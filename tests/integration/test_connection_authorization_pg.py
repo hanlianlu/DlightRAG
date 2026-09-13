@@ -11,7 +11,7 @@ from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
 from dlightrag.application.connections.credentials import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
-from tests.integration.test_connections_pg import FakeMcp
+from tests.integration.test_connections_pg import FakeMcp, stored_catalogue
 
 
 def cipher():
@@ -182,7 +182,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
                     break
                 await asyncio.sleep(0.02)
             assert view.connections[0].authentication == "oauth"
-            assert view.connections[0].tools[0].remote_name == "read"
+            assert (await stored_catalogue(store))[0].remote_name == "read"
             async with pool.acquire() as conn:
                 flows = await conn.fetch("SELECT * FROM dlightrag_connection_oauth_flows")
                 grants = await conn.fetch("SELECT * FROM dlightrag_connection_grants")

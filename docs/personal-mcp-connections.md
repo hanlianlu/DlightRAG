@@ -15,7 +15,7 @@ This plan is the implementation authority for the accepted target. It is governe
 - Fast has no MCP tools. The composer has no Tools/MCP control, and a conversation has no Connection selector.
 - The first release supports MCP Streamable HTTP only. Arbitrary Web-managed stdio is not accepted.
 - Authentication choices are unauthenticated, a write-only personal static bearer, and OAuth through the locked `mcp==2.2.0` SDK.
-- The Connection is the authorization unit. Enabling it authorizes all current and future remote tools; the UI shows the catalogue but offers no per-tool checkbox, allowlist, or later drift approval.
+- The Connection is the authorization unit. Enabling it authorizes all current and future remote tools; the UI never projects the catalogue and offers no per-tool checkbox, allowlist, or later drift approval. The Capability Catalogue is agent-facing: it is what a Run pins, not what a person approves item by item.
 - OAuth scope expansion still requires provider consent. It is not implied by Connection enablement.
 - There are no per-call write confirmations. Up-front enable consent warns that tools can modify, send, or delete data allowed by the external grant, including in authorized shared external workspaces.
 - DlightRAG isolates its private Connection records, credentials, Runs, Conversations, files, and caches by owner. It does not claim that an arbitrary external MCP server enforces the same local user boundary.
@@ -222,7 +222,7 @@ Management is a Web projection only:
 
 | Method and path | Meaning |
 |---|---|
-| `GET /web/api/connections/mcp` | Redacted owner list, revisions, catalogue summaries, and observed status |
+| `GET /web/api/connections/mcp` | Redacted owner list, revisions, and observed status; never catalogue content |
 | `POST /web/api/connections/mcp` | Create a disabled Streamable-HTTP Connection |
 | `PATCH /web/api/connections/mcp/{connection_id}` | Revision-CAS label/endpoint/enable/disable commands |
 | `DELETE /web/api/connections/mcp/{connection_id}` | Revision-CAS tombstone and immediate future-dispatch revocation |
@@ -232,13 +232,15 @@ Management is a Web projection only:
 | `POST /web/api/connections/mcp/{connection_id}/revoke` | Revoke/erase the active Grant and block future dispatch |
 | `GET /web/oauth/connections/mcp/callback` | State-bound OAuth callback inbox deposit; not a public management interface |
 
-Mutations use current same-origin auth/CSRF and expected revisions; the OAuth callback uses authenticated owner plus SDK state because a provider redirect cannot supply same-origin CSRF. Cross-owner identifiers return not-found. `simple` returns 403 and bootstrap hides the Feature; local `none` is labelled single-user.
+Mutations use current same-origin auth/CSRF and expected revisions; the OAuth callback uses authenticated owner plus SDK state because a provider redirect cannot supply same-origin CSRF. Cross-owner identifiers return not-found. `simple` returns 403 and bootstrap hides the Feature; eligibility is decided by that bootstrap capability, so the projection carries no eligibility flag of its own.
 
-The list distinguishes authoritative `disabled/enabled/revoked` from observations `ready/degraded/needs-auth/refreshing`. It shows last-good catalogue age, all discovered tool names/schemas as read-only information, and redacted errors. It never claims a permanent global “connected” state.
+The list distinguishes authoritative `disabled/enabled/revoked` from observations `ready/degraded/needs-auth/refreshing` by reporting the redacted observed status, and never claims a permanent global “connected” state. It shows no tool names, schemas, catalogue age, or raw error kinds: Settings answers whether a server is reachable and authorized, and the Agent is the only consumer of what that server offers. The projection carries exactly what Settings renders — catalogue facts and error classification stay server-side — while activation epoch and generation remain because the integration suite reads them here as the authoritative read model.
 
-Enable requires one whole-Connection warning acknowledgement: current and future tools can read and can modify/send/delete within the external Grant. New catalogue publication does not ask again. OAuth scope growth does. Disable copy says new dispatch is blocked after the gate linearization point while already in-flight work is only best-effort cancelled.
+Enable requires one whole-Connection warning acknowledgement per owner session — the first enable in a drawer session asks once and every later switch is a single tap; an owner who already has an enabled Connection is never asked again. The operator-recorded `consent_version=1` attests to that standing authorization rather than to a per-Connection dialog. New catalogue publication does not ask again; OAuth scope growth does. The switch also owns discovery: a Connection with no confirmed catalogue is probed before it is enabled, and a check that reports an authentication failure leaves the Connection off instead of enabling a server that cannot answer.
 
 There is no composer affordance, per-conversation selection, or per-tool checkbox.
+
+Settings offers no **revoke** command even though the route exists: delete already retires the Grant and erases the encrypted envelope, so revoke would only preserve the endpoint string while costing a second destructive action next to the one that removes the Connection. A future surface that needs to keep the configuration while destroying only the credential may expose it again.
 
 ## Fault behavior
 

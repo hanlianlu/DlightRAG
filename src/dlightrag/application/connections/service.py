@@ -288,7 +288,6 @@ class Connections:
         revision, items = await self._store.read(owner_id)
         return ConnectionsView(
             revision=revision,
-            single_user=auth_mode == "none",
             connections=tuple(
                 ConnectionView(
                     connection_id=item.connection_id,
@@ -300,9 +299,6 @@ class Connections:
                     authentication=item.authentication,
                     authorization_status=item.authorization_status,
                     status=item.status,
-                    last_error_kind=item.last_error_kind,
-                    catalogue_created_at=item.catalogue_created_at,
-                    tools=item.catalogue,
                 )
                 for item in items
             ),

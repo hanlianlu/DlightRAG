@@ -16,6 +16,7 @@ from dlightrag.application.connections import ConnectionCommand, ConnectionPolic
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connection_authorization_pg import cipher
 from tests.integration.test_connection_binding_pg import enabled_connection
+from tests.integration.test_connections_pg import stored_catalogue
 from tests.unit.test_connection_oauth import refresh_credentials
 from tests.unit.test_connections_transport import public_dns
 
@@ -36,7 +37,7 @@ async def oauth_connection(pool, remote):
         key_id=key,
         envelope=envelope,
         scopes=("read",),
-        catalogue=view.connections[0].tools,
+        catalogue=await stored_catalogue(store),
         policy=ConnectionPolicy(),
     )
     service = Connections(
@@ -308,12 +309,9 @@ async def test_maintenance_retains_pins_then_run_cascade_releases_tombstone():
                 command=ConnectionCommand(kind="probe", connection_id=identity),
             )
         assert (await service.maintain())["collected"] == 3
-        assert (
-            await store.pinned_catalogues(
-                owner_id="a", run_id=accepted.run.run_id, bindings=bound.bindings
-            )
-            == view.connections[0].tools
-        )
+        assert await store.pinned_catalogues(
+            owner_id="a", run_id=accepted.run.run_id, bindings=bound.bindings
+        ) == await stored_catalogue(store)
         view = await service.change(
             owner_id="a",
             auth_mode="jwt",

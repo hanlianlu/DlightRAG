@@ -632,7 +632,7 @@ it('opens Connections after the fixed OAuth return without starting authorizatio
   window.history.replaceState(null, '', '?settings=connections&authorization=restart');
   window.fetch = async (input, init) => {
     if (init?.method && init.method !== 'GET') writes.push(String(input));
-    if (String(input) === '/web/api/connections/mcp') return response({revision: '0', single_user: false, connections: []});
+    if (String(input) === '/web/api/connections/mcp') return response({revision: '0', connections: []});
     return bootstrapResponse(input);
   };
   try {
@@ -641,7 +641,10 @@ it('opens Connections after the fixed OAuth return without starting authorizatio
     await app.ready;
     await waitFor(() => Boolean(app.querySelector('dl-settings-connections')));
     expect(app.querySelector<DlSettingsDialog>('dl-settings-dialog')!.showConnections).to.equal(true);
-    expect(app.textContent).to.contain('Authorization failed or expired');
+    // The return path lands on the Connections surface with the MCP group already open; the
+    // failed grant reports itself inside the affected card, not as a drawer-level banner.
+    const surface = app.querySelector('dl-settings-connections')!;
+    await waitFor(() => surface.querySelector('[data-connections-root]')?.getAttribute('aria-expanded') === 'true');
     expect(writes).to.deep.equal([]);
     expect(window.location.search).not.to.contain('settings=');
     expect(window.location.search).not.to.contain('authorization=');

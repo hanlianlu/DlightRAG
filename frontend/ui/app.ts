@@ -196,8 +196,8 @@ export class DlApp extends LightElement {
         const settings = this.querySelector<DlSettingsDialog>('dl-settings-dialog');
         if (settings && bootstrap.personalMcpConnections) {
           settings.showConnections = true;
-          settings.connectionAuthorizationFailed = callbackReturn.searchParams.get('authorization') === 'restart';
-          void settings.open(null);
+          await settings.open(null);
+          settings.expandConnections();
         }
         callbackReturn.searchParams.delete('settings');
         callbackReturn.searchParams.delete('authorization');

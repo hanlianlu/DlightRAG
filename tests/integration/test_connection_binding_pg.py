@@ -8,6 +8,7 @@ import pytest
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
+from tests.integration.test_connections_pg import stored_catalogue
 
 
 class CatalogueMcp:
@@ -62,12 +63,14 @@ async def enabled_connection(pool, owner="a"):
 @pytest.mark.asyncio
 async def test_bind_research_is_owner_scoped_schema_exact_and_network_free():
     async with isolated_run_runtime("binding") as (_, pool):
-        service, _, mcp, view = await enabled_connection(pool)
+        service, store, mcp, view = await enabled_connection(pool)
         bound = await service.bind_research(owner_id="a", auth_mode="jwt")
         assert mcp.calls == 1
         assert len(bound.bindings) == len(bound.tools) == 1
         assert bound.bindings[0].generation == view.connections[0].generation
-        assert bound.tools[0].definition.parameters == view.connections[0].tools[0].input_schema
+        assert (
+            bound.tools[0].definition.parameters == (await stored_catalogue(store))[0].input_schema
+        )
         assert bound.tools[0].description == "Accepted description"
         assert bound.tools[0].replay_policy == "never"
         assert (await service.bind_research(owner_id="b", auth_mode="jwt")).tools == ()

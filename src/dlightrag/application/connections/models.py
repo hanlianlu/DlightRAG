@@ -58,6 +58,13 @@ class CatalogueTool:
 
 @dataclass(frozen=True)
 class ConnectionView:
+    """The Settings projection: exactly what Settings renders, and nothing else.
+
+    Catalogue facts and raw error kinds stay server-side. Activation epoch and generation remain
+    because the integration suite reads them here as the authoritative read model: re-enable must
+    publish a newer epoch, and a refresh must publish a newer generation.
+    """
+
     connection_id: str
     label: str
     endpoint: str
@@ -66,9 +73,6 @@ class ConnectionView:
     generation: int
     authentication: str
     status: str
-    last_error_kind: str | None
-    catalogue_created_at: str | None
-    tools: tuple[CatalogueTool, ...]
     authorization_status: str | None = None
 
 
@@ -76,7 +80,6 @@ class ConnectionView:
 class ConnectionsView:
     revision: str
     connections: tuple[ConnectionView, ...]
-    single_user: bool = False
 
 
 @dataclass(frozen=True)

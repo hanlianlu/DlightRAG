@@ -59,7 +59,6 @@ function memorySummary(event: ChatMemoryOperationDetail): string {
 /** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
 export class DlSettingsDialog extends LightElement {
   static properties = {
-    connectionAuthorizationFailed: {state: true},
     personalMcpConnections: {attribute: false},
     showConnections: {state: true},
     handles: {attribute: false},
@@ -70,7 +69,6 @@ export class DlSettingsDialog extends LightElement {
     language: {state: true},
   };
 
-  declare connectionAuthorizationFailed: boolean;
   declare personalMcpConnections: boolean;
   declare showConnections: boolean;
   declare handles: AppHandles;
@@ -88,7 +86,6 @@ export class DlSettingsDialog extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
-    this.connectionAuthorizationFailed = false;
     this.personalMcpConnections = false;
     this.showConnections = false;
     this.handles = productionHandles();
@@ -134,6 +131,7 @@ export class DlSettingsDialog extends LightElement {
       if (!signal.aborted) this.memoryLoading = false;
     }
     if (signal.aborted) return;
+    this.showConnections = true;
     await this.updateComplete;
     const dialog = this.#dialog();
     if (!dialog || dialog.open) return;
@@ -190,8 +188,7 @@ export class DlSettingsDialog extends LightElement {
                       aria-label=${msg('Close settings', {id: 'settings.close'})}>${icon('close', {size: 'sm'})}</button>
             </div>
             ${this.personalMcpConnections ? html`<section class="settings-section">
-              <button type="button" class="dl-btn" aria-expanded=${this.showConnections} @click=${() => {this.showConnections = !this.showConnections;}}>${msg('Connections', {id: 'settings.connections'})}</button>
-              ${this.connectionAuthorizationFailed ? html`<p role="alert">${msg('Authorization failed or expired. Restart authorization.', {id: 'connections.oauthFailed'})}</p>` : nothing}
+              <h3 id="settings-connections">${msg('Connections', {id: 'settings.connections'})}</h3>
               ${this.showConnections ? html`<dl-settings-connections></dl-settings-connections>` : nothing}
             </section>` : nothing}
             <section class="settings-section">
@@ -277,6 +274,11 @@ export class DlSettingsDialog extends LightElement {
     const dialog = this.#dialog();
     if (dialog && event.target === dialog) dialog.close();
   };
+
+  /** The OAuth return path lands on the Connections surface with its group already open. */
+  expandConnections(): void {
+    this.querySelector('dl-settings-connections')?.expand();
+  }
 
   #closed = (): void => {
     this.showConnections = false;

@@ -18,6 +18,12 @@ class FakeMcp:
         ]
 
 
+async def stored_catalogue(store, owner_id: str = "a", index: int = 0):
+    """The published catalogue is agent-facing; the Settings projection no longer carries it."""
+    _revision, items = await store.read(owner_id)
+    return items[index].catalogue
+
+
 @pytest.mark.asyncio
 async def test_owner_draft_probe_consent_and_revision():
     async with isolated_run_runtime("connections") as (_, pool):
@@ -51,7 +57,7 @@ async def test_owner_draft_probe_consent_and_revision():
             expected_revision=draft.revision,
             command=ConnectionCommand(kind="probe", connection_id=item.connection_id),
         )
-        assert ready.connections[0].tools[0].remote_name == "read"
+        assert (await stored_catalogue(store))[0].remote_name == "read"
         with pytest.raises(ConnectionsError, match="consent"):
             await connections.change(
                 owner_id="a",
@@ -216,25 +222,24 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
                 expected_revision=ready.revision,
                 command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
             )
+            enabled_catalogue = await stored_catalogue(store)
             mcp.changed = True
             async with asyncio.timeout(5):
                 while True:
-                    current = await service.read(owner_id="a", auth_mode="jwt")
-                    if len(current.connections[0].tools) == 2:
+                    catalogue = await stored_catalogue(store)
+                    if len(catalogue) == 2:
                         break
                     await asyncio.sleep(0.05)
+            current = await service.read(owner_id="a", auth_mode="jwt")
             assert (
                 current.connections[0].activation_epoch == enabled.connections[0].activation_epoch
             )
             assert current.connections[0].generation > enabled.connections[0].generation
-            assert current.connections[0].tools[0].input_schema == {
+            assert catalogue[0].input_schema == {
                 "type": "object",
                 "properties": {"new_argument": {"type": "string"}},
             }
-            assert (
-                current.connections[0].tools[0].local_name
-                == enabled.connections[0].tools[0].local_name
-            )
+            assert catalogue[0].local_name == enabled_catalogue[0].local_name
         finally:
             await service.aclose()
 
@@ -316,6 +321,7 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
             expected_revision=draft.revision,
             command=ConnectionCommand(kind="probe", connection_id=identity),
         )
+        ready_catalogue = await stored_catalogue(store)
         mcp.fault = True
         fault = await service.change(
             owner_id="a",
@@ -325,7 +331,7 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
         )
         assert fault.connections[0].status == "degraded"
         assert fault.connections[0].generation == ready.connections[0].generation
-        assert fault.connections[0].tools == ready.connections[0].tools
+        assert await stored_catalogue(store) == ready_catalogue
 
 
 @pytest.mark.asyncio
