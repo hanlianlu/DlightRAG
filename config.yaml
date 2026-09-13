@@ -13,18 +13,23 @@ models:
       temperature: 1.0
       reasoning: max
     roles:
+      # DeepSeek rejects the json_schema response_format type, so every role on
+      # it declares json_object explicitly. This is endpoint-specific, not the
+      # shipped default: other endpoints keep the `auto` (strict schema) path.
       extract:
         provider: openai
         model: deepseek-flash
         base_url: https://api.deepseek.com
         temperature: 0.0
         reasoning: off
+        structured_output: json_object
       keyword:
         provider: openai
         model: deepseek-flash
         base_url: https://api.deepseek.com
         temperature: 0.0
         reasoning: off
+        structured_output: json_object
       query:
         provider: openai
         model: deepseek-flash
@@ -32,12 +37,14 @@ models:
         temperature: 0.7
         reasoning: off
         agentic_reasoning: max
+        structured_output: json_object
       vlm:
         provider: openai
         model: deepseek-flash
         base_url: https://api.deepseek.com
         temperature: 0.0
         reasoning: off
+        structured_output: json_object
   embedding:
     provider: voyage
     model: voyage-multimodal-3.5
