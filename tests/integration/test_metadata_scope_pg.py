@@ -30,7 +30,12 @@ import asyncpg
 import pytest
 
 from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import (
+    PG_CONN_KWARGS,
+    drop_database,
+    drop_scratch_database,
+    skip_without_postgres,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -52,16 +57,6 @@ def _kwargs(database: str) -> dict[str, Any]:
     return {**_DEFAULT_KWARGS, "database": database}
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_kwargs(_MAINT_DB))
-        await conn.fetchval("SELECT 1")
-        await conn.close()
-        return True
-    except Exception:
-        return False
-
-
 async def _create_fresh_database(database: str) -> None:
     conn = await asyncpg.connect(**_kwargs(_MAINT_DB))
     try:
@@ -70,7 +65,7 @@ async def _create_fresh_database(database: str) -> None:
             "WHERE datname = $1 AND pid <> pg_backend_pid()",
             database,
         )
-        await conn.execute(f"DROP DATABASE IF EXISTS {database}")
+        await drop_scratch_database(conn, database)
         await conn.execute(f"CREATE DATABASE {database}")
     finally:
         await conn.close()
@@ -84,15 +79,10 @@ async def _create_fresh_database(database: str) -> None:
 
 @pytest.fixture(scope="module", autouse=True)
 async def _fresh_test_database() -> AsyncIterator[None]:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     await _create_fresh_database(_TEST_DB)
     yield None
-    conn = await asyncpg.connect(**_kwargs(_MAINT_DB))
-    try:
-        await conn.execute(f"DROP DATABASE IF EXISTS {_TEST_DB}")
-    finally:
-        await conn.close()
+    await drop_database(_TEST_DB)
 
 
 def _fake_llm(prompt: str, **_: Any) -> str:

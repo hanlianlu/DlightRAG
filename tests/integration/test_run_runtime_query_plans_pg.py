@@ -5,24 +5,13 @@ from __future__ import annotations
 
 import uuid
 
-import asyncpg
 import pytest
 
 from dlightrag.engine.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
-from tests.integration.pg_conn import PG_CONN_KWARGS
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
+from tests.support.pg import skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
-
-
-async def _pg_available() -> bool:
-    try:
-        connection = await asyncpg.connect(**PG_CONN_KWARGS)
-        await connection.fetchval("SELECT 1")
-        await connection.close()
-        return True
-    except Exception:
-        return False
 
 
 async def _plan(connection, sql: str, *args) -> str:
@@ -31,8 +20,7 @@ async def _plan(connection, sql: str, *args) -> str:
 
 
 async def test_runtime_backlog_queries_use_bounded_indexes() -> None:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     async with isolated_run_runtime("runtime_plans") as (store, pool):
         for index in range(40):
             await store.accept_run(

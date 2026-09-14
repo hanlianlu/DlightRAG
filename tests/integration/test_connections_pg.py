@@ -7,8 +7,8 @@ import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
-from tests.integration.pg_conn import PG_CONN_KWARGS
 from tests.integration.run_runtime_pg_harness import drop_owned_database, isolated_run_runtime
+from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database
 
 
 class FakeMcp:
@@ -43,7 +43,7 @@ async def test_owned_database_drops_with_a_backend_of_this_role_attached():
         assert remaining == 0, "the database must be gone even though a backend was attached"
     finally:
         await attached.close()
-        await admin.execute(f'DROP DATABASE IF EXISTS "{database}"')
+        await drop_scratch_database(admin, database)
         await admin.close()
 
 

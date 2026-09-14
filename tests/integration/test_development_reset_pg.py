@@ -15,7 +15,7 @@ from typing import Any
 import asyncpg
 import pytest
 
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, skip_without_postgres
 
 _reset_path = Path(__file__).resolve().parents[2] / "scripts" / "reset_development.py"
 _spec = importlib.util.spec_from_file_location("reset_development_cli_pg", _reset_path)
@@ -33,15 +33,6 @@ _TEST_CONN_KWARGS = {**PG_CONN_KWARGS, "database": _TEST_DATABASE}
 _EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_ADMIN)
-        await conn.close()
-        return True
-    except OSError, asyncpg.PostgresError:
-        return False
-
-
 async def _create_test_database() -> None:
     conn = await asyncpg.connect(**_ADMIN)
     try:
@@ -57,7 +48,7 @@ async def _drop_test_database() -> None:
     try:
         exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", _TEST_DATABASE)
         if exists:
-            await conn.execute(f'DROP DATABASE "{_TEST_DATABASE}" WITH (FORCE)')
+            await drop_scratch_database(conn, _TEST_DATABASE)
     finally:
         await conn.close()
 
@@ -74,8 +65,7 @@ def _test_target() -> Any:
 
 @pytest.fixture(autouse=True)
 async def _test_database(tmp_path: Path):
-    if not await _pg_available():
-        pytest.skip("PostgreSQL is not reachable")
+    await skip_without_postgres()
     await _create_test_database()
     yield
     await _drop_test_database()

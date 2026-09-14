@@ -20,7 +20,7 @@ from dlightrag.engine.runtime.records import (
     RunAccessScope,
     Succeeded,
 )
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database
 
 
 class DropAdmin(Protocol):
@@ -46,7 +46,7 @@ async def drop_owned_database(admin: DropAdmin, database: str) -> None:
     """
     for attempt in range(_DROP_ATTEMPTS):
         try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+            await drop_scratch_database(admin, database)
             return
         except asyncpg.exceptions.InsufficientPrivilegeError:
             if attempt + 1 == _DROP_ATTEMPTS:

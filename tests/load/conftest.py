@@ -8,7 +8,7 @@ import os
 import asyncpg
 import pytest
 
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS
 
 
 def _enabled() -> bool:

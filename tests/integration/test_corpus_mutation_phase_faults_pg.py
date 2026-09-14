@@ -12,32 +12,20 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
-import asyncpg
 import pytest
 
 from dlightrag.application.corpus_admin.mutations import CorpusMutationExecutor
 from dlightrag.engine.dependencies import ParserUnavailableError, TransientDependencyError
 from dlightrag.engine.runtime.coordinator import RunCoordinator
-from tests.integration.pg_conn import PG_CONN_KWARGS
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
+from tests.support.pg import skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
-async def _pg_available() -> bool:
-    try:
-        connection = await asyncpg.connect(**PG_CONN_KWARGS)
-        await connection.fetchval("SELECT 1")
-        await connection.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture(autouse=True)
-async def _require_postgres() -> None:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+async def _postgres() -> None:
+    await skip_without_postgres()
 
 
 class _Maintenance:

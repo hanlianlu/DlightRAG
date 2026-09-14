@@ -14,7 +14,7 @@ from typing import Any, cast
 
 import pytest
 
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, skip_without_postgres
 
 # Mark all tests in this module as integration
 pytestmark = [
@@ -23,30 +23,10 @@ pytestmark = [
 ]
 
 
-async def _pg_available() -> bool:
-    """Check if PostgreSQL is available."""
-    try:
-        import asyncpg
-
-        conn = await asyncpg.connect(
-            host=str(_PG_CONN_KWARGS["host"]),
-            port=int(_PG_CONN_KWARGS["port"]),
-            user=str(_PG_CONN_KWARGS["user"]),
-            password=str(_PG_CONN_KWARGS["password"]),
-            database=str(_PG_CONN_KWARGS["database"]),
-        )
-        await conn.fetchval("SELECT 1")
-        await conn.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def pg_check():
     """Skip test if PostgreSQL is not available."""
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
 
 
 _PG_CONN_KWARGS = PG_CONN_KWARGS

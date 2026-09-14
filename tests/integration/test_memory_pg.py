@@ -22,27 +22,16 @@ from dlightrag.adapters.postgres.answer.memory_settings import (
     PGMemorySettingsStore,
 )
 from dlightrag.application.memory import MemoryDisabledError, MemoryService
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 _PG: dict[str, Any] = PG_CONN_KWARGS
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_PG)
-        await conn.fetchval("SELECT 1")
-        await conn.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def store() -> AsyncIterator[PostgresMemoryStore]:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     db_name = f"dlightrag_mem_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**_PG)
     try:
@@ -57,11 +46,7 @@ async def store() -> AsyncIterator[PostgresMemoryStore]:
     finally:
         await created.aclose()
         await pool.close()
-        admin = await asyncpg.connect(**_PG)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(db_name)
 
 
 def _provenance(run: str = "run-1") -> MemoryProvenance:

@@ -13,7 +13,7 @@ from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunExecutionOutcome,
 )
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -21,19 +21,9 @@ _ADMIN: dict[str, Any] = PG_CONN_KWARGS
 _TEST_DATABASE = "dlightrag_cancellation_test"
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_ADMIN)
-        await conn.close()
-        return True
-    except OSError, asyncpg.PostgresError:
-        return False
-
-
 @pytest.fixture(autouse=True)
 async def pool():
-    if not await _pg_available():
-        pytest.skip("PostgreSQL is not reachable")
+    await skip_without_postgres()
     admin = await asyncpg.connect(**_ADMIN)
     try:
         await admin.execute(f'CREATE DATABASE "{_TEST_DATABASE}"')
@@ -48,11 +38,7 @@ async def pool():
         yield created
     finally:
         await created.close()
-        admin = await asyncpg.connect(**_ADMIN)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{_TEST_DATABASE}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(_TEST_DATABASE)
 
 
 def _request(query: str = "why") -> dict[str, Any]:

@@ -158,7 +158,7 @@ test-unit:
 # providers and parsers are controlled fakes. The browser command exercises
 # reconnect and explicit Corpus Mutation repair/resume presentation.
 runtime-faults: frontend-browser-install
-	uv run python -c 'import asyncio; from tests.integration.run_runtime_pg_harness import require_postgres; asyncio.run(require_postgres())'
+	uv run python -c 'import asyncio; from tests.support.pg import require_postgres; asyncio.run(require_postgres())'
 	uv run pytest tests/unit tests/integration/test_corpus_mutation_runs_pg.py tests/integration/test_corpus_mutation_phase_faults_pg.py tests/integration/test_run_runtime_lane_independence_pg.py tests/integration/test_run_runtime_query_plans_pg.py tests/integration/test_retrieval_runs_pg.py tests/integration/test_answer_runs_pg.py -q --tb=short
 	npm --prefix frontend test
 	npm --prefix frontend run test:browser

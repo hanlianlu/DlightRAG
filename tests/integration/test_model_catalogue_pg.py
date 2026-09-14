@@ -11,26 +11,16 @@ import pytest
 
 from dlightrag.adapters.postgres.model_catalogue import PGModelCatalogueStore
 from dlightrag.engine.ai.catalog import catalogue_overlay_revision
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 _PG_CONN_KWARGS: dict[str, Any] = PG_CONN_KWARGS
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
-        await conn.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def catalogue_database() -> AsyncIterator[tuple[Any, dict[str, Any]]]:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     database = f"dlightrag_catalogue_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**_PG_CONN_KWARGS)
     try:
@@ -43,11 +33,7 @@ async def catalogue_database() -> AsyncIterator[tuple[Any, dict[str, Any]]]:
         yield pool, kwargs
     finally:
         await pool.close()
-        admin = await asyncpg.connect(**_PG_CONN_KWARGS)
-        try:
-            await admin.execute(f'DROP DATABASE "{database}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(database)
 
 
 async def test_writer_initializes_singleton_and_publish_is_compare_and_set(

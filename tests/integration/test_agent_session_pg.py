@@ -94,7 +94,7 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -163,19 +163,9 @@ class _CountingPool:
             yield _CountingConnection(connection, self._calls)
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_ADMIN)
-        await conn.close()
-        return True
-    except OSError, asyncpg.PostgresError:
-        return False
-
-
 @pytest.fixture(autouse=True)
 async def pool():
-    if not await _pg_available():
-        pytest.skip("PostgreSQL is not reachable")
+    await skip_without_postgres()
     admin = await asyncpg.connect(**_ADMIN)
     try:
         await admin.execute(f'CREATE DATABASE "{_TEST_DATABASE}"')
@@ -190,11 +180,7 @@ async def pool():
         yield created
     finally:
         await created.close()
-        admin = await asyncpg.connect(**_ADMIN)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{_TEST_DATABASE}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(_TEST_DATABASE)
 
 
 async def _store(pool) -> PGRunStore:

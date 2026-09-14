@@ -9,7 +9,6 @@ import uuid
 from dataclasses import replace
 from typing import Any, cast
 
-import asyncpg
 import pytest
 
 from dlightrag.engine.runtime.coordinator import (
@@ -24,30 +23,19 @@ from dlightrag.engine.runtime.records import (
     WaitingForRepair,
 )
 from dlightrag.engine.runtime.store import RunStore
-from tests.integration.pg_conn import PG_CONN_KWARGS
 from tests.integration.run_runtime_pg_harness import (
     TrackingExecutor,
     isolated_run_runtime,
     run_envelope,
 )
+from tests.support.pg import skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
-async def _pg_available() -> bool:
-    try:
-        connection = await asyncpg.connect(**PG_CONN_KWARGS)
-        await connection.fetchval("SELECT 1")
-        await connection.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture(autouse=True)
-async def _require_postgres() -> None:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+async def _postgres() -> None:
+    await skip_without_postgres()
 
 
 class _OneShotOperationalStateOutage:

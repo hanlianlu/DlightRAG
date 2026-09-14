@@ -15,6 +15,7 @@ from PIL import Image
 
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
+from tests.support.pg import drop_scratch_database
 
 RUN_E2E_ENV = "DLIGHTRAG_RUN_E2E_PG18"
 REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
@@ -138,7 +139,7 @@ async def isolated_pg18_database(
         if created:
             admin = await asyncpg.connect(**admin_kwargs)
             try:
-                await admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+                await drop_scratch_database(admin, database)
             finally:
                 await admin.close()
 

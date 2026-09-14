@@ -86,7 +86,7 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [
     pytest.mark.integration,
@@ -143,20 +143,9 @@ def _answer_run_request(
     return request
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
-        await conn.fetchval("SELECT 1")
-        await conn.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def store() -> AsyncIterator[FingerprintingRunStore]:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
 
     db_name = f"dlightrag_runtime_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**_PG_CONN_KWARGS)
@@ -178,11 +167,7 @@ async def store() -> AsyncIterator[FingerprintingRunStore]:
     finally:
         if pool is not None:
             await pool.close()
-        admin = await asyncpg.connect(**_PG_CONN_KWARGS)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(db_name)
 
 
 class _Executor:

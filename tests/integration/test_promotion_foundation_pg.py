@@ -14,7 +14,7 @@ from typing import Any
 import asyncpg
 import pytest
 
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, skip_without_postgres
 
 pytestmark = [
     pytest.mark.integration,
@@ -31,16 +31,6 @@ _DEFAULT_KWARGS: dict[str, Any] = PG_CONN_KWARGS
 
 def _kwargs(database: str) -> dict[str, Any]:
     return {**_DEFAULT_KWARGS, "database": database}
-
-
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_kwargs(_MAINT_DB))
-        await conn.fetchval("SELECT 1")
-        await conn.close()
-        return True
-    except Exception:
-        return False
 
 
 async def _ensure_test_database() -> None:
@@ -62,8 +52,7 @@ async def _ensure_test_database() -> None:
 
 @pytest.fixture
 async def pool() -> Any:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     await _ensure_test_database()
     pool = await asyncpg.create_pool(**_kwargs(_TEST_DB), min_size=1, max_size=2)
     yield pool

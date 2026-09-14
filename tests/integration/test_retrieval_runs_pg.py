@@ -28,7 +28,7 @@ from dlightrag.engine.runtime.records import (
     RunAccessScope,
     run_request_fingerprint,
 )
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -37,21 +37,10 @@ _FINGERPRINT = ModelFingerprint("openai", "extract-model", None)
 _PROFILE = ModelProfile(context_window_tokens=128_000, supports_images=True)
 
 
-async def _pg_available() -> bool:
-    try:
-        connection = await asyncpg.connect(**PG_CONN_KWARGS)
-        await connection.fetchval("SELECT 1")
-        await connection.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def retrieval_pg() -> AsyncIterator[tuple[PGRunStore, Any]]:
     """Use a fresh database so no stale local schema can affect validation."""
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     database = f"dlightrag_retrieval_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**PG_CONN_KWARGS)
     try:
@@ -67,11 +56,7 @@ async def retrieval_pg() -> AsyncIterator[tuple[PGRunStore, Any]]:
         yield store, pool
     finally:
         await pool.close()
-        admin = await asyncpg.connect(**PG_CONN_KWARGS)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(database)
 
 
 def _prepared(*, query: str = "quarterly report") -> dict[str, Any]:

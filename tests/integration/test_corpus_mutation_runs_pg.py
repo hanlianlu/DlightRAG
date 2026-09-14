@@ -14,25 +14,14 @@ from dlightrag.engine.runtime.records import (
     PreparedRunEnvelope,
     RunAccessScope,
 )
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
-async def _pg_available() -> bool:
-    try:
-        connection = await asyncpg.connect(**PG_CONN_KWARGS)
-        await connection.fetchval("SELECT 1")
-        await connection.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def corpus_run_pg() -> AsyncIterator[PGRunStore]:
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
     database = f"dlightrag_corpus_run_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**PG_CONN_KWARGS)
     try:
@@ -48,11 +37,7 @@ async def corpus_run_pg() -> AsyncIterator[PGRunStore]:
         yield store
     finally:
         await pool.close()
-        admin = await asyncpg.connect(**PG_CONN_KWARGS)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(database)
 
 
 def _envelope(

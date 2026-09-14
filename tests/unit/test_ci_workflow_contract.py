@@ -130,7 +130,7 @@ def test_pg_integration_suites_share_environment_connection_contract() -> None:
     script = f"""
 import importlib
 
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS
 
 expected = {{
     "host": "{_PG_OVERRIDE_ENV["PGHOST"]}",

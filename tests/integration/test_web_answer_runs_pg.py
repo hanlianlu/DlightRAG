@@ -48,7 +48,7 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
-from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [
     pytest.mark.integration,
@@ -62,21 +62,10 @@ _OTHER_OWNER = "principal-beta"
 _MAX_TURNS = 100
 
 
-async def _pg_available() -> bool:
-    try:
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
-        await conn.fetchval("SELECT 1")
-        await conn.close()
-        return True
-    except Exception:
-        return False
-
-
 @pytest.fixture
 async def db_name() -> AsyncIterator[str]:
     """Provision an isolated throwaway database and yield its name."""
-    if not await _pg_available():
-        pytest.skip("PostgreSQL not available")
+    await skip_without_postgres()
 
     name = f"dlightrag_weblink_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**_PG_CONN_KWARGS)
@@ -87,11 +76,7 @@ async def db_name() -> AsyncIterator[str]:
     try:
         yield name
     finally:
-        admin = await asyncpg.connect(**_PG_CONN_KWARGS)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        finally:
-            await admin.close()
+        await drop_database(name)
 
 
 @pytest.fixture
