@@ -22,10 +22,38 @@ class EvidenceDelta:
     new_chunks: int = 0
     new_entities: int = 0
     new_relationships: int = 0
+    dropped_rows: int = 0
 
     @property
     def changed(self) -> bool:
         return bool(self.new_chunks or self.new_entities or self.new_relationships)
+
+
+def has_unrepresentable_text(value: Any) -> bool:
+    """Return whether any string in ``value`` holds text a durable store cannot keep.
+
+    PostgreSQL text and jsonb values cannot carry U+0000, and a lone surrogate
+    cannot be encoded at all, so admitting either would fail a later durable
+    write and end the Run that produced it. Evidence is the one admission path
+    every retrieval source shares, which is why the check lives here instead of
+    in each Tool or provider adapter.
+    """
+    if isinstance(value, str):
+        if "\x00" in value:
+            return True
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return True
+        return False
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if has_unrepresentable_text(key) or has_unrepresentable_text(item):
+                return True
+        return False
+    if isinstance(value, list | tuple | set | frozenset):
+        return any(has_unrepresentable_text(item) for item in value)
+    return False
 
 
 class EvidenceLedger:
@@ -177,7 +205,11 @@ class EvidenceLedger:
 
     def add_contexts(self, contexts: RetrievalContexts) -> EvidenceDelta:
         new_chunks = 0
+        dropped_rows = 0
         for row in contexts.get("chunks", []):
+            if has_unrepresentable_text(row):
+                dropped_rows += 1
+                continue
             normalized, identity = self._normalize_chunk(row)
             if identity in self._seen_chunks:
                 continue
@@ -195,6 +227,9 @@ class EvidenceLedger:
             seen = self._seen_rows.setdefault(key, set())
             added = 0
             for row in rows:
+                if has_unrepresentable_text(row):
+                    dropped_rows += 1
+                    continue
                 identity = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
                 if identity in seen:
                     continue
@@ -206,6 +241,7 @@ class EvidenceLedger:
             new_chunks=new_chunks,
             new_entities=counts.get("entities", 0),
             new_relationships=counts.get("relationships", 0),
+            dropped_rows=dropped_rows,
         )
 
     async def aflush_images(self) -> None:
@@ -416,4 +452,4 @@ def _durable_row(row: ContextRow) -> dict[str, Any]:
     return payload
 
 
-__all__ = ["EvidenceDelta", "EvidenceLedger"]
+__all__ = ["EvidenceDelta", "EvidenceLedger", "has_unrepresentable_text"]

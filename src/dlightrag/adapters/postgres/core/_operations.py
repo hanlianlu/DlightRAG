@@ -4,6 +4,7 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TypeVar
 
+from dlightrag.adapters.postgres.core._errors import guard_payload
 from dlightrag.adapters.postgres.core._pool import pg_pool
 
 T = TypeVar("T")
@@ -23,16 +24,16 @@ class PostgresOperationRunner:
 
     async def _run(self, operation: Callable[[Any], Awaitable[T]]) -> T:
         if self._operation_pool is None:
-            return await pg_pool.run(operation)
+            return await guard_payload(pg_pool.run(operation), surface="Durable record")
         async with self._operation_pool.acquire() as connection:
-            return await operation(connection)
+            return await guard_payload(operation(connection), surface="Durable record")
 
     async def _run_once(self, operation: Callable[[Any], Awaitable[T]]) -> T:
         """Run an outcome-sensitive mutation without replaying it."""
         if self._operation_pool is None:
-            return await pg_pool.run_once(operation)
+            return await guard_payload(pg_pool.run_once(operation), surface="Durable record")
         async with self._operation_pool.acquire() as connection:
-            return await operation(connection)
+            return await guard_payload(operation(connection), surface="Durable record")
 
     async def _stream(self, operation: Callable[[Any], AsyncIterator[T]]) -> AsyncIterator[T]:
         """Stream a read through one connection; the caller drains the iterator."""

@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dlightrag.adapters.postgres.core._errors import guard_payload
 from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.adapters.postgres.runtime._terminal import finish_fenced_run
@@ -675,20 +676,23 @@ class PGAgentSessionRepository:
                         settlement.value,
                     )
                     if settlement.value.memory_operation is not None:
-                        await conn.execute(
-                            _INSERT_MEMORY_OPERATION_EVENT,
-                            self._owner_id,
-                            self._run_id,
-                            self._lease_owner,
-                            self._fencing_epoch,
-                            json.dumps(
-                                _memory_event_payload(
-                                    session_id,
-                                    settlement.intent_id,
-                                    settlement.value.memory_operation,
+                        await guard_payload(
+                            conn.execute(
+                                _INSERT_MEMORY_OPERATION_EVENT,
+                                self._owner_id,
+                                self._run_id,
+                                self._lease_owner,
+                                self._fencing_epoch,
+                                json.dumps(
+                                    _memory_event_payload(
+                                        session_id,
+                                        settlement.intent_id,
+                                        settlement.value.memory_operation,
+                                    ),
+                                    ensure_ascii=False,
                                 ),
-                                ensure_ascii=False,
                             ),
+                            surface="Memory Operation event",
                         )
                 from dlightrag.adapters.postgres.answer.attachment_replay import (
                     write_attachment_occurrences,
@@ -898,11 +902,14 @@ class PGAgentSessionRepository:
             }
             for entry, sequence in zip(entries, sequences, strict=True)
         ]
-        await conn.execute(
-            _INSERT_ENTRIES,
-            self._owner_id,
-            _uuid(session_id.value),
-            json.dumps(payload, ensure_ascii=False),
+        await guard_payload(
+            conn.execute(
+                _INSERT_ENTRIES,
+                self._owner_id,
+                _uuid(session_id.value),
+                json.dumps(payload, ensure_ascii=False),
+            ),
+            surface="Session Entry",
         )
 
     async def _write_registers(
@@ -924,12 +931,15 @@ class PGAgentSessionRepository:
                 }
                 for write in sets
             ]
-            await conn.execute(
-                _SET_REGISTERS,
-                self._owner_id,
-                _uuid(session_id.value),
-                sequence,
-                json.dumps(payload, ensure_ascii=False),
+            await guard_payload(
+                conn.execute(
+                    _SET_REGISTERS,
+                    self._owner_id,
+                    _uuid(session_id.value),
+                    sequence,
+                    json.dumps(payload, ensure_ascii=False),
+                ),
+                surface="Session Register",
             )
         if deletes:
             await conn.execute(
@@ -1108,22 +1118,25 @@ class PGAgentSessionRepository:
         return _host_update_digest(update)
 
     async def _write_evidence_resource(self, conn: Any, write: OpaqueEvidenceResourceWrite) -> None:
-        await conn.execute(
-            _INSERT_RESOURCE,
-            self._owner_id,
-            self._run_id,
-            write.resource_id,
-            "evidence",
-            write.safe_name,
-            write.media_type,
-            json.dumps(write.capabilities, ensure_ascii=False),
-            None,
-            None,
-            write.locator_digest,
-            None,
-            write.session_id,
-            write.intent_id,
-            write.result_ordinal,
+        await guard_payload(
+            conn.execute(
+                _INSERT_RESOURCE,
+                self._owner_id,
+                self._run_id,
+                write.resource_id,
+                "evidence",
+                write.safe_name,
+                write.media_type,
+                json.dumps(write.capabilities, ensure_ascii=False),
+                None,
+                None,
+                write.locator_digest,
+                None,
+                write.session_id,
+                write.intent_id,
+                write.result_ordinal,
+            ),
+            surface="Evidence Resource",
         )
         row = await conn.fetchrow(
             _SELECT_RESOURCE_DIGESTS, self._owner_id, self._run_id, write.resource_id
@@ -1148,22 +1161,25 @@ class PGAgentSessionRepository:
             raise _EvidenceIdentityConflict() from exc
 
     async def _write_fetched_resource(self, conn: Any, write: OpaqueFetchedResourceWrite) -> None:
-        await conn.execute(
-            _INSERT_RESOURCE,
-            self._owner_id,
-            self._run_id,
-            write.resource_id,
-            "fetched_blob",
-            write.safe_name,
-            write.media_type,
-            json.dumps(write.capabilities, ensure_ascii=False),
-            write.ordinal,
-            write.blob_digest,
-            write.source_locator_digest,
-            write.source_locator,
-            write.session_id,
-            write.intent_id,
-            None,
+        await guard_payload(
+            conn.execute(
+                _INSERT_RESOURCE,
+                self._owner_id,
+                self._run_id,
+                write.resource_id,
+                "fetched_blob",
+                write.safe_name,
+                write.media_type,
+                json.dumps(write.capabilities, ensure_ascii=False),
+                write.ordinal,
+                write.blob_digest,
+                write.source_locator_digest,
+                write.source_locator,
+                write.session_id,
+                write.intent_id,
+                None,
+            ),
+            surface="Fetched Resource",
         )
         row = await conn.fetchrow(
             _SELECT_RESOURCE_DIGESTS, self._owner_id, self._run_id, write.resource_id
@@ -1294,18 +1310,21 @@ class PGProgressStore:
                 if existing is not None and existing["state_digest"] != state_digest:
                     return StageConflict(stage_intent_id=stage_intent_id)
                 if existing is None:
-                    await conn.execute(
-                        "INSERT INTO dlightrag_answer_run_stages ("
-                        " owner_id, run_id, stage_intent_id, stage_name,"
-                        " progress_version, state, state_digest)"
-                        " VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
-                        self._owner_id,
-                        self._run_id,
-                        _uuid(stage_intent_id.value),
-                        "final_generation",
-                        expected_progress_version,
-                        state_json,
-                        state_digest,
+                    await guard_payload(
+                        conn.execute(
+                            "INSERT INTO dlightrag_answer_run_stages ("
+                            " owner_id, run_id, stage_intent_id, stage_name,"
+                            " progress_version, state, state_digest)"
+                            " VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
+                            self._owner_id,
+                            self._run_id,
+                            _uuid(stage_intent_id.value),
+                            "final_generation",
+                            expected_progress_version,
+                            state_json,
+                            state_digest,
+                        ),
+                        surface="Run stage",
                     )
                 terminal = await finish_fenced_run(
                     conn,
@@ -1394,18 +1413,21 @@ class PGProgressStore:
                         run_id=self._run_id,
                         writes=evidence,
                     )
-                    await conn.execute(
-                        "INSERT INTO dlightrag_answer_run_stages ("
-                        " owner_id, run_id, stage_intent_id, stage_name,"
-                        " progress_version, state, state_digest)"
-                        " VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
-                        self._owner_id,
-                        self._run_id,
-                        _uuid(stage_intent_id.value),
-                        stage_name,
-                        expected_progress_version,
-                        state_json,
-                        state_digest,
+                    await guard_payload(
+                        conn.execute(
+                            "INSERT INTO dlightrag_answer_run_stages ("
+                            " owner_id, run_id, stage_intent_id, stage_name,"
+                            " progress_version, state, state_digest)"
+                            " VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
+                            self._owner_id,
+                            self._run_id,
+                            _uuid(stage_intent_id.value),
+                            stage_name,
+                            expected_progress_version,
+                            state_json,
+                            state_digest,
+                        ),
+                        surface="Run stage",
                     )
                     await conn.execute(_ADVANCE_PROGRESS, self._owner_id, self._run_id)
                     return StageCommit(

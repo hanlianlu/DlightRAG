@@ -101,6 +101,7 @@ from dlightrag.engine.agent.session.repository import (
     AgentSessionCursor,
     AgentSessionRepository,
     AgentSessionSnapshot,
+    UnrepresentablePayloadError,
     project_transaction_commit,
     validate_snapshot_refresh,
 )
@@ -594,6 +595,23 @@ class AgentSessionRuntime[HostDeltaT]:
                     operation_id=operation_id,
                 )
                 await self._fail(refreshed, kind=exc.kind, detail=exc.detail)
+            except UnrepresentablePayloadError as exc:
+                # The transaction rolled back whole, so the Session is still
+                # consistent: this value, not the Session state, is the problem.
+                # Terminating the Operation keeps the Session able to accept work.
+                logger.warning(
+                    "Agent Runtime payload is not representable in the store",
+                    exc_info=True,
+                )
+                refreshed = await self.restore(
+                    session_id=session_id,
+                    operation_id=operation_id,
+                )
+                await self._fail(
+                    refreshed,
+                    kind="payload_unrepresentable",
+                    detail=exc.detail,
+                )
             except Exception as exc:
                 refreshed = await self.restore(
                     session_id=session_id,
@@ -1216,6 +1234,53 @@ class AgentSessionRuntime[HostDeltaT]:
         )
 
     async def _append_tool_result(
+        self,
+        view: OperationView,
+        item: ToolBatchItem,
+        result: ToolResultEntry,
+        *,
+        attempt_id: AttemptId | None,
+        host_delta: HostDeltaT | None,
+        advances_durable_progress: bool = True,
+    ) -> None:
+        """Settle one Tool result, degrading to a synthetic failure if it cannot be stored.
+
+        A Tool that returns text the durable store refuses must not end the Run:
+        the synthetic-result path already tells the model that one Tool call
+        failed, and the refused transaction rolled back whole, so the Session
+        state this settlement reads is still the committed one.
+        """
+        try:
+            await self._commit_tool_result(
+                view,
+                item,
+                result,
+                attempt_id=attempt_id,
+                host_delta=host_delta,
+                advances_durable_progress=advances_durable_progress,
+            )
+        except UnrepresentablePayloadError:
+            logger.warning(
+                "Agent Runtime Tool result is not representable; settling a synthetic failure",
+                exc_info=True,
+            )
+            await self._commit_tool_result(
+                view,
+                item,
+                ToolResultEntry.text(
+                    tool_name=item.tool_name,
+                    call_id=item.call_id,
+                    outcome="failed",
+                    text=(
+                        f'Tool "{item.tool_name}" returned content the durable store cannot keep.'
+                    ),
+                ),
+                attempt_id=attempt_id,
+                host_delta=None,
+                advances_durable_progress=advances_durable_progress,
+            )
+
+    async def _commit_tool_result(
         self,
         view: OperationView,
         item: ToolBatchItem,

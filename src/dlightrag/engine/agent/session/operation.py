@@ -29,6 +29,7 @@ TerminalFailureKind = Literal[
     "context_overflow",
     "compaction_failed",
     "runtime_fault",
+    "payload_unrepresentable",
 ]
 
 

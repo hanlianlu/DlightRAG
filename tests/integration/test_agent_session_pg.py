@@ -57,6 +57,7 @@ from dlightrag.engine.agent.session.registers import (
     SetRegister,
     ToolArguments,
 )
+from dlightrag.engine.agent.session.repository import UnrepresentablePayloadError
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
     RuntimeContext,
@@ -2208,3 +2209,57 @@ async def test_stale_epoch_writes_zero_rows(pool) -> None:
     assert outcome.__class__.__name__ == "TransactionLeaseLost"
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_sessions") == 0
+
+
+async def test_pg_unrepresentable_payload_is_classified_and_rolled_back(pool) -> None:
+    """PostgreSQL's own U+0000 refusal arrives named, and the Session survives it."""
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+
+    poison = RequestSnapshot.from_values(
+        operation_id=OperationId.new(),
+        turn_number=1,
+        plan_digest="f" * 64,
+        model_role="query",
+        messages=[{"role": "user", "content": "poison\x00context"}],
+        tools=[],
+        tool_choice="auto",
+        max_tokens=10,
+    )
+    with pytest.raises(UnrepresentablePayloadError) as failure:
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(poison)],
+                expectations=[RegisterExpectation(poison.ref, None)],
+            ),
+        )
+    assert "Session Register" in failure.value.detail
+
+    # The refused transaction rolled back whole, so the Session is unharmed and
+    # still accepts the next write on the same connection.
+    loaded = await store.load(session_id)
+    assert not any(record.ref.kind == "request_snapshot" for record in loaded.registers)
+    clean = RequestSnapshot.from_values(
+        operation_id=OperationId.new(),
+        turn_number=1,
+        plan_digest="f" * 64,
+        model_role="query",
+        messages=[{"role": "user", "content": "clean context"}],
+        tools=[],
+        tool_choice="auto",
+        max_tokens=10,
+    )
+    recovered = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(clean)],
+            expectations=[RegisterExpectation(clean.ref, None)],
+        ),
+    )
+    assert isinstance(recovered, TransactionCommit)

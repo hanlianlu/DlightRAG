@@ -198,6 +198,21 @@ def validate_snapshot_refresh(
         raise ValueError("Agent Session refresh replaced its historical Entry prefix")
 
 
+class UnrepresentablePayloadError(RuntimeError):
+    """A durable payload holds a character its store cannot represent.
+
+    PostgreSQL text and jsonb values cannot carry U+0000, and a lone surrogate
+    cannot be encoded at all, so a payload that reaches the store with one is
+    refused. The refusal describes the *value*, not the stored Session: the
+    transaction rolled back whole, which is why the Session Runtime terminates
+    the Operation instead of faulting the Session.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
 class AgentSessionRepository[HostDeltaT](Protocol):
     """Coherent snapshot reads plus the atomic transaction adapter seam."""
 
@@ -223,6 +238,7 @@ __all__ = [
     "AgentSessionCursor",
     "AgentSessionRepository",
     "AgentSessionSnapshot",
+    "UnrepresentablePayloadError",
     "project_transaction_commit",
     "validate_snapshot_refresh",
 ]

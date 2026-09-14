@@ -137,7 +137,10 @@ async def _search_corpus(
     retrievals = trace.setdefault("knowledge_base_retrievals", [])
     if isinstance(retrievals, list):
         retrievals.append({**result.trace, "query": query})
-    return ToolResult.text(f"Knowledge base added {delta.new_chunks} new passages.")
+    content = f"Knowledge base added {delta.new_chunks} new passages."
+    if delta.dropped_rows:
+        content += f" Dropped {delta.dropped_rows} unusable evidence item(s)."
+    return ToolResult.text(content)
 
 
 async def _search_open_web(
@@ -170,6 +173,8 @@ async def _search_open_web(
     await evidence.aflush_images()
     trace["web_search_cost_dollars"] += result.cost_dollars
     content = f"Open web added {delta.new_chunks} new passages."
+    if delta.dropped_rows:
+        content += f" Dropped {delta.dropped_rows} unusable evidence item(s)."
     if result.dropped_results:
         content += f" Dropped {result.dropped_results} malformed result(s)."
     if result.degradation:

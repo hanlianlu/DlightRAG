@@ -36,6 +36,7 @@ from dlightrag.engine.agent.session.ids import (
 )
 from dlightrag.engine.agent.session.operation import (
     OperationCompleted,
+    OperationFailed,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
@@ -212,6 +213,24 @@ _DEPENDENCY_DEFER_BASE_SECONDS = 5
 _DEPENDENCY_DEFER_MAX_SECONDS = 60
 
 type DependencyStateCallback = Callable[[DependencyComponent], None]
+
+
+def _incomplete_operation_error(operation: Any, *, message: str) -> RunExecutionError:
+    """Classify a terminal Agent Operation failure into a public Run failure.
+
+    A refused payload describes the *value*, not the stored Session, so it gets
+    its own kind: the Run failed, but the conversation survives and can be used
+    again. Generic messages stay as they were for every other terminal state.
+    """
+    if isinstance(operation.state, OperationFailed) and (
+        operation.state.kind == "payload_unrepresentable"
+    ):
+        return RunExecutionError(
+            "payload_unrepresentable",
+            "The research context could not be stored: it contained a character the "
+            "durable store cannot keep.",
+        )
+    return RunExecutionError("run_execution_failed", message)
 
 
 def _child_lifecycle_for_plan(plan: AgentRunPlan | None) -> tuple[bool, bool]:
@@ -1484,9 +1503,11 @@ class AnswerExecutor:
                         operation_id=accepted.operation_id,
                     )
                     if not isinstance(operation.state, OperationCompleted):
-                        raise RunExecutionError(
-                            "run_execution_failed",
-                            f"Research Agent operation ended as {operation.state.state_type}.",
+                        raise _incomplete_operation_error(
+                            operation,
+                            message=(
+                                f"Research Agent operation ended as {operation.state.state_type}."
+                            ),
                         )
                     snapshot = operation.context.snapshot
                     operation_usage = (
@@ -1748,9 +1769,9 @@ class AnswerExecutor:
                         operation_id=correction.operation_id,
                     )
                     if not isinstance(corrected.state, OperationCompleted):
-                        raise RunExecutionError(
-                            "run_execution_failed",
-                            "Publication correction Agent operation did not complete.",
+                        raise _incomplete_operation_error(
+                            corrected,
+                            message="Publication correction Agent operation did not complete.",
                         )
                     corrected_snapshot = corrected.context.snapshot
                     correction_usage = (

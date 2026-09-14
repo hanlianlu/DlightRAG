@@ -38,7 +38,10 @@ from dlightrag.engine.agent.session.registers import (
     RequestSnapshot,
     SetRegister,
 )
-from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionSnapshot,
+    UnrepresentablePayloadError,
+)
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionEvent,
     AgentSessionRuntime,
@@ -56,9 +59,12 @@ from dlightrag.engine.agent.session.transactions import (
     RegisterExpectation,
     SessionTransaction,
     TransactionLeaseLost,
+    TransactionOutcome,
 )
+from dlightrag.engine.agent.tool_content import tool_content_text
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.answer.evidence import has_unrepresentable_text
 from dlightrag.engine.dependencies import ProviderUnavailableError
 
 
@@ -505,6 +511,37 @@ async def test_runtime_event_sink_failure_is_observe_only() -> None:
         operation_id=accepted.operation_id,
     )
     assert isinstance(final.state, OperationCompleted)
+
+
+def _payload_holds_unrepresentable_text(transaction: SessionTransaction[Any]) -> bool:
+    payloads = [entry.canonical_payload() for entry in transaction.entries]
+    payloads.extend(
+        write.value.canonical_payload()
+        for write in transaction.register_writes
+        if isinstance(write, SetRegister)
+    )
+    return any(has_unrepresentable_text(payload) for payload in payloads)
+
+
+class _RefusingStore(MemoryAgentSessionRepository[dict[str, Any]]):
+    """Memory Session Store that refuses what PostgreSQL cannot represent."""
+
+    async def transact(
+        self,
+        *,
+        session_id: SessionId,
+        fencing_epoch: int,
+        transaction: SessionTransaction[Any],
+    ) -> TransactionOutcome:
+        if _payload_holds_unrepresentable_text(transaction):
+            raise UnrepresentablePayloadError(
+                "Session Register holds a character PostgreSQL cannot store."
+            )
+        return await super().transact(
+            session_id=session_id,
+            fencing_epoch=fencing_epoch,
+            transaction=transaction,
+        )
 
 
 @pytest.mark.asyncio
@@ -1493,3 +1530,106 @@ async def test_truncated_empty_turn_recovers_instead_of_completing_with_nothing(
         AssistantMessageEntry,
     ]
     assert snapshot.tree.ancestry()[-1].content == "done"  # type: ignore[union-attr]
+
+
+class _PoisonToolEffects(_Effects):
+    """Effects whose Tool returns text PostgreSQL cannot keep."""
+
+    async def execute_tool(
+        self,
+        context: RuntimeContext,
+        item: Any,
+        arguments: Mapping[str, Any],
+        attempt_id: AttemptId,
+        emit_ephemeral: Any,
+    ) -> ToolEffectResult[dict[str, Any]]:
+        execution = await super().execute_tool(context, item, arguments, attempt_id, emit_ephemeral)
+        return replace(
+            execution,
+            result=ToolResultEntry.text(
+                tool_name=item.tool_name,
+                call_id=item.call_id,
+                outcome="succeeded",
+                text="poison\x00passage",
+            ),
+        )
+
+
+class _PoisonSnapshotEffects(_Effects):
+    """Effects whose provider request holds a character PostgreSQL rejects."""
+
+    async def assemble_request(
+        self, context: RuntimeContext
+    ) -> RequestSnapshot | CompactionRequired:
+        return RequestSnapshot.from_values(
+            operation_id=context.operation_id,
+            turn_number=1,
+            plan_digest=context.meta.plan_digest,
+            model_role="query",
+            messages=[{"role": "user", "content": "poison\x00context"}],
+            tools=[],
+            tool_choice="auto",
+            max_tokens=256,
+        )
+
+
+@pytest.mark.asyncio
+async def test_unrepresentable_tool_result_settles_a_synthetic_failure_and_continues() -> None:
+    """A Tool result no store can keep must not end the Run."""
+    tool = _agent_tool()
+    effects = _PoisonToolEffects(
+        [
+            _assistant(ToolCall("c1", "lookup", {"value": "x"})),
+            _assistant(text="done"),
+        ]
+    )
+    store = _RefusingStore()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="unrepresentable-tool",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    results = [entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry)]
+    assert [entry.result.outcome for entry in results] == ["failed"]
+    assert "durable store cannot keep" in tool_content_text(results[0].result.parts)
+    assert not any(record.ref.kind == "session_fault" for record in snapshot.registers)
+
+
+@pytest.mark.asyncio
+async def test_unrepresentable_request_snapshot_fails_the_operation_but_not_the_session() -> None:
+    """A refused payload describes the value: the Session keeps accepting work."""
+    tool = _agent_tool()
+    store = _RefusingStore()
+    runtime = _runtime(store, _PoisonSnapshotEffects([]), tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="unrepresentable-snapshot",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationFailed)
+    assert final.state.kind == "payload_unrepresentable"
+    snapshot = await store.load(session_id)
+    assert not any(record.ref.kind == "session_fault" for record in snapshot.registers)
+    resumed = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="after-unrepresentable-payload",
+        content="new question",
+        plan=_plan(tool),
+    )
+    assert resumed.operation_id is not None

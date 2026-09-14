@@ -385,3 +385,50 @@ def test_ledger_state_round_trips_identities_without_image_bytes() -> None:
         "[1] report.pdf",
         "[2] Page A [resource: res-a]",
     ]
+
+
+def test_unrepresentable_web_passage_is_dropped_and_counted() -> None:
+    ledger = EvidenceLedger()
+
+    delta = ledger.add_rows(_web("poison\x00passage"))
+
+    assert delta.new_chunks == 0
+    assert delta.changed is False
+    assert delta.dropped_rows == 1
+    assert ledger.contexts["chunks"] == []
+
+
+def test_lone_surrogate_passage_is_dropped() -> None:
+    ledger = EvidenceLedger()
+
+    delta = ledger.add_rows(_web("bad\ud800passage"))
+
+    assert delta.dropped_rows == 1
+    assert ledger.contexts["chunks"] == []
+
+
+def test_unrepresentable_corpus_and_graph_rows_are_dropped() -> None:
+    ledger = EvidenceLedger()
+
+    delta = ledger.add_contexts(
+        {
+            "chunks": [_corpus_row(chunk="c1", content="bad\x00corpus")],
+            "entities": [{"entity_name": "Volvo\x00Cars", "description": "layoffs"}],
+            "relationships": [],
+        }
+    )
+
+    assert (delta.new_chunks, delta.new_entities, delta.dropped_rows) == (0, 0, 2)
+    assert ledger.contexts["chunks"] == []
+    assert ledger.contexts["entities"] == []
+
+
+def test_checkable_content_keeps_admitting_after_a_dropped_passage() -> None:
+    ledger = EvidenceLedger()
+
+    dropped = ledger.add_rows(_web("poison\x00passage"))
+    kept = ledger.add_rows(_web("clean passage"))
+
+    assert dropped.dropped_rows == 1
+    assert kept.new_chunks == 1
+    assert [row["content"] for row in ledger.contexts["chunks"]] == ["clean passage"]
