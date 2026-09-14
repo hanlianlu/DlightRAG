@@ -11,8 +11,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
+# `localhost` is ambiguous on a machine that also runs a host PostgreSQL on [::1]: the resolver
+# prefers that IPv6 instance over the container's IPv4 mapping, so the suite silently tested against
+# a server whose `dlightrag` role is not the superuser CI provides - which surfaced as unrelated
+# "permission denied to terminate process" and "must be superuser to create extension" failures.
+# Pin the container mapping and keep PGHOST for CI and other deployments.
 PG_CONN_KWARGS: dict[str, Any] = dict(
-    host=os.environ.get("PGHOST", "localhost"),
+    host=os.environ.get("PGHOST", "127.0.0.1"),
     port=int(os.environ.get("PGPORT", "5432")),
     user=os.environ.get("PGUSER", "dlightrag"),
     password=os.environ.get("PGPASSWORD", "dlightrag"),
