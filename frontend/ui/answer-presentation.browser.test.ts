@@ -70,7 +70,7 @@ it('expands and collapses long References lists locally per Answer', async () =>
   const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
   element.presentation = {
     ...presentation,
-    sources: Array.from({length: 5}, (_, index) => ({
+    sources: Array.from({length: 7}, (_, index) => ({
       ...presentation.sources[0],
       id: String(index + 1),
       title: `Reference ${index + 1}`,
@@ -79,19 +79,44 @@ it('expands and collapses long References lists locally per Answer', async () =>
   document.body.appendChild(element);
   await element.updateComplete;
 
-  const toggle = element.querySelector<HTMLButtonElement>('.answer-references-show-all')!;
-  expect(toggle.textContent?.trim()).to.equal('Show all 5');
+  const toggle = element.querySelector<HTMLButtonElement>('.answer-references-toggle')!;
+  expect(toggle.textContent?.trim()).to.equal('Show all 7');
   expect(toggle.getAttribute('aria-expanded')).to.equal('false');
+  expect(toggle.querySelector('.answer-references-toggle-icon svg')).to.not.equal(null);
   toggle.click();
   await element.updateComplete;
 
-  const collapse = element.querySelector<HTMLButtonElement>('.answer-references-show-all')!;
+  const collapse = element.querySelector<HTMLButtonElement>('.answer-references-toggle')!;
   expect(element.querySelector('.answer-reference-list')?.classList.contains('expanded')).to.equal(true);
   expect(collapse.textContent?.trim()).to.equal('Show fewer');
   expect(collapse.getAttribute('aria-expanded')).to.equal('true');
   collapse.click();
   await element.updateComplete;
   expect(element.querySelector('.answer-reference-list')?.classList.contains('expanded')).to.equal(false);
+});
+
+it('renders the References control from four sources and not from three', async () => {
+  // Three sources can never be truncated (five rows wide, three narrow), so the
+  // render gate starts at four and the stylesheet decides whether it is shown.
+  const render = async (count: number) => {
+    const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+    element.presentation = {
+      ...presentation,
+      sources: Array.from({length: count}, (_, index) => ({
+        ...presentation.sources[0],
+        id: String(index + 1),
+        title: `Reference ${index + 1}`,
+      })),
+    };
+    document.body.appendChild(element);
+    await element.updateComplete;
+    const toggle = element.querySelector('.answer-references-toggle');
+    element.remove();
+    return toggle;
+  };
+
+  expect(await render(3)).to.equal(null);
+  expect(await render(4)).to.not.equal(null);
 });
 
 it('renders Artifact intent and semantic Visual Evidence in approved order', async () => {

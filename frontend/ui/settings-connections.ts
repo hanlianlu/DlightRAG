@@ -449,7 +449,7 @@ export class DlSettingsConnections extends LightElement {
             <span class=${styles.rowLabel}>${connection.label}</span>
             <span class=${styles.rowMeta}>${this.#meta(connection)}</span>
           </span>
-          <span class=${styles.chevron}>${icon('chevron-down', {size: 'sm'})}</span>
+          <span class=${styles.chevron}>${icon('disclosure', {size: 'sm'})}</span>
         </button>
         ${this.#switch(connection)}
       </div>
@@ -522,8 +522,7 @@ export class DlSettingsConnections extends LightElement {
           ? msg('1 connection needs attention', {id: 'connections.attentionOne'})
           : msg(str`${attention} connections need attention`, {id: 'connections.attentionMany'})}</span>`
         : nothing}
-      <span class=${styles.groupChevron}
-        style=${`transform: rotate(${this.expanded ? '0deg' : '-90deg'})`}>${icon('chevron-down', {size: 'sm'})}</span>
+      <span class=${styles.groupChevron}>${icon('disclosure', {size: 'sm'})}</span>
     </button>`;
   }
 

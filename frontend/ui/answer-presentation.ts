@@ -9,6 +9,7 @@ import type {
   PresentationImage,
   PresentationPart,
 } from '../api/conversations.ts';
+import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import answerStyles from '../styles/answer-presentation.module.css';
@@ -103,9 +104,10 @@ export class AnswerPresentationElement extends LightElement {
           )}
           </div>
           ${presentation.sources.length > 3 ? html`
-            <button class=${answerStyles['answer-references-show-all']} type="button"
+            <button class=${answerStyles['answer-references-toggle']} type="button"
                     aria-expanded=${String(this.referencesExpanded)}
                     @click=${this.#toggleReferences}>
+              <span class=${answerStyles['answer-references-toggle-icon']}>${icon('disclosure', {size: 'xs'})}</span>
               ${this.referencesExpanded
                 ? msg('Show fewer', {id: 'answerPresentation.showFewerReferences'})
                 : msg(str`Show all ${presentation.sources.length}`, {id: 'answerPresentation.showAllReferences'})}

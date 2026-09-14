@@ -81,8 +81,68 @@
     outline-offset: 2px;
 }
 
-.answer-references-show-all {
-    display: none;
+/* One gutter width for the reference id column and the disclosure column. */
+.answer-ref-id,
+.answer-references-toggle-icon {
+    flex-shrink: 0;
+    min-width: 24px;
+}
+
+.answer-references-toggle {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--color-accent-action);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    gap: var(--space-tight);
+    padding: var(--space-tight) 0;
+    text-align: left;
+    width: 100%;
+}
+
+.answer-references-toggle:hover {
+    background: var(--color-accent-ghost);
+}
+
+.answer-references-toggle:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
+}
+
+/* The disclosure column shares the reference id gutter and keeps its glyph
+ * flush left, so the chevron's ink lines up with [n]. The glyph itself carries
+ * the rotation, which keeps the pivot on the glyph instead of the column. */
+.answer-references-toggle-icon {
+    color: var(--color-text-muted);
+    display: flex;
+    justify-content: flex-start;
+}
+
+.answer-references-toggle-icon svg {
+    transition: transform var(--duration-control) var(--easing-standard);
+}
+
+.answer-references-toggle[aria-expanded='true'] .answer-references-toggle-icon svg {
+    transform: rotate(90deg);
+}
+
+/* A collapsed list shows the first five rows, and three on a narrow answer
+ * column. The control is the list's next sibling, so each threshold hides it
+ * only when that threshold hides no row. Both halves stay in their own query:
+ * a viewport-wide "nothing to reveal" rule would hide the control on a narrow
+ * column whose fourth row is collapsed away. */
+@media (width > 640px) {
+    .answer-reference-list:not(.expanded) .answer-ref-item:nth-child(n + 6) {
+        display: none;
+    }
+
+    .answer-references:not(:has(.answer-reference-list.expanded), :has(.answer-reference-list .answer-ref-item:nth-child(6))) .answer-references-toggle {
+        display: none;
+    }
 }
 
 @media (width <= 640px) {
@@ -90,23 +150,14 @@
         display: none;
     }
 
-    .answer-references-show-all {
-        background: transparent;
-        border: 0;
-        color: var(--color-accent-action);
-        cursor: pointer;
-        display: inline-flex;
-        font: inherit;
-        font-size: var(--font-size-detail);
-        padding: var(--space-tight) 0;
+    .answer-references:not(:has(.answer-reference-list.expanded), :has(.answer-reference-list .answer-ref-item:nth-child(4))) .answer-references-toggle {
+        display: none;
     }
 }
 
 .answer-ref-id {
     color: var(--color-accent-muted);
     font-weight: 600;
-    flex-shrink: 0;
-    min-width: 24px;
 }
 
 .answer-ref-title {

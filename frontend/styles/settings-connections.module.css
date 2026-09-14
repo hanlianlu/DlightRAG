@@ -15,10 +15,9 @@
     border: 0;
     color: inherit;
     cursor: pointer;
-    display: grid;
+    display: flex;
     font: inherit;
     gap: var(--space-inline);
-    grid-template-columns: auto auto 1fr auto;
     padding: 0;
     text-align: left;
     width: 100%;
@@ -40,10 +39,20 @@
     font-size: var(--font-size-caption);
   }
 
-  .groupChevron {
+  /* Both disclosures are their row's last child and pin themselves there, so no
+   * optional sibling can move them. The box stays glyph-sized because it never
+   * takes a width: rotation pivots on the glyph, not on flexible row space. */
+  .groupChevron,
+  .chevron {
     color: var(--color-text-dim);
     display: flex;
+    flex-shrink: 0;
+    margin-inline-start: auto;
     transition: transform var(--duration-control) var(--easing-standard);
+  }
+
+  .groupRow[aria-expanded='true'] .groupChevron {
+    transform: rotate(90deg);
   }
 
   /* ── Connection card ── */
@@ -70,18 +79,16 @@
     border: 0;
     color: inherit;
     cursor: pointer;
-    display: grid;
+    display: flex;
     font: inherit;
     gap: var(--space-tight);
-    grid-template-columns: auto 1fr auto;
     min-width: 0;
     padding-block: var(--space-tight);
     text-align: left;
   }
 
-  .chevron {
-    color: var(--color-text-dim);
-    display: flex;
+  .cardToggle[aria-expanded='true'] .chevron {
+    transform: rotate(90deg);
   }
 
   .cardBody {
@@ -93,6 +100,7 @@
 
   .rowText {
     display: grid;
+    flex: 1;
     gap: var(--space-inline);
     min-width: 0;
   }
