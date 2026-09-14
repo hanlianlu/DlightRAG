@@ -16,6 +16,7 @@ Proves on compact fixtures:
   reader validation fails equivalently while passing on the partitioned corpus.
 """
 
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
@@ -25,7 +26,12 @@ from typing import Any
 import asyncpg
 import pytest
 
-from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, skip_without_postgres
+from tests.support.pg import (
+    PG_CONN_KWARGS,
+    drop_database,
+    drop_scratch_database,
+    skip_without_postgres,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -68,17 +74,26 @@ async def _create_fresh_database(database: str) -> None:
         await db.close()
 
 
+async def _drop_databases(*databases: str) -> None:
+    for database in databases:
+        await drop_database(database)
+
+
+def _drop_owned_databases() -> None:
+    """Drop the databases this suite owns, on a loop of its own.
+
+    A module-scoped async generator's post-yield block is skipped once the whole suite shares one
+    session, which left `dlightrag_partition_foundation_test` behind on a full-directory run.
+    """
+    asyncio.run(_drop_databases(_TEST_DB, _LEGACY_DB))
+
+
 @pytest.fixture(scope="module", autouse=True)
-async def _fresh_test_database() -> AsyncIterator[None]:
+async def _fresh_test_database(request: pytest.FixtureRequest) -> AsyncIterator[None]:
     await skip_without_postgres()
     await _create_fresh_database(_TEST_DB)
+    request.addfinalizer(_drop_owned_databases)
     yield None
-    conn = await asyncpg.connect(**_kwargs(_MAINT_DB))
-    try:
-        await drop_scratch_database(conn, _TEST_DB)
-        await drop_scratch_database(conn, _LEGACY_DB)
-    finally:
-        await conn.close()
 
 
 @dataclass
