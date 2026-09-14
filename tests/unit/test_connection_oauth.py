@@ -11,7 +11,7 @@ import pytest
 from pydantic import SecretStr
 
 from dlightrag.application.connections import ConnectionPolicy
-from tests.unit.test_connections_transport import public_dns
+from tests.support.dns import public_dns
 
 
 class FakeAuthorizationServer:

@@ -11,23 +11,7 @@ from pydantic import SecretStr
 
 from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
 from dlightrag.application.connections import ConnectionPolicy, ConnectionsError
-
-_PINNED_PUBLIC_ADDRESS = "93.184.216.34"
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"})
-_REAL_GETADDRINFO = socket.getaddrinfo
-
-
-def public_dns(host: str, port: int, *args: Any, **kwargs: Any) -> list[Any]:
-    """Resolve a fixture host to one pinned public address, and leave every other host alone.
-
-    Callers install this on the process-wide ``socket.getaddrinfo``. A fake that answers lookups it
-    does not mean to fake redirects unrelated traffic: the integration tests that patch this helper
-    also open a real PostgreSQL connection on ``localhost``, which the fake would send to the
-    pinned public address, hanging until the client's connect timeout.
-    """
-    if host in _LOOPBACK_HOSTS:
-        return _REAL_GETADDRINFO(host, port, *args, **kwargs)
-    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PINNED_PUBLIC_ADDRESS, 443))]
+from tests.support.dns import public_dns
 
 
 def test_public_dns_leaves_loopback_to_the_real_resolver(monkeypatch):

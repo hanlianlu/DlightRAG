@@ -17,8 +17,8 @@ from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connection_authorization_pg import cipher
 from tests.integration.test_connection_binding_pg import enabled_connection
 from tests.integration.test_connections_pg import stored_catalogue
+from tests.support.dns import public_dns
 from tests.unit.test_connection_oauth import refresh_credentials
-from tests.unit.test_connections_transport import public_dns
 
 
 async def oauth_connection(pool, remote):

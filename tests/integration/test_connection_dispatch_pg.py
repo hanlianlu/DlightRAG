@@ -246,6 +246,7 @@ async def test_gate_first_revoke_is_in_flight_cancelled_unknown_without_network_
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            await store.stop_notifications()
             await service.aclose()
 
 
@@ -570,8 +571,8 @@ async def test_owner_gate_reaches_real_sdk_fake_http_static_call(monkeypatch):
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.application.connections import Connections
     from dlightrag.application.connections.credentials import CredentialCipher
+    from tests.support.dns import public_dns
     from tests.unit.test_connections_config import KEYRING
-    from tests.unit.test_connections_transport import public_dns
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     async with isolated_run_runtime("dispatch_http") as (runs, pool):

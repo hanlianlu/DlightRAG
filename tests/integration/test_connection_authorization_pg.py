@@ -90,8 +90,8 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
 
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.application.connections import ConnectionPolicy
+    from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
-    from tests.unit.test_connections_transport import public_dns
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
@@ -228,6 +228,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
                 next(row["consented_scopes"] for row in rows if row["status"] == "active")
             ) == ["read", "write"]
         finally:
+            await store.stop_notifications()
             await a.aclose()
             await b.aclose()
 
@@ -247,8 +248,8 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
 
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.application.connections import ConnectionPolicy
+    from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
-    from tests.unit.test_connections_transport import public_dns
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()

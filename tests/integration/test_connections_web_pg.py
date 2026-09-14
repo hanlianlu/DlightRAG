@@ -118,8 +118,8 @@ async def test_web_sdk_oauth_authenticated_callback_strips_query_and_returns_fix
     from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
     from dlightrag.application.connections import ConnectionPolicy
     from tests.integration.test_connection_authorization_pg import cipher
+    from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
-    from tests.unit.test_connections_transport import public_dns
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
