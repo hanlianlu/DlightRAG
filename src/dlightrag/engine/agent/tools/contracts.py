@@ -8,9 +8,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel
 
 from dlightrag.engine.agent.session.effects import (
-    EffectIntent,
     ReplayPolicy,
-    ToolResultEntry,
     schema_digest,
 )
 from dlightrag.engine.agent.session.ids import IntentId
@@ -20,7 +18,7 @@ from dlightrag.engine.agent.tool_content import (
     VisualSource,
     tool_content_text,
 )
-from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, ToolChoice, ToolDefinition
+from dlightrag.engine.ai.messages import AssistantTurn, ToolChoice, ToolDefinition
 
 
 class ToolModelFunc(Protocol):
@@ -204,50 +202,10 @@ class AgentTool:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolObservation:
-    """What one tool execution did, with nothing it carried.
-
-    Tool payloads can hold attachment text, provider responses, and redacted
-    failure detail, so an observation records only the call's shape: which tool
-    ran, how long it took, whether the run had already answered that exact call,
-    and how it ended.
-    """
-
-    tool: str
-    call_id: str
-    outcome: str
-    duration_ms: float
-    cached: bool
-    is_error: bool
-    content_chars: int
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "tool": self.tool,
-            "call_id": self.call_id,
-            "outcome": self.outcome,
-            "duration_ms": self.duration_ms,
-            "cached": self.cached,
-            "is_error": self.is_error,
-            "content_chars": self.content_chars,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class ToolExecution:
-    call: ToolCall
-    result: ToolResult
-    observation: ToolObservation
-    is_error: bool = False
-
-
-@dataclass(frozen=True, slots=True)
 class ExecutedTurn:
+    """The one assistant turn a Run's last tool-capable model call produced."""
+
     assistant: AssistantTurn
-    results: tuple[ToolExecution, ...]
-    messages: list[dict[str, Any]]
-    intents: tuple[EffectIntent, ...] = ()
-    validation_results: tuple[ToolResultEntry, ...] = ()
 
 
 __all__ = [
@@ -257,9 +215,7 @@ __all__ = [
     "ExecutedTurn",
     "ResourceAttachmentBytes",
     "ToolExecute",
-    "ToolExecution",
     "ToolModelFunc",
-    "ToolObservation",
     "ToolResult",
     "ToolResultCapacityError",
     "ToolRuntime",

@@ -55,3 +55,31 @@ def test_session_repository_exposes_only_snapshot_and_transaction_primitives() -
         if callable(value) and not name.startswith("_")
     }
     assert public_methods == {"load", "refresh", "transact"}
+
+
+def test_the_legacy_event_driven_tool_loop_cannot_return() -> None:
+    """One live tool path: the durable AgentSessionRuntime.
+
+    The event-driven executor was the second implementation of tool dispatch; it
+    kept its own copy of settlement metadata, which is how the browser ended up
+    with a dead ``duration_ms`` field. Its module and event type are gone.
+    """
+    assert not (AGENT / "tools" / "executor.py").exists()
+    assert not (AGENT / "events.py").exists()
+    forbidden = (
+        "ToolTurnExecutor",
+        "PreparedToolTurn",
+        "ToolPreflight",
+        "preflight_tool_calls",
+        "DuplicateToolCallIdError",
+        "ToolObservation",
+        "ToolExecution",
+        "AgentEvent",
+    )
+    matches: dict[str, list[str]] = {name: [] for name in forbidden}
+    for path in SRC.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in forbidden:
+            if name in text:
+                matches[name].append(str(path.relative_to(ROOT)))
+    assert matches == {name: [] for name in forbidden}

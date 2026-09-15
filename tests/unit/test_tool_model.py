@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.engine.agent.tools import ToolTurnExecutor
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
@@ -78,29 +77,6 @@ async def test_tool_model_routes_streaming_turns_through_the_provider(monkeypatc
     assert emitted == ["live"]
     provider.complete_tool_turn_streaming.assert_awaited_once()
     provider.complete_tool_turn.assert_not_awaited()
-
-
-async def test_tool_turn_executor_uses_the_production_model_output_contract(monkeypatch) -> None:
-    provider = AsyncMock()
-    provider.complete_tool_turn.return_value = AssistantTurn(
-        text="done",
-        tool_calls=(),
-        stop_reason="stop",
-    )
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.tool_model.get_provider",
-        lambda *_args, **_kwargs: provider,
-    )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
-
-    prepared = await ToolTurnExecutor(model).prepare_turn(
-        [{"role": "user", "content": "research"}],
-        [],
-        max_tokens=2_048,
-    )
-
-    assert prepared.assistant.text == "done"
-    assert provider.complete_tool_turn.await_args.kwargs["max_tokens"] == 2_048
 
 
 async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:

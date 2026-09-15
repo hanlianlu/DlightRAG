@@ -24,7 +24,6 @@ from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
-from dlightrag.engine.agent.events import AgentEvent
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry, CompactionEntry
 from dlightrag.engine.agent.session.fold import (
     PriorTurns,
@@ -92,7 +91,6 @@ logger = logging.getLogger(__name__)
 
 ToolModel = ToolModelFunc
 StreamModel = Callable[..., AsyncIterator[str]]
-EventSink = Callable[[AgentEvent], Awaitable[None]]
 ProviderTextSink = Callable[[str], Awaitable[None]]
 
 
@@ -575,8 +573,6 @@ class AnswerOrchestrator:
                         else None
                     ),
                 ),
-                results=(),
-                messages=[],
             )
         run.stop_reason = "model_stop"
 
