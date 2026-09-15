@@ -1276,6 +1276,38 @@ async def test_tool_label_is_resolved_for_a_pinned_connection_tool_only() -> Non
     assert "tool_label" not in builtin
 
 
+async def test_a_replayed_tool_start_says_how_long_it_has_already_run() -> None:
+    """A reload mid-call must not restart the counter from zero.
+
+    The frame carries the duration the worker already measured (from the durable
+    event's commit to this replay), and a live start carries none.
+    """
+    committed = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=12)
+    replay = browser_frame(
+        RunEvent(
+            sequence=4,
+            event_type="tool_start",
+            payload={"tool_name": "mcp_connection_deadbeef", "call_id": "call-1"},
+            created_at=committed,
+        ),
+        live_after=9,
+    )
+    live = browser_frame(
+        RunEvent(
+            sequence=10,
+            event_type="tool_start",
+            payload={"tool_name": "mcp_connection_deadbeef", "call_id": "call-2"},
+            created_at=committed,
+        ),
+        live_after=9,
+    )
+
+    replayed_payload = json.loads(replay.split("data: ", 1)[1].strip())
+    live_payload = json.loads(live.split("data: ", 1)[1].strip())
+    assert 11_000 <= replayed_payload["elapsed_ms"] <= 60_000
+    assert "elapsed_ms" not in live_payload
+
+
 async def test_a_token_frame_carries_only_the_text() -> None:
     (frame,) = await _frames([_event(1, "token", {"text": "Rev"})])
 

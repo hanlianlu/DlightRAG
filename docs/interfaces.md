@@ -307,6 +307,7 @@ Tool events carry metadata only, and the browser stream adds one display field:
 | `duration_ms` | `tool_end` | Measured wall time of the attempt that settled; absent when no call ran |
 | `object_label` | `tool_progress` | Bounded current object a Tool reports (a query, a path, a skill name) |
 | `text_chars`, `attachment_count`, `output_bytes`, `spill_state` | either | Bounded size and spill metadata when a producer reports it |
+| `elapsed_ms` | `tool_start` | Browser projection only: how long a replayed start has already been running, so a reloaded trace keeps counting |
 | `tool_label` | all three | Browser projection only: a human name for a pinned Connection tool, resolved from the Run's pins |
 
 No tool event carries stdout, stderr, arguments, or Tool output.

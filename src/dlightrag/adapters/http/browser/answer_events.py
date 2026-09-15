@@ -14,6 +14,7 @@ of the canonical stored result.
 """
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from dlightrag.adapters.http.browser.conversations import (
@@ -66,6 +67,22 @@ def render_done_event(
     )
 
 
+def _is_live(event: RunEvent, live_after: int | None) -> bool:
+    """Whether this event was committed after the subscriber arrived."""
+    return live_after is None or event.sequence > live_after
+
+
+def _elapsed_ms_since(committed_at: datetime) -> int:
+    """Whole milliseconds from one committed event to the frame rendering it.
+
+    This is the one place the browser edge reads a wall clock, and it measures a
+    duration rather than an instant, so no reader has to synchronize clocks. A
+    deployment whose workers disagree about the clock shows the difference only
+    in a replayed counter.
+    """
+    return max(0, round((datetime.now(UTC) - committed_at).total_seconds() * 1000))
+
+
 def _browser_payload(
     event: RunEvent,
     *,
@@ -107,6 +124,10 @@ def _browser_payload(
                 # Resolved here, never stored: the durable event keeps transport-neutral
                 # identity, and only this edge knows how to name an owner's tool.
                 projected["tool_label"] = display
+            if event.event_type == "tool_start" and not _is_live(event, live_after):
+                # A replayed start has already been running for a while. Saying how long
+                # lets a reloaded trace keep counting instead of restarting from zero.
+                projected["elapsed_ms"] = _elapsed_ms_since(event.created_at)
             return projected
         case "memory_operation_settled":
             allowed = {
@@ -122,7 +143,7 @@ def _browser_payload(
                 "target_change_id",
             }
             safe = {key: value for key, value in payload.items() if key in allowed}
-            safe["live"] = live_after is None or event.sequence > live_after
+            safe["live"] = _is_live(event, live_after)
             return safe
         case "done":
             done = render_done_event(

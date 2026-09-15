@@ -164,3 +164,21 @@ test('a label arriving later fills a row that started unnamed', () => {
   assert.equal(rows[0].label, 'Notes · ping');
   assert.equal(toolStatusText(rows), 'Notes · ping — ping');
 });
+
+test('a replayed start continues counting from the server-reported time', () => {
+  const rows = applyToolEvent([], 'tool_start', {
+    tool_name: 'mcp_connection_deadbeef',
+    call_id: 'c1',
+    elapsed_ms: 21_000,
+  }, 1_000_000);
+  assert.equal(rows[0].startedAt, 979_000);
+  assert.equal(rowDurationMs(rows[0], 1_001_000), 22_000);
+  assert.equal(rowDurationMs(rows[0], 1_000_000), 21_000);
+
+  const live = applyToolEvent([], 'tool_start', {
+    tool_name: 'read',
+    call_id: 'c2',
+    elapsed_ms: 0,
+  }, 5000);
+  assert.equal(live[0].startedAt, 5000);
+});

@@ -31,6 +31,8 @@ export interface ToolEventPayload {
   tool_label?: string;
   outcome?: string;
   duration_ms?: number;
+  /** Server-measured running time of a replayed start, when it arrived late. */
+  elapsed_ms?: number;
 }
 
 export const MAX_TOOL_ROWS = 5;
@@ -49,6 +51,11 @@ export function applyToolEvent(
   if (eventType === 'tool_start') {
     if (!name) return rows;
     const display = toolDisplay(name);
+    // A replayed start tells us how long the call has already run, so a reloaded
+    // trace keeps counting instead of pretending the call just began.
+    const runningFor = typeof payload.elapsed_ms === 'number' && payload.elapsed_ms > 0
+      ? payload.elapsed_ms
+      : 0;
     const row: ToolRow = {
       callId,
       label,
@@ -57,7 +64,7 @@ export function applyToolEvent(
       verbId: display.verbId,
       object: '',
       state: 'running',
-      startedAt: now,
+      startedAt: now - runningFor,
       durationMs: null,
     };
     return [...rows, row].slice(-MAX_TOOL_ROWS);
