@@ -50,6 +50,9 @@ postgres/
 tests/
 docs/
 frontend/node_modules/
+# The image builds its own frontend; a host build must never travel in the context, or the image
+# ends up carrying two bundles and index.html can point at the stale one.
+src/dlightrag/adapters/http/browser/static/app/
 scripts/
 *.md
 !README.md
