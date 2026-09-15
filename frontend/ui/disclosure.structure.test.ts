@@ -24,18 +24,10 @@ function read(path: string): string {
   return readFileSync(join(ROOT, path), 'utf8');
 }
 
-/** Return one rule's declarations, matched at a line start so a descendant
- * selector such as `.cardToggle[aria-expanded] .chevron` cannot satisfy it. */
-function rule(css: string, selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`(?:^|\\n)\\s*${escaped} \\{([^}]*)\\}`, 'm').exec(css);
-  assert.ok(match, `${selector} rule is missing`);
-  return match[1];
-}
-
-/** Return the declarations of the one rule whose selector list is exactly these.
- * Comments are stripped first, because a grouped selector may follow one. */
-function sharedRule(css: string, selectors: string[]): string {
+/** Return the declarations of the one rule whose selector list is exactly these,
+ * so a grouped rule can never satisfy a single-selector lookup. Comments are
+ * stripped first, because a grouped selector may follow one. */
+function rule(css: string, ...selectors: string[]): string {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
   for (const match of source.matchAll(/(?:^|\n)([^{}]+)\{([^}]*)\}/g)) {
     const names = match[1].split(',').map((part) => part.trim());
@@ -66,7 +58,7 @@ function block(css: string, header: string): string {
 
 test('MCP disclosures pin one fixed glyph column to the row end', () => {
   const css = read('styles/settings-connections.module.css');
-  const disclosure = sharedRule(css, ['.groupChevron', '.chevron']);
+  const disclosure = rule(css, '.groupChevron', '.chevron');
   assert.match(disclosure, /flex-shrink: 0/);
   assert.match(disclosure, /margin-inline-start: auto/);
   assert.match(disclosure, /transition: transform var\(--duration-control\)/);
@@ -85,6 +77,17 @@ test('MCP disclosures use the shared disclosure icon without inline rotation', (
   const source = read('ui/settings-connections.ts');
   assert.equal((source.match(/icon\('disclosure'/g) ?? []).length, 2);
   assert.doesNotMatch(source, /rotate\(/);
+});
+
+test('MCP disclosure rows ring inside their own box on keyboard focus', () => {
+  const css = read('styles/settings-connections.module.css');
+  // The radius lets the inset ring follow a rounded row inside the card's clip.
+  assert.match(rule(css, '.groupRow'), /border-radius: var\(--radius-control\)/);
+  assert.match(rule(css, '.cardToggle'), /border-radius: var\(--radius-control\)/);
+  const ring = rule(css, '.groupRow:focus-visible', '.cardToggle:focus-visible');
+  assert.match(ring, /outline: 2px solid var\(--color-control-ring\)/);
+  // The card clips overflow, so an outward ring would show clipped segments.
+  assert.match(ring, /outline-offset: -2px/);
 });
 
 test('References keep each threshold and gate inside its own query', () => {
@@ -107,10 +110,10 @@ test('References keep each threshold and gate inside its own query', () => {
 
 test('References control shares the reference id gutter', () => {
   const css = read('styles/answer-presentation.module.css');
-  const gutter = sharedRule(css, ['.answer-ref-id', '.answer-references-toggle-icon']);
+  const gutter = rule(css, '.answer-ref-id', '.answer-references-toggle-icon');
   assert.match(gutter, /flex-shrink: 0/);
   assert.match(gutter, /min-width: 24px/);
-  assert.match(sharedRule(css, ['.answer-references-toggle-icon']), /justify-content: flex-start/);
+  assert.match(rule(css, '.answer-references-toggle-icon'), /justify-content: flex-start/);
   // The svg carries the rotation, so the pivot stays on the glyph while the
   // column keeps the gutter width.
   assert.match(css, /\.answer-references-toggle\[aria-expanded='true'\] \.answer-references-toggle-icon svg \{/);

@@ -13,6 +13,7 @@
     align-items: center;
     background: transparent;
     border: 0;
+    border-radius: var(--radius-control);
     color: inherit;
     cursor: pointer;
     display: flex;
@@ -77,6 +78,7 @@
     align-items: center;
     background: transparent;
     border: 0;
+    border-radius: var(--radius-control);
     color: inherit;
     cursor: pointer;
     display: flex;
@@ -89,6 +91,15 @@
 
   .cardToggle[aria-expanded='true'] .chevron {
     transform: rotate(90deg);
+  }
+
+  /* Both disclosures are full-bleed rows, so the keyboard ring sits inside the
+   * row: the card clips overflow at its own radius, and the group header reads
+   * the same way. */
+  .groupRow:focus-visible,
+  .cardToggle:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: -2px;
   }
 
   .cardBody {
