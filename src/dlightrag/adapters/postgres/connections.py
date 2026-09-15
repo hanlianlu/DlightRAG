@@ -28,6 +28,7 @@ from dlightrag.application.connections.models import (
     DispatchCredentials,
     GrantRefreshClaim,
     OAuthFlow,
+    PinnedToolFact,
     RefreshClaim,
     StoredConnection,
     StoredGrant,
@@ -441,6 +442,40 @@ class PGConnectionsStore(PostgresOperationRunner):
                 raise ValueError("Run Connection pins unavailable or mismatched")
             return tuple(
                 CatalogueTool(**tool) for row in rows for tool in _json(row["catalogue_json"])
+            )
+
+        return await self._run(operation)
+
+    async def pinned_tool_facts(self, *, owner_id: str, run_id: str) -> tuple[PinnedToolFact, ...]:
+        """Read the display facts of this Run's pinned tools, tolerating a lost head.
+
+        The pin still names the generation whose definitions the Run accepted; a
+        disabled, revoked, or deleted Connection keeps its head row (tombstoned), so
+        the label survives, while a pin whose generation was never retained simply
+        contributes nothing.
+        """
+
+        async def operation(conn: Any) -> tuple[PinnedToolFact, ...]:
+            rows = await conn.fetch(
+                """SELECT h.label,g.catalogue_json
+                FROM dlightrag_answer_connection_pins p
+                JOIN dlightrag_connection_generations g ON
+                (g.owner_id,g.connection_id,g.generation)=(p.owner_id,p.connection_id,p.generation)
+                LEFT JOIN dlightrag_connection_heads h ON
+                (h.owner_id,h.connection_id)=(p.owner_id,p.connection_id)
+                WHERE p.owner_id=$1 AND p.run_id=$2 ORDER BY p.connection_id""",
+                owner_id,
+                uuid.UUID(run_id),
+            )
+            return tuple(
+                PinnedToolFact(
+                    local_name=str(tool.get("local_name") or ""),
+                    connection_label=str(row["label"] or ""),
+                    remote_name=str(tool.get("remote_name") or ""),
+                )
+                for row in rows
+                for tool in _json(row["catalogue_json"]) or ()
+                if tool.get("local_name")
             )
 
         return await self._run(operation)

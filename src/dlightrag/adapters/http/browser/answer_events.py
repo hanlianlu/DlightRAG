@@ -13,6 +13,7 @@ presentation -- sanitized ``html``, the answer text, and answer images -- instea
 of the canonical stored result.
 """
 
+from collections.abc import Mapping
 from typing import Any
 
 from dlightrag.adapters.http.browser.conversations import (
@@ -72,6 +73,7 @@ def _browser_payload(
     visual_workspaces: set[str] | None,
     live_after: int | None,
     run_id: str | None,
+    tool_labels: Mapping[str, str] | None = None,
 ) -> Any:
     payload = dict(event.payload)
     match event.event_type:
@@ -99,6 +101,12 @@ def _browser_payload(
             label = projected.get("object_label")
             if isinstance(label, str):
                 projected["object_label"] = label[:64]
+            name = projected.get("tool_name")
+            display = tool_labels.get(name) if isinstance(name, str) and tool_labels else None
+            if display:
+                # Resolved here, never stored: the durable event keeps transport-neutral
+                # identity, and only this edge knows how to name an owner's tool.
+                projected["tool_label"] = display
             return projected
         case "memory_operation_settled":
             allowed = {
@@ -138,6 +146,7 @@ def browser_frame(
     visual_workspaces: set[str] | None = None,
     live_after: int | None = None,
     run_id: str | None = None,
+    tool_labels: Mapping[str, str] | None = None,
 ) -> str:
     """Render one durable event as the frame this browser session reads."""
     return sse_frame(
@@ -149,6 +158,7 @@ def browser_frame(
             visual_workspaces=visual_workspaces,
             live_after=live_after,
             run_id=run_id,
+            tool_labels=tool_labels,
         ),
     )
 

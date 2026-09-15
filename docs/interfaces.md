@@ -296,6 +296,21 @@ The common SSE terminal and progress events are:
 Answer may additionally emit `token`, `reset`, `tool_start`, `tool_progress`,
 and `tool_end`. Retrieval emits only `progress` and one terminal event.
 
+Tool events carry metadata only, and the browser stream adds one display field:
+
+| Field | Events | Meaning |
+|---|---|---|
+| `tool_name` | all three | Transport-neutral tool identity |
+| `call_id` | all three | The one call being started, updated, or settled |
+| `source_position` / `source_index` | start and progress / settle | Position of the call in its model turn |
+| `outcome` | `tool_end` | `succeeded`, or a typed failure such as `failed`, `invalid_arguments`, `tool_contract_changed`, `outcome_unknown` |
+| `duration_ms` | `tool_end` | Measured wall time of the attempt that settled; absent when no call ran |
+| `object_label` | `tool_progress` | Bounded current object a Tool reports (a query, a path, a skill name) |
+| `text_chars`, `attachment_count`, `output_bytes`, `spill_state` | either | Bounded size and spill metadata when a producer reports it |
+| `tool_label` | all three | Browser projection only: a human name for a pinned Connection tool, resolved from the Run's pins |
+
+No tool event carries stdout, stderr, arguments, or Tool output.
+
 Each durable sequence is the SSE `id`. Supplying conflicting header/query
 cursors returns 400. Without a cursor, replay starts at sequence 1. Ten-second
 comment keepalives consume no sequence. Exactly one terminal event is committed.

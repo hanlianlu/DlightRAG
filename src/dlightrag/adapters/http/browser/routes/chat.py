@@ -46,7 +46,7 @@ from dlightrag.adapters.http.browser.presentation import (
 )
 from dlightrag.adapters.http.browser.routes.skills import require_known_skill
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
-from dlightrag.application.access import AccessAction, owner_id_from_user
+from dlightrag.application.access import AccessAction, auth_mode_for_owner, owner_id_from_user
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
@@ -632,8 +632,17 @@ async def answer_run_events(
             detail="Answer run events expired; read its result from the conversation",
         )
     downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
+    owner = owner_id_from_user(user)
+    # Resolved once per subscription, beside the other read-time projections: a
+    # pinned Connection tool keeps a human name even after the Connection later
+    # changes, and the durable event keeps transport-neutral identity.
+    tool_labels = await get_application(request).connections.pinned_tool_labels(
+        owner_id=owner,
+        auth_mode=auth_mode_for_owner(owner),
+        run_id=run_id,
+    )
     events = get_application(request).runs.subscribe(
-        owner_id=owner_id_from_user(user),
+        owner_id=owner,
         run_id=run_id,
         after_sequence=resume_cursor(request),
     )
@@ -646,6 +655,7 @@ async def answer_run_events(
                 visual_workspaces=visual,
                 live_after=turn.run.next_event_sequence - 1,
                 run_id=run_id,
+                tool_labels=tool_labels,
             ),
         ),
         media_type="text/event-stream",

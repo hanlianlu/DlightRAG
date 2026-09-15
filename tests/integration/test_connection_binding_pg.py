@@ -594,3 +594,73 @@ async def test_every_accepting_path_validates_normalized_binding_before_commit(p
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT count(*) FROM dlightrag_runs") == 0
             assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_connection_pins") == 0
+
+
+@pytest.mark.asyncio
+async def test_pinned_tool_labels_resolve_a_run_and_survive_connection_deletion():
+    """A live Run names its Connection tools, and a pin keeps that name readable.
+
+    The label is read-time truth: the Run pins a generation, while the name comes
+    from the Connection head, which tombstoning preserves. Deleting the Connection
+    therefore changes nothing for a Run that already accepted it.
+    """
+    from dataclasses import replace
+    from uuid import uuid7
+
+    from tests.integration.run_runtime_pg_harness import run_envelope
+
+    async with isolated_run_runtime("binding_labels") as (runs, pool):
+        service, store, mcp, view = await enabled_connection(pool)
+        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        local_name = bound.tools[0].name
+        envelope = run_envelope("answer", key="r1", owner="a", mode="research")
+        envelope = replace(
+            envelope,
+            payload={
+                **envelope.payload,
+                "run_connection_bindings": [b.as_json() for b in bound.bindings],
+            },
+        )
+        pinned = await runs.accept_run(
+            envelope=envelope, run_id=str(uuid7()), connection_bindings=bound.bindings
+        )
+        unpinned = await runs.create_run(
+            envelope=run_envelope("answer", key="r2", owner="a", mode="research"),
+            run_id=str(uuid7()),
+            connection_bindings=(),
+        )
+
+        labels = await service.pinned_tool_labels(
+            owner_id="a", auth_mode="jwt", run_id=pinned.run.run_id
+        )
+        assert labels == {local_name: "Fixture · read"}
+        assert (
+            await service.pinned_tool_labels(
+                owner_id="a", auth_mode="jwt", run_id=unpinned.run.run_id
+            )
+            == {}
+        )
+        assert (
+            await service.pinned_tool_labels(
+                owner_id="b", auth_mode="jwt", run_id=pinned.run.run_id
+            )
+            == {}
+        )
+        assert (
+            await service.pinned_tool_labels(
+                owner_id="a", auth_mode="simple", run_id=pinned.run.run_id
+            )
+            == {}
+        )
+
+        deleted = ConnectionCommand(kind="delete", connection_id=view.connections[0].connection_id)
+        await service.change(
+            owner_id="a",
+            auth_mode="jwt",
+            expected_revision=(await service.read(owner_id="a", auth_mode="jwt")).revision,
+            command=deleted,
+        )
+
+        assert await service.pinned_tool_labels(
+            owner_id="a", auth_mode="jwt", run_id=pinned.run.run_id
+        ) == {local_name: "Fixture · read"}

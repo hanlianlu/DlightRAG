@@ -10,6 +10,7 @@ keys, retention, and concurrency live in the PostgreSQL integration suite.
 import asyncio
 import datetime
 import json
+from functools import partial
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -1234,6 +1235,45 @@ async def test_tool_progress_frame_projects_metadata_without_raw_output() -> Non
         "output_bytes": 4096,
         "spill_state": "staging",
     }
+
+
+async def test_tool_label_is_resolved_for_a_pinned_connection_tool_only() -> None:
+    """The browser edge, not the stored event, knows how to name an owner's tool."""
+
+    async def _label_frames(events: list[RunEvent], labels: dict[str, str]) -> list[str]:
+        async def _iterate():
+            for event in events:
+                yield event
+
+        return [
+            frame
+            async for frame in follow_run_frames(
+                _iterate(), partial(browser_frame, tool_labels=labels)
+            )
+        ]
+
+    events = [
+        _event(
+            1,
+            "tool_start",
+            {
+                "tool_name": "mcp_connection_deadbeef",
+                "call_id": "call-1",
+                "tool_name_spoof": "mcp_other",
+                "tool_label": "must-not-be-trusted-from-the-log",
+            },
+        ),
+        _event(2, "tool_start", {"tool_name": "read", "call_id": "call-2"}),
+    ]
+    frames = await _label_frames(
+        events, {"mcp_connection_deadbeef": "Personal tools · search_issues"}
+    )
+
+    labelled = json.loads(frames[0].split("data: ", 1)[1].strip())
+    builtin = json.loads(frames[1].split("data: ", 1)[1].strip())
+    assert labelled["tool_label"] == "Personal tools · search_issues"
+    assert labelled["tool_name"] == "mcp_connection_deadbeef"
+    assert "tool_label" not in builtin
 
 
 async def test_a_token_frame_carries_only_the_text() -> None:

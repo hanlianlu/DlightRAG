@@ -97,6 +97,20 @@ class ConnectionsView:
     presets: tuple[PresetView, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PinnedToolFact:
+    """One pinned Connection tool's display facts: identity plus owner-visible names.
+
+    The local name is dispatch identity; the two names are what a person reads.
+    Only a reader that already owns the Run may obtain these facts, and they
+    authorize nothing.
+    """
+
+    local_name: str
+    connection_label: str
+    remote_name: str
+
+
 @dataclass(frozen=True)
 class StoredConnection:
     owner_id: str
@@ -247,6 +261,9 @@ class ConnectionsStore(Protocol):
     async def pinned_catalogues(
         self, *, owner_id: str, run_id: str, bindings: tuple[RunConnectionBinding, ...]
     ) -> tuple[CatalogueTool, ...]: ...
+    async def pinned_tool_facts(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[PinnedToolFact, ...]: ...
     async def start_notifications(self) -> None: ...
     async def stop_notifications(self) -> None: ...
     async def wait_refresh(self, timeout: float) -> None: ...

@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -44,6 +44,7 @@ from .models import (
     McpClientPort,
     OAuthFlow,
     OAuthPort,
+    PinnedToolFact,
     PresetView,
     RefreshClaim,
     StoredGrant,
@@ -125,6 +126,21 @@ class Connections:
 
             restored.append(_catalogue_tool(tool, execute=execute))
         return tuple(restored)
+
+    async def pinned_tool_labels(
+        self, *, owner_id: str, auth_mode: str, run_id: str
+    ) -> Mapping[str, str]:
+        """Label this Run's pinned Connection tools for a human reader.
+
+        Display, not authority: the caller may only render these names for a Run
+        it already owns, and every failure mode -- an ineligible reader, a Run
+        with no pins, a retained catalogue that no longer resolves -- returns the
+        same empty mapping, so a missing label can never fail or blank a trace.
+        """
+        if not owner_id or not self.eligible(auth_mode):
+            return {}
+        facts = await self._store.pinned_tool_facts(owner_id=owner_id, run_id=run_id)
+        return {fact.local_name: label for fact in facts if (label := _tool_label(fact)) != ""}
 
     async def _dispatch(
         self,
@@ -904,6 +920,26 @@ class Connections:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+_MAX_TOOL_LABEL_CHARS = 96
+
+
+def _tool_label(fact: PinnedToolFact) -> str:
+    """One line naming an owner's remote tool, without exposing its connection identity.
+
+    The Connection label is owner-authored and the remote name is remote-authored, so
+    the result is bounded here rather than at the wire, and whitespace is collapsed
+    before it reaches a single-line activity row.
+    """
+    label = " ".join(fact.connection_label.split())
+    remote = fact.remote_name.strip()
+    if not label:
+        return remote[:_MAX_TOOL_LABEL_CHARS]
+    if not remote:
+        return label[:_MAX_TOOL_LABEL_CHARS]
+    text = f"{label} · {remote}"
+    return text[:_MAX_TOOL_LABEL_CHARS]
 
 
 def _call_failure(tool: CatalogueTool, *, unknown: bool) -> ToolResult:
