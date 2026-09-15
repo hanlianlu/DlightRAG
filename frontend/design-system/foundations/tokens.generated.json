@@ -841,6 +841,10 @@
     "$type": "dimension",
     "$value": "clamp(44px, 6vw, 72px)"
   },
+  "size-radio": {
+    "$type": "dimension",
+    "$value": "10px"
+  },
   "size-switch-height": {
     "$type": "dimension",
     "$value": "24px"
@@ -848,6 +852,26 @@
   "size-switch-inset": {
     "$type": "dimension",
     "$value": "5px"
+  },
+  "size-switch-sm-height": {
+    "$type": "dimension",
+    "$value": "16px"
+  },
+  "size-switch-sm-inset": {
+    "$type": "dimension",
+    "$value": "2px"
+  },
+  "size-switch-sm-thumb": {
+    "$type": "dimension",
+    "$value": "12px"
+  },
+  "size-switch-sm-travel": {
+    "$type": "dimension",
+    "$value": "calc(\n    var(--size-switch-sm-width) - var(--size-switch-sm-thumb) - 2 * var(--size-switch-sm-inset)\n  )"
+  },
+  "size-switch-sm-width": {
+    "$type": "dimension",
+    "$value": "28px"
   },
   "size-switch-thumb": {
     "$type": "dimension",

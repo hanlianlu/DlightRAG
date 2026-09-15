@@ -23,6 +23,10 @@
   --size-icon-sm: var(--space-xs);
   --size-icon-md: var(--space-s);
 
+  /* The radio marker shared by the workspace pickers (slicer popover and Files panel pill).
+   * One token for both is what keeps the two lists looking like the same control. */
+  --size-radio: 10px;
+
   /* Switch track and thumb. The two derived invariants are what the primitive and its
    * geometry test rely on: height = thumb + 2 * inset, and width = thumb + 2 * inset + travel. */
   --size-switch-width: 40px;
@@ -31,6 +35,16 @@
   --size-switch-inset: 5px;
   --size-switch-travel: calc(
     var(--size-switch-width) - var(--size-switch-thumb) - 2 * var(--size-switch-inset)
+  );
+
+  /* Compact switch for dense rows. One icon step down (thumb 12, track 16) with the same two
+   * invariants, so a row of Connection cards reads calmer without losing the control's shape. */
+  --size-switch-sm-width: 28px;
+  --size-switch-sm-height: 16px;
+  --size-switch-sm-thumb: 12px;
+  --size-switch-sm-inset: 2px;
+  --size-switch-sm-travel: calc(
+    var(--size-switch-sm-width) - var(--size-switch-sm-thumb) - 2 * var(--size-switch-sm-inset)
   );
   --dl-icon-size-xs: 12px;
   --dl-icon-size-sm: 16px;

@@ -59,16 +59,16 @@
     border: 1.5px solid var(--color-text-subtle);
     border-radius: var(--radius-circle);
     flex-shrink: 0;
-    height: var(--size-icon-sm);
+    height: var(--size-radio);
     transition: all 0.15s;
-    width: var(--size-icon-sm);
+    width: var(--size-radio);
 }
 
 .ingest-target-popover-radio.on {
     background: radial-gradient(
         circle at 50% 50%,
-        var(--color-accent-action) 0 calc(var(--size-icon-sm) * 0.23),
-        transparent calc(var(--size-icon-sm) * 0.24)
+        var(--color-accent-action) 0 calc(var(--size-radio) * 0.23),
+        transparent calc(var(--size-radio) * 0.24)
     );
     border-color: var(--color-accent-action);
 }

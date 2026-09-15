@@ -291,7 +291,7 @@ export class DlSettingsConnections extends LightElement {
 
   #switch(connection: Connection): TemplateResult {
     const pending = this.pending === connection.connectionId;
-    return html`<button class="dl-switch" type="button" role="switch" data-switch=${connection.connectionId}
+    return html`<button class="dl-switch dl-switch--sm" type="button" role="switch" data-switch=${connection.connectionId}
       aria-checked=${String(connection.enabled)} ?disabled=${pending}
       aria-label=${connection.enabled
         ? msg(str`Disable ${connection.label} in Research`, {id: 'connections.switchOff'})

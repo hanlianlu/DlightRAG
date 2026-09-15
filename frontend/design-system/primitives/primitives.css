@@ -148,6 +148,24 @@ a.dl-btn {
     border-color: var(--color-control-border-hover);
 }
 
+/* Compact variant for dense rows: apply it beside the base class (`dl-switch dl-switch--sm`).
+ * Same geometry invariants one icon step down, so it only rescales the track and thumb and keeps
+ * every state rule identical. */
+.dl-switch--sm {
+    block-size: var(--size-switch-sm-height);
+    inline-size: var(--size-switch-sm-width);
+}
+
+.dl-switch--sm::after {
+    block-size: var(--size-switch-sm-thumb);
+    inline-size: var(--size-switch-sm-thumb);
+    margin-inline-start: calc(var(--size-switch-sm-inset) - 1px);
+}
+
+.dl-switch--sm[aria-checked='true']::after {
+    transform: translateX(var(--size-switch-sm-travel));
+}
+
 @media (forced-colors: active) {
     .dl-switch {
         border-color: ButtonText;

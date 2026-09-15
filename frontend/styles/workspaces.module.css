@@ -30,22 +30,19 @@
   border-radius: var(--radius-circle);
   display: flex;
   flex-shrink: 0;
-  height: var(--size-icon-md);
+  height: var(--size-radio);
   justify-content: center;
-  transition: border-color var(--duration-control) var(--easing-standard);
-  width: var(--size-icon-md);
+  transition: all 0.15s;
+  width: var(--size-radio);
 }
 
 .workspacePopoverCheck.on {
+  background: radial-gradient(
+    circle at 50% 50%,
+    var(--color-accent-action) 0 calc(var(--size-radio) * 0.23),
+    transparent calc(var(--size-radio) * 0.24)
+  );
   border-color: var(--color-accent-action);
-}
-
-.workspacePopoverCheck.on::after {
-  background: var(--color-accent-action);
-  border-radius: var(--radius-circle);
-  content: '';
-  height: var(--space-tight);
-  width: var(--space-tight);
 }
 
 .on {

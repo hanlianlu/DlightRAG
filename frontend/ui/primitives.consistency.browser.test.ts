@@ -87,24 +87,31 @@ it('switch foundations satisfy both symmetry invariants', () => {
   const token = (name: string): number => Number.parseFloat(
     getComputedStyle(document.documentElement).getPropertyValue(name),
   );
-  const width = token('--size-switch-width');
-  const height = token('--size-switch-height');
-  const thumb = token('--size-switch-thumb');
-  const inset = token('--size-switch-inset');
 
-  expect(height).to.equal(thumb + 2 * inset);
+  // The compact variant is the same control one icon step down, so both sizes prove out.
+  // The variant composes with the base class, exactly as the product markup uses it.
+  for (const [className, suffix] of [
+    ['dl-switch', ''],
+    ['dl-switch dl-switch--sm', '-sm'],
+  ] as const) {
+    const width = token(`--size-switch${suffix}-width`);
+    const height = token(`--size-switch${suffix}-height`);
+    const thumb = token(`--size-switch${suffix}-thumb`);
+    const inset = token(`--size-switch${suffix}-inset`);
 
-  // The travel token is a calc() and stays uncomputed in getComputedStyle, so prove the rendered
-  // displacement against the same invariant instead of reading the token text.
-  const button = document.createElement('button');
-  button.className = 'dl-switch';
-  button.setAttribute('role', 'switch');
-  button.setAttribute('aria-checked', 'true');
-  document.body.appendChild(button);
-  const rendered = getComputedStyle(button, '::after').transform;
-  const travel = Number.parseFloat(/matrix\(1, 0, 0, 1, ([\d.]+),/.exec(rendered)?.[1] ?? 'NaN');
+    expect(height).to.equal(thumb + 2 * inset);
 
-  expect(travel).to.equal(width - thumb - 2 * inset);
+    // The travel token is a calc() and stays uncomputed in getComputedStyle, so prove the rendered
+    // displacement against the same invariant instead of reading the token text.
+    const button = document.createElement('button');
+    button.className = className;    button.setAttribute('role', 'switch');
+    button.setAttribute('aria-checked', 'true');
+    document.body.appendChild(button);
+    const rendered = getComputedStyle(button, '::after').transform;
+    const travel = Number.parseFloat(/matrix\(1, 0, 0, 1, ([\d.]+),/.exec(rendered)?.[1] ?? 'NaN');
+
+    expect(travel).to.equal(width - thumb - 2 * inset);
+  }
 });
 
 it('a switch thumb sits at the same inset inside its track in both states', () => {
