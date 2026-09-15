@@ -44,6 +44,7 @@ test('chat bubbles wrap unbroken queries', () => {
 test('source downloads use same-origin hrefs', () => {
   const sources = read('ui/inspector-sources.ts');
   assert.ok(sources.includes('safeSameOriginHref(source.downloadUrl)'));
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: the assertion matches template syntax in the source text
   assert.ok(sources.includes("<a href=${download}"));
 });
 

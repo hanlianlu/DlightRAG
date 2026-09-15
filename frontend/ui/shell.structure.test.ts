@@ -50,7 +50,9 @@ test('features do not import store singleton values', () => {
   for (const name of readdirSync(dir)) {
     if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
     const source = readFileSync(join(dir, name), 'utf8');
-    const importRe = new RegExp(String.raw`^import[\s\S]*?from '\.\./stores/[^']+';`, 'gm');
+    // Escaped slashes keep this a literal: the pattern is static, and biome
+    // prefers a literal over a constructed RegExp for one.
+    const importRe = /^import[\s\S]*?from '\.\.\/stores\/[^']+';/gm;
     for (const match of source.matchAll(importRe)) {
       const block = match[0];
       if (block.includes(' type ') && !block.includes('{')) continue;
