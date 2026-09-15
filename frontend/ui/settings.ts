@@ -22,7 +22,6 @@ import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
 import type {ChatMemoryOperationDetail} from './chat-feature.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
-import type {ToastRequestDetail} from './toast.ts';
 
 const MAX_SEEN_MEMORY_OPERATIONS = 500;
 type MemoryReadResult = 'loaded' | 'stale' | 'failed';

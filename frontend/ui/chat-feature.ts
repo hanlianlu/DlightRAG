@@ -52,7 +52,6 @@ import {
 import './chat-message-list.ts';
 import type {ChatTurnView} from '../lib/chat-views.ts';
 import {requestToast} from './toast-request.ts';
-import type {ToastRequestDetail} from './toast.ts';
 import {webRouter} from './router.ts';
 
 export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat-message-list.ts';

@@ -50,9 +50,9 @@ function sharedRule(css: string, selectors: string[]): string {
  * assertion can prove a rule sits *inside* a query rather than merely nearby. */
 function block(css: string, header: string): string {
   const start = css.indexOf(header);
-  assert.ok(start >= 0, header + ' is missing');
+  assert.ok(start >= 0, `${header} is missing`);
   const open = css.indexOf('{', start);
-  assert.ok(open > start, header + ' has no body');
+  assert.ok(open > start, `${header} has no body`);
   let depth = 0;
   for (let index = open; index < css.length; index += 1) {
     if (css[index] === '{') depth += 1;
@@ -61,7 +61,7 @@ function block(css: string, header: string): string {
       if (depth === 0) return css.slice(open + 1, index);
     }
   }
-  assert.fail(header + ' block is not closed');
+  assert.fail(`${header} block is not closed`);
 }
 
 test('MCP disclosures pin one fixed glyph column to the row end', () => {

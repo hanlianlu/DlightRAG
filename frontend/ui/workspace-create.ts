@@ -7,7 +7,6 @@ import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
-import type {ToastRequestDetail} from './toast.ts';
 
 export interface WorkspaceCreatedDetail {
   workspace: string;

@@ -24,7 +24,6 @@ import {requestToast} from './toast-request.ts';
 import './conversation-list.ts';
 import {type FocusRestorer, modalResult } from './modal.ts';
 import {webRouter} from './router.ts';
-import type {ToastRequestDetail} from './toast.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 

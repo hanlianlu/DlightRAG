@@ -33,7 +33,6 @@ export class WorkspaceStore extends Store {
   #primary = '';
   #loader: WorkspacePageLoader | null = null;
   readonly #pager: KeysetPager<WorkspacePageItem>;
-  #loadMoreState: WorkspaceLoadMoreState = 'idle';
 
   get records(): readonly WorkspaceRecord[] {
     return this.#records;
