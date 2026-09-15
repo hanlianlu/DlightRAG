@@ -188,6 +188,13 @@ class CompactionResult:
 class ToolEffectResult[HostDeltaT]:
     result: ToolResultEntry
     host_delta: HostDeltaT | None
+    duration_ms: int | None = None
+    """Wall time of this one effect attempt, when the adapter measured it.
+
+    Only the adapter that awaited the effect can measure it, and only the
+    settlement event publishes it: synthetic settlements (changed contract,
+    raised effect, unknown outcome) leave it None rather than inventing a value.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -1183,6 +1190,7 @@ class AgentSessionRuntime[HostDeltaT]:
         )
         if not isinstance(args_record.value, ToolArguments):
             raise TypeError("Tool Arguments register has the wrong value type")
+        effect: ToolEffectResult[HostDeltaT]
         try:
             effect = await self._effects.execute_tool(
                 view.context,
@@ -1210,6 +1218,7 @@ class AgentSessionRuntime[HostDeltaT]:
             effect.result,
             attempt_id=state.attempt_id,
             host_delta=effect.host_delta,
+            duration_ms=effect.duration_ms,
         )
 
     async def _settle_pending_unknown(self, view: OperationView, item: ToolBatchItem) -> None:
@@ -1242,6 +1251,7 @@ class AgentSessionRuntime[HostDeltaT]:
         attempt_id: AttemptId | None,
         host_delta: HostDeltaT | None,
         advances_durable_progress: bool = True,
+        duration_ms: int | None = None,
     ) -> None:
         """Settle one Tool result, degrading to a synthetic failure if it cannot be stored.
 
@@ -1258,6 +1268,7 @@ class AgentSessionRuntime[HostDeltaT]:
                 attempt_id=attempt_id,
                 host_delta=host_delta,
                 advances_durable_progress=advances_durable_progress,
+                duration_ms=duration_ms,
             )
         except UnrepresentablePayloadError:
             logger.warning(
@@ -1289,6 +1300,7 @@ class AgentSessionRuntime[HostDeltaT]:
         attempt_id: AttemptId | None,
         host_delta: HostDeltaT | None,
         advances_durable_progress: bool = True,
+        duration_ms: int | None = None,
     ) -> None:
         state = view.state
         if isinstance(state, ToolBatchReady):
@@ -1375,8 +1387,7 @@ class AgentSessionRuntime[HostDeltaT]:
             commit=commit,
             data={
                 "entry_id": entry.entry_id.value,
-                "source_index": item.source_index,
-                "outcome": durable_result.outcome,
+                **_settlement_facts(item, durable_result, duration_ms),
             },
         )
 
@@ -1801,6 +1812,29 @@ class AgentSessionRuntime[HostDeltaT]:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _settlement_facts(
+    item: ToolBatchItem,
+    result: ToolResultEntry,
+    duration_ms: int | None,
+) -> dict[str, Any]:
+    """The one place that decides what a Tool settlement publishes.
+
+    Call identity belongs here because a settlement is the only event that says
+    a call finished: without it a reader can only guess which row to close. The
+    durable contract keeps these events metadata-only, so no Tool output,
+    arguments, or stdout ever joins them.
+    """
+    facts: dict[str, Any] = {
+        "tool_name": item.tool_name,
+        "call_id": item.call_id,
+        "source_index": item.source_index,
+        "outcome": result.outcome,
+    }
+    if duration_ms is not None:
+        facts["duration_ms"] = max(0, int(duration_ms))
+    return facts
 
 
 def _digest(value: Any) -> str:

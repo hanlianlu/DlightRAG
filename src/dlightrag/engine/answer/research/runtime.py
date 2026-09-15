@@ -4,6 +4,7 @@
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict
 from typing import Any, Literal, cast
@@ -103,6 +104,11 @@ def provider_attempt_detail(exc: BaseException, *, retryable: bool) -> str:
         else "Model provider rejected the request"
     )
     return f"{label}{_http_suffix(exc)}"
+
+
+def _elapsed_ms(started: float) -> int:
+    """Whole milliseconds since one monotonic start mark, never negative."""
+    return max(0, round((time.perf_counter() - started) * 1000))
 
 
 def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
@@ -574,6 +580,7 @@ class ResearchRuntimeEffects:
                 )
             )
 
+        started = time.perf_counter()
         await emit_ephemeral(
             AgentSessionEvent(
                 kind="tool_start",
@@ -647,7 +654,7 @@ class ResearchRuntimeEffects:
             tool_effects=fitted.effects,
             details=fitted.details,
         )
-        return ToolEffectResult(durable, delta)
+        return ToolEffectResult(durable, delta, _elapsed_ms(started))
 
     async def compact(self, context: RuntimeContext, attempt: int) -> Any:
         return await self._orchestrator.compact_runtime_context(
@@ -722,6 +729,7 @@ def _answer_runtime_event_sink(
             "source_position",
             "source_index",
             "outcome",
+            "duration_ms",
             "text_chars",
             "attempt_id",
             "object_label",

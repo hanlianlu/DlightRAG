@@ -100,6 +100,7 @@ class _Effects:
     crash_provider: bool = False
     crash_tool: bool = False
     compaction_required: bool = False
+    tool_duration_ms: int | None = None
 
     def __post_init__(self) -> None:
         self.provider_attempts: list[AttemptId] = []
@@ -168,6 +169,7 @@ class _Effects:
                 text=f"result:{arguments['value']}",
             ),
             host_delta={"source_index": item.source_index},
+            duration_ms=self.tool_duration_ms,
         )
 
     async def compact(self, context: RuntimeContext, attempt: int) -> Any:
@@ -227,6 +229,51 @@ def _runtime(
         event_sink=collect,
         controls=controls,
     )
+
+
+@pytest.mark.asyncio
+async def test_tool_settlement_publishes_call_identity_and_measured_elapsed() -> None:
+    """A settlement is the only event that says a call finished.
+
+    Identity must ride it, because a reader has nothing else to close the row
+    with; elapsed time must ride it too, because the adapter that awaited the
+    effect is the only place it can be measured. Synthetic settlements (a tool
+    that was never executed) publish identity and no invented duration.
+    """
+    tool = _agent_tool()
+    effects = _Effects(
+        [
+            _assistant(
+                ToolCall("bad", "missing", {}),
+                ToolCall("ok", "lookup", {"value": "x"}),
+            ),
+            _assistant(text="done"),
+        ],
+        tool_duration_ms=1234,
+    )
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    events: list[AgentSessionEvent] = []
+    runtime = _runtime(store, effects, tool, events=events)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="run-1",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    settlements = [event for event in events if event.kind == "tool_result_committed"]
+    assert [(event.data["call_id"], event.data["outcome"]) for event in settlements] == [
+        ("bad", "unknown_tool"),
+        ("ok", "succeeded"),
+    ]
+    assert [event.data["tool_name"] for event in settlements] == ["missing", "lookup"]
+    assert [event.data["source_index"] for event in settlements] == [0, 1]
+    assert [event.data.get("duration_ms") for event in settlements] == [None, 1234]
+    assert all(event.commit_sequence is not None for event in settlements)
 
 
 @pytest.mark.asyncio

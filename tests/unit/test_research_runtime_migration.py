@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Research Host migration through the canonical AgentSessionRuntime."""
 
+import asyncio
 import base64
 import hashlib
 from dataclasses import asdict, replace
@@ -25,7 +26,11 @@ from dlightrag.engine.agent.session.ids import (
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.runtime import AgentOperationCancelled, AgentSessionRuntime
+from dlightrag.engine.agent.session.runtime import (
+    AgentOperationCancelled,
+    AgentSessionEvent,
+    AgentSessionRuntime,
+)
 from dlightrag.engine.agent.tools import (
     AgentTool,
     EvidenceSourceFact,
@@ -50,6 +55,7 @@ from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
+    _answer_runtime_event_sink,
     _build_effect_host_update,
     provider_attempt_detail,
 )
@@ -457,6 +463,109 @@ async def test_research_runtime_projects_live_object_label_into_tool_updates() -
     assert updates[0].data["tool_name"] == "search_knowledge_base"
     assert updates[0].data["call_id"] == "search-call"
     assert updates[0].data["object_label"] == "quarterly revenue 2026"
+
+
+@pytest.mark.asyncio
+async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_settlement() -> None:
+    """Elapsed time is measured by the adapter that awaited the effect, then
+    published by the settlement event -- including for a failed Tool, whose
+    failure is a typed result rather than an exception."""
+
+    async def execute(_input: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        await asyncio.sleep(0.03)
+        return ToolResult.text("too slow", is_error=True)
+
+    tool = AgentTool("mcp_connection_hash", "Call a remote tool.", _EmptyToolInput, execute)
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+    )
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="mcp-call",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+
+    settled = await effects.execute_tool(
+        cast(
+            Any,
+            SimpleNamespace(
+                session_id=SessionId.new(),
+                lane_id=LaneId.main(),
+                operation_id=OperationId.new(),
+            ),
+        ),
+        item,
+        {},
+        AttemptId.new(),
+        lambda _event: asyncio.sleep(0),
+    )
+
+    assert settled.result.outcome == "failed"
+    assert settled.duration_ms is not None
+    assert settled.duration_ms >= 25
+
+
+@pytest.mark.asyncio
+async def test_answer_event_sink_publishes_tool_identity_outcome_and_elapsed() -> None:
+    """The wire event a browser folds is produced here; nothing else renames or
+    drops the settlement facts between the Session commit and the stream."""
+    recorded: list[tuple[str, dict[str, Any]]] = []
+
+    class _Recorder(_Session):
+        async def emit_tool_event(self, kind: str, payload: object) -> None:
+            recorded.append((kind, dict(cast(Any, payload))))
+
+    sink = _answer_runtime_event_sink(cast(Any, _Recorder()))
+    settlement = {
+        "entry_id": "entry-1",
+        "tool_name": "mcp_connection_hash",
+        "call_id": "call-9",
+        "source_index": 1,
+        "outcome": "succeeded",
+        "duration_ms": 1500,
+    }
+    await sink(
+        AgentSessionEvent(
+            kind="tool_result_committed",
+            session_id=SessionId.new(),
+            lane_id=LaneId.main(),
+            operation_id=OperationId.new(),
+            commit_sequence=7,
+            data=settlement,
+        )
+    )
+
+    assert recorded == [
+        (
+            "tool_end",
+            {
+                "tool_name": "mcp_connection_hash",
+                "call_id": "call-9",
+                "source_index": 1,
+                "outcome": "succeeded",
+                "duration_ms": 1500,
+                "session_commit_sequence": 7,
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

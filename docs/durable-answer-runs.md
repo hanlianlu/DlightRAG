@@ -218,9 +218,14 @@ Mutation also persists handoff, deferral, and repair phases on the Run. Answer m
 emit `token`, `reset`, and `tool_start` / `tool_progress` / `tool_end`.
 
 Appending locks the Run row, consumes its next sequence, and checks live lease
-owner/epoch. Answer token text is coalesced into bounded chunks. Tool events
-store only name, status, elapsed time, output byte count, spill state, call
-identity, and attachment count—never stdout/stderr.
+owner/epoch. Answer token text is coalesced into bounded chunks. A Tool event
+carries only metadata — tool name, call identity, status, elapsed time, and
+bounded counts or spill state when a producer reports them — and never stdout,
+stderr, arguments, or Tool output. Call identity and elapsed time ride the
+settlement event so a reader can close exactly one activity row and show how long
+that call took; a call that was never executed settles without an invented
+duration. The browser event projection may add a display label resolved from the
+Run's pinned Connections; that label is read-time truth and is never stored.
 
 A terminal transaction stores status/error/result and appends exactly one
 terminal event:
