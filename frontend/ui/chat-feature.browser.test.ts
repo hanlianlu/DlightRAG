@@ -27,6 +27,7 @@ import './chat-feature.ts';
 import {
   ANSWER_RECONNECT_COPY,
   answerReconnectState,
+  carriedToolTrace,
   type ChatRunActionDetail,
   type DlChatMessageList,
   storedTurnView,
@@ -1985,4 +1986,78 @@ it('renders a named, timed tool trace and ticks only while a row is running', as
   await list.updateComplete;
   expect(text()).to.contain('8.0s', 'server truth replaces the viewer clock');
   list.remove();
+});
+
+it('keeps the tool trace after server truth replaces the settled turn', () => {
+  const watched: ChatTurnView = {
+    ...storedTurnView(storedTurn()),
+    state: 'succeeded',
+    toolTotal: 2,
+    toolExpanded: true,
+    toolRows: [{
+      callId: 'c1',
+      label: 'Personal tools · search_issues',
+      name: 'mcp_connection_deadbeef',
+      verb: 'Calling an MCP tool',
+      verbId: 'chatFeature.tool.mcp',
+      object: '',
+      state: 'done',
+      startedAt: null,
+      durationMs: 2400,
+    }],
+  };
+  const fromServer = storedTurnView(storedTurn());
+
+  const carried = carriedToolTrace(fromServer, watched);
+  expect(carried.toolRows).to.deep.equal(watched.toolRows);
+  expect(carried.toolTotal).to.equal(2);
+  expect(carried.toolExpanded).to.equal(true);
+  expect(carried.state).to.equal('succeeded');
+  expect(carried.streamText).to.equal(fromServer.streamText);
+
+  expect(carriedToolTrace(fromServer, null)).to.equal(fromServer, 'no watched turn');
+  expect(carriedToolTrace(fromServer, {...watched, toolTotal: 0})).to.equal(
+    fromServer,
+    'nothing ran',
+  );
+  expect(carriedToolTrace(fromServer, {...watched, runId: 'another-run'})).to.equal(
+    fromServer,
+    'a different run cannot lend its trace',
+  );
+});
+
+it('Chat Feature shows the watched tool trace after the stored turn lands', async () => {
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready', conversationId: 'trace', history: [], lineage: null,
+  };
+  document.body.appendChild(feature);
+  await settle(feature);
+  feature.turns = [{
+    ...storedTurnView(storedTurn()),
+    state: 'succeeded',
+    toolTotal: 1,
+    toolExpanded: true,
+    toolRows: [{
+      callId: 'c1',
+      label: 'Personal tools · search_issues',
+      name: 'mcp_connection_deadbeef',
+      verb: 'Calling an MCP tool',
+      verbId: 'chatFeature.tool.mcp',
+      object: '',
+      state: 'done',
+      startedAt: null,
+      durationMs: 2400,
+    }],
+  }];
+
+  feature.view = {
+    kind: 'ready', conversationId: 'trace', history: [storedTurn()], lineage: null,
+  };
+  await settle(feature);
+
+  expect(feature.turns[0]?.toolTotal).to.equal(1);
+  expect(feature.turns[0]?.toolRows[0]?.label).to.equal('Personal tools · search_issues');
+  expect(feature.textContent).to.contain('Personal tools · search_issues');
+  expect(feature.textContent).to.contain('2.4s');
 });

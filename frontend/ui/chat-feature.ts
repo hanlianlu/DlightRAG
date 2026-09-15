@@ -44,6 +44,7 @@ import {
   ANSWER_RECONNECT_COPY,
   MAX_STEERING_MESSAGES,
   answerReconnectState,
+  carriedToolTrace,
   storedTurnView,
   type ChatReconnectDetail,
   type ChatToolTraceToggleDetail,
@@ -358,7 +359,9 @@ export class DlChatFeature extends LightElement {
         );
         const mergedStored = stored.map((turn) => {
           const current = currentById.get(turn.id) ?? currentByRunId.get(turn.runId);
-          return current && !terminalTurn(current) && !terminalTurn(turn) ? current : turn;
+          return current && !terminalTurn(current) && !terminalTurn(turn)
+            ? current
+            : carriedToolTrace(turn, current ?? null);
         });
         const storedIds = new Set(stored.map((turn) => turn.id));
         const storedRunIds = new Set(stored.map((turn) => turn.runId).filter(Boolean));
@@ -816,10 +819,11 @@ export class DlChatFeature extends LightElement {
   }
 
   #replaceStoredTurn(turnId: string, stored: ConversationTurn): void {
-    const replacement = storedTurnView(stored);
-    this.turns = this.turns.map((turn) => turn.id === turnId
-      ? {...replacement, id: turnId, steeringMessages: turn.steeringMessages}
-      : turn);
+    this.turns = this.turns.map((turn) => {
+      if (turn.id !== turnId) return turn;
+      const replacement = carriedToolTrace(storedTurnView(stored), turn);
+      return {...replacement, id: turnId, steeringMessages: turn.steeringMessages};
+    });
   }
 
   #setTurnError(turnId: string, message: string): void {

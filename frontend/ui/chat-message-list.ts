@@ -825,6 +825,29 @@ declare global {
   }
 }
 
+/** Keep this tab's tool trace when server truth replaces a settled turn.
+ *
+ * Tool rows are a live affordance: they are never stored with the turn, so a
+ * reload or another browser has none. The tab that watched the run still can,
+ * and dropping them one refresh after the answer lands is what made "what did
+ * the agent actually call" unanswerable at exactly the moment it became
+ * interesting.
+ */
+export function carriedToolTrace(
+  replacement: ChatTurnView,
+  watched: ChatTurnView | null,
+): ChatTurnView {
+  if (!watched || watched.toolTotal === 0 || watched.runId !== replacement.runId) {
+    return replacement;
+  }
+  return {
+    ...replacement,
+    toolRows: watched.toolRows,
+    toolTotal: watched.toolTotal,
+    toolExpanded: watched.toolExpanded,
+  };
+}
+
 export function storedTurnView(stored: ConversationTurn): ChatTurnView {
   let state: ChatTurnView['state'] = 'pending';
   let error = '';

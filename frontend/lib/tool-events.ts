@@ -1,7 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 /** Pure state machine for the compact per-run tool trace shown while a turn
- *  runs and re-inspectable after it settles.
+ *  runs and re-inspectable afterwards in the tab that watched it settle. Rows are
+ *  a live affordance: they are never stored with the turn, so a reload or another
+ *  browser reads the answer without them.
  *
  *  The clock is a parameter, never a global read: a row is stamped when the
  *  viewer observes its start, so the fold stays deterministic and testable
