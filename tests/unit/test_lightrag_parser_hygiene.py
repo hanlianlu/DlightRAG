@@ -208,3 +208,126 @@ def test_mineru_hygiene_routes_chart_through_drawing(tmp_path: Path) -> None:
     content = "\n".join(block.content_template for block in doc.blocks)
     assert "{{IMG:" in content
     assert "Body text survives" in content
+
+
+# ---------------------------------------------------------------------------
+# Payload-less media normalization (``table``/``equation`` with an image only)
+# ---------------------------------------------------------------------------
+
+# Verbatim MinerU output for a full-page line drawing: the table model claimed
+# the page, every cell is empty, and the only surviving content is ``img_path``.
+_PAYLOADLESS_TABLE = {
+    "type": "table",
+    "img_path": "images/3307e3fb8f0b213dbfe9e8dc0be195ca4c1e40482c95e5ceca61b036ee985c08.jpg",
+    "table_caption": ["Plate 4"],
+    "table_footnote": ["Note: untitled."],
+    "table_body": "<table><tr><td></td><td></td></tr></table>",
+    "bbox": [272, 0, 854, 998],
+    "page_idx": 0,
+}
+
+
+def test_payloadless_media_routes_empty_table_with_image_to_drawing() -> None:
+    from dlightrag.engine.rag.corpus.ingestion.parser_hygiene import (
+        normalize_mineru_payloadless_media,
+    )
+
+    converted, text = normalize_mineru_payloadless_media(
+        [dict(_PAYLOADLESS_TABLE), {"type": "text", "text": "Body"}]
+    )
+
+    assert converted["type"] == "image"
+    assert converted["img_path"] == _PAYLOADLESS_TABLE["img_path"]
+    assert converted["image_caption"] == ["Plate 4"]
+    assert converted["image_footnote"] == ["Note: untitled."]
+    assert "table_caption" not in converted
+    assert converted["bbox"] == [272, 0, 854, 998]
+    assert converted["page_idx"] == 0
+    assert text == {"type": "text", "text": "Body"}
+
+
+def test_payloadless_media_keeps_tables_that_carry_visible_text() -> None:
+    from dlightrag.engine.rag.corpus.ingestion.parser_hygiene import (
+        normalize_mineru_payloadless_media,
+    )
+
+    with_text = {
+        "type": "table",
+        "img_path": "images/table.jpg",
+        "table_body": "<table><tr><td>Region</td><td>1.9</td></tr></table>",
+    }
+    rows_only = {"type": "table", "rows": [["Region", "1.9"]], "img_path": "images/t.jpg"}
+    nbsp_only = {
+        "type": "table",
+        "img_path": "images/blank.jpg",
+        "table_body": "<table><tr><td>&nbsp;</td></tr></table>",
+    }
+
+    converted = normalize_mineru_payloadless_media([with_text, rows_only, nbsp_only])
+
+    assert converted[0] == with_text
+    assert converted[1] == rows_only
+    assert converted[2]["type"] == "image"
+
+
+def test_payloadless_media_requires_a_materialized_image() -> None:
+    from dlightrag.engine.rag.corpus.ingestion.parser_hygiene import (
+        normalize_mineru_payloadless_media,
+    )
+
+    no_image = {"type": "table", "table_body": "<table><tr><td></td></tr></table>"}
+    blank_image = {"type": "equation", "img_path": "   ", "text": ""}
+
+    assert normalize_mineru_payloadless_media([no_image, blank_image]) == [
+        no_image,
+        blank_image,
+    ]
+
+
+def test_payloadless_media_converts_empty_equation_items() -> None:
+    from dlightrag.engine.rag.corpus.ingestion.parser_hygiene import (
+        normalize_mineru_payloadless_media,
+    )
+
+    empty = {"type": "equation", "img_path": "images/eq1.png", "text": "", "latex": ""}
+    real = {"type": "equation", "img_path": "images/eq2.png", "text": "$x^2$"}
+
+    converted = normalize_mineru_payloadless_media([empty, real])
+
+    assert converted[0]["type"] == "image"
+    assert converted[0]["img_path"] == "images/eq1.png"
+    assert converted[1] == real
+
+
+def test_mineru_hygiene_routes_payloadless_table_through_drawing(tmp_path: Path) -> None:
+    from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
+
+    apply_mineru_content_list_hygiene()  # idempotent
+
+    doc = MinerUIRBuilder()._normalize_content_list(
+        [dict(_PAYLOADLESS_TABLE), {"type": "text", "text": "Body text survives"}],
+        tmp_path,
+        document_name="plate.jpg",
+    )
+
+    content = "\n".join(block.content_template for block in doc.blocks)
+    assert "{{IMG:" in content
+    assert "{{TBL:" not in content
+    assert "Body text survives" in content
+
+
+def test_upstream_still_keeps_a_payloadless_table(tmp_path: Path) -> None:
+    """Drift alarm: drop the matching transform once this starts failing."""
+
+    builder_cls, upstream = _unpatched_normalize_content_list()
+
+    doc = upstream(
+        builder_cls(),
+        [dict(_PAYLOADLESS_TABLE)],
+        tmp_path,
+        document_name="plate.jpg",
+    )
+
+    content = "\n".join(block.content_template for block in doc.blocks)
+    assert "{{TBL:" in content
+    assert "{{IMG:" not in content

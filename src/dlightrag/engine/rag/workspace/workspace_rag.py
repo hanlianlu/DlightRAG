@@ -477,6 +477,7 @@ class WorkspaceRag:
                 workspace=self.workspace_id,
                 parser_rules=settings.parser_rules,
                 chunk_options=dict(settings.chunk_options),
+                image_margin=settings.image_margin,
                 bm25_language_classifier=bm25_language_classifier,
                 telemetry=self.telemetry,
             )

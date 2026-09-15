@@ -2862,3 +2862,75 @@ async def test_unrelated_candidate_does_not_collapse_when_external_owner_has_sta
     deps["metadata_index"].delete.assert_not_awaited()
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_image_ingest_enqueues_a_padded_parser_input(tmp_path: Path) -> None:
+    """An image source gets page context, while its provenance stays the file
+    the caller supplied."""
+    from PIL import Image
+
+    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+        PADDED_INPUT_DIR_NAME,
+    )
+
+    source = tmp_path / "plate.jpg"
+    Image.new("RGB", (400, 300), (5, 10, 15)).save(source)
+    engine, deps = _make_engine()
+
+    await engine.aingest_file(source)
+
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    enqueued = Path(kwargs["file_paths"][0])
+    assert enqueued.name == source.name
+    assert enqueued.parent.name == PADDED_INPUT_DIR_NAME
+    # Identity: LightRAG keys documents by the canonical basename.
+    assert kwargs["parse_engine"] == ["mineru"]
+    _, saved = deps["metadata_index"].upsert.await_args.args
+    assert saved["download_locator"] == str(source.resolve())
+    assert source.exists()
+
+
+async def test_padded_parser_input_is_removed_after_the_batch(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+        PADDED_INPUT_DIR_NAME,
+    )
+
+    source = tmp_path / "plate.png"
+    Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
+    engine, deps = _make_engine()
+
+    await engine.aingest_file(source)
+
+    assert not (tmp_path / PADDED_INPUT_DIR_NAME).exists()
+    assert source.exists()
+
+
+async def test_zero_image_margin_enqueues_the_source_itself(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+        PADDED_INPUT_DIR_NAME,
+    )
+
+    source = tmp_path / "plate.png"
+    Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
+    engine, deps = _make_engine(image_margin=0.0)
+
+    await engine.aingest_file(source)
+
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["file_paths"] == [str(source)]
+    assert not (tmp_path / PADDED_INPUT_DIR_NAME).exists()
+
+
+async def test_non_image_sources_are_not_normalized(tmp_path: Path) -> None:
+    source = tmp_path / "plain.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+
+    await engine.aingest_files([_prepare_ingest_item(source, workspace="default")])
+
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["file_paths"] == [str(source)]

@@ -15,6 +15,10 @@ from dlightrag.engine.ai.settings import (
     freeze_settings_value,
     thaw_settings_value,
 )
+from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+    DEFAULT_IMAGE_MARGIN,
+    MAX_IMAGE_MARGIN,
+)
 
 
 class LightRAGPipelineKwargs(TypedDict):
@@ -186,6 +190,10 @@ class IngestionSettings(FrozenSettings):
     chunk_token_size: int = Field(default=2000, ge=1)
     replace_default: bool = False
     retain_remote_source_files: bool = False
+    # Page margin composited around an image source before an external parser
+    # lays it out; one value for whichever parser is active. See
+    # ingestion/image_normalization.py for the measurements behind 3%.
+    image_margin: float = Field(default=DEFAULT_IMAGE_MARGIN, ge=0.0, le=MAX_IMAGE_MARGIN)
     url_max_bytes: int = Field(default=100 * 1024 * 1024, ge=1)
     url_private_host_allowlist: tuple[str, ...] = ()
     max_upload_bytes: int = Field(default=100 * 1024 * 1024, ge=1)
@@ -382,6 +390,10 @@ class RagSettings(FrozenSettings):
     @property
     def chunk_p_token_size(self):
         return self.corpus.ingestion.chunk_token_size
+
+    @property
+    def image_margin(self):
+        return self.corpus.ingestion.image_margin
 
     @property
     def kg_entity_types(self):

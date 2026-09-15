@@ -538,6 +538,7 @@ the same absolute path. Production sizing, SSL, indexes, and role details are in
 | `models.embedding.max_concurrency` | `16` | Embedding calls |
 | `models.embedding.batch_size` | `64` | LightRAG embedding batch size |
 | `corpus.ingestion.chunk_token_size` | `2000` | LightRAG chunk size |
+| `corpus.ingestion.image_margin` | `0.03` | White page margin composited around an image source before the external parser lays it out. A full-bleed image gives docling's layout model no page context, so 8 of 20 real artwork photographs produced a zero-block document (document FAILED) at `0`; 3% was the smallest margin that fixed every sample. One value covers both docling and MinerU; `0` disables the normalization |
 | `corpus.ingestion.replace_default` | `false` | Default replacement policy |
 | `corpus.ingestion.retain_remote_source_files` | `false` | Default remote-byte retention |
 | `corpus.ingestion.max_upload_bytes` | `104857600` | One ingest file |

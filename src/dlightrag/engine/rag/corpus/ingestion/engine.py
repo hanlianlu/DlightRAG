@@ -8,7 +8,7 @@ import shutil
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,12 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     RobustDocumentEmbedder,
 )
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+    DEFAULT_IMAGE_MARGIN,
+    discard_padded_images,
+    normalize_image_margin,
+    padded_parser_path,
+)
 from dlightrag.engine.rag.corpus.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.engine.rag.corpus.ingestion.paths import lightrag_archived_source_path
 from dlightrag.engine.rag.corpus.sources.source_contract import (
@@ -117,6 +123,7 @@ class UnifiedIngestionEngine:
         parser_rules: str,
         chunk_options: dict[str, Any] | None,
         bm25_language_classifier: Any | None = None,
+        image_margin: float = DEFAULT_IMAGE_MARGIN,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self._lightrag = lightrag
@@ -127,6 +134,7 @@ class UnifiedIngestionEngine:
         self._parser_rules = parser_rules
         self._chunk_options = chunk_options or {}
         self._bm25_language_classifier = bm25_language_classifier
+        self._image_margin = normalize_image_margin(image_margin)
         self._telemetry = telemetry
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
@@ -240,19 +248,24 @@ class UnifiedIngestionEngine:
             return {"processed": 0, "errors": [], "results": []}
 
         entries: list[_PendingDocumentIngest] = []
-        for index, item in enumerate(
-            _prepare_ingest_item(path, workspace=self._workspace) for path in paths
-        ):
-            entries.append(
-                self._prepare_pending_document(
-                    index=index,
-                    item=item,
-                    title=title,
-                    author=author,
-                    metadata=metadata,
-                    resolve_parser_directives=False,
+        padded_inputs: list[Path] = []
+        try:
+            for index, item in enumerate(
+                self._normalized_parser_item(path, padded_inputs) for path in paths
+            ):
+                entries.append(
+                    self._prepare_pending_document(
+                        index=index,
+                        item=item,
+                        title=title,
+                        author=author,
+                        metadata=metadata,
+                        resolve_parser_directives=False,
+                    )
                 )
-            )
+        except BaseException:
+            discard_padded_images(padded_inputs)
+            raise
 
         doc_ids = [entry.doc_id for entry in entries]
         duplicate_doc_ids = sorted(doc_id for doc_id in set(doc_ids) if doc_ids.count(doc_id) > 1)
@@ -269,6 +282,9 @@ class UnifiedIngestionEngine:
         to_enqueue: list[tuple[_PendingDocumentIngest, _DocumentIngestDecision]] = []
 
         async with AsyncExitStack() as stack:
+            # Derived parser inputs live until the batch settles (parse,
+            # analysis, finalization); the stack unwinds on failure too.
+            stack.callback(discard_padded_images, padded_inputs)
             locked_doc_ids = {
                 doc_id for entry in entries for doc_id in (entry.doc_id, *entry.replacement_doc_ids)
             }
@@ -462,6 +478,26 @@ class UnifiedIngestionEngine:
             "errors": errors,
             "results": [results_by_index[index] for index in sorted(results_by_index)],
         }
+
+    def _normalized_parser_item(
+        self,
+        path: str | Path | PreparedIngestFile,
+        padded_inputs: list[Path],
+    ) -> PreparedIngestFile:
+        """Prepare one ingest item, giving an image source page context.
+
+        Only ``parser_path`` moves: ``source_uri``, ``download_locator`` and the
+        display filename keep describing the bytes the caller supplied, so
+        downloads, hashes and metadata stay attached to the original file.
+        """
+        item = _prepare_ingest_item(path, workspace=self._workspace)
+        if self._image_margin <= 0:
+            return item
+        padded = padded_parser_path(item.parser_path, margin=self._image_margin)
+        if padded is None:
+            return item
+        padded_inputs.append(padded)
+        return replace(item, parser_path=padded)
 
     def _prepare_pending_document(
         self,

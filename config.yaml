@@ -82,6 +82,12 @@ corpus:
     # For the bundled CPU profile, use endpoint http://docling:5001 and set
     # code_formula_preset to null instead.
   ingestion:
+    # Page margin composited around an image source before the parser lays it
+    # out; one value for whichever external parser is active. Without it a
+    # full-bleed image gives the layout model no page context: 40% of real
+    # artwork photographs failed outright (docling zero-block IR) at 0%.
+    # 3% is the smallest measured value that works; 0 disables it.
+    image_margin: 0.03
     pipeline:
       max_concurrency: 16
   retrieval:
