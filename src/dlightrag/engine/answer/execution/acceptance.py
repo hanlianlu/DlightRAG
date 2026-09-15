@@ -25,7 +25,6 @@ def research_history_input_measure(
     resource_manifest: tuple[ResourceManifestEntry, ...],
     image_budget: AnswerImageBudget | None,
     tools: list[AgentTool],
-    retained_tail_tokens: int,
     memory_text: str = "",
     episodic_summary: str = "",
 ) -> Callable[..., int]:
@@ -64,7 +63,7 @@ def research_history_input_measure(
         return (
             context.measure_control_input(
                 evidence=EvidenceLedger(image_budget=image_budget),
-                working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
+                working=WorkingContextProjection(),
             )
             + tool_schema_tokens
         )

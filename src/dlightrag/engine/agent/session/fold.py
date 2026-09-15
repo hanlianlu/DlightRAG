@@ -253,41 +253,24 @@ def select_compaction_boundary(
     return retained_start
 
 
-def _without_reasoning(message: dict[str, Any]) -> dict[str, Any]:
-    if message.get("role") != "assistant":
-        return message
-    reduced = {key: value for key, value in message.items() if key != "provider_state"}
-    calls = cast(list[dict[str, Any]], reduced.get("tool_calls") or [])
-    if calls:
-        reduced["tool_calls"] = [
-            {key: value for key, value in call.items() if key != "thought_signature"}
-            for call in calls
-        ]
-    return reduced
-
-
 class WorkingContextProjection:
-    """Every assistant/tool exchange one session produced, newest first to replay.
+    """Every assistant/tool exchange one session produced, in order to replay.
 
-    Provider-native reasoning is what makes an exchange expensive and is valid
-    only as an unmodified replay, so the policy-sized recent tail carries it and
-    older exchanges keep just the call and its result: a later turn still sees
-    which angle was spent without paying for the thinking behind it.
+    An exchange travels whole, provider-native state included. Reasoning is
+    valid only as an unmodified replay: DeepSeek requires every previous turn's
+    ``reasoning_content`` back on any request that carries tools and rejects a
+    partial history with HTTP 400, and Gemini signs tool calls that stop
+    verifying once filtered. Bounding the request is the compaction boundary's
+    job, where whole exchanges are replaced by one summary; stripping state from
+    an exchange that is still replayed produces a history no provider ever sent.
 
     In durable Research it is only a projection cache rebuilt from the active
     session graph before each provider call. In-process callers may append to it
     directly because they have no durable Session Repository.
     """
 
-    def __init__(self, *, retained_tail_tokens: int) -> None:
-        if retained_tail_tokens < 0:
-            raise ValueError("retained_tail_tokens cannot be negative")
-        self._retained_tail_tokens = retained_tail_tokens
+    def __init__(self) -> None:
         self._exchanges: list[list[dict[str, Any]]] = []
-
-    @property
-    def retained_tail_tokens(self) -> int:
-        return self._retained_tail_tokens
 
     def record(self, exchange: list[dict[str, Any]]) -> None:
         self._exchanges.append(exchange)
@@ -297,17 +280,12 @@ class WorkingContextProjection:
         return {"exchanges": [[dict(message) for message in ex] for ex in self._exchanges]}
 
     @classmethod
-    def from_canonical_json(
-        cls,
-        state: Mapping[str, Any],
-        *,
-        retained_tail_tokens: int,
-    ) -> WorkingContextProjection:
+    def from_canonical_json(cls, state: Mapping[str, Any]) -> WorkingContextProjection:
         """Rebuild a derived working projection from canonical exchanges."""
         exchanges = state.get("exchanges")
         if not isinstance(exchanges, Sequence):
             raise ValueError("working projection state has no exchanges")
-        projection = cls(retained_tail_tokens=retained_tail_tokens)
+        projection = cls()
         projection._exchanges = [
             [dict(cast(Mapping[str, Any], message)) for message in cast(Sequence[Any], exchange)]
             for exchange in exchanges
@@ -315,22 +293,10 @@ class WorkingContextProjection:
         return projection
 
     def messages(self) -> list[dict[str, Any]]:
-        if not self._exchanges:
-            return []
-        newest = len(self._exchanges) - 1
-        replay_from = newest
-        budget = self._retained_tail_tokens - estimate_messages_tokens(self._exchanges[newest])
-        for index in reversed(range(newest)):
-            budget -= estimate_messages_tokens(self._exchanges[index])
-            if budget < 0:
-                break
-            replay_from = index
+        """Return every exchange verbatim, provider-native state included."""
         messages: list[dict[str, Any]] = []
-        for index, exchange in enumerate(self._exchanges):
-            if index >= replay_from:
-                messages.extend(exchange)
-            else:
-                messages.extend(_without_reasoning(message) for message in exchange)
+        for exchange in self._exchanges:
+            messages.extend(exchange)
         return messages
 
 

@@ -17,7 +17,6 @@ from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 
 _WINDOW = 80_000
-_RETAINED_TAIL = 13_600
 _CONTROL_TURN_INSTRUCTION = control_turn_instruction()
 
 
@@ -49,7 +48,7 @@ async def test_research_question_keeps_all_raw_current_images_and_resource_handl
 
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
 
@@ -107,7 +106,7 @@ async def test_history_contribution_preserves_roles_and_precedes_current_questio
 
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
 
@@ -125,7 +124,7 @@ async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
     history = _long_history(40)
     messages = await _assembler(history).control_turn(
         evidence=_ledger(0),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
     rendered = str(messages)
@@ -137,7 +136,7 @@ async def test_evidence_uses_the_residual_after_pinned_conversation_history() ->
     evidence = _ledger(5)
     messages = await _assembler(_long_history(10)).control_turn(
         evidence=evidence,
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
 
@@ -153,7 +152,7 @@ async def test_control_evidence_and_tool_schemas_stop_at_compaction_threshold() 
 
     messages = await assembler.control_turn(
         evidence=_ledger(100, chars=4_000),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=tool_schema_tokens,
     )
 
@@ -285,7 +284,7 @@ async def test_research_turn_packing_runs_off_the_event_loop(
 
     await assembler.control_turn(
         evidence=_ledger(3),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
     assert estimator_threads and loop_thread not in estimator_threads
@@ -300,7 +299,6 @@ def test_research_seed_measure_grows_when_memory_is_reserved() -> None:
         "resource_manifest": (),
         "image_budget": None,
         "tools": [],
-        "retained_tail_tokens": _RETAINED_TAIL,
     }
     empty = research_history_input_measure(**kwargs)
     reserved = research_history_input_measure(**kwargs, memory_text=reserved_auto_recall_text())
@@ -319,7 +317,7 @@ async def test_control_turn_projects_artifact_publication_as_one_capability() ->
 
     messages = await assembler.control_turn(
         evidence=_ledger(1),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
 
@@ -339,7 +337,7 @@ async def test_control_turn_carries_non_citable_memory() -> None:
     )
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
-        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
     system = str(messages[0]["content"])

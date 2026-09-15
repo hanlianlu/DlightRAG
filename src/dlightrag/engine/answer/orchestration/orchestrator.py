@@ -598,7 +598,6 @@ class AnswerOrchestrator:
         self._attachment_snapshots = dict(attachment_snapshots or {})
         self._parent_history = conversation_history or PriorTurns()
         evidence = EvidenceLedger(image_budget=self._image_budget)
-        retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
         trace = _fresh_research_trace()
         skills = self._skills
         tools = self._compose_tools(
@@ -623,7 +622,7 @@ class AnswerOrchestrator:
             ),
             tools=tools,
             evidence=evidence,
-            working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
+            working=WorkingContextProjection(),
             registry=registry,
             trace=trace,
             attachment_snapshots=self._attachment_snapshots,
@@ -697,7 +696,6 @@ class AnswerOrchestrator:
         evidence = EvidenceLedger(image_budget=self._image_budget)
         if request.context == "parent" and context_snapshot.evidence_state:
             evidence.restore_ledger_state(context_snapshot.evidence_state)
-        retained_tail_tokens = self._context_policy.retained_tail_target(child_profile)
         trace = _fresh_research_trace()
         trace["child_context"] = request.context
         trace["child_model_role"] = request.model_role
@@ -730,7 +728,7 @@ class AnswerOrchestrator:
             ),
             tools=tools,
             evidence=evidence,
-            working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
+            working=WorkingContextProjection(),
             registry=None,
             trace=trace,
             attachment_snapshots=self._attachment_snapshots,
@@ -758,9 +756,7 @@ class AnswerOrchestrator:
             run.attachment_snapshots,
             admissions=run.attachment_admissions,
         )
-        working = WorkingContextProjection(
-            retained_tail_tokens=self._context_policy.retained_tail_target(run.model_profile)
-        )
+        working = WorkingContextProjection()
         self._record_exchanges(working, messages)
         run.working = working
 
@@ -984,7 +980,7 @@ class AnswerOrchestrator:
         fixed = (
             run.context.measure_control_input(
                 evidence=EvidenceLedger(),
-                working=WorkingContextProjection(retained_tail_tokens=0),
+                working=WorkingContextProjection(),
             )
             + tool_schema_tokens
         )

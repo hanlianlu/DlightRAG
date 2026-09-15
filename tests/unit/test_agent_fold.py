@@ -12,6 +12,7 @@ from dlightrag.engine.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.engine.agent.session.fold import (
+    WorkingContextProjection,
     exchange_starts,
     fold_entries,
     host_turn_starts,
@@ -209,3 +210,62 @@ def test_projection_is_bound_to_physical_branch_entry_identity() -> None:
     )
     messages = project_session_messages((user, assistant), projection)
     assert messages[-1]["content"] == "new"
+
+
+def test_working_projection_replays_signed_state_without_filtering() -> None:
+    """Every exchange is replayed verbatim, however much history precedes it.
+
+    DeepSeek requires every previous turn's ``reasoning_content`` back on a
+    request that carries tools and rejects a partial history with HTTP 400, and
+    Gemini signs its tool calls. A projection that drops either produces a
+    history no provider ever sent, so bounding is the compaction boundary's job.
+    """
+    projection = WorkingContextProjection()
+    for index in range(4):
+        projection.record(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": f"c{index}",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                            "thought_signature": f"sig-{index}",
+                        }
+                    ],
+                    "provider_state": {"reasoning_content": f"thinking {index}"},
+                },
+                {"role": "tool", "tool_call_id": f"c{index}", "content": "result"},
+            ]
+        )
+
+    assistants = [
+        message for message in projection.messages() if message.get("role") == "assistant"
+    ]
+    assert [message["provider_state"] for message in assistants] == [
+        {"reasoning_content": f"thinking {index}"} for index in range(4)
+    ]
+    assert [
+        call["thought_signature"] for message in assistants for call in message["tool_calls"]
+    ] == [f"sig-{index}" for index in range(4)]
+
+
+def test_working_projection_round_trips_signed_state_through_canonical_json() -> None:
+    state = {
+        "exchanges": [
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "c1", "thought_signature": "sig"}],
+                    "provider_state": {"reasoning_content": "thinking"},
+                }
+            ]
+        ]
+    }
+    projection = WorkingContextProjection.from_canonical_json(state)
+
+    assert projection.messages() == state["exchanges"][0]
+    assert projection.canonical_json() == state

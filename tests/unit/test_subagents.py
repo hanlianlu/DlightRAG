@@ -1352,7 +1352,7 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
 
     messages = await child.context.control_turn(
         evidence=child.evidence,
-        working=WorkingContextProjection(retained_tail_tokens=1000),
+        working=WorkingContextProjection(),
         tool_schema_tokens=0,
     )
 

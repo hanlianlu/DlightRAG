@@ -107,7 +107,7 @@ _VISUAL_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("a
 
 
 def _episode() -> _RunWorking:
-    return _RunWorking(retained_tail_tokens=20_000)
+    return _RunWorking()
 
 
 def _answer_run_input() -> AnswerRunInput:

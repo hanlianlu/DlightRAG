@@ -1843,7 +1843,6 @@ class AnswerService:
                         resource_manifest=resolved.resource_manifest,
                         image_budget=resolved.image_budget,
                         tools=tools,
-                        retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
                         memory_text=memory_text,
                         episodic_summary=request.episodic_summary,
                     )
