@@ -60,7 +60,7 @@ def finalize_answer(
         enriched_chunks=enriched_chunks,
     )
 
-    if not answer_text or not flat_contexts:
+    if not answer_text:
         return FinalizedAnswer(
             answer=answer_text,
             sources=[],
@@ -69,6 +69,11 @@ def finalize_answer(
             all_sources=all_sources,
         )
 
+    # Clean the text even when the Run retrieved nothing. An empty index resolves
+    # no marker, so a follow-up turn cannot keep citation markers that the model
+    # copied out of the conversation history: the contract is that a run without
+    # evidence answers without citations, and a kept marker would render as a
+    # badge that opens no source.
     result = CitationProcessor(
         contexts=flat_contexts,
         available_sources=all_sources,

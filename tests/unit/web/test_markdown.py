@@ -144,7 +144,7 @@ def test_citation_badges_basic():
     """[1-2] in plain text becomes a citation badge."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    result = render_answer_html("See [1-2] for details.")
+    result = render_answer_html("See [1-2] for details.", known_refs={"1"})
     assert 'class="citation-badge"' in result
     assert 'data-ref="1"' in result
     assert 'data-chunk="2"' in result
@@ -157,7 +157,7 @@ def test_citation_badges_doc_level():
     """[3] doc-level citation becomes a badge."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    result = render_answer_html("See [3] for details.")
+    result = render_answer_html("See [3] for details.", known_refs={"3"})
     assert 'class="citation-badge"' in result
     assert 'data-ref="3"' in result
     assert 'aria-label="Source 3"' in result
@@ -169,7 +169,7 @@ def test_citation_badges_in_inline_code_skipped():
     """[1-2] inside inline code must NOT become a badge."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    result = render_answer_html("Use `array[1-2]` in code.")
+    result = render_answer_html("Use `array[1-2]` in code.", known_refs={"1"})
     # The [1-2] is inside <code>, should not be a badge
     assert "<code>" in result
     assert result.count('class="citation-badge"') == 0
@@ -180,7 +180,7 @@ def test_citation_badges_in_fenced_code_skipped():
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     md = "```\narray[1-2] = value\n```\n\nSee [1-2] for info."
-    result = render_answer_html(md)
+    result = render_answer_html(md, known_refs={"1"})
     # Only the [1-2] outside code should be a badge
     assert result.count('class="citation-badge"') == 1
 
@@ -190,7 +190,7 @@ def test_citation_badges_in_table():
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     md = "| Source | Note |\n|---|---|\n| [1-2] | data |"
-    result = render_answer_html(md)
+    result = render_answer_html(md, known_refs={"1"})
     assert 'class="citation-badge"' in result
 
 
@@ -198,7 +198,7 @@ def test_citation_badges_markdown_rendering():
     """Verify markdown is actually rendered (not just escaped)."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    result = render_answer_html("**bold** text [1-1]")
+    result = render_answer_html("**bold** text [1-1]", known_refs={"1"})
     assert "<strong>bold</strong>" in result
     assert 'class="citation-badge"' in result
 
@@ -451,3 +451,18 @@ def test_a_highlight_outside_a_formula_still_marks_only_itself():
 
     assert '<span class="highlight">The rule matters.</span>' in out
     assert "$$\nx = y\n$$" in out
+
+
+def test_unresolved_marker_stays_literal_text_instead_of_a_badge():
+    """A marker outside the published sources must not promise a source."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html(
+        "Copied claim [9-1] and doc claim [9], kept claim [1-1].",
+        known_refs={"1"},
+    )
+
+    assert 'data-ref="1"' in result
+    assert 'data-ref="9"' not in result
+    assert "[9-1]" in result
+    assert "[9]" in result

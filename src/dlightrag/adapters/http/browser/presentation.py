@@ -2,6 +2,7 @@
 """Safe semantic projection shared by browser history, SSE, and Artifact views."""
 
 import re
+from collections.abc import Set as AbstractSet
 from typing import Any, Literal
 
 import nh3
@@ -181,13 +182,20 @@ def _reference_aria_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
     return f"Source {ref}" if chunk_idx in {None, ""} else f"Source {ref}, chunk {chunk_idx}"
 
 
-def render_answer_html(answer: str) -> str:
-    """Render one Markdown segment with semantic citation controls."""
+def render_answer_html(answer: str, *, known_refs: AbstractSet[str]) -> str:
+    """Render one Markdown segment with semantic citation controls.
+
+    ``known_refs`` holds the source ids this surface actually publishes. A marker
+    outside that set stays literal text: badging it would promise a source the
+    click cannot open.
+    """
     html = render_markdown(answer)
     html, protected = _protect_code_blocks(html)
 
     def chunk_citation(match: re.Match[str]) -> str:
         ref_id, chunk_idx = match.group(1), match.group(2)
+        if ref_id not in known_refs:
+            return match.group(0)
         return (
             f'<cite class="citation-badge" data-ref="{ref_id}" data-chunk="{chunk_idx}" '
             f'role="button" tabindex="0" aria-label="{_reference_aria_label(ref_id, chunk_idx)}">'
@@ -196,6 +204,8 @@ def render_answer_html(answer: str) -> str:
 
     def document_citation(match: re.Match[str]) -> str:
         ref_id = match.group(1)
+        if ref_id not in known_refs:
+            return match.group(0)
         return (
             f'<cite class="citation-badge" data-ref="{ref_id}" role="button" tabindex="0" '
             f'aria-label="{_reference_aria_label(ref_id)}">{_reference_label(ref_id)}</cite>'
@@ -254,6 +264,10 @@ def build_answer_presentation(
     """Build the bounded Web projection used identically by SSE and history."""
     artifact_values = artifacts or []
     image_values = evidence_images
+    # Validate the sources once: they are both the payload this surface publishes
+    # and the ref set its citation badges may point at.
+    presentation_sources = [_presentation_source(source) for source in sources]
+    known_refs = {source.id for source in presentation_sources}
     raw_parts = answer_parts_from_markdown(
         answer,
         artifacts=artifact_values,
@@ -263,7 +277,7 @@ def build_answer_presentation(
         PresentationPart(
             type=part["type"],
             text=str(part.get("text") or ""),
-            html=render_answer_html(str(part.get("text") or ""))
+            html=render_answer_html(str(part.get("text") or ""), known_refs=known_refs)
             if part["type"] == "markdown"
             else "",
             artifact=(
@@ -288,7 +302,7 @@ def build_answer_presentation(
     return AnswerPresentation(
         answer_text=answer,
         parts=parts,
-        sources=[_presentation_source(source) for source in sources],
+        sources=presentation_sources,
         evidence_images=[
             PresentationImage.model_validate(image)
             for image in image_values

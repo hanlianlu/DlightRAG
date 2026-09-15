@@ -179,12 +179,39 @@ def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> No
     from dlightrag.adapters.http.browser.presentation import build_answer_presentation
 
     presentation = build_answer_presentation(
+        answer="Answer [1] and copied [9-1].",
+        sources=[
+            {
+                "id": "1",
+                "title": "Report",
+                "type": "document",
+                "source_uri": "local://report.pdf",
+                "chunks": [{"chunk_id": "c1", "content": "Evidence.", "chunk_idx": 1}],
+            }
+        ],
+        evidence_images=[],
+    )
+    html = presentation.parts[0].html
+    assert '<cite class="citation-badge"' in html
+    assert 'data-ref="1"' in html
+    # A marker outside the published sources stays text instead of promising a
+    # source the click cannot open.
+    assert 'data-ref="9"' not in html
+    assert "[9-1]" in html
+    assert "answer_images" not in presentation.model_dump()
+
+
+def test_answer_presentation_without_sources_badges_no_citation() -> None:
+    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
+
+    presentation = build_answer_presentation(
         answer="Answer [1].",
         sources=[],
         evidence_images=[],
     )
-    assert '<cite class="citation-badge"' in presentation.parts[0].html
-    assert "answer_images" not in presentation.model_dump()
+
+    assert '<cite class="citation-badge"' not in presentation.parts[0].html
+    assert "[1]" in presentation.parts[0].html
 
 
 def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None:

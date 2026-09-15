@@ -189,3 +189,35 @@ class TestFinalizeAnswer:
 
         assert result.cited_chunks == {"1": ["c1"]}
         assert calls == 1
+
+
+class TestFinalizeWithoutEvidence:
+    """A run that retrieved nothing cannot keep markers copied from history."""
+
+    def test_markers_copied_from_history_are_removed_when_nothing_was_retrieved(self) -> None:
+        from dlightrag.engine.answer.citations.finalization import finalize_answer
+
+        result = finalize_answer(
+            "报告已完成 [9-1]，要点如下 [10-1] 与 [33-1]。",
+            {"chunks": []},
+        )
+
+        # Removing a marker keeps the whitespace around it, as the English case above does.
+        assert result.answer == "报告已完成 ，要点如下  与 。"
+        assert result.sources == []
+        assert result.cited_chunks == {}
+
+    def test_doc_level_markers_are_removed_when_nothing_was_retrieved(self) -> None:
+        from dlightrag.engine.answer.citations.finalization import finalize_answer
+
+        result = finalize_answer("See [7] and [12].", {"chunks": [], "entities": []})
+
+        assert result.answer == "See  and ."
+        assert result.sources == []
+
+    def test_a_references_section_is_stripped_without_evidence(self) -> None:
+        from dlightrag.engine.answer.citations.finalization import finalize_answer
+
+        result = finalize_answer("Body text.\n\n## References\n[9] made up", {"chunks": []})
+
+        assert result.answer == "Body text."
