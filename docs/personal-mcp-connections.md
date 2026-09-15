@@ -210,6 +210,19 @@ DlightRAG supplies only product integration:
 
 The SDK's pending PKCE verifier/state remains process memory. If the flow owner dies or its lease expires, no other worker resumes the exchange: the flow expires, any callback becomes unusable, and Settings asks the user to authorize again.
 
+### Client registration
+
+The MCP authorization spec orders client registration: a client the server already knows, then a Client ID Metadata Document, then Dynamic Client Registration as the compatibility fallback. DlightRAG supports the last two and lets the locked SDK choose between them, so the deployed capability matches what each authorization server offers:
+
+- When an authorization server advertises `client_id_metadata_document_supported`, the SDK uses this deployment's own published document URL as `client_id`. No registration call happens and no client secret exists anywhere, which is what makes providers without a registration endpoint reachable at all.
+- Otherwise the SDK registers dynamically, exactly as before.
+
+`GET /web/oauth/connections/mcp/client-metadata` serves that document: `client_id`, `client_name`, `redirect_uris`, `grant_types`, `response_types`, and `token_endpoint_auth_method="none"`. It is public by protocol -- an authorization server fetches it without a credential -- and it carries only the few facts an authorization redirect already reveals, so it reads no owner, Cookie, or Connection state and is the only public Web path besides login/logout.
+
+The `client_id` URL is derived from the configured public callback: same origin, fixed non-root path, https, no userinfo, query, or fragment. Both the document draft and the SDK reject every other shape, so a deployment whose callback is plain http publishes no document and keeps Dynamic Client Registration. The document is served with a bounded `Cache-Control` because authorization servers are expected to cache it, and `client_id` inside the document matches the URL exactly, since both sides compare the two as plain strings.
+
+Pre-registered client credentials are deliberately not implemented. They would add a second credential kind and a per-Connection secret for a mechanism no target provider needs: each one either publishes a metadata document or offers dynamic registration.
+
 OAuth uses an expiring Grant-scoped refresh lease without a database transaction over remote I/O. As an approved safety refinement, refresh preflight is separate from the effect session: the locked SDK constructs refresh requests and safe same-origin token redirects, and its generator is closed before its original MCP request can be sent. Failed refresh never enters discovery, registration or consent. Foreground preflight first checks the trusted pending effect, owner, Grant, Run/Child fence and cancellation; after a successful TokenStorage CAS, the complete effect gate runs again before one token-only MCP call. TokenStorage CAS requires `(grant_id, active status, lease owner, live refresh epoch, expected secret version)`. Only one refresh sequence runs per Grant; expiry permits takeover but stale saves/releases cannot overwrite expired-lease re-encryption, replacement or revocation. Cosmetic re-encryption skips live refresh leases both at candidate selection and at its actual CAS, preserving externally rotated refresh tokens. CAS failure discards returned tokens. No 401/403 after an effect causes refresh-and-replay.
 
 A provider-requested scope outside `consented_scopes` never expands authority in a worker. It marks `needs_auth`; Settings performs a new consent flow and publishes a new Grant/generation. Expired credentials refresh automatically only within already consented scope. Missing refresh capability, rejected refresh, or nonstandard provider requirements become `needs_auth`, not a spontaneous worker redirect. SDK support does not imply universal provider compatibility.
@@ -237,8 +250,9 @@ Management is a Web projection only:
 | `POST /web/api/connections/mcp/{connection_id}/oauth` | Begin SDK OAuth from Settings |
 | `POST /web/api/connections/mcp/{connection_id}/revoke` | Revoke/erase the active Grant and block future dispatch |
 | `GET /web/oauth/connections/mcp/callback` | State-bound OAuth callback inbox deposit; not a public management interface |
+| `GET /web/oauth/connections/mcp/client-metadata` | Public Client ID Metadata Document; fetched by authorization servers, reads no owner state |
 
-Mutations use current same-origin auth/CSRF and expected revisions; the OAuth callback uses authenticated owner plus SDK state because a provider redirect cannot supply same-origin CSRF. Cross-owner identifiers return not-found. `simple` returns 403 and bootstrap hides the Feature; eligibility is decided by that bootstrap capability, so the projection carries no eligibility flag of its own.
+Mutations use current same-origin auth/CSRF and expected revisions; the OAuth callback uses authenticated owner plus SDK state because a provider redirect cannot supply same-origin CSRF. The client metadata document is the one deliberately public Web path: it serves static configuration, holds no secret, and answers the same for every caller. Cross-owner identifiers return not-found. `simple` returns 403 and bootstrap hides the Feature; eligibility is decided by that bootstrap capability, so the projection carries no eligibility flag of its own.
 
 The list distinguishes authoritative `disabled/enabled/revoked` from observations `ready/degraded/needs-auth/refreshing` by reporting the redacted observed status, and never claims a permanent global “connected” state. It shows no tool names, schemas, catalogue age, or raw error kinds: Settings answers whether a server is reachable and authorized, and the Agent is the only consumer of what that server offers. The projection carries exactly what Settings renders — catalogue facts and error classification stay server-side — while activation epoch and generation remain because the integration suite reads them here as the authoritative read model.
 

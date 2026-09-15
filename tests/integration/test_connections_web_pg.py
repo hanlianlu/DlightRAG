@@ -243,3 +243,65 @@ async def test_web_sdk_oauth_authenticated_callback_strips_query_and_returns_fix
                 )
             finally:
                 await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path, monkeypatch):
+    """An authorization server has no cookie, so the document must be public, minimal, and exact."""
+    from dlightrag.adapters.http.browser.routes.connections import callback_router
+    from dlightrag.application.connections import ConnectionPolicy
+
+    monkeypatch.chdir(tmp_path)
+    config = DlightragConfig(
+        _env_file=None,
+        models={
+            "chat": {
+                "roles": {
+                    role: {"model": "fixture-model"}
+                    for role in ("extract", "query", "keyword", "vlm")
+                }
+            }
+        },
+        access={
+            "auth_mode": "jwt",
+            "jwt_verification_key": "test-only-web-jwt-key-not-for-production",
+        },
+    )
+    callback = "https://app.example/web/oauth/connections/mcp/callback"
+    metadata_url = "https://app.example/web/oauth/connections/mcp/client-metadata"
+
+    def app_for(service):
+        app = FastAPI()
+        app.include_router(callback_router, prefix="/web")
+        app.state.application = SimpleNamespace(connections=service)
+        app.add_middleware(WebAuthMiddleware, config_getter=lambda: config)
+        return app
+
+    async with isolated_run_runtime("oauth_metadata") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        published = Connections(
+            store=store, mcp=FakeMcp(), policy=ConnectionPolicy(oauth_callback_url=callback)
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app_for(published)), base_url="https://app.example"
+        ) as client:
+            response = await client.get("/web/oauth/connections/mcp/client-metadata")
+            assert response.status_code == 200
+            assert response.json() == {
+                "client_id": metadata_url,
+                "client_name": "DlightRAG personal Connection",
+                "redirect_uris": [callback],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            }
+            assert response.headers["cache-control"] == "public, max-age=300"
+
+        unpublished = Connections(store=store, mcp=FakeMcp(), policy=ConnectionPolicy())
+        async with AsyncClient(
+            transport=ASGITransport(app_for(unpublished)), base_url="https://app.example"
+        ) as client:
+            assert (
+                await client.get("/web/oauth/connections/mcp/client-metadata")
+            ).status_code == 404

@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -166,6 +167,20 @@ async def begin_authorization(
 
 
 callback_router = APIRouter(route_class=_SecretSafeRoute)
+
+
+@callback_router.get("/oauth/connections/mcp/client-metadata")
+async def published_client_metadata(request: Request) -> Response:
+    """Publish this deployment's Client ID Metadata Document.
+
+    Public by protocol and read-only: it reads no cookie, owner, or Connection, and returns only
+    the few facts an authorization redirect already reveals. A deployment without a public https
+    callback publishes none, and its Connections register dynamically instead.
+    """
+    document = get_application(request).connections.published_client_metadata()
+    if document is None:
+        raise HTTPException(404, "No client metadata published")
+    return JSONResponse(document, headers={"Cache-Control": "public, max-age=300"})
 
 
 @callback_router.get("/oauth/connections/mcp/callback")

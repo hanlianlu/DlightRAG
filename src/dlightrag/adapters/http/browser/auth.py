@@ -29,7 +29,13 @@ from dlightrag.application.settings import authentication_settings
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
 WEB_CSRF_COOKIE = "dlightrag_web_csrf"
 CSRF_HEADER = "X-CSRF-Token"
-_PUBLIC_WEB_PATHS = {"/web/login", "/web/logout"}
+_PUBLIC_WEB_PATHS = {
+    "/web/login",
+    "/web/logout",
+    # An authorization server fetches this one without a cookie. It is a static document that
+    # reveals only what an authorization redirect already does; see client_metadata.py.
+    "/web/oauth/connections/mcp/client-metadata",
+}
 _WEB_COOKIE_PATH = "/web"
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 

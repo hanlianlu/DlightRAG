@@ -29,6 +29,7 @@ from dlightrag.engine.network_admission import (
     validate_public_http_url,
 )
 
+from .client_metadata import client_metadata_document, client_metadata_url
 from .credentials import CredentialCipher, access_bearer
 from .models import (
     AuthorizationStart,
@@ -295,6 +296,18 @@ class Connections:
         except Exception:
             # Losing local authority visibility cannot authorize further I/O.
             task.cancel()
+
+    def published_client_metadata(self) -> dict[str, Any] | None:
+        """The Client ID Metadata Document this deployment publishes, or None.
+
+        Public by protocol: an authorization server fetches it without a credential, so it carries
+        only what an authorization redirect already reveals.
+        """
+        callback_url = self._policy.oauth_callback_url
+        metadata_url = client_metadata_url(callback_url)
+        if metadata_url is None or callback_url is None:
+            return None
+        return client_metadata_document(metadata_url=metadata_url, oauth_callback_url=callback_url)
 
     async def read(self, *, owner_id: str, auth_mode: str) -> ConnectionsView:
         self._authorize(owner_id, auth_mode)

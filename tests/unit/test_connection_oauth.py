@@ -24,6 +24,10 @@ class FakeAuthorizationServer:
         self.scope = "read"
         self.granted_scope = "read"
         self.authorization_endpoint = "https://as.example/authorize"
+        # An authorization server that advertises a Client ID Metadata Document offers the
+        # spec-preferred alternative to dynamic client registration.
+        self.cimd = False
+        self.registrations = 0
 
     def __call__(self, request):
         self.requests.append(request)
@@ -53,9 +57,13 @@ class FakeAuthorizationServer:
                         "response_types_supported": ["code"],
                         "code_challenge_methods_supported": ["S256"],
                         "token_endpoint_auth_methods_supported": ["client_secret_basic"],
+                        **({"client_id_metadata_document_supported": True} if self.cimd else {}),
                     },
                 )
             if path == "/register":
+                self.registrations += 1
+                if self.cimd:
+                    raise AssertionError("a URL client_id must not register dynamically")
                 return httpx2.Response(
                     201,
                     json={
@@ -69,10 +77,18 @@ class FakeAuthorizationServer:
                 body = parse_qs(request.content.decode())
                 assert body["code"] == ["test-code"]
                 assert body["resource"] == ["https://mcp.example/mcp"]
-                assert (
-                    request.headers["authorization"]
-                    == "Basic " + base64.b64encode(b"test-client:test-client-secret").decode()
-                )
+                if self.cimd:
+                    # No secret exists to authenticate with, so the URL client_id is asserted
+                    # in the body and the SDK must not send an Authorization header at all.
+                    assert "authorization" not in request.headers
+                    assert body["client_id"] == [
+                        "https://app.example/web/oauth/connections/mcp/client-metadata"
+                    ]
+                else:
+                    assert (
+                        request.headers["authorization"]
+                        == "Basic " + base64.b64encode(b"test-client:test-client-secret").decode()
+                    )
                 challenge = (
                     base64.urlsafe_b64encode(
                         hashlib.sha256(body["code_verifier"][0].encode()).digest()
@@ -163,6 +179,54 @@ async def test_sdk_authorization_pkce_resource_and_token_storage(monkeypatch, ca
     assert "test-client-secret" not in caplog.text
     assert "test-access-token" not in caplog.text
     assert "test-code" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_advertises_client_id_metadata_uses_the_published_url(monkeypatch):
+    from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    server = FakeAuthorizationServer()
+    server.cimd = True
+    saved = []
+
+    async def redirect(url):
+        server.authorization = parse_qs(urlsplit(url).query)
+
+    async def callback():
+        return SecretStr(
+            json.dumps(
+                {
+                    "code": "test-code",
+                    "state": server.authorization["state"][0],
+                    "iss": "https://as.example",
+                }
+            )
+        )
+
+    async def save(secret):
+        saved.append(secret)
+
+    result = await PersonalOAuthClient(
+        transport_factory=lambda: httpx2.MockTransport(server)
+    ).authorize(
+        endpoint="https://mcp.example/mcp",
+        callback_url="https://app.example/web/oauth/connections/mcp/callback",
+        policy=ConnectionPolicy(),
+        redirect=redirect,
+        callback=callback,
+        save=save,
+    )
+    # The document URL is the whole client identity: nothing registered, no secret exists, and the
+    # server met the URL as client_id in the exchange.
+    credentials = json.loads(result.credentials.get_secret_value())
+    assert credentials["client_info"]["client_id"] == (
+        "https://app.example/web/oauth/connections/mcp/client-metadata"
+    )
+    assert credentials["client_info"]["token_endpoint_auth_method"] == "none"
+    assert credentials["client_info"].get("client_secret") is None
+    assert server.registrations == 0
+    assert result.tools[0]["name"] == "read"
 
 
 @pytest.mark.asyncio

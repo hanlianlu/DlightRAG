@@ -21,6 +21,7 @@ from mcp.shared.auth import (
 )
 from pydantic import AnyHttpUrl, SecretStr
 
+from dlightrag.application.connections.client_metadata import CLIENT_NAME, client_metadata_url
 from dlightrag.application.connections.models import ConnectionsError, OAuthResult
 from dlightrag.application.connections.policy import ConnectionPolicy
 from dlightrag.engine.network_admission import _normalize_host_patterns, _resolve_public_target
@@ -229,13 +230,16 @@ class PersonalOAuthClient:
         provider = OAuthClientProvider(
             server_url=endpoint,
             client_metadata=OAuthClientMetadata(
-                client_name="DlightRAG personal Connection",
+                client_name=CLIENT_NAME,
                 redirect_uris=[AnyHttpUrl(callback_url)],
                 grant_types=["authorization_code", "refresh_token"],
                 response_types=["code"],
                 token_endpoint_auth_method="client_secret_basic",  # noqa: S106 - SDK method identifier, not a secret
             ),
             storage=storage,
+            # The SDK uses this URL as the client_id when the authorization server advertises
+            # client_id_metadata_document_supported, and registers dynamically when it does not.
+            client_metadata_url=client_metadata_url(callback_url),
             redirect_handler=admitted_redirect,
             callback_handler=sdk_callback,
         )
