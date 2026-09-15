@@ -153,17 +153,33 @@ class AnswerPresentation(ClientContractModel):
     artifact_outcome: PresentationArtifactOutcome
 
 
-def _protect_code_blocks(html: str) -> tuple[str, list[str]]:
-    protected: list[str] = []
+def _protect_spans(
+    html: str,
+    patterns: tuple[str, ...],
+    protected: list[str],
+) -> str:
+    """Mask spans from citation substitution, appending each to ``protected``."""
 
     def replace(match: re.Match[str]) -> str:
         index = len(protected)
         protected.append(match.group(0))
         return f"\x00CODE{index}\x00"
 
-    html = re.sub(r"<pre[^>]*>.*?</pre>", replace, html, flags=re.DOTALL)
-    html = re.sub(r"<code[^>]*>.*?</code>", replace, html, flags=re.DOTALL)
+    for pattern in patterns:
+        html = re.sub(pattern, replace, html, flags=re.DOTALL)
+    return html
+
+
+def _protect_code_blocks(html: str) -> tuple[str, list[str]]:
+    protected: list[str] = []
+    html = _protect_spans(html, (r"<pre[^>]*>.*?</pre>", r"<code[^>]*>.*?</code>"), protected)
     return html, protected
+
+
+def _protect_links(html: str, protected: list[str]) -> str:
+    """Mask link text: a projected citation is a link whose label holds its own
+    marker, and badging that marker would nest a control inside the link."""
+    return _protect_spans(html, (r"<a\b[^>]*>.*?</a>",), protected)
 
 
 def _restore_code_blocks(html: str, protected: list[str]) -> str:
@@ -191,6 +207,7 @@ def render_answer_html(answer: str, *, known_refs: AbstractSet[str]) -> str:
     """
     html = render_markdown(answer)
     html, protected = _protect_code_blocks(html)
+    html = _protect_links(html, protected)
 
     def chunk_citation(match: re.Match[str]) -> str:
         ref_id, chunk_idx = match.group(1), match.group(2)

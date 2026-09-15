@@ -114,6 +114,20 @@ def _math_inline_rule(state: StateInline, silent: bool) -> bool:
     return True
 
 
+def _render_link_open(renderer, tokens: list, idx: int, options, env) -> str:
+    """Open external links in a new tab.
+
+    An answer or an Artifact may cite a public URL directly (and a published
+    file's projected citations are plain Markdown links). Following one in place
+    would navigate the running application away from itself.
+    """
+    token = tokens[idx]
+    href = str(token.attrGet("href") or "")
+    if href.startswith(("http://", "https://")):
+        token.attrSet("target", "_blank")
+    return renderer.renderToken(tokens, idx, options, env)
+
+
 def _render_math_inline(_renderer, tokens: list, idx: int, _options, _env) -> str:
     """Re-wrap math content with its original delimiters for MathJax.
 
@@ -181,6 +195,7 @@ def _make_md() -> MarkdownIt:
     # Insert BEFORE the escape rule so \$ still works for literal dollars
     md.inline.ruler.before("escape", "math_inline", _math_inline_rule)
     md.add_render_rule("math_inline", _render_math_inline)
+    md.add_render_rule("link_open", _render_link_open)
     return md
 
 

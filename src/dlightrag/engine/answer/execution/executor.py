@@ -78,6 +78,7 @@ from dlightrag.engine.answer.capabilities import (
     RequestModelContext,
 )
 from dlightrag.engine.answer.citations.finalization import finalize_answer
+from dlightrag.engine.answer.citations.projection import link_public_citations
 from dlightrag.engine.answer.citations.sources import project_contexts_for_client
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
 from dlightrag.engine.answer.compaction import CompactionCoordinator
@@ -2674,7 +2675,9 @@ def _stage_publications(
         payload = item.content
         if item.media_type == "text/markdown":
             cleaned = finalize_answer(payload.decode("utf-8"), contexts)
-            payload = cleaned.answer.encode("utf-8")
+            # A published file travels outside the app, where an internal marker
+            # cites nothing: project validated public citations onto their URL.
+            payload = link_public_citations(cleaned.answer, cleaned.sources).encode("utf-8")
             artifact_sources[item.resource_id] = list(cleaned.sources)
             for descriptor in descriptors:
                 if descriptor.get("resource_id") == item.resource_id:

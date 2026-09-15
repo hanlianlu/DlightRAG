@@ -884,3 +884,73 @@ async def test_durable_child_usage_aggregates_roster_rows() -> None:
         "input_tokens": 8,
         "output_tokens": 3,
     }
+
+
+def test_public_document_citations_are_projected_into_the_published_artifact(
+    tmp_path: Path,
+) -> None:
+    """A published file carries links for citations whose source has a public URL."""
+    from dlightrag.engine.runtime.records import artifact_digest
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.md").write_text(
+        "Web fact [1]. Local fact [2]. Web excerpt [1-1]. Local excerpt [2-1].",
+        encoding="utf-8",
+    )
+    plan = validate_publication(
+        root,
+        answer="[Open report](artifact:report.md)",
+        attachments=(prepare_artifact_attachment(root, path="report.md"),),
+    )
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "chunk-web",
+                "reference_id": "1",
+                "file_path": "沃尔沃汽车将在全球裁员近3000人",
+                "content": "Web fact.",
+                "_workspace": "__web_search__",
+                "full_doc_id": "web-1",
+                "metadata": {
+                    "source_uri": "https://www.cls.cn/detail/2041214",
+                    "source_download_locator": "https://www.cls.cn/detail/2041214",
+                },
+            },
+            {
+                "chunk_id": "chunk-local",
+                "reference_id": "2",
+                "file_path": "primary.pdf",
+                "content": "Local fact.",
+                "_workspace": "default",
+                "full_doc_id": "doc-primary",
+                "metadata": {
+                    "source_uri": "local://default/primary.pdf",
+                    "source_download_locator": "/private/primary.pdf",
+                    "source_file_name": "primary.pdf",
+                },
+            },
+        ]
+    }
+
+    publications, descriptors, _ = _stage_publications(
+        plan=plan,
+        answer=plan.answer,
+        contexts=contexts,
+    )
+
+    (publication,) = publications
+    (descriptor,) = descriptors
+    assert (
+        publication.content
+        == (
+            "Web fact [[1] 沃尔沃汽车将在全球裁员近3000人](<https://www.cls.cn/detail/2041214>)."
+            " Local fact [2]."
+            " Web excerpt [[1-1] 沃尔沃汽车将在全球裁员近3000人]"
+            "(<https://www.cls.cn/detail/2041214>)."
+            " Local excerpt [2-1]."
+        ).encode()
+    )
+    # The descriptor addresses the projected bytes, not the pre-projection ones.
+    assert descriptor["byte_size"] == len(publication.content)
+    assert descriptor["digest"] == artifact_digest(publication.content)

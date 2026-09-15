@@ -466,3 +466,89 @@ def test_unresolved_marker_stays_literal_text_instead_of_a_badge():
     assert 'data-ref="9"' not in result
     assert "[9-1]" in result
     assert "[9]" in result
+
+
+def test_external_links_open_in_a_new_tab():
+    """A cited public URL must not navigate the running application away."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html(
+        "See [[9] Report](<https://example.com/report>).",
+        known_refs=set(),
+    )
+
+    assert 'href="https://example.com/report"' in result
+    assert 'target="_blank"' in result
+
+
+def test_internal_links_keep_their_own_navigation():
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html("See [Files](/web/files).", known_refs=set())
+
+    assert 'href="/web/files"' in result
+    assert "target=" not in result
+
+
+def test_projected_link_label_is_not_badged_inside_its_own_anchor():
+    """A projected citation is a link whose label holds its own marker."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html(
+        "Fact [[9] Title](<https://example.com/x>) and [9].",
+        known_refs={"9"},
+    )
+
+    assert 'href="https://example.com/x"' in result
+    assert 'target="_blank"' in result
+    assert ">[9] Title</a>" in result
+    # The standalone marker still badges, and never inside the link.
+    assert '<cite class="citation-badge"' in result
+    assert "</cite> Title</a>" not in result
+
+
+def test_markdown_artifact_presentation_badges_nothing_for_a_projected_citation():
+    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
+
+    presentation = build_answer_presentation(
+        answer="Fact [[9] Title](<https://example.com/x>).",
+        sources=[
+            {
+                "id": "9",
+                "title": "Title",
+                "type": "web",
+                "source_uri": "https://example.com/x",
+            }
+        ],
+        evidence_images=[],
+    )
+
+    html = presentation.parts[0].html
+    assert 'target="_blank"' in html
+    assert ">[9] Title</a>" in html
+    assert "<cite" not in html
+
+
+def test_projected_citation_inside_a_table_cell_keeps_its_cell():
+    """A table row must survive a source title that contains a pipe."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+    from dlightrag.engine.answer.citations.contracts import SourceReference
+    from dlightrag.engine.answer.citations.projection import link_public_citations
+
+    source = SourceReference(
+        id="10",
+        title="Volvo cost saving | WardsAuto",
+        source_uri="https://example.com/wardsauto",
+        workspace="default",
+        download_locator="https://example.com/wardsauto",
+    )
+    projected = link_public_citations(
+        "| scenario | evidence |\n| --- | --- |\n| base | see [10] |",
+        [source],
+    )
+
+    html = render_answer_html(projected, known_refs={"10"})
+
+    assert html.count("<td>") == 2
+    assert 'href="https://example.com/wardsauto"' in html
+    assert "WardsAuto</a>" in html
