@@ -1,8 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Safe semantic projection shared by browser history, SSE, and Artifact views."""
 
+import html as html_module
 import re
-from collections.abc import Set as AbstractSet
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import nh3
@@ -198,12 +199,13 @@ def _reference_aria_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
     return f"Source {ref}" if chunk_idx in {None, ""} else f"Source {ref}, chunk {chunk_idx}"
 
 
-def render_answer_html(answer: str, *, known_refs: AbstractSet[str]) -> str:
+def render_answer_html(answer: str, *, known_sources: Mapping[str, str]) -> str:
     """Render one Markdown segment with semantic citation controls.
 
-    ``known_refs`` holds the source ids this surface actually publishes. A marker
-    outside that set stays literal text: badging it would promise a source the
-    click cannot open.
+    ``known_sources`` maps each source id this surface publishes to its title. A
+    marker outside that set stays literal text: badging it would promise a source
+    the click cannot open. A badge carries its source title as a tooltip, which is
+    the only source name a private corpus document has in the interface.
     """
     html = render_markdown(answer)
     html, protected = _protect_code_blocks(html)
@@ -211,21 +213,26 @@ def render_answer_html(answer: str, *, known_refs: AbstractSet[str]) -> str:
 
     def chunk_citation(match: re.Match[str]) -> str:
         ref_id, chunk_idx = match.group(1), match.group(2)
-        if ref_id not in known_refs:
+        title = known_sources.get(ref_id)
+        if title is None:
             return match.group(0)
         return (
             f'<cite class="citation-badge" data-ref="{ref_id}" data-chunk="{chunk_idx}" '
-            f'role="button" tabindex="0" aria-label="{_reference_aria_label(ref_id, chunk_idx)}">'
+            f'role="button" tabindex="0" title="{html_module.escape(title, quote=True)}" '
+            f'aria-label="{_reference_aria_label(ref_id, chunk_idx)}">'
             f"{_reference_label(ref_id, chunk_idx)}</cite>"
         )
 
     def document_citation(match: re.Match[str]) -> str:
         ref_id = match.group(1)
-        if ref_id not in known_refs:
+        title = known_sources.get(ref_id)
+        if title is None:
             return match.group(0)
         return (
             f'<cite class="citation-badge" data-ref="{ref_id}" role="button" tabindex="0" '
-            f'aria-label="{_reference_aria_label(ref_id)}">{_reference_label(ref_id)}</cite>'
+            f'title="{html_module.escape(title, quote=True)}" '
+            f'aria-label="{_reference_aria_label(ref_id)}">'
+            f"{_reference_label(ref_id)}</cite>"
         )
 
     html = CITATION_PATTERN.sub(chunk_citation, html)
@@ -284,7 +291,7 @@ def build_answer_presentation(
     # Validate the sources once: they are both the payload this surface publishes
     # and the ref set its citation badges may point at.
     presentation_sources = [_presentation_source(source) for source in sources]
-    known_refs = {source.id for source in presentation_sources}
+    known_sources = {source.id: source.title for source in presentation_sources}
     raw_parts = answer_parts_from_markdown(
         answer,
         artifacts=artifact_values,
@@ -294,7 +301,7 @@ def build_answer_presentation(
         PresentationPart(
             type=part["type"],
             text=str(part.get("text") or ""),
-            html=render_answer_html(str(part.get("text") or ""), known_refs=known_refs)
+            html=render_answer_html(str(part.get("text") or ""), known_sources=known_sources)
             if part["type"] == "markdown"
             else "",
             artifact=(
