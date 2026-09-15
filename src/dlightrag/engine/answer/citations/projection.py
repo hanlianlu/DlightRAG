@@ -12,10 +12,12 @@ Deliberately narrow:
 - public HTTP(S) sources only -- private corpus paths and Resource Handles keep
   their marker, because they have no destination outside the application, and
   the in-app Source panel stays the way to reach them;
-- excerpt markers keep their excerpt number in the link label (``[[9-1] Title]``).
-  A URL cannot address one excerpt, so the link lands the reader on the source
-  page while the text still says which excerpt supported the claim, and the
-  answer's own badge -> Source panel keeps the exact-excerpt view;
+- the marker itself is the link text (``[9-1](url "Title")``), so the published
+  prose reads exactly as the model wrote it while the URL travels with it, and
+  the source title rides along as the link's title (visible on hover, and in the
+  raw file). A URL cannot address one excerpt, so the link lands the reader on
+  the source page while the text still says which excerpt supported the claim,
+  and the in-app badge -> Source panel keeps the exact-excerpt view;
 - never a new citation dialect: the model still writes ``[n]``/``[n-m]`` and the
   citation index stays the single authority. This is a rendering projection over
   already-validated sources, not a second parser.
@@ -44,14 +46,11 @@ from .contracts import CITATION_TRAILING_BOUNDARY, SourceReference
 # Non-numeric references (``att-1``) are not matched: they carry no public URL.
 _MARKER: Final = re.compile(rf"(?<!\[)\[([0-9]+)(?:-([0-9]+))?\]{CITATION_TRAILING_BOUNDARY}")
 
-_LABEL_LIMIT: Final = 80
-_BRACKETS: Final = str.maketrans({"[": "(", "]": ")"})
-# Markdown punctuation that would otherwise change the label's rendering;
-# backslash-escaped so the published label matches the source title exactly.
-# A pipe matters most: a citation inside a table cell would split the row.
-_ESCAPE: Final = str.maketrans(
-    {"\\": r"\\", "`": r"\`", "*": r"\*", "_": r"\_", "~": r"\~", "|": r"\|"}
-)
+_TITLE_LIMIT: Final = 80
+# A link title is a quoted string, so only its delimiter, its escape character,
+# and the table-cell separator need escaping. A pipe matters most: a citation
+# inside a table cell would otherwise split the row.
+_TITLE_ESCAPE: Final = str.maketrans({"\\": r"\\", '"': r"\"", "|": r"\|"})
 
 # Spans whose text is data, never a citation: code keeps its array indices, and
 # an existing link keeps its label and destination. A marker rewritten inside
@@ -69,7 +68,8 @@ _INLINE_CODE: Final = re.compile(r"(`+)(?:[^`]|`(?!\1))*?\1")
 # ``[see [9]](url)`` is one link whose label holds a marker-shaped run.
 _LINK_LABEL: Final = r"\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\]"
 _LINK_OR_IMAGE: Final = re.compile(
-    rf"!?{_LINK_LABEL}\(\s*(?:<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)\s*\)"
+    rf"!?{_LINK_LABEL}\(\s*(?:<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)"
+    rf"(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'|\([^\n()]*\)))?\s*\)"
 )
 # Only the image reference form is masked: ``[9-1][10-1]`` -- two adjacent
 # citations, which the model writes often -- is lexically identical to a text
@@ -107,7 +107,7 @@ def link_public_citations(
             url = validate_public_web_url(source.source_uri)
         except ValueError:
             continue
-        public[str(source.id)] = (label_for(source), url)
+        public[str(source.id)] = (title_for(source), url)
     if not public or not answer:
         return answer
 
@@ -118,9 +118,9 @@ def link_public_citations(
         entry = public.get(ref_id)
         if entry is None:
             return match.group(0)
-        label, url = entry
+        title, url = entry
         marker = ref_id if chunk_idx is None else f"{ref_id}-{chunk_idx}"
-        return f"[[{marker}] {label}](<{url}>)"
+        return f'[{marker}](<{url}> "{title}")'
 
     projected = _MARKER.sub(_replace, answer)
     for index in range(len(protected) - 1, -1, -1):
@@ -142,19 +142,19 @@ def _mask_markdown(answer: str) -> tuple[str, list[str]]:
     return answer, protected
 
 
-def label_for(source: SourceReference) -> str:
-    """Return one single-line link label for a source.
+def title_for(source: SourceReference) -> str:
+    """Return one single-line link title for a source.
 
-    Brackets are replaced because a bare ``]`` would end the link text, and
-    whitespace is collapsed because a raw newline would break the inline link.
+    Whitespace is collapsed because a raw newline would end the inline link, and
+    the title is truncated before escaping so a cut cannot leave a dangling
+    escape.
     """
     title = " ".join(str(source.title or "").split())
     if not title:
         return f"Source {source.id}"
-    if len(title) > _LABEL_LIMIT:
-        # Truncate before escaping, so a cut cannot leave a dangling escape.
-        title = title[: _LABEL_LIMIT - 1].rstrip() + "…"
-    return title.translate(_ESCAPE).translate(_BRACKETS)
+    if len(title) > _TITLE_LIMIT:
+        title = title[: _TITLE_LIMIT - 1].rstrip() + "…"
+    return title.translate(_TITLE_ESCAPE)
 
 
-__all__ = ["label_for", "link_public_citations"]
+__all__ = ["link_public_citations", "title_for"]

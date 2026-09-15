@@ -1,8 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for projecting public document citations onto their URL."""
+"""Tests for projecting public citations onto their URL."""
 
 from dlightrag.engine.answer.citations.contracts import SourceReference
-from dlightrag.engine.answer.citations.projection import link_public_citations
+from dlightrag.engine.answer.citations.projection import (
+    link_public_citations,
+    title_for,
+)
 
 
 def _source(ref_id: str, *, uri: str, title: str | None = None) -> SourceReference:
@@ -25,17 +28,17 @@ def test_public_document_citation_becomes_a_self_describing_link() -> None:
     projected = link_public_citations("沃尔沃将裁员近 3000 人 [9]。", sources)
 
     assert projected == (
-        "沃尔沃将裁员近 3000 人 [[9] 沃尔沃汽车将在全球裁员近3000人]"
-        "(<https://www.cls.cn/detail/2041214>)。"
+        "沃尔沃将裁员近 3000 人 [9](<https://www.cls.cn/detail/2041214>"
+        ' "沃尔沃汽车将在全球裁员近3000人")。'
     )
 
 
 def test_excerpt_marker_projects_and_keeps_its_excerpt_number() -> None:
-    """A URL cannot address one excerpt, so the number stays in the label."""
+    """The marker stays the link text, so the prose reads as the model wrote it."""
     sources = [_source("9", uri="https://example.com/report", title="Report")]
 
     assert link_public_citations("Fact [9-1] only.", sources) == (
-        "Fact [[9-1] Report](<https://example.com/report>) only."
+        'Fact [9-1](<https://example.com/report> "Report") only.'
     )
 
 
@@ -54,19 +57,19 @@ def test_unknown_reference_is_left_alone() -> None:
     sources = [_source("1", uri="https://example.com/a", title="A")]
 
     assert link_public_citations("Known [1], copied [7].", sources) == (
-        "Known [[1] A](<https://example.com/a>), copied [7]."
+        'Known [1](<https://example.com/a> "A"), copied [7].'
     )
 
 
-def test_label_drops_brackets_and_collapses_whitespace() -> None:
-    sources = [_source("3", uri="https://example.com/b", title="Head [draft]\n second line")]
+def test_title_collapses_whitespace_and_escapes_its_own_delimiters() -> None:
+    sources = [_source("3", uri="https://example.com/b", title='Head "quoted"\n next | pipe')]
 
     projected = link_public_citations("See [3].", sources)
 
-    assert projected == "See [[3] Head (draft) second line](<https://example.com/b>)."
+    assert projected == 'See [3](<https://example.com/b> "Head \\"quoted\\" next \\| pipe").'
 
 
-def test_label_falls_back_and_truncates() -> None:
+def test_title_falls_back_and_truncates() -> None:
     long_title = "题" * 120
     sources = [
         SourceReference(
@@ -81,9 +84,24 @@ def test_label_falls_back_and_truncates() -> None:
 
     projected = link_public_citations("See [4] and [5].", sources)
 
-    assert "[[4] Source 4](<https://example.com/c>)" in projected
-    label = projected.split("[[5] ", 1)[1].split("](<", 1)[0]
-    assert len(label) == 80 and label.endswith("…")
+    assert '[4](<https://example.com/c> "Source 4")' in projected
+    title = projected.split('[5](<https://example.com/d> "', 1)[1].split('")', 1)[0]
+    assert len(title) == 80 and title.endswith("…")
+
+
+def test_truncation_cannot_leave_a_dangling_escape() -> None:
+    sources = [_source("5", uri="https://example.com/d", title="x" * 79 + '"y')]
+
+    projected = link_public_citations("See [5].", sources)
+
+    title = projected.split('[5](<https://example.com/d> "', 1)[1].split('")', 1)[0]
+    assert title.endswith("…")
+    assert not title.endswith("\\")
+
+
+def test_title_for_returns_one_single_line_source_label() -> None:
+    assert title_for(_source("1", uri="https://example.com/a", title="  A\n B  ")) == "A B"
+    assert title_for(_source("2", uri="https://example.com/b")) == "Source 2"
 
 
 def test_projection_is_idempotent() -> None:
@@ -99,8 +117,8 @@ def test_url_with_parentheses_survives_the_link_destination() -> None:
     projected = link_public_citations("See [2] and [2-3].", sources)
 
     assert projected == (
-        "See [[2] Foo](<https://example.com/wiki/Foo_(a)_(b)>) and"
-        " [[2-3] Foo](<https://example.com/wiki/Foo_(a)_(b)>)."
+        'See [2](<https://example.com/wiki/Foo_(a)_(b)> "Foo") and'
+        ' [2-3](<https://example.com/wiki/Foo_(a)_(b)> "Foo").'
     )
 
 
@@ -112,30 +130,18 @@ def test_code_keeps_its_text_while_prose_projects() -> None:
 
     assert "```py\narr[1] = 2\n```" in projected
     assert "`arr[1]`" in projected
-    assert projected.endswith("fact [[1] A](<https://example.com/a>).")
+    assert projected.endswith('fact [1](<https://example.com/a> "A").')
 
 
-def test_label_escapes_markdown_emphasis_and_code_punctuation() -> None:
-    sources = [_source("7", uri="https://example.com/c", title="Q1* results with `code` and _x_")]
+def test_double_backtick_and_indented_code_keep_their_markers() -> None:
+    sources = [_source("1", uri="https://example.com/a", title="A")]
+    text = "span ``arr[1]`` end\n\n    indented arr[1]\n\nfact [1]."
 
-    projected = link_public_citations("See [7].", sources)
+    projected = link_public_citations(text, sources)
 
-    assert projected == (
-        "See [[7] Q1\\* results with \\`code\\` and \\_x\\_](<https://example.com/c>)."
-    )
-
-
-def test_label_escapes_a_pipe_so_a_table_row_is_not_split() -> None:
-    sources = [
-        _source("10", uri="https://example.com/wardsauto", title="Volvo cost saving | WardsAuto")
-    ]
-
-    projected = link_public_citations(
-        "| scenario | evidence |\n| --- | --- |\n| base | see [10] |",
-        sources,
-    )
-
-    assert "Volvo cost saving \\| WardsAuto" in projected
+    assert "``arr[1]``" in projected
+    assert "    indented arr[1]" in projected
+    assert projected.endswith('fact [1](<https://example.com/a> "A").')
 
 
 def test_existing_markdown_structures_are_left_alone() -> None:
@@ -165,22 +171,14 @@ def test_projection_stays_idempotent_over_a_bracketed_destination() -> None:
     assert link_public_citations(bracketed, sources) == bracketed
 
 
-def test_double_backtick_and_indented_code_keep_their_markers() -> None:
-    sources = [_source("1", uri="https://example.com/a", title="A")]
-    text = "span ``arr[1]`` end\n\n    indented arr[1]\n\nfact [1]."
+def test_label_in_a_table_cell_cannot_split_the_row() -> None:
+    sources = [
+        _source("10", uri="https://example.com/wardsauto", title="Volvo cost saving | WardsAuto")
+    ]
 
-    projected = link_public_citations(text, sources)
+    projected = link_public_citations(
+        "| scenario | evidence |\n| --- | --- |\n| base | see [10] |",
+        sources,
+    )
 
-    assert "``arr[1]``" in projected
-    assert "    indented arr[1]" in projected
-    assert projected.endswith("fact [[1] A](<https://example.com/a>).")
-
-
-def test_label_truncation_cannot_leave_a_dangling_escape() -> None:
-    sources = [_source("5", uri="https://example.com/d", title="x" * 79 + "*y")]
-
-    projected = link_public_citations("See [5].", sources)
-
-    label = projected.split("[[5] ", 1)[1].split("](<", 1)[0]
-    assert label.endswith("…")
-    assert not label.endswith("\\")
+    assert "Volvo cost saving \\| WardsAuto" in projected

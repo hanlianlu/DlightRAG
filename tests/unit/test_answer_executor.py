@@ -944,10 +944,11 @@ def test_public_document_citations_are_projected_into_the_published_artifact(
     assert (
         publication.content
         == (
-            "Web fact [[1] 沃尔沃汽车将在全球裁员近3000人](<https://www.cls.cn/detail/2041214>)."
+            "Web fact [1](<https://www.cls.cn/detail/2041214>"
+            ' "沃尔沃汽车将在全球裁员近3000人").'
             " Local fact [2]."
-            " Web excerpt [[1-1] 沃尔沃汽车将在全球裁员近3000人]"
-            "(<https://www.cls.cn/detail/2041214>)."
+            " Web excerpt [1-1](<https://www.cls.cn/detail/2041214>"
+            ' "沃尔沃汽车将在全球裁员近3000人").'
             " Local excerpt [2-1]."
         ).encode()
     )

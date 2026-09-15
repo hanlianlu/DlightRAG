@@ -473,7 +473,7 @@ def test_external_links_open_in_a_new_tab():
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     result = render_answer_html(
-        "See [[9] Report](<https://example.com/report>).",
+        "See [Report](<https://example.com/report>).",
         known_refs=set(),
     )
 
@@ -490,28 +490,28 @@ def test_internal_links_keep_their_own_navigation():
     assert "target=" not in result
 
 
-def test_projected_link_label_is_not_badged_inside_its_own_anchor():
-    """A projected citation is a link whose label holds its own marker."""
+def test_marker_inside_an_existing_link_label_is_not_badged():
+    """A link label is link text; badging inside it would nest a control."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     result = render_answer_html(
-        "Fact [[9] Title](<https://example.com/x>) and [9].",
+        "Fact [see [9]](<https://example.com/x>) and [9].",
         known_refs={"9"},
     )
 
     assert 'href="https://example.com/x"' in result
     assert 'target="_blank"' in result
-    assert ">[9] Title</a>" in result
+    assert ">see [9]</a>" in result
     # The standalone marker still badges, and never inside the link.
     assert '<cite class="citation-badge"' in result
-    assert "</cite> Title</a>" not in result
+    assert "</cite></a>" not in result
 
 
 def test_markdown_artifact_presentation_badges_nothing_for_a_projected_citation():
     from dlightrag.adapters.http.browser.presentation import build_answer_presentation
 
     presentation = build_answer_presentation(
-        answer="Fact [[9] Title](<https://example.com/x>).",
+        answer='Fact [9](<https://example.com/x> "Title").',
         sources=[
             {
                 "id": "9",
@@ -524,8 +524,9 @@ def test_markdown_artifact_presentation_badges_nothing_for_a_projected_citation(
     )
 
     html = presentation.parts[0].html
+    assert 'href="https://example.com/x"' in html
     assert 'target="_blank"' in html
-    assert ">[9] Title</a>" in html
+    assert 'title="Title"' in html and ">9</a>" in html
     assert "<cite" not in html
 
 
@@ -551,4 +552,4 @@ def test_projected_citation_inside_a_table_cell_keeps_its_cell():
 
     assert html.count("<td>") == 2
     assert 'href="https://example.com/wardsauto"' in html
-    assert "WardsAuto</a>" in html
+    assert 'title="Volvo cost saving | WardsAuto"' in html and ">10</a>" in html
