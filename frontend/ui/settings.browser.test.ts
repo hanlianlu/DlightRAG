@@ -92,8 +92,10 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
   await settings.open();
 
   expect(settings.querySelector<HTMLDialogElement>('dialog[open]')).not.to.equal(null);
-  expect(settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')?.disabled)
-    .to.equal(true);
+  // A refused read leaves no control at all: a disabled unchecked checkbox would
+  // render "memory is off" for a state nobody read.
+  expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
+  expect(settings.textContent).to.contain('Could not load memory settings.');
   expect(buttonNamed(settings, 'Clear memory')?.hidden).to.equal(true);
 });
 
@@ -164,6 +166,7 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
     });
   };
   const settings = mount();
+  settings.memory = {enabled: true, activeCount: 2};
 
   settings.handleMemoryOperation({
     live: true,
@@ -190,6 +193,37 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
   expect(methods).to.deep.equal(['GET', 'GET', 'PUT']);
   expect(toggle.checked).to.equal(false);
   expect(settings.textContent).not.to.contain('9 stored items');
+});
+
+it('renders Connections independently and never paints an unread memory state', async () => {
+  let releaseRead!: (response: Response) => void;
+  const pendingRead = new Promise<Response>((resolve) => { releaseRead = resolve; });
+  window.fetch = async (input) => {
+    if (String(input).includes('/memory/settings')) return await pendingRead;
+    return Response.json({revision: '1', connections: []});
+  };
+  const settings = mount();
+
+  const opened = settings.open();
+  settings.personalMcpConnections = true;
+  await waitFor(() => Boolean(settings.querySelector('dl-settings-connections')));
+
+  // The MCP section is on screen while the memory projection is still unknown,
+  // and Profile Memory is not painted as "off" in the meantime.
+  expect(Boolean(settings.querySelector('dl-settings-connections'))).to.equal(true);
+  expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
+  expect(settings.textContent).to.contain('Loading memory settings');
+
+  releaseRead(new Response(JSON.stringify({enabled: true, active_count: 3}), {
+    status: 200,
+    headers: {'Content-Type': 'application/json'},
+  }));
+  await opened;
+  await waitFor(() => Boolean(settings.querySelector('#memory-enabled-toggle')));
+
+  const toggle = settings.querySelector<HTMLInputElement>('#memory-enabled-toggle')!;
+  expect(toggle.checked).to.equal(true);
+  expect(settings.textContent).to.contain('3 stored items');
 });
 
 it('hides personal Connections without capability and tears the Feature down on close', async () => {

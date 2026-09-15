@@ -94,6 +94,7 @@ export const templates: Record<
   'settings.clearMemoryBody': '已记住的偏好和事实将被忘记。会话不受影响。',
   'settings.cancel': '取消',
   'settings.clearMemoryConfirm': '清除记忆',
+  'settings.memoryLoading': '正在读取记忆设置…',
   'settings.memoryLoadFailed': '记忆设置加载失败。',
   'settings.memorySaveFailed': '记忆设置保存失败。',
   'settings.memoryCleared': '记忆已清除。',

@@ -118,6 +118,10 @@ export class DlSettingsDialog extends LightElement {
     this.#returnFocus = returnFocus ?? (
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     );
+    // Connections is independent of the Memory projection. Render it up front so
+    // its first paint can never coincide with the Memory control resolving a value
+    // the user is not looking at.
+    this.showConnections = true;
     if (!this.memoryPending) {
       this.memoryLoading = true;
       const read = await this.#readMemory();
@@ -193,13 +197,15 @@ export class DlSettingsDialog extends LightElement {
             </section>` : nothing}
             <section class="settings-section">
               <h3 id="settings-memory">${msg('Profile Memory', {id: 'settings.profileMemory'})}</h3>
-              <label class="dl-dialog-checkbox">
+              ${this.memory ? html`<label class="dl-dialog-checkbox">
                 <input type="checkbox" id="memory-enabled-toggle"
-                       .checked=${this.memory?.enabled ?? false}
-                       ?disabled=${this.memoryLoading || this.memoryPending || !this.memory}
+                       .checked=${this.memory.enabled}
+                       ?disabled=${this.memoryLoading || this.memoryPending}
                        @change=${this.#toggleMemory}>
                 ${msg('Activate profile memories', {id: 'settings.activateMemories'})}
-              </label>
+              </label>` : html`<p class="settings-note" role="status">${this.memoryLoading
+                ? msg('Loading memory settings…', {id: 'settings.memoryLoading'})
+                : msg('Could not load memory settings.', {id: 'settings.memoryLoadFailed'})}</p>`}
               <p id="memory-active-count" class="settings-count" aria-live="polite"
                  ?hidden=${active === null || active === undefined}>
                 ${active === 1
