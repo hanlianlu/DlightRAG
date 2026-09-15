@@ -108,6 +108,31 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     return converted
 
 
+def _openai_tool_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
+    """Project tool definitions with an explicit non-strict contract.
+
+    Agent tool schemas keep optional and mutually exclusive properties (a
+    locator is exactly one of several), so they are deliberately not normalized
+    into the strict subset: strict mode materializes every property and would
+    turn "one of these" into "all of these". Chat Completions is non-strict by
+    default, but a wire that attempts strict mode when the field is absent would
+    silently rewrite arguments instead of failing, so the intent is stated here
+    rather than left to a default.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+                "strict": False,
+            },
+        }
+        for tool in tools
+    ]
+
+
 def _openai_provider_state(message: Any) -> dict[str, Any] | None:
     extras = getattr(message, "model_extra", None) or {}
     state = {
@@ -210,17 +235,7 @@ class OpenAICompatibleProvider(CompletionProvider):
             "messages": _openai_tool_messages(messages),
         }
         if tools:
-            call_kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters,
-                    },
-                }
-                for tool in tools
-            ]
+            call_kwargs["tools"] = _openai_tool_payload(tools)
             call_kwargs["tool_choice"] = tool_choice
         if temperature is not None:
             call_kwargs["temperature"] = temperature
@@ -269,17 +284,7 @@ class OpenAICompatibleProvider(CompletionProvider):
             "stream": True,
         }
         if tools:
-            call_kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters,
-                    },
-                }
-                for tool in tools
-            ]
+            call_kwargs["tools"] = _openai_tool_payload(tools)
             call_kwargs["tool_choice"] = tool_choice
         if temperature is not None:
             call_kwargs["temperature"] = temperature

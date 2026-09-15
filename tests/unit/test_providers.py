@@ -627,6 +627,7 @@ class TestOpenAICompatibleProvider:
                     "name": "search_web",
                     "description": "Search the open web.",
                     "parameters": tool.parameters,
+                    "strict": False,
                 },
             }
         ]
