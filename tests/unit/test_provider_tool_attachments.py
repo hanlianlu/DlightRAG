@@ -97,7 +97,7 @@ def test_anthropic_serializes_every_attachment_in_declared_order() -> None:
     ]
 
 
-def test_gemini_puts_the_image_in_the_same_user_turn() -> None:
+def test_gemini_carries_the_image_beside_its_function_response() -> None:
     contents = _gemini_tool_contents([{"role": "user", "content": "look"}, _tool_message()])
 
     assert contents[0] == {"role": "user", "parts": [{"text": "look"}]}
@@ -105,12 +105,78 @@ def test_gemini_puts_the_image_in_the_same_user_turn() -> None:
     parts = contents[-1]["parts"]
     assert parts[0]["function_response"]["name"] == "read"
     assert parts[0]["function_response"]["response"]["output"] == "image attachment: chart.png"
+    # Pixels stay top-level: google-genai serializes a nested FunctionResponsePart
+    # with Python field names, which the REST API cannot bind to the response.
+    assert "parts" not in parts[0]["function_response"]
     assert parts[1] == {
         "inline_data": {
             "mime_type": "image/png",
             "data": base64.b64decode(_PNG),
         }
     }
+
+
+def test_gemini_answers_one_tool_batch_in_one_turn() -> None:
+    """Every result of a model turn answers it in the same user turn.
+
+    The API matches one functionResponse per functionCall, so a turn per tool
+    message leaves the batch unmatched and strands the trailing result behind an
+    extra user turn.
+    """
+    second = {
+        "role": "tool",
+        "tool_call_id": "call-2",
+        "name": "read",
+        "content": "no attachment here",
+        "is_error": False,
+    }
+    contents = _gemini_tool_contents(
+        [
+            {"role": "user", "content": "look"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
+                    {"id": "call-2", "function": {"name": "read", "arguments": "{}"}},
+                ],
+            },
+            _tool_message(),
+            second,
+        ]
+    )
+
+    assert [content["role"] for content in contents] == ["user", "model", "user"]
+    answers = contents[-1]["parts"]
+    responses = [part["function_response"] for part in answers if "function_response" in part]
+    assert [response["id"] for response in responses] == ["call-1", "call-2"]
+    assert [part for part in answers if "inline_data" in part] == [
+        {"inline_data": {"mime_type": "image/png", "data": base64.b64decode(_PNG)}}
+    ]
+
+
+def test_gemini_keeps_two_call_batches_in_separate_turns() -> None:
+    """A later user turn closes the batch, so the next batch answers its own turn."""
+    contents = _gemini_tool_contents(
+        [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call-1"}]},
+            {"role": "tool", "tool_call_id": "call-1", "name": "read", "content": "one"},
+            {"role": "user", "content": "again"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call-2"}]},
+            {"role": "tool", "tool_call_id": "call-2", "name": "read", "content": "two"},
+        ]
+    )
+
+    assert [content["role"] for content in contents] == [
+        "model",
+        "user",
+        "user",
+        "model",
+        "user",
+    ]
+    assert contents[1]["parts"][0]["function_response"]["id"] == "call-1"
+    assert contents[2]["parts"] == [{"text": "again"}]
+    assert contents[4]["parts"][0]["function_response"]["id"] == "call-2"
 
 
 def test_openai_compatible_appends_untrusted_multimodal_user_message() -> None:

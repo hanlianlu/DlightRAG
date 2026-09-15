@@ -837,3 +837,70 @@ async def test_anthropic_multipage_view_uses_two_rendered_pages_through_tool_mod
     ]
     assert ids == ["call-1", "call-2"]
     assert budget.count == charged
+
+
+async def test_gemini_answers_a_whole_tool_batch_in_one_matched_turn() -> None:
+    """One model turn's calls are answered by one turn holding every response.
+
+    Projecting a turn per tool message leaves the model turn under-answered and
+    strands the trailing result behind an unrelated user turn.
+    """
+    settings = ModelSettings(
+        provider="gemini",
+        model="gemini-2.0-flash",
+        api_key="test-key",
+        max_retries=0,
+    )
+    capture = _HttpCapture("gemini")
+    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    bind_mock_http(model._provider, capture.handler)
+    messages = [
+        {"role": "user", "content": "look"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "view", "arguments": '{"locator":"1"}'},
+                },
+                {
+                    "id": "call-2",
+                    "type": "function",
+                    "function": {"name": "view", "arguments": '{"locator":"2"}'},
+                },
+            ],
+        },
+        _tool_turn(2)[1],
+        {**_tool_turn(0)[1], "tool_call_id": "call-2"},
+    ]
+    try:
+        turn = await model(messages=messages, tools=[_VIEW_TOOL])
+    finally:
+        await model.aclose()
+    assert turn.text == _MODEL_TEXT
+    contents = capture.body["contents"]
+    assert [content["role"] for content in contents] == ["user", "model", "user"]
+    calls = contents[1]["parts"]
+    assert [part["functionCall"]["id"] for part in calls] == ["call-1", "call-2"]
+    answers = contents[2]["parts"]
+    responses = [part["functionResponse"] for part in answers if "functionResponse" in part]
+    assert [response["id"] for response in responses] == ["call-1", "call-2"]
+    # The image rides as an ordinary part of the answering turn, and the wire
+    # keeps camelCase because only top-level parts get the alias conversion.
+    assert [part for part in answers if "inlineData" in part] == [
+        {
+            "inlineData": {
+                "data": base64.b64encode(PAGE_ONE).decode(),
+                "mimeType": "image/png",
+            }
+        },
+        {
+            "inlineData": {
+                "data": base64.b64encode(PAGE_TWO).decode(),
+                "mimeType": "image/png",
+            }
+        },
+    ]
+    assert _wire_images("gemini", capture.body) == _expected_payloads(2)

@@ -84,7 +84,19 @@ def _convert_content(content: str | list[Any]) -> list[dict[str, Any]]:
 
 
 def _attachment_inline_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
-    """Inline attached tool images as their own user-turn parts."""
+    """Inline attached tool images as top-level parts of the answering turn.
+
+    They deliberately do not nest in ``functionResponse.parts``. google-genai
+    copies ``functionResponse`` through ``_Part_to_mldev`` verbatim and has no
+    ``_FunctionResponse_to_mldev`` counterpart, so a nested
+    ``FunctionResponsePart`` reaches the wire with Python field names
+    (``inline_data``/``mime_type``) instead of the camelCase names the REST API
+    requires. No client-side input shape avoids that: a dict, a validated model
+    and a ``by_alias`` dump all serialize the same way. Multimodal function
+    responses are a known open upstream defect (googleapis/python-genai#2268),
+    so the pixels ride as ordinary parts, which do get the wire names. Revisit
+    this once the nested projection round-trips.
+    """
     parts: list[dict[str, Any]] = []
     for attachment in message.get("attachments") or ():
         if not (isinstance(attachment, dict) and attachment.get("data_url")):
@@ -96,10 +108,33 @@ def _attachment_inline_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
     return parts
 
 
+def _gemini_tool_turn_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project one tool result to exactly one ``functionResponse`` part plus its pixels."""
+    return [
+        {
+            "function_response": {
+                "id": str(message.get("tool_call_id") or ""),
+                "name": str(message.get("name") or ""),
+                "response": {
+                    "output": str(message.get("content") or ""),
+                    "is_error": bool(message.get("is_error", False)),
+                },
+            }
+        },
+        *_attachment_inline_parts(message),
+    ]
+
+
 def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     contents: list[dict[str, Any]] = []
+    # The API matches one functionResponse per functionCall of the model turn, so
+    # every consecutive tool result answers that turn together and any other role
+    # closes the batch.
+    tool_turn: dict[str, Any] | None = None
     for message in messages:
         role = message.get("role")
+        if role != "tool":
+            tool_turn = None
         if role == "assistant":
             parts: list[dict[str, Any]] = list(_convert_content(message.get("content", "")))
             for call in message.get("tool_calls") or ():
@@ -121,22 +156,10 @@ def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
             contents.append({"role": "model", "parts": parts})
             continue
         if role == "tool":
-            part = {
-                "function_response": {
-                    "id": str(message.get("tool_call_id") or ""),
-                    "name": str(message.get("name") or ""),
-                    "response": {
-                        "output": str(message.get("content") or ""),
-                        "is_error": bool(message.get("is_error", False)),
-                    },
-                }
-            }
-            contents.append(
-                {
-                    "role": "user",
-                    "parts": [part, *_attachment_inline_parts(message)],
-                }
-            )
+            if tool_turn is None:
+                tool_turn = {"role": "user", "parts": []}
+                contents.append(tool_turn)
+            tool_turn["parts"].extend(_gemini_tool_turn_parts(message))
             continue
         contents.append(
             {
