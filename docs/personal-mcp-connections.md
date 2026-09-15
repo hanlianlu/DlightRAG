@@ -26,7 +26,13 @@ This plan is the implementation authority for the accepted target. It is governe
 
 The implementation includes CRUD, enable/disable, all three authentication choices, automatic catalogue refresh, atomic Run binding, recovery, effect-time revocation, retention/GC, and Settings status together. Independent full validation and review remain release gates.
 
-It does not add a marketplace, public Connection-management REST API, inbound-MCP management tools, arbitrary request headers, MCP resources/prompts/apps, a protocol registry, a universal `PluginManager`, a second `RunRuntime`, or a durable invocation-permit ledger. It does not merge Connections with models, Skills, Profile Memory, or Web resources.
+It does not add a marketplace, public Connection-management REST API, inbound-MCP management tools, arbitrary request headers, MCP resources/prompts/apps, a protocol registry, a universal `PluginManager`, a second `RunRuntime`, or a durable invocation-permit ledger. It does not merge Connections with models, Skills, Profile Memory, or Web resources. A static, code-owned list of starter Presets is not a marketplace: it has no discovery, ranking, or installation semantics, and it only fills the create form.
+
+## Starter presets
+
+A Preset is product-owned copy plus an endpoint and the authentication choice that suits its tier, projected by the owner read as `presets`. Choosing one writes the label and endpoint into the create form and selects that tab; it creates nothing, enables nothing, authorizes nothing, and stores no credential. The create command stays the single authority that validates the endpoint, and every preset endpoint already satisfies that same validation -- `tests/unit/test_connection_presets.py` holds that equality so a Preset can never offer a URL the create route would reject.
+
+The list is deliberately short and reviewed by hand. `PRESETS` in `application/connections/presets.py` is the one source: an endpoint joins it only when it is first-party, reachable over public HTTPS, credential-free in the URL, and either answers unauthenticated (`none`) or offers a flow this module can actually run (`oauth` through dynamic client registration, see the OAuth slice). No preset asks for a pasted secret on first click: a tier that only works with a personal key stays out of the list until the service itself offers OAuth.
 
 The reusable hot-plug semantics are only **immutable publication → atomic Run pin → effect-time revoke → retention/GC**. Keep those mechanics private inside Connections until a second real consumer proves an extraction seam.
 

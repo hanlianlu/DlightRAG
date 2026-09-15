@@ -41,7 +41,7 @@ dependencies = [
     # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
     # MCP server
-    "mcp==2.2.0",
+    "mcp>=2.2.0",
     # REST API server
     "PyJWT>=2.14.0",
     "fastapi>=0.141.1",

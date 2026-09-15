@@ -8,9 +8,19 @@ test.beforeEach(() => {Object.defineProperty(globalThis, 'document', {configurab
 test.afterEach(() => {globalThis.fetch = originalFetch; Object.defineProperty(globalThis, 'document', {configurable: true, value: originalDocument});});
 
 test('Connections wire normalizes owner projection and rejects credential-shaped replies', async () => {
-  globalThis.fetch = async () => Response.json({revision: '0', connections: []});
-  assert.deepEqual(await getConnections(), {revision: '0', connections: []});
-  globalThis.fetch = async () => Response.json({revision: '0', connections: [], bearer: 'must-not-enter-ui'});
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: []});
+  assert.deepEqual(await getConnections(), {revision: '0', connections: [], presets: []});
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [], bearer: 'must-not-enter-ui'});
+  await assert.rejects(getConnections(), ConnectionsApiError);
+});
+
+test('presets arrive as display copy plus the tab they imply, and an unknown tab is rejected', async () => {
+  const preset = {preset_id: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', default_authentication: 'oauth'};
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [preset]});
+  assert.deepEqual((await getConnections()).presets, [
+    {presetId: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', defaultAuthentication: 'oauth'},
+  ]);
+  globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [{...preset, default_authentication: 'token'}]});
   await assert.rejects(getConnections(), ConnectionsApiError);
 });
 
@@ -29,7 +39,7 @@ test('bearer candidate sends explicit new endpoint and only the write-only crede
   globalThis.fetch = async (url, init) => {
     assert.equal(url, '/web/api/connections/mcp/connection/bearer');
     assert.deepEqual(JSON.parse(String(init?.body)), {expected_revision: 'revision', bearer: 'new-test-token', endpoint: 'https://candidate.example/mcp'});
-    return Response.json({revision: 'next', connections: []});
+    return Response.json({revision: 'next', connections: [], presets: []});
   };
   await changeConnection('revision', {kind: 'bearer', connectionId: 'connection', bearer: 'new-test-token', endpoint: 'https://candidate.example/mcp'});
 });

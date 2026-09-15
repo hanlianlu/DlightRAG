@@ -13,10 +13,18 @@ const connection = v.pipe(v.strictObject({
 }), v.transform((w) => ({connectionId: w.connection_id, label: w.label, endpoint: w.endpoint,
   enabled: w.enabled, activationEpoch: w.activation_epoch, generation: w.generation,
   authorizationStatus: w.authorization_status, authentication: w.authentication, status: w.status})));
-const view = v.pipe(v.strictObject({revision: v.string(), connections: v.array(connection)}),
-  v.transform((w) => ({revision: w.revision, connections: w.connections})));
+const preset = v.pipe(v.strictObject({
+  preset_id: v.string(), label: v.string(), endpoint: v.string(),
+  default_authentication: v.picklist(['none', 'bearer', 'oauth']),
+}), v.transform((w) => ({presetId: w.preset_id, label: w.label, endpoint: w.endpoint,
+  defaultAuthentication: w.default_authentication})));
+const view = v.pipe(v.strictObject({revision: v.string(), connections: v.array(connection),
+  presets: v.array(preset)}),
+  v.transform((w) => ({revision: w.revision, connections: w.connections, presets: w.presets})));
 export type ConnectionsView = v.InferOutput<typeof view>;
 export type Connection = v.InferOutput<typeof connection>;
+/** A starter fill for the create form; it carries no credential and grants nothing. */
+export type Preset = v.InferOutput<typeof preset>;
 
 export class ConnectionsApiError extends Error {
   readonly status: number;

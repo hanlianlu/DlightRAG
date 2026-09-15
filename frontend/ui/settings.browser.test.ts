@@ -200,7 +200,7 @@ it('renders Connections independently and never paints an unread memory state', 
   const pendingRead = new Promise<Response>((resolve) => { releaseRead = resolve; });
   window.fetch = async (input) => {
     if (String(input).includes('/memory/settings')) return await pendingRead;
-    return Response.json({revision: '1', connections: []});
+    return Response.json({revision: '1', connections: [], presets: []});
   };
   const settings = mount();
 
@@ -228,7 +228,7 @@ it('renders Connections independently and never paints an unread memory state', 
 
 it('hides personal Connections without capability and tears the Feature down on close', async () => {
   window.fetch = async (url) => Response.json(String(url).includes('connections')
-    ? {revision: '0', connections: []}
+    ? {revision: '0', connections: [], presets: []}
     : {enabled: false, active_count: 0});
   const settings = mount();
   await settings.open();

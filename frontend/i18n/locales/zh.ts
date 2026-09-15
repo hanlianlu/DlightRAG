@@ -64,6 +64,8 @@ export const templates: Record<
   'connections.deleteConfirm': '删除连接',
   'connections.new': '添加 MCP 连接',
   'connections.add': '添加连接',
+  'connections.presets': '预设',
+  'connections.usePreset': str`使用 ${0} 预设`,
   'connections.startsInactive': '创建后默认停用。',
   'connections.empty': '尚无 MCP 连接。',
   'connections.loading': '正在加载连接…',

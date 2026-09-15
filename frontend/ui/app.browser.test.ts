@@ -632,7 +632,7 @@ it('opens Connections after the fixed OAuth return without starting authorizatio
   window.history.replaceState(null, '', '?settings=connections&authorization=restart');
   window.fetch = async (input, init) => {
     if (init?.method && init.method !== 'GET') writes.push(String(input));
-    if (String(input) === '/web/api/connections/mcp') return response({revision: '0', connections: []});
+    if (String(input) === '/web/api/connections/mcp') return response({revision: '0', connections: [], presets: []});
     return bootstrapResponse(input);
   };
   try {

@@ -21,12 +21,12 @@ type Feature = HTMLElementTagNameMap['dl-settings-connections'];
 type Wire = {url: string; method?: string; body: Record<string, unknown>};
 
 /** A reply that answers every method with the same owner projection. */
-function replies(connections: unknown[], recorded?: Wire[]): typeof window.fetch {
+function replies(connections: unknown[], recorded?: Wire[], presets: unknown[] = []): typeof window.fetch {
   return async (url, init) => {
     if (init?.method) {
       recorded?.push({url: String(url), method: init.method, body: JSON.parse(String(init.body))});
     }
-    return Response.json({revision: '1', connections});
+    return Response.json({revision: '1', connections, presets});
   };
 }
 
@@ -41,6 +41,7 @@ function probeReplies(connections: () => Record<string, unknown>[], recorded?: W
     return Response.json({
       revision: '1',
       connections: connections().map((connection) => (probed ? {...connection, status: 'ready'} : connection)),
+      presets: [],
     });
   };
 }
@@ -85,6 +86,55 @@ it('stays collapsed, reports the inventory, and never projects the catalogue', a
   expect(feature.querySelector('[data-switch]')).to.equal(null);
   await openGroup(feature);
   expect(feature.querySelectorAll('[data-switch]')).to.have.length(2);
+});
+
+it('fills the form from a preset and opens the new Connection on the tab its tier implies', async () => {
+  const commands: Wire[] = [];
+  const presets = [
+    {preset_id: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', default_authentication: 'oauth'},
+    {preset_id: 'wolfram', label: 'Wolfram', endpoint: 'https://agenttools.wolfram.com/mcp', default_authentication: 'none'},
+  ];
+  const created = {
+    ...draft,
+    connection_id: 'new',
+    label: 'Notion',
+    endpoint: 'https://mcp.notion.com/mcp',
+  };
+  window.fetch = async (url, init) => {
+    if (!init?.method) return Response.json({revision: '1', connections: [], presets});
+    commands.push({url: String(url), method: init.method, body: JSON.parse(String(init.body))});
+    return Response.json({revision: '2', connections: [created], presets});
+  };
+  const feature = mount();
+  await openGroup(feature);
+  const addRow = [...feature.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent?.includes('Add MCP connection'))!;
+  addRow.click();
+  await feature.updateComplete;
+
+  const chips = [...feature.querySelectorAll<HTMLButtonElement>('[data-preset]')];
+  expect(chips.map((chip) => chip.textContent)).to.deep.equal(['Notion', 'Wolfram']);
+  expect(chips[0]!.getAttribute('aria-label')).to.equal('Use the Notion preset');
+  chips[0]!.click();
+  await feature.updateComplete;
+  expect(feature.querySelector<HTMLInputElement>('[data-new-label]')!.value).to.equal('Notion');
+  expect(feature.querySelector<HTMLInputElement>('[data-new-endpoint]')!.value)
+    .to.equal('https://mcp.notion.com/mcp');
+
+  const submit = [...feature.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent?.includes('Add connection'))!;
+  submit.click();
+  await waitFor(() => commands.length === 1);
+  // A preset fills the form only: create stays the one command that owns the Connection.
+  expect(commands[0]!.url).to.equal('/web/api/connections/mcp');
+  expect(commands[0]!.body).to.deep.equal({
+    expected_revision: '1', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp',
+  });
+  await waitFor(() => Boolean(feature.querySelector('[data-card="new"]')));
+  // The card opens on the tab the preset implies, so the owner does not have to guess.
+  const card = feature.querySelector('[data-card="new"]')!.closest('article')!;
+  const selected = [...card.querySelectorAll<HTMLButtonElement>('button[aria-pressed="true"]')];
+  expect(selected.map((button) => button.textContent)).to.deep.equal(['OAuth']);
 });
 
 it('lets the switch own discovery, and asks the owner once before the first enable', async () => {
@@ -186,7 +236,7 @@ it('begins authorization against the stored endpoint and labels every credential
       commands.push({url: String(url), method: init.method, body: JSON.parse(String(init.body))});
       return Response.json({authorization_url: 'https://as.example/authorize?state=fixture'});
     }
-    return Response.json({revision: 'current', connections: [granted]});
+    return Response.json({revision: 'current', connections: [granted], presets: []});
   };
   const feature = mount();
   await openCard(feature, 'fixture');

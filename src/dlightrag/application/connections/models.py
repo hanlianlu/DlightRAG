@@ -77,9 +77,24 @@ class ConnectionView:
 
 
 @dataclass(frozen=True)
+class PresetView:
+    """One create-form starter: a label, an endpoint, and the tab that fits its tier.
+
+    Presets carry no credential, no authority, and no catalogue: filling the form is all a
+    Preset can do, and the ordinary create command still validates and owns the Connection.
+    """
+
+    preset_id: str
+    label: str
+    endpoint: str
+    default_authentication: str
+
+
+@dataclass(frozen=True)
 class ConnectionsView:
     revision: str
     connections: tuple[ConnectionView, ...]
+    presets: tuple[PresetView, ...] = ()
 
 
 @dataclass(frozen=True)

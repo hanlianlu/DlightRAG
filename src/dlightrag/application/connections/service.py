@@ -43,11 +43,24 @@ from .models import (
     McpClientPort,
     OAuthFlow,
     OAuthPort,
+    PresetView,
     RefreshClaim,
     StoredGrant,
 )
+from .presets import PRESETS
 
 logger = logging.getLogger(__name__)
+
+# The catalogue is static, so the projection is built once and shared by every read.
+_PRESET_VIEWS: tuple[PresetView, ...] = tuple(
+    PresetView(
+        preset_id=preset.preset_id,
+        label=preset.label,
+        endpoint=preset.endpoint,
+        default_authentication=preset.default_authentication,
+    )
+    for preset in PRESETS
+)
 
 
 class Connections:
@@ -302,6 +315,7 @@ class Connections:
                 )
                 for item in items
             ),
+            presets=_PRESET_VIEWS,
         )
 
     async def change(

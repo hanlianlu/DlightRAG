@@ -4,7 +4,7 @@
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import Page, Route
+from playwright.sync_api import Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -568,6 +568,6 @@ def test_active_html_is_sandboxed_and_destroyed_on_close(page: Page) -> None:
         timeout=10000,
     )
     assert page.locator("dl-active-artifact-frame iframe").count() == 0
-    assert page.get_by_role("button", name="Open Artifact").evaluate(
-        "element => document.activeElement === element"
-    )
+    # The canvas also restores focus in the frame after it closes, so wait for the contract
+    # instead of racing the frame that performs it.
+    expect(page.get_by_role("button", name="Open Artifact")).to_be_focused()

@@ -4,6 +4,7 @@
 from urllib.parse import urlparse
 
 import pytest
+from playwright.sync_api import expect
 
 
 def _open_ready_page(page) -> None:
@@ -346,4 +347,6 @@ def test_escape_closes_source_lightbox_only_and_restores_image_focus(page):
     )
     assert page.locator("#panel").get_attribute("aria-hidden") is None
     assert page.locator("#panel").evaluate("element => element.classList.contains('open')") is True
-    assert image.evaluate("element => document.activeElement === element") is True
+    # The lightbox restores focus in the frame after it closes, so assert the contract through a
+    # retrying expectation instead of racing the frame that performs it.
+    expect(image).to_be_focused()

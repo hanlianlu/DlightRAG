@@ -105,7 +105,7 @@ it('Settings MCP consent and credential forms have no serious accessible-name or
     connection_id: 'a', label: 'Personal tools', endpoint: 'https://fixture.example/mcp',
     enabled: false, activation_epoch: 1, generation: 1, authentication: 'oauth',
     status: 'needs-auth', authorization_status: 'failed',
-  }]});
+  }], presets: [{preset_id: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', default_authentication: 'oauth'}]});
   try {
     const feature = document.createElement('dl-settings-connections');
     document.body.append(feature);

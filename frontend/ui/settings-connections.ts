@@ -17,6 +17,7 @@ import {
   getConnections,
   type Connection,
   type ConnectionsView,
+  type Preset,
 } from '../api/connections.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
@@ -67,6 +68,8 @@ export class DlSettingsConnections extends LightElement {
   #timer: ReturnType<typeof setTimeout> | null = null;
   #generation = 0;
   #acknowledged = false;
+  /** The tab the last preset asked for, applied to the Connection the next create produces. */
+  #presetAuth: Authentication | null = null;
 
   constructor() {
     super();
@@ -479,8 +482,50 @@ export class DlSettingsConnections extends LightElement {
     </article>`;
   }
 
+  /**
+   * A preset only ever fills the form: it selects no endpoint policy, stores no credential, and
+   * grants no authority -- creating the Connection stays the one act that does any of that.
+   */
+  #applyPreset(preset: Preset): void {
+    const label = this.querySelector<HTMLInputElement>('[data-new-label]');
+    const endpoint = this.querySelector<HTMLInputElement>('[data-new-endpoint]');
+    if (label) label.value = preset.label;
+    if (endpoint) endpoint.value = preset.endpoint;
+    this.#presetAuth = preset.defaultAuthentication;
+  }
+
+  /**
+   * Create, then open the new Connection on the tab its preset implies: an endpoint that answers
+   * unauthenticated starts on None, and one that cannot be used without an account starts on the
+   * choice that account needs, so the owner never has to guess which tab to pick.
+   */
+  async #create(label: string, endpoint: string, returnFocus: HTMLElement | null): Promise<void> {
+    const presetAuth = this.#presetAuth;
+    const known = new Set(
+      this.view?.connections.map((connection) => connection.connectionId) ?? [],
+    );
+    this.#presetAuth = null;
+    const view = await this.#command({kind: 'create', label, endpoint}, returnFocus);
+    const created = view?.connections.find((connection) => !known.has(connection.connectionId));
+    if (!created || !presetAuth) return;
+    this.draftAuth = {...this.draftAuth, [created.connectionId]: presetAuth};
+    this.expanded = true;
+    this.openCard = created.connectionId;
+  }
+
   #createForm(): TemplateResult {
+    const presets = this.view?.presets ?? [];
     return html`<div class=${styles.stackTight}>
+      ${presets.length === 0 ? nothing : html`
+        <div class=${styles.presetRow} role="group"
+          aria-label=${msg('Presets', {id: 'connections.presets'})}>
+          ${presets.map((preset) => html`
+            <button class=${styles.presetChip} type="button" data-preset=${preset.presetId}
+              aria-label=${msg(str`Use the ${preset.label} preset`, {id: 'connections.usePreset'})}
+              @click=${() => {
+                this.#applyPreset(preset);
+              }}>${preset.label}</button>`)}
+        </div>`}
       <label class=${styles.field}>
         <span class=${styles.fieldLabel}>${msg('Label', {id: 'connections.label'})}</span>
         <input class=${styles.input} data-new-label required maxlength="100">
@@ -497,8 +542,7 @@ export class DlSettingsConnections extends LightElement {
           const endpoint = this.querySelector<HTMLInputElement>('[data-new-endpoint]');
           if (!label?.reportValidity() || !endpoint?.reportValidity()) return;
           this.adding = false;
-          void this.#command({kind: 'create', label: label.value, endpoint: endpoint.value},
-            event.currentTarget as HTMLElement);
+          void this.#create(label.value, endpoint.value, event.currentTarget as HTMLElement);
         }}>${msg('Add connection', {id: 'connections.add'})}</button>
     </div>`;
   }
