@@ -641,7 +641,7 @@ async def test_runtime_invariant_faults_session_and_rejects_new_work() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_contract_change_is_source_position_synthetic_result() -> None:
+async def test_recovery_contract_change_is_source_index_synthetic_result() -> None:
     original = _agent_tool(replayable=True)
     first_effects = _Effects(
         [_assistant(ToolCall("c1", "lookup", {"value": "x"}))],

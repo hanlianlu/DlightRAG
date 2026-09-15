@@ -104,7 +104,7 @@ def _browser_payload(
             allowed = {
                 "tool_name",
                 "call_id",
-                "source_position",
+                "source_index",
                 "update_sequence",
                 "outcome",
                 "duration_ms",

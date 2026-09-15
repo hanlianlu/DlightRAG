@@ -568,7 +568,7 @@ class ResearchRuntimeEffects:
                     data={
                         "tool_name": item.tool_name,
                         "call_id": item.call_id,
-                        "source_position": item.source_index,
+                        "source_index": item.source_index,
                         "text_chars": len(result.text_content),
                         **(
                             {"object_label": object_label}
@@ -591,7 +591,7 @@ class ResearchRuntimeEffects:
                 data={
                     "tool_name": item.tool_name,
                     "call_id": item.call_id,
-                    "source_position": item.source_index,
+                    "source_index": item.source_index,
                     "attempt_id": attempt_id.value,
                 },
                 ephemeral=True,
@@ -726,7 +726,6 @@ def _answer_runtime_event_sink(
         allowed = {
             "tool_name",
             "call_id",
-            "source_position",
             "source_index",
             "outcome",
             "duration_ms",

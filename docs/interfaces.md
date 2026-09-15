@@ -296,13 +296,13 @@ The common SSE terminal and progress events are:
 Answer may additionally emit `token`, `reset`, `tool_start`, `tool_progress`,
 and `tool_end`. Retrieval emits only `progress` and one terminal event.
 
-Tool events carry metadata only, and the browser stream adds one display field:
+Tool events carry metadata only; the browser projection adds fields of its own:
 
 | Field | Events | Meaning |
 |---|---|---|
 | `tool_name` | all three | Transport-neutral tool identity |
 | `call_id` | all three | The one call being started, updated, or settled |
-| `source_position` / `source_index` | start and progress / settle | Position of the call in its model turn |
+| `source_index` | all three | Position of the call in its model turn |
 | `outcome` | `tool_end` | `succeeded`, or a typed failure such as `failed`, `invalid_arguments`, `tool_contract_changed`, `outcome_unknown` |
 | `duration_ms` | `tool_end` | Measured wall time of the attempt that settled; absent when no call ran |
 | `object_label` | `tool_progress` | Bounded current object a Tool reports (a query, a path, a skill name) |
