@@ -14,7 +14,7 @@ dependencies = [
     "dlightrag-memory==2.0.8",
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
-    "anthropic>=1.5.0",
+    "anthropic>=1.6.0",
     "google-genai>=2.23.0",
     "json-repair>=0.63.4",
     # Built-in RAG and source capabilities
@@ -52,7 +52,7 @@ dependencies = [
     "nh3>=0.3.7",
     "pygments>=2.17",
     # Observability
-    "langfuse>=4.15.1",
+    "langfuse>=4.15.3",
     # Native docx parsing: lightrag's docx parser imports python-docx + defusedxml.
     "python-docx>=1.2.0",
     "defusedxml>=0.7.1",
