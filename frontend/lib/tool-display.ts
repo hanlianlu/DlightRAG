@@ -5,6 +5,10 @@
 
 import {msg} from '@lit/localize';
 
+/** Local Connection tools carry an opaque `mcp_<connection>_<digest>` identity, so
+ *  their names are recognized structurally rather than listed. */
+const MCP_TOOL_PREFIX = 'mcp_';
+
 const TOOL_VERBS: Record<string, string> = {
   search_knowledge_base: 'Searching the knowledge base',
   search_web: 'Searching the web',
@@ -40,6 +44,11 @@ export function toolDisplay(name: string): ToolDisplay {
   const verb = TOOL_VERBS[name];
   if (verb !== undefined) {
     return {verb, verbId: `chatFeature.tool.${name}`, known: true};
+  }
+  if (name.startsWith(MCP_TOOL_PREFIX)) {
+    // A pinned Connection tool whose display label did not resolve still names its
+    // kind: an opaque local identity is an implementation detail, never a row.
+    return {verb: 'Calling an MCP tool', verbId: 'chatFeature.tool.mcp', known: false};
   }
   return {verb: prettyToolName(name), verbId: null, known: false};
 }

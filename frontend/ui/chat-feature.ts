@@ -795,7 +795,13 @@ export class DlChatFeature extends LightElement {
       }
     }
     if (!turn) return;
-    const projected = events.reduce(applyAnswerEvent, turn);
+    // One observation time per batch: every row this batch starts is stamped from
+    // the same instant, and the view owns the ticking that follows.
+    const now = performance.now();
+    const projected = events.reduce(
+      (view, event) => applyAnswerEvent(view, event, now),
+      turn,
+    );
     if (projected === turn) return;
     const nextTurns = [...this.turns];
     nextTurns[turnIndex] = projected;

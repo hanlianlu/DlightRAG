@@ -72,7 +72,11 @@ function phaseText(phase: string): string | null {
  * the event does not change the view (memory events, unknown phases), so the
  * caller can cheaply detect a no-op batch.
  */
-export function applyAnswerEvent(turn: ChatTurnView, event: AnswerRunEvent): ChatTurnView {
+export function applyAnswerEvent(
+  turn: ChatTurnView,
+  event: AnswerRunEvent,
+  now: number,
+): ChatTurnView {
   switch (event.kind) {
     case 'memory':
       return turn;
@@ -95,7 +99,7 @@ export function applyAnswerEvent(turn: ChatTurnView, event: AnswerRunEvent): Cha
     case 'tool': {
       const info = event.payload as ToolEventPayload;
       if (!info || typeof info.tool_name !== 'string') return turn;
-      const toolRows = applyToolEvent(turn.toolRows, event.eventType, info);
+      const toolRows = applyToolEvent(turn.toolRows, event.eventType, info, now);
       const toolTotal = event.eventType === 'tool_start' ? turn.toolTotal + 1 : turn.toolTotal;
       const text = toolStatusText(toolRows);
       return {

@@ -346,10 +346,15 @@ it('maps every server answer phase and tool name to qualitative deterministic co
   expect(unknown.known).to.equal(false);
   expect(unknown.verb).to.equal('Acme Custom Tool');
   expect(unknown.verbId).to.equal(null);
-  const rows = applyToolEvent([], 'tool_start', {tool_name: 'load_skill', call_id: 'c1'});
+  const rows = applyToolEvent([], 'tool_start', {tool_name: 'load_skill', call_id: 'c1'}, 1000);
   expect(toolStatusText(applyToolEvent(rows, 'tool_progress', {
     call_id: 'c1', object_label: 'code-review',
-  }))).to.contain('code-review');
+  }, 1000))).to.contain('code-review');
+  expect(toolDisplay('mcp_connection_deadbeef')).to.deep.equal({
+    verb: 'Calling an MCP tool',
+    verbId: 'chatFeature.tool.mcp',
+    known: false,
+  });
 });
 
 it('maps and renders every reconnect state with one visible status and action', async () => {
@@ -1890,4 +1895,94 @@ it('does not treat browser abort as settlement of an accepted child command', as
   await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
   expect(keys).to.have.length(2);
   expect(keys[0]).to.equal(keys[1]);
+});
+
+it('renders a named, timed tool trace and ticks only while a row is running', async () => {
+  const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  list.turns = [{
+    id: 'turn-trace',
+    userText: 'Question',
+    userAttachments: [],
+    runId: 'run-trace',
+    state: 'streaming',
+    streamText: '',
+    presentation: null,
+    usage: {},
+    evidence: {},
+    error: '',
+    progress: '',
+    liveStatus: '',
+    sawChildren: false,
+    cancelRequested: false,
+    steeringMessages: [],
+    toolTotal: 3,
+    toolExpanded: true,
+    toolRows: [
+      {
+        callId: 'c1',
+        label: 'Personal tools · search_issues',
+        name: 'mcp_connection_deadbeef',
+        verb: 'Calling an MCP tool',
+        verbId: 'chatFeature.tool.mcp',
+        object: '',
+        state: 'running',
+        startedAt: performance.now() - 400,
+        durationMs: null,
+      },
+      {
+        callId: 'c2',
+        label: null,
+        name: 'read',
+        verb: 'Reading a document',
+        verbId: 'chatFeature.tool.read',
+        object: 'report.pdf',
+        state: 'done',
+        startedAt: null,
+        durationMs: 2400,
+      },
+      {
+        callId: 'c3',
+        label: null,
+        name: 'bash',
+        verb: 'Running a command',
+        verbId: 'chatFeature.tool.bash',
+        object: '',
+        state: 'failed',
+        startedAt: null,
+        durationMs: 30,
+      },
+    ],
+  }];
+  document.body.append(list);
+  await list.updateComplete;
+
+  const text = (): string => list.textContent ?? '';
+  expect(text()).to.contain('Personal tools · search_issues');
+  expect(text()).to.not.contain('Deadbeef');
+  expect(text()).to.contain('Reading a document — report.pdf');
+  expect(text()).to.contain('2.4s');
+  expect(text()).to.contain('30ms');
+  expect(text()).to.not.contain('0.4s', 'a running row stays quiet in its first second');
+  const ticking = (): string[] => [...list.querySelectorAll('[aria-hidden="true"]')]
+    .map((element) => element.textContent ?? '')
+    .filter((label) => /^\d+(\.\d+)?(ms|s)$/.test(label));
+  expect(ticking()).to.deep.equal([], 'nothing ticks until a second has passed');
+
+  const deadline = performance.now() + 3000;
+  while (performance.now() < deadline && ticking().length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  expect(text()).to.match(/\b1\.\ds\b/, 'the running row counts up on its own');
+  expect(ticking()).to.have.lengthOf(1, 'only the running counter ticks');
+  expect(ticking()[0]).to.match(/^1\.\ds$/, 'the ticking counter stays out of the live region');
+
+  list.turns = list.turns.map((turn) => ({
+    ...turn,
+    toolRows: turn.toolRows.map((row) => row.state === 'running'
+      ? {...row, state: 'done' as const, startedAt: null, durationMs: 8000}
+      : row),
+  }));
+  await list.updateComplete;
+  expect(text()).to.contain('8.0s', 'server truth replaces the viewer clock');
+  list.remove();
 });

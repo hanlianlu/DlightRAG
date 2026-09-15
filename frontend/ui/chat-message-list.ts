@@ -13,7 +13,7 @@ import type {ChatTurnView} from '../lib/chat-views.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
-import {toolRowText} from '../lib/tool-events.ts';
+import {rowDurationMs, toolRowText, type ToolRow} from '../lib/tool-events.ts';
 import {
   TURN_PLACEHOLDER_MIN_PX,
   turnIsLive,
@@ -56,6 +56,17 @@ function formatToolDuration(durationMs: number | null): string {
   if (durationMs === null) return '';
   if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
   return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+/** The live counter re-renders once a second: sub-second precision is noise on a
+ *  row that is still running, so a running row stays quiet for its first second. */
+const ELAPSED_TICK_MS = 1000;
+
+function shownToolDuration(row: ToolRow, now: number): string {
+  const durationMs = rowDurationMs(row, now);
+  if (durationMs === null) return '';
+  if (row.state === 'running' && durationMs < ELAPSED_TICK_MS) return '';
+  return formatToolDuration(durationMs);
 }
 
 export interface ChatViewActionDetail {
@@ -135,6 +146,9 @@ export class DlChatMessageList extends LightElement {
   #imageRevision = 0;
   #stickAfterUpdate = true;
   #scrollFrame = 0;
+  #elapsedTimer: ReturnType<typeof setInterval> | null = null;
+  #elapsedTick = 0;
+  #now = performance.now();
   #pendingTurnAnchor: string | null = null;
   #pendingPrependAnchor: {turnId: string; offset: number} | null = null;
   #restoreOlderFocus = false;
@@ -155,8 +169,35 @@ export class DlChatMessageList extends LightElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this.#scrollFrame) cancelAnimationFrame(this.#scrollFrame);
+    this.#stopElapsedTimer();
     this.#unbindScroll();
     for (const url of liveObjectUrls(this.turns)) URL.revokeObjectURL(url);
+  }
+
+  /** One view clock for every running row: it exists only while a visible row
+   *  runs, so an idle transcript schedules nothing. */
+  #syncElapsedTimer(): void {
+    const running = this.turns.some((turn) => this.#counting(turn));
+    if (running && this.#elapsedTimer === null) {
+      this.#elapsedTimer = setInterval(() => {
+        this.#now = performance.now();
+        this.#elapsedTick += 1;
+        this.requestUpdate();
+      }, ELAPSED_TICK_MS);
+    } else if (!running) {
+      this.#stopElapsedTimer();
+    }
+  }
+
+  /** Whether this turn shows a counter that has to redraw on its own. */
+  #counting(turn: ChatTurnView): boolean {
+    return turn.toolExpanded && turn.toolRows.some((row) => row.state === 'running');
+  }
+
+  #stopElapsedTimer(): void {
+    if (this.#elapsedTimer === null) return;
+    clearInterval(this.#elapsedTimer);
+    this.#elapsedTimer = null;
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
@@ -254,6 +295,7 @@ export class DlChatMessageList extends LightElement {
 
   protected override updated(changed: PropertyValues<this>): void {
     this.#bindScroll();
+    this.#syncElapsedTimer();
     if (changed.has('turns')) {
       const previous = (changed.get('turns') as readonly ChatTurnView[] | undefined) ?? [];
       const current = liveObjectUrls(this.turns);
@@ -445,9 +487,18 @@ export class DlChatMessageList extends LightElement {
     }
     return html`
       <div data-turn-id=${turn.id} data-turn-slot>
-        ${guard([turn, this.#imageRevision], () => this.#turn(turn))}
+        ${guard([turn, this.#imageRevision, this.#elapsedDependency(turn)], () => this.#turn(turn))}
       </div>
     `;
+  }
+
+  /** The cache key that lets one running tool row redraw its counter.
+   *
+   * The turn template is cached by identity, so a ticking view clock alone
+   * changes nothing. A turn that shows no counter keeps the stable key and stays
+   * cached; only the turn that is actually counting joins the clock. */
+  #elapsedDependency(turn: ChatTurnView): number {
+    return this.#counting(turn) ? this.#elapsedTick : 0;
   }
 
   #turn(turn: ChatTurnView): TemplateResult {
@@ -723,7 +774,9 @@ export class DlChatMessageList extends LightElement {
     return html`
       <div class=${chatStyles.toolTrace} role="status"
            aria-label=${msg('Tool activity', {id: 'chatMessageList.toolActivity'})}>
-        ${turn.toolRows.map((row) => html`
+        ${turn.toolRows.map((row) => {
+          const duration = shownToolDuration(row, this.#now);
+          return html`
           <div class="${chatStyles.toolRow} ${row.state === 'failed' ? chatStyles.toolRowFailed : ''}">
             <span class=${chatStyles.toolState}>
               ${row.state === 'running' ? html`<span class=${chatStyles.toolSpinner}></span>`
@@ -731,11 +784,13 @@ export class DlChatMessageList extends LightElement {
                   : icon('check', {size: 'xs', className: 'tool-state-icon tool-state-icon--done'})}
             </span>
             <span class=${chatStyles.toolLabel}>${toolRowText(row)}</span>
-            ${row.durationMs !== null
-              ? html`<span class=${chatStyles.toolDuration}>${formatToolDuration(row.durationMs)}</span>`
+            ${duration
+              ? html`<span class=${chatStyles.toolDuration}
+                      aria-hidden=${String(row.state === 'running')}>${duration}</span>`
               : nothing}
           </div>
-        `)}
+        `;
+        })}
       </div>
     `;
   }
