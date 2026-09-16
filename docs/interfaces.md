@@ -202,11 +202,22 @@ cursors return 422 before storage access.
 | `attachments` | answer | none | Link descriptors or multipart files used only by this answer |
 | `semantic_highlights` | answer | `false` | Add answer-aware source highlights when globally enabled |
 | `history` | answer | none | Up to 100 caller-supplied user/assistant messages |
+| `effort` | answer | unset | Agent effort for this Run's answering agent: `low`, `high`, or `max` |
 | `filters` | both | none | Built-in and custom metadata filters |
 
 `all_workspaces` is authorization-relative. `None` and `[]` mean omission;
 `"*"` and `"all"` are ordinary workspace names. Ingestion remains
 single-workspace.
+
+`effort` re-levels the answering agent of one accepted Run and nothing else: a
+subagent keeps the level configured for its own role, and a Run that omits the
+field keeps the deployment default. The value is refused with a validation error
+when it is not one of the three; a level the answering model cannot express is
+clamped to the nearest supported one by the engine, preferring the higher
+neighbour. The accepted Run records the choice in its prepared input, and the
+submission's idempotency fingerprint distinguishes it, so reusing a submission
+id with another effort is a conflict rather than a replay. [ADR 0014](adr/0014-caller-chosen-agent-effort.md)
+owns the decision.
 
 ### REST
 
@@ -429,8 +440,12 @@ Registered public tool names are:
 ### Web
 
 Web routes under `/web/api/*` are browser contracts, not compatibility aliases
-for REST. `GET /web/api/bootstrap` returns authorized workspace state, Files
-target, attachment limits, and image capability—never bearer or edge tokens.
+for REST. `GET /web/api/bootstrap` (bootstrap contract version 3) returns
+authorized workspace state, Files target, attachment limits, image capability,
+and `agent_effort: {levels, default}` — the efforts this deployment offers and,
+when it is one of them, its own configured level — never bearer or edge tokens.
+`POST /web/api/answer` accepts the same optional `effort` as REST and MCP, on
+both its JSON and its multipart form.
 Route families cover:
 
 - `/conversations`, `/conversations/{id}/history`, and
