@@ -18,6 +18,7 @@ from dlightrag.adapters.http.browser.attachment_models import (
     validate_web_attachments,
 )
 from dlightrag.adapters.http.browser.requests import WebAnswerRequest
+from dlightrag.engine.answer.client_contracts import AnswerEffort, normalize_answer_effort
 from dlightrag.engine.answer.image_capability import (
     AnswerImageCapability,
     check_answer_image_count,
@@ -42,6 +43,7 @@ class ParsedWebAnswerRequest:
     attachments: tuple[ValidatedWebAttachment, ...]
     mode: str | None = None
     requested_skill: str | None = None
+    effort: AnswerEffort | None = None
 
 
 def _optional_uuid(value: Any) -> UUID | None:
@@ -101,6 +103,7 @@ async def parse_web_answer_request(
             attachments=(),
             mode=body.mode,
             requested_skill=_optional_skill(body.requested_skill),
+            effort=body.effort,
         )
 
     try:
@@ -175,6 +178,7 @@ async def parse_web_answer_request(
                 submission_id=UUID(str(form.get("submission_id"))),
                 mode=_optional_mode(form.get("mode")),
                 requested_skill=_optional_skill(form.get("requested_skill")),
+                effort=normalize_answer_effort(form.get("effort")),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -186,6 +190,7 @@ async def parse_web_answer_request(
             attachments=attachments,
             mode=body.mode,
             requested_skill=body.requested_skill,
+            effort=body.effort,
         )
     finally:
         await form.close()

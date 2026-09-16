@@ -22,7 +22,12 @@ from dlightrag.application.corpus_admin import (
     WorkspaceCatalogPageRequest,
     normalize_workspace,
 )
-from dlightrag.engine.answer.client_contracts import ClientContractModel
+from dlightrag.application.settings import default_answer_effort
+from dlightrag.engine.answer.client_contracts import (
+    ANSWER_EFFORT_LEVELS,
+    AnswerEffort,
+    ClientContractModel,
+)
 from dlightrag.engine.answer.image_capability import ImageCapabilityStatus
 
 router = APIRouter()
@@ -42,8 +47,15 @@ class WebAttachmentBootstrap(ClientContractModel):
     accept: str
 
 
+class WebAnswerEffort(ClientContractModel):
+    """The agent efforts this deployment offers, and its own default if named."""
+
+    levels: list[AnswerEffort]
+    default: AnswerEffort | None = None
+
+
 class WebBootstrap(ClientContractModel):
-    contract_version: Literal[2] = 2
+    contract_version: Literal[3] = 3
     personal_mcp_connections: bool
     workspaces: list[WebBootstrapWorkspace]
     workspaces_next_cursor: str | None = None
@@ -52,6 +64,7 @@ class WebBootstrap(ClientContractModel):
     known_workspaces: list[str]
     answer_attachments: WebAttachmentBootstrap
     active_html_preview_enabled: bool
+    agent_effort: WebAnswerEffort
 
 
 async def build_web_bootstrap(
@@ -150,6 +163,10 @@ async def build_web_bootstrap(
         active_html_preview_enabled=(
             application.config.answer.conversations.active_html_preview_enabled
         ),
+        agent_effort=WebAnswerEffort(
+            levels=list(ANSWER_EFFORT_LEVELS),
+            default=default_answer_effort(application.config),
+        ),
     )
 
 
@@ -168,6 +185,7 @@ async def browser_bootstrap(
 
 
 __all__ = [
+    "WebAnswerEffort",
     "WebAttachmentBootstrap",
     "WebBootstrap",
     "WebBootstrapUnavailableError",

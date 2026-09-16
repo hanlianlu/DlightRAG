@@ -4,7 +4,7 @@
 from typing import Literal
 from uuid import UUID
 
-from dlightrag.engine.answer.client_contracts import ClientContractModel
+from dlightrag.engine.answer.client_contracts import AnswerEffort, ClientContractModel
 
 
 class WebAnswerRequest(ClientContractModel):
@@ -14,6 +14,7 @@ class WebAnswerRequest(ClientContractModel):
     submission_id: UUID
     mode: Literal["auto", "fast", "research"] | None = None
     requested_skill: str | None = None
+    effort: AnswerEffort | None = None
 
 
 __all__ = ["WebAnswerRequest"]

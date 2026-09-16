@@ -4,7 +4,10 @@
 // it posts the compact JSON envelope; with attachments it posts one multipart
 // form carrying the same envelope fields plus repeated `attachments` file parts
 // in user order. The server contract (parse_web_answer_request) reads exactly
-// these names: query, workspaces, optional conversation_id, submission_id, attachments.
+// these names: query, workspaces, optional conversation_id, submission_id,
+// attachments, optional mode, requested_skill, effort.
+
+import type {AgentEffort} from './agent-effort.ts';
 
 export type AnswerMode = 'auto' | 'fast' | 'research';
 
@@ -15,6 +18,7 @@ export interface AnswerEnvelope {
     submissionId: string;
     mode?: AnswerMode;
     requestedSkill?: string;
+    effort?: AgentEffort;
 }
 
 export interface AnswerRequestInit {
@@ -36,6 +40,7 @@ export function buildAnswerRequest(
                 submission_id: envelope.submissionId,
                 ...(envelope.mode ? {mode: envelope.mode} : {}),
                 ...(envelope.requestedSkill ? {requested_skill: envelope.requestedSkill} : {}),
+                ...(envelope.effort ? {effort: envelope.effort} : {}),
             }),
         };
     }
@@ -46,6 +51,7 @@ export function buildAnswerRequest(
     form.append('submission_id', envelope.submissionId);
     if (envelope.mode) form.append('mode', envelope.mode);
     if (envelope.requestedSkill) form.append('requested_skill', envelope.requestedSkill);
+    if (envelope.effort) form.append('effort', envelope.effort);
     for (const file of attachments) form.append('attachments', file, file.name);
     return {body: form};
 }

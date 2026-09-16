@@ -7,6 +7,7 @@
   "disclosure": {"source": "lucide", "name": "chevron-right"},
   "download": {"source": "lucide", "name": "download"},
   "edit": {"source": "lucide", "name": "pencil"},
+  "effort": {"source": "lucide", "name": "gauge"},
   "files": {"source": "lucide", "name": "folder"},
   "moon": {"source": "lucide", "name": "moon"},
   "next": {"source": "lucide", "name": "chevron-right"},
@@ -16,13 +17,7 @@
   "previous": {"source": "lucide", "name": "chevron-left"},
   "send": {"source": "lucide", "name": "send"},
   "settings": {"source": "lucide", "name": "settings"},
-  "status-dot": {
-    "source": "dlightrag",
-    "name": "status-dot",
-    "fill": "currentColor",
-    "stroke": "none",
-    "nodes": [["circle", {"cx": "12", "cy": "12", "r": "4"}]]
-  },
+  "status-dot": {"source": "dlightrag", "name": "status-dot", "fill": "currentColor", "stroke": "none", "nodes": [["circle", {"cx": "12", "cy": "12", "r": "4"}]]},
   "stop": {"source": "lucide", "name": "square", "fill": "currentColor", "stroke": "none"},
   "sun": {"source": "lucide", "name": "sun"},
   "system": {"source": "lucide", "name": "monitor"}

@@ -2,6 +2,7 @@
 
 import {csrfHeaders} from './csrf.ts';
 import {acceptedAnswer as acceptedAnswerSchema, type AcceptedAnswer} from './conversations.ts';
+import type {AgentEffort} from '../lib/agent-effort.ts';
 import {buildAnswerRequest, type AnswerMode} from '../lib/answer-request.ts';
 import * as v from 'valibot';
 
@@ -23,6 +24,8 @@ export interface AnswerSubmissionIntent {
   readonly workspaces: readonly string[];
   readonly mode: AnswerMode | null;
   readonly requestedSkill?: string | null;
+  /** The caller's own agent effort; omitted runs use the deployment default. */
+  readonly effort?: AgentEffort | null;
 }
 
 export class AnswerSubmissionError extends Error {
@@ -84,6 +87,7 @@ export class BrowserAnswerSubmissionAdapter implements AnswerSubmissionAdapter {
       submissionId: intent.submissionId,
       ...(intent.mode ? {mode: intent.mode} : {}),
       ...(intent.requestedSkill ? {requestedSkill: intent.requestedSkill} : {}),
+      ...(intent.effort ? {effort: intent.effort} : {}),
     }, [...files]);
     let response: Response;
     try {

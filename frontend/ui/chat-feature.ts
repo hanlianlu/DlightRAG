@@ -27,6 +27,8 @@ import {
 } from '../lib/run-controller.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
+import type {AgentEffort, AgentEffortOffer} from '../lib/agent-effort.ts';
+import {EMPTY_AGENT_EFFORT_OFFER} from '../lib/agent-effort.ts';
 import {AnswerSubmissionController} from '../stores/answer-submission-controller.ts';
 import {
   answerSubmissionSnapshot,
@@ -133,6 +135,7 @@ export class DlChatFeature extends LightElement {
     view: {attribute: false},
     attachmentPolicy: {attribute: false},
     attachmentAccept: {type: String},
+    agentEffortOffer: {attribute: false},
     interactionLocked: {attribute: false},
     turns: {state: true},
     runRevision: {state: true},
@@ -142,6 +145,7 @@ export class DlChatFeature extends LightElement {
   declare view: ChatView;
   declare attachmentPolicy: AttachmentPolicy | null;
   declare attachmentAccept: string;
+  declare agentEffortOffer: AgentEffortOffer;
   declare interactionLocked: boolean;
   declare turns: readonly ChatTurnView[];
   declare runRevision: number;
@@ -165,6 +169,7 @@ export class DlChatFeature extends LightElement {
     this.view = {kind: 'new'};
     this.attachmentPolicy = null;
     this.attachmentAccept = '';
+    this.agentEffortOffer = EMPTY_AGENT_EFFORT_OFFER;
     this.interactionLocked = false;
     this.turns = [];
     this.runRevision = 0;
@@ -418,6 +423,7 @@ export class DlChatFeature extends LightElement {
       ${this.#submissionFailureControls()}
       <dl-chat-composer
         .handles=${this.handles}
+        .agentEffortOffer=${this.agentEffortOffer}
         ?inert=${this.interactionLocked}
         .running=${this.#runController.active}
         .submissionPending=${this.submissionPending}
@@ -516,7 +522,12 @@ export class DlChatFeature extends LightElement {
 
   #submit = (event: CustomEvent<ComposerSubmitDetail>): void => {
     event.stopPropagation();
-    void this.#submitQuery(event.detail.query, event.detail.mode, event.detail.requestedSkill);
+    void this.#submitQuery(
+      event.detail.query,
+      event.detail.mode,
+      event.detail.requestedSkill,
+      event.detail.effort,
+    );
   };
 
   #steer = (event: CustomEvent<ComposerSteerDetail>): void => {
@@ -550,6 +561,7 @@ export class DlChatFeature extends LightElement {
     query: string,
     mode: AnswerMode | null,
     requestedSkill: string | null = null,
+    effort: AgentEffort | null = null,
   ): Promise<void> {
     if (this.#runController.active || this.#submissionActor) return;
     if (!this.handles.conversations.canAnswer) {
@@ -583,6 +595,7 @@ export class DlChatFeature extends LightElement {
       submissionId,
       workspaces: [...this.handles.workspaces.active],
       ...(requestedSkill ? {requestedSkill} : {}),
+      effort,
     }, lease, this.#submissionAdapter);
     if (!actor) {
       lease.restore();
@@ -688,7 +701,12 @@ export class DlChatFeature extends LightElement {
     if (type === 'EDIT') {
       this.handles.workspaces.restoreActive(intent.workspaces);
       this.querySelector<DlChatComposer>('dl-chat-composer')
-        ?.restoreSubmission(intent.query, intent.mode, intent.requestedSkill ?? null);
+        ?.restoreSubmission(
+          intent.query,
+          intent.mode,
+          intent.requestedSkill ?? null,
+          intent.effort ?? null,
+        );
     }
     if (this.#submissionTurnId) {
       this.turns = this.turns.filter((turn) => turn.id !== this.#submissionTurnId);

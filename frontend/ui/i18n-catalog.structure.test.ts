@@ -56,6 +56,20 @@ test('every declared msg id exists in the zh catalog', () => {
   assert.deepEqual(missing, []);
 });
 
+test('every offered agent effort has a zh label and aria entry', () => {
+  const effort = readFileSync(join(FRONTEND_DIR, 'lib', 'agent-effort.ts'), 'utf8');
+  const labels = effort.match(/EFFORT_LABELS[^{]+\{([^}]+)\}/)?.[1];
+  assert.ok(labels, 'EFFORT_LABELS catalog missing');
+  const levels = [...labels.matchAll(/^\s*([a-z]+):/gm)].map((match) => match[1]);
+  assert.deepEqual(levels, ['low', 'high', 'max']);
+  const keys = catalogKeys();
+  const missing = levels.flatMap((level) => [
+    `chatComposer.effort.${level}`,
+    `chatComposer.effortAria.${level}`,
+  ]).filter((id) => !keys.has(id));
+  assert.deepEqual(missing, []);
+});
+
 test('every catalogued tool verb has a zh entry', () => {
   const display = readFileSync(join(FRONTEND_DIR, 'lib', 'tool-display.ts'), 'utf8');
   const block = display.match(/const TOOL_VERBS[^{]+\{([^}]+)\}/)?.[1];

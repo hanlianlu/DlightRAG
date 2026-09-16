@@ -20,7 +20,7 @@ import type {DlSettingsDialog} from './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 
 const bootstrap = {
-  contract_version: 2,
+  contract_version: 3,
   personal_mcp_connections: true,
   workspaces: [
     {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
@@ -39,6 +39,7 @@ const bootstrap = {
     accept: 'image/*,.md,.pdf',
   },
   active_html_preview_enabled: true,
+  agent_effort: {levels: ['low', 'high', 'max'], default: 'high'},
 } as const;
 
 const SAFE_PNG =
@@ -130,8 +131,8 @@ it('renders the application shell from the typed bootstrap before resolving read
   const loaded = await app.ready;
 
   expect(loaded).to.deep.equal({
-    contractVersion: 2,
-  personalMcpConnections: true,
+    contractVersion: 3,
+    personalMcpConnections: true,
     workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test'}],
     workspacesNextCursor: null,
     primaryWorkspace: 'default',
@@ -147,6 +148,7 @@ it('renders the application shell from the typed bootstrap before resolving read
       accept: 'image/*,.md,.pdf',
     },
     activeHtmlPreviewEnabled: true,
+    agentEffort: {levels: ['low', 'high', 'max'], default: 'high'},
   });
   const shell = app.querySelector<HTMLElement>('#app');
   expect(shell?.inert).to.equal(false);
@@ -157,6 +159,11 @@ it('renders the application shell from the typed bootstrap before resolving read
   expect(chat?.attachmentAccept).to.equal('image/*,.md,.pdf');
   expect(chat?.querySelector('dl-chat-message-list')).not.to.equal(null);
   expect(chat?.querySelector('dl-chat-composer')).not.to.equal(null);
+  // The offer reaches the composer, which is what draws the effort picker.
+  expect(chat?.agentEffortOffer).to.deep.equal({levels: ['low', 'high', 'max'], default: 'high'});
+  const composer = app.querySelector('dl-chat-composer');
+  await composer?.updateComplete;
+  expect(composer?.querySelector('.composer-effort-label')?.textContent).to.equal('High');
 });
 
 it('keeps the composed compact conversation modal interactive and inerts sibling Shell UI', async () => {

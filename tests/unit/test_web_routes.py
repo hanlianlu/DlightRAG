@@ -686,7 +686,7 @@ class TestWebBootstrap:
 
         assert response.status_code == 200
         assert response.json() == {
-            "contract_version": 2,
+            "contract_version": 3,
             "personal_mcp_connections": True,
             "workspaces": [
                 {
@@ -719,6 +719,10 @@ class TestWebBootstrap:
                 ),
             },
             "active_html_preview_enabled": True,
+            "agent_effort": {
+                "levels": ["low", "high", "max"],
+                "default": None,
+            },
         }
 
     async def test_filters_saved_scope_and_primary_through_authorized_workspaces(

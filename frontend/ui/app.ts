@@ -53,7 +53,7 @@ import './toast.ts';
 import './workspace-scope.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
-  contractVersion: 2,
+  contractVersion: 3,
   personalMcpConnections: false,
   workspaces: [],
   primaryWorkspace: '',
@@ -70,6 +70,7 @@ const EMPTY_BOOTSTRAP: WebBootstrap = {
     accept: '',
   },
   activeHtmlPreviewEnabled: true,
+  agentEffort: {levels: [], default: null},
 };
 
 /** Authenticated bootstrap, top-level capabilities, and Feature composition only. */
@@ -287,6 +288,7 @@ export class DlApp extends LightElement {
 
                 <dl-chat-feature .handles=${this.handles} .attachmentPolicy=${this.#attachmentPolicy()}
                   .attachmentAccept=${attachments.accept}
+                  .agentEffortOffer=${bootstrap.agentEffort}
                   .interactionLocked=${panelInteractionLocked}
                   ?inert=${blockingShellModal || this.canvasWide}
                   @dl-chat-content-change=${this.#chatContentChanged}

@@ -97,6 +97,25 @@ test('a first multipart submission omits the optional conversation field', () =>
   assert.equal(form.get('submission_id'), 'sub-1');
 });
 
+test('an effort choice rides both the JSON envelope and the multipart form', () => {
+  const chosen = {...envelope, mode: 'research' as const, requestedSkill: 'brief', effort: 'max' as const};
+  const json = JSON.parse(buildAnswerRequest(chosen, []).body as string) as Record<string, unknown>;
+  assert.equal(json.mode, 'research');
+  assert.equal(json.requested_skill, 'brief');
+  assert.equal(json.effort, 'max');
+
+  const form = buildAnswerRequest(chosen, [file('a.png', 'image/png')]).body as FormData;
+  assert.equal(form.get('effort'), 'max');
+});
+
+test('an unset effort is omitted so the deployment default applies', () => {
+  const json = JSON.parse(buildAnswerRequest(envelope, []).body as string) as Record<string, unknown>;
+  assert.ok(!('effort' in json));
+
+  const form = buildAnswerRequest(envelope, [file('a.png', 'image/png')]).body as FormData;
+  assert.equal(form.has('effort'), false);
+});
+
 test('a rebuilt request from the same attachments never duplicates the file parts', () => {
   const attachments = [file('a.png', 'image/png'), file('b.pdf', 'application/pdf')];
   const first = buildAnswerRequest(envelope, attachments).body as FormData;

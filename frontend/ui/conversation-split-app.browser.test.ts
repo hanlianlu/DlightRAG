@@ -9,7 +9,7 @@ import {initializeBrowserAdapters} from './browser-adapters.ts';
 defineDesignSystemElements();
 
 const bootstrap = {
-  contract_version: 2,
+  contract_version: 3,
   personal_mcp_connections: true,
   workspaces: [
     {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
@@ -28,6 +28,7 @@ const bootstrap = {
     accept: 'image/*,.md,.pdf',
   },
   active_html_preview_enabled: true,
+  agent_effort: {levels: ['low', 'high', 'max'], default: 'high'},
 } as const;
 
 afterEach(() => {

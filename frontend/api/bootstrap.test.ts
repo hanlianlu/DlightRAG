@@ -31,18 +31,27 @@ test('bootstrap rejects malformed success JSON through its typed error', async (
   );
 });
 
-test('bootstrap v2 requires an explicit personal Connections capability', async () => {
+test('bootstrap v3 requires the agent effort offer and its own capabilities', async () => {
   const fixture = {
-    contract_version: 2, workspaces: [], primary_workspace: '', active_workspaces: [],
+    contract_version: 3, workspaces: [], primary_workspace: '', active_workspaces: [],
     answer_attachments: {count_limit: 0, image_max_bytes: 1, document_max_bytes: 1,
       extensions: [], image_capability: 'unknown', image_limit: 0, accept: ''},
     active_html_preview_enabled: false, personal_mcp_connections: true,
+    agent_effort: {levels: ['low', 'high', 'max'], default: 'high'},
   };
   globalThis.fetch = async () => Response.json(fixture);
-  assert.equal((await getWebBootstrap()).personalMcpConnections, true);
-  globalThis.fetch = async () => Response.json({...fixture, contract_version: 1});
+  const bootstrap = await getWebBootstrap();
+  assert.equal(bootstrap.personalMcpConnections, true);
+  assert.deepEqual(bootstrap.agentEffort, {levels: ['low', 'high', 'max'], default: 'high'});
+  globalThis.fetch = async () => Response.json({...fixture, contract_version: 2});
   await assert.rejects(getWebBootstrap(), BootstrapApiError);
   const {personal_mcp_connections: _capability, ...missing} = fixture;
   globalThis.fetch = async () => Response.json(missing);
   await assert.rejects(getWebBootstrap(), BootstrapApiError);
+  // A deployment that names no level, or one the three-level control cannot
+  // name, reports no default rather than a level it would not run.
+  globalThis.fetch = async () => Response.json({...fixture, agent_effort: {levels: ['low', 'high', 'max']}});
+  assert.equal((await getWebBootstrap()).agentEffort.default, null);
+  globalThis.fetch = async () => Response.json({...fixture, agent_effort: {levels: ['low'], default: null}});
+  assert.deepEqual((await getWebBootstrap()).agentEffort, {levels: ['low'], default: null});
 });

@@ -383,12 +383,14 @@ body.files-panel-open #files-btn {
     color: var(--color-text-dim);
 }
 
-.composer-mode {
+.composer-mode,
+.composer-effort {
     position: relative;
     flex-shrink: 0;
 }
 
-.composer-mode-trigger {
+.composer-mode-trigger,
+.composer-effort-trigger {
     border: none;
     background: transparent;
     color: var(--color-text-dim);
@@ -401,17 +403,31 @@ body.files-panel-open #files-btn {
     border-radius: var(--radius-control);
 }
 
-.composer-mode-trigger:hover {
+.composer-effort-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.composer-effort-icon {
+    flex-shrink: 0;
+}
+
+.composer-mode-trigger:hover,
+.composer-effort-trigger:hover {
     color: var(--color-text-primary);
     background: var(--color-bg-hover);
 }
 
-.composer-mode-trigger:focus-visible {
+.composer-mode-trigger:focus-visible,
+.composer-effort-trigger:focus-visible {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
 }
 
-.composer-mode-menu {
+
+.composer-mode-menu,
+.composer-effort-menu {
     position: absolute;
     right: 0;
     bottom: calc(100% + 0.35rem);
@@ -426,7 +442,8 @@ body.files-panel-open #files-btn {
     z-index: 5;
 }
 
-.composer-mode-menu[hidden] {
+.composer-mode-menu[hidden],
+.composer-effort-menu[hidden] {
     display: none;
 }
 
@@ -533,7 +550,8 @@ body.files-panel-open #files-btn {
     font-size: 0.75rem;
 }
 
-.composer-mode-menu button {
+.composer-mode-menu button,
+.composer-effort-menu button {
     border: none;
     background: transparent;
     color: var(--color-text-primary);
@@ -546,22 +564,40 @@ body.files-panel-open #files-btn {
     cursor: pointer;
 }
 
+.composer-effort-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.composer-effort-default {
+    color: var(--color-text-dim);
+    font-size: 0.7rem;
+}
+
 .composer-mode-menu button:hover,
-.composer-mode-menu button:focus-visible {
+.composer-mode-menu button:focus-visible,
+.composer-effort-menu button:hover,
+.composer-effort-menu button:focus-visible {
     background: var(--color-bg-hover);
 }
 
-.composer-mode-menu button:focus-visible {
+.composer-mode-menu button:focus-visible,
+.composer-effort-menu button:focus-visible {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
 }
 
-.composer-mode-menu button[aria-checked='true'] {
+.composer-mode-menu button[aria-checked='true'],
+.composer-effort-menu button[aria-checked='true'] {
     background: var(--color-bg-elevated);
 }
 
+
 /* The chosen row keeps its own surface while the pointer is over it. */
-.composer-mode-menu button[aria-checked='true']:hover {
+.composer-mode-menu button[aria-checked='true']:hover,
+.composer-effort-menu button[aria-checked='true']:hover {
     background: var(--color-bg-elevated);
     color: var(--color-text-primary);
 }

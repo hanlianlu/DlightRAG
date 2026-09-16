@@ -16,6 +16,15 @@ import {
   skillGhostSuffix,
 } from '../lib/skill-directive.ts';
 import type {PendingAttachment} from '../stores/attachment-store.ts';
+import {
+  EMPTY_AGENT_EFFORT_OFFER,
+  EFFORT_LABELS,
+  type AgentEffort,
+  type AgentEffortOffer,
+  offeredLevels,
+  storeAgentEffort,
+  storedAgentEffort,
+} from '../lib/agent-effort.ts';
 import chatStyles from '../styles/chat.module.css';
 import {
   acceptsAttachmentUpload,
@@ -39,6 +48,8 @@ export interface ComposerSubmitDetail {
   query: string;
   mode: AnswerMode | null;
   requestedSkill: string | null;
+  /** The caller's own agent effort; null asks for the deployment default. */
+  effort: AgentEffort | null;
 }
 
 export interface ComposerSteerDetail {
@@ -59,7 +70,7 @@ function storedMode(): AnswerMode | null {
   }
 }
 
-/** Lit-owned draft, attachment admission, answer mode, and keyboard interaction. */
+/** Lit-owned draft, attachment admission, answer mode and effort, and keyboard interaction. */
 export class DlChatComposer extends LightElement {
   static properties = {
     handles: {attribute: false},
@@ -68,9 +79,12 @@ export class DlChatComposer extends LightElement {
     stopping: {type: Boolean},
     attachmentPolicy: {attribute: false},
     attachmentAccept: {type: String},
+    agentEffortOffer: {attribute: false},
     draft: {state: true},
     mode: {state: true},
     modeOpen: {state: true},
+    effort: {state: true},
+    effortOpen: {state: true},
     multiline: {state: true},
     dragActive: {state: true},
     attachments: {state: true},
@@ -86,9 +100,12 @@ export class DlChatComposer extends LightElement {
   declare stopping: boolean;
   declare attachmentPolicy: AttachmentPolicy | null;
   declare attachmentAccept: string;
+  declare agentEffortOffer: AgentEffortOffer;
   declare draft: string;
   declare mode: AnswerMode;
   declare modeOpen: boolean;
+  declare effort: AgentEffort | null;
+  declare effortOpen: boolean;
   declare multiline: boolean;
   declare dragActive: boolean;
   declare attachments: readonly PendingAttachment[];
@@ -101,6 +118,8 @@ export class DlChatComposer extends LightElement {
   #dragCounter = 0;
   #allowNextLineBreak = false;
   #requestMode: AnswerMode | null;
+  #requestEffort: AgentEffort | null = null;
+  #effortInitialized = false;
 
   constructor() {
     super();
@@ -115,6 +134,9 @@ export class DlChatComposer extends LightElement {
     this.#requestMode = storedMode();
     this.mode = this.#requestMode ?? 'auto';
     this.modeOpen = false;
+    this.effort = null;
+    this.effortOpen = false;
+    this.agentEffortOffer = EMPTY_AGENT_EFFORT_OFFER;
     this.multiline = false;
     this.dragActive = false;
     this.attachments = [...this.handles.attachments.list()];
@@ -122,6 +144,13 @@ export class DlChatComposer extends LightElement {
     this.skillNotice = false;
     this.skillMenuOpen = false;
     this.skillActive = -1;
+  }
+
+  override willUpdate(): void {
+    if (this.#effortInitialized || offeredLevels(this.agentEffortOffer).length === 0) return;
+    this.#effortInitialized = true;
+    this.#requestEffort = storedAgentEffort(this.agentEffortOffer);
+    this.effort = this.#requestEffort ?? this.agentEffortOffer.default;
   }
 
   get hasDraft(): boolean {
@@ -134,7 +163,7 @@ export class DlChatComposer extends LightElement {
     this.#unsubscribe ??= this.handles.attachments.subscribe(() => {
       this.attachments = [...this.handles.attachments.list()];
     });
-    document.addEventListener('click', this.#closeModeMenu);
+    document.addEventListener('click', this.#closeMenus);
     document.addEventListener('dragenter', this.#dragEnter);
     document.addEventListener('dragleave', this.#dragLeave);
     document.addEventListener('dragover', this.#dragOver);
@@ -146,7 +175,7 @@ export class DlChatComposer extends LightElement {
     super.disconnectedCallback();
     this.#unsubscribe?.();
     this.#unsubscribe = null;
-    document.removeEventListener('click', this.#closeModeMenu);
+    document.removeEventListener('click', this.#closeMenus);
     document.removeEventListener('dragenter', this.#dragEnter);
     document.removeEventListener('dragleave', this.#dragLeave);
     document.removeEventListener('dragover', this.#dragOver);
@@ -181,11 +210,17 @@ export class DlChatComposer extends LightElement {
     query: string,
     requestMode: AnswerMode | null,
     requestedSkill: string | null = null,
+    requestEffort: AgentEffort | null = null,
   ): void {
     this.draft = requestedSkill ? `/skill:${requestedSkill} ${query}` : query;
     this.#requestMode = requestMode;
     this.mode = requestMode ?? 'auto';
     this.modeOpen = false;
+    this.effortOpen = false;
+    this.#effortInitialized = true;
+    this.#requestEffort = requestEffort;
+    this.effort = requestEffort ?? this.agentEffortOffer.default;
+    storeAgentEffort(requestEffort);
     try {
       if (requestMode === null) localStorage.removeItem(STORAGE_KEY);
       else localStorage.setItem(STORAGE_KEY, requestMode);
@@ -272,6 +307,7 @@ export class DlChatComposer extends LightElement {
                 `)}
               </div>
             </div>
+            ${this.#effortControl()}
             <button type="submit"
                     class="composer-send ${stop ? 'is-stop' : ''} ${steer ? 'is-steer' : ''}"
                     aria-label=${this.submissionPending
@@ -450,7 +486,13 @@ export class DlChatComposer extends LightElement {
     this.dispatchEvent(new CustomEvent<ComposerSubmitDetail>('dl-composer-submit', {
       bubbles: true,
       composed: true,
-      detail: {query: submitQuery, mode: this.#requestMode, requestedSkill},
+      detail: {
+        query: submitQuery,
+        mode: this.#requestMode,
+        requestedSkill,
+        // Fast answers run no agent turns, so they never carry an effort.
+        effort: this.mode === 'fast' ? null : this.#requestEffort,
+      },
     }));
     void this.updateComplete.then(() => this.#resize());
   }
@@ -520,6 +562,98 @@ export class DlChatComposer extends LightElement {
     this.handles.attachments.add(file, kind);
   }
 
+  /** Fast answers run no agent turns, so the control never appears there. */
+  #effortControl(): TemplateResult | typeof nothing {
+    const levels = offeredLevels(this.agentEffortOffer);
+    if (levels.length === 0 || this.mode === 'fast') return nothing;
+    const displayed = this.#displayedEffort(levels);
+    return html`
+      <div class="composer-effort">
+        <button type="button" class="composer-effort-trigger" id="composer-effort"
+                aria-haspopup="menu" aria-expanded=${String(this.effortOpen)}
+                aria-label=${displayed
+                  ? msg(str`Agent effort: ${EFFORT_LABELS[displayed]}`, {id: `chatComposer.effortAria.${displayed}`})
+                  : msg('Agent effort', {id: 'chatComposer.effortAria'})}
+                @click=${this.#toggleEffortMenu} @keydown=${this.#effortTriggerKeydown}>
+          ${icon('effort', {size: 'sm', className: 'composer-effort-icon'})}
+          <span class="composer-effort-label">${displayed
+            ? msg(EFFORT_LABELS[displayed], {id: `chatComposer.effort.${displayed}`})
+            : msg('Effort', {id: 'chatComposer.effortLabel'})}</span>
+        </button>
+        <div class="composer-effort-menu" id="composer-effort-menu" role="menu"
+             aria-label=${msg('Agent effort', {id: 'chatComposer.effortMenuAria'})}
+             ?hidden=${!this.effortOpen} @keydown=${this.#effortMenuKeydown}>
+          ${levels.map((level) => html`
+            <button type="button" role="menuitemradio" data-effort=${level}
+                    aria-checked=${String(displayed === level)} tabindex="-1"
+                    @click=${() => this.#selectEffort(level)}>
+              <span>${msg(EFFORT_LABELS[level], {id: `chatComposer.effort.${level}`})}</span>
+              ${this.agentEffortOffer.default === level
+                ? html`<span class="composer-effort-default">${msg('Default', {id: 'chatComposer.effortDefault'})}</span>`
+                : nothing}
+            </button>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
+  /** The level this composer shows: the caller's choice, else the deployment's. */
+  #displayedEffort(levels: readonly AgentEffort[]): AgentEffort | null {
+    return this.effort && levels.includes(this.effort) ? this.effort : null;
+  }
+
+  #toggleEffortMenu = (event: Event): void => {
+    event.stopPropagation();
+    this.effortOpen = !this.effortOpen;
+    if (!this.effortOpen) return;
+    const levels = offeredLevels(this.agentEffortOffer);
+    const displayed = this.#displayedEffort(levels);
+    void this.updateComplete.then(() => this.#focusEffort(displayed ?? levels[0]));
+  };
+
+  #selectEffort(level: AgentEffort): void {
+    this.#effortInitialized = true;
+    this.#requestEffort = level;
+    this.effort = level;
+    this.effortOpen = false;
+    storeAgentEffort(level);
+    this.focusInput();
+  }
+
+  #effortTriggerKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    const levels = offeredLevels(this.agentEffortOffer);
+    this.effortOpen = true;
+    const level = event.key === 'ArrowUp' ? levels[levels.length - 1] : levels[0];
+    void this.updateComplete.then(() => this.#focusEffort(level));
+  };
+
+  #effortMenuKeydown = (event: KeyboardEvent): void => {
+    const levels = offeredLevels(this.agentEffortOffer);
+    const target = event.target as HTMLButtonElement;
+    const index = levels.indexOf(target.dataset.effort as AgentEffort);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.effortOpen = false;
+      this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    let next = index;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = levels.length - 1;
+    else if (event.key === 'ArrowDown') next = (index + 1) % levels.length;
+    else next = (index - 1 + levels.length) % levels.length;
+    this.#focusEffort(levels[next]);
+  };
+
+  #focusEffort(level: AgentEffort): void {
+    this.querySelector<HTMLButtonElement>(`[data-effort="${level}"]`)?.focus();
+  }
+
   #toggleModeMenu = (event: Event): void => {
     event.stopPropagation();
     this.modeOpen = !this.modeOpen;
@@ -569,8 +703,9 @@ export class DlChatComposer extends LightElement {
     this.querySelector<HTMLButtonElement>(`[data-mode="${mode}"]`)?.focus();
   }
 
-  #closeModeMenu = (): void => {
+  #closeMenus = (): void => {
     if (this.modeOpen) this.modeOpen = false;
+    if (this.effortOpen) this.effortOpen = false;
   };
 
   #dragEnter = (event: DragEvent): void => {

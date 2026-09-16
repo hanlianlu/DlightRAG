@@ -10,6 +10,7 @@ import type {
   ConversationTurn,
   PresentationImage,
 } from '../api/conversations.ts';
+import {AGENT_EFFORT_STORAGE_KEY} from '../lib/agent-effort.ts';
 import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
 import {attachmentStore} from '../stores/attachment-store.ts';
 import {conversationStore} from '../stores/conversation-store.ts';
@@ -35,6 +36,10 @@ import {webRouter} from './router.ts';
 
 const originalFetch = window.fetch;
 const originalRevokeObjectURL = URL.revokeObjectURL;
+
+function effortRow(composer: DlChatComposer, level: string): HTMLButtonElement {
+  return composer.querySelector<HTMLButtonElement>(`[data-effort="${level}"]`)!;
+}
 
 const policy = {
   countLimit: 6,
@@ -672,14 +677,19 @@ it('Composer owns draft, attachment, mode, and typed submission intent', async (
   input.dispatchEvent(new Event('input', {bubbles: true}));
   await composer.updateComplete;
 
-  let submitted: {query: string; mode: string | null} | null = null;
+  let submitted: {query: string; mode: string | null; effort?: string | null} | null = null;
   composer.addEventListener('dl-composer-submit', (event) => {
     submitted = (event as CustomEvent).detail;
   });
   composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
   await composer.updateComplete;
 
-  expect(submitted).to.deep.equal({query: 'Explain this', mode: null, requestedSkill: null});
+  expect(submitted).to.deep.equal({
+    query: 'Explain this',
+    mode: null,
+    requestedSkill: null,
+    effort: null,
+  });
   expect(composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')?.value).to.equal('');
   expect(composer.hasDraft).to.equal(true);
 
@@ -689,6 +699,109 @@ it('Composer owns draft, attachment, mode, and typed submission intent', async (
   composer.focusInput();
   await composer.updateComplete;
   expect(document.activeElement).to.equal(composer.querySelector('[aria-label="Message"]'));
+});
+
+it('Composer offers only bootstrap levels, remembers the choice, and hides effort for fast', async () => {
+  localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  composer.agentEffortOffer = {levels: ['low', 'high', 'max'], default: 'high'};
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+
+  // The deployment default is shown, checked, and marked without being stored.
+  expect(composer.querySelector('.composer-effort-label')?.textContent).to.equal('High');
+  expect(localStorage.getItem(AGENT_EFFORT_STORAGE_KEY)).to.equal(null);
+  const rows = [...composer.querySelectorAll<HTMLButtonElement>('[data-effort]')];
+  expect(rows.map((row) => row.dataset.effort)).to.deep.equal(['low', 'high', 'max']);
+  expect(rows.map((row) => row.getAttribute('aria-checked'))).to.deep.equal(['false', 'true', 'false']);
+  expect(rows[1]?.querySelector('.composer-effort-default')?.textContent).to.equal('Default');
+
+  // ArrowUp opens on the last level, Escape closes and returns focus to the trigger.
+  const trigger = composer.querySelector<HTMLButtonElement>('.composer-effort-trigger')!;
+  trigger.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowUp', bubbles: true}));
+  await composer.updateComplete;
+  expect(document.activeElement).to.equal(rows[2]);
+  rows[2]!.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+  await composer.updateComplete;
+  expect(composer.querySelector('.composer-effort-menu')?.hasAttribute('hidden')).to.equal(true);
+  expect(document.activeElement).to.equal(trigger);
+
+  // Choosing a level stores the caller's own override and carries it in the intent.
+  const intents: {effort: string | null}[] = [];
+  composer.addEventListener('dl-composer-submit', (event) => {
+    intents.push((event as CustomEvent<{effort: string | null}>).detail);
+  });
+  const input = composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = 'Compare both';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  effortRow(composer, 'max').click();
+  await composer.updateComplete;
+  expect(localStorage.getItem(AGENT_EFFORT_STORAGE_KEY)).to.equal('max');
+  expect(composer.querySelector('.composer-effort-label')?.textContent).to.equal('Max');
+  composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await composer.updateComplete;
+  expect(intents.at(-1)?.effort).to.equal('max');
+
+  // Fast answers run no agent turns: the control disappears and sends no effort.
+  composer.querySelector<HTMLButtonElement>('[data-mode="fast"]')!.click();
+  await composer.updateComplete;
+  expect(composer.querySelector('.composer-effort')).to.equal(null);
+  input.value = 'Quick one';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await composer.updateComplete;
+  expect(intents.at(-1)?.effort).to.equal(null);
+  expect(localStorage.getItem(AGENT_EFFORT_STORAGE_KEY)).to.equal('max');
+
+  // Returning to an agent mode restores the stored choice.
+  composer.querySelector<HTMLButtonElement>('[data-mode="auto"]')!.click();
+  await composer.updateComplete;
+  expect(composer.querySelector('.composer-effort-label')?.textContent).to.equal('Max');
+
+  composer.remove();
+  localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
+});
+
+it('Composer shows no effort picker when the deployment offers none', async () => {
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  composer.agentEffortOffer = {levels: [], default: null};
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+
+  expect(composer.querySelector('.composer-effort')).to.equal(null);
+  expect(composer.querySelector('.composer-mode')).to.not.equal(null);
+  composer.remove();
+});
+
+it('Composer starts unselected when the deployment default is not an offered level', async () => {
+  localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  composer.agentEffortOffer = {levels: ['low', 'high', 'max'], default: null};
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+
+  expect(composer.querySelector('.composer-effort-label')?.textContent).to.equal('Effort');
+  const rows = [...composer.querySelectorAll<HTMLButtonElement>('[data-effort]')];
+  expect(rows.map((row) => row.getAttribute('aria-checked'))).to.deep.equal(['false', 'false', 'false']);
+  expect(composer.querySelector('.composer-effort-default')).to.equal(null);
+
+  // A level the deployment dropped is never reused from storage.
+  localStorage.setItem(AGENT_EFFORT_STORAGE_KEY, 'xhigh');
+  const second = document.createElement('dl-chat-composer') as DlChatComposer;
+  second.attachmentPolicy = policy;
+  second.agentEffortOffer = {levels: ['low', 'high'] as const, default: 'low'};
+  document.body.appendChild(second);
+  await second.updateComplete;
+  expect(second.querySelector('.composer-effort-label')?.textContent).to.equal('Low');
+  expect(second.querySelectorAll('[data-effort]').length).to.equal(2);
+  second.remove();
+  composer.remove();
+  localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
 });
 
 it('Composer clears steering text without discarding attachments and detects wrapped drafts', async () => {

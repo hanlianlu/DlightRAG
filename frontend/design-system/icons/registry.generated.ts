@@ -223,6 +223,30 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "effort": {
+    source: "lucide",
+    sourceName: "gauge",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "m12 14 4-4"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M3.34 19a10 10 0 1 1 17.32 0"
+        }
+      ]
+    ]
+  },
   "files": {
     source: "lucide",
     sourceName: "folder",

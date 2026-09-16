@@ -42,25 +42,40 @@ test('the design-system row emphasises hover and keyboard focus', () => {
   assert.match(row, /padding-inline:\s*var\(--space-tight\)/);
 });
 
-test('the composer mode switcher emphasises its trigger, its rows, and the attach control', () => {
+test('both composer pickers emphasise their triggers, their rows, and the attach control', () => {
   const css = readFileSync(join(ROOT, 'styles', 'layout.css'), 'utf8');
 
-  assert.match(rule(css, '.composer-mode-trigger:hover'), /background:\s*var\(--color-bg-hover\)/);
+  // The effort control reuses the mode switcher's rules, so the two stay one
+  // visual definition; a new picker must join them rather than restate them.
   assert.match(
-    rule(css, '.composer-mode-trigger:focus-visible'),
-    /outline:\s*2px solid var\(--color-control-ring\)/,
-  );
-  assert.match(
-    rule(css, '.composer-mode-menu button:hover', '.composer-mode-menu button:focus-visible'),
+    rule(css, '.composer-mode-trigger:hover', '.composer-effort-trigger:hover'),
     /background:\s*var\(--color-bg-hover\)/,
   );
   assert.match(
-    rule(css, '.composer-mode-menu button:focus-visible'),
+    rule(css, '.composer-mode-trigger:focus-visible', '.composer-effort-trigger:focus-visible'),
+    /outline:\s*2px solid var\(--color-control-ring\)/,
+  );
+  assert.match(
+    rule(
+      css,
+      '.composer-mode-menu button:hover',
+      '.composer-mode-menu button:focus-visible',
+      '.composer-effort-menu button:hover',
+      '.composer-effort-menu button:focus-visible',
+    ),
+    /background:\s*var\(--color-bg-hover\)/,
+  );
+  assert.match(
+    rule(css, '.composer-mode-menu button:focus-visible', '.composer-effort-menu button:focus-visible'),
     /outline:\s*2px solid var\(--color-control-ring\)/,
   );
 
-  const chosen = rule(css, '.composer-mode-menu button[aria-checked=\'true\']');
-  const chosenHover = rule(css, '.composer-mode-menu button[aria-checked=\'true\']:hover');
+  const chosen = rule(css, ".composer-mode-menu button[aria-checked='true']", ".composer-effort-menu button[aria-checked='true']");
+  const chosenHover = rule(
+    css,
+    ".composer-mode-menu button[aria-checked='true']:hover",
+    ".composer-effort-menu button[aria-checked='true']:hover",
+  );
   assert.match(chosen, /background:\s*var\(--color-bg-elevated\)/);
   assert.match(chosenHover, /background:\s*var\(--color-bg-elevated\)/, 'the chosen row keeps it');
 

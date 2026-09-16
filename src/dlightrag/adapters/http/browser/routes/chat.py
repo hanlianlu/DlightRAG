@@ -190,6 +190,7 @@ async def start_answer_run(
             attachments=body.attachments,
             mode=mode,
             requested_skill=requested_skill,
+            effort=body.effort,
         )
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise _command_error(
