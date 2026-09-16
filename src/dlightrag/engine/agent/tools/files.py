@@ -464,12 +464,12 @@ def read_tool(
 
     url_enabled = resource_reader is not None
     description = (
-        "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id, or an "
+        "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
         "anonymous public HTTP(S) url. URL reads accept only optional http.user_agent, "
         "http.accept, and http.accept_language representation preferences; continue "
         "with the returned resource_id and cursor."
         if url_enabled
-        else "Read one workspace path or Host-provided durable resource_id."
+        else "Read one workspace path or Host-provided durable resource_id registered in this run."
     )
     guidance = (
         "read: one of path, resource_id, or url; file pages carry an offset while "
@@ -570,7 +570,7 @@ def view_tool(
 
     return AgentTool(
         name="view",
-        description="View pixels from exactly one registered resource, anonymous public URL, or workspace image path. PDF without locator returns a bounded overview; select a physical page for detail. No separate model is called.",
+        description="View pixels from exactly one resource registered in this run, anonymous public URL, or workspace image path. PDF without locator returns a bounded overview; select a physical page for detail. No separate model is called.",
         input_model=ViewArgs,
         execute=execute,
         replay_policy="replayable",

@@ -191,8 +191,9 @@ async def test_duplicate_occurrences_membership_inventory_and_snapshot_reuse(mon
         assert len(assets) == 12
         assert len({a.resource_id for a in assets}) == 12
         assert len({a.content for a in assets}) == 1
-        with pytest.raises(ResourceRegistryError, match="unknown visual handle"):
-            await call(view, resource_id=other, locator=assets[0].resource_id)
+        foreign = await call(view, resource_id=other, locator=assets[0].resource_id)
+        assert foreign.is_error is True
+        assert "unknown visual handle" in foreign.text_content
         cursor = result.text_content.split("more: read(")[1].split("cursor='")[1].split("'")[0]
         page = await call(read, resource_id=resource, cursor=cursor)
         assert "Visual inventory" in page.text_content
@@ -271,3 +272,25 @@ async def test_conversion_cancellation_does_not_overlap_native_work_or_cleanup(m
         await second
     assert len(calls) == 1
     await registry.aclose()
+
+
+async def test_a_handle_from_an_earlier_turn_is_a_typed_refusal_with_a_remedy():
+    """Resource ids and cursors belong to the run that registered them.
+
+    A follow-up run replays an earlier turn's images as attachments but never
+    registers its handles, so a tool call that reuses one must fail as an ordinary
+    typed refusal that names the rule and the way forward -- not as an unknown
+    internal failure that invites a retry.
+    """
+    async with ResourceRegistry() as registry:
+        registry.register(ResourceInput(filename="plot.png", content=png()))
+        read, view = tools(registry)
+
+        for result in (
+            await call(view, resource_id="res-earlier-turn"),
+            await call(read, resource_id="res-earlier-turn"),
+        ):
+            assert result.is_error is True
+            assert "res-earlier-turn" in result.text_content
+            assert "earlier turn" in result.text_content
+            assert "Re-attach" in result.text_content

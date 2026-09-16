@@ -26,7 +26,11 @@ from dlightrag.engine.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,
 )
-from dlightrag.engine.answer.resources.models import ResourceAdmissionError, TextWindowBudget
+from dlightrag.engine.answer.resources.models import (
+    ResourceAdmissionError,
+    ResourceNotFoundError,
+    TextWindowBudget,
+)
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.visual import (
     ResourceViewError,
@@ -34,6 +38,21 @@ from dlightrag.engine.answer.resources.visual import (
     render_pdf_page,
 )
 from dlightrag.engine.public_http import PublicHttpPresentation
+
+
+def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
+    """Name the one rule a reused handle breaks, and the way forward.
+
+    A follow-up run replays an earlier turn's images as attachments, but it never
+    registers that turn's ids or cursors: a handle is a capability of the run that
+    created it. Reporting that as a caller mistake keeps the model from retrying,
+    which an unknown internal failure would invite.
+    """
+    return (
+        f"{exc}. Resource ids and cursors belong to the run that registered them, so a "
+        "handle from an earlier turn is historical and cannot be read or viewed here. "
+        "Re-attach the document, or work from the images already replayed in this context."
+    )
 
 
 def make_resource_reader(registry: ResourceRegistry, text_window_budget: TextWindowBudget):
@@ -76,7 +95,13 @@ def make_resource_reader(registry: ResourceRegistry, text_window_budget: TextWin
             effects=effects,
         )
 
-    return read_registered
+    async def read(request: ResourceReadRequest, runtime: ToolRuntime) -> ToolResult:
+        try:
+            return await read_registered(request, runtime)
+        except ResourceNotFoundError as exc:
+            return ToolResult.text(_run_scoped_handle_refusal(exc), is_error=True)
+
+    return read
 
 
 def make_resource_viewer(registry: ResourceRegistry):
@@ -217,7 +242,13 @@ def make_resource_viewer(registry: ResourceRegistry):
             ),
         )
 
-    return view_registered
+    async def view(args: ViewArgs, runtime: ToolRuntime, prepare: ImagePreparer) -> ToolResult:
+        try:
+            return await view_registered(args, runtime, prepare)
+        except ResourceNotFoundError as exc:
+            return ToolResult.text(_run_scoped_handle_refusal(exc), is_error=True)
+
+    return view
 
 
 def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
