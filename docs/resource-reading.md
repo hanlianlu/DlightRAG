@@ -2,6 +2,8 @@
 
 Status: approved implementation contract. Implementation and evaluation results must be reported separately from these requirements.
 
+Scope note: [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md) is the accepted decision that revises the run-scoped reach of Resource ids (lineage adoption, per-Run handles with earlier handles kept as aliases, cursors staying run-local). This contract text is updated with that implementation, not before it. Until then a historical handle fails as a typed refusal.
+
 Scope: Answer Run attachments and Resources only. This change does not replace LightRAG corpus ingestion, expand admitted formats, or add local workspace PDF/Office conversion. The project is in development: remove superseded code and contracts, not compatibility aliases or legacy replay branches. This does not authorize deleting user data or unrelated VLM capabilities.
 
 ## Tool responsibilities
