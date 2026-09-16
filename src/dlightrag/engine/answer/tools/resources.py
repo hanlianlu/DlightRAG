@@ -37,6 +37,7 @@ from dlightrag.engine.answer.resources.lineage import (
 )
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
+    ResourceCursorError,
     ResourceNotFoundError,
     TextWindowBudget,
 )
@@ -52,17 +53,38 @@ logger = logging.getLogger(__name__)
 
 
 def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
-    """Name the one rule a reused handle breaks, and the way forward.
+    """Name the one rule an unusable handle breaks, and the way forward.
 
-    A follow-up run replays an earlier turn's images as attachments, but it never
-    registers that turn's ids or cursors: a handle is a capability of the run that
-    created it. Reporting that as a caller mistake keeps the model from retrying,
-    which an unknown internal failure would invite.
+    Adoption covers a handle this Session's lineage admits; everything else is a
+    caller mistake, and reporting it that way keeps the model from retrying, which
+    an unknown internal failure would invite.
     """
     return (
         f"{exc}. Resource ids and cursors belong to the run that registered them, so a "
         "handle from an earlier turn is historical and cannot be read or viewed here. "
         "Re-attach the document, or work from the images already replayed in this context."
+    )
+
+
+def _stale_cursor_refusal(exc: ResourceCursorError) -> str:
+    """Cursors are this Run's own view state, never a durable handle."""
+    return (
+        f"{exc}. A cursor continues this Run's own view of a Resource; read the resource "
+        "again for a current continuation."
+    )
+
+
+def _unconverted_refusal(filename: str) -> str:
+    """Reading an earlier document whose view this Session never built.
+
+    Converting it now would select a parser and produce a view the earlier Run never
+    recorded, so the model is told what is true instead: the pixels are adoptable,
+    the text is not.
+    """
+    return (
+        f"The earlier Run never extracted text from {filename}, so this Run will not "
+        "convert it again. View its pages for pixels, or re-read it from its URL or a "
+        "fresh attachment."
     )
 
 
@@ -73,18 +95,23 @@ async def _adopt_earlier_then_retry(
     lineage: LineageResourceLoader | None,
     registry: ResourceRegistry,
     refusal: str,
+    requires_stored_view: bool = False,
 ) -> ToolResult:
     """Give one earlier Run's handle the chance to become this Run's Resource.
 
     The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
     refusal. Adoption effects ride the retried call's own settlement, which is what
-    pins the adopted bytes under this Run before the model sees the content.
+    pins the adopted bytes under this Run before the model sees the content. A text
+    read additionally requires the earlier Run's own view, because converting the
+    document here would record a history that Run never had.
     """
     if lineage is None or not resource_id:
         return ToolResult.text(refusal, is_error=True)
     loaded = await lineage.load(resource_id)
     if loaded is None:
         return ToolResult.text(refusal, is_error=True)
+    if requires_stored_view and loaded.conversion_snapshot is None:
+        return ToolResult.text(_unconverted_refusal(loaded.filename), is_error=True)
     try:
         adopted = adopt_lineage_resource(registry, loaded)
     except LineageSnapshotError as exc:
@@ -92,11 +119,12 @@ async def _adopt_earlier_then_retry(
     logger.info(
         "Adopted an earlier Run Resource",
         extra={
-            "resource_id": adopted,
+            "resource_id": adopted.resource_id,
             "origin_resource_id": loaded.resource_id,
             "origin_run_id": loaded.origin_run_id,
             "filename": loaded.filename,
-            "reused_conversion_view": loaded.conversion_snapshot is not None,
+            "source_url": loaded.source_url,
+            "reused_conversion_view": adopted.snapshot is not None,
         },
     )
     effects = lineage_adoption_effects(loaded, adopted)
@@ -182,7 +210,10 @@ def make_resource_reader(
                 lineage=lineage,
                 registry=registry,
                 refusal=_run_scoped_handle_refusal(exc),
+                requires_stored_view=True,
             )
+        except ResourceCursorError as exc:
+            return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
 
     return read
 
@@ -338,6 +369,8 @@ def make_resource_viewer(
                 registry=registry,
                 refusal=_run_scoped_handle_refusal(exc),
             )
+        except ResourceCursorError as exc:
+            return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
 
     return view
 

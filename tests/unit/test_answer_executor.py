@@ -955,3 +955,73 @@ def test_public_document_citations_are_projected_into_the_published_artifact(
     # The descriptor addresses the projected bytes, not the pre-projection ones.
     assert descriptor["byte_size"] == len(publication.content)
     assert descriptor["digest"] == artifact_digest(publication.content)
+
+
+@pytest.mark.asyncio
+async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> None:
+    """An adopted Resource must survive a resume.
+
+    A Run that adopted an earlier Run's document pins it as its own fetch, so
+    recovery has to rebuild that Resource (and its earlier handle as alias) rather
+    than treat the row as a Web catalog entry it never was.
+    """
+    import hashlib
+
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    document = b"%PDF-1.7 adopted earlier"
+    snapshot = ConversionSnapshot(
+        resource_id="res-earlier",
+        input_digest=hashlib.sha256(document).hexdigest(),
+        text="Adopted text.",
+        visuals=(),
+        extraction_status="complete",
+        converter="fixture",
+        converter_version="1",
+    )
+    effects = snapshot.effects()
+    encoded = next(item.content for item in effects if item.resource_kind == "conversion_snapshot")
+    blobs = {
+        hashlib.sha256(document).hexdigest(): document,
+        hashlib.sha256(encoded).hexdigest(): encoded,
+    }
+    rows = (
+        RunFetchedResource(
+            resource_id="res-adopted",
+            ordinal=0,
+            digest=hashlib.sha256(document).hexdigest(),
+            filename="earlier.pdf",
+            mime_type="application/pdf",
+            source_locator=b"res-earlier",
+            capabilities={"resource_kind": "lineage_adoption", "resource_aliases": ["res-earlier"]},
+        ),
+        RunFetchedResource(
+            resource_id="res-earlier-conversion",
+            ordinal=0,
+            digest=hashlib.sha256(encoded).hexdigest(),
+            filename="conversion.json",
+            mime_type="application/json",
+            source_locator=b"res-earlier",
+            capabilities={"resource_kind": "conversion_snapshot"},
+        ),
+    )
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(return_value=rows)
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, kwargs
+        yield blobs[digest]
+
+    executor._blob_store.stream = stream
+
+    async with ResourceRegistry() as registry:
+        await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
+
+        adopted = registry.canonical_resource_id("res-earlier")
+        assert adopted.startswith("res-")
+        assert registry.canonical_resource_id("res-adopted") == adopted
+        assert registry.canonical_resource_id(adopted) == adopted
+        read = await registry.read(adopted, max_window_tokens=1000)
+        assert "Adopted text." in read.content

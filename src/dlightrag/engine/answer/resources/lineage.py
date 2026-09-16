@@ -15,14 +15,16 @@ refusal in place.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
 from dlightrag.engine.answer.resources.models import ResourceInput
-from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.resources.registry import (
+    ResourceRegistry,
+    ResourceStateMismatchError,
+)
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 
 LINEAGE_ADOPTION_KIND = "lineage_adoption"
@@ -71,7 +73,17 @@ class LineageSnapshotError(RuntimeError):
     """
 
 
-def adopt_lineage_resource(registry: ResourceRegistry, loaded: LineageResourceBytes) -> str:
+@dataclass(frozen=True, slots=True)
+class AdoptedLineageResource:
+    """This Run's canonical handle for adopted bytes, and the view adopted with them."""
+
+    resource_id: str
+    snapshot: ConversionSnapshot | None = None
+
+
+def adopt_lineage_resource(
+    registry: ResourceRegistry, loaded: LineageResourceBytes
+) -> AdoptedLineageResource:
     """Register the earlier bytes as this Run's Resource under the earlier handle.
 
     The returned id is this Run's canonical handle, and the handle the model used
@@ -85,80 +97,83 @@ def adopt_lineage_resource(registry: ResourceRegistry, loaded: LineageResourceBy
         ),
         aliases=(loaded.resource_id,),
     )
-    if loaded.conversion_snapshot is not None:
+    snapshot = _restore_snapshot(loaded)
+    if snapshot is not None:
         try:
-            snapshot = ConversionSnapshot.restore(loaded.conversion_snapshot, dict(loaded.assets))
-        except (KeyError, TypeError, ValueError) as exc:
+            registry.adopt_conversion_snapshot(snapshot)
+        except ResourceStateMismatchError as exc:
             raise LineageSnapshotError(
-                "the earlier Run's stored conversion view is unusable"
+                "the earlier Run's stored conversion view does not belong to these bytes"
             ) from exc
-        if snapshot.resource_id != loaded.resource_id:
-            raise LineageSnapshotError("conversion snapshot does not belong to this resource")
-        registry.adopt_conversion_snapshot(snapshot)
-    return adopted
+    return AdoptedLineageResource(adopted, snapshot)
+
+
+def _restore_snapshot(loaded: LineageResourceBytes) -> ConversionSnapshot | None:
+    """Decode the stored view, refusing rather than repairing a broken one."""
+    if loaded.conversion_snapshot is None:
+        return None
+    try:
+        snapshot = ConversionSnapshot.restore(loaded.conversion_snapshot, dict(loaded.assets))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LineageSnapshotError("the earlier Run's stored conversion view is unusable") from exc
+    if snapshot.resource_id != loaded.resource_id:
+        raise LineageSnapshotError("conversion snapshot does not belong to this resource")
+    return snapshot
 
 
 def lineage_adoption_effects(
-    loaded: LineageResourceBytes, adopted_resource_id: str
+    loaded: LineageResourceBytes, adopted: AdoptedLineageResource
 ) -> tuple[ResourceAttachmentBytes, ...]:
     """Pin the adopted bytes, snapshot, and assets under the consuming Run.
 
     Settlement writes these as this Run's own Resources, so origin-Run cleanup can
     never invalidate what this Run adopted, and recovery re-materializes them
-    through the same restore path a same-Run fetch already uses.
+    through the same restore path a same-Run fetch already uses. The adopted view
+    names its own assets, so nothing here re-reads the stored JSON.
     """
     effects = [
         ResourceAttachmentBytes(
-            resource_id=adopted_resource_id,
+            resource_id=adopted.resource_id,
             filename=loaded.filename,
             mime_type=loaded.media_type,
             source_locator=loaded.resource_id,
             content=loaded.content,
             resource_kind=LINEAGE_ADOPTION_KIND,
+            aliases=(loaded.resource_id,),
         )
     ]
-    if loaded.conversion_snapshot is None:
+    if adopted.snapshot is None or loaded.conversion_snapshot is None:
         return tuple(effects)
+    # The stored view keeps the identity the earlier Run recorded for it: recovery
+    # matches a snapshot to its parent by that identity, and this Run reaches the
+    # parent through the alias instead of renaming what the earlier Run wrote.
     effects.append(
         ResourceAttachmentBytes(
-            resource_id=f"{adopted_resource_id}-conversion",
+            resource_id=f"{loaded.resource_id}-conversion",
             filename="conversion.json",
             mime_type="application/json",
-            source_locator=adopted_resource_id,
+            source_locator=loaded.resource_id,
             content=loaded.conversion_snapshot,
             resource_kind=SNAPSHOT_KIND,
         )
     )
-    media_types = _snapshot_asset_media_types(loaded.conversion_snapshot)
     effects.extend(
         ResourceAttachmentBytes(
-            resource_id=asset_id,
-            filename=asset_id,
-            mime_type=media_types.get(asset_id, "application/octet-stream"),
-            source_locator=adopted_resource_id,
-            content=content,
+            resource_id=visual.handle_id,
+            filename=visual.handle_id,
+            mime_type=visual.media_type,
+            source_locator=loaded.resource_id,
+            content=visual.data,
             resource_kind=ASSET_KIND,
         )
-        for asset_id, content in sorted(loaded.assets.items())
+        for visual in adopted.snapshot.visuals
     )
     return tuple(effects)
 
 
-def _snapshot_asset_media_types(encoded: bytes) -> dict[str, str]:
-    """Asset media types as the adopted snapshot recorded them."""
-    payload = json.loads(encoded)
-    assets = payload.get("assets")
-    if not isinstance(assets, list):
-        raise ValueError("conversion snapshot assets are missing")
-    return {
-        str(asset["resource_id"]): str(asset.get("media_type") or "application/octet-stream")
-        for asset in assets
-        if isinstance(asset, dict) and isinstance(asset.get("resource_id"), str)
-    }
-
-
 __all__ = [
     "ASSET_KIND",
+    "AdoptedLineageResource",
     "LINEAGE_ADOPTION_KIND",
     "SNAPSHOT_KIND",
     "LineageResourceBytes",

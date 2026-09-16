@@ -303,6 +303,9 @@ def _build_effect_host_update(
                         "visual_source": asdict(attached.source)
                         if attached.source is not None
                         else None,
+                        **(
+                            {"resource_aliases": list(attached.aliases)} if attached.aliases else {}
+                        ),
                     },
                     blob_digest=digest,
                     source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),

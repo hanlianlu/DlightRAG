@@ -96,6 +96,9 @@ from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
 
 RUN_MIGRATION_SCOPE = "runs"
 
+# Resource kinds a later Run may adopt from an earlier Run on the same Session.
+_ADOPTABLE_RESOURCE_KINDS = frozenset({"web", "tool_attachment"})
+
 
 def _parse_uuid(value: str) -> uuid.UUID | None:
     try:
@@ -2198,9 +2201,9 @@ FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND session_id = $2 AND blob_digest IS NOT NULL
   AND (
       (resource_id = $3 AND kind = 'fetched_blob'
-       AND capabilities->>'resource_kind' IN ('web', 'tool_attachment'))
+       AND capabilities->>'resource_kind' = ANY($5::text[]))
       OR (source_locator = $4::bytea AND kind = 'fetched_blob'
-          AND capabilities->>'resource_kind' IN ('conversion_snapshot', 'conversion_asset'))
+          AND capabilities->>'resource_kind' = ANY(ARRAY['conversion_snapshot', 'conversion_asset']))
   )
 ORDER BY (resource_id = $3) DESC, resource_id
 FOR SHARE
@@ -3399,7 +3402,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
 
         return await self._run_read(_operation)
 
-    async def lineage_resource(
+    async def lineage_resource_rows(
         self, *, owner_id: str, session_id: str, resource_id: str
     ) -> tuple[RunFetchedResource, ...]:
         """Read one earlier Run Resource this Session may adopt, with its view.
@@ -3420,6 +3423,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 session_uuid,
                 resource_id,
                 resource_id.encode("utf-8"),
+                sorted(_ADOPTABLE_RESOURCE_KINDS),
             )
             return tuple(
                 RunFetchedResource(

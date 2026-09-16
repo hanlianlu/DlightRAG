@@ -89,6 +89,8 @@ class ResourceAttachmentBytes:
     content: bytes
     resource_kind: str = "tool_attachment"
     source: VisualSource | None = None
+    """Another durable handle these bytes are already known by, when one exists."""
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

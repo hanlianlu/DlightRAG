@@ -163,8 +163,9 @@ async def test_pdf_overview_actual_coverage_aggregate_budget_and_signed_recovery
         (attachment,) = tool_content_attachments(second.parts)
         assert attachment.source is not None
         assert attachment.source.page == 2
-        with pytest.raises(ResourceRegistryError):
-            await call(view, resource_id=resource, cursor=cursor + "x")
+        tampered = await call(view, resource_id=resource, cursor=cursor + "x")
+        assert tampered.is_error is True
+        assert "read the resource again for a current continuation" in tampered.text_content
 
 
 def docx_images(count):

@@ -127,9 +127,10 @@ async def test_adopts_an_earlier_runs_document_and_its_stored_view() -> None:
             from dlightrag.engine.answer.resources.lineage import adopt_lineage_resource
 
             adopted = adopt_lineage_resource(registry, loaded)
-            assert adopted != "res-earlier-document"
-            assert registry.canonical_resource_id("res-earlier-document") == adopted
-            text = await registry.read(adopted, max_window_tokens=1000)
+            assert adopted.resource_id != "res-earlier-document"
+            assert registry.canonical_resource_id("res-earlier-document") == adopted.resource_id
+            assert adopted.snapshot is not None
+            text = await registry.read(adopted.resource_id, max_window_tokens=1000)
             assert "Text the earlier run already extracted." in text.content
 
 
@@ -155,12 +156,12 @@ async def test_the_session_stamp_decides_admission() -> None:
 
         # Only the document and its own view rows come back: no unrelated Resource
         # of the same Session can be reached by naming it.
-        rows = await store.lineage_resource(
+        rows = await store.lineage_resource_rows(
             owner_id=OWNER, session_id=session_id, resource_id="res-unrelated"
         )
         assert rows == ()
 
-        document_rows = await store.lineage_resource(
+        document_rows = await store.lineage_resource_rows(
             owner_id=OWNER, session_id=session_id, resource_id="res-earlier-document"
         )
         kinds = {str(row.capabilities.get("resource_kind")) for row in document_rows}

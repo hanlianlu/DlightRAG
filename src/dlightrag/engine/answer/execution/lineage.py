@@ -9,8 +9,10 @@ nothing here reads message text or accepts a handle on trust.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
-from typing import Protocol
+import hashlib
+import logging
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
@@ -19,21 +21,20 @@ from dlightrag.engine.answer.resources.lineage import (
 )
 from dlightrag.engine.runtime.records import RunFetchedResource
 
+if TYPE_CHECKING:
+    from dlightrag.engine.answer.execution.executor import RunBlobReader
+
+logger = logging.getLogger(__name__)
+
 _ADOPTABLE_KINDS = frozenset({"web", "tool_attachment"})
 
 
 class LineageResourceStore(Protocol):
     """The one durable read lineage adoption needs, already Session-scoped."""
 
-    async def lineage_resource(
+    async def lineage_resource_rows(
         self, *, owner_id: str, session_id: str, resource_id: str
     ) -> tuple[RunFetchedResource, ...]: ...
-
-
-class BlobReader(Protocol):
-    """Stream one owner-scoped Blob by digest."""
-
-    def stream(self, *, owner_id: str, digest: str) -> AsyncIterator[bytes]: ...
 
 
 class RetainedResourceLoader:
@@ -43,7 +44,7 @@ class RetainedResourceLoader:
         self,
         *,
         store: LineageResourceStore,
-        blobs: BlobReader,
+        blobs: RunBlobReader,
         owner_id: str,
         session_id: str,
     ) -> None:
@@ -53,7 +54,7 @@ class RetainedResourceLoader:
         self._session_id = session_id
 
     async def load(self, resource_id: str) -> LineageResourceBytes | None:
-        rows = await self._store.lineage_resource(
+        rows = await self._store.lineage_resource_rows(
             owner_id=self._owner_id,
             session_id=self._session_id,
             resource_id=resource_id,
@@ -70,29 +71,45 @@ class RetainedResourceLoader:
         )
         if source is None:
             return None
+        content = await self._read(source.digest)
+        if content is None:
+            return None
         snapshot_row = _first(rows, SNAPSHOT_KIND)
         return LineageResourceBytes(
             resource_id=resource_id,
             origin_run_id=_origin_run_id(source),
             filename=source.filename or resource_id,
             media_type=source.mime_type or "application/octet-stream",
-            content=await self._read(source.digest),
+            content=content,
             conversion_snapshot=(
                 await self._read(snapshot_row.digest) if snapshot_row is not None else None
             ),
             assets={
-                row.resource_id: await self._read(row.digest)
+                row.resource_id: asset
                 for row in rows
                 if _resource_kind(row) == ASSET_KIND and row.digest
+                for asset in (await self._read(row.digest),)
+                if asset is not None
             },
             source_url=_source_url(source),
         )
 
-    async def _read(self, digest: str) -> bytes:
+    async def _read(self, digest: str) -> bytes | None:
+        """Read one retained Blob, or nothing when those bytes are no longer there.
+
+        Retention is what makes an earlier Run's Resource adoptable, so absent or
+        altered bytes refuse the adoption instead of failing the tool internally.
+        """
         pieces = [
             piece async for piece in self._blobs.stream(owner_id=self._owner_id, digest=digest)
         ]
-        return b"".join(pieces)
+        content = b"".join(pieces)
+        if not content:
+            return None
+        if hashlib.sha256(content).hexdigest() != digest:
+            logger.warning("Adoptable Resource bytes no longer match their recorded digest")
+            return None
+        return content
 
 
 def _resource_kind(row: RunFetchedResource) -> str:
@@ -118,4 +135,4 @@ def _source_url(row: RunFetchedResource) -> str | None:
     return decoded if decoded.startswith(("http://", "https://")) else None
 
 
-__all__ = ["BlobReader", "LineageResourceStore", "RetainedResourceLoader"]
+__all__ = ["LineageResourceStore", "RetainedResourceLoader"]

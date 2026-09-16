@@ -285,9 +285,9 @@ class ArtifactReader(Protocol):
 
 
 class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
-    """Executor store: artifacts, selected attachment retention and fenced routing."""
+    """Executor store: artifacts, fenced routing, and one Session-scoped lineage read."""
 
-    async def lineage_resource(
+    async def lineage_resource_rows(
         self,
         *,
         owner_id: str,
@@ -2245,21 +2245,26 @@ class AnswerExecutor:
                 raise ValueError("durable resource blob digest mismatch")
             capabilities = resource.capabilities
             attachment_snapshots[resource.resource_id] = content
-            if capabilities.get("resource_kind") == "conversion_snapshot":
+            kind = capabilities.get("resource_kind")
+            if kind == "conversion_snapshot":
                 conversions.append((resource.source_locator.decode(), content))
                 continue
-            if capabilities.get("resource_kind") in {"tool_attachment", "conversion_asset"}:
+            if kind in {"tool_attachment", "conversion_asset"}:
                 continue
-            raw_aliases = capabilities.get("resource_aliases", [])
-            if (
-                not isinstance(raw_aliases, list)
-                or len(raw_aliases) > 64
-                or not all(isinstance(alias, str) for alias in raw_aliases)
-            ):
-                raise RunExecutionError(
-                    "run_execution_failed",
-                    "A durable Web resource catalog entry is invalid.",
+            raw_aliases = _resource_aliases(capabilities)
+            if kind == "lineage_adoption":
+                # An adopted Resource: this Run's own fetch of an earlier Run's bytes.
+                # The minted handle and the recorded one both stay resolvable, because
+                # the model may be holding either after a resume.
+                registry.register(
+                    ResourceInput(
+                        filename=resource.filename,
+                        declared_mime=resource.mime_type,
+                        content=content,
+                    ),
+                    aliases=(resource.resource_id, *raw_aliases),
                 )
+                continue
             origin = str(capabilities.get("admission_origin") or "")
             if origin not in {"caller", "search", "agent"}:
                 raise RunExecutionError(
@@ -2511,6 +2516,21 @@ def _durable_fast_compaction_trace(snapshot: Any) -> dict[str, Any]:
             "first_retained_sequence": projection.first_retained_sequence,
         },
     }
+
+
+def _resource_aliases(capabilities: Mapping[str, Any]) -> tuple[str, ...]:
+    """Validate the earlier durable handles one restored Resource carries."""
+    raw = capabilities.get("resource_aliases", [])
+    if (
+        not isinstance(raw, list)
+        or len(raw) > 64
+        or not all(isinstance(alias, str) for alias in raw)
+    ):
+        raise RunExecutionError(
+            "run_execution_failed",
+            "A durable Web resource catalog entry is invalid.",
+        )
+    return tuple(raw)
 
 
 async def _reserve_agent_session_boundary(

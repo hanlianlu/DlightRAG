@@ -146,6 +146,19 @@ async def test_read_adopts_an_earlier_handle_and_reuses_its_stored_text(monkeypa
         assert ASSET_KIND in kinds
         ids = [effect.resource_id for effect in result.effects.attached_resources]
         assert len(ids) == len(set(ids)), "each adopted Resource settles once"
+        source = next(
+            effect
+            for effect in result.effects.attached_resources
+            if effect.resource_kind == LINEAGE_ADOPTION_KIND
+        )
+        assert source.aliases == (EARLIER_HANDLE,), "the earlier handle is recorded, not only bound"
+        snapshot_effect = next(
+            effect
+            for effect in result.effects.attached_resources
+            if effect.resource_kind == SNAPSHOT_KIND
+        )
+        assert snapshot_effect.resource_id == f"{EARLIER_HANDLE}-conversion"
+        assert snapshot_effect.source_locator == EARLIER_HANDLE
         assert registry.canonical_resource_id(EARLIER_HANDLE) != EARLIER_HANDLE
 
         second = await call(read, resource_id=EARLIER_HANDLE)
@@ -174,6 +187,26 @@ async def test_view_adopts_an_earlier_image_without_any_snapshot() -> None:
         assert "tool_attachment" in kinds, "the viewed pixels stay a tool attachment"
         restored = decode_tool_content(encode_tool_content(result.parts))
         assert any(part for part in restored if part.type == "resource_attachment")
+
+
+async def test_reading_a_document_the_earlier_run_never_converted_refuses(monkeypatch) -> None:
+    """Text needs the earlier Run's own view; converting it here would invent one."""
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("adoption must not run parser selection")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", forbidden)
+    lineage = Loader(adopted_document(with_snapshot=False))
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+
+        refused = await call(read, resource_id=EARLIER_HANDLE)
+        assert refused.is_error is True
+        assert "never extracted text" in refused.text_content
+        assert "View its pages" in refused.text_content
+        assert lineage.reads == 1
+        # Pixels need no stored view; that path is covered by the image adoption test,
+        # which can only view a target the registry can actually render.
 
 
 async def test_an_unauthorized_handle_keeps_the_typed_refusal() -> None:
