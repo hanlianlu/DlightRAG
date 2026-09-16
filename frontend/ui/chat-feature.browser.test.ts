@@ -765,6 +765,59 @@ it('Composer offers only bootstrap levels, remembers the choice, and hides effor
   localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
 });
 
+it('Composer pickers share one keyboard contract for their menus', async () => {
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  composer.agentEffortOffer = {levels: ['low', 'high', 'max'], default: 'high'};
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+
+  // Keys come from the focused row, exactly as a keyboard user produces them.
+  const key = async (name: string): Promise<void> => {
+    (document.activeElement as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', {key: name, bubbles: true, composed: true}),
+    );
+    await composer.updateComplete;
+  };
+  const row = (mode: string) => composer.querySelector<HTMLButtonElement>(`[data-mode="${mode}"]`)!;
+  const trigger = composer.querySelector<HTMLButtonElement>('.composer-mode-trigger')!;
+  expect(composer.querySelector('.composer-mode-menu')?.hasAttribute('hidden')).to.equal(true);
+
+  // The mode switcher was the only picker before this change and had no keyboard
+  // coverage; both now run the same Arrow/Home/End/Escape step.
+  trigger.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
+  await composer.updateComplete;
+  expect(document.activeElement).to.equal(row('auto'), 'ArrowDown opens on the first mode');
+  await key('ArrowDown');
+  expect(document.activeElement).to.equal(row('fast'));
+  await key('End');
+  expect(document.activeElement).to.equal(row('research'));
+  await key('ArrowDown');
+  expect(document.activeElement).to.equal(row('auto'), 'ArrowDown wraps');
+  await key('Home');
+  expect(document.activeElement).to.equal(row('auto'));
+  await key('ArrowUp');
+  expect(document.activeElement).to.equal(row('research'), 'ArrowUp wraps backwards');
+
+  // An unrelated key leaves the row where it is instead of moving the selection.
+  await key('x');
+  expect(document.activeElement).to.equal(row('research'));
+
+  await key('Escape');
+  expect(composer.querySelector('.composer-mode-menu')?.hasAttribute('hidden')).to.equal(true);
+  expect(document.activeElement).to.equal(trigger);
+
+  // Closing from the trigger keeps the menu closed.
+  trigger.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowUp', bubbles: true}));
+  await composer.updateComplete;
+  expect(document.activeElement).to.equal(row('research'), 'ArrowUp opens on the last mode');
+  composer.querySelector<HTMLButtonElement>('.composer-mode-trigger')!.click();
+  await composer.updateComplete;
+  expect(composer.querySelector('.composer-mode-menu')?.hasAttribute('hidden')).to.equal(true);
+
+  composer.remove();
+});
+
 it('Composer shows no effort picker when the deployment offers none', async () => {
   const composer = document.createElement('dl-chat-composer') as DlChatComposer;
   composer.attachmentPolicy = policy;

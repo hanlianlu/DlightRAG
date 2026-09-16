@@ -61,6 +61,15 @@ export interface ComposerWorkspaceDropDetail {
   folderName: string | null;
 }
 
+/** The radio-menu row one Arrow/Home/End key moves to; null when the key is not ours. */
+function menuStep(key: string, index: number, count: number): number | null {
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  if (key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'ArrowUp') return (index - 1 + count) % count;
+  return null;
+}
+
 function storedMode(): AnswerMode | null {
   try {
     const value = localStorage.getItem(STORAGE_KEY);
@@ -632,21 +641,16 @@ export class DlChatComposer extends LightElement {
 
   #effortMenuKeydown = (event: KeyboardEvent): void => {
     const levels = offeredLevels(this.agentEffortOffer);
-    const target = event.target as HTMLButtonElement;
-    const index = levels.indexOf(target.dataset.effort as AgentEffort);
     if (event.key === 'Escape') {
       event.preventDefault();
       this.effortOpen = false;
       this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
       return;
     }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const target = event.target as HTMLButtonElement;
+    const next = menuStep(event.key, levels.indexOf(target.dataset.effort as AgentEffort), levels.length);
+    if (next === null) return;
     event.preventDefault();
-    let next = index;
-    if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = levels.length - 1;
-    else if (event.key === 'ArrowDown') next = (index + 1) % levels.length;
-    else next = (index - 1 + levels.length) % levels.length;
     this.#focusEffort(levels[next]);
   };
 
@@ -681,21 +685,16 @@ export class DlChatComposer extends LightElement {
   };
 
   #modeMenuKeydown = (event: KeyboardEvent): void => {
-    const target = event.target as HTMLButtonElement;
-    const index = MODES.indexOf(target.dataset.mode as AnswerMode);
     if (event.key === 'Escape') {
       event.preventDefault();
       this.modeOpen = false;
       this.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.focus();
       return;
     }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const target = event.target as HTMLButtonElement;
+    const next = menuStep(event.key, MODES.indexOf(target.dataset.mode as AnswerMode), MODES.length);
+    if (next === null) return;
     event.preventDefault();
-    let next = index;
-    if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = MODES.length - 1;
-    else if (event.key === 'ArrowDown') next = (index + 1) % MODES.length;
-    else next = (index - 1 + MODES.length) % MODES.length;
     this.#focusMode(MODES[next]);
   };
 
