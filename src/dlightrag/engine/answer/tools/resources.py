@@ -108,9 +108,23 @@ async def _adopt_earlier_then_retry(
         result,
         effects=replace(
             result.effects,
-            attached_resources=(*result.effects.attached_resources, *effects),
+            attached_resources=_settled_once(result.effects.attached_resources, effects),
         ),
     )
+
+
+def _settled_once(
+    first: tuple[ResourceAttachmentBytes, ...], then: tuple[ResourceAttachmentBytes, ...]
+) -> tuple[ResourceAttachmentBytes, ...]:
+    """Keep one settlement entry per Resource, preferring the tool's own.
+
+    A view of an adopted document names the same stored snapshot the adoption
+    pinned, and settling it twice would write the same bytes twice for no gain.
+    """
+    seen = {effect.resource_id: effect for effect in then}
+    for effect in first:
+        seen[effect.resource_id] = effect
+    return tuple(seen.values())
 
 
 def make_resource_reader(

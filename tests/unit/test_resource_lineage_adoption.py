@@ -144,6 +144,8 @@ async def test_read_adopts_an_earlier_handle_and_reuses_its_stored_text(monkeypa
         assert LINEAGE_ADOPTION_KIND in kinds
         assert SNAPSHOT_KIND in kinds
         assert ASSET_KIND in kinds
+        ids = [effect.resource_id for effect in result.effects.attached_resources]
+        assert len(ids) == len(set(ids)), "each adopted Resource settles once"
         assert registry.canonical_resource_id(EARLIER_HANDLE) != EARLIER_HANDLE
 
         second = await call(read, resource_id=EARLIER_HANDLE)
