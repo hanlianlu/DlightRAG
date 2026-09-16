@@ -691,8 +691,8 @@ admission limit rejects later admission with HTTP 503. Corpus Mutation admission
 uses its independent 1,000-Run limit and the same pre-insert 503 behavior. REST,
 MCP, and same-origin browser commands report the retriable message
 `Deployment-wide nonterminal admission limit reached`. The controlled failure
-and admission-limit evidence is linked from the
-[Slice 6 validation report](validation/run-runtime-slice-6.md). Queue residence
+and admission-limit evidence is recorded with the
+[RunRuntime targets](run-runtime-and-scaling-target.md#captured-local-load-evidence). Queue residence
 has no application timeout. Top-level Retrieval applies
 `corpus.retrieval.timeout` only during claimed
 execution and reports `retrieval_timeout` terminally. Explicit transient corpus

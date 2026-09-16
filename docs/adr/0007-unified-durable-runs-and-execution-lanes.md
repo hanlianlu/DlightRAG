@@ -4,7 +4,7 @@
 
 Accepted, implemented, and validated for the documented local control-plane evidence. Slice 1 established common
 Runtime and Answer, Slice 2 added top-level Retrieval, Slice 5 moved Corpus
-Mutation onto the same RunRuntime, and the [Slice 6 validation](../validation/run-runtime-slice-6.md)
+Mutation onto the same RunRuntime, and the [captured local campaign](../run-runtime-and-scaling-target.md#captured-local-load-evidence)
 confirms the local worker bounds, the Corpus Mutation admission limit, and
 failure behavior. The 30,000 Query limit remains a configured default/target,
 not a reached load-test boundary.

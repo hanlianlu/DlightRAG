@@ -4,8 +4,8 @@
 
 Accepted, implemented, and fault-validated for the current PostgreSQL Adapter
 family and its purpose-built cross-owner transaction seams. The
-[Slice 6 matrix](../validation/run-runtime-slice-6.md) includes controlled
-accept, claim, heartbeat, authorization, and readiness failures.
+`runtime-faults` gate includes controlled accept, claim, heartbeat,
+authorization, and readiness failures.
 
 ## Context
 

@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted and implemented in Slice 4. The [Slice 6 validation](../validation/run-runtime-slice-6.md)
-adds supported PostgreSQL 18 observable delete-convergence evidence without
-claiming storage-neutral proof of LightRAG internals.
+Accepted and implemented in Slice 4. The `runtime-pg18` gate adds supported
+PostgreSQL 18 observable delete-convergence evidence without claiming
+storage-neutral proof of LightRAG internals.
 
 ## Context
 

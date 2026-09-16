@@ -4,8 +4,8 @@
 
 Accepted, implemented, and fault-validated. The Product Document visibility
 barrier and durable Corpus Mutation Run lifecycle are implemented; the
-[Slice 6 matrix](../validation/run-runtime-slice-6.md) records phase-boundary,
-repair, and supported PostgreSQL 18 convergence evidence.
+`runtime-faults` and `runtime-pg18` gates record phase-boundary, repair, and
+supported PostgreSQL 18 convergence evidence.
 
 ## Context
 

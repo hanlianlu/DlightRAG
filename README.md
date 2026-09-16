@@ -238,8 +238,7 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [Interfaces](docs/interfaces.md) | Python, REST, MCP, and Web contracts |
 | [Retrieval and Answer](docs/retrieval-answer.md) | Retrieval, fusion, rerank, packing, citations, highlights |
 | [RunRuntime and Durable Execution](docs/durable-answer-runs.md) | Common Query and Corpus Mutation state machine, leases, events, recovery, retention |
-| [RunRuntime and Scaling Target](docs/run-runtime-and-scaling-target.md) | Accepted workload model, lane bounds, lifecycle guarantees, and ownership boundary |
-| [RunRuntime Slice 6 Validation](docs/validation/run-runtime-slice-6.md) | Failure matrix, reproducible commands, 10k control-plane evidence, accepted bounds, limitations |
+| [RunRuntime and Scaling Target](docs/run-runtime-and-scaling-target.md) | Accepted workload model, lane bounds, lifecycle guarantees, captured 10k control-plane evidence, and ownership boundary |
 | [Security](docs/security.md) | Authentication, authorization, ingress and content boundaries |
 | [PostgreSQL](docs/postgresql.md) | PostgreSQL requirements, schema ownership, tuning |
 | [Operations](docs/operations.md) | Executable runbooks and recovery workflows |

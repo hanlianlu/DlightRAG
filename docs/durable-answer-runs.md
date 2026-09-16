@@ -67,10 +67,9 @@ process; Corpus Mutation defaults to two workers per writer process. Multiple
 processes contribute additive local slots, while PostgreSQL row locks prevent a
 Run from being double-claimed. Deployment configuration owns process count and
 total active Run capacity. Model-provider and LightRAG pipeline concurrency are
-independent from both Run lanes. The [Slice 6 validation
-report](validation/run-runtime-slice-6.md) records the failure matrix,
-admission-limit rejection, single-process occupancy, 10k-client measurements,
-broad survival thresholds, and limitations.
+independent from both Run lanes. The failure matrix, admission-limit rejection,
+single-process occupancy, 10k-client measurements, broad survival thresholds,
+and their limitations are recorded as [captured local load evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence).
 
 A free worker claims the oldest eligible queued or expired-running row with
 `FOR UPDATE SKIP LOCKED`. It sweeps bounded batches at startup, after local

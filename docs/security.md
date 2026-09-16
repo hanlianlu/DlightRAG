@@ -176,7 +176,7 @@ saturation, up to the deployment-wide Query-lane nonterminal admission limit
 writer process executes at most two Corpus Mutations concurrently by default;
 deployment configuration owns process count and total active capacity. The
 controlled admission-limit, authorization, sanitation, and 10k-client evidence
-is recorded in the [Slice 6 validation report](validation/run-runtime-slice-6.md).
+is recorded with the [RunRuntime targets](run-runtime-and-scaling-target.md#captured-local-load-evidence).
 Monitor PostgreSQL/blob growth and rate-limit acceptance before either admission
 limit.
 `none` and `simple` collapse callers into one deployment owner and require an
