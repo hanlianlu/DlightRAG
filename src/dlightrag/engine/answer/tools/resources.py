@@ -6,7 +6,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
+from functools import partial
 
 from dlightrag.engine.agent.tool_content import (
     ToolResourceAttachmentPart,
@@ -26,6 +29,12 @@ from dlightrag.engine.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,
 )
+from dlightrag.engine.answer.resources.lineage import (
+    LineageResourceLoader,
+    LineageSnapshotError,
+    adopt_lineage_resource,
+    lineage_adoption_effects,
+)
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
     ResourceNotFoundError,
@@ -38,6 +47,8 @@ from dlightrag.engine.answer.resources.visual import (
     render_pdf_page,
 )
 from dlightrag.engine.public_http import PublicHttpPresentation
+
+logger = logging.getLogger(__name__)
 
 
 def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
@@ -55,7 +66,59 @@ def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
     )
 
 
-def make_resource_reader(registry: ResourceRegistry, text_window_budget: TextWindowBudget):
+async def _adopt_earlier_then_retry(
+    retry: Callable[[], Awaitable[ToolResult]],
+    *,
+    resource_id: str | None,
+    lineage: LineageResourceLoader | None,
+    registry: ResourceRegistry,
+    refusal: str,
+) -> ToolResult:
+    """Give one earlier Run's handle the chance to become this Run's Resource.
+
+    The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
+    refusal. Adoption effects ride the retried call's own settlement, which is what
+    pins the adopted bytes under this Run before the model sees the content.
+    """
+    if lineage is None or not resource_id:
+        return ToolResult.text(refusal, is_error=True)
+    loaded = await lineage.load(resource_id)
+    if loaded is None:
+        return ToolResult.text(refusal, is_error=True)
+    try:
+        adopted = adopt_lineage_resource(registry, loaded)
+    except LineageSnapshotError as exc:
+        return ToolResult.text(f"{exc}; the document was not converted again.", is_error=True)
+    logger.info(
+        "Adopted an earlier Run Resource",
+        extra={
+            "resource_id": adopted,
+            "origin_resource_id": loaded.resource_id,
+            "origin_run_id": loaded.origin_run_id,
+            "filename": loaded.filename,
+            "reused_conversion_view": loaded.conversion_snapshot is not None,
+        },
+    )
+    effects = lineage_adoption_effects(loaded, adopted)
+    try:
+        result = await retry()
+    except ResourceNotFoundError:
+        return ToolResult.text(refusal, is_error=True)
+    return replace(
+        result,
+        effects=replace(
+            result.effects,
+            attached_resources=(*result.effects.attached_resources, *effects),
+        ),
+    )
+
+
+def make_resource_reader(
+    registry: ResourceRegistry,
+    text_window_budget: TextWindowBudget,
+    *,
+    lineage: LineageResourceLoader | None = None,
+):
     async def read_registered(request: ResourceReadRequest, runtime: ToolRuntime) -> ToolResult:
         resource_id = request.resource_id
         if resource_id is None:
@@ -99,12 +162,20 @@ def make_resource_reader(registry: ResourceRegistry, text_window_budget: TextWin
         try:
             return await read_registered(request, runtime)
         except ResourceNotFoundError as exc:
-            return ToolResult.text(_run_scoped_handle_refusal(exc), is_error=True)
+            return await _adopt_earlier_then_retry(
+                partial(read_registered, request, runtime),
+                resource_id=request.resource_id,
+                lineage=lineage,
+                registry=registry,
+                refusal=_run_scoped_handle_refusal(exc),
+            )
 
     return read
 
 
-def make_resource_viewer(registry: ResourceRegistry):
+def make_resource_viewer(
+    registry: ResourceRegistry, *, lineage: LineageResourceLoader | None = None
+):
     async def view_registered(
         args: ViewArgs, runtime: ToolRuntime, prepare: ImagePreparer
     ) -> ToolResult:
@@ -246,7 +317,13 @@ def make_resource_viewer(registry: ResourceRegistry):
         try:
             return await view_registered(args, runtime, prepare)
         except ResourceNotFoundError as exc:
-            return ToolResult.text(_run_scoped_handle_refusal(exc), is_error=True)
+            return await _adopt_earlier_then_retry(
+                partial(view_registered, args, runtime, prepare),
+                resource_id=args.resource_id,
+                lineage=lineage,
+                registry=registry,
+                refusal=_run_scoped_handle_refusal(exc),
+            )
 
     return view
 

@@ -232,8 +232,8 @@ class ResourceRegistry:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    def register(self, resource: ResourceInput) -> str:
-        return self._register(resource, admission_origin="caller")
+    def register(self, resource: ResourceInput, *, aliases: tuple[str, ...] = ()) -> str:
+        return self._register(resource, admission_origin="caller", aliases=aliases)
 
     def register_discovered_link(self, url: str) -> str | None:
         """Register one inert search-discovered public link outside caller count."""
@@ -263,6 +263,7 @@ class ResourceRegistry:
         *,
         admission_origin: Literal["caller", "search", "agent"],
         presentation: PublicHttpPresentation = PublicHttpPresentation(),
+        aliases: tuple[str, ...] = (),
     ) -> str:
         self._ensure_open()
         filename = resource.filename
@@ -335,6 +336,8 @@ class ResourceRegistry:
                     registered.url = normalize_public_http_url_identity(resource.url)
                 if resource.filename:
                     registered.filename = safe_source_filename(resource.filename)
+            for alias in aliases:
+                self._bind_alias(alias, existing)
             return existing
 
         if byte_size is not None and self._total_bytes + byte_size > (
@@ -375,7 +378,25 @@ class ResourceRegistry:
         self._ids_by_dedup[dedup_key] = resource_id
         if byte_size is not None:
             self._total_bytes += byte_size
+        for alias in aliases:
+            self._bind_alias(alias, resource_id)
         return resource_id
+
+    def _bind_alias(self, alias: str, canonical: str) -> None:
+        """Point one earlier durable handle at this Run's canonical Resource.
+
+        Aliases only ever name bytes this Run already holds, so following one can
+        never reach content the Run did not adopt; a collision is therefore a state
+        mismatch rather than a silent rebind.
+        """
+        if not alias.startswith("res-") or alias == canonical:
+            return
+        bound = self._aliases.get(alias)
+        if bound is not None and self._canonical_resource_id(bound) != canonical:
+            raise ResourceStateMismatchError("Resource alias collides with another Resource")
+        if alias in self._resources:
+            raise ResourceStateMismatchError("Resource alias collides with another Resource")
+        self._aliases[alias] = canonical
 
     def canonical_resource_id(self, resource_id: str) -> str:
         """Return the durable canonical handle for a known Resource alias."""
