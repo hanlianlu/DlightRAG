@@ -278,7 +278,7 @@ A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Age
 _Avoid_: Web Search result, URL attachment, raw URL, Bash output
 
 **Resource Handle**:
-An opaque owner/run-scoped identity through which prepared, fetched, evidence-backed, or spilled content remains addressable across recovery.
+An opaque owner/run-scoped identity through which prepared, fetched, evidence-backed, or spilled content remains addressable across recovery. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle and the earlier handle stays readable only as its alias.
 _Avoid_: File path, URL, blob id
 
 **Blob**:

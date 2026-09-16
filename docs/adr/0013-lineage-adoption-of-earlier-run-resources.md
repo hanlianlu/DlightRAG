@@ -4,7 +4,7 @@ A later Answer Run on the same Agent Session may re-materialize a Resource an ea
 
 ## Status
 
-Accepted, implementation sliced S2–S5 and not yet landed. `bfc1c5ae` (a reused historical handle fails as a typed refusal) and `c4ee5f5b` (an attachment image may not cut a tool batch) are the landed prerequisites. This ADR narrows nothing already decided: the run-scoped meaning of a Resource Handle, the lineage authorization of attachment replay, and `replay`/never-reparse semantics all stand.
+Accepted and implemented for the handle-triggered adoption path. `bfc1c5ae` (a reused historical handle fails as a typed refusal) and `c4ee5f5b` (an attachment image may not cut a tool batch) are its landed prerequisites. This ADR narrows nothing already decided: the run-scoped meaning of a Resource Handle, the lineage authorization of attachment replay, and `replay`/never-reparse semantics all stand.
 
 ## Context
 
@@ -18,10 +18,10 @@ The alignment principle comes from Pi's durable runtime: identifiers embedded in
 
 A Run adopts its lineage Resources **lazily on first use**, through one Answer-owned rule:
 
-- **Selection.** Two sources, both already authorized and bounded: declared carries (`history_attachments`) and evidence (attachment occurrences inside the retained, post-compaction suffix). Authorization is the existing lineage rule — owner, selected Session, originating Run/blob reference, and still-retained bytes. Selection never parses message text.
+- **Selection.** The trigger is a handle the model names, and admission is the durable row's own authorization: same owner, same Agent Session, adoptable kind, and bytes still retained. A row another owner or another Session registered is never returned, so naming a foreign handle reaches nothing. Selection never parses message text and never trusts the handle itself. Deciding this by Session stamp rather than by re-deriving the declared carries and the retained entry suffix keeps one rule for both the already-declared attachments and the documents a tool produced.
 - **Materialization.** Under the consuming Run's fence: stream and verify the origin blob, reuse the stored `conversion_snapshot` (never reparse), register the content as **this Run's** Resource, record the earlier handle in `capabilities.resource_aliases`, and pin the blob reference so origin-Run cleanup cannot invalidate it.
 - **Resolution.** `read`/`view` accept this Run's handles and aliases of Resources this Run materialized; anything else keeps failing as the typed refusal that names the rule and the remedies. A cursor remains this Run's projection state and a stale one is refused and re-derived by reading again.
-- **Publication.** This Run's Resource manifest lists adopted Resources under this Run's handles, and lists the bounded lineage-available set so the model has a discoverable entry point.
+- **Publication.** This Run's Resource manifest lists this Run's own Resources, including anything already adopted. Listing a *not-yet-adopted* lineage-available set is deliberately deferred: the model reaches the adoptable handles through its own context, which is also what keeps the manifest bounded, and surfacing more would need its own bound and its own measurement before it earns a place in a prompt.
 - **Accounting.** Adopted bytes charge the consuming Run's aggregate text and image budgets on use; no new budget is opened.
 
 ## Considered options
@@ -34,5 +34,7 @@ A Run adopts its lineage Resources **lazily on first use**, through one Answer-o
 ## Consequences
 
 A follow-up turn can read an earlier document and render pages that were never rendered, while no earlier Run's capability is silently extended: every resolution re-checks the lineage rule and re-pins bytes under the consuming Run. Compaction naturally shrinks the adoptable set, and `history_attachments` stays bounded by the existing attachment allowance. `resource-reading.md` and the domain-language Resource Handle entry must be revised with the implementation, and the new behavior is owned by configuration (`answer.resources.lineage_adoption`) per ADR 0006.
+
+Adopted Resources count against the consuming Run's caller attachment allowance and aggregate budgets, so adoption cannot outgrow the allowance the Run already has. Each adoption that the Session stamp refuses, or whose stored conversion view is unusable, keeps failing explicitly rather than repairing by re-parsing.
 
 Stop conditions, to revisit this decision rather than extend it silently: adoption sets routinely exceeding a small bound; adopted content consuming the budgets of current work; compaction-pruned documents still being requested; material change in multi-host blob retention cost; or a future decision to share Resources across Sessions.
