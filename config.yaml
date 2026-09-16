@@ -36,7 +36,10 @@ models:
         base_url: https://api.deepseek.com
         temperature: 0.7
         reasoning: off
-        agentic_reasoning: max
+        # Agentic turns (tool loops) still think, but a measured 35k-token first
+        # turn at ~200 tok/s cost minutes before the first tool call. high keeps
+        # the loop responsive; raise deliberately, not by default.
+        agentic_reasoning: high
         structured_output: json_object
       vlm:
         provider: openai

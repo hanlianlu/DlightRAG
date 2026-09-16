@@ -158,7 +158,6 @@ export const templates: Record<
   'chatFeature.tool.subagent_status': '正在查看子代理状态',
   'chatFeature.tool.mcp': '正在调用 MCP 工具',
   'chatMessageList.toolActivity': '工具活动',
-  'chatMessageList.toolSummaryCount': str`${0} 次工具调用`,
   'chatFeature.answerStopped': '回答已停止',
   'chatFeature.answerReady': '回答已就绪',
   'chatFeature.submissionFailed': '回答无法提交。',

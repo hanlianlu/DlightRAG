@@ -196,28 +196,8 @@
   flex-shrink: 0;
 }
 
-.toolSummary {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-tight);
-  margin-top: var(--space-related);
-  border: 1px solid var(--color-border-subtle);
-  background: transparent;
-  color: var(--color-text-dim);
-  font: inherit;
-  font-size: 0.75rem;
-  padding: 0.1rem 0.5rem;
-  border-radius: var(--radius-control);
-  cursor: pointer;
-}
 
-.toolSummary:hover {
-  color: var(--color-text-primary);
-}
 
-.toolSummaryToggle {
-  font-size: 0.7rem;
-}
 
 .streamingDot {
   display: inline-block;

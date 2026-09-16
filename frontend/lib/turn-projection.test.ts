@@ -24,8 +24,6 @@ function turn(overrides: Partial<ChatTurnView> = {}): ChatTurnView {
     cancelRequested: false,
     steeringMessages: [],
     toolRows: [],
-    toolTotal: 0,
-    toolExpanded: false,
     ...overrides,
   };
 }
@@ -75,7 +73,6 @@ test('tool events drive the trace and sawChildren', () => {
     eventType: 'tool_start',
     payload: {tool_name: 'spawn_agent', call_id: 'c1', tool_label: 'Child agent'},
   }, 4000);
-  assert.equal(view.toolTotal, 1);
   assert.equal(view.sawChildren, true);
   assert.equal(view.toolRows[0].startedAt, 4000);
   assert.equal(view.toolRows[0].label, 'Child agent');

@@ -100,12 +100,10 @@ export function applyAnswerEvent(
       const info = event.payload as ToolEventPayload;
       if (!info || typeof info.tool_name !== 'string') return turn;
       const toolRows = applyToolEvent(turn.toolRows, event.eventType, info, now);
-      const toolTotal = event.eventType === 'tool_start' ? turn.toolTotal + 1 : turn.toolTotal;
       const text = toolStatusText(toolRows);
       return {
         ...turn,
         toolRows,
-        toolTotal,
         progress: text,
         liveStatus: text,
         sawChildren: turn.sawChildren || CHILD_TOOL_NAMES.has(info.tool_name),

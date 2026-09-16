@@ -48,10 +48,6 @@ export interface ChatReconnectDetail {
   runId: string;
 }
 
-export interface ChatToolTraceToggleDetail {
-  runId: string;
-}
-
 function formatToolDuration(durationMs: number | null): string {
   if (durationMs === null) return '';
   if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
@@ -191,7 +187,7 @@ export class DlChatMessageList extends LightElement {
 
   /** Whether this turn shows a counter that has to redraw on its own. */
   #counting(turn: ChatTurnView): boolean {
-    return turn.toolExpanded && turn.toolRows.some((row) => row.state === 'running');
+    return turn.toolRows.some((row) => row.state === 'running');
   }
 
   #stopElapsedTimer(): void {
@@ -543,10 +539,10 @@ export class DlChatMessageList extends LightElement {
 
   #answerBody(turn: ChatTurnView): TemplateResult | typeof nothing {
     if (turn.state === 'succeeded' && turn.presentation) {
-      return html`<dl-answer-presentation .presentation=${turn.presentation}></dl-answer-presentation>${this.#toolSummary(turn)}`;
+      return html`<dl-answer-presentation .presentation=${turn.presentation}></dl-answer-presentation>`;
     }
     if (turn.state === 'failed') {
-      return html`${turn.error || msg('Service error. Please try again.', {id: 'chatFeature.serviceError'})}${this.#toolSummary(turn)}`;
+      return html`${turn.error || msg('Service error. Please try again.', {id: 'chatFeature.serviceError'})}`;
     }
     return html`
       ${turn.streamText ? html`<span class="stream-tail">${turn.streamText}</span>` : nothing}
@@ -563,7 +559,6 @@ export class DlChatMessageList extends LightElement {
       ${turn.state === 'cancelled' ? html`
         <div class=${chatStyles.stoppedNote}>${msg('Stopped', {id: 'chatMessageList.stopped'})}</div>
       ` : nothing}
-      ${turn.state === 'cancelled' ? this.#toolSummary(turn) : nothing}
     `;
   }
 
@@ -762,14 +757,6 @@ export class DlChatMessageList extends LightElement {
     }));
   }
 
-  #toggleToolTrace(runId: string): void {
-    this.dispatchEvent(new CustomEvent<ChatToolTraceToggleDetail>('dl-chat-tool-trace-toggle', {
-      bubbles: true,
-      composed: true,
-      detail: {runId},
-    }));
-  }
-
   #toolTrace(turn: ChatTurnView): TemplateResult {
     return html`
       <div class=${chatStyles.toolTrace} role="status"
@@ -795,21 +782,6 @@ export class DlChatMessageList extends LightElement {
     `;
   }
 
-  #toolSummary(turn: ChatTurnView): TemplateResult | typeof nothing {
-    if (turn.toolTotal === 0) return nothing;
-    return html`
-      <button type="button" class=${chatStyles.toolSummary}
-              aria-expanded=${String(turn.toolExpanded)}
-              aria-label=${msg('Tool activity', {id: 'chatMessageList.toolActivity'})}
-              @click=${() => this.#toggleToolTrace(turn.runId)}>
-        <span>${msg(str`${turn.toolTotal} tool call(s)`, {id: 'chatMessageList.toolSummaryCount'})}</span>
-        <span class=${chatStyles.toolSummaryToggle}>${turn.toolExpanded
-          ? icon('chevron-down', {size: 'xs'})
-          : icon('disclosure', {size: 'xs'})}</span>
-      </button>
-      ${turn.toolExpanded ? this.#toolTrace(turn) : nothing}
-    `;
-  }
 }
 
 customElements.define('dl-chat-message-list', DlChatMessageList);
@@ -821,31 +793,7 @@ declare global {
 
   interface HTMLElementEventMap {
     'dl-chat-background-click': CustomEvent<void>;
-    'dl-chat-tool-trace-toggle': CustomEvent<ChatToolTraceToggleDetail>;
   }
-}
-
-/** Keep this tab's tool trace when server truth replaces a settled turn.
- *
- * Tool rows are a live affordance: they are never stored with the turn, so a
- * reload or another browser has none. The tab that watched the run still can,
- * and dropping them one refresh after the answer lands is what made "what did
- * the agent actually call" unanswerable at exactly the moment it became
- * interesting.
- */
-export function carriedToolTrace(
-  replacement: ChatTurnView,
-  watched: ChatTurnView | null,
-): ChatTurnView {
-  if (!watched || watched.toolTotal === 0 || watched.runId !== replacement.runId) {
-    return replacement;
-  }
-  return {
-    ...replacement,
-    toolRows: watched.toolRows,
-    toolTotal: watched.toolTotal,
-    toolExpanded: watched.toolExpanded,
-  };
 }
 
 export function storedTurnView(stored: ConversationTurn): ChatTurnView {
@@ -883,7 +831,5 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     cancelRequested: stored.cancelRequested,
     steeringMessages: [],
     toolRows: [],
-    toolTotal: 0,
-    toolExpanded: false,
   };
 }

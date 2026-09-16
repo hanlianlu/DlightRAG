@@ -27,6 +27,4 @@ export interface ChatTurnView {
   cancelRequested: boolean;
   steeringMessages: readonly string[];
   toolRows: readonly ToolRow[];
-  toolTotal: number;
-  toolExpanded: boolean;
 }

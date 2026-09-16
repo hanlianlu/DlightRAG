@@ -44,10 +44,8 @@ import {
   ANSWER_RECONNECT_COPY,
   MAX_STEERING_MESSAGES,
   answerReconnectState,
-  carriedToolTrace,
   storedTurnView,
   type ChatReconnectDetail,
-  type ChatToolTraceToggleDetail,
   type ChatView,
 } from './chat-message-list.ts';
 import './chat-message-list.ts';
@@ -125,8 +123,6 @@ function optimisticTurn(
     cancelRequested: false,
     steeringMessages: [],
     toolRows: [],
-    toolTotal: 0,
-    toolExpanded: false,
   };
 }
 
@@ -359,9 +355,7 @@ export class DlChatFeature extends LightElement {
         );
         const mergedStored = stored.map((turn) => {
           const current = currentById.get(turn.id) ?? currentByRunId.get(turn.runId);
-          return current && !terminalTurn(current) && !terminalTurn(turn)
-            ? current
-            : carriedToolTrace(turn, current ?? null);
+          return current && !terminalTurn(current) && !terminalTurn(turn) ? current : turn;
         });
         const storedIds = new Set(stored.map((turn) => turn.id));
         const storedRunIds = new Set(stored.map((turn) => turn.runId).filter(Boolean));
@@ -420,7 +414,6 @@ export class DlChatFeature extends LightElement {
         .scrollRequest=${this.#scrollRequest}
         .interactionLocked=${this.interactionLocked}
         @dl-chat-reconnect=${this.#reconnect}
-        @dl-chat-tool-trace-toggle=${this.#toggleToolTrace}
         @dl-chat-load-older=${this.#loadOlderMessages}></dl-chat-message-list>
       ${this.#submissionFailureControls()}
       <dl-chat-composer
@@ -821,7 +814,7 @@ export class DlChatFeature extends LightElement {
   #replaceStoredTurn(turnId: string, stored: ConversationTurn): void {
     this.turns = this.turns.map((turn) => {
       if (turn.id !== turnId) return turn;
-      const replacement = carriedToolTrace(storedTurnView(stored), turn);
+      const replacement = storedTurnView(stored);
       return {...replacement, id: turnId, steeringMessages: turn.steeringMessages};
     });
   }
@@ -833,13 +826,6 @@ export class DlChatFeature extends LightElement {
   #setTurn(turnId: string, patch: Partial<ChatTurnView>): void {
     this.turns = this.turns.map((turn) => turn.id === turnId ? {...turn, ...patch} : turn);
   }
-
-  #toggleToolTrace = (event: CustomEvent<ChatToolTraceToggleDetail>): void => {
-    event.stopPropagation();
-    const turn = this.turns.find((candidate) => candidate.runId === event.detail.runId);
-    if (!turn) return;
-    this.#setTurn(turn.id, {toolExpanded: !turn.toolExpanded});
-  };
 }
 
 customElements.define('dl-chat-feature', DlChatFeature);

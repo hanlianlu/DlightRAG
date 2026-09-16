@@ -82,8 +82,6 @@ it('chat message list has no new serious axe violations', async () => {
     cancelRequested: false,
     steeringMessages: [],
     toolRows: [],
-    toolTotal: 0,
-    toolExpanded: false,
   };
   list.turns = [turn];
   document.body.append(list);
