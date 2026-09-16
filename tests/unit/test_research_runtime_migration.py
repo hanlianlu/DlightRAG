@@ -152,7 +152,6 @@ async def _settle_bounded_research_tool(
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
-        state=None,
     )
     settled = await effects.execute_tool(
         cast(Any, context),
@@ -231,7 +230,6 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
-        state=None,
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -285,7 +283,6 @@ async def test_cancellation_during_a_provider_delta_cancels_without_retry() -> N
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
-        state=None,
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -335,7 +332,6 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
-        state=None,
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -399,7 +395,6 @@ async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path
                 session_id=session_id,
                 lane_id=LaneId.main(),
                 operation_id=OperationId.new(),
-                state=None,
             ),
         ),
         item,
@@ -466,7 +461,6 @@ async def test_research_runtime_projects_live_object_label_into_tool_updates() -
                 session_id=SessionId.new(),
                 lane_id=LaneId.main(),
                 operation_id=OperationId.new(),
-                state=None,
             ),
         ),
         item,
@@ -527,7 +521,6 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
                 session_id=SessionId.new(),
                 lane_id=LaneId.main(),
                 operation_id=OperationId.new(),
-                state=None,
             ),
         ),
         item,
@@ -853,14 +846,12 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     assert isinstance(final.state, OperationCompleted)
     snapshot = await store.load(session_id)
     result = next(entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry))
-    # A resource Tool answers with the passage itself, so the admitted row is
-    # labelled where it stands: the label is what the Citation Contract asks the
-    # model to reuse. This body is shorter than the classification threshold, so the
-    # excerpt is also rendered rather than assumed already shown — the safe
-    # direction, and a handful of tokens for a handful of characters.
-    assert result.result.text_content.startswith("bounded attachment text")
-    assert result.result.text_content.count("[1-1] notes.txt") == 1
-    assert "bounded attachment text" in result.result.text_content
+    # A resource Tool answers with the passage itself, and the Tool declares that, so
+    # the admitted row is labelled where it stands instead of being carried twice:
+    # the label is what the Citation Contract asks the model to reuse. The Tool knows
+    # this, so no body length or substring guess decides it.
+    assert result.result.text_content == "[1-1] notes.txt\n\nbounded attachment text"
+    assert result.result.text_content.count("bounded attachment text") == 1
     [(intent_id, delta)] = store.applied_host_deltas(session_id)
     assert intent_id == result.intent_id
     assert len(delta.evidence) == 1
@@ -1151,10 +1142,12 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     assert isinstance(final.state, OperationCompleted)
     assert len(requests) == 2
     first, second = requests
-    # The last two messages are this Run's derived control instruction and clock.
-    assert second[:-2][: len(first) - 2] == first[:-2]
+    # The last message is this Run's derived control instruction; everything before it
+    # is the transcript, which only grows.
+    assert second[-1] == first[-1]
+    assert second[:-1][: len(first) - 1] == first[:-1]
     # The admitted passage arrived inside the Tool result, not as a re-rendered pack.
-    assert "one grounded fact" in str(second[-3]["content"])
+    assert "one grounded fact" in str(second[-2]["content"])
     assert sum("one grounded fact" in str(message) for message in second) == 1
     # And each turn's billed prompt was aggregated for the operator.
     cache = prepared.trace["prompt_cache"]
@@ -1213,29 +1206,25 @@ def test_a_provider_that_reports_no_usage_records_no_cache_turn() -> None:
     assert trace["prompt_cache"]["turns"] == 0
 
 
-def test_one_batch_shares_one_observation_capacity_across_its_tools() -> None:
+def test_one_tool_result_gets_one_absolute_evidence_capacity() -> None:
     from dlightrag.engine.answer.research.runtime import _evidence_render_budget
 
     result = ToolResult.text("status")
-    # Three Tools of one batch share the reserve; the last one may still spend what
-    # its siblings did not use because each is offered its own remaining share.
-    first = _evidence_render_budget(
-        capacity_tokens=40_000, result=result, pending_rows=4, remaining_items=3
-    )
-    alone = _evidence_render_budget(
-        capacity_tokens=40_000, result=result, pending_rows=4, remaining_items=1
-    )
+    budget = _evidence_render_budget(capacity_tokens=40_000, result=result, pending_rows=4)
 
-    assert first < alone
-    assert alone <= 40_000
-    assert first > 0
-    # A Tool whose own text already fills the share gets no evidence budget.
+    # One absolute, model-aware room: the Tool's own text and the per-row framing come
+    # out of it, and it is neither shared across a batch nor derived from the
+    # compaction trigger. Freezing is what keeps a passage reusable, so shrinking it
+    # to stay under a trigger would trade a permanent prefix for a turn compaction
+    # can bound anyway.
+    assert 0 < budget <= 40_000
+    assert budget < _evidence_render_budget(capacity_tokens=40_000, result=result, pending_rows=1)
+    # A Tool whose own text already fills the room gets none of it.
     assert (
         _evidence_render_budget(
             capacity_tokens=40_000,
             result=ToolResult.text("x" * 1_000_000),
             pending_rows=40,
-            remaining_items=1,
         )
         == 0
     )

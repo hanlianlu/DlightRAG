@@ -445,18 +445,19 @@ def test_checkable_content_keeps_admitting_after_a_dropped_passage() -> None:
 
 def test_a_body_the_tool_already_carried_is_labelled_not_repeated() -> None:
     read_body = "Read window " + ("quoted page text " * 8)
+    carried = _corpus_row(chunk="read-1", content=read_body)
+    # What `read`/`view` declare at admission: this Tool's own result already
+    # carries the row's body (its text, or its pixels).
+    carried["_carried_by_tool"] = True
     ledger = EvidenceLedger()
     ledger.add_rows(
         [
-            _corpus_row(chunk="read-1", content=read_body),
+            carried,
             _corpus_row(chunk="search-1", content="passage only the ledger carries"),
         ]
     )
 
-    labels, rendered = ledger.take_admitted_text(
-        budget_tokens=1_000_000,
-        verbatim_text=f"### Document [1]: report.pdf\n{read_body}",
-    )
+    labels, rendered = ledger.take_admitted_text(budget_tokens=1_000_000)
 
     # The label is what the Citation Contract asks the model to reuse; the body is
     # not carried twice in one request.
@@ -574,19 +575,31 @@ def test_rollback_show_returns_the_rows_to_the_pending_set() -> None:
     assert "passage the tool admitted" in rendered
 
 
-def test_a_snippet_that_happens_to_match_the_tool_text_keeps_its_excerpt() -> None:
+def test_a_body_no_tool_carried_is_always_rendered_however_short() -> None:
     ledger = EvidenceLedger()
+    # No Tool declared this row carried, so nothing about its text can suppress it:
+    # a snippet that merely resembles a Tool's status line still reaches the model.
     ledger.add_rows([_corpus_row(chunk="c1", content="added")])
 
-    labels, rendered = ledger.take_admitted_text(
-        budget_tokens=1_000_000,
-        verbatim_text="Knowledge base added 1 new passages.",
-    )
+    labels, rendered = ledger.take_admitted_text(budget_tokens=1_000_000)
 
-    # A body below the classification threshold is rendered; the rule exists to
-    # avoid carrying a real passage twice, not to classify snippets.
     assert labels == ""
     assert "added" in rendered
+
+
+def test_a_carried_declaration_is_a_run_local_rendering_fact() -> None:
+    carried = _corpus_row(chunk="read-1", content="body the tool result already shows")
+    carried["_carried_by_tool"] = True
+    ledger = EvidenceLedger()
+    ledger.add_rows([carried])
+
+    # It is spent where it was made and never enters the durable ledger row.
+    state = ledger.durable_state()
+    assert all("_carried_by_tool" not in row for row in state["contexts"]["chunks"])
+    restored = EvidenceLedger()
+    restored.restore_ledger_state(state)
+    restored.add_rows([])
+    assert restored.row_count == 1
 
 
 def test_the_visual_lane_never_exceeds_its_image_budget() -> None:

@@ -284,6 +284,11 @@ def _resource_rows(tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
         "page_number": None,
         "_workspace": "__web_search__" if source_type == "web_search" else "__attachment__",
         "_evidence_key": f"{tool_name}:{identity}",
+        # This Tool's own result already carries the row's body — the excerpt's text
+        # for `read`, its pixels for `view` — so the ledger labels it where it stands
+        # rather than carrying the same passage twice in one request. The Tool knows
+        # this; no caller has to guess it from a substring.
+        "_carried_by_tool": True,
         "metadata": metadata,
     }
     if tool_name != "view":

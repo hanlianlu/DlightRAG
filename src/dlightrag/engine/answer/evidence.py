@@ -293,7 +293,6 @@ class EvidenceLedger:
         self,
         *,
         budget_tokens: int,
-        verbatim_text: str = "",
         intent_key: str | None = None,
     ) -> tuple[str, str]:
         """Render the rows admitted since the previous call as model-visible text.
@@ -306,10 +305,9 @@ class EvidenceLedger:
         measured prompts were billed at 88-100% cache miss while the fold itself
         stayed cached.
 
-        Returns ``(labels, rendered)``. A row whose body already appears in
-        ``verbatim_text`` — the Tool's own model-visible result, which is how a read
-        or an injected Tool answers — contributes only its ``[n-m]`` label, so the
-        passage is not carried twice in one request.
+        Returns ``(labels, rendered)``. A row the admitting Tool marked as already
+        carried by its own model-visible result contributes only its ``[n-m]`` label,
+        so the passage is not carried twice in one request.
 
         ``budget_tokens`` bounds one batch exactly as the old pack bounded the
         request: the newest rows render verbatim while the batch's older rows
@@ -350,8 +348,8 @@ class EvidenceLedger:
         indexer = CitationIndexer()
         indexer.build_index(self.contexts["chunks"])
 
-        labelled = [chunk for chunk in chunks if _body_already_shown(chunk, verbatim_text)]
-        rest = [chunk for chunk in chunks if not _body_already_shown(chunk, verbatim_text)]
+        labelled = [chunk for chunk in chunks if _carried_by_tool(chunk)]
+        rest = [chunk for chunk in chunks if not _carried_by_tool(chunk)]
         kept_keys: set[str] = set()
         running = 0
         cutoff = False
@@ -548,24 +546,15 @@ class EvidenceLedger:
         return normalized, identity
 
 
-#: A body below this size is cheaper to render than to reason about; the rule
-#: exists to avoid carrying a real passage twice, not to classify snippets.
-_VERBATIM_BODY_MIN_CHARS = 120
+def _carried_by_tool(row: ContextRow) -> bool:
+    """Return whether the admitting Tool's own result already carries this row.
 
-
-def _body_already_shown(row: ContextRow, verbatim_text: str) -> bool:
-    """Return whether one Tool's own result already carries this row's body.
-
-    Resource-backed Tools answer with the passage itself, so rendering the row again
-    would put the same text in one request twice. The row still needs its citation
-    label, which is what the caller splices in front of the body it already has.
-
-    A short body is never classified as already shown: ``verbatim_text`` is one
-    Tool's whole result, and a snippet that happens to appear inside it (a status
-    line mentioning the same words) must not cost that passage its excerpt.
+    A resource-backed Tool answers with the passage itself, so rendering the row
+    again would put the same text in one request twice. The row still needs its
+    citation label, which is what the caller splices in front of the body it already
+    has. The Tool declares this at admission; nothing infers it from the text.
     """
-    body = str(row.get("content") or "").strip()
-    return len(body) >= _VERBATIM_BODY_MIN_CHARS and body in verbatim_text
+    return bool(row.get("_carried_by_tool"))
 
 
 def _cited_label(row: ContextRow, indexer: CitationIndexer) -> str:
@@ -652,7 +641,10 @@ def _collapsed_handle_block(collapsed: list[ContextRow]) -> dict[str, Any] | Non
 
 def _durable_row(row: ContextRow) -> dict[str, Any]:
     payload = dict(row)
+    # Run-local rendering facts: pixels cannot be re-derived and the label decision
+    # is already spent by the freeze that admitted the row.
     payload.pop("image_data", None)
+    payload.pop("_carried_by_tool", None)
     metadata = payload.get("metadata")
     if isinstance(metadata, Mapping):
         payload["metadata"] = dict(metadata)

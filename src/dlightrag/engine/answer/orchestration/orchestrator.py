@@ -535,7 +535,7 @@ class AnswerOrchestrator:
             snapshot,
             tail_target_tokens=tail,
             accounted_before=(
-                run.context.accounted_input_tokens(evidence=run.evidence, working=run.working)
+                run.context.corrected_input_tokens(evidence=run.evidence, working=run.working)
                 + _tool_schema_tokens(run.tools)
             ),
             durable_handles=run.evidence.citation_handles(),
@@ -598,7 +598,6 @@ class AnswerOrchestrator:
         attachment_snapshots: Mapping[str, bytes] | None = None,
         attachment_admissions: Mapping[str, int] | None = None,
         agent_turn_count: int = 0,
-        as_of: datetime | None = None,
     ) -> PreparedRun:
         """Build one run's memory and the tools bound to it, before any restore."""
         if self._model_func is None:
@@ -628,7 +627,6 @@ class AnswerOrchestrator:
                 tool_guidance=_tool_guidance(tools),
                 profile_memory_write=any(tool.name == "remember" for tool in tools),
                 artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
-                as_of=as_of,
             ),
             tools=tools,
             evidence=evidence,

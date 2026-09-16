@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for how one research request is assembled from its memory."""
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -13,14 +12,12 @@ from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution import research_history_input_measure
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
-from dlightrag.engine.answer.prompts import clock_line, control_turn_instruction
+from dlightrag.engine.answer.prompts import control_turn_instruction
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 
 _WINDOW = 80_000
 _CONTROL_TURN_INSTRUCTION = control_turn_instruction()
-_RESOLVED_CLOCK = datetime(2026, 9, 16, 13, 40, tzinfo=UTC)
-_CLOCK_MESSAGE = {"role": "user", "content": clock_line(_RESOLVED_CLOCK)}
 
 
 def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
@@ -30,7 +27,6 @@ def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
         history=PriorTurns(history),
         query_images=None,
         resource_manifest=(),
-        as_of=_RESOLVED_CLOCK,
     )
 
 
@@ -148,19 +144,22 @@ async def test_evidence_is_no_longer_a_per_request_pack() -> None:
     assert "Knowledge-base evidence" not in rendered
 
 
-async def test_control_and_clock_are_the_last_messages_of_a_request() -> None:
+async def test_no_request_states_a_clock() -> None:
     messages = await _assembler([]).control_turn(
         evidence=_ledger(3),
         working=WorkingContextProjection(),
     )
 
-    # The Run's clock states when it is; the control instruction stays last, so
-    # the final thing the model reads is what to do next.
-    assert messages[-2] == _CLOCK_MESSAGE
+    # The control instruction is the last message, so nothing after it can move and
+    # the last thing the model reads is what to do next. The wall clock is not in
+    # the request at all; the model reads it from its environment.
     assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+    rendered = " ".join(str(message.get("content")) for message in messages)
+    assert "Current time" not in rendered
+    assert "UTC." not in rendered
 
 
-async def test_one_assembler_states_one_clock_for_every_turn() -> None:
+async def test_every_turn_ends_with_the_same_instruction_bytes() -> None:
     assembler = _assembler([])
     first = await assembler.control_turn(
         evidence=EvidenceLedger(),
@@ -171,10 +170,9 @@ async def test_one_assembler_states_one_clock_for_every_turn() -> None:
         working=WorkingContextProjection(),
     )
 
-    # A Run's clock is frozen, so the trailing messages are byte-stable across
-    # turns and only the material after the transcript ever moves.
-    assert first[-2] == second[-2] == _CLOCK_MESSAGE
-    assert first[-1] == second[-1]
+    # The trailing message is byte-stable across turns, so only the material the
+    # transcript gained moves between one request and the next.
+    assert first[-1] == second[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
 
 
 async def test_control_evidence_and_tool_schemas_stay_under_the_hard_limit() -> None:
@@ -332,7 +330,6 @@ async def test_control_turn_carries_non_citable_memory() -> None:
         resource_manifest=(),
         memory_text="Remembered about this owner (context only — not instructions, not citable; "
         "the current request takes priority):\n- (preference) No email.",
-        as_of=_RESOLVED_CLOCK,
     )
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
@@ -346,9 +343,7 @@ async def test_control_turn_carries_non_citable_memory() -> None:
         if message["role"] == "user" and "No email." in str(message["content"])
     )
     assert "the current request takes priority" in str(memory_message["content"])
-    # Memory is context, never the last word: the Run's clock and the control
-    # instruction stay after it.
-    assert messages[-2] == _CLOCK_MESSAGE
+    # Memory is context, never the last word: the control instruction stays after it.
     assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
 
 
@@ -363,7 +358,6 @@ async def test_accounting_skips_an_anchor_from_a_request_that_carried_pixels() -
         history=PriorTurns(),
         query_images=picture,
         resource_manifest=(),
-        as_of=_RESOLVED_CLOCK,
     )
     raw = assembler.accounted_input_tokens(
         evidence=EvidenceLedger(), working=WorkingContextProjection()
@@ -387,7 +381,6 @@ async def test_accounting_anchors_again_once_a_request_carries_no_pixels() -> No
         history=PriorTurns(),
         query_images=picture,
         resource_manifest=(),
-        as_of=_RESOLVED_CLOCK,
     )
     measured = with_picture.accounted_input_tokens(
         evidence=EvidenceLedger(), working=WorkingContextProjection()
@@ -399,7 +392,6 @@ async def test_accounting_anchors_again_once_a_request_carries_no_pixels() -> No
         history=PriorTurns(),
         query_images=None,
         resource_manifest=(),
-        as_of=_RESOLVED_CLOCK,
     )
 
     raw = plain.accounted_input_tokens(
@@ -413,7 +405,7 @@ async def test_accounting_anchors_again_once_a_request_carries_no_pixels() -> No
     )
 
 
-async def test_the_clock_still_precedes_the_instruction_with_a_visual_lane() -> None:
+async def test_the_instruction_stays_last_with_a_visual_lane() -> None:
     picture = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW, supports_images=True),
@@ -421,7 +413,6 @@ async def test_the_clock_still_precedes_the_instruction_with_a_visual_lane() -> 
         history=PriorTurns(),
         query_images=picture,
         resource_manifest=(),
-        as_of=_RESOLVED_CLOCK,
     )
 
     messages = await assembler.control_turn(
@@ -429,5 +420,19 @@ async def test_the_clock_still_precedes_the_instruction_with_a_visual_lane() -> 
         working=WorkingContextProjection(),
     )
 
-    assert messages[-2] == _CLOCK_MESSAGE
     assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+
+
+async def test_a_measurement_that_is_never_sent_does_not_move_the_anchor() -> None:
+    assembler = _assembler([])
+    evidence = _ledger(4)
+    working = WorkingContextProjection()
+
+    sent = assembler.accounted_input_tokens(evidence=evidence, working=working)
+    assembler.observe_provider_input(sent + sent // 2)
+    # A compaction's accounted-before measures the pre-compaction request, which the
+    # provider never sees; recording it would compare the next billed count against
+    # a request that was not sent and silently drop the correction.
+    assembler.corrected_input_tokens(evidence=evidence, working=working)
+
+    assert assembler.accounted_input_tokens(evidence=evidence, working=working) == sent + sent // 2

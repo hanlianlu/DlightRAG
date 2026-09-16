@@ -2,7 +2,6 @@
 """Assemble one research request from the run's memory under one capacity."""
 
 import asyncio
-from datetime import datetime
 from typing import Any
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
@@ -13,12 +12,7 @@ from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.memory import standing_memory_message
 from dlightrag.engine.answer.mode import resource_role
-from dlightrag.engine.answer.prompts import (
-    agent_control_prompt,
-    clock_line,
-    control_turn_instruction,
-    run_clock,
-)
+from dlightrag.engine.answer.prompts import agent_control_prompt, control_turn_instruction
 from dlightrag.engine.answer.resources.converters import conversion_format
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
@@ -29,8 +23,8 @@ class ContextAssembler:
 
     Every request is the previous request plus new material. The Session fold only
     appends, evidence text is frozen into the Tool result that admitted it, and the
-    clock and control instruction ride *after* the transcript. That shape is what a
-    provider prefix cache can reuse.
+    control instruction rides after the transcript. That shape is what a provider
+    prefix cache can reuse, and no request states a clock.
 
     The former shape re-packed the whole evidence ledger after the growing fold on
     every turn, which put the pack past every matched cache prefix: on this
@@ -56,7 +50,6 @@ class ContextAssembler:
         tool_guidance: tuple[str, ...] = (),
         profile_memory_write: bool = False,
         artifact_publication: bool = False,
-        as_of: datetime | None = None,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -71,9 +64,6 @@ class ContextAssembler:
         self._control_instruction = control_turn_instruction(
             artifact_publication=artifact_publication
         )
-        #: One Run's clock. Frozen at construction because a value that moves with
-        #: wall time would move the last message of every request with it.
-        self._clock = run_clock(as_of)
         #: Provider-anchored estimator correction; see ``observe_provider_input``.
         self._estimated_bias_tokens = 0
         self._last_measured_tokens: int | None = None
@@ -106,15 +96,28 @@ class ContextAssembler:
         evidence: EvidenceLedger,
         working: WorkingContextProjection,
     ) -> int:
-        """Measure this request and remember the raw measure for the next anchor.
+        """Measure the request about to be sent, and remember it for the next anchor.
 
-        Only the request-assembly path calls this: it is the measurement a provider
-        is about to answer, and the one ``observe_provider_input`` corrects against.
+        Only request assembly calls this. The remembered measure is the one the
+        provider is about to answer, so only this path may record it: a measurement
+        of a request that is never sent (a compaction's accounted-before, for
+        instance) would make the next anchor compare a billed count against
+        something the provider never saw.
         """
         messages = self._compose_control_turn(evidence, working)
         measured = estimate_messages_tokens(messages)
         self._last_measured_tokens = measured
         self._last_measured_had_pixels = _carries_pixels(messages)
+        return measured + self._estimated_bias_tokens
+
+    def corrected_input_tokens(
+        self,
+        *,
+        evidence: EvidenceLedger,
+        working: WorkingContextProjection,
+    ) -> int:
+        """Measure with the carried correction, without moving the next anchor."""
+        measured = self.measure_control_input(evidence=evidence, working=working)
         return measured + self._estimated_bias_tokens
 
     def observe_provider_input(
@@ -224,17 +227,10 @@ class ContextAssembler:
                 )
             )
         tail.extend(self._contributions)
-        # The clock and the instruction are the only per-turn prose in the
-        # request, and both are its last messages: a value that changes after them
-        # cannot exist, and a value that changes in them costs one message. The
-        # clock sits first so the last thing the model reads is what to do next.
-        tail.append(
-            ContextContribution(
-                source="answer.clock",
-                authority="reference",
-                messages=({"role": "user", "content": clock_line(self._clock)},),
-            )
-        )
+        # The instruction is the only per-turn prose in the request and its last
+        # message, so nothing after it can move and the last thing the model reads is
+        # what to do next. It stays derived rather than durable: the reusable prefix
+        # ends before it, which costs those few tokens per turn and nothing else.
         tail.append(
             ContextContribution(
                 source="answer.control",

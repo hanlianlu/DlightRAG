@@ -8,14 +8,11 @@ only fragment shared across calls. This facade exports the complete prompts.
 from .agent import agent_control_prompt, control_turn_instruction
 from .answer import answer_core
 from .highlight import HIGHLIGHT_BATCH_USER_PROMPT, HIGHLIGHT_SYSTEM_PROMPT
-from .identity import clock_line, run_clock
 
 __all__ = [
-    "clock_line",
     "control_turn_instruction",
     "HIGHLIGHT_BATCH_USER_PROMPT",
     "HIGHLIGHT_SYSTEM_PROMPT",
     "agent_control_prompt",
     "answer_core",
-    "run_clock",
 ]

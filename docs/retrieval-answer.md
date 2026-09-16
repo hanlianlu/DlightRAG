@@ -306,18 +306,18 @@ Uncatalogued endpoints first receive the best-effort fallback profile; acceptanc
 fails only if the resolved profile still cannot provide usable capacity.
 
 The Context Policy independently reserves output, dynamic context, safety,
-retained tail, episodic continuation, and minimum input. Each Tool result is
-fitted to the profile's dynamic context reserve, shared across the Tools of one
-batch; admitted Evidence text is frozen into that result inside the same budget,
-and the proactive compaction trigger is what bounds the request as a whole.
-Provider output is limited by both model output capacity and remaining physical
-context.
+retained tail, episodic continuation, and minimum input. Each Tool result is fitted
+to one absolute, model-aware observation capacity that also holds the Evidence text
+frozen into it; the proactive compaction trigger is what bounds the request as a
+whole. Provider output is limited by both model output capacity and remaining
+physical context.
 
 A Research request is the previous request plus new material, so a provider prefix
 cache can reuse it: the Session fold only appends, admitted Evidence text is frozen
-into the Tool result that produced it, and the Run's clock and control instruction
-are the last two messages. The clock is deliberately not part of the system prompt —
-a prefix that moves with wall time forfeits the whole cache ([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
+into the Tool result that produced it, and the control instruction is the last
+message. No request states the current time — a prefix that moves with wall time
+forfeits the whole cache, so the model reads the clock from its environment
+([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
 The compaction trigger is measured from the character estimator corrected against
 the prompt size the provider itself billed for the previous request, and each
 turn's billed prompt and cache hits are aggregated in the Run trace.

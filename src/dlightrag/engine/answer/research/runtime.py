@@ -128,29 +128,21 @@ def _evidence_render_budget(
     capacity_tokens: int,
     result: ToolResult,
     pending_rows: int,
-    remaining_items: int,
 ) -> int:
     """Return how many tokens one Tool may add as frozen evidence text.
 
-    Three claims share one observation capacity and none of them may exceed it: the
-    Tool's own result, the framing the renderer adds around passages, and — because
-    a batch is interpreted Tool by Tool with no compaction between them — the share
-    a parallel batch still has left to spend.
+    One absolute, model-aware capacity holds the Tool's own result plus the framing
+    the renderer adds around passages. It is deliberately not shared out across the
+    Tools of a batch and deliberately not derived from the compaction trigger:
+    freezing is what keeps a passage reusable, so shrinking it to stay under a
+    trigger would trade a permanent prefix for a turn that compaction can bound
+    anyway. Both reference harnesses bound tool output only when pressure forces it.
     """
-    share = max(1, capacity_tokens // max(1, remaining_items))
     usable = max(
-        0, share - estimate_tokens(result.text_content) - _ROW_FRAMING_TOKENS * pending_rows
+        0,
+        capacity_tokens - estimate_tokens(result.text_content) - _ROW_FRAMING_TOKENS * pending_rows,
     )
     return min(usable, max(0, capacity_tokens))
-
-
-def _remaining_batch_items(state: Any, item: ToolBatchItem) -> int:
-    """Return how many Tools of the current batch, including this one, still run."""
-    batch = getattr(state, "batch", None)
-    items = getattr(batch, "items", None)
-    if not items:
-        return 1
-    return max(1, len(items) - item.source_index)
 
 
 def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
@@ -217,8 +209,8 @@ def _with_admitted_evidence(
     the full input rate while the fold itself stayed cached.
 
     Three shapes meet here, and the order between them is the Citation Contract's
-    "label directly above the excerpt": the labels of passages this Tool's own text
-    already carries, that text, then the passages it does not carry. A continuation
+    "label directly above the excerpt": the labels of passages this Tool's own result
+    already carries, that result, then the passages it does not carry. A continuation
     stays last: ``fit_tool_result`` recognizes that suffix by identity, so nothing
     is spliced after it.
 
@@ -228,10 +220,8 @@ def _with_admitted_evidence(
     """
     if result.is_error:
         return result
-    text = result.text_content
     labels, rendered = evidence.take_admitted_text(
         budget_tokens=budget_tokens,
-        verbatim_text=text,
         intent_key=intent_key,
     )
     if not labels and not rendered:
@@ -760,7 +750,6 @@ class ResearchRuntimeEffects:
             capacity_tokens=observation_capacity,
             result=result,
             pending_rows=evidence.pending_row_count(),
-            remaining_items=_remaining_batch_items(context.state, item),
         )
         result = _with_admitted_evidence(
             result,

@@ -45,8 +45,8 @@ def answer_core() -> str:
     """The answer system prompt: byte-stable for every call.
 
     Every byte before the messages is provider prefix-cache input, so this text
-    never carries a clock (see ``identity.core_identity``). The Fast caller
-    states the time in the last block of its own user message instead.
+    never carries a clock, and no caller adds one: the model reads the wall clock
+    from its environment (see ``identity.core_identity``).
     """
     return "\n\n".join(
         [
