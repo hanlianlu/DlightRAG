@@ -424,6 +424,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "query",
         "history",
         "mode",
+        "effort",
         "attachments",
         "filters",
         "chunk_top_k",
@@ -473,6 +474,18 @@ async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_applicat
     assert result.is_error is True
     assert "Error:" in _tool_text(result)
     assert "mode" in _tool_text(result)
+
+
+async def test_mcp_rejects_an_unsupported_effort_before_creating_a_run(
+    mock_mcp_application,
+) -> None:
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x", "effort": "xhigh"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert "Error:" in _tool_text(result)
+    assert "effort" in _tool_text(result)
+    mock_mcp_application.answers.create.assert_not_awaited()
     mock_mcp_application.answers.create.assert_not_awaited()
 
 
@@ -885,6 +898,7 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
             "attachments": [{"url": "https://example.com/report.pdf", "filename": "report.pdf"}],
             "filters": {"title": "Manual"},
             "semantic_highlights": True,
+            "effort": "max",
             "idempotency_key": "key-1",
         },
     )
@@ -909,6 +923,8 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
     assert answer_request.retrieval.top_k == 8
     assert answer_request.retrieval.chunk_top_k == 12
     assert answer_request.semantic_highlights is True
+    # The answering agent's effort is part of the accepted request, not decoration.
+    assert answer_request.effort == "max"
     assert call_kwargs["idempotency_key"] == "key-1"
     assert call_kwargs["owner_id"] == _EXPECTED_OWNER
     assert answer_request.filters is not None

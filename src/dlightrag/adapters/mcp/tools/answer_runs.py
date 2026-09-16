@@ -95,6 +95,16 @@ async def answer_tool(
         Literal["auto", "fast", "research"] | None,
         Field(default=None, description="Answer mode. Omit for auto."),
     ] = None,
+    effort: Annotated[
+        Literal["low", "high", "max"] | None,
+        Field(
+            default=None,
+            description=(
+                "Agent effort for this answer's own answering agent. "
+                "Omit for the deployment's configured level."
+            ),
+        ),
+    ] = None,
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
