@@ -42,7 +42,12 @@ Every citation marker is defined where its evidence appears, and nowhere else:
 
 
 def answer_core() -> str:
-    """The answer system prompt, rebuilt per call so its clock is the caller's."""
+    """The answer system prompt: byte-stable for every call.
+
+    Every byte before the messages is provider prefix-cache input, so this text
+    never carries a clock (see ``identity.core_identity``). The Fast caller
+    states the time in the last block of its own user message instead.
+    """
     return "\n\n".join(
         [
             core_identity(),

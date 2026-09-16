@@ -6,7 +6,7 @@ import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, Literal, cast
 
 from dlightrag.engine.agent.session.effects import EffectIntent, ToolResultEntry, canonical_json
@@ -34,16 +34,23 @@ from dlightrag.engine.agent.session.runtime import (
     SteerCommand,
     ToolEffectResult,
 )
-from dlightrag.engine.agent.tool_content import tool_content_attachments
+from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
 from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.providers.base import (
     is_provider_context_overflow,
+    provider_cache_hit_tokens,
+    provider_input_tokens,
     provider_status_code,
 )
+from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.errors import AnswerInputError
-from dlightrag.engine.answer.evidence import EvidenceDelta
+from dlightrag.engine.answer.evidence import (
+    EvidenceDelta,
+    EvidenceLedger,
+    has_unrepresentable_text,
+)
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
@@ -111,11 +118,143 @@ def _elapsed_ms(started: float) -> int:
     return max(0, round((time.perf_counter() - started) * 1000))
 
 
+#: Per-row framing the render budget does not charge as passage content: a label
+#: line, a document heading, and a metadata line.
+_ROW_FRAMING_TOKENS = 64
+
+
+def _evidence_render_budget(
+    *,
+    capacity_tokens: int,
+    result: ToolResult,
+    pending_rows: int,
+    remaining_items: int,
+) -> int:
+    """Return how many tokens one Tool may add as frozen evidence text.
+
+    Three claims share one observation capacity and none of them may exceed it: the
+    Tool's own result, the framing the renderer adds around passages, and — because
+    a batch is interpreted Tool by Tool with no compaction between them — the share
+    a parallel batch still has left to spend.
+    """
+    share = max(1, capacity_tokens // max(1, remaining_items))
+    usable = max(
+        0, share - estimate_tokens(result.text_content) - _ROW_FRAMING_TOKENS * pending_rows
+    )
+    return min(usable, max(0, capacity_tokens))
+
+
+def _remaining_batch_items(state: Any, item: ToolBatchItem) -> int:
+    """Return how many Tools of the current batch, including this one, still run."""
+    batch = getattr(state, "batch", None)
+    items = getattr(batch, "items", None)
+    if not items:
+        return 1
+    return max(1, len(items) - item.source_index)
+
+
 def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
     """Return the pinned profile's effective Research observation capacity."""
     hard_limit = CONTEXT_POLICY.hard_input_limit(profile)
     trigger = CONTEXT_POLICY.compaction_trigger(profile)
     return max(0, hard_limit - trigger)
+
+
+#: A miss below this prompt size is cache-breakpoint noise, not a regression;
+#: the first turn of a Run has nothing to hit and is never reported.
+_CACHE_NOTICE_MIN_PROMPT_TOKENS = 8_192
+
+
+def _record_prompt_cache(trace: dict[str, Any], assistant: AssistantTurn) -> None:
+    """Aggregate one turn's prefix-cache hit against what the provider billed.
+
+    A prefix cache is invisible until it breaks, and it breaks silently: this
+    deployment ran nine consecutive turns at 0% hits while every turn looked
+    healthy from the inside. The counters ride in the Run trace so a hit ratio is
+    readable per Run, and a cold turn over a large prompt warns once so a
+    regression reaches logs instead of only the provider's bill.
+    """
+    usage = assistant.usage_details if isinstance(assistant.usage_details, Mapping) else None
+    counts = {str(key): int(value) for key, value in (usage or {}).items()}
+    billed = provider_input_tokens(counts)
+    if billed is None:
+        return
+    hit = provider_cache_hit_tokens(counts)
+    cache = trace.setdefault(
+        "prompt_cache",
+        {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0},
+    )
+    previous_turns = int(cache["turns"])
+    cache["turns"] = previous_turns + 1
+    cache["prompt_tokens"] = int(cache["prompt_tokens"]) + billed
+    cache["cache_hit_tokens"] = int(cache["cache_hit_tokens"]) + (hit or 0)
+    if previous_turns and hit == 0 and billed >= _CACHE_NOTICE_MIN_PROMPT_TOKENS:
+        cache["cold_turns"] = int(cache["cold_turns"]) + 1
+        logger.warning(
+            "prompt cache returned no hit for a %d-token prompt",
+            billed,
+            extra={
+                "prompt_tokens": billed,
+                "turn": previous_turns + 1,
+                "cache_hit_tokens": 0,
+            },
+        )
+
+
+def _with_admitted_evidence(
+    result: ToolResult,
+    *,
+    evidence: EvidenceLedger,
+    budget_tokens: int,
+    intent_key: str,
+) -> ToolResult:
+    """Freeze the evidence this Tool call admitted into its own model-visible text.
+
+    Evidence reaches the model exactly once, inside the Tool result that produced
+    it, and every later request replays those identical bytes. A per-request pack
+    could not be reused by a provider prefix cache: it was re-rendered after the
+    growing Session fold, so each turn re-billed the whole accumulated corpus at
+    the full input rate while the fold itself stayed cached.
+
+    Three shapes meet here, and the order between them is the Citation Contract's
+    "label directly above the excerpt": the labels of passages this Tool's own text
+    already carries, that text, then the passages it does not carry. A continuation
+    stays last: ``fit_tool_result`` recognizes that suffix by identity, so nothing
+    is spliced after it.
+
+    A failed call admits nothing and returns unchanged, and a result the durable
+    store cannot keep retracts the freeze so those rows render with a later Tool
+    result instead of disappearing with the refused one.
+    """
+    if result.is_error:
+        return result
+    text = result.text_content
+    labels, rendered = evidence.take_admitted_text(
+        budget_tokens=budget_tokens,
+        verbatim_text=text,
+        intent_key=intent_key,
+    )
+    if not labels and not rendered:
+        return result
+    merged = _spliced_tool_text(result, labels=labels, rendered=rendered)
+    if has_unrepresentable_text(merged):
+        evidence.rollback_show(intent_key)
+        return result
+    return replace(
+        result,
+        parts=(ToolTextPart(merged), *tool_content_attachments(result.parts)),
+    )
+
+
+def _spliced_tool_text(result: ToolResult, *, labels: str, rendered: str) -> str:
+    """Splice evidence around a Tool's own text, keeping any continuation last."""
+    text = result.text_content
+    protected = result.protected_text
+    if protected and text.endswith(protected):
+        body, tail = text[: -len(protected)].rstrip(), protected
+    else:
+        body, tail = text, ""
+    return "\n\n".join(part for part in (labels, body.strip(), rendered, tail) if part)
 
 
 class FetchedResourceBuffer:
@@ -513,6 +652,7 @@ class ResearchRuntimeEffects:
             ) from exc
 
         streamed_text = "".join(emitted)
+        _record_prompt_cache(self._prepared.trace, assistant)
         if assistant.tool_calls or streamed_text != assistant.text:
             if emitted:
                 await self._session.reset_output()
@@ -610,10 +750,40 @@ class ResearchRuntimeEffects:
         )
         result = await tool.execute(validated, runtime)
         observation_capacity = _research_dynamic_context_reserve(self._prepared.model_profile)
+        evidence = self._prepared.evidence
+        if item.intent_id is None:
+            raise RuntimeError("executable Tool item lost its IntentId")
+        # The freeze is keyed by the Intent so re-executing it renders the same
+        # bytes rather than committing a Tool result without its citation labels.
+        intent_key = item.intent_id.value
+        render_budget = _evidence_render_budget(
+            capacity_tokens=observation_capacity,
+            result=result,
+            pending_rows=evidence.pending_row_count(),
+            remaining_items=_remaining_batch_items(context.state, item),
+        )
+        result = _with_admitted_evidence(
+            result,
+            evidence=evidence,
+            budget_tokens=render_budget,
+            intent_key=intent_key,
+        )
         fitted = fit_tool_result(
             result,
             max_tokens=observation_capacity,
         )
+        if fitted.text_content != result.text_content:
+            # The passages did not fit after all. Re-render them as their
+            # re-readable handles rather than let `fit_tool_result` cut the tail:
+            # a truncated excerpt is a passage the model was shown and cannot cite.
+            evidence.rollback_show(intent_key)
+            result = _with_admitted_evidence(
+                result,
+                evidence=evidence,
+                budget_tokens=0,
+                intent_key=intent_key,
+            )
+            fitted = fit_tool_result(result, max_tokens=observation_capacity)
         outcome = "failed" if fitted.is_error else "succeeded"
         durable = ToolResultEntry(
             tool_name=item.tool_name,

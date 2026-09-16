@@ -4,8 +4,9 @@
 The summarizer writes one structured markdown document whose headings map
 onto :class:`~dlightrag.engine.agent.session.projection.CompactionSummary` fields.
 The framework parses the headings back into the typed summary; the model is
-never asked to invent paths or durable handles — those are extracted from the
-covered branch-ancestry prefix by the framework. Prompts modules stay import-free:
+never asked to invent paths or durable handles — the caller supplies the handle
+list from the run's Evidence ledger, the one record of what the run admitted.
+Prompts modules stay import-free:
 the caller passes the pre-rendered previous summary text.
 
 The heading schema is the durable contract. First-pass and merge user turns

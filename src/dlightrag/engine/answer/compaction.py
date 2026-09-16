@@ -161,12 +161,29 @@ def _transcript(messages: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
-def _extract_paths_and_handles(
-    entries: Sequence[SessionEntry],
-) -> tuple[list[str] | None, list[str] | None]:
-    """Return no inferred authority after transient Tool Arguments are deleted."""
-    del entries
-    return None, None
+def _durable_handles(handles: Sequence[str]) -> list[str] | None:
+    """Return the re-readable source handles one compaction keeps for the model.
+
+    Authority is the run's Evidence ledger, which is the one record of what the
+    run actually admitted. The former source was the covered entries' Tool
+    Arguments, and that inference was withdrawn with the temporary Arguments
+    themselves — correctly, because a replayed or deleted argument is not
+    evidence. A compacted transcript otherwise loses every passage it had shown,
+    and the handles are what let the next turn read a source again by identity.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for handle in handles:
+        text = handle.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+    return ordered[:_MAX_DURABLE_HANDLES] or None
+
+
+#: One summary's handle list is continuation memory; this bounds its prose.
+_MAX_DURABLE_HANDLES = 40
 
 
 class CompactionCoordinator:
@@ -191,6 +208,7 @@ class CompactionCoordinator:
         *,
         tail_target_tokens: int,
         accounted_before: int,
+        durable_handles: Sequence[str] = (),
         trace: dict[str, Any],
     ) -> tuple[ContextProjection, CompactionOutcome]:
         """Prepare one projection effect result; Runtime owns its atomic commit."""
@@ -264,8 +282,11 @@ class CompactionCoordinator:
             parsed = parse_compaction_summary(summary_text)
         except ValueError as exc:
             raise _CompactionAttemptFailed(str(exc)) from exc
-        paths, handles = _extract_paths_and_handles(covered)
-        summary = _with_framework_fields(parsed, paths=paths, durable_handles=handles)
+        summary = _with_framework_fields(
+            parsed,
+            paths=None,
+            durable_handles=_durable_handles(durable_handles),
+        )
         summary_json = summary.canonical_json()
 
         accounted_after = self._estimate_retained(entries, first_retained, summary_json)
@@ -308,6 +329,7 @@ class CompactionCoordinator:
                 "accounted_before": accounted_before,
                 "accounted_after": accounted_after,
                 "summary_chars": len(summary_json),
+                "durable_handles": len(summary.durable_handles or ()),
                 "hierarchical": hierarchical,
                 "tail_target_tokens": tail_target_tokens,
             }

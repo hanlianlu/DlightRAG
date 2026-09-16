@@ -6,6 +6,7 @@ import pytest
 from dlightrag.engine.agent.session.fold import host_turn_starts
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.projection import CompactionSummary, render_compaction_summary
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.answer.compaction import CompactionCoordinator, parse_compaction_summary
 from dlightrag.engine.answer.fast import FastSessionHost
@@ -110,3 +111,74 @@ async def test_coordinator_compacts_direct_fast_pairs_without_a_baseline_registe
     assert projection.covered_through_entry_id == snapshot.tree.ancestry()[1].entry_id
     assert projection.first_retained_entry_id == current.user_entry_id
     assert outcome.covered_through_sequence == snapshot.tree.ancestry()[1].sequence
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_the_runs_source_handles_re_readable() -> None:
+    """A compacted transcript loses the passages it showed; their handles stay.
+
+    The former framework field had no authority once temporary Tool Arguments were
+    deleted, and the pair was deliberately emptied. The Evidence ledger is the record
+    of what the run actually admitted, so handles come from there instead.
+    """
+    store = MemoryAgentSessionRepository[None]()
+
+    async def no_result() -> None:
+        return None
+
+    session_id = SessionId.new()
+    host = FastSessionHost(
+        repository=store,
+        initial_snapshot=await store.load(session_id),
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        idempotency_key="old-key",
+        content="old question " * 200,
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        content="old answer " * 200,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        idempotency_key="current-key",
+        content="current question",
+    )
+
+    async def stream_model(**_kwargs):
+        yield "## Goal\nPreserve the old turn."
+
+    coordinator = CompactionCoordinator(
+        model_profile=ModelProfile(context_window_tokens=100_000),
+        context_policy=ContextPolicy(
+            requested_output_reserve_tokens=1_000,
+            dynamic_context_reserve_tokens=1_000,
+            retained_tail_tokens=0,
+        ),
+        stream_model=stream_model,
+        exchange_starts_func=host_turn_starts,
+    )
+    projection, _outcome = await coordinator.prepare(
+        await store.load(session_id),
+        tail_target_tokens=0,
+        accounted_before=100,
+        durable_handles=("[1] report.pdf", "[1] report.pdf", "  ", "[2] memo.docx"),
+        trace={},
+    )
+
+    assert projection.summary is not None
+    summary = CompactionSummary.from_canonical_json(projection.summary)
+    # Deduplicated, blank-free, and ordered as the ledger admitted them.
+    assert summary.durable_handles == ["[1] report.pdf", "[2] memo.docx"]
+    assert "durable handles (re-readable, not evidence)" in render_compaction_summary(
+        projection.summary
+    )

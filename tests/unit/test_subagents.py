@@ -1353,7 +1353,6 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
     messages = await child.context.control_turn(
         evidence=child.evidence,
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
 
     assert [tool.name for tool in child.tools] == ["search_knowledge_base", "ask_parent"]

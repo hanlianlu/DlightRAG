@@ -3,6 +3,7 @@
 
 import asyncio
 import threading
+from typing import cast
 
 import pytest
 
@@ -272,40 +273,40 @@ async def test_cancelled_evidence_flush_restores_rows_before_join() -> None:
         await asyncio.gather(flush, return_exceptions=True)
 
 
-def test_transform_keeps_recent_evidence_and_collapses_older_to_handles() -> None:
+def test_admitted_evidence_keeps_recent_rows_and_collapses_older_to_handles() -> None:
     ledger = EvidenceLedger()
     # Oldest observation: large enough to exceed a tight ceiling on its own.
     ledger.add_rows([_corpus_row(chunk="old", content="OLD-EVIDENCE " + ("filler " * 200))])
     # Recent observation: small and must be retained verbatim.
     ledger.add_rows([_corpus_row(workspace="beta", chunk="new", content="RECENT-EVIDENCE key")])
 
-    # A residual window that only fits the small recent observation.
-    blocks, indexer = ledger.transform(residual_tokens=60)
+    # A window that only fits the small recent observation. Both rows were
+    # admitted inside one batch here, so both are offered to the one render.
+    _labels, text = ledger.take_admitted_text(budget_tokens=60)
 
-    text = "\n".join(str(b["text"]) for b in blocks if b.get("type") == "text")
     assert "RECENT-EVIDENCE key" in text
     assert "OLD-EVIDENCE" not in text
     # The collapsed older source remains a re-readable handle preserving its id.
     assert "Retained evidence (re-read for detail)" in text
     assert "[1]" in text
-    # Citation identity for the collapsed source still resolves.
-    assert indexer.get_max_chunk_idx("1") > 0
+    # A second take has nothing left: the transcript already carries this text.
+    assert ledger.take_admitted_text(budget_tokens=60) == ("", "")
 
 
-def test_transform_does_not_guess_an_image_token_cost() -> None:
+def test_admitted_evidence_does_not_guess_an_image_token_cost() -> None:
     ledger = EvidenceLedger()
     visual = _corpus_row(chunk="visual", content="")
     visual["image_data"] = "AAAA"
     ledger.add_rows([visual])
 
-    blocks, indexer = ledger.transform(residual_tokens=0)
+    # A zero-token window still renders nothing for a body-less visual row: the
+    # text estimator charges no tokens for pixels, and the row's pixels ride in
+    # the run-local visual lane instead of the transcript.
+    assert ledger.take_admitted_text(budget_tokens=0) == ("", "")
+    assert ledger.visual_blocks() == []
 
-    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
-    assert "Retained evidence (re-read for detail)" not in text
-    assert indexer.get_chunk_id("1", 1) == "visual"
 
-
-def test_transform_keeps_a_collapsed_web_resource_re_readable() -> None:
+def test_admitted_evidence_keeps_a_collapsed_web_resource_re_readable() -> None:
     ledger = EvidenceLedger()
     ledger.add_rows(
         _web(
@@ -315,27 +316,35 @@ def test_transform_keeps_a_collapsed_web_resource_re_readable() -> None:
     )
     ledger.add_rows([_corpus_row(workspace="beta", chunk="new", content="RECENT")])
 
-    blocks, _ = ledger.transform(residual_tokens=60)
+    _labels, text = ledger.take_admitted_text(budget_tokens=60)
 
-    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
     assert "OLD-WEB-EVIDENCE" not in text
     assert "[resource: res-web-page]" in text
 
 
-def test_transform_preserves_stable_citation_ids_across_full_render() -> None:
+def test_admitted_evidence_preserves_stable_citation_ids_across_batches() -> None:
     ledger = EvidenceLedger()
     ledger.add_rows([_corpus_row(chunk="c1", content="alpha evidence")])
+    _first_labels, first = ledger.take_admitted_text(budget_tokens=1_000_000)
     ledger.add_rows(_web("web evidence"))
+    _second_labels, second = ledger.take_admitted_text(budget_tokens=1_000_000)
 
-    blocks, indexer = ledger.transform(residual_tokens=1_000_000)
+    # Nothing collapses when the whole window is available, and the batch that
+    # arrived later keeps numbering from the ledger rather than restarting.
+    assert "Retained evidence (re-read for detail)" not in first + second
+    assert "alpha evidence" in first
+    assert "web evidence" in second
+    assert "alpha evidence" not in second
+    assert "[1-1]" in first
+    assert "[2-1]" in second
 
-    text = "\n".join(str(b["text"]) for b in blocks if b.get("type") == "text")
-    # Nothing collapses when the whole window is available.
-    assert "Retained evidence (re-read for detail)" not in text
-    assert "alpha evidence" in text
-    assert "web evidence" in text
-    assert "[1-1]" in text
-    assert "[2-1]" in text
+
+def test_admitted_evidence_renders_only_what_the_previous_take_left() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows([_corpus_row(chunk="c1", content="alpha evidence")])
+    ledger.take_admitted_text(budget_tokens=1_000_000)
+
+    assert ledger.take_admitted_text(budget_tokens=1_000_000) == ("", "")
 
 
 def test_empty_ledger_state_is_empty_object() -> None:
@@ -432,3 +441,180 @@ def test_checkable_content_keeps_admitting_after_a_dropped_passage() -> None:
     assert dropped.dropped_rows == 1
     assert kept.new_chunks == 1
     assert [row["content"] for row in ledger.contexts["chunks"]] == ["clean passage"]
+
+
+def test_a_body_the_tool_already_carried_is_labelled_not_repeated() -> None:
+    read_body = "Read window " + ("quoted page text " * 8)
+    ledger = EvidenceLedger()
+    ledger.add_rows(
+        [
+            _corpus_row(chunk="read-1", content=read_body),
+            _corpus_row(chunk="search-1", content="passage only the ledger carries"),
+        ]
+    )
+
+    labels, rendered = ledger.take_admitted_text(
+        budget_tokens=1_000_000,
+        verbatim_text=f"### Document [1]: report.pdf\n{read_body}",
+    )
+
+    # The label is what the Citation Contract asks the model to reuse; the body is
+    # not carried twice in one request.
+    assert labels == "[1-1] report.pdf"
+    assert read_body not in rendered
+    assert "passage only the ledger carries" in rendered
+    assert "[1-2] report.pdf" in rendered
+
+
+def test_visual_evidence_keeps_its_own_lane_with_a_citation_label() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    budget = AnswerImageBudget(
+        max_images=4,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    ledger = EvidenceLedger(image_budget=budget)
+    visual = _corpus_row(chunk="p1", content="caption for the page")
+    visual["image_data"] = png
+    visual["page_number"] = 7
+    ledger.add_rows([visual])
+    asyncio.run(ledger.aflush_images())
+
+    blocks = ledger.visual_blocks()
+
+    assert [block["type"] for block in blocks] == ["text", "image_url"]
+    assert blocks[0]["text"].startswith("[1-1]")
+    assert "Page 7" in blocks[0]["text"]
+
+
+def test_visual_evidence_renders_nothing_without_a_budgeted_image() -> None:
+    ledger = EvidenceLedger()
+    visual = _corpus_row(chunk="p1", content="caption")
+    visual["image_data"] = "AAAA"
+    ledger.add_rows([visual])
+
+    assert ledger.visual_blocks() == []
+
+
+def test_an_incremental_batch_states_the_graph_once_and_never_again() -> None:
+    from dlightrag.engine.rag.retrieval import RetrievalContexts
+
+    ledger = EvidenceLedger()
+    ledger.add_contexts(
+        cast(
+            RetrievalContexts,
+            {
+                "chunks": [_corpus_row(chunk="c1", content="grounded passage")],
+                "entities": [{"entity_name": "Acme", "entity_type": "ORG", "description": "d"}],
+                "relationships": [],
+            },
+        )
+    )
+
+    labels, first = ledger.take_admitted_text(budget_tokens=1_000_000)
+    # A chunk-only second batch must not re-state the graph the first batch already
+    # froze: that would copy history into the uncached suffix of every later result.
+    ledger.add_rows([_corpus_row(chunk="c2", content="later passage")])
+    _labels, second = ledger.take_admitted_text(budget_tokens=1_000_000)
+
+    assert labels == ""
+    assert first.count("## Knowledge graph evidence") == 1
+    assert "Acme" in first
+    assert "## Knowledge graph evidence" not in second
+    assert "Acme" not in second
+    assert "later passage" in second
+
+
+def test_a_restored_ledger_renders_nothing_it_already_froze() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows([_corpus_row(chunk="c1", content="already in the transcript")])
+    ledger.take_admitted_text(budget_tokens=1_000_000)
+
+    restored = EvidenceLedger()
+    restored.restore_ledger_state(ledger.durable_state())
+
+    # The committed Tool results already carry that text; a recovery must not
+    # render it a second time into a later result.
+    assert restored.take_admitted_text(budget_tokens=1_000_000) == ("", "")
+
+
+def test_re_executing_one_intent_freeze_reproduces_the_same_bytes() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows([_corpus_row(chunk="c1", content="passage the tool admitted")])
+
+    first = ledger.take_admitted_text(budget_tokens=1_000_000, intent_key="intent-1")
+    # A resume while the effect was still pending re-executes the same intent. It
+    # must render the same text again rather than report nothing new and commit an
+    # unlabelled Tool result.
+    replay = ledger.take_admitted_text(budget_tokens=1_000_000, intent_key="intent-1")
+    # A different Tool is not entitled to it.
+    other = ledger.take_admitted_text(budget_tokens=1_000_000, intent_key="intent-2")
+
+    assert first == replay
+    assert first != ("", "")
+    assert other == ("", "")
+
+
+def test_rollback_show_returns_the_rows_to_the_pending_set() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows([_corpus_row(chunk="c1", content="passage the tool admitted")])
+    ledger.take_admitted_text(budget_tokens=1_000_000, intent_key="intent-1")
+
+    ledger.rollback_show("intent-1")
+    _labels, rendered = ledger.take_admitted_text(budget_tokens=1_000_000, intent_key="intent-2")
+
+    assert "passage the tool admitted" in rendered
+
+
+def test_a_snippet_that_happens_to_match_the_tool_text_keeps_its_excerpt() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows([_corpus_row(chunk="c1", content="added")])
+
+    labels, rendered = ledger.take_admitted_text(
+        budget_tokens=1_000_000,
+        verbatim_text="Knowledge base added 1 new passages.",
+    )
+
+    # A body below the classification threshold is rendered; the rule exists to
+    # avoid carrying a real passage twice, not to classify snippets.
+    assert labels == ""
+    assert "added" in rendered
+
+
+def test_the_visual_lane_never_exceeds_its_image_budget() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    budget = AnswerImageBudget(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    ledger = EvidenceLedger(image_budget=budget)
+    rows = []
+    for index in range(3):
+        row = _corpus_row(chunk=f"p{index}", content=f"caption {index}")
+        row["image_data"] = png
+        rows.append(row)
+    ledger.add_rows(rows)
+    asyncio.run(ledger.aflush_images())
+
+    blocks = ledger.visual_blocks()
+
+    # One image budget, one lane: the third row's pixels are dropped, not queued.
+    assert sum(block["type"] == "image_url" for block in blocks) == 1
+    assert len(blocks) == 2

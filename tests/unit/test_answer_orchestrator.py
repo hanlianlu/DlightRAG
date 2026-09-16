@@ -167,12 +167,10 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
     with_messages = await with_workspace.context.control_turn(
         evidence=with_workspace.evidence,
         working=with_workspace.working,
-        tool_schema_tokens=0,
     )
     without_messages = await without_workspace.context.control_turn(
         evidence=without_workspace.evidence,
         working=without_workspace.working,
-        tool_schema_tokens=0,
     )
 
     assert "attach_artifact" in str(with_messages[0]["content"])

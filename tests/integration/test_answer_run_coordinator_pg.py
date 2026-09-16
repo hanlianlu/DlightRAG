@@ -206,6 +206,19 @@ async def _wait_for_status(
     return run
 
 
+def _newest_tool_text(messages: Any) -> str:
+    """Return the newest Tool result's text from one provider request.
+
+    A Tool's own observation is what these controlled providers act on, and it is no
+    longer necessarily the request's last message: the Research tail carries this
+    Run's clock and control instruction after the transcript.
+    """
+    for message in reversed(list(messages or ())):
+        if isinstance(message, dict) and message.get("role") == "tool":
+            return str(message.get("content") or "")
+    return ""
+
+
 def _status_is(store: PGRunStore, run_id: str, status: str) -> Any:
     async def _check() -> bool:
         run = await store.get_run(owner_id=_OWNER, run_id=run_id)
@@ -343,7 +356,7 @@ class _CancelPendingChildProvider:
             )
         if self.parent_calls == 2:
             await self.child_tool_started.wait()
-            last_content = str(kwargs["messages"][-1].get("content", ""))
+            last_content = _newest_tool_text(kwargs["messages"])
             child_id = next(
                 token.strip(".,;:()[]{}")
                 for token in last_content.split()
@@ -426,7 +439,7 @@ class _InteractiveGuidanceProvider:
                 stop_reason="tool_use",
                 usage_details={"input_tokens": 3, "output_tokens": 1},
             )
-        last_content = str(messages[-1].get("content", "")) if messages else ""
+        last_content = _newest_tool_text(messages)
         if self.parent_calls == 2:
             child_id = next(
                 token.strip(".,;:()[]{}")

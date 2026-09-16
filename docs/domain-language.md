@@ -248,7 +248,7 @@ The immutable Entry set plus stable Lane heads and Lane state. Branch ancestry f
 _Avoid_: linear log, DAG merge, navigation operation
 
 **Context Projection**:
-The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence.
+The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence. Evidence text admitted before the retained suffix survives as its recorded source handles, not as re-rendered passages.
 _Avoid_: authority, checkpoint, transcript snapshot
 
 **Context Contribution**:
@@ -278,7 +278,7 @@ _Avoid_: Agent step, retrieval request, Session replacement
 ## Evidence And Resources
 
 **Evidence**:
-Citable, run-scoped source material with durable identity and content/locator integrity.
+Citable, run-scoped source material with durable identity and content/locator integrity. Within one Answer Run it reaches the model inside the Tool result that admitted it, frozen at that position; source handles recorded by a compaction keep text Evidence re-readable.
 _Avoid_: Summary, agent prose
 
 **Web Resource**:

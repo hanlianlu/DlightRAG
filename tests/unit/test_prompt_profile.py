@@ -8,6 +8,7 @@ from dlightrag.engine.answer.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
     answer_core,
+    clock_line,
 )
 from dlightrag.engine.answer.prompts.identity import core_identity
 from dlightrag.engine.rag.retrieval.planner_prompt import RETRIEVAL_PLANNER_SYSTEM_PROMPT
@@ -20,8 +21,15 @@ def test_answer_prompt_is_assembled_from_core_identity_and_guidance() -> None:
     assert "Citation Contract" in prompt
 
 
-def test_the_answer_model_is_told_when_it_is() -> None:
-    assert f"{datetime.now(UTC):%Y-%m-%d}" in answer_core()
+def test_the_answer_model_is_told_when_it_is_without_a_moving_prompt_prefix() -> None:
+    # The clock is not in the system prompt: a prefix that moves with wall time
+    # makes every request a new prompt prefix and forfeits the provider's cache.
+    # It rides as the last message of the request instead.
+    assert f"{datetime.now(UTC):%Y-%m-%d}" not in answer_core()
+    assert "Current time" not in answer_core()
+    assert "stated at the end of this request" in answer_core()
+    clock = clock_line(datetime(2026, 9, 16, 13, 40, tzinfo=UTC))
+    assert clock == "Current time: 2026-09-16 13:40 UTC."
 
 
 def test_retrieval_planner_prompt_is_task_specific_static_guidance() -> None:

@@ -70,6 +70,19 @@ class TestCompactionSummary:
         assert "g" in first and "p" in first
         assert render_compaction_summary(None) == "No prior context summary."
 
+    def test_render_states_durable_handles_as_a_re_readable_list(self) -> None:
+        summary = CompactionSummary(
+            goal="g",
+            durable_handles=["[1] report.pdf", "[resource: res-1] memo.docx"],
+        ).canonical_json()
+
+        rendered = render_compaction_summary(summary)
+
+        assert "durable handles (re-readable, not evidence):" in rendered
+        assert "  - [1] report.pdf" in rendered
+        assert "  - [resource: res-1] memo.docx" in rendered
+        assert "{" not in rendered
+
 
 class TestProjectionRecord:
     def test_initial_projection_is_valid(self) -> None:

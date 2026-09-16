@@ -2,8 +2,9 @@
 """The two retrieval tools a run offers, and where their evidence lands.
 
 Both tools answer one narrow question per call and return only how much new
-evidence arrived; the passages themselves land in the run's ledger, never in the
-reply the model reads back.
+evidence arrived; the passages themselves land in the run's ledger, and the
+Runtime then freezes that run's newly admitted evidence into the Tool result the
+model reads back, so a passage reaches the model once, where it arrived.
 """
 
 from collections.abc import Awaitable, Callable

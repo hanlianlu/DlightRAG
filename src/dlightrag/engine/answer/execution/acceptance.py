@@ -4,6 +4,7 @@
 import json
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
@@ -27,6 +28,7 @@ def research_history_input_measure(
     tools: list[AgentTool],
     memory_text: str = "",
     episodic_summary: str = "",
+    as_of: datetime | None = None,
 ) -> Callable[..., int]:
     """Return the exact zero-evidence Research seed serializer used at acceptance."""
     tool_schema_tokens = estimate_tokens(
@@ -59,6 +61,7 @@ def research_history_input_measure(
             tool_guidance=tool_guidance,
             profile_memory_write=any(tool.name == "remember" for tool in tools),
             artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
+            as_of=as_of,
         )
         return (
             context.measure_control_input(

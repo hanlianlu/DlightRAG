@@ -21,6 +21,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
@@ -36,7 +37,7 @@ from dlightrag.engine.answer.errors import (
 from dlightrag.engine.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.memory import standing_memory_message
-from dlightrag.engine.answer.prompts import answer_core
+from dlightrag.engine.answer.prompts import answer_core, clock_line
 from dlightrag.engine.answer.synthesis_context import AnswerContextPacker
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
@@ -344,10 +345,16 @@ class AnswerSynthesizer:
 
         The standing memory block rides as its own user-role message after the
         current request — never inside the system prompt (Pi/Kimi convention).
+
+        The clock rides in this request instead of the system prompt: it is the
+        last thing before the question, so a system message that moves with the
+        wall clock cannot make every turn a new prompt prefix and cost every cached
+        token the provider would otherwise re-read at a fraction of the input rate.
         """
         content: list[dict[str, Any]] = []
         content.extend(current_image_blocks or ())
         content.extend(excerpt_blocks)
+        content.append({"type": "text", "text": clock_line(datetime.now(UTC))})
         content.append({"type": "text", "text": user_prompt})
         contributions = [
             ContextContribution(

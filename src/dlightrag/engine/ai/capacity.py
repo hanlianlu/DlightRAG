@@ -89,9 +89,10 @@ class ContextPolicy:
     up to 46%, so it could never absorb the error it was named for. The boundary
     is covered instead by the provider's own rejection followed by compaction
     and a retry of the same turn; a rejection whose wording escapes the overflow
-    matcher stays an explicit, diagnosable failure. The real fix would be to
-    anchor input measurement on the provider's reported usage, and that is
-    deliberately not done here.
+    matcher stays an explicit, diagnosable failure. Anchoring input measurement on
+    the provider's reported usage is deliberately owned by request composition
+    (:meth:`dlightrag.engine.answer.research.context.ContextAssembler.observe_provider_input`)
+    rather than by this policy, which stays a pure function of model facts.
     """
 
     requested_output_reserve_tokens: int = 16_384

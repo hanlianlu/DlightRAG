@@ -294,6 +294,36 @@ class TestAnswerSynthesizerPolicy:
         assert cast(Any, stream).trace["answer_images_rag"] == 1
         assert cast(Any, stream).trace["answer_images_total"] == 3
 
+    @pytest.mark.asyncio
+    async def test_the_clock_rides_before_the_question_not_in_the_system_prompt(self) -> None:
+        # A system message that moves with the wall clock starts a new prompt
+        # prefix on every turn; the clock belongs inside the request it belongs to,
+        # directly before the question it is about.
+        model_func = _stream_func("ok")
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=2),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
+
+        await synth.generate_stream("describe", _image_contexts())
+
+        messages = model_func.call_args.kwargs["messages"]
+        assert "Current time" not in str(messages[0]["content"])
+        blocks = messages[-1]["content"]
+        clock_index = next(
+            index
+            for index, block in enumerate(blocks)
+            if block.get("type") == "text" and str(block["text"]).startswith("Current time: ")
+        )
+        question_index = next(
+            index
+            for index, block in enumerate(blocks)
+            if block.get("type") == "text" and "## Question" in str(block["text"])
+        )
+        assert clock_index < question_index
+        assert str(blocks[clock_index]["text"]).endswith(" UTC.")
+
     def test_history_measure_uses_the_exact_current_image_serializer(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(max_images=2),

@@ -2,29 +2,44 @@
 """Assemble one research request from the run's memory under one capacity."""
 
 import asyncio
+from datetime import datetime
 from typing import Any
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
-from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.memory import standing_memory_message
 from dlightrag.engine.answer.mode import resource_role
-from dlightrag.engine.answer.prompts import agent_control_prompt, control_turn_instruction
+from dlightrag.engine.answer.prompts import (
+    agent_control_prompt,
+    clock_line,
+    control_turn_instruction,
+    run_clock,
+)
 from dlightrag.engine.answer.resources.converters import conversion_format
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 
 
 class ContextAssembler:
-    """Build each turn of one request from the stores, never by extending the last turn.
+    """Build each turn of one request as an append-only transcript.
 
-    Each control turn replays the active Agent Session projection and packs the
-    ledger. The terminal in-loop assistant text is the Research answer; citation
-    and source finalization remain deterministic outside model generation.
+    Every request is the previous request plus new material. The Session fold only
+    appends, evidence text is frozen into the Tool result that admitted it, and the
+    clock and control instruction ride *after* the transcript. That shape is what a
+    provider prefix cache can reuse.
+
+    The former shape re-packed the whole evidence ledger after the growing fold on
+    every turn, which put the pack past every matched cache prefix: on this
+    deployment one Run was billed at 0% cache hits on all nine turns, and the turns
+    that did hit reused only the fold (7.7k-11k of a 76k-106k prompt) while the
+    65k-90k pack was charged at the full input rate again.
+
+    The terminal in-loop assistant text is the Research answer; citation and source
+    finalization remain deterministic outside model generation.
     """
 
     def __init__(
@@ -41,11 +56,11 @@ class ContextAssembler:
         tool_guidance: tuple[str, ...] = (),
         profile_memory_write: bool = False,
         artifact_publication: bool = False,
+        as_of: datetime | None = None,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
         self._input_limit = context_policy.hard_input_limit(model_profile)
-        self._control_target = context_policy.compaction_trigger(model_profile)
         self._history = history
         self._question = _question_message(query, query_images, resource_manifest)
         self._memory_text = memory_text
@@ -56,20 +71,25 @@ class ContextAssembler:
         self._control_instruction = control_turn_instruction(
             artifact_publication=artifact_publication
         )
+        #: One Run's clock. Frozen at construction because a value that moves with
+        #: wall time would move the last message of every request with it.
+        self._clock = run_clock(as_of)
+        #: Provider-anchored estimator correction; see ``observe_provider_input``.
+        self._estimated_bias_tokens = 0
+        self._last_measured_tokens: int | None = None
+        #: Whether the last measured request carried pixel blocks. The estimator
+        #: charges nothing for them by design, so their tokens would otherwise be
+        #: mistaken for the text undercount the anchor exists to correct.
+        self._last_measured_had_pixels = False
 
     async def control_turn(
         self,
         *,
         evidence: EvidenceLedger,
         working: WorkingContextProjection,
-        tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(
-            self._build_control_turn,
-            evidence,
-            working,
-            tool_schema_tokens,
-        )
+        """Compose one request's messages. Tool-schema input is the caller's to add."""
+        return await asyncio.to_thread(self._compose_control_turn, evidence, working)
 
     def measure_control_input(
         self,
@@ -80,24 +100,56 @@ class ContextAssembler:
         """Measure the exact control-turn messages without enforcing the limit."""
         return estimate_messages_tokens(self._compose_control_turn(evidence, working))
 
-    def observation_residual(
+    def accounted_input_tokens(
         self,
-        transcript_with_assistant: list[dict[str, Any]],
         *,
-        tool_schema_tokens: int,
+        evidence: EvidenceLedger,
+        working: WorkingContextProjection,
     ) -> int:
-        """Return capacity left for the next model-visible tool-result batch."""
-        fixed = list(transcript_with_assistant)
-        if len(fixed) >= 2 and _is_control_evidence_message(fixed[-2], self._control_instruction):
-            fixed.pop(-2)
-        assistant = fixed[-1] if fixed else {}
-        tool_messages = [_empty_tool_message(call) for call in assistant.get("tool_calls") or ()]
-        instruction = {
-            "role": "user",
-            "content": [{"type": "text", "text": self._control_instruction}],
-        }
-        used = estimate_messages_tokens([*fixed, *tool_messages, instruction]) + tool_schema_tokens
-        return max(0, self._control_target - used)
+        """Measure this request and remember the raw measure for the next anchor.
+
+        Only the request-assembly path calls this: it is the measurement a provider
+        is about to answer, and the one ``observe_provider_input`` corrects against.
+        """
+        messages = self._compose_control_turn(evidence, working)
+        measured = estimate_messages_tokens(messages)
+        self._last_measured_tokens = measured
+        self._last_measured_had_pixels = _carries_pixels(messages)
+        return measured + self._estimated_bias_tokens
+
+    def observe_provider_input(
+        self,
+        prompt_tokens: int | None,
+        *,
+        tool_schema_tokens: int = 0,
+    ) -> None:
+        """Anchor the estimator on the provider's own count for the last request.
+
+        The character heuristic undercounts recorded Session content by a median of
+        8% and up to 46%, and the reservation policy deliberately carries no
+        safety margin for it, so the error has to be absorbed somewhere. The
+        provider states the exact input it billed; the difference against what this
+        assembler measured for that same request is the correction carried forward.
+
+        A request that carried pixels is skipped: the estimator charges no tokens
+        for image blocks by design, so its gap to the provider would measure the
+        provider's image accounting rather than the text undercount. The correction
+        never exceeds the raw estimate it corrects, so one bad anchor cannot more
+        than double the accounted input. The pixel fact is read from the messages
+        this assembler composed for that request, not from the provider's counters.
+        """
+        if (
+            prompt_tokens is None
+            or prompt_tokens <= 0
+            or self._last_measured_tokens is None
+            or self._last_measured_had_pixels
+        ):
+            return
+        billed_text = prompt_tokens - tool_schema_tokens
+        self._estimated_bias_tokens = min(
+            max(0, billed_text - self._last_measured_tokens),
+            self._last_measured_tokens,
+        )
 
     def output_allowance(
         self,
@@ -108,34 +160,21 @@ class ContextAssembler:
         """Preflight one exact model request and return its provider output cap."""
         if additional_input_tokens < 0:
             raise ValueError("additional_input_tokens cannot be negative")
-        input_tokens = estimate_messages_tokens(messages) + additional_input_tokens
+        input_tokens = (
+            estimate_messages_tokens(messages)
+            + additional_input_tokens
+            + self._estimated_bias_tokens
+        )
         self._check_input_tokens(input_tokens)
         return self._context_policy.output_allowance(
             self._model_profile,
             input_tokens=input_tokens,
         )
 
-    def _build_control_turn(
-        self,
-        evidence: EvidenceLedger,
-        working: WorkingContextProjection,
-        tool_schema_tokens: int,
-    ) -> list[dict[str, Any]]:
-        # The orchestrator owns the proactive H trigger and compacts before
-        # composing; this assembler enforces only the hard L limit later, in
-        # ``output_allowance``.
-        return self._compose_control_turn(
-            evidence,
-            working,
-            tool_schema_tokens=tool_schema_tokens,
-        )
-
     def _compose_control_turn(
         self,
         evidence: EvidenceLedger,
         working: WorkingContextProjection,
-        *,
-        tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         system = {
             "role": "system",
@@ -145,7 +184,26 @@ class ContextAssembler:
             ),
         }
         head = self._head(system, working.messages())
+        memory_message = standing_memory_message(self._memory_text)
         tail: list[ContextContribution] = []
+        if memory_message is not None:
+            tail.append(
+                ContextContribution(
+                    source="profile.memory",
+                    authority="profile",
+                    messages=(memory_message,),
+                )
+            )
+        visual_blocks = evidence.visual_blocks()
+        if visual_blocks:
+            tail.append(
+                ContextContribution(
+                    source="answer.evidence_images",
+                    authority="evidence",
+                    messages=({"role": "user", "content": visual_blocks},),
+                    citable=True,
+                )
+            )
         if self._tool_guidance:
             tail.append(
                 ContextContribution(
@@ -165,30 +223,25 @@ class ContextAssembler:
                     ),
                 )
             )
-        if evidence.row_count:
-            blocks, _ = self._pack(
-                evidence,
-                head=head,
-                tool_schema_tokens=tool_schema_tokens,
-            )
-            tail.append(
-                ContextContribution(
-                    source="answer.evidence",
-                    authority="evidence",
-                    messages=({"role": "user", "content": blocks},),
-                    citable=True,
-                )
-            )
-        memory_message = standing_memory_message(self._memory_text)
-        if memory_message is not None:
-            tail.append(
-                ContextContribution(
-                    source="profile.memory",
-                    authority="profile",
-                    messages=(memory_message,),
-                )
-            )
         tail.extend(self._contributions)
+        # The clock and the instruction are the only per-turn prose in the
+        # request, and both are its last messages: a value that changes after them
+        # cannot exist, and a value that changes in them costs one message. The
+        # clock sits first so the last thing the model reads is what to do next.
+        tail.append(
+            ContextContribution(
+                source="answer.clock",
+                authority="reference",
+                messages=({"role": "user", "content": clock_line(self._clock)},),
+            )
+        )
+        tail.append(
+            ContextContribution(
+                source="answer.control",
+                authority="reference",
+                messages=({"role": "user", "content": self._control_instruction},),
+            )
+        )
         return [*head, *ContextProjector().project(tail).messages]
 
     def _head(
@@ -242,40 +295,24 @@ class ContextAssembler:
         )
         return list(ContextProjector().project(contributions).messages)
 
-    def _pack(
-        self,
-        evidence: EvidenceLedger,
-        *,
-        head: list[dict[str, Any]],
-        tool_schema_tokens: int = 0,
-    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        instruction_block = {"type": "text", "text": self._control_instruction}
-        fixed_input_tokens = estimate_messages_tokens(
-            [*head, {"role": "user", "content": [instruction_block]}]
-        )
-        target = self._control_target
-        residual = max(0, target - tool_schema_tokens - fixed_input_tokens)
-        while True:
-            blocks, indexer = evidence.transform(residual_tokens=residual)
-            content = [*blocks, instruction_block]
-            rendered_tokens = (
-                estimate_messages_tokens([*head, {"role": "user", "content": content}])
-                + tool_schema_tokens
-            )
-            if rendered_tokens <= target:
-                return content, indexer
-            if residual == 0:
-                raise AnswerInputOverflowError(
-                    "Fixed research evidence handles exceed the resolved model input target"
-                )
-            residual = max(0, residual - (rendered_tokens - target))
-
     def _check_input_tokens(self, input_tokens: int) -> None:
         if input_tokens > self._input_limit:
             raise AnswerInputOverflowError(
                 "Research input exceeds the resolved model input limit: "
                 f"{input_tokens} > {self._input_limit} estimated input tokens"
             )
+
+
+def _carries_pixels(messages: list[dict[str, Any]]) -> bool:
+    """Return whether any request message states pixels rather than only text."""
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in {"image_url", "input_image"}:
+                return True
+    return False
 
 
 def _question_message(
@@ -291,27 +328,6 @@ def _question_message(
         content.append({"type": "text", "text": manifest})
     content.extend(query_images or [])
     return {"role": "user", "content": content}
-
-
-def _is_control_evidence_message(message: dict[str, Any], instruction: str) -> bool:
-    content = message.get("content")
-    return bool(
-        message.get("role") == "user"
-        and isinstance(content, list)
-        and content
-        and isinstance(content[-1], dict)
-        and content[-1].get("text") == instruction
-    )
-
-
-def _empty_tool_message(call: dict[str, Any]) -> dict[str, Any]:
-    function = call.get("function") or {}
-    return {
-        "role": "tool",
-        "tool_call_id": str(call.get("id") or ""),
-        "name": str(function.get("name") or ""),
-        "content": "",
-    }
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:

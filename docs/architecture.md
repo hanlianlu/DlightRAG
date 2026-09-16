@@ -152,6 +152,12 @@ The last Research assistant turn with no tool call is the answer. Citation,
 source, media, usage, and Artifact finalization is deterministic for both paths;
 there is no hidden finalizer model call.
 
+Each turn's request is the previous turn's request plus new material: the Session
+fold only appends, admitted Evidence text is frozen into the Tool result that
+produced it, and the Run's clock and control instruction are the last two messages.
+That shape is what a provider prefix cache can reuse, which is why the clock is not
+in the system prompt ([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
+
 Research provider text is an optimistic projection. Native provider deltas flow
 through `emit_token`; `reset` invalidates them before a tool-bearing turn,
 provider retry/failure, correction/follow-up, recovery, or canonical rewrite.

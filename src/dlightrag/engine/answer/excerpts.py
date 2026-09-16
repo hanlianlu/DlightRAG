@@ -116,7 +116,6 @@ def build_excerpt_lane_blocks(
         for chunk in doc_chunks:
             content = str(chunk.get("content") or "").strip()
             chunk_id = str(chunk.get("chunk_id") or "")
-            page_number = chunk.get("page_number")
             image_data = chunk.get("image_data")
             cite_tag = ""
             if indexer is not None and ref_id and chunk_id:
@@ -148,20 +147,29 @@ def build_excerpt_lane_blocks(
                     blocks.append(image_block)
 
             if content:
-                if cite_tag:
-                    label = (
-                        f"{cite_tag} {filename}, Page {page_number}"
-                        if page_number
-                        else f"{cite_tag} {filename}"
-                    )
-                else:
-                    label = f"[{filename}, Page {page_number}]" if page_number else f"[{filename}]"
+                label = chunk_label(cite_tag=cite_tag, chunk=chunk, filename=filename)
                 blocks.append({"type": "text", "text": f"{label}\n{content}"})
 
             metadata_line = format_chunk_metadata(chunk)
             if metadata_line:
                 blocks.append({"type": "text", "text": metadata_line})
     return blocks
+
+
+def chunk_label(*, cite_tag: str, chunk: dict[str, Any], filename: str) -> str:
+    """Return one excerpt's label line: the marker a Citation Contract names.
+
+    The label is rendered in exactly one place because a passage that a Tool result
+    already carries is labelled where it stands instead of being rendered again.
+    """
+    page_number = chunk.get("page_number")
+    if cite_tag:
+        return (
+            f"{cite_tag} {filename}, Page {page_number}"
+            if page_number
+            else f"{cite_tag} {filename}"
+        )
+    return f"[{filename}, Page {page_number}]" if page_number else f"[{filename}]"
 
 
 def format_chunk_metadata(
@@ -233,6 +241,7 @@ def build_image_label(*, cite_tag: str, chunk: dict[str, Any], filename: str) ->
 __all__ = [
     "build_excerpt_lane_blocks",
     "build_image_label",
+    "chunk_label",
     "format_chunk_metadata",
     "format_kg_context",
 ]

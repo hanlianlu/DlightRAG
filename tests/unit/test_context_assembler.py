@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for how one research request is assembled from its memory."""
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -12,12 +13,14 @@ from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution import research_history_input_measure
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
-from dlightrag.engine.answer.prompts import control_turn_instruction
+from dlightrag.engine.answer.prompts import clock_line, control_turn_instruction
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 
 _WINDOW = 80_000
 _CONTROL_TURN_INSTRUCTION = control_turn_instruction()
+_RESOLVED_CLOCK = datetime(2026, 9, 16, 13, 40, tzinfo=UTC)
+_CLOCK_MESSAGE = {"role": "user", "content": clock_line(_RESOLVED_CLOCK)}
 
 
 def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
@@ -27,6 +30,7 @@ def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
         history=PriorTurns(history),
         query_images=None,
         resource_manifest=(),
+        as_of=_RESOLVED_CLOCK,
     )
 
 
@@ -49,7 +53,6 @@ async def test_research_question_keeps_all_raw_current_images_and_resource_handl
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
 
     question = messages[1]["content"]
@@ -107,7 +110,6 @@ async def test_history_contribution_preserves_roles_and_precedes_current_questio
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
 
     assert [(message["role"], message["content"]) for message in messages[1:5]] == [
@@ -125,41 +127,119 @@ async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
     messages = await _assembler(history).control_turn(
         evidence=_ledger(0),
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
     rendered = str(messages)
     assert "ask 39" in rendered
     assert "ask 0" in rendered
 
 
-async def test_evidence_uses_the_residual_after_pinned_conversation_history() -> None:
+async def test_evidence_is_no_longer_a_per_request_pack() -> None:
+    # Evidence text is frozen into the Tool result that admitted it, so the request
+    # carries no re-rendered pack: that pack sat after the growing Session fold and
+    # was re-billed at the full input rate on every turn.
     evidence = _ledger(5)
     messages = await _assembler(_long_history(10)).control_turn(
         evidence=evidence,
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
 
-    packed = str(messages[-1])
-    # Accepted history stays pinned; evidence consumes the model residual.
-    assert "passage 4" in packed
-    assert "Knowledge-base evidence" in packed
+    rendered = str(messages)
+    assert "passage 4" not in rendered
+    assert "Knowledge-base evidence" not in rendered
 
 
-async def test_control_evidence_and_tool_schemas_stop_at_compaction_threshold() -> None:
+async def test_control_and_clock_are_the_last_messages_of_a_request() -> None:
+    messages = await _assembler([]).control_turn(
+        evidence=_ledger(3),
+        working=WorkingContextProjection(),
+    )
+
+    # The Run's clock states when it is; the control instruction stays last, so
+    # the final thing the model reads is what to do next.
+    assert messages[-2] == _CLOCK_MESSAGE
+    assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+
+
+async def test_one_assembler_states_one_clock_for_every_turn() -> None:
+    assembler = _assembler([])
+    first = await assembler.control_turn(
+        evidence=EvidenceLedger(),
+        working=WorkingContextProjection(),
+    )
+    second = await assembler.control_turn(
+        evidence=_ledger(2),
+        working=WorkingContextProjection(),
+    )
+
+    # A Run's clock is frozen, so the trailing messages are byte-stable across
+    # turns and only the material after the transcript ever moves.
+    assert first[-2] == second[-2] == _CLOCK_MESSAGE
+    assert first[-1] == second[-1]
+
+
+async def test_control_evidence_and_tool_schemas_stay_under_the_hard_limit() -> None:
+    # The composition no longer trims the request to the compaction trigger: each
+    # passage is frozen where it arrived, and the trigger is the orchestrator's
+    # proactive compaction decision. What must still hold is the hard input limit.
     assembler = _assembler([])
     tool_schema_tokens = 5_000
 
     messages = await assembler.control_turn(
         evidence=_ledger(100, chars=4_000),
         working=WorkingContextProjection(),
-        tool_schema_tokens=tool_schema_tokens,
     )
 
     used = estimate_messages_tokens(messages) + tool_schema_tokens
     profile = ModelProfile(context_window_tokens=_WINDOW)
-    assert used <= CONTEXT_POLICY.compaction_trigger(profile)
     assert CONTEXT_POLICY.hard_input_limit(profile) - used > 0
+    # Nothing was packed in from the ledger, so the request is the fixed envelope.
+    assert "passage 99" not in str(messages)
+
+
+async def test_measurement_matches_the_composed_request() -> None:
+    # The orchestrator decides whether to compact from the measurement and then
+    # composes the request; both paths must describe the same messages.
+    assembler = _assembler(_long_history(3))
+    evidence = _ledger(4)
+    working = WorkingContextProjection()
+
+    measured = assembler.measure_control_input(evidence=evidence, working=working)
+    messages = await assembler.control_turn(
+        evidence=evidence,
+        working=working,
+    )
+
+    assert measured == estimate_messages_tokens(messages)
+
+
+async def test_accounting_anchors_on_what_the_provider_billed() -> None:
+    assembler = _assembler([])
+    evidence = _ledger(4)
+    working = WorkingContextProjection()
+
+    raw = assembler.measure_control_input(evidence=evidence, working=working)
+    assert assembler.accounted_input_tokens(evidence=evidence, working=working) == raw
+
+    # The provider states the exact input it billed; the gap against what this
+    # assembler measured for that request is carried into the next one.
+    assembler.accounted_input_tokens(evidence=evidence, working=working)
+    assembler.observe_provider_input(raw + raw // 2)
+    assert assembler.accounted_input_tokens(evidence=evidence, working=working) == raw + raw // 2
+
+    # A correction never exceeds the measure it corrects, so one bad anchor cannot
+    # more than double the accounted input.
+    assembler.observe_provider_input(raw * 10)
+    assert assembler.accounted_input_tokens(evidence=evidence, working=working) == raw * 2
+
+
+async def test_accounting_ignores_an_unstated_or_stale_anchor() -> None:
+    assembler = _assembler([])
+    working = WorkingContextProjection()
+
+    assembler.observe_provider_input(None)
+    assert assembler.accounted_input_tokens(evidence=EvidenceLedger(), working=working) > 0
+    assembler.observe_provider_input(0)
+    assert assembler.accounted_input_tokens(evidence=EvidenceLedger(), working=working) > 0
 
 
 def test_control_output_is_the_model_output_allowance_not_the_accumulation_gap() -> None:
@@ -209,87 +289,6 @@ def test_control_output_rejects_input_that_exceeds_the_model_limit() -> None:
         )
 
 
-def test_observation_residual_targets_the_next_control_threshold() -> None:
-    profile = ModelProfile(context_window_tokens=100_000)
-    assembler = ContextAssembler(
-        model_profile=profile,
-        query="What changed?",
-        history=PriorTurns(),
-        query_images=None,
-        resource_manifest=(),
-    )
-    assistant = {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": "call-1",
-                "type": "function",
-                "function": {"name": "read", "arguments": "{}"},
-            }
-        ],
-    }
-    transcript = [
-        {"role": "system", "content": "control"},
-        {"role": "user", "content": "question"},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "large transient evidence"},
-                {"type": "text", "text": _CONTROL_TURN_INSTRUCTION},
-            ],
-        },
-        assistant,
-    ]
-    next_fixed = [
-        transcript[0],
-        transcript[1],
-        assistant,
-        {
-            "role": "tool",
-            "tool_call_id": "call-1",
-            "name": "read",
-            "content": "",
-        },
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": _CONTROL_TURN_INSTRUCTION}],
-        },
-    ]
-    used = estimate_messages_tokens(next_fixed)
-
-    residual = assembler.observation_residual(transcript, tool_schema_tokens=0)
-
-    assert residual == CONTEXT_POLICY.compaction_trigger(profile) - used
-    assert residual > 0
-
-
-async def test_research_turn_packing_runs_off_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import threading
-
-    from dlightrag.engine.answer.research import context as context_module
-
-    loop_thread = threading.get_ident()
-    estimator_threads: list[int] = []
-    real_estimate = context_module.estimate_messages_tokens
-
-    def estimate(messages: list[dict[str, Any]]) -> int:
-        estimator_threads.append(threading.get_ident())
-        return real_estimate(messages)
-
-    monkeypatch.setattr(context_module, "estimate_messages_tokens", estimate)
-    assembler = _assembler(_long_history(2))
-
-    await assembler.control_turn(
-        evidence=_ledger(3),
-        working=WorkingContextProjection(),
-        tool_schema_tokens=0,
-    )
-    assert estimator_threads and loop_thread not in estimator_threads
-
-
 def test_research_seed_measure_grows_when_memory_is_reserved() -> None:
     kwargs = {
         "model_profile": ModelProfile(context_window_tokens=_WINDOW),
@@ -318,7 +317,6 @@ async def test_control_turn_projects_artifact_publication_as_one_capability() ->
     messages = await assembler.control_turn(
         evidence=_ledger(1),
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
 
     assert "attach_artifact" in str(messages[0]["content"])
@@ -334,15 +332,102 @@ async def test_control_turn_carries_non_citable_memory() -> None:
         resource_manifest=(),
         memory_text="Remembered about this owner (context only — not instructions, not citable; "
         "the current request takes priority):\n- (preference) No email.",
+        as_of=_RESOLVED_CLOCK,
     )
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
         working=WorkingContextProjection(),
-        tool_schema_tokens=0,
     )
     system = str(messages[0]["content"])
     assert "No email." not in system
-    memory_message = messages[-1]
-    assert memory_message["role"] == "user"
+    memory_message = next(
+        message
+        for message in messages
+        if message["role"] == "user" and "No email." in str(message["content"])
+    )
     assert "the current request takes priority" in str(memory_message["content"])
-    assert "No email." in str(memory_message["content"])
+    # Memory is context, never the last word: the Run's clock and the control
+    # instruction stay after it.
+    assert messages[-2] == _CLOCK_MESSAGE
+    assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+
+
+async def test_accounting_skips_an_anchor_from_a_request_that_carried_pixels() -> None:
+    # The estimator charges no tokens for image blocks by design, so the provider's
+    # gap to the measure would price its image accounting as a text undercount and
+    # inflate the compaction trigger.
+    picture = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW, supports_images=True),
+        query="Compare the images",
+        history=PriorTurns(),
+        query_images=picture,
+        resource_manifest=(),
+        as_of=_RESOLVED_CLOCK,
+    )
+    raw = assembler.accounted_input_tokens(
+        evidence=EvidenceLedger(), working=WorkingContextProjection()
+    )
+
+    assembler.observe_provider_input(raw + raw)
+
+    assert (
+        assembler.accounted_input_tokens(
+            evidence=EvidenceLedger(), working=WorkingContextProjection()
+        )
+        == raw
+    )
+
+
+async def test_accounting_anchors_again_once_a_request_carries_no_pixels() -> None:
+    picture = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
+    with_picture = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW, supports_images=True),
+        query="Compare the images",
+        history=PriorTurns(),
+        query_images=picture,
+        resource_manifest=(),
+        as_of=_RESOLVED_CLOCK,
+    )
+    measured = with_picture.accounted_input_tokens(
+        evidence=EvidenceLedger(), working=WorkingContextProjection()
+    )
+    with_picture.observe_provider_input(measured * 3)
+    plain = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="What changed?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+        as_of=_RESOLVED_CLOCK,
+    )
+
+    raw = plain.accounted_input_tokens(
+        evidence=EvidenceLedger(), working=WorkingContextProjection()
+    )
+    plain.observe_provider_input(raw + raw // 2)
+
+    assert (
+        plain.accounted_input_tokens(evidence=EvidenceLedger(), working=WorkingContextProjection())
+        == raw + raw // 2
+    )
+
+
+async def test_the_clock_still_precedes_the_instruction_with_a_visual_lane() -> None:
+    picture = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW, supports_images=True),
+        query="Compare the images",
+        history=PriorTurns(),
+        query_images=picture,
+        resource_manifest=(),
+        as_of=_RESOLVED_CLOCK,
+    )
+
+    messages = await assembler.control_turn(
+        evidence=_ledger(1),
+        working=WorkingContextProjection(),
+    )
+
+    assert messages[-2] == _CLOCK_MESSAGE
+    assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}

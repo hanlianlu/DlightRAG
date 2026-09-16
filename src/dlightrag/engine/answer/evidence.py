@@ -6,11 +6,17 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.citations.utils import context_chunk_key
-from dlightrag.engine.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
+from dlightrag.engine.answer.excerpts import (
+    build_excerpt_lane_blocks,
+    build_image_label,
+    chunk_label,
+    format_kg_context,
+)
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
 
@@ -60,11 +66,14 @@ class EvidenceLedger:
     """Accumulate one answer's evidence under stable numeric citation ids.
 
     The ledger stores only the windows tools or initial retrieval actually
-    returned, with stable source and locator identity. ``transform`` renders
-    evidence inside the caller's residual request capacity: recent evidence is
-    kept verbatim and older evidence collapses to compact re-readable handles
-    that still preserve citation identity. There are no per-source quotas or image
-    lanes; one shared image budget carries every evidence visual.
+    returned, with stable source and locator identity. ``take_admitted_text``
+    renders the rows admitted since the previous call inside one batch budget:
+    recent rows are kept verbatim and that batch's older rows collapse to compact
+    re-readable handles that still preserve citation identity, and the caller
+    freezes the text into the Tool result that admitted them. Evidence text and
+    evidence pixels part company here: ``_durable_row`` drops image bytes, so
+    ``visual_blocks`` serves them from one shared image budget as their own
+    per-request lane instead.
     """
 
     def __init__(self, *, image_budget: AnswerImageBudget | None = None) -> None:
@@ -80,10 +89,24 @@ class EvidenceLedger:
         self._image_blocks: dict[str, dict[str, Any]] = {}
         self._pending_image_rows: list[ContextRow] = []
         self._image_budget_lock = asyncio.Lock()
+        # Rows the model has already been shown as frozen transcript text. The
+        # ledger holds this cursor instead of a pending list so an ordinary
+        # header skip advances it to "nothing new" without adhoc bookkeeping.
+        self._shown_rows: dict[str, int] = dict.fromkeys(("chunks", "entities", "relationships"), 0)
+        #: Where each in-flight Effect Intent's freeze began, so re-executing that
+        #: intent reproduces the same bytes instead of reporting nothing new.
+        self._intent_marks: dict[str, dict[str, int]] = {}
 
     @property
     def row_count(self) -> int:
         return sum(len(rows) for rows in self.contexts.values())
+
+    def pending_row_count(self) -> int:
+        """Return how many admitted rows no Tool result has frozen yet."""
+        return sum(
+            len(self.contexts.get(key, [])) - self._shown_rows[key]
+            for key in ("chunks", "entities", "relationships")
+        )
 
     def ledger_state_json(self) -> str:
         """Return the canonical durable Evidence state for Session settlement.
@@ -160,6 +183,9 @@ class EvidenceLedger:
             for key, values in cast(Mapping[str, Any], state.get("seen_rows") or {}).items()
         }
         self._image_blocks = {}
+        # A recovered ledger was already rendered into the Session transcript by
+        # the Tool results that admitted it; nothing is pending on restore.
+        self._shown_rows = {key: len(self.contexts.get(key, [])) for key in self._shown_rows}
         self._pending_image_rows = (
             [row for row in self.contexts["chunks"] if row.get("image_data")]
             if self._image_budget is not None
@@ -263,6 +289,151 @@ class EvidenceLedger:
                 self._pending_image_rows = [*rows, *self._pending_image_rows]
                 raise
 
+    def take_admitted_text(
+        self,
+        *,
+        budget_tokens: int,
+        verbatim_text: str = "",
+        intent_key: str | None = None,
+    ) -> tuple[str, str]:
+        """Render the rows admitted since the previous call as model-visible text.
+
+        Durable Research freezes this text into the Tool result that admitted the
+        rows, so a passage reaches the model once, at the position it arrived, and
+        every later request reuses those exact bytes as a cacheable prefix. The
+        previous shape re-rendered the whole ledger *after* the growing Session
+        fold on every turn, so the pack sat past every matched cache prefix:
+        measured prompts were billed at 88-100% cache miss while the fold itself
+        stayed cached.
+
+        Returns ``(labels, rendered)``. A row whose body already appears in
+        ``verbatim_text`` — the Tool's own model-visible result, which is how a read
+        or an injected Tool answers — contributes only its ``[n-m]`` label, so the
+        passage is not carried twice in one request.
+
+        ``budget_tokens`` bounds one batch exactly as the old pack bounded the
+        request: the newest rows render verbatim while the batch's older rows
+        collapse to the re-readable handles that already carry citation identity.
+        Images never render here; they belong to the run-local visual lane because
+        their bytes are not durable (``_durable_row`` drops ``image_data``).
+
+        ``intent_key`` makes the freeze reproduce itself. The caller names the
+        durable Effect Intent that admitted the rows, so re-executing that same
+        intent — a resume while the effect was still pending — renders those rows
+        again instead of reporting nothing new and committing an unlabelled Tool
+        result. ``rollback_show`` retracts one such freeze when the caller could not
+        use it after all.
+        """
+        if budget_tokens < 0:
+            raise ValueError("evidence render budget cannot be negative")
+        marks = self._intent_marks.setdefault(intent_key, {}) if intent_key is not None else None
+        start = {
+            key: min(self._shown_rows[key], marks[key])
+            if marks and key in marks
+            else self._shown_rows[key]
+            for key in ("chunks", "entities", "relationships")
+        }
+        if marks is not None:
+            for key in ("chunks", "entities", "relationships"):
+                marks[key] = start[key]
+        chunks = self.contexts["chunks"][start["chunks"] :]
+        admitted_kg: RetrievalContexts = {
+            "chunks": [],
+            "entities": self.contexts.get("entities", [])[start["entities"] :],
+            "relationships": self.contexts.get("relationships", [])[start["relationships"] :],
+        }
+        for key in ("chunks", "entities", "relationships"):
+            self._shown_rows[key] = len(self.contexts.get(key, []))
+        if not chunks and not admitted_kg["entities"] and not admitted_kg["relationships"]:
+            return "", ""
+
+        indexer = CitationIndexer()
+        indexer.build_index(self.contexts["chunks"])
+
+        labelled = [chunk for chunk in chunks if _body_already_shown(chunk, verbatim_text)]
+        rest = [chunk for chunk in chunks if not _body_already_shown(chunk, verbatim_text)]
+        kept_keys: set[str] = set()
+        running = 0
+        cutoff = False
+        for chunk in reversed(rest):
+            cost = _chunk_evidence_cost(chunk)
+            if not cutoff and running + cost <= budget_tokens:
+                running += cost
+                kept_keys.add(self._chunk_identity(chunk))
+            else:
+                cutoff = True
+        kept = [chunk for chunk in rest if self._chunk_identity(chunk) in kept_keys]
+        collapsed = [chunk for chunk in rest if self._chunk_identity(chunk) not in kept_keys]
+
+        blocks: list[dict[str, Any]] = []
+        kg = format_kg_context(admitted_kg, indexer)
+        if kg != _NO_KG:
+            blocks.append({"type": "text", "text": f"## Knowledge graph evidence\n{kg}"})
+        blocks.extend(self._render_chunk_blocks(kept, indexer, {}))
+        handle_block = _collapsed_handle_block(collapsed)
+        if handle_block is not None:
+            blocks.append(handle_block)
+        rendered = "\n\n".join(
+            text
+            for text in (
+                str(block.get("text") or "").strip() for block in _drop_empty_headings(blocks)
+            )
+            if text
+        )
+        labels = "\n".join(_cited_label(chunk, indexer) for chunk in labelled)
+        return labels, rendered
+
+    def rollback_show(self, intent_key: str) -> None:
+        """Retract one Tool's freeze because the caller could not use its text.
+
+        The rows stay admitted; the next Tool result renders them the way any
+        other pending row is rendered.
+        """
+        marks = self._intent_marks.pop(intent_key, None)
+        if marks is None:
+            return
+        for key, position in marks.items():
+            self._shown_rows[key] = min(self._shown_rows[key], position)
+
+    def visual_blocks(self) -> list[dict[str, Any]]:
+        """Return this run's budgeted evidence images as one bounded request lane.
+
+        Evidence pixels are run-local: ``_durable_row`` drops ``image_data``, so a
+        recovered Session cannot re-render them from durable state and they cannot
+        enter the transcript the way evidence text does. The lane is re-rendered
+        per request, which is where this design still pays a cache miss: bounded
+        by the resolved image budget and never by the accumulated corpus.
+        """
+        rows = [row for row in self.contexts["chunks"] if row.get("image_data")]
+        if not rows:
+            return []
+        indexer = CitationIndexer()
+        indexer.build_index(self.contexts["chunks"])
+        blocks: list[dict[str, Any]] = []
+        for row in rows:
+            key = context_chunk_key(
+                str(row.get("chunk_id") or ""),
+                workspace=row.get("_workspace"),
+            )
+            image_block = self._image_blocks.get(key)
+            if image_block is None:
+                continue
+            ref_id = str(row.get("reference_id") or "")
+            chunk_id = str(row.get("chunk_id") or "")
+            chunk_index = indexer.get_chunk_idx(ref_id, chunk_id) if ref_id and chunk_id else None
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": build_image_label(
+                        cite_tag=f"[{ref_id}-{chunk_index}]" if chunk_index is not None else "",
+                        chunk=row,
+                        filename=str(row.get("file_path") or ""),
+                    ),
+                }
+            )
+            blocks.append(image_block)
+        return blocks
+
     def render_blocks(
         self,
         *,
@@ -277,45 +448,11 @@ class EvidenceLedger:
             if image_blocks_by_context_key is not None
             else self._image_blocks
         )
-        blocks = self._render_chunk_blocks(chunks, indexer, image_blocks)
-        return blocks, indexer
-
-    def transform(
-        self,
-        *,
-        residual_tokens: int,
-    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        """Render evidence bounded by the caller's residual request capacity.
-
-        The most recent evidence is rendered verbatim up to the ceiling; older
-        evidence collapses to compact re-readable handles.  Citation identities
-        are preserved because the indexer always spans every accumulated source,
-        so ``[n-m]`` markers still resolve for collapsed sources.
-        """
-        if residual_tokens < 0:
-            raise ValueError("residual_tokens cannot be negative")
-        chunks = self.contexts["chunks"]
-        indexer = CitationIndexer()
-        indexer.build_index(chunks)
-
-        kept_keys: set[str] = set()
-        running = 0
-        cutoff = False
-        for chunk in reversed(chunks):
-            cost = _chunk_evidence_cost(chunk)
-            if not cutoff and running + cost <= residual_tokens:
-                running += cost
-                kept_keys.add(self._chunk_identity(chunk))
-            else:
-                cutoff = True
-
-        kept = [chunk for chunk in chunks if self._chunk_identity(chunk) in kept_keys]
-        collapsed = [chunk for chunk in chunks if self._chunk_identity(chunk) not in kept_keys]
-
-        blocks = self._render_chunk_blocks(kept, indexer, self._image_blocks)
-        handle_block = _collapsed_handle_block(collapsed)
-        if handle_block is not None:
-            blocks.append(handle_block)
+        blocks: list[dict[str, Any]] = []
+        kg = format_kg_context(self.contexts, indexer)
+        if kg != _NO_KG:
+            blocks.append({"type": "text", "text": f"## Knowledge graph evidence\n{kg}"})
+        blocks.extend(self._render_chunk_blocks(chunks, indexer, image_blocks))
         return blocks, indexer
 
     def _render_chunk_blocks(
@@ -324,6 +461,12 @@ class EvidenceLedger:
         indexer: CitationIndexer,
         image_blocks: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        """Render chunk lanes only. Knowledge-graph evidence is a caller's choice.
+
+        An incremental caller states the graph slice it admits; a full caller states
+        the whole ledger. Rendering the whole graph from here would re-copy history
+        into every later Tool result.
+        """
         attachments: list[ContextRow] = []
         web: list[ContextRow] = []
         corpus: list[ContextRow] = []
@@ -337,9 +480,6 @@ class EvidenceLedger:
                 corpus.append(row)
 
         blocks: list[dict[str, Any]] = []
-        kg = format_kg_context(self.contexts, indexer)
-        if kg != _NO_KG:
-            blocks.append({"type": "text", "text": f"## Knowledge graph evidence\n{kg}"})
         for title, rows in (
             ("## User-attached documents", attachments),
             ("## Knowledge-base evidence", corpus),
@@ -406,6 +546,73 @@ class EvidenceLedger:
         else:
             identity = context_chunk_key(row.get("chunk_id"), workspace=workspace)
         return normalized, identity
+
+
+#: A body below this size is cheaper to render than to reason about; the rule
+#: exists to avoid carrying a real passage twice, not to classify snippets.
+_VERBATIM_BODY_MIN_CHARS = 120
+
+
+def _body_already_shown(row: ContextRow, verbatim_text: str) -> bool:
+    """Return whether one Tool's own result already carries this row's body.
+
+    Resource-backed Tools answer with the passage itself, so rendering the row again
+    would put the same text in one request twice. The row still needs its citation
+    label, which is what the caller splices in front of the body it already has.
+
+    A short body is never classified as already shown: ``verbatim_text`` is one
+    Tool's whole result, and a snippet that happens to appear inside it (a status
+    line mentioning the same words) must not cost that passage its excerpt.
+    """
+    body = str(row.get("content") or "").strip()
+    return len(body) >= _VERBATIM_BODY_MIN_CHARS and body in verbatim_text
+
+
+def _cited_label(row: ContextRow, indexer: CitationIndexer) -> str:
+    """Return one already-shown row's citation label line."""
+    ref_id = str(row.get("reference_id") or "")
+    chunk_id = str(row.get("chunk_id") or "")
+    chunk_index = indexer.get_chunk_idx(ref_id, chunk_id) if ref_id and chunk_id else None
+    cite_tag = f"[{ref_id}-{chunk_index}]" if chunk_index is not None else ""
+    file_path = str(row.get("file_path") or "")
+    filename = Path(file_path).name if file_path else f"Source {ref_id}"
+    return chunk_label(cite_tag=cite_tag, chunk=dict(row), filename=filename)
+
+
+def _drop_empty_headings(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop a section heading whose rows render no text in this batch.
+
+    A visual-only passage renders no text block: its pixels belong to the run-local
+    visual lane, so the batch text would otherwise open with a heading and nothing
+    under it. A heading is kept when its own section — up to the next heading of the
+    same or higher level — contains a block that is not itself a bare heading.
+    """
+    kept: list[dict[str, Any]] = []
+    for position, block in enumerate(blocks):
+        level = _bare_heading_level(block)
+        if level:
+            has_content = False
+            for following in blocks[position + 1 :]:
+                following_level = _bare_heading_level(following)
+                if following_level and following_level <= level:
+                    break
+                if not following_level:
+                    has_content = True
+                    break
+            if not has_content:
+                continue
+        kept.append(block)
+    return kept
+
+
+def _bare_heading_level(block: Any) -> int:
+    """Return a block's heading depth, or 0 when it is not a heading alone."""
+    if not isinstance(block, dict):
+        return 0
+    text = str(block.get("text") or "").strip()
+    if not text.startswith("#") or "\n" in text:
+        return 0
+    return len(text) - len(text.lstrip("#"))
 
 
 def _chunk_evidence_cost(row: ContextRow) -> int:

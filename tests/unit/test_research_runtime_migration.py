@@ -31,6 +31,7 @@ from dlightrag.engine.agent.session.runtime import (
     AgentSessionEvent,
     AgentSessionRuntime,
 )
+from dlightrag.engine.agent.tool_content import ToolTextPart
 from dlightrag.engine.agent.tools import (
     AgentTool,
     EvidenceSourceFact,
@@ -45,6 +46,7 @@ from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.orchestration.orchestrator import (
@@ -119,7 +121,7 @@ async def _settle_bounded_research_tool(
         tools=(tool,),
         model_profile=profile,
         trace={"tool_observations": []},
-        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+        evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
@@ -150,6 +152,7 @@ async def _settle_bounded_research_tool(
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
+        state=None,
     )
     settled = await effects.execute_tool(
         cast(Any, context),
@@ -203,6 +206,9 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
         streamed_terminal_text=None,
         model_func=None,
         stream_model_func=None,
+        trace={
+            "prompt_cache": {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0}
+        },
     )
 
     class _Orchestrator:
@@ -225,6 +231,7 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
+        state=None,
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -255,6 +262,9 @@ async def test_cancellation_during_a_provider_delta_cancels_without_retry() -> N
         streamed_terminal_text=None,
         model_func=None,
         stream_model_func=None,
+        trace={
+            "prompt_cache": {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0}
+        },
     )
 
     class _Orchestrator:
@@ -275,6 +285,7 @@ async def test_cancellation_during_a_provider_delta_cancels_without_retry() -> N
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
+        state=None,
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -297,6 +308,9 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
         model_profile=answer_model_profile(),
         streamed_terminal_text="older",
         model_func=None,
+        trace={
+            "prompt_cache": {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0}
+        },
     )
 
     class _Orchestrator:
@@ -321,6 +335,7 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
+        state=None,
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -350,7 +365,7 @@ async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path
         tools=(tool,),
         model_profile=answer_model_profile(),
         trace={"tool_observations": []},
-        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+        evidence=EvidenceLedger(),
     )
     session_id = SessionId.new()
     effects = ResearchRuntimeEffects(
@@ -384,6 +399,7 @@ async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path
                 session_id=session_id,
                 lane_id=LaneId.main(),
                 operation_id=OperationId.new(),
+                state=None,
             ),
         ),
         item,
@@ -417,7 +433,7 @@ async def test_research_runtime_projects_live_object_label_into_tool_updates() -
         tools=(tool,),
         model_profile=answer_model_profile(),
         trace={"tool_observations": []},
-        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+        evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
@@ -450,6 +466,7 @@ async def test_research_runtime_projects_live_object_label_into_tool_updates() -
                 session_id=SessionId.new(),
                 lane_id=LaneId.main(),
                 operation_id=OperationId.new(),
+                state=None,
             ),
         ),
         item,
@@ -480,7 +497,7 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
         tools=(tool,),
         model_profile=answer_model_profile(),
         trace={"tool_observations": []},
-        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+        evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
@@ -510,6 +527,7 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
                 session_id=SessionId.new(),
                 lane_id=LaneId.main(),
                 operation_id=OperationId.new(),
+                state=None,
             ),
         ),
         item,
@@ -835,7 +853,14 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     assert isinstance(final.state, OperationCompleted)
     snapshot = await store.load(session_id)
     result = next(entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry))
-    assert result.result.text_content == "bounded attachment text"
+    # A resource Tool answers with the passage itself, so the admitted row is
+    # labelled where it stands: the label is what the Citation Contract asks the
+    # model to reuse. This body is shorter than the classification threshold, so the
+    # excerpt is also rendered rather than assumed already shown — the safe
+    # direction, and a handful of tokens for a handful of characters.
+    assert result.result.text_content.startswith("bounded attachment text")
+    assert result.result.text_content.count("[1-1] notes.txt") == 1
+    assert "bounded attachment text" in result.result.text_content
     [(intent_id, delta)] = store.applied_host_deltas(session_id)
     assert intent_id == result.intent_id
     assert len(delta.evidence) == 1
@@ -1032,3 +1057,275 @@ async def test_attached_resources_pin_their_earlier_handles_for_recovery() -> No
     (fetched,) = update.fetched
     assert fetched.resource.capabilities["resource_aliases"] == ["res-earlier"]
     assert fetched.resource.capabilities["resource_kind"] == "lineage_adoption"
+
+
+@pytest.mark.asyncio
+async def test_each_research_request_extends_the_previous_transcript_prefix() -> None:
+    """A later request reuses the earlier one's bytes instead of re-rendering them.
+
+    This is the property a provider prefix cache needs, and the reason evidence text
+    is frozen into the Tool result that admitted it: the old shape re-rendered the
+    accumulated corpus *after* the growing Session fold, so no earlier request could
+    be a prefix of a later one and every turn paid full input price for the corpus.
+    """
+    requests: list[list[dict[str, Any]]] = []
+
+    async def model(**kwargs: Any) -> AssistantTurn:
+        requests.append([dict(message) for message in kwargs["messages"]])
+        if len(requests) == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(ToolCall("search-1", "search_knowledge_base", {"query": "one fact"}),),
+                stop_reason="tool_use",
+                # A first turn has nothing to hit; the provider still reports it.
+                usage_details={"prompt_tokens": 10_000, "prompt_cache_hit_tokens": 0},
+            )
+        return AssistantTurn(
+            text="done",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"prompt_tokens": 12_000, "prompt_cache_hit_tokens": 0},
+        )
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return RetrievalResult(
+            contexts={
+                "chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "reference_id": "source-1",
+                        "file_path": "doc.txt",
+                        "content": "one grounded fact",
+                        "metadata": {"source_type": "file", "title": "doc.txt"},
+                    }
+                ],
+                "entities": [],
+                "relationships": [],
+            },
+            trace={"retrieved": 1},
+        )
+
+    profile = answer_model_profile()
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(Any, SimpleNamespace()),
+        retrieve_knowledge_base=retrieve,
+        model_func=model,
+        stream_model_func=cast(Any, None),
+        text_window_budget=TextWindowBudget(profile.context_window_tokens),
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        resolved_mode="research",
+    )
+    prepared = orchestrator.prepare_run("What changed?")
+    plan = AgentRunPlan.from_tools(
+        prepared.tools,
+        model_role="query",
+        context_policy_revision="context-v1",
+        model_identity=asdict(ModelFingerprint("openai", "query", None)),
+        model_profile=asdict(profile),
+    )
+    session_id = SessionId.new()
+    runtime = AgentSessionRuntime(
+        repository=MemoryAgentSessionRepository[EffectHostUpdate](),
+        effects=ResearchRuntimeEffects(
+            orchestrator=orchestrator,
+            prepared=prepared,
+            session=_Session(),  # type: ignore[arg-type]
+            session_id=session_id,
+            fetched_buffer=FetchedResourceBuffer(),
+            persist_child_intent=None,
+        ),
+        tools=prepared.tools,
+        fencing_epoch=1,
+        provider_attempt_limit=plan.provider_attempt_limit,
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="prefix",
+        content="What changed?",
+        plan=plan,
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    assert len(requests) == 2
+    first, second = requests
+    # The last two messages are this Run's derived control instruction and clock.
+    assert second[:-2][: len(first) - 2] == first[:-2]
+    # The admitted passage arrived inside the Tool result, not as a re-rendered pack.
+    assert "one grounded fact" in str(second[-3]["content"])
+    assert sum("one grounded fact" in str(message) for message in second) == 1
+    # And each turn's billed prompt was aggregated for the operator.
+    cache = prepared.trace["prompt_cache"]
+    assert cache["turns"] == 2
+    assert cache["prompt_tokens"] == 22_000
+    assert cache["cache_hit_tokens"] == 0
+    # The first turn has nothing cached yet and is never counted as a regression.
+    assert cache["cold_turns"] == 1
+
+
+def test_prompt_cache_counters_land_in_the_run_trace_and_warn_once_per_cold_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.engine.answer.research.runtime import _record_prompt_cache
+
+    trace: dict[str, Any] = {}
+
+    def turn(hit: int, billed: int) -> AssistantTurn:
+        return AssistantTurn(
+            text="x",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"prompt_tokens": billed, "prompt_cache_hit_tokens": hit},
+        )
+
+    with caplog.at_level("WARNING"):
+        # First turn: nothing was cached yet, so it is not a regression.
+        _record_prompt_cache(trace, turn(0, 60_000))
+        # A large prompt with no hit after the first turn is exactly the failure
+        # this counter exists to surface, and it is silent from the inside.
+        _record_prompt_cache(trace, turn(0, 132_202))
+        # A hit, and a miss too small to report, are both ordinary.
+        _record_prompt_cache(trace, turn(120_000, 132_000))
+        _record_prompt_cache(trace, turn(0, 512))
+
+    cache = trace["prompt_cache"]
+    assert cache == {
+        "turns": 4,
+        "prompt_tokens": 324_714,
+        "cache_hit_tokens": 120_000,
+        "cold_turns": 1,
+    }
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert warnings[0].levelname == "WARNING"
+    assert warnings[0].getMessage() == "prompt cache returned no hit for a 132202-token prompt"
+
+
+def test_a_provider_that_reports_no_usage_records_no_cache_turn() -> None:
+    from dlightrag.engine.answer.research.runtime import _record_prompt_cache
+
+    trace: dict[str, Any] = {"prompt_cache": {"turns": 0, "cold_turns": 0}}
+
+    _record_prompt_cache(trace, AssistantTurn(text="x", tool_calls=(), stop_reason="stop"))
+
+    assert trace["prompt_cache"]["turns"] == 0
+
+
+def test_one_batch_shares_one_observation_capacity_across_its_tools() -> None:
+    from dlightrag.engine.answer.research.runtime import _evidence_render_budget
+
+    result = ToolResult.text("status")
+    # Three Tools of one batch share the reserve; the last one may still spend what
+    # its siblings did not use because each is offered its own remaining share.
+    first = _evidence_render_budget(
+        capacity_tokens=40_000, result=result, pending_rows=4, remaining_items=3
+    )
+    alone = _evidence_render_budget(
+        capacity_tokens=40_000, result=result, pending_rows=4, remaining_items=1
+    )
+
+    assert first < alone
+    assert alone <= 40_000
+    assert first > 0
+    # A Tool whose own text already fills the share gets no evidence budget.
+    assert (
+        _evidence_render_budget(
+            capacity_tokens=40_000,
+            result=ToolResult.text("x" * 1_000_000),
+            pending_rows=40,
+            remaining_items=1,
+        )
+        == 0
+    )
+
+
+def test_the_freeze_splice_keeps_a_continuation_last() -> None:
+    from dlightrag.engine.answer.research.runtime import _with_admitted_evidence
+
+    ledger = EvidenceLedger()
+    ledger.add_rows(
+        [
+            {
+                "chunk_id": "c1",
+                "reference_id": "source-1",
+                "file_path": "doc.txt",
+                "content": "a passage the tool did not carry",
+                "metadata": {"source_type": "file", "title": "doc.txt"},
+            }
+        ]
+    )
+    continuation = "[more text available; cursor=abc]"
+    result = ToolResult(
+        parts=(ToolTextPart(f"tool body\n{continuation}"),),
+        protected_text=continuation,
+    )
+
+    frozen = _with_admitted_evidence(
+        result,
+        evidence=ledger,
+        budget_tokens=1_000_000,
+        intent_key="intent-1",
+    )
+
+    text = frozen.text_content
+    assert text.startswith("tool body")
+    assert "a passage the tool did not carry" in text
+    assert text.endswith(continuation)
+    assert text.index("a passage the tool did not carry") < text.index(continuation)
+
+
+def test_a_refused_freeze_returns_the_rows_to_the_next_tool_result() -> None:
+    from dlightrag.engine.answer.research.runtime import _with_admitted_evidence
+
+    ledger = EvidenceLedger()
+    ledger.add_rows(
+        [
+            {
+                "chunk_id": "c1",
+                "reference_id": "source-1",
+                "file_path": "doc.txt",
+                "content": "passage behind a refused result",
+                "metadata": {"source_type": "file"},
+            }
+        ]
+    )
+    # A Tool body the durable store cannot keep: the freeze is retracted so the
+    # passage renders with a later Tool result instead of vanishing with this one.
+    refused = _with_admitted_evidence(
+        ToolResult.text("body with \x00 a NUL"),
+        evidence=ledger,
+        budget_tokens=1_000_000,
+        intent_key="intent-1",
+    )
+    later = _with_admitted_evidence(
+        ToolResult.text("later result"),
+        evidence=ledger,
+        budget_tokens=1_000_000,
+        intent_key="intent-2",
+    )
+
+    assert refused.text_content == "body with \x00 a NUL"
+    assert "passage behind a refused result" in later.text_content
+
+
+def test_a_provider_without_cache_counters_is_not_a_cold_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.engine.answer.research.runtime import _record_prompt_cache
+
+    trace: dict[str, Any] = {}
+
+    def turn(usage: dict[str, int]) -> AssistantTurn:
+        return AssistantTurn(text="x", tool_calls=(), stop_reason="stop", usage_details=usage)
+
+    with caplog.at_level("WARNING"):
+        _record_prompt_cache(trace, turn({"input_tokens": 60_000, "output_tokens": 5}))
+        _record_prompt_cache(trace, turn({"input_tokens": 61_000, "output_tokens": 5}))
+
+    # A provider that reports no cache fields is a different fact from a reported
+    # zero, and must not be counted as a regression.
+    assert trace["prompt_cache"]["cold_turns"] == 0
+    assert trace["prompt_cache"]["turns"] == 2
+    assert [record for record in caplog.records if record.levelname == "WARNING"] == []

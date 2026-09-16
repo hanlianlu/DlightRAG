@@ -66,6 +66,7 @@ from dlightrag.engine.ai.capacity import (
 )
 from dlightrag.engine.ai.media import decode_image_base64, detect_image_mime
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
+from dlightrag.engine.ai.providers.base import provider_input_tokens
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.compaction import CompactionCoordinator
@@ -456,13 +457,20 @@ class AnswerOrchestrator:
         """Build one exact provider request without executing an external effect."""
         self._record_working_fold(run, runtime_context.snapshot)
         tool_schema_tokens = _tool_schema_tokens(run.tools)
-        estimated = (
-            run.context.measure_control_input(evidence=run.evidence, working=run.working)
+        # Anchor on what the provider billed for the previous request before
+        # measuring this one: the estimator's undercount is the only input error
+        # nothing else absorbs.
+        run.context.observe_provider_input(
+            _last_provider_input_tokens(runtime_context.snapshot),
+            tool_schema_tokens=tool_schema_tokens,
+        )
+        accounted = (
+            run.context.accounted_input_tokens(evidence=run.evidence, working=run.working)
             + tool_schema_tokens
         )
         if should_compact(
             run.model_profile,
-            input_tokens=estimated,
+            input_tokens=accounted,
             context_policy=self._context_policy,
         ):
             self._require_compactable_floor(run, tool_schema_tokens)
@@ -470,7 +478,6 @@ class AnswerOrchestrator:
         messages = await run.context.control_turn(
             evidence=run.evidence,
             working=run.working,
-            tool_schema_tokens=tool_schema_tokens,
         )
         max_tokens = run.context.output_allowance(
             messages,
@@ -528,9 +535,10 @@ class AnswerOrchestrator:
             snapshot,
             tail_target_tokens=tail,
             accounted_before=(
-                run.context.measure_control_input(evidence=run.evidence, working=run.working)
+                run.context.accounted_input_tokens(evidence=run.evidence, working=run.working)
                 + _tool_schema_tokens(run.tools)
             ),
+            durable_handles=run.evidence.citation_handles(),
             trace=run.trace,
         )
         return CompactionResult(
@@ -590,6 +598,7 @@ class AnswerOrchestrator:
         attachment_snapshots: Mapping[str, bytes] | None = None,
         attachment_admissions: Mapping[str, int] | None = None,
         agent_turn_count: int = 0,
+        as_of: datetime | None = None,
     ) -> PreparedRun:
         """Build one run's memory and the tools bound to it, before any restore."""
         if self._model_func is None:
@@ -619,6 +628,7 @@ class AnswerOrchestrator:
                 tool_guidance=_tool_guidance(tools),
                 profile_memory_write=any(tool.name == "remember" for tool in tools),
                 artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
+                as_of=as_of,
             ),
             tools=tools,
             evidence=evidence,
@@ -1143,7 +1153,33 @@ def _fresh_research_trace() -> dict[str, Any]:
         "agent_turns": 0,
         "web_search_cost_dollars": 0.0,
         "tool_observations": [],
+        "prompt_cache": {
+            "turns": 0,
+            "prompt_tokens": 0,
+            "cache_hit_tokens": 0,
+            "cold_turns": 0,
+        },
     }
+
+
+def _last_provider_input_tokens(snapshot: Any) -> int | None:
+    """Return the prompt size the provider billed for the previous request.
+
+    The Session records each Assistant turn's own usage, so the anchor needs no
+    separate accounting channel and survives a restart with the transcript.
+    """
+    graph = getattr(snapshot, "graph", None)
+    ancestry = graph.ancestry() if graph is not None else snapshot.entries
+    for entry in reversed(list(ancestry)):
+        if not isinstance(entry, AssistantMessageEntry):
+            continue
+        usage = entry.usage if isinstance(entry.usage, Mapping) else None
+        billed = provider_input_tokens(
+            {str(key): int(value) for key, value in usage.items()} if usage else None
+        )
+        if billed is not None:
+            return billed
+    return None
 
 
 _CHILD_OBJECTIVE_PREFIX = (

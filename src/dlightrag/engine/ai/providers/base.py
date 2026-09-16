@@ -3,7 +3,7 @@
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from typing import Any
 
 from dlightrag.engine.ai.messages import (
@@ -110,6 +110,60 @@ def usage_mapping(usage: Any) -> dict[str, Any]:
             return {}
         raw = {**(base or {}), **(extra or {})}
     return {k: v for k, v in raw.items() if not (isinstance(k, str) and k.startswith("_"))}
+
+
+def provider_input_tokens(usage: Mapping[str, int] | None) -> int | None:
+    """Return the total prompt tokens one provider billed, or None when unstated.
+
+    The counters are provider-specific dialects of the same fact. A total
+    ``prompt_tokens``/``prompt_token_count`` already includes whatever the
+    provider cached; Anthropic's ``input_tokens`` excludes its cache siblings, so
+    the cache reads and writes are added back. This is the number a prefix cache
+    is measured against, never an approximation of it.
+    """
+    if not usage:
+        return None
+    total = _first_int(usage, ("prompt_tokens", "prompt_token_count"))
+    if total is not None:
+        return total
+    uncached = _first_int(usage, ("input_tokens",))
+    if uncached is None:
+        return None
+    return uncached + sum(
+        value
+        for value in (
+            _first_int(usage, ("cache_read_input_tokens", "prompt_cache_hit_tokens")),
+            _first_int(usage, ("cache_creation_input_tokens", "prompt_cache_miss_tokens")),
+        )
+        if value is not None
+    )
+
+
+def _first_int(usage: Mapping[str, int], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def provider_cache_hit_tokens(usage: Mapping[str, int] | None) -> int | None:
+    """Return the prompt tokens one provider served from a prefix cache.
+
+    None means the provider does not report caching at all, which is a different
+    fact from a reported zero.
+    """
+    if not usage:
+        return None
+    return _first_int(
+        usage,
+        (
+            "prompt_tokens_details.cached_tokens",
+            "prompt_cache_hit_tokens",
+            "cache_read_input_tokens",
+            "cached_content_token_count",
+        ),
+    )
 
 
 def usage_to_dict(usage: Any) -> dict[str, int] | None:
@@ -325,6 +379,8 @@ __all__ = [
     "CompletionProvider",
     "capture_stream_usage",
     "is_provider_context_overflow",
+    "provider_cache_hit_tokens",
+    "provider_input_tokens",
     "provider_status_code",
     "usage_mapping",
     "usage_to_dict",

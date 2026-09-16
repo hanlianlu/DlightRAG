@@ -13,6 +13,8 @@ from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
+    provider_cache_hit_tokens,
+    provider_input_tokens,
     provider_status_code,
 )
 from dlightrag.engine.ai.providers.openai_compatible import (
@@ -1692,3 +1694,39 @@ def test_provider_status_code_reads_the_rejection_without_prompt_text() -> None:
 
     assert provider_status_code(Ok()) is None
     assert provider_status_code(Misdeclared()) is None
+
+
+class TestProviderUsageDialects:
+    """One fact — the prompt a provider billed — read from each provider's counters."""
+
+    def test_a_total_counter_is_the_billed_prompt_including_its_cache(self) -> None:
+        # DeepSeek and OpenAI state the total, and the hit is a subset of it.
+        assert (
+            provider_input_tokens(
+                {
+                    "prompt_tokens": 47_442,
+                    "prompt_cache_hit_tokens": 0,
+                    "prompt_cache_miss_tokens": 47_442,
+                }
+            )
+            == 47_442
+        )
+        assert provider_cache_hit_tokens({"prompt_tokens": 47_442}) is None
+
+    def test_anthropic_excludes_its_cache_siblings_from_the_input_counter(self) -> None:
+        usage = {
+            "input_tokens": 1_000,
+            "cache_read_input_tokens": 9_000,
+            "cache_creation_input_tokens": 500,
+        }
+
+        assert provider_input_tokens(usage) == 10_500
+        assert provider_cache_hit_tokens(usage) == 9_000
+
+    def test_an_unstated_prompt_is_unknown_rather_than_zero(self) -> None:
+        assert provider_input_tokens(None) is None
+        assert provider_input_tokens({}) is None
+        assert provider_input_tokens({"completion_tokens": 12}) is None
+
+    def test_a_reported_zero_hit_is_a_measured_miss(self) -> None:
+        assert provider_cache_hit_tokens({"prompt_cache_hit_tokens": 0}) == 0

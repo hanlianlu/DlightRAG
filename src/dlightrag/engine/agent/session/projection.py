@@ -96,8 +96,13 @@ def render_compaction_summary(summary_json: str | None) -> str:
         sections.append(f"critical context: {critical}")
     if summary.paths is not None:
         sections.append(f"paths: {canonical_json(summary.paths)}")
-    if summary.durable_handles is not None:
-        sections.append(f"durable handles: {canonical_json(summary.durable_handles)}")
+    handles = summary.durable_handles
+    if isinstance(handles, list):
+        rendered = "\n".join(
+            f"  - {handle}" for handle in handles if isinstance(handle, str) and handle.strip()
+        )
+        if rendered:
+            sections.append(f"durable handles (re-readable, not evidence):\n{rendered}")
     return "Prior context summary:\n" + "\n".join(f"- {section}" for section in sections)
 
 
