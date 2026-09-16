@@ -70,6 +70,14 @@ _Avoid_: Web UI, Web Conversation, Web Channel, URL read
 The caller-facing selector `auto | fast | research`. Omitted means `auto` on REST, MCP, Web Conversation, and Python.
 _Avoid_: research bool, inferred path, Web Search as a mode
 
+**Agent Effort**:
+The caller-facing three-level selector `low | high | max` for one Answer Run's own
+answering agent. Omitted means the deployment's configured level for that role;
+a subagent keeps the level configured for its own role, and a level the answering
+model cannot express is clamped by reasoning resolution rather than refused. The
+accepted Run's stored `effort` is this selector's audit surface.
+_Avoid_: reasoning level (the deployment setting), Web Search effort (`fast | balanced | deep`), Answer Mode
+
 **Valid Mode Set**:
 The capability-derived subset of `{fast, research}` that one Prepared Input may legally resolve to.
 _Avoid_: requested mode, router guess, heuristic from Web Search being configured
