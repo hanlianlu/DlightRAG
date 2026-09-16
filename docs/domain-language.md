@@ -314,8 +314,8 @@ The fenced terminal transaction that makes staged Agent Workspace files owner-vi
 _Avoid_: Staging, Spill settlement, a second model call
 
 **Agent Loop**:
-The product-neutral event-driven turn cycle that stops when the model emits no tool call or cancellation is observed; provider errors produce an error stop. Research hosts it through durable boundaries; Fast does not enter it.
-_Avoid_: workflow engine, max-agent-turn policy, READY protocol, Fast Answer
+The product-neutral turn cycle driven by one durable Agent Session: it stops when the model emits no tool call or cancellation is observed, and a provider error produces an error stop. Its only lifecycle observations are Agent Session events — ephemeral while a turn runs, committed at each settlement — because one loop means one event vocabulary. Research hosts it through durable boundaries; Fast does not enter it.
+_Avoid_: Agent Event, Tool Turn Executor, workflow engine, max-agent-turn policy, READY protocol, Fast Answer
 
 ## Execution And Workspace
 
