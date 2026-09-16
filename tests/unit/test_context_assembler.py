@@ -11,13 +11,12 @@ from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution import research_history_input_measure
+from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
-from dlightrag.engine.answer.prompts import control_turn_instruction
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 
 _WINDOW = 80_000
-_CONTROL_TURN_INSTRUCTION = control_turn_instruction()
 
 
 def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
@@ -144,23 +143,37 @@ async def test_evidence_is_no_longer_a_per_request_pack() -> None:
     assert "Knowledge-base evidence" not in rendered
 
 
-async def test_no_request_states_a_clock() -> None:
+async def test_a_request_carries_no_per_turn_prose_and_no_clock() -> None:
     messages = await _assembler([]).control_turn(
         evidence=_ledger(3),
         working=WorkingContextProjection(),
     )
 
-    # The control instruction is the last message, so nothing after it can move and
-    # the last thing the model reads is what to do next. The wall clock is not in
-    # the request at all; the model reads it from its environment.
-    assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+    # Nothing is composed per turn: the request is the pinned head plus the
+    # transcript, so a later request extends this one instead of restating it.
+    # The wall clock is not in a Research request at all — the agent answers `date`
+    # through Bash — and the loop-termination guidance is in the system prompt.
+    assert [message["role"] for message in messages] == ["system", "user"]
     rendered = " ".join(str(message.get("content")) for message in messages)
     assert "Current time" not in rendered
-    assert "UTC." not in rendered
+    # The loop-termination guidance lives in that system message now, not in a
+    # per-turn nudge that had to be rebuilt every turn.
+    assert rendered.count("return the final answer without tool calls") == 1
+    assert "return the final answer without tool calls" in str(messages[0]["content"])
 
 
-async def test_every_turn_ends_with_the_same_instruction_bytes() -> None:
-    assembler = _assembler([])
+async def test_only_per_run_static_context_follows_the_transcript() -> None:
+    # Memory, tool guidance and skill context are frozen per Run, so they are
+    # byte-stable across turns even though they sit after the transcript; the
+    # run-local visual lane is the one thing that legitimately re-renders.
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="What changed?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+        tool_guidance=("- read: bounded text",),
+    )
     first = await assembler.control_turn(
         evidence=EvidenceLedger(),
         working=WorkingContextProjection(),
@@ -170,9 +183,8 @@ async def test_every_turn_ends_with_the_same_instruction_bytes() -> None:
         working=WorkingContextProjection(),
     )
 
-    # The trailing message is byte-stable across turns, so only the material the
-    # transcript gained moves between one request and the next.
-    assert first[-1] == second[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+    assert first[-1] == second[-1]
+    assert "- read: bounded text" in str(second[-1]["content"])
 
 
 async def test_control_evidence_and_tool_schemas_stay_under_the_hard_limit() -> None:
@@ -317,8 +329,10 @@ async def test_control_turn_projects_artifact_publication_as_one_capability() ->
         working=WorkingContextProjection(),
     )
 
+    # The publication contract lives in the capability-gated system prompt now; there
+    # is no per-turn instruction left to restate it.
     assert "attach_artifact" in str(messages[0]["content"])
-    assert "root Artifact" in str(messages[-1]["content"])
+    assert "attachment, not answer text, authorizes publication" in str(messages[0]["content"])
 
 
 async def test_control_turn_carries_non_citable_memory() -> None:
@@ -343,8 +357,10 @@ async def test_control_turn_carries_non_citable_memory() -> None:
         if message["role"] == "user" and "No email." in str(message["content"])
     )
     assert "the current request takes priority" in str(memory_message["content"])
-    # Memory is context, never the last word: the control instruction stays after it.
-    assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
+    # Memory is context, never the last word of the request it belongs to: it rides
+    # as its own trailing message rather than inside the system prompt.
+    assert messages[-1]["role"] == "user"
+    assert "the current request takes priority" in str(messages[-1]["content"])
 
 
 async def test_accounting_skips_an_anchor_from_a_request_that_carried_pixels() -> None:
@@ -405,34 +421,49 @@ async def test_accounting_anchors_again_once_a_request_carries_no_pixels() -> No
     )
 
 
-async def test_the_instruction_stays_last_with_a_visual_lane() -> None:
-    picture = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
+async def test_evidence_images_stay_after_the_transcript() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    budget = AnswerImageBudget(
+        max_images=2,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    ledger = EvidenceLedger(image_budget=budget)
+    row = {
+        "chunk_id": "page-1",
+        "reference_id": "source-uuid",
+        "full_doc_id": "doc-uuid",
+        "file_path": "report.pdf",
+        "content": "",
+        "_workspace": "alpha",
+        "metadata": {"source_type": "file", "title": "report.pdf"},
+        "image_data": png,
+    }
+    row["page_number"] = 3
+    ledger.add_rows([row])
+    await ledger.aflush_images()
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW, supports_images=True),
-        query="Compare the images",
+        query="What changed?",
         history=PriorTurns(),
-        query_images=picture,
+        query_images=None,
         resource_manifest=(),
     )
 
     messages = await assembler.control_turn(
-        evidence=_ledger(1),
+        evidence=ledger,
         working=WorkingContextProjection(),
     )
 
-    assert messages[-1] == {"role": "user", "content": _CONTROL_TURN_INSTRUCTION}
-
-
-async def test_a_measurement_that_is_never_sent_does_not_move_the_anchor() -> None:
-    assembler = _assembler([])
-    evidence = _ledger(4)
-    working = WorkingContextProjection()
-
-    sent = assembler.accounted_input_tokens(evidence=evidence, working=working)
-    assembler.observe_provider_input(sent + sent // 2)
-    # A compaction's accounted-before measures the pre-compaction request, which the
-    # provider never sees; recording it would compare the next billed count against
-    # a request that was not sent and silently drop the correction.
-    assembler.corrected_input_tokens(evidence=evidence, working=working)
-
-    assert assembler.accounted_input_tokens(evidence=evidence, working=working) == sent + sent // 2
+    # Images re-render per request, so the lane belongs after the transcript: anything
+    # before it stays reusable, and the lane costs no more than the image budget.
+    assert "image_url" in str(messages[-1]["content"])
+    assert "image_url" not in str(messages[0]["content"])

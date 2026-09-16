@@ -154,9 +154,9 @@ there is no hidden finalizer model call.
 
 Each turn's request is the previous turn's request plus new material: the Session
 fold only appends, admitted Evidence text is frozen into the Tool result that
-produced it, and the control instruction is the last message. That shape is what a
-provider prefix cache can reuse, and no request states a clock — the model reads one
-from its environment when a question needs it
+produced it, and nothing is composed per turn. That shape is what a provider prefix
+cache can reuse. No system message states a clock: a Research agent reads one from
+its environment, and a Fast answer's own request states it
 ([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
 
 Research provider text is an optimistic projection. Native provider deltas flow

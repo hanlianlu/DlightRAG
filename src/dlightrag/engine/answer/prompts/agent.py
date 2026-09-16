@@ -45,21 +45,6 @@ report a change only after the mutation succeeds.\
 """
 
 
-def control_turn_instruction(*, artifact_publication: bool = False) -> str:
-    instruction = (
-        "Evidence gathered so far is above. Call a tool only to resolve a specific "
-        "missing fact; otherwise return the final answer without tool calls."
-    )
-    if artifact_publication:
-        return (
-            f"{instruction} Before returning it, attach every completed root Artifact "
-            "after its final modification; use the returned URI for deliberate placement. "
-            "If an attached Artifact contains the complete deliverable, make the final "
-            "Answer a concise handoff rather than repeat its contents."
-        )
-    return instruction
-
-
 def agent_control_prompt(
     *,
     profile_memory_write: bool = False,
@@ -67,7 +52,7 @@ def agent_control_prompt(
 ) -> str:
     # The grounding and citation contract is shared with the Fast answer
     # prompt so a Research answer and a Fast answer cite identically.
-    sections = [core_identity(), _AGENT_GUIDANCE]
+    sections = [core_identity(environment_clock=True), _AGENT_GUIDANCE]
     if artifact_publication:
         sections.append(_ARTIFACT_PUBLICATION_GUIDANCE)
     if profile_memory_write:
@@ -76,4 +61,4 @@ def agent_control_prompt(
     return "\n\n".join(sections)
 
 
-__all__ = ["agent_control_prompt", "control_turn_instruction"]
+__all__ = ["agent_control_prompt"]

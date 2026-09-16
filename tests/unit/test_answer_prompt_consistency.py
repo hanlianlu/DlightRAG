@@ -1,11 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Research and Fast answers share one grounding and citation contract."""
 
-from dlightrag.engine.answer.prompts import (
-    agent_control_prompt,
-    answer_core,
-    control_turn_instruction,
-)
+from dlightrag.engine.answer.prompts import agent_control_prompt, answer_core
 from dlightrag.engine.answer.prompts.answer import answer_grounding_guidance
 
 
@@ -61,10 +57,10 @@ def test_artifact_publication_guidance_is_capability_gated() -> None:
     assert "Do not reproduce substantial portions of the Artifact" in enabled
     assert "explicitly requests both inline and file versions" in enabled
     assert "does not require duplicated prose" in enabled
-    assert "root Artifact" not in control_turn_instruction()
-    terminal = control_turn_instruction(artifact_publication=True)
-    assert "root Artifact" in terminal
-    assert "concise handoff rather than repeat" in terminal
+    # The publication reminder lives in this one prompt now: there is no per-turn
+    # instruction left to restate it.
+    assert "root Artifact" not in disabled
+    assert "attach_artifact" in enabled
 
 
 def test_research_agent_keeps_its_own_loop_guidance() -> None:

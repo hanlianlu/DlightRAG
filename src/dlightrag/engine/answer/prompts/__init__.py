@@ -5,12 +5,13 @@ A prompt lives in the module named after the call that sends it; `identity.py` h
 only fragment shared across calls. This facade exports the complete prompts.
 """
 
-from .agent import agent_control_prompt, control_turn_instruction
+from .agent import agent_control_prompt
 from .answer import answer_core
 from .highlight import HIGHLIGHT_BATCH_USER_PROMPT, HIGHLIGHT_SYSTEM_PROMPT
+from .identity import clock_line
 
 __all__ = [
-    "control_turn_instruction",
+    "clock_line",
     "HIGHLIGHT_BATCH_USER_PROMPT",
     "HIGHLIGHT_SYSTEM_PROMPT",
     "agent_control_prompt",

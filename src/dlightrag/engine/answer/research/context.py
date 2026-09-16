@@ -12,7 +12,7 @@ from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.memory import standing_memory_message
 from dlightrag.engine.answer.mode import resource_role
-from dlightrag.engine.answer.prompts import agent_control_prompt, control_turn_instruction
+from dlightrag.engine.answer.prompts import agent_control_prompt
 from dlightrag.engine.answer.resources.converters import conversion_format
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
@@ -61,9 +61,6 @@ class ContextAssembler:
         self._tool_guidance = tool_guidance
         self._profile_memory_write = profile_memory_write
         self._artifact_publication = artifact_publication
-        self._control_instruction = control_turn_instruction(
-            artifact_publication=artifact_publication
-        )
         #: Provider-anchored estimator correction; see ``observe_provider_input``.
         self._estimated_bias_tokens = 0
         self._last_measured_tokens: int | None = None
@@ -227,17 +224,13 @@ class ContextAssembler:
                 )
             )
         tail.extend(self._contributions)
-        # The instruction is the only per-turn prose in the request and its last
-        # message, so nothing after it can move and the last thing the model reads is
-        # what to do next. It stays derived rather than durable: the reusable prefix
-        # ends before it, which costs those few tokens per turn and nothing else.
-        tail.append(
-            ContextContribution(
-                source="answer.control",
-                authority="reference",
-                messages=({"role": "user", "content": self._control_instruction},),
-            )
-        )
+        # No per-turn prose is composed. A nudge that restated the system prompt's
+        # own guidance had to be rebuilt every turn and sat after the transcript, so
+        # the reusable prefix ended before it; both reference harnesses send nothing
+        # of the kind — Pi appends only durable messages, and DeepSeek's loop derives
+        # each request from its session log. What remains after the transcript is
+        # per-Run static (memory, tool guidance, skill context) plus the run-local
+        # visual lane, and the loop-termination guidance lives in the system prompt.
         return [*head, *ContextProjector().project(tail).messages]
 
     def _head(

@@ -295,10 +295,11 @@ class TestAnswerSynthesizerPolicy:
         assert cast(Any, stream).trace["answer_images_total"] == 3
 
     @pytest.mark.asyncio
-    async def test_no_fast_request_states_a_clock(self) -> None:
-        # A system message that moves with the wall clock starts a new prompt prefix
-        # on every turn, and a clock in the current message buys nothing here: the
-        # model reads the wall clock from its environment when a question needs it.
+    async def test_fast_states_the_clock_in_its_own_request(self) -> None:
+        # Fast has no tools, so nothing in its environment can tell it what "now" is.
+        # The clock therefore rides in the current request's own message — before the
+        # question that may depend on it, and never in the system prompt, which has to
+        # stay byte-stable for a provider prefix cache to reuse earlier turns.
         model_func = _stream_func("ok")
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(max_images=2),
@@ -309,9 +310,21 @@ class TestAnswerSynthesizerPolicy:
         await synth.generate_stream("describe", _image_contexts())
 
         messages = model_func.call_args.kwargs["messages"]
-        rendered = str(messages)
-        assert "Current time" not in rendered
-        assert "does not state the current time" in str(messages[0]["content"])
+        assert "Current time" not in str(messages[0]["content"])
+        assert "states the current time in UTC" in str(messages[0]["content"])
+        blocks = messages[-1]["content"]
+        clock_index = next(
+            index
+            for index, block in enumerate(blocks)
+            if block.get("type") == "text" and str(block["text"]).startswith("Current time: ")
+        )
+        question_index = next(
+            index
+            for index, block in enumerate(blocks)
+            if block.get("type") == "text" and "## Question" in str(block["text"])
+        )
+        assert clock_index < question_index
+        assert str(blocks[clock_index]["text"]).endswith(" UTC.")
 
     def test_history_measure_uses_the_exact_current_image_serializer(self) -> None:
         synth = AnswerSynthesizer(

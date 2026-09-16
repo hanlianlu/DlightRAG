@@ -1142,12 +1142,13 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     assert isinstance(final.state, OperationCompleted)
     assert len(requests) == 2
     first, second = requests
-    # The last message is this Run's derived control instruction; everything before it
-    # is the transcript, which only grows.
-    assert second[-1] == first[-1]
-    assert second[:-1][: len(first) - 1] == first[:-1]
+    # This composition has no per-Run tail (no admitted evidence images and no tool
+    # guidance), so the later request is a strict extension of the earlier one: the
+    # earlier request is its prefix byte for byte.
+    assert second[: len(first)] == first
     # The admitted passage arrived inside the Tool result, not as a re-rendered pack.
-    assert "one grounded fact" in str(second[-2]["content"])
+    tool_messages = [message for message in second if message.get("role") == "tool"]
+    assert "one grounded fact" in str(tool_messages[-1]["content"])
     assert sum("one grounded fact" in str(message) for message in second) == 1
     # And each turn's billed prompt was aggregated for the operator.
     cache = prepared.trace["prompt_cache"]

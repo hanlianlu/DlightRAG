@@ -44,13 +44,13 @@ Every citation marker is defined where its evidence appears, and nowhere else:
 def answer_core() -> str:
     """The answer system prompt: byte-stable for every call.
 
-    Every byte before the messages is provider prefix-cache input, so this text
-    never carries a clock, and no caller adds one: the model reads the wall clock
-    from its environment (see ``identity.core_identity``).
+    Every byte before the messages is provider prefix-cache input, so this text never
+    carries a clock. Fast has no tools, so its own request states the time and this
+    prompt tells the model to use it (see ``identity.core_identity``).
     """
     return "\n\n".join(
         [
-            core_identity(),
+            core_identity(environment_clock=False),
             ANSWER_CONTEXT_GUIDANCE,
             CITATION_GUIDANCE,
         ]

@@ -314,9 +314,10 @@ physical context.
 
 A Research request is the previous request plus new material, so a provider prefix
 cache can reuse it: the Session fold only appends, admitted Evidence text is frozen
-into the Tool result that produced it, and the control instruction is the last
-message. No request states the current time — a prefix that moves with wall time
-forfeits the whole cache, so the model reads the clock from its environment
+into the Tool result that produced it, and nothing is composed per turn. No system
+message states the current time — a prefix that moves with wall time forfeits the
+whole cache — so a Research agent reads the clock from its environment and a Fast
+answer's own request states it
 ([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
 The compaction trigger is measured from the character estimator corrected against
 the prompt size the provider itself billed for the previous request, and each

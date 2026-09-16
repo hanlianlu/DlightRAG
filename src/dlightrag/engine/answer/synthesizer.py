@@ -21,6 +21,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
@@ -36,7 +37,7 @@ from dlightrag.engine.answer.errors import (
 from dlightrag.engine.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.memory import standing_memory_message
-from dlightrag.engine.answer.prompts import answer_core
+from dlightrag.engine.answer.prompts import answer_core, clock_line
 from dlightrag.engine.answer.synthesis_context import AnswerContextPacker
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
@@ -345,13 +346,15 @@ class AnswerSynthesizer:
         The standing memory block rides as its own user-role message after the
         current request — never inside the system prompt (Pi/Kimi convention).
 
-        No block states a clock: the system prompt is byte-stable and the request
-        carries nothing that moves with wall time, so a provider prefix cache can
-        reuse the earlier turns of a conversation.
+        The clock is the current request's own line, placed before the question that
+        can depend on it: Fast has no tools, so nothing in the environment can tell
+        the model what "now" is. It costs one line and no cache — this message is
+        fresh every turn and never enters the reusable prefix.
         """
         content: list[dict[str, Any]] = []
         content.extend(current_image_blocks or ())
         content.extend(excerpt_blocks)
+        content.append({"type": "text", "text": clock_line(datetime.now(UTC))})
         content.append({"type": "text", "text": user_prompt})
         contributions = [
             ContextContribution(
