@@ -93,7 +93,7 @@ async def _seed_origin_run(db: Any, store: PGRunStore) -> tuple[str, str]:
                 resource_id,
                 name,
                 mime,
-                json.dumps({"resource_kind": kind, "origin_run_id": origin_run}),
+                json.dumps({"resource_kind": kind}),
                 digest,
                 hashlib.sha256(locator.encode()).hexdigest(),
                 locator.encode(),

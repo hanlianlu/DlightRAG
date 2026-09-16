@@ -2193,7 +2193,7 @@ ORDER BY reference_kind, ordinal
 """
 
 _SELECT_LINEAGE_RESOURCE = """
-SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
+SELECT run_id, resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
 FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND session_id = $2 AND blob_digest IS NOT NULL
   AND (
@@ -3429,7 +3429,12 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                     filename=str(row["safe_name"] or row["resource_id"]),
                     mime_type=str(row["media_type"] or "application/octet-stream"),
                     source_locator=bytes(row["source_locator"] or b""),
-                    capabilities=_json_object(row["capabilities"]),
+                    # The origin Run is the row's own run_id; surface it the way
+                    # occurrence rows record theirs, so one loader reads both.
+                    capabilities={
+                        **_json_object(row["capabilities"]),
+                        "origin_run_id": str(row["run_id"]),
+                    },
                 )
                 for row in rows
             )
