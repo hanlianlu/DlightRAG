@@ -31,6 +31,7 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
@@ -233,6 +234,8 @@ class AnswerRequest:
     agent_lane_id: str = "main"
     source_lane_id: str | None = None
     requested_skill: str | None = None
+    #: The caller's own agent effort for this run, when one was chosen.
+    effort: AnswerEffort | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,6 +652,7 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         agent_lane_id=request.agent_lane_id,
         source_lane_id=request.source_lane_id,
         requested_skill=request.requested_skill,
+        effort=request.effort,
         history_attachments=tuple(
             AttachmentReference(
                 digest=resource.digest,
@@ -1659,6 +1663,7 @@ class AnswerService:
                     agent_session_id=request.agent_session_id or SessionId.new().value,
                     agent_lane_id=request.agent_lane_id,
                     source_lane_id=request.source_lane_id,
+                    effort=request.effort,
                 ), projection.valid_modes
 
             yield prepare

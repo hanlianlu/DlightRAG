@@ -591,6 +591,28 @@ async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_cap
     assert prepared["profile_memory_epoch"] == 7
 
 
+async def test_an_accepted_effort_is_recorded_and_distinguishes_replays() -> None:
+    store = _Store()
+    service = _service(store=store)
+
+    await service.create(
+        request=_request(mode="research", effort="max"),
+        owner_id=_OWNER,
+        auth_mode="jwt",
+    )
+    await service.create(
+        request=_request(mode="research"),
+        owner_id=_OWNER,
+        auth_mode="jwt",
+    )
+
+    chosen, defaulted = (row["prepared_input"] for row in store.created)
+    assert chosen["effort"] == "max"
+    assert defaulted["effort"] is None
+    # The same submission with another effort is another request, not a replay.
+    assert chosen["idempotency_fingerprint"] != defaulted["idempotency_fingerprint"]
+
+
 async def test_fast_acceptance_never_enters_profile_memory_capability() -> None:
     store = _Store()
 

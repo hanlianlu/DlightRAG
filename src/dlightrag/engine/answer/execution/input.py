@@ -23,6 +23,7 @@ from dlightrag.engine.ai.reasoning import (
     resolve_reasoning,
 )
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
+from dlightrag.engine.answer.client_contracts import AnswerEffort, normalize_answer_effort
 from dlightrag.engine.answer.execution.connection_binding import (
     RunConnectionBinding,
     decode_connection_bindings,
@@ -217,6 +218,8 @@ class AnswerRunRequest:
     agent_lane_id: str = "main"
     source_lane_id: str | None = None
     requested_skill: str | None = None
+    #: The caller's own agent effort for this run, when one was chosen.
+    effort: AnswerEffort | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -239,6 +242,7 @@ class AnswerRunRequest:
             "agent_lane_id": self.agent_lane_id,
             "source_lane_id": self.source_lane_id,
             "requested_skill": self.requested_skill,
+            "effort": self.effort,
         }
 
     @classmethod
@@ -273,6 +277,7 @@ class AnswerRunRequest:
             requested_skill=(
                 str(request["requested_skill"]).strip() if request.get("requested_skill") else None
             ),
+            effort=normalize_answer_effort(request.get("effort")),
         )
 
 
@@ -313,6 +318,8 @@ class AnswerRunInput:
     parent_run_id: str | None = None
     continuation_kind: str | None = None
     requested_skill: str | None = None
+    #: The caller's own agent effort for this run, when one was chosen.
+    effort: AnswerEffort | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -346,6 +353,7 @@ class AnswerRunInput:
             "parent_run_id": self.parent_run_id,
             "continuation_kind": self.continuation_kind,
             "requested_skill": self.requested_skill,
+            "effort": self.effort,
         }
 
     @classmethod
@@ -410,6 +418,7 @@ class AnswerRunInput:
             requested_skill=(
                 str(request["requested_skill"]).strip() if request.get("requested_skill") else None
             ),
+            effort=normalize_answer_effort(request.get("effort")),
         )
 
     @classmethod

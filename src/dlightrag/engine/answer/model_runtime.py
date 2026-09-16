@@ -9,6 +9,7 @@ from typing import Any
 
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.reasoning import ReasoningLevel
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ChatModelSelector, ModelRoleSettings, ModelSettings
 from dlightrag.engine.ai.telemetry import Telemetry
@@ -64,7 +65,7 @@ class AnswerModelRuntime:
         self._vlm_profile = vlm_profile
         self._answer_synthesizers: dict[ModelProfile, AnswerSynthesizer] = {}
         self._answer_model: CompletionModel | None = None
-        self._tool_models: dict[ChatModelSelector, ToolModel] = {}
+        self._tool_models: dict[tuple[ChatModelSelector, ReasoningLevel | None], ToolModel] = {}
         self._vlm_model: CompletionModel | None = None
         self._web_sources: WebSourceService | None = None
         self._closed = False
@@ -93,19 +94,33 @@ class AnswerModelRuntime:
     def model_settings(self, role: ChatModelSelector) -> ModelSettings:
         return self._settings.model_roles.resolve(role)
 
-    def tool_model(self, role: ChatModelSelector) -> ToolModel:
-        """Return the configured tool wrapper for a selected child/model role."""
-        self._ensure_open()
-        if role not in self._tool_models:
-            self._tool_models[role] = ToolModel(
-                self._settings.model_roles.resolve(role),
-                scheduler=self._scheduler,
-                telemetry=self._telemetry,
-            )
-        return self._tool_models[role]
+    def tool_model(
+        self,
+        role: ChatModelSelector,
+        *,
+        agentic_reasoning: ReasoningLevel | None = None,
+    ) -> ToolModel:
+        """Return the configured tool wrapper for a selected child/model role.
 
-    def query_tool_model(self) -> ToolModel:
-        return self.tool_model("query")
+        One accepted run may pin its own agent effort for the answering role, so
+        the requested level is part of the cache key: a pinned run never changes
+        the configured default another run still reads.
+        """
+        self._ensure_open()
+        key = (role, agentic_reasoning)
+        cached = self._tool_models.get(key)
+        if cached is None:
+            settings = self._settings.model_roles.resolve(role)
+            if agentic_reasoning is not None:
+                # ModelSettings is a Pydantic model: copying with an explicit field
+                # keeps it in the fields-set, so the level is not inherited over.
+                settings = settings.model_copy(update={"agentic_reasoning": agentic_reasoning})
+            cached = ToolModel(settings, scheduler=self._scheduler, telemetry=self._telemetry)
+            self._tool_models[key] = cached
+        return cached
+
+    def query_tool_model(self, *, agentic_reasoning: ReasoningLevel | None = None) -> ToolModel:
+        return self.tool_model("query", agentic_reasoning=agentic_reasoning)
 
     def vlm_func(self) -> Callable[..., Any]:
         self._ensure_open()

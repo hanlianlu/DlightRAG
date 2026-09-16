@@ -111,6 +111,7 @@ async def answer_tool(
         creation = await application.answers.create(
             request=ServiceAnswerRequest(
                 query=args.query,
+                effort=args.effort,
                 workspaces=tuple(resolved_workspaces),
                 retrieval=RetrievalOptions(
                     top_k=args.top_k,

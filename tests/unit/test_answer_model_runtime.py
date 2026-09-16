@@ -95,7 +95,7 @@ def test_synthesizer_failure_does_not_construct_provider() -> None:
 async def test_close_is_idempotent_and_prevents_recreation() -> None:
     runtime = _runtime()
     components = [AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()]
-    runtime._tool_models["query"] = components[0]
+    runtime._tool_models[("query", None)] = components[0]
     runtime._answer_model = components[1]
     runtime._vlm_model = components[2]
     runtime._web_sources = components[3]

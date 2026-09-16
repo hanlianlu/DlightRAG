@@ -69,6 +69,7 @@ from dlightrag.engine.agent.tools import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.reasoning import ReasoningLevel
 from dlightrag.engine.ai.scheduler import model_call_scope
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
@@ -1233,6 +1234,7 @@ class AnswerExecutor:
 
         run = await self.prepare_orchestrated_run(
             query=request.query,
+            agent_effort=request.effort,
             workspaces=list(request.workspaces),
             retrieval=request.retrieval,
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
@@ -1983,6 +1985,7 @@ class AnswerExecutor:
         async_subagents: bool = True,
         interactive_controls: bool = True,
         pinned_models: tuple[PinnedModelProfile, ...],
+        agent_effort: ReasoningLevel | None = None,
         connection_tools: tuple[AgentTool, ...] = (),
         lineage_loader: LineageResourceLoader | None = None,
     ) -> OrchestratorRun:
@@ -2062,7 +2065,7 @@ class AnswerExecutor:
             model_func: Callable[..., Any] | None = None
             stream_model_func: Callable[..., AsyncIterator[str]] | None = None
             if resolved_mode == "research":
-                tool_model = self._models.query_tool_model()
+                tool_model = self._models.query_tool_model(agentic_reasoning=agent_effort)
                 model_func = tool_model
                 stream_model_func = tool_model.stream_text
 

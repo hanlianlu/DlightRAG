@@ -235,6 +235,7 @@ def _service_request(
     )
     return ServiceAnswerRequest(
         query=body.query,
+        effort=body.effort,
         workspaces=tuple(workspaces),
         history=tuple(conversation_history_as_dicts(body.history) or ()),
         retrieval=RetrievalOptions(

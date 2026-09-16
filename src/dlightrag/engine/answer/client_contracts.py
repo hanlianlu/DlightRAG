@@ -14,12 +14,35 @@ the model.
 """
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dlightrag.engine.answer.resources.images import MAX_QUERY_IMAGES
+
+#: The agent efforts a caller may choose, ordered from least to most.
+AnswerEffort = Literal["low", "high", "max"]
+ANSWER_EFFORT_LEVELS: tuple[AnswerEffort, ...] = ("low", "high", "max")
+
+
+def normalize_answer_effort(value: Any) -> AnswerEffort | None:
+    """Return one accepted agent effort, or raise for a value outside the three.
+
+    One entry point owns the three levels so the browser control, every public
+    transport, and the engine's pinned input can never drift apart.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("effort is not a supported level")
+    text = value.strip().lower()
+    if not text:
+        return None
+    if text not in ANSWER_EFFORT_LEVELS:
+        raise ValueError("effort is not a supported level")
+    return cast(AnswerEffort, text)
+
 
 MAX_HISTORY_MESSAGES = 100
 MAX_HISTORY_CONTENT_CHARS = 16000
@@ -118,6 +141,7 @@ class AnswerRequestContract(QueryRequestContract):
     semantic_highlights: bool = False
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
     mode: Literal["auto", "fast", "research"] | None = None
+    effort: AnswerEffort | None = None
 
 
 def model_dump_json_safe(value: Any) -> Any:
@@ -140,6 +164,9 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 
 
 __all__ = [
+    "ANSWER_EFFORT_LEVELS",
+    "AnswerEffort",
+    "normalize_answer_effort",
     "ClientContractModel",
     "ConversationMessage",
     "AnswerAttachmentLink",

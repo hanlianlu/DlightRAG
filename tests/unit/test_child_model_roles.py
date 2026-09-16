@@ -17,6 +17,7 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.reasoning import (
+    ReasoningLevel,
     best_effort_reasoning_profile,
     merge_reasoning_kwargs,
     resolve_reasoning,
@@ -136,7 +137,7 @@ def test_spawn_guidance_uses_serialized_effective_profiles_not_tier_guarantees()
     assert "model=visual; images=False" in child_model_guidance(narrowed)
 
 
-async def _prepared_executor(monkeypatch):
+async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = None):
     roles = _roles()
     pins = _pins(roles)
     profiles = {cast(Any, pin.role): pin.profile for pin in pins}
@@ -180,6 +181,7 @@ async def _prepared_executor(monkeypatch):
         resolved_mode="research",
         resource_scope="owner/run",
         pinned_models=pins,
+        agent_effort=agent_effort,
     )
     return executor, run.orchestrator, provider, pins
 

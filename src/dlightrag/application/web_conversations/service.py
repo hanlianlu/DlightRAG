@@ -21,6 +21,7 @@ from dlightrag.application.answer_runs import (
 from dlightrag.application.runs import RunView
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.media import thumbnail_bytes
+from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.input import AnswerRunRequest
 from dlightrag.engine.answer.history import (
@@ -423,6 +424,7 @@ class WebConversationService:
         attachments: Sequence[WebAttachment] = (),
         mode: str | None = None,
         requested_skill: str | None = None,
+        effort: AnswerEffort | None = None,
     ) -> WebAnswerSubmission | None:
         """Create or replay one submission's run and its conversation entry.
 
@@ -442,6 +444,7 @@ class WebConversationService:
             attachments=attachments,
             mode=mode,
             requested_skill=requested_skill,
+            effort=effort,
         )
         replay = await self._store_call(
             self._store.replay_answer_turn(
@@ -473,6 +476,7 @@ class WebConversationService:
             attachments=attachments,
             mode=mode,
             requested_skill=requested_skill,
+            effort=effort,
         )
 
         async def resolve_history(
@@ -692,6 +696,7 @@ def _prepare_submission(
     attachments: Sequence[WebAttachment],
     mode: str | None = None,
     requested_skill: str | None = None,
+    effort: AnswerEffort | None = None,
 ) -> _PreparedSubmission:
     """Normalize a browser submission without coupling it to a UI history page."""
     request = AnswerRequest(
@@ -701,6 +706,7 @@ def _prepare_submission(
         semantic_highlights=True,
         mode=mode,
         requested_skill=requested_skill,
+        effort=effort,
         resources=tuple(
             ResourceInput(
                 filename=attachment.filename,
@@ -750,6 +756,7 @@ def _web_answer_request_fingerprint(
     attachments: Sequence[WebAttachment],
     mode: str | None = None,
     requested_skill: str | None = None,
+    effort: AnswerEffort | None = None,
 ) -> str:
     """Hash only the stable browser submission, before conversation enrichment."""
     return run_request_fingerprint(
@@ -758,6 +765,7 @@ def _web_answer_request_fingerprint(
             "query": query,
             "mode": mode or "auto",
             "requested_skill": requested_skill or "",
+            "effort": effort or "",
             "workspaces": list(workspaces),
             "attachments": [
                 {
