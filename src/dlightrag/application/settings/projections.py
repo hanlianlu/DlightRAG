@@ -170,6 +170,7 @@ def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
         semantic_highlights=semantic_highlight_settings(config),
         publication=PublicationLimits(**publication.model_dump()),
         child_guidance_timeout_seconds=(config.answer.agent.child_guidance_timeout_seconds),
+        lineage_adoption=config.answer.generation.lineage_adoption,
     )
 
 

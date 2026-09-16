@@ -105,6 +105,7 @@ from dlightrag.engine.answer.execution.input import (
     pinned_model_selectors,
     validate_active_answer_input,
 )
+from dlightrag.engine.answer.execution.lineage import RetainedResourceLoader
 from dlightrag.engine.answer.fast import FastRunBoundaries, FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.engine.answer.history import HistoryInputMeasure, HistoryProjectionTarget
@@ -145,6 +146,7 @@ from dlightrag.engine.answer.research.runtime import (
     _usage_from_snapshot_entries,
 )
 from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
+from dlightrag.engine.answer.resources.lineage import LineageResourceLoader
 from dlightrag.engine.answer.resources.models import (
     ResourceManifestEntry,
     ResourceRegistryError,
@@ -285,6 +287,14 @@ class ArtifactReader(Protocol):
 class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
     """Executor store: artifacts, selected attachment retention and fenced routing."""
 
+    async def lineage_resource(
+        self,
+        *,
+        owner_id: str,
+        session_id: str,
+        resource_id: str,
+    ) -> tuple[RunFetchedResource, ...]: ...
+
     async def load_child_attachment_occurrences(
         self,
         *,
@@ -344,6 +354,7 @@ class AnswerExecutorSettings:
     semantic_highlights: SemanticHighlightSettings
     publication: PublicationLimits = PublicationLimits()
     child_guidance_timeout_seconds: int = 300
+    lineage_adoption: bool = True
 
 
 @dataclass
@@ -1236,6 +1247,7 @@ class AnswerExecutor:
             interactive_controls=interactive_controls,
             pinned_models=request.pinned_models,
             connection_tools=connection_tools,
+            lineage_loader=self._lineage_loader(session, agent_session_id),
             skills=(
                 self._skills_bundle_factory(session.owner_id, request.requested_skill)
                 if self._skills_bundle_factory is not None
@@ -1972,6 +1984,7 @@ class AnswerExecutor:
         interactive_controls: bool = True,
         pinned_models: tuple[PinnedModelProfile, ...],
         connection_tools: tuple[AgentTool, ...] = (),
+        lineage_loader: LineageResourceLoader | None = None,
     ) -> OrchestratorRun:
         pinned_model_selectors(pinned_models)
         child_pins = {pin.role: pin for pin in pinned_models}
@@ -2111,10 +2124,14 @@ class AnswerExecutor:
                     else None
                 ),
                 resource_viewer=(
-                    make_resource_viewer(resolved.registry) if resolved.registry else None
+                    make_resource_viewer(resolved.registry, lineage=lineage_loader)
+                    if resolved.registry
+                    else None
                 ),
                 resource_reader=(
-                    make_resource_reader(resolved.registry, text_window_budget)
+                    make_resource_reader(
+                        resolved.registry, text_window_budget, lineage=lineage_loader
+                    )
                     if resolved.registry is not None
                     else None
                 ),
@@ -2283,6 +2300,23 @@ class AnswerExecutor:
                 raise ValueError("conversion snapshot input digest mismatch")
             registry.adopt_conversion_snapshot(snapshot)
         return attachment_snapshots
+
+    def _lineage_loader(
+        self, session: RunSession, agent_session_id: SessionId
+    ) -> LineageResourceLoader | None:
+        """Adopt an earlier Run's Resources when this deployment allows it.
+
+        The loader carries this Run's owner and Agent Session, so a row from another
+        Session or owner cannot be reached through it even by a forged handle.
+        """
+        if not self._settings.lineage_adoption:
+            return None
+        return RetainedResourceLoader(
+            store=self._store,
+            blobs=self._blob_store,
+            owner_id=session.owner_id,
+            session_id=agent_session_id.value,
+        )
 
     async def _answer_run_resources(
         self,

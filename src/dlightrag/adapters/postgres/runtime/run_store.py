@@ -96,6 +96,14 @@ from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
 
 RUN_MIGRATION_SCOPE = "runs"
 
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except TypeError, ValueError:
+        return None
+
+
 _ABANDONED_ERROR_MESSAGE = "Run exceeded its reclaim-without-progress bound."
 _BATCH_LIMIT = 200
 _EVENT_PAGE_LIMIT = 500
@@ -2184,12 +2192,26 @@ WHERE owner_id = $1 AND run_id = $2
 ORDER BY reference_kind, ordinal
 """
 
+_SELECT_LINEAGE_RESOURCE = """
+SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
+FROM dlightrag_answer_resources
+WHERE owner_id = $1 AND session_id = $2 AND blob_digest IS NOT NULL
+  AND (
+      (resource_id = $3 AND kind = 'fetched_blob'
+       AND capabilities->>'resource_kind' IN ('web', 'tool_attachment'))
+      OR (source_locator = $4::bytea AND kind = 'fetched_blob'
+          AND capabilities->>'resource_kind' IN ('conversion_snapshot', 'conversion_asset'))
+  )
+ORDER BY (resource_id = $3) DESC, resource_id
+FOR SHARE
+"""
+
 _SELECT_RUN_FETCHED_RESOURCES = """
 SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
 FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
   AND capabilities->>'resource_kind' IN (
-      'web', 'tool_attachment', 'conversion_snapshot', 'conversion_asset'
+      'web', 'tool_attachment', 'conversion_snapshot', 'conversion_asset', 'lineage_adoption'
   )
   AND ordinal IS NOT NULL AND source_locator IS NOT NULL
 ORDER BY ordinal, resource_id
@@ -3376,6 +3398,43 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             return tuple(_reference_record(row) for row in rows)
 
         return await self._run_read(_operation)
+
+    async def lineage_resource(
+        self, *, owner_id: str, session_id: str, resource_id: str
+    ) -> tuple[RunFetchedResource, ...]:
+        """Read one earlier Run Resource this Session may adopt, with its view.
+
+        The Session stamp decides admission: a row another owner or another Agent
+        Session registered is not returned at all, so the caller cannot adopt it by
+        naming its handle.
+        """
+        owner = _require_owner(owner_id)
+        session_uuid = _parse_uuid(session_id)
+        if session_uuid is None or not resource_id:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[RunFetchedResource, ...]:
+            rows = await conn.fetch(
+                _SELECT_LINEAGE_RESOURCE,
+                owner,
+                session_uuid,
+                resource_id,
+                resource_id.encode("utf-8"),
+            )
+            return tuple(
+                RunFetchedResource(
+                    resource_id=str(row["resource_id"]),
+                    ordinal=int(row["ordinal"] or 0),
+                    digest=str(row["blob_digest"]),
+                    filename=str(row["safe_name"] or row["resource_id"]),
+                    mime_type=str(row["media_type"] or "application/octet-stream"),
+                    source_locator=bytes(row["source_locator"] or b""),
+                    capabilities=_json_object(row["capabilities"]),
+                )
+                for row in rows
+            )
+
+        return await self._run(_operation)
 
     async def list_fetched_resources(
         self, *, owner_id: str, run_id: str

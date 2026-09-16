@@ -178,6 +178,13 @@ class AnswerConfig(BaseModel):
         ge=0,
         description="Maximum current and retrieved image blocks sent to the answer LLM.",
     )
+    lineage_adoption: bool = Field(
+        default=True,
+        description=(
+            "Let a Run adopt a Resource an earlier Run on the same Agent Session "
+            "registered, on first use, by reusing that Run's stored conversion view."
+        ),
+    )
 
     # Vision support is runtime Answer state, not config. Users do not set it
     # in config.yaml; the startup probe records it on Application health.
