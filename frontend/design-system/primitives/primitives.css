@@ -12,11 +12,23 @@
 
 .dl-dialog-checkbox {
     align-items: center;
+    border-radius: var(--radius-control);
     display: flex;
     font-size: var(--font-size-caption);
     gap: var(--space-tight);
     min-height: var(--size-button);
     margin-block: var(--space-component);
+
+    /* The hover tint insets itself instead of moving the row's text. */
+    margin-inline: calc(-1 * var(--space-tight));
+    padding-inline: var(--space-tight);
+    transition: background 0.1s, color 0.1s;
+}
+
+.dl-dialog-checkbox:hover,
+.dl-dialog-checkbox:focus-within {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
 }
 
 .dl-dialog-checkbox input:is([type='checkbox'], [type='radio']) {
@@ -227,6 +239,11 @@ a.dl-btn {
 .confirm-dialog .dl-dialog-checkbox {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
+}
+
+label.dl-dialog-checkbox:has(input:focus-visible) {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
 }
 
 

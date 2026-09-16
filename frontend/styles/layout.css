@@ -403,7 +403,12 @@ body.files-panel-open #files-btn {
 
 .composer-mode-trigger:hover {
     color: var(--color-text-primary);
-    background: var(--color-bg-elevated);
+    background: var(--color-bg-hover);
+}
+
+.composer-mode-trigger:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
 }
 
 .composer-mode-menu {
@@ -541,8 +546,24 @@ body.files-panel-open #files-btn {
     cursor: pointer;
 }
 
+.composer-mode-menu button:hover,
+.composer-mode-menu button:focus-visible {
+    background: var(--color-bg-hover);
+}
+
+.composer-mode-menu button:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
+}
+
 .composer-mode-menu button[aria-checked='true'] {
     background: var(--color-bg-elevated);
+}
+
+/* The chosen row keeps its own surface while the pointer is over it. */
+.composer-mode-menu button[aria-checked='true']:hover {
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
 }
 
 .composer-send {
@@ -618,7 +639,7 @@ body.files-panel-open #files-btn {
 
 .composer-plus:hover {
     color: var(--color-accent-action);
-    background: var(--color-bg-elevated);
+    background: var(--color-bg-hover);
 }
 
 .composer-form.multiline {
