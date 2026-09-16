@@ -70,7 +70,24 @@ def _cost_to_dict(usage: Any) -> dict[str, float] | None:
 
 
 def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project Engine messages onto OpenAI-compatible wire messages.
+
+    A tool batch stays contiguous. An assistant message that carries tool calls must be
+    answered by exactly those tool messages before any other role, and the tool role
+    cannot carry pixels, so attachment images wait for the end of their batch and ride
+    in one user message. Attaching them to each result instead would end the batch early:
+    the provider then sees fewer tool messages than calls and rejects the whole request
+    with HTTP 400 ("insufficient tool messages following tool_calls message"), which is
+    how a single image-bearing result made every later request on a session fail.
+    """
     converted: list[dict[str, Any]] = []
+    pending_images: list[dict[str, Any]] = []
+
+    def flush_images() -> None:
+        if pending_images:
+            converted.append({"role": "user", "content": list(pending_images)})
+            pending_images.clear()
+
     for message in messages:
         native = {
             key: value
@@ -86,25 +103,21 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         # endpoints; drop them instead of forwarding an empty list.
         if native.get("role") == "assistant" and native.get("tool_calls") == []:
             native.pop("tool_calls", None)
+        if message.get("role") != "tool":
+            flush_images()
         converted.append(native)
-        attachments = message.get("attachments") or ()
-        if message.get("role") == "tool" and attachments:
-            parts: list[dict[str, Any]] = []
-            if message.get("content"):
-                parts.append({"type": "text", "text": str(message["content"])})
-            for attachment in attachments:
+        if message.get("role") == "tool":
+            for attachment in message.get("attachments") or ():
                 if isinstance(attachment, dict) and attachment.get("data_url"):
-                    parts.append(
+                    # Tool pixels are not tool-role instructions and must not use
+                    # repository-private wire fields.
+                    pending_images.append(
                         {
                             "type": "image_url",
                             "image_url": {"url": str(attachment["data_url"])},
                         }
                     )
-            if parts:
-                # Tool pixels ride as ordinary user content after the tool
-                # result; they are not tool-role instructions and must not use
-                # repository-private wire fields.
-                converted.append({"role": "user", "content": parts})
+    flush_images()
     return converted
 
 

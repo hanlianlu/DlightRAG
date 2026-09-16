@@ -478,7 +478,10 @@ async def test_sdk_http_projects_tool_attachments(
         assert roles == (["user", "tool"] if count == 0 else ["user", "tool", "user"])
         if count:
             follow = body["messages"][2]["content"]
-            assert follow[0] == {"type": "text", "text": _TOOL_TEXT}
+            # Images ride alone. Repeating the tool text here would also fabricate a
+            # user turn for an attachment that carries no bytes, and any user turn
+            # between tool messages ends the batch the provider is still matching.
+            assert [part["type"] for part in follow] == ["image_url"] * count
     elif provider_name == "anthropic":
         block = body["messages"][-1]["content"][0]
         assert block["type"] == "tool_result"
@@ -496,6 +499,45 @@ async def test_sdk_http_projects_tool_attachments(
         assert response["name"] == "view"
         assert response["response"]["output"] == _TOOL_TEXT
         assert response["response"]["is_error"] is False
+
+
+async def test_sdk_http_keeps_an_image_bearing_tool_batch_contiguous() -> None:
+    """One image-bearing result must not cut its batch: the provider answers the
+    remaining calls with HTTP 400 'insufficient tool messages following tool_calls
+    message', which is how a single rendered page made every later request on a
+    session fail."""
+    capture = _HttpCapture("openai")
+    provider = _provider("openai", capture)
+    tool_calls = [
+        {
+            "id": f"call-{index}",
+            "type": "function",
+            "function": {"name": "view", "arguments": "{}"},
+        }
+        for index in (1, 2)
+    ]
+    messages = [
+        {"role": "user", "content": "look"},
+        {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        _tool_turn(1)[1],
+        {"role": "tool", "tool_call_id": "call-2", "name": "view", "content": "second page"},
+    ]
+    try:
+        await _invoke(provider, "complete", messages, _MODELS["openai"])
+    finally:
+        await provider.aclose()
+    serialized = json.dumps(capture.body)
+    for key in ("attachments", "provider_state", "untrusted_tool_data", "is_error"):
+        assert f'"{key}"' not in serialized
+    assert all(_PRIVATE_WIRE_KEYS.isdisjoint(message) for message in capture.body["messages"])
+    assert [message["role"] for message in capture.body["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+    ]
+    assert _wire_images("openai", capture.body) == _expected_payloads(1)
 
 
 async def test_openai_plain_text_complete_has_no_follow_up_user_turn() -> None:
