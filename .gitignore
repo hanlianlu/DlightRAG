@@ -63,7 +63,9 @@ output/
 
 # Node.js
 node_modules/
-frontend/node_modules/
+# No trailing slash: the pattern has to cover a symlinked install too, not only a
+# directory. A committed `frontend/node_modules` symlink once slipped past it.
+frontend/node_modules
 
 # Vite output; built by `make frontend-build` and by the Dockerfile.
 src/dlightrag/adapters/http/browser/static/app/

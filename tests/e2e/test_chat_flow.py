@@ -432,3 +432,37 @@ def test_a_second_failed_reconnect_replaces_the_offer_instead_of_stacking_it(
     expect(
         page.get_by_text("Connection lost while this answer is running.", exact=True)
     ).to_have_count(0)
+
+
+@pytest.mark.e2e
+def test_the_chosen_agent_effort_reaches_the_run(
+    page: Page,
+    e2e_conversation_service: Any,
+) -> None:
+    """The composer's effort choice is the run's own agent effort, not a local setting.
+
+    The browser route threads it into the accepted run input, so this asserts the
+    whole path instead of the control alone: a submission that loses the choice
+    would still render, and the run would quietly answer at the deployment default.
+    """
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    _install_event_transport(
+        page,
+        [[_frame(index + 1, "progress", '{"phase": "planning"}')] for index in range(200)],
+    )
+
+    page.click("#composer-effort")
+    page.click('[data-effort="max"]')
+    _submit(page, "What is DlightRAG?")
+    page.wait_for_selector(".composer-send.is-stop", timeout=10000)
+
+    conversation_id = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
+    assert conversation_id
+    run_id = page.evaluate(
+        "id => fetch(`/web/api/conversations/${id}/history`)"
+        ".then(r => r.json()).then(h => h.turns[0].answer_run_id)",
+        conversation_id,
+    )
+
+    assert e2e_conversation_service.requested_effort(run_id) == "max"

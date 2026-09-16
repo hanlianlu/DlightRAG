@@ -78,6 +78,7 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.answer.capabilities import AnswerCapabilities
+from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     AttachmentReference,
@@ -113,9 +114,11 @@ def _run_request(
     workspaces: Any,
     attachments: Any,
     idempotency_fingerprint: str,
+    effort: AnswerEffort | None = None,
 ) -> dict[str, Any]:
     return AnswerRunInput(
         query=query,
+        effort=effort,
         workspaces=tuple(workspaces),
         attachments=tuple(
             AttachmentReference(
@@ -362,6 +365,12 @@ class E2EConversationService:
         with self._lock:
             return self._submission_for(submission_id)
 
+    def requested_effort(self, run_id: str) -> str | None:
+        """Return the agent effort the browser asked this run to use, if any."""
+        with self._lock:
+            entry = self._runs.get(run_id)
+            return None if entry is None else entry["requested_effort"]
+
     async def start_answer(
         self,
         _user: Any,
@@ -373,6 +382,7 @@ class E2EConversationService:
         attachments: Any = (),
         mode: str | None = None,
         requested_skill: str | None = None,
+        effort: AnswerEffort | None = None,
     ) -> WebAnswerSubmission | None:
         with self._lock:
             if conversation_id is None:
@@ -401,6 +411,7 @@ class E2EConversationService:
                 workspaces=workspaces,
                 attachments=attachments,
                 idempotency_fingerprint=submission_id,
+                effort=effort,
             )
             turn = LinkedTurn(
                 turn_id=str(uuid4()),
@@ -415,6 +426,7 @@ class E2EConversationService:
             self._runs[run_id] = {
                 "conversation_id": conversation_id,
                 "requested_mode": requested_mode,
+                "requested_effort": effort,
                 "bytes": {
                     attachment.ordinal: (attachment.attachment_bytes, attachment.mime_type)
                     for attachment in attachments
