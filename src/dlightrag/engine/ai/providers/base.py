@@ -43,6 +43,56 @@ _OVERFLOW_MESSAGE_PATTERNS = tuple(
 )
 
 
+#: Provider texts that mean the endpoint refused the request's *reasoning control*
+#: rather than its content. An uncatalogued endpoint resolves to a best-effort,
+#: unverified level map, so a level it cannot express is sent as-is and the provider
+#: is the judge; this classifier is what turns that verdict into a nameable failure.
+_REASONING_REJECTION_MESSAGE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"reasoning_effort",
+        r"reasoning[_. ]?(?:level|budget|mode)",
+        r"thinking[_ ]?(?:config|budget|type|level)",
+        r"enable_thinking",
+        r"chat_template_kwargs",
+        r"output_config",
+        # A bare control name still counts, but only beside rejection wording (the
+        # marker gate below) which is what keeps benign prose out.
+        r"\breasoning\b",
+        r"\bthinking\b",
+    )
+)
+
+#: Fields that carry reasoning *data* rather than a control. A complaint about one of
+#: them is a different failure with a different remedy — our own echo is wrong, not the
+#: endpoint's level map — so it must never classify as a rejected control.
+_REASONING_PAYLOAD_FIELDS = (
+    "reasoning_content",
+    "reasoning_details",
+    "reasoning_text",
+    "thought_signature",
+)
+
+#: A rejection has to look like one: the same words appear in benign prose about
+#: reasoning ("reasoning tokens: 512"). Statuses and these verbs carry the verdict.
+_REASONING_REJECTION_STATUSES = frozenset({400, 404, 422})
+_REASONING_REJECTION_MARKERS = (
+    "unsupported",
+    "not support",
+    "does not support",
+    "invalid",
+    "unknown",
+    "unrecognized",
+    "unexpected",
+    "not allowed",
+    "not permitted",
+    "must be one of",
+    "allowed values",
+    "no such",
+    "cannot be",
+)
+
+
 def is_provider_context_overflow(exc: BaseException) -> bool:
     """Return whether one exception chain is a provider context-window rejection.
 
@@ -62,6 +112,39 @@ def is_provider_context_overflow(exc: BaseException) -> bool:
             return True
         current = current.__cause__ or current.__context__
     return False
+
+
+def is_provider_reasoning_rejection(exc: BaseException) -> bool:
+    """Return whether one exception chain rejected the request's reasoning control.
+
+    An uncatalogued endpoint gets a best-effort, unverified level map, so a level it
+    cannot express travels as-is and the provider decides. This names the decision it
+    made, so the failure is diagnosable instead of reading as a generic rejection: a
+    strict endpoint answers 400/404/422 and its message names a reasoning control.
+
+    Matching is deliberately narrow. The status must be a rejection, the text must
+    name a reasoning parameter or level, and it must use rejection wording, because
+    the same words appear in benign prose about a response's reasoning tokens.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current)
+        status = getattr(current, "status_code", None)
+        if status in _REASONING_REJECTION_STATUSES and _reasoning_rejection_message(message):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _reasoning_rejection_message(message: str) -> bool:
+    lowered = message.lower()
+    if any(field in lowered for field in _REASONING_PAYLOAD_FIELDS):
+        return False
+    if not any(marker in lowered for marker in _REASONING_REJECTION_MARKERS):
+        return False
+    return any(pattern.search(message) for pattern in _REASONING_REJECTION_MESSAGE_PATTERNS)
 
 
 def provider_status_code(exc: BaseException) -> int | None:
@@ -379,6 +462,7 @@ __all__ = [
     "CompletionProvider",
     "capture_stream_usage",
     "is_provider_context_overflow",
+    "is_provider_reasoning_rejection",
     "provider_cache_hit_tokens",
     "provider_input_tokens",
     "provider_status_code",

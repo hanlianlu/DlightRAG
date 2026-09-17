@@ -17,6 +17,9 @@ from dlightrag.engine.ai.providers.base import (
     provider_input_tokens,
     provider_status_code,
 )
+from dlightrag.engine.ai.providers.base import (
+    is_provider_reasoning_rejection as provider_reasoning_rejection,
+)
 from dlightrag.engine.ai.providers.openai_compatible import (
     OpenAICompatibleProvider,
     _openai_tool_messages,
@@ -1730,3 +1733,81 @@ class TestProviderUsageDialects:
 
     def test_a_reported_zero_hit_is_a_measured_miss(self) -> None:
         assert provider_cache_hit_tokens({"prompt_cache_hit_tokens": 0}) == 0
+
+
+class TestReasoningControlRejection:
+    """An endpoint that refuses our reasoning control says so, by name.
+
+    An uncatalogued endpoint resolves to a best-effort, unverified level map, so the
+    configured level travels as-is and the provider decides. Without this
+    classification that decision reads as "Model provider rejected the request (HTTP
+    400)", which cannot be told apart from a bad question or a broken prompt.
+    """
+
+    class _Rejection(Exception):
+        def __init__(self, message: str, status: int | None = 400) -> None:
+            super().__init__(message)
+            if status is not None:
+                self.status_code = status
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # DeepSeek/OpenAI dialects name the parameter they refused.
+            "Error code: 400 - Unsupported value: 'reasoning_effort' does not support 'max'",
+            "400 invalid_request_error: unknown parameter 'thinking'",
+            # Gemini and vLLM-shaped refusals name their own control.
+            "422 Unprocessable Entity: thinking_config.thinking_level must be one of LOW, HIGH",
+            "400 Bad Request: enable_thinking is not supported by this model",
+            # Anthropic's adaptive thinking rides in output_config.
+            "400 invalid_request_error: output_config: unexpected field",
+            # A bare control name still counts, beside rejection wording.
+            "400 invalid_request_error: reasoning is not allowed for this model",
+        ],
+    )
+    def test_a_refused_control_classifies(self, message: str) -> None:
+        assert provider_reasoning_rejection(self._Rejection(message)) is True
+
+    @pytest.mark.parametrize(
+        ("message", "status"),
+        [
+            # A rejection of something else is not this failure.
+            ("400 Unsupported value: 'temperature' does not support 0.9", 400),
+            ("400 prompt is too long: 300000 tokens > 200000 maximum", 400),
+            # The words alone are not a refusal: usage prose reports reasoning tokens.
+            ("reasoning tokens: 512", None),
+            ("reasoning_effort: max", 400),
+            # A 5xx is not a verdict about the request's shape.
+            ("400 unsupported parameter: reasoning_effort", 503),
+            # Our own echo fields carry reasoning *data*; complaining about one of them
+            # means our replay is wrong, not that the endpoint lacks the level.
+            ("400 invalid_request_error: reasoning_content is missing in assistant message", 400),
+            ("400 invalid reasoning_details signature", 400),
+        ],
+    )
+    def test_everything_else_stays_unclassified(self, message: str, status: int | None) -> None:
+        assert provider_reasoning_rejection(self._Rejection(message, status)) is False
+
+    def test_the_failure_detail_names_the_control_and_the_remedy(self) -> None:
+        from dlightrag.engine.answer.errors import (
+            REASONING_CONTROL_REJECTED_MESSAGE,
+            reasoning_control_rejection_message,
+        )
+        from dlightrag.engine.answer.research.runtime import provider_attempt_detail
+
+        rejection = self._Rejection(
+            "400 Unsupported value: 'reasoning_effort' does not support 'max'"
+        )
+        overflow = self._Rejection("400 prompt is too long: 300000 tokens > 200000 maximum")
+
+        assert (
+            provider_attempt_detail(rejection, retryable=False)
+            == f"{REASONING_CONTROL_REJECTED_MESSAGE} (HTTP 400)"
+        )
+        # A refusal of anything else keeps the generic verdict.
+        assert provider_attempt_detail(overflow, retryable=False) == (
+            "Model provider rejected the request (HTTP 400)"
+        )
+        assert reasoning_control_rejection_message(overflow) is None
+        # A temporal verdict keeps its own wording even if the text matches.
+        assert "temporarily unavailable" in provider_attempt_detail(rejection, retryable=True)

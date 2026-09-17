@@ -90,6 +90,7 @@ from dlightrag.engine.answer.errors import (
     CurrentImagePayloadError,
     InvalidToolConfigurationError,
     classify_answer_error,
+    reasoning_control_rejection_message,
 )
 from dlightrag.engine.answer.execution.connection_binding import (
     ResearchConnectionToolResolver,
@@ -918,7 +919,7 @@ class AnswerExecutor:
                     exc.public_message
                     if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
                     and exc.public_message
-                    else "Answer run failed."
+                    else reasoning_control_rejection_message(exc) or "Answer run failed."
                 )
                 raise RunExecutionError(classify_answer_error(exc), message) from exc
             recovered = dependency_component_from_checkpoint(session.checkpoint)

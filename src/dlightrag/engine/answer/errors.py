@@ -152,6 +152,25 @@ class InvalidToolConfigurationError(RuntimeError):
         self.public_message = "Answer tooling is misconfigured."
 
 
+#: What an endpoint's refusal of a reasoning control means to an operator.
+#: A model the catalogue does not know resolves to a best-effort, unverified level
+#: map, so the configured level travels as-is and the provider decides; naming that
+#: decision is the difference between a diagnosable failure and a generic rejection.
+REASONING_CONTROL_REJECTED_MESSAGE = (
+    "The model endpoint rejected this request's reasoning control. A model the "
+    "catalogue does not know sends the configured level as-is, so record the levels "
+    "it supports in the model catalogue, or supply the endpoint's own fields through "
+    "the role's agentic model kwargs."
+)
+
+
+def reasoning_control_rejection_message(exc: BaseException) -> str | None:
+    """Return the operator-facing message for a rejected reasoning control, if any."""
+    from dlightrag.engine.ai.providers.base import is_provider_reasoning_rejection
+
+    return REASONING_CONTROL_REJECTED_MESSAGE if is_provider_reasoning_rejection(exc) else None
+
+
 def classify_answer_error(exc: BaseException) -> str:
     """Map an answer-stream failure to a stable answer error kind."""
     if isinstance(exc, AnswerInputError | InvalidToolConfigurationError):
@@ -173,6 +192,7 @@ __all__ = [
     "MODEL_CAPABILITY_UNAVAILABLE",
     "UNSUPPORTED_ANSWER_MODE",
     "UNSUPPORTED_RESOURCE_CAPABILITY",
+    "REASONING_CONTROL_REJECTED_MESSAGE",
     "ROUTING_FAILED",
     "AnswerInputError",
     "AnswerImageError",

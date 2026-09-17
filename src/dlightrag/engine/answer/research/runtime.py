@@ -45,7 +45,7 @@ from dlightrag.engine.ai.providers.base import (
     provider_status_code,
 )
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.engine.answer.errors import AnswerInputError
+from dlightrag.engine.answer.errors import AnswerInputError, reasoning_control_rejection_message
 from dlightrag.engine.answer.evidence import (
     EvidenceDelta,
     EvidenceLedger,
@@ -104,12 +104,21 @@ def _http_suffix(exc: BaseException) -> str:
 
 
 def provider_attempt_detail(exc: BaseException, *, retryable: bool) -> str:
-    """Store safe provider-failure detail: a verdict plus an HTTP status."""
+    """Store safe provider-failure detail: a verdict plus an HTTP status.
+
+    A refusal of this request's reasoning control is named rather than folded into the
+    generic rejection: an uncatalogued endpoint receives the configured level as-is, so
+    "the provider rejected the request" would leave an operator with no way to tell a
+    bad level from a bad question.
+    """
     label = (
         "Model provider is temporarily unavailable"
         if retryable
         else "Model provider rejected the request"
     )
+    reasoning = reasoning_control_rejection_message(exc)
+    if not retryable and reasoning is not None:
+        return f"{reasoning}{_http_suffix(exc)}"
     return f"{label}{_http_suffix(exc)}"
 
 
