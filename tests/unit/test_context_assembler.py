@@ -467,3 +467,54 @@ async def test_evidence_images_stay_after_the_transcript() -> None:
     # before it stays reusable, and the lane costs no more than the image budget.
     assert "image_url" in str(messages[-1]["content"])
     assert "image_url" not in str(messages[0]["content"])
+
+
+async def test_carried_notes_are_stated_once_in_the_static_prefix() -> None:
+    from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+    notes = (InventoryPathRecord(relative_path="notes/plan.md", entry_type="file", size_bytes=12),)
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="continue",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+        carried_run_notes=notes,
+    )
+    first = await assembler.control_turn(
+        evidence=EvidenceLedger(), working=WorkingContextProjection()
+    )
+    working = WorkingContextProjection()
+    working.record(
+        [
+            {"role": "assistant", "content": "working"},
+            {"role": "user", "content": "and then"},
+        ]
+    )
+    second = await assembler.control_turn(evidence=EvidenceLedger(), working=working)
+
+    carry = "already in this workspace"
+    assert str(first).count(carry) == 1
+    assert str(second).count(carry) == 1
+    assert first[1]["content"] == second[1]["content"]
+    assert "notes/plan.md (12 bytes)" in first[1]["content"]
+    # The statement sits after system and before the question, so later turns do not
+    # push it past the growing fold.
+    assert first[1]["role"] == "user"
+    assert first[2]["content"] == "continue"
+    assert second[-1]["content"] == "and then"
+
+
+async def test_a_run_with_nothing_carried_says_nothing_about_carrying() -> None:
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="start",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+    )
+    messages = await assembler.control_turn(
+        evidence=EvidenceLedger(), working=WorkingContextProjection()
+    )
+    assert "already in this workspace" not in str(messages)
+    assert "carried" not in str(messages).lower()

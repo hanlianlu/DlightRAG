@@ -6,14 +6,17 @@ it reads again — the file itself is what outlives the summary.
 """
 
 from dlightrag.engine.answer.continuation_handles import (
+    MAX_CARRIED_RUN_NOTE_BYTES,
     MAX_RUN_NOTE_PATH_CHARS,
     MAX_RUN_NOTES,
     MAX_SPILL_HANDLES,
     RUN_NOTE_DIRECTORY,
+    carried_run_notes_message,
     compose_durable_handles,
     compose_run_notes,
     is_run_note,
     run_note_handle,
+    select_carried_run_notes,
     spill_handle,
 )
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
@@ -166,3 +169,43 @@ def test_the_reserved_directory_the_prompt_teaches_is_the_one_the_rule_reads() -
 
     assert f"`{RUN_NOTE_DIRECTORY}/`" in taught
     assert f"`{RUN_NOTE_DIRECTORY}/`" not in agent_control_prompt(run_notes=False)
+
+
+def test_select_carried_run_notes_reuses_the_summary_caps_and_skips_long_names() -> None:
+    records = [
+        _inventory("artifacts/report.md"),
+        _inventory(f"notes/{'x' * MAX_RUN_NOTE_PATH_CHARS}.md"),
+        _inventory("notes/a.md", size_bytes=12),
+        _inventory("notes/b.md", size_bytes=20),
+        *(_inventory(f"notes/{index:02d}.md") for index in range(MAX_RUN_NOTES)),
+    ]
+
+    selected = select_carried_run_notes(records)
+
+    assert [item.relative_path for item in selected] == [
+        "notes/a.md",
+        "notes/b.md",
+        *[f"notes/{index:02d}.md" for index in range(MAX_RUN_NOTES - 2)],
+    ]
+
+
+def test_select_carried_run_notes_stops_at_the_byte_ceiling() -> None:
+    first = _inventory("notes/a.md", size_bytes=MAX_CARRIED_RUN_NOTE_BYTES - 10)
+    second = _inventory("notes/b.md", size_bytes=20)
+
+    assert select_carried_run_notes((first, second)) == (first,)
+
+
+def test_the_carry_message_is_empty_when_nothing_was_carried() -> None:
+    assert carried_run_notes_message(()) == ""
+
+
+def test_the_carry_message_names_paths_once_without_a_clock_or_run_id() -> None:
+    message = carried_run_notes_message(
+        (_inventory("notes/plan.md"), _inventory("notes/decisions.md", size_bytes=310))
+    )
+
+    assert message.count("already in this workspace") == 1
+    assert "notes/plan.md (1240 bytes)" in message
+    assert "notes/decisions.md (310 bytes)" in message
+    assert "do not re-derive" in message

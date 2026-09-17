@@ -97,6 +97,7 @@ from dlightrag.engine.answer.citations.sources import project_contexts_for_clien
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
 from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.compaction import CompactionCoordinator
+from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
 from dlightrag.engine.answer.errors import (
     AnswerInputError,
     AnswerResourceAdmissionError,
@@ -190,7 +191,10 @@ from dlightrag.engine.answer.web_sources import WebSourceService
 from dlightrag.engine.answer.workspace import (
     WorkspaceIntegrityError,
     WorkspaceRecoveryFailed,
+    WorkspaceUnavailableError,
+    active_epoch_workspace,
     bind_run_workspace,
+    run_root,
 )
 from dlightrag.engine.dependencies import (
     DependencyComponent,
@@ -230,7 +234,9 @@ from dlightrag.engine.runtime.records import (
 from dlightrag.engine.runtime.settlements import (
     ArtifactAttachmentUpdate,
     EffectHostUpdate,
+    InventoryPathRecord,
 )
+from dlightrag.engine.runtime.workspace import WorkspaceStore
 
 logger = logging.getLogger(__name__)
 _FAST_COMPACTION_ATTEMPT_LIMIT = 3
@@ -341,6 +347,7 @@ class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
 
 type PlannerHistoryInputMeasureFactory = Callable[..., Awaitable[HistoryInputMeasure]]
 type WorkspaceWarmer = Callable[[Sequence[str]], None]
+type WorkspaceInventoryLoader = Callable[[str, str], Awaitable[tuple[InventoryPathRecord, ...]]]
 
 
 class RawRetrieval(Protocol):
@@ -786,6 +793,7 @@ class AnswerExecutor:
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         connection_tool_resolver: ResearchConnectionToolResolver | None = None,
         skills_bundle_factory: SkillsBundleFactory | None = None,
+        workspace_inventory_loader: WorkspaceInventoryLoader | None = None,
         now: Callable[[], datetime.datetime] | None = None,
         on_dependency_unavailable: DependencyStateCallback | None = None,
         on_dependency_recovered: DependencyStateCallback | None = None,
@@ -815,6 +823,12 @@ class AnswerExecutor:
         self._memory_capability_current = memory_capability_current
         self._connection_tool_resolver = connection_tool_resolver
         self._skills_bundle_factory = skills_bundle_factory
+        # A continuation carries another Run's notes. That read is one inventory
+        # load keyed by (owner, run), not a Session-repository method (an architecture
+        # test pins that seam to snapshot-or-transaction) and not a RunStore widening
+        # (Runtime stays filesystem- and product-neutral). Composition injects the
+        # callable; this executor never constructs a store for another Run.
+        self._workspace_inventory_loader = workspace_inventory_loader
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
@@ -1104,6 +1118,63 @@ class AnswerExecutor:
                 "Fork from a Run whose head is still present.",
             )
         return head, reconstructed
+
+    async def _continuation_parent_is_local(self, session: RunSession, parent_run_id: str) -> bool:
+        """Whether a continuation's parent is a Run of this Run's own Agent Session.
+
+        A Fork refuses a foreign parent before it seeds; collecting notes needs the
+        same rule, or a caller who names a same-owner Run from another conversation
+        would have its notes presented as this conversation's.
+        """
+        prepared = session.prepared_input if isinstance(session.prepared_input, Mapping) else {}
+        parent = await self._store.load_routing(owner_id=session.owner_id, run_id=parent_run_id)
+        return parent is not None and parent.agent_session_id == str(
+            prepared.get("agent_session_id") or ""
+        )
+
+    async def _parent_notes_for_bind(
+        self,
+        *,
+        session: RunSession,
+        owner_id: str,
+        parent_run_id: str | None,
+        workspace_root: Path,
+        materialize: bool,
+        workspace_store: WorkspaceStore | None = None,
+    ) -> tuple[tuple[InventoryPathRecord, ...], Path | None]:
+        """Return the parent's Run Notes and, when copying, the workspace they live in.
+
+        Follow-Up and Fork share this path: both name a parent Run, and the carried
+        set is that Run's registered notes. The inventory read is injected because
+        AgentSessionRepository is snapshot-or-transaction and RunStore stays
+        product-neutral. Composition provides the callable.
+        """
+        if not parent_run_id or self._workspace_inventory_loader is None:
+            return (), None
+        if not materialize:
+            # A recovered attempt states what its own epoch holds, not what the parent
+            # holds now: the parent may have been reclaimed since, and this Run may
+            # have rewritten a carried note before it crashed.
+            if workspace_store is None:
+                return (), None
+            return select_carried_run_notes(await workspace_store.load_inventory()), None
+        if not await self._continuation_parent_is_local(session, parent_run_id):
+            raise RunExecutionError(
+                "run_notes_unavailable",
+                "The parent Run belongs to another Session. "
+                "Continue from a Run in this conversation.",
+            )
+        records = await self._workspace_inventory_loader(owner_id, parent_run_id)
+        notes = select_carried_run_notes(records)
+        if not notes:
+            return (), None
+        source = active_epoch_workspace(run_root(workspace_root, owner_id, parent_run_id))
+        if source is None:
+            raise WorkspaceUnavailableError(
+                "The parent Run's Agent Workspace is gone. "
+                "Continue from a Run whose workspace still exists."
+            )
+        return notes, source
 
     async def _execute_run(
         self,
@@ -1596,7 +1667,17 @@ class AnswerExecutor:
                     ),
                 )
                 if root is not None:
+                    carried_notes: tuple[InventoryPathRecord, ...] = ()
+                    carry_source: Path | None = None
                     try:
+                        carried_notes, carry_source = await self._parent_notes_for_bind(
+                            session=session,
+                            owner_id=session.owner_id,
+                            parent_run_id=request.parent_run_id,
+                            workspace_root=root,
+                            materialize=session.workspace_epoch is None,
+                            workspace_store=workspace_store,
+                        )
                         bound = await bind_run_workspace(
                             workspace_root=root,
                             owner_id=session.owner_id,
@@ -1605,12 +1686,25 @@ class AnswerExecutor:
                             recorded_epoch=session.workspace_epoch,
                             store=workspace_store,
                             execution_adapter=self._execution_adapter,
+                            carried_notes=(
+                                carried_notes if session.workspace_epoch is None else ()
+                            ),
+                            carry_source=carry_source,
                         )
+                    except WorkspaceUnavailableError as exc:
+                        raise RunExecutionError("run_notes_unavailable", str(exc)) from exc
                     except WorkspaceRecoveryFailed as exc:
                         raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
                     except WorkspaceIntegrityError as exc:
-                        raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
-                    run.orchestrator.bind_workspace(bound, workspace_store)
+                        kind = (
+                            "run_notes_unavailable"
+                            if carry_source is not None
+                            else "workspace_integrity_error"
+                        )
+                        raise RunExecutionError(kind, str(exc)) from exc
+                    run.orchestrator.bind_workspace(
+                        bound, workspace_store, carried_run_notes=carried_notes
+                    )
                 session_id = agent_session_id
                 store = self._store
                 run.orchestrator.bind_memory(

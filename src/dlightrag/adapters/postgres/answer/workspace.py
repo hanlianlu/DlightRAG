@@ -102,16 +102,9 @@ class PGWorkspaceStore:
                 return HandoffCommit(workspace_epoch=int(updated))
 
     async def load_inventory(self) -> tuple[InventoryPathRecord, ...]:
-        async with self._connection() as conn:
-            rows = await conn.fetch(
-                "SELECT relative_path, entry_type, mode, size_bytes, content_digest"
-                " FROM dlightrag_answer_workspace_inventory"
-                " WHERE owner_id = $1 AND run_id = $2"
-                " ORDER BY relative_path",
-                self._owner_id,
-                self._run_id,
-            )
-        return tuple(_inventory_row(row) for row in rows)
+        return await load_run_inventory(
+            owner_id=self._owner_id, run_id=self._run_id, pool=self._pool
+        )
 
     async def replace_inventory(
         self, records: Sequence[InventoryPathRecord]
@@ -248,6 +241,31 @@ class PGWorkspaceStore:
             )
 
 
+async def load_run_inventory(
+    *,
+    owner_id: str,
+    run_id: uuid.UUID,
+    pool: ConnectionPool | None = None,
+) -> tuple[InventoryPathRecord, ...]:
+    """Read one Run's Workspace Inventory without a live claim.
+
+    A continuation copies another Run's notes. That Run is terminal, so it holds
+    no lease, and the fenced store's write methods would refuse it. The read is
+    the same query; it does not need the claim.
+    """
+    connection_pool = pool if pool is not None else await pg_pool.get()
+    async with connection_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, entry_type, mode, size_bytes, content_digest"
+            " FROM dlightrag_answer_workspace_inventory"
+            " WHERE owner_id = $1 AND run_id = $2"
+            " ORDER BY relative_path",
+            owner_id,
+            run_id,
+        )
+    return tuple(_inventory_row(row) for row in rows)
+
+
 def _inventory_row(row: Any) -> InventoryPathRecord:
     return InventoryPathRecord(
         relative_path=str(row["relative_path"]),
@@ -289,4 +307,4 @@ async def _upsert_spill(
     )
 
 
-__all__ = ["PGWorkspaceStore"]
+__all__ = ["PGWorkspaceStore", "load_run_inventory"]

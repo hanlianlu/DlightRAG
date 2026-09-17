@@ -11,11 +11,14 @@ from typing import Any
 import pytest
 
 from dlightrag.engine.answer import workspace as workspace_module
+from dlightrag.engine.answer.continuation_handles import MAX_CARRIED_RUN_NOTE_BYTES
 from dlightrag.engine.answer.workspace import (
     AgentWorkspaceReclaimer,
     WorkspaceIntegrityError,
+    active_epoch_workspace,
     agent_workspace_reclaimer,
     bind_run_workspace,
+    carry_run_notes,
     copy_epoch_verified,
     epoch_paths,
     owner_shard,
@@ -25,6 +28,7 @@ from dlightrag.engine.answer.workspace import (
     write_spill_file,
 )
 from dlightrag.engine.runtime.records import DeletedRun
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
 
 
@@ -134,12 +138,18 @@ async def test_first_bind_reclaims_only_exact_older_claim_local_temps(tmp_path: 
         ".tmp-1-short",
         ".tmp-other",
         ".unrelated",
-        "1",
     ]
+    # A numbered epoch below this attempt is residue: the Run's row records no epoch,
+    # so an interrupted bind left it, and fencing generations only grow.
+    residue_name = "1"
     for name in preserved_names:
         preserved = epochs / name
         preserved.mkdir()
         (preserved / "keep.txt").write_text("keep", encoding="utf-8")
+
+    residue = epochs / residue_name
+    residue.mkdir()
+    (residue / "keep.txt").write_text("residue", encoding="utf-8")
 
     other_root = run_root(tmp_path, "owner", "other-run")
     other_temp = other_root / "epochs" / ".tmp-1-55555555555555555555555555555555"
@@ -156,6 +166,7 @@ async def test_first_bind_reclaims_only_exact_older_claim_local_temps(tmp_path: 
     )
 
     assert all(not (epochs / name).exists() for name in stale_names)
+    assert not (epochs / residue_name).exists()
     assert all(
         (epochs / name / "keep.txt").read_text(encoding="utf-8") == "keep"
         for name in preserved_names
@@ -624,3 +635,248 @@ def test_reclaim_never_follows_a_symlinked_shard(tmp_path: Path) -> None:
         reclaim_run_workspace(tmp_path, owner, run_id)
 
     assert (outside / run_id / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def _note(
+    relative_path: str, content: bytes, *, digest: str | None = ""
+) -> tuple[InventoryPathRecord, bytes]:
+    recorded = hashlib.sha256(content).hexdigest() if digest == "" else digest
+    return (
+        InventoryPathRecord(
+            relative_path=relative_path,
+            entry_type="file",
+            size_bytes=len(content),
+            content_digest=recorded,
+        ),
+        content,
+    )
+
+
+def _parent_workspace(tmp_path: Path, owner: str, run_id: str, epoch: int = 1) -> Path:
+    root = run_root(tmp_path, owner, run_id)
+    workspace, _ = epoch_paths(root, epoch)
+    workspace.mkdir(parents=True)
+    return workspace
+
+
+def test_carry_run_notes_copies_bytes_and_records_the_destination_digest(tmp_path: Path) -> None:
+    parent = _parent_workspace(tmp_path, "owner", str(uuid.uuid4()))
+    record, content = _note("notes/plan.md", b"the numbers are 4 and 9")
+    (parent / "notes").mkdir()
+    (parent / "notes" / "plan.md").write_bytes(content)
+    dest = tmp_path / "child"
+    dest.mkdir()
+
+    copied = carry_run_notes(source_workspace=parent, destination_workspace=dest, notes=(record,))
+
+    assert (dest / "notes" / "plan.md").read_bytes() == content
+    assert copied == (
+        InventoryPathRecord(
+            relative_path="notes/plan.md",
+            entry_type="file",
+            size_bytes=len(content),
+            content_digest=hashlib.sha256(content).hexdigest(),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_chain_of_two_carries_accumulates_the_file_itself(
+    tmp_path: Path,
+) -> None:
+    """The unit that accumulates is the file, and each hop is a real bind.
+
+    A chain that carried the inherited note but dropped the one the first
+    continuation wrote would pass a test that only exercised the copy helper, so
+    this drives two bindings and reads each hop's own Inventory back.
+    """
+    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+
+    owner = "owner"
+    parent_id = "01930000-0000-7000-8000-0000000000a1"
+    child_id = "01930000-0000-7000-8000-0000000000a2"
+    grandchild_id = "01930000-0000-7000-8000-0000000000a3"
+    store = InMemoryWorkspaceStore()
+    parent = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner,
+        run_id=parent_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=store,
+    )
+    (parent.workspace / "notes").mkdir()
+    (parent.workspace / "notes" / "plan.md").write_text("inherited", encoding="utf-8")
+    await store.replace_inventory(_note_records(parent.workspace, ("notes/plan.md",)))
+
+    child_store = InMemoryWorkspaceStore()
+    child = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner,
+        run_id=child_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=child_store,
+        carried_notes=select_carried_run_notes(await store.load_inventory()),
+        carry_source=parent.workspace,
+    )
+    # The continuation writes a note of its own, observed the way a write settlement does.
+    (child.workspace / "notes" / "findings.md").write_text("written", encoding="utf-8")
+    await child_store.replace_inventory(
+        (
+            *await child_store.load_inventory(),
+            *_note_records(child.workspace, ("notes/findings.md",)),
+        )
+    )
+
+    grandchild_store = InMemoryWorkspaceStore()
+    grandchild = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner,
+        run_id=grandchild_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=grandchild_store,
+        carried_notes=select_carried_run_notes(await child_store.load_inventory()),
+        carry_source=child.workspace,
+    )
+
+    assert (grandchild.workspace / "notes" / "plan.md").read_text(encoding="utf-8") == "inherited"
+    assert (grandchild.workspace / "notes" / "findings.md").read_text(encoding="utf-8") == "written"
+    assert [item.relative_path for item in await grandchild_store.load_inventory()] == [
+        "notes/findings.md",
+        "notes/plan.md",
+    ]
+
+
+def _note_records(workspace: Path, relative_paths: tuple[str, ...]) -> list[InventoryPathRecord]:
+    records: list[InventoryPathRecord] = []
+    for relative_path in relative_paths:
+        data = (workspace / relative_path).read_bytes()
+        records.append(
+            InventoryPathRecord(
+                relative_path=relative_path,
+                entry_type="file",
+                size_bytes=len(data),
+                content_digest=hashlib.sha256(data).hexdigest(),
+            )
+        )
+    return records
+
+
+@pytest.mark.asyncio
+async def test_first_bind_hands_off_the_carried_notes_as_the_new_inventory(
+    tmp_path: Path,
+) -> None:
+    parent_id = str(uuid.uuid4())
+    child_id = str(uuid.uuid4())
+    parent = _parent_workspace(tmp_path, "owner", parent_id)
+    record, content = _note("notes/plan.md", b"after compaction")
+    (parent / "notes").mkdir()
+    (parent / "notes" / "plan.md").write_bytes(content)
+    store = InMemoryWorkspaceStore()
+
+    bound = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id=child_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=store,
+        carried_notes=(record,),
+        carry_source=parent,
+    )
+
+    assert (bound.workspace / "notes" / "plan.md").read_bytes() == content
+    assert store.inventory[0].relative_path == "notes/plan.md"
+    assert store.inventory[0].content_digest == hashlib.sha256(content).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_recovery_bind_does_not_copy_from_the_parent_again(tmp_path: Path) -> None:
+    """A recovered Run may have written notes of its own; the parent must not replace them."""
+    child_id = str(uuid.uuid4())
+    first = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id=child_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=InMemoryWorkspaceStore(),
+    )
+    (first.workspace / "notes").mkdir()
+    (first.workspace / "notes" / "own.md").write_text("mine", encoding="utf-8")
+    parent = _parent_workspace(tmp_path, "owner", str(uuid.uuid4()))
+    record, content = _note("notes/plan.md", b"parent")
+    (parent / "notes").mkdir()
+    (parent / "notes" / "plan.md").write_bytes(content)
+
+    recovered = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id=child_id,
+        fencing_epoch=2,
+        recorded_epoch=1,
+        store=InMemoryWorkspaceStore(workspace_epoch=1),
+        carried_notes=(record,),
+        carry_source=parent,
+    )
+
+    assert (recovered.workspace / "notes" / "own.md").read_text(encoding="utf-8") == "mine"
+    assert not (recovered.workspace / "notes" / "plan.md").exists()
+
+
+def test_active_epoch_workspace_is_the_highest_numbered_live_tree(tmp_path: Path) -> None:
+    run_id = str(uuid.uuid4())
+    root = run_root(tmp_path, "owner", run_id)
+    older, _ = epoch_paths(root, 1)
+    newer, _ = epoch_paths(root, 4)
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True)
+    (older / "stale.txt").write_text("old", encoding="utf-8")
+    (newer / "live.txt").write_text("new", encoding="utf-8")
+
+    assert active_epoch_workspace(root) == newer
+    assert active_epoch_workspace(tmp_path / "missing") is None
+
+
+def test_a_note_over_the_byte_ceiling_is_not_selected() -> None:
+    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+
+    huge = InventoryPathRecord(
+        relative_path="notes/dump.md",
+        entry_type="file",
+        size_bytes=MAX_CARRIED_RUN_NOTE_BYTES + 1,
+    )
+    small = InventoryPathRecord(relative_path="notes/plan.md", entry_type="file", size_bytes=12)
+    # Path order puts the dump first; the ceiling stops selection rather than skipping ahead.
+    assert select_carried_run_notes((huge, small)) == ()
+
+
+def test_carry_refuses_a_size_mismatch_and_a_directory(tmp_path: Path) -> None:
+    """A registration that describes something other than a regular file is refused.
+
+    Size is the one check a `bash`-written note has (its observation carries no
+    digest), so a mismatch there is the only thing standing between a stale
+    registration and carrying the wrong bytes.
+    """
+    parent = tmp_path / "parent"
+    (parent / "notes" / "dir.md").mkdir(parents=True)
+    (parent / "notes" / "plan.md").write_text("short", encoding="utf-8")
+    child = tmp_path / "child"
+    child.mkdir()
+
+    oversized = InventoryPathRecord(
+        relative_path="notes/plan.md",
+        entry_type="file",
+        size_bytes=999,
+        content_digest=hashlib.sha256(b"short").hexdigest(),
+    )
+    with pytest.raises(WorkspaceIntegrityError, match="size check"):
+        carry_run_notes(source_workspace=parent, destination_workspace=child, notes=(oversized,))
+    assert not (child / "notes").exists()
+
+    not_a_file = InventoryPathRecord(relative_path="notes/dir.md", entry_type="file", size_bytes=0)
+    with pytest.raises(WorkspaceIntegrityError, match="not a regular file"):
+        carry_run_notes(source_workspace=parent, destination_workspace=child, notes=(not_a_file,))
+    assert not (child / "notes").exists()

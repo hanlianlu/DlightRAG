@@ -48,6 +48,11 @@ MAX_RUN_NOTES = 8
 #: budget instead of the note's.
 MAX_RUN_NOTE_PATH_CHARS = 512
 
+#: Total bytes one continuation may copy. A note is conclusions, not a dump, and
+#: the copy multiplies storage by every follow-up; 1 MiB is generous for the count
+#: cap and still bounds a carry that would otherwise clone an unbounded tree.
+MAX_CARRIED_RUN_NOTE_BYTES = 1_048_576
+
 
 def spill_handle(spill: CommittedSpillRecord) -> str:
     """Render one committed spill as a handle the next turn can act on.
@@ -101,6 +106,51 @@ def compose_run_notes(records: Sequence[InventoryPathRecord]) -> list[str]:
     return notes[:MAX_RUN_NOTES]
 
 
+def select_carried_run_notes(
+    records: Sequence[InventoryPathRecord],
+) -> tuple[InventoryPathRecord, ...]:
+    """Return the notes a continuation copies, in Inventory order, within the carry bound.
+
+    A path over the read limit is skipped rather than truncated: the name is the
+    identity, and a clipped one would point at a file that does not exist. The
+    count cap is the summary's own, so a carry cannot invent a note the next
+    compaction would refuse to name. The first note that would exceed the byte
+    ceiling stops the selection; later files are not reordered to squeeze in.
+    """
+    selected: list[InventoryPathRecord] = []
+    total_bytes = 0
+    for record in records:
+        if record.entry_type != "file" or not is_run_note(record.relative_path):
+            continue
+        if len(record.relative_path) > MAX_RUN_NOTE_PATH_CHARS:
+            continue
+        if len(selected) >= MAX_RUN_NOTES:
+            break
+        if total_bytes + record.size_bytes > MAX_CARRIED_RUN_NOTE_BYTES:
+            break
+        selected.append(record)
+        total_bytes += record.size_bytes
+    return tuple(selected)
+
+
+def carried_run_notes_message(records: Sequence[InventoryPathRecord]) -> str:
+    """Return the one static prefix that names the notes this Run inherited.
+
+    The text is a function of the carried set alone: no clock, no Run id, and no
+    per-turn remainder. Empty input is empty output so a Run that inherited
+    nothing says nothing about carrying.
+    """
+    if not records:
+        return ""
+    lines = [
+        "The parent Run's notes are already in this workspace. "
+        "Read them with read(path=...); do not re-derive their contents.",
+        "",
+    ]
+    lines.extend(f"- {record.relative_path} ({record.size_bytes} bytes)" for record in records)
+    return "\n".join(lines)
+
+
 def compose_durable_handles(
     *,
     spills: Sequence[CommittedSpillRecord],
@@ -118,13 +168,16 @@ def compose_durable_handles(
 
 
 __all__ = [
+    "MAX_CARRIED_RUN_NOTE_BYTES",
     "MAX_RUN_NOTES",
     "MAX_RUN_NOTE_PATH_CHARS",
     "MAX_SPILL_HANDLES",
     "RUN_NOTE_DIRECTORY",
+    "carried_run_notes_message",
     "compose_durable_handles",
     "compose_run_notes",
     "is_run_note",
     "run_note_handle",
+    "select_carried_run_notes",
     "spill_handle",
 ]

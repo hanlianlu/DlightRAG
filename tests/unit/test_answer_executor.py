@@ -190,6 +190,7 @@ def _routing_record(
     *,
     fork_point_entry_id: str | None,
     fork_point_projection_id: str | None = None,
+    agent_lane_id: str = "main",
 ) -> Any:
     from dlightrag.engine.answer.runs.routing import RoutingRecord
 
@@ -198,7 +199,7 @@ def _routing_record(
         valid_modes=("fast",),
         resolved_mode="fast",
         agent_session_id=session_id,
-        agent_lane_id="main",
+        agent_lane_id=agent_lane_id,
         source_lane_id=None,
         fork_point_entry_id=fork_point_entry_id,
         fork_point_projection_id=fork_point_projection_id,
@@ -1513,3 +1514,135 @@ async def test_a_fork_whose_recorded_projection_is_not_the_one_there_refuses() -
 
     # The head is not on this Session at all, so the refusal names the stale point.
     assert raised.value.kind == "fork_point_stale"
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_resolves_the_parent_runs_registered_notes(
+    tmp_path: Path,
+) -> None:
+    """A continuation resolves the parent Run's registered notes, not its whole tree."""
+    import hashlib
+    import uuid
+
+    from dlightrag.engine.answer.workspace import epoch_paths, run_root
+    from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+    parent_id = str(uuid.uuid4())
+    content = b"carried"
+    record = InventoryPathRecord(
+        relative_path="notes/plan.md",
+        entry_type="file",
+        size_bytes=len(content),
+        content_digest=hashlib.sha256(content).hexdigest(),
+    )
+    workspace, _ = epoch_paths(run_root(tmp_path, "owner", parent_id), 1)
+    (workspace / "notes").mkdir(parents=True)
+    (workspace / "notes" / "plan.md").write_bytes(content)
+
+    async def load(_owner: str, run_id: str) -> tuple[InventoryPathRecord, ...]:
+        assert run_id == parent_id
+        return (record,)
+
+    executor = _executor()
+    executor._workspace_inventory_loader = load
+    session = MagicMock(
+        owner_id="owner",
+        prepared_input={"agent_session_id": "01930000-0000-7000-8000-000000000001"},
+    )
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(
+                "01930000-0000-7000-8000-000000000001",
+                fork_point_entry_id=None,
+                agent_lane_id="main",
+            )
+        )
+    )
+
+    notes, source = await executor._parent_notes_for_bind(
+        session=cast(RunSession, session),
+        owner_id="owner",
+        parent_run_id=parent_id,
+        workspace_root=tmp_path,
+        materialize=True,
+    )
+
+    assert notes == (record,)
+    assert source is not None
+    assert source == workspace
+    assert (source / "notes" / "plan.md").read_bytes() == content
+
+
+@pytest.mark.asyncio
+async def test_a_gone_parent_workspace_is_a_typed_refusal_not_an_empty_carry(
+    tmp_path: Path,
+) -> None:
+    from dlightrag.engine.answer.workspace import WorkspaceUnavailableError
+    from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+    record = InventoryPathRecord(relative_path="notes/plan.md", entry_type="file", size_bytes=1)
+
+    async def load(_owner: str, _run_id: str) -> tuple[InventoryPathRecord, ...]:
+        return (record,)
+
+    executor = _executor()
+    executor._workspace_inventory_loader = load
+    session = MagicMock(
+        owner_id="owner",
+        prepared_input={"agent_session_id": "01930000-0000-7000-8000-000000000001"},
+    )
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(
+                "01930000-0000-7000-8000-000000000001",
+                fork_point_entry_id=None,
+                agent_lane_id="main",
+            )
+        )
+    )
+
+    with pytest.raises(WorkspaceUnavailableError, match="still exists"):
+        await executor._parent_notes_for_bind(
+            session=cast(RunSession, session),
+            owner_id="owner",
+            parent_run_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            workspace_root=tmp_path,
+            materialize=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_no_notes_carries_nothing() -> None:
+    from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+    async def load(_owner: str, _run_id: str) -> tuple[InventoryPathRecord, ...]:
+        return (
+            InventoryPathRecord(
+                relative_path="artifacts/report.md", entry_type="file", size_bytes=8
+            ),
+        )
+
+    executor = _executor()
+    executor._workspace_inventory_loader = load
+    session = MagicMock(
+        owner_id="owner",
+        prepared_input={"agent_session_id": "01930000-0000-7000-8000-000000000001"},
+    )
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(
+                "01930000-0000-7000-8000-000000000001",
+                fork_point_entry_id=None,
+                agent_lane_id="main",
+            )
+        )
+    )
+    notes, source = await executor._parent_notes_for_bind(
+        session=cast(RunSession, session),
+        owner_id="owner",
+        parent_run_id="parent",
+        workspace_root=Path("/tmp"),
+        materialize=True,
+    )
+    assert notes == ()
+    assert source is None

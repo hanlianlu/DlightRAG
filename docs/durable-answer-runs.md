@@ -350,7 +350,14 @@ history. Research restores complete `OperationState` and invokes the same pure
 
 A Fork opens its Lane at the parent Run's recorded Fork Point instead of at the
 source Lane's current head, so a branch from an earlier turn starts at that turn
-and inherits the projection that was active there. A Run with no recorded point —
+and inherits the projection that was active there.
+
+A continuation's first bind copies the parent Run's registered Run Notes into its
+own epoch and records them in its Inventory before the handoff, so a crash cannot
+leave carried files on disk with no observation of them; a recovered attempt copies
+the whole epoch instead and never the parent again, because the Run may have written
+notes of its own. A numbered epoch that no Run row records is residue from an
+interrupted bind, and the next attempt discards it rather than copying it forward. A Run with no recorded point —
 one that predates the recording, or whose worker died before it could write one —
 refuses a Fork with a remedy rather than branching from wherever the Lane has since
 moved.

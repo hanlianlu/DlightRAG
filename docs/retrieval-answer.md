@@ -339,6 +339,16 @@ turn sees that turn's summary and retained tail rather than everything the
 conversation has since become, and it starts from that state's projection rather
 than the one the source Lane is on now.
 
+Either kind also carries the parent Run's Run Notes when it has a workspace to carry
+them into: the parent's registered notes are copied into the continuation's own
+Workspace Epoch and recorded in its Inventory before the first request, and that
+first request states the carry once as static text beside the system prompt. Only
+registered notes travel, so a Run with none carries none; a parent in another Agent
+Session, a registered note whose bytes are gone or no longer match, and a parent
+Workspace already reclaimed are typed refusals rather than a silent empty carry. A
+recovered attempt states what its own epoch holds rather than re-reading the parent,
+because it may have written a note of its own before it was interrupted.
+
 The summary also names the run's Run Notes: the files it wrote under `notes/` in
 its Agent Workspace, bounded to a small list and named by the `read(path=…)` call
 that reads each one again. They come from the Workspace Inventory — the framework's

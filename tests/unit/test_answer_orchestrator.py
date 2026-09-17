@@ -23,6 +23,7 @@ from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
+from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -189,6 +190,103 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
     # cannot act on it, so it must not be advertised there either.
     assert "`notes/`" in str(with_messages[0]["content"])
     assert "`notes/`" not in str(without_messages[0]["content"])
+
+
+@pytest.mark.asyncio
+async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
+    tmp_path: Path,
+) -> None:
+    """ADR 0019 experiment: a parent that settled, then a continuation of it.
+
+    The parent's note is written through the tool the product uses to write one, its
+    registration is the effect that tool reports, and the continuation binds its
+    workspace through the production `bind_run_workspace`, so the bytes, the new
+    Inventory, and the static first-request line are all the product's own path
+    rather than a hand-built copy. What is not exercised here: a live coordinator
+    interrupt of the parent (the parent has already settled, which is the state a
+    continuation reads) and whether the model would have needed the note.
+    """
+    import hashlib
+
+    from dlightrag.engine.agent.environment import AccessScheduler
+    from dlightrag.engine.agent.tools.files import WriteArgs, write_tool
+    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+    from dlightrag.engine.answer.workspace import bind_run_workspace
+    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    content = "the error was ECONNRESET on shard 4"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    store = InMemoryWorkspaceStore()
+    owner_id = "owner"
+    parent_id = "01930000-0000-7000-8000-0000000000aa"
+    parent = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner_id,
+        run_id=parent_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=store,
+    )
+    parent_environment = LocalExecutionEnvironment(parent.workspace)
+    write = write_tool(parent_environment, AccessScheduler())
+    written = await write.execute(
+        WriteArgs(path="notes/findings.md", content=content), tool_runtime(tool_name="write")
+    )
+    # The settlement's job: the tool reports the observation, the store keeps it.
+    assert written.effects.workspace_inventory is not None
+    await store.replace_inventory(
+        (
+            InventoryPathRecord(
+                relative_path="notes/findings.md",
+                entry_type="file",
+                size_bytes=len(content.encode("utf-8")),
+                content_digest=digest,
+            ),
+        )
+    )
+    registered = await store.load_inventory()
+
+    carried = select_carried_run_notes(registered)
+    child_store = InMemoryWorkspaceStore()
+    child = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner_id,
+        run_id="01930000-0000-7000-8000-0000000000bb",
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=child_store,
+        carried_notes=carried,
+        carry_source=parent.workspace,
+    )
+    environment = LocalExecutionEnvironment(child.workspace)
+    orchestrator = _orchestrator(mode="research", model=model, environment=environment)
+    orchestrator.bind_workspace(
+        child,
+        child_store,
+        carried_run_notes=select_carried_run_notes(await child_store.load_inventory()),
+    )
+    prepared = orchestrator.prepare_run("continue the task")
+    first = await prepared.context.control_turn(
+        evidence=prepared.evidence, working=prepared.working
+    )
+    prepared.working.record([{"role": "assistant", "content": "a further turn"}])
+    second = await prepared.context.control_turn(
+        evidence=prepared.evidence, working=prepared.working
+    )
+
+    file = child.workspace / "notes" / "findings.md"
+    assert file.read_text(encoding="utf-8") == content
+    assert hashlib.sha256(file.read_bytes()).hexdigest() == digest
+    assert [
+        (item.relative_path, item.content_digest) for item in await child_store.load_inventory()
+    ] == [("notes/findings.md", digest)]
+    assert str(first).count("already in this workspace") == 1
+    assert str(second).count("already in this workspace") == 1
+    assert first[1]["content"] == second[1]["content"]
+    assert "notes/findings.md" in first[1]["content"]
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:

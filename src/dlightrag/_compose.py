@@ -75,6 +75,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
+    from dlightrag.adapters.postgres.answer.workspace import load_run_inventory
     from dlightrag.adapters.postgres.connections import PGConnectionsStore
     from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
@@ -145,6 +146,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.runtime.contracts import RunKind
     from dlightrag.engine.runtime.coordinator import RunCoordinator, RunExecutor
     from dlightrag.engine.runtime.errors import IncompatibleActiveRunError, RunExecutionError
+    from dlightrag.engine.runtime.records import parse_run_id
+    from dlightrag.engine.runtime.settlements import InventoryPathRecord
 
     # Large document scans are DlightRAG product policy, not an AI package import side effect.
     Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
@@ -344,6 +347,15 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         cipher=CredentialCipher(config.answer.agent.connections.credential_secret_keyring),
     )
 
+    async def load_parent_workspace_inventory(
+        owner_id: str, run_id: str
+    ) -> tuple[InventoryPathRecord, ...]:
+        # Unfenced on purpose: the parent Run is terminal and holds no lease.
+        parsed = parse_run_id(run_id)
+        if parsed is None:
+            return ()
+        return await load_run_inventory(owner_id=owner_id, run_id=parsed)
+
     answer_executor = AnswerExecutor(
         store=run_store,
         blob_store=run_blob_store,
@@ -368,6 +380,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_capability_current=memory.capability_current,
         connection_tool_resolver=connections.restore_research,
         skills_bundle_factory=skills_bundle_factory(config, ensure_dirs=True),
+        workspace_inventory_loader=load_parent_workspace_inventory,
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
     )

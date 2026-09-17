@@ -11,7 +11,7 @@ import base64
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +92,7 @@ from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest, SubagentHost
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import WorkspaceStore
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,9 @@ class AnswerOrchestrator:
         #: The Run's durable spill rows, read when a summary must name the handles
         #: the covered prefix is about to take with it.
         self._workspace_store: WorkspaceStore | None = None
+        #: Parent notes copied at bind. Empty means this Run inherited nothing and
+        #: the first request says nothing about carrying.
+        self._carried_run_notes: tuple[InventoryPathRecord, ...] = ()
         self._resolved_mode: ResolvedMode = resolved_mode
         self._subagent_host = subagent_host
         self._memory_host = memory_host
@@ -375,11 +379,18 @@ class AnswerOrchestrator:
         """Attach the non-citable auto-recall block for this run."""
         self._memory_text = text
 
-    def bind_workspace(self, workspace: RunWorkspace, store: WorkspaceStore | None = None) -> None:
+    def bind_workspace(
+        self,
+        workspace: RunWorkspace,
+        store: WorkspaceStore | None = None,
+        *,
+        carried_run_notes: Sequence[InventoryPathRecord] = (),
+    ) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
         self._workspace = workspace
         self._environment = workspace.environment
         self._workspace_store = store
+        self._carried_run_notes = tuple(carried_run_notes)
 
     def artifact_root(self) -> Path | None:
         """Return this run's request-local Artifact root, when execution owns one."""
@@ -671,6 +682,7 @@ class AnswerOrchestrator:
                 # composed-tool fact the publication guidance uses: a read-only
                 # Child Session is told nothing about a path it cannot write.
                 run_notes=any(tool.name == "write" for tool in tools),
+                carried_run_notes=self._carried_run_notes,
             ),
             tools=tools,
             evidence=evidence,

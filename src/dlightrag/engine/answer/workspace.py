@@ -23,6 +23,7 @@ from dlightrag.engine.agent.environment import (
 )
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
+from dlightrag.engine.answer.continuation_handles import RUN_NOTE_DIRECTORY, is_run_note
 from dlightrag.engine.answer.execution_settings import default_local_workspace_root
 from dlightrag.engine.runtime.records import DeletedRun, parse_run_id
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
@@ -40,6 +41,10 @@ class WorkspaceRecoveryFailed(RuntimeError):
 
 class WorkspaceIntegrityError(RuntimeError):
     """Unsupported entries or a stable source/destination digest mismatch."""
+
+
+class WorkspaceUnavailableError(RuntimeError):
+    """The parent Run's Agent Workspace is gone; a continuation cannot carry from it."""
 
 
 logger = logging.getLogger(__name__)
@@ -82,8 +87,16 @@ async def bind_run_workspace(
     recorded_epoch: int | None,
     store: WorkspaceStore | None,
     execution_adapter: ExecutionEnvironmentAdapter | None = None,
+    carried_notes: Sequence[InventoryPathRecord] = (),
+    carry_source: Path | None = None,
 ) -> RunWorkspace:
-    """Create or recover the active epoch and return a rooted environment."""
+    """Create or recover the active epoch and return a rooted environment.
+
+    A continuation's first bind copies the parent's registered Run Notes into this
+    epoch *before* the handoff records the inventory, so a crash cannot leave the
+    files on disk with an empty observation. Recovery copies the whole epoch and
+    must not copy from the parent again: this Run may have written notes of its own.
+    """
     root = run_root(workspace_root, owner_id, run_id)
     adapter = execution_adapter or TrustExecutionAdapter()
     source_epoch = recorded_epoch
@@ -92,11 +105,32 @@ async def bind_run_workspace(
     # this run's current fenced claim before stale epoch-copy trees may be reclaimed.
     _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
     if source_epoch is None:
+        # Nothing is recorded for this Run, so no numbered epoch below this attempt
+        # is authoritative: an interrupted bind (crash or a lost claim between the
+        # copy and the handoff) left one behind, and fencing epochs only grow.
+        _discard_unrecorded_epochs(root, below=destination)
         workspace, spill = _prepare_epoch_dirs(root, destination)
-        if store is not None:
-            await store.handoff_epoch(
-                expected_epoch=None, destination_epoch=destination, inventory=()
+        inventory: tuple[InventoryPathRecord, ...] = ()
+        if carried_notes:
+            if carry_source is None:
+                raise WorkspaceUnavailableError(
+                    "The parent Run's Agent Workspace is gone. "
+                    "Continue from a Run whose workspace still exists."
+                )
+            inventory = carry_run_notes(
+                source_workspace=carry_source,
+                destination_workspace=workspace,
+                notes=carried_notes,
             )
+        if store is not None:
+            committed = await store.handoff_epoch(
+                expected_epoch=None, destination_epoch=destination, inventory=inventory
+            )
+            if not isinstance(committed, HandoffCommit):
+                # A fenced-out worker must not compose a request that claims notes are
+                # in a workspace this Run does not own.
+                _discard_unrecorded_epochs(root, below=destination + 1)
+                raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
         _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
         return RunWorkspace(
             epoch=destination,
@@ -119,6 +153,7 @@ async def bind_run_workspace(
             if not isinstance(result, HandoffCommit):
                 raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
         _retire_epoch(root, source_epoch)
+        _discard_unrecorded_epochs(root, below=destination, keep=destination)
         # Narrow the race in which the fenced-out worker creates its unique temp tree
         # after the pre-copy cleanup. A later creation remains safe but may survive.
         _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
@@ -193,6 +228,176 @@ def _inventory_observation(
         )
         for relative_path, (entry_type, size_bytes, digest) in sorted(manifest.items())
     )
+
+
+def active_epoch_workspace(root: Path) -> Path | None:
+    """Return the highest numbered epoch's workspace directory, if it is a real tree.
+
+    Retired epochs are deleted after a successful handoff, so the highest number is
+    the live tree. A missing root is a continuation's explicit refusal, not an empty
+    carry: silently copying nothing is the behaviour this slice removes.
+    """
+    for component in (root, root / "epochs"):
+        try:
+            mode = component.lstat().st_mode
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            return None
+    newest: int | None = None
+    try:
+        entries = tuple((root / "epochs").iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        epoch = int(entry.name)
+        if epoch < 1:
+            continue
+        try:
+            entry_mode = entry.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        if stat.S_ISLNK(entry_mode) or not stat.S_ISDIR(entry_mode):
+            continue
+        if newest is None or epoch > newest:
+            newest = epoch
+    if newest is None:
+        return None
+    workspace, _ = epoch_paths(root, newest)
+    try:
+        workspace_mode = workspace.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    if stat.S_ISLNK(workspace_mode) or not stat.S_ISDIR(workspace_mode):
+        return None
+    return workspace
+
+
+def carry_run_notes(
+    *,
+    source_workspace: Path,
+    destination_workspace: Path,
+    notes: Sequence[InventoryPathRecord],
+) -> tuple[InventoryPathRecord, ...]:
+    """Copy the parent's registered Run Notes into this epoch. All or nothing.
+
+    The Inventory is the authority on which paths are notes; this function never
+    walks the source tree to discover extras. A missing file, a digest mismatch,
+    a symlink, or a non-file is a typed refusal and leaves the destination's notes
+    directory untouched. The copy is a framework write, so the destination records
+    always carry a digest even when the parent observation did not.
+    """
+    if not notes:
+        return ()
+    try:
+        source_mode = source_workspace.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise WorkspaceUnavailableError(
+            "The parent Run's Agent Workspace is gone. "
+            "Continue from a Run whose workspace still exists."
+        ) from exc
+    except OSError as exc:
+        raise WorkspaceUnavailableError(
+            "The parent Run's Agent Workspace is gone. "
+            "Continue from a Run whose workspace still exists."
+        ) from exc
+    if stat.S_ISLNK(source_mode) or not stat.S_ISDIR(source_mode):
+        raise WorkspaceIntegrityError("parent workspace is not a directory")
+    staging = destination_workspace / f".carry-notes-{uuid.uuid4().hex}"
+    try:
+        copied: list[InventoryPathRecord] = []
+        for record in notes:
+            if not is_run_note(record.relative_path):
+                raise WorkspaceIntegrityError("carried path is not a Run Note")
+            source_file = _require_regular_file_inside(source_workspace, record.relative_path)
+            data = source_file.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            if len(data) != record.size_bytes:
+                raise WorkspaceIntegrityError(
+                    f"carried run note {record.relative_path} failed size check"
+                )
+            if record.content_digest is not None and digest != record.content_digest:
+                raise WorkspaceIntegrityError(
+                    f"carried run note {record.relative_path} failed digest check"
+                )
+            staged = staging / record.relative_path
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(data)
+            copied.append(
+                InventoryPathRecord(
+                    relative_path=record.relative_path,
+                    entry_type="file",
+                    size_bytes=len(data),
+                    content_digest=digest,
+                )
+            )
+        _replace_notes_directory(destination_workspace, staging / RUN_NOTE_DIRECTORY)
+    except WorkspaceIntegrityError, WorkspaceUnavailableError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    except OSError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise WorkspaceIntegrityError(str(exc)) from exc
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    else:
+        shutil.rmtree(staging, ignore_errors=True)
+    return tuple(copied)
+
+
+def _require_regular_file_inside(root: Path, relative_path: str) -> Path:
+    """Resolve one Inventory path under root without following any symlink."""
+    parts = [part for part in relative_path.split("/") if part]
+    if not parts:
+        raise WorkspaceIntegrityError("carried path is not a Run Note")
+    current = root
+    mode = 0
+    for part in parts:
+        if part in {".", ".."}:
+            raise WorkspaceIntegrityError("carried path is not a Run Note")
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError as exc:
+            raise WorkspaceIntegrityError(f"carried run note {relative_path} is missing") from exc
+        if stat.S_ISLNK(mode):
+            raise WorkspaceIntegrityError(f"carried run note {relative_path} is a symbolic link")
+    if not stat.S_ISREG(mode):
+        raise WorkspaceIntegrityError(f"carried run note {relative_path} is not a regular file")
+    return current
+
+
+def _replace_notes_directory(destination_workspace: Path, staged_notes: Path) -> None:
+    """Swap the staged notes tree into place. A symlink at the reserved path is refused."""
+    if not staged_notes.exists():
+        raise WorkspaceIntegrityError("carried notes directory was not staged")
+    final_notes = destination_workspace / RUN_NOTE_DIRECTORY
+    try:
+        mode = final_notes.lstat().st_mode
+    except FileNotFoundError:
+        staged_notes.rename(final_notes)
+        return
+    if stat.S_ISLNK(mode):
+        raise WorkspaceIntegrityError("notes directory is a symbolic link")
+    if not stat.S_ISDIR(mode):
+        raise WorkspaceIntegrityError("notes path is not a directory")
+    backup = destination_workspace / f".notes-old-{uuid.uuid4().hex}"
+    final_notes.rename(backup)
+    try:
+        staged_notes.rename(final_notes)
+    except OSError:
+        backup.rename(final_notes)
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
 
 
 class FileOutputStage(OutputStage):
@@ -294,13 +499,71 @@ def _cleanup_stale_epoch_copy_temps(root: Path, *, current_epoch: int) -> None:
             logger.warning("Failed to reclaim stale epoch-copy temp %s", entry, exc_info=True)
 
 
+def _discard_unrecorded_epochs(root: Path, *, below: int, keep: int | None = None) -> None:
+    """Remove numbered epochs no record names, below one fencing generation.
+
+    Fencing epochs strictly increase, so every numbered directory below the current
+    attempt belongs to a claim that has already lost; the one the caller is keeping
+    is the epoch the Run's own row records.
+    """
+    epochs = root / "epochs"
+    try:
+        entries = tuple(epochs.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Failed to inspect epochs in %s", epochs, exc_info=True)
+        return
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            numbered = int(entry.name)
+        except ValueError:
+            continue
+        if numbered >= below or numbered == keep:
+            continue
+        try:
+            mode = entry.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                entry.unlink()
+            elif stat.S_ISDIR(mode):
+                shutil.rmtree(entry)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("Failed to discard unrecorded epoch %s", entry, exc_info=True)
+
+
 def _prepare_epoch_dirs(root: Path, epoch: int) -> tuple[Path, Path]:
     workspace, spill = epoch_paths(root, epoch)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "artifacts").mkdir(exist_ok=True)
     (workspace / "tmp").mkdir(exist_ok=True)
     spill.mkdir(parents=True, exist_ok=True)
+    _discard_carry_staging(workspace)
     return workspace, spill
+
+
+def _discard_carry_staging(workspace: Path) -> None:
+    """Remove a staging tree an interrupted carry left behind.
+
+    The swap that installs carried notes is atomic, so anything still named for a
+    staging pass is residue: a recovery copy would otherwise record it as content.
+    """
+    for entry in tuple(workspace.iterdir()):
+        if not entry.name.startswith(".carry-notes-"):
+            continue
+        try:
+            mode = entry.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                entry.unlink()
+            elif stat.S_ISDIR(mode):
+                shutil.rmtree(entry)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("Failed to discard carry staging %s", entry, exc_info=True)
 
 
 def _workspace_manifest(root: Path) -> dict[str, tuple[str, int, str]]:
@@ -622,8 +885,11 @@ __all__ = [
     "RunWorkspace",
     "WorkspaceIntegrityError",
     "WorkspaceRecoveryFailed",
+    "WorkspaceUnavailableError",
+    "active_epoch_workspace",
     "agent_workspace_reclaimer",
     "bind_run_workspace",
+    "carry_run_notes",
     "copy_epoch_verified",
     "epoch_paths",
     "list_run_workspace_roots",
