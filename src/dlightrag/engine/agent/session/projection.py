@@ -79,11 +79,15 @@ class CompactionSummary:
         return cls(**payload)
 
 
-def render_compaction_summary(summary_json: str | None) -> str:
+def render_compaction_summary(summary_json: str | None, *, re_readable_handles: bool = True) -> str:
     """Render one compaction summary deterministically for a model prompt.
 
     A missing summary renders an explicit empty-continuation note so the fold
-    never silently drops a compaction position.
+    never silently drops a compaction position. ``re_readable_handles`` states
+    whether the receiving Run owns the tools the handle lines name: a Run without
+    them sees the summary's content but not calls it cannot make. The stored
+    summary is never changed by this: it records what the Run that wrote it could
+    re-read, and rendering is a projection of that record.
     """
     if summary_json is None:
         return "No prior context summary."
@@ -101,14 +105,14 @@ def render_compaction_summary(summary_json: str | None) -> str:
         sections.append(f"critical context: {critical}")
     if summary.paths is not None:
         sections.append(f"paths: {canonical_json(summary.paths)}")
-    notes = summary.run_notes
+    notes = summary.run_notes if re_readable_handles else None
     if isinstance(notes, list):
         rendered = "\n".join(
             f"  - {note}" for note in notes if isinstance(note, str) and note.strip()
         )
         if rendered:
             sections.append(f"Run Notes (re-readable, not evidence):\n{rendered}")
-    handles = summary.durable_handles
+    handles = summary.durable_handles if re_readable_handles else None
     if isinstance(handles, list):
         rendered = "\n".join(
             f"  - {handle}" for handle in handles if isinstance(handle, str) and handle.strip()

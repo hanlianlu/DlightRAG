@@ -123,12 +123,20 @@ def project_session_messages(
     projection: object | None,
     *,
     included_incomplete_host_user_entry_id: EntryId | None = None,
+    re_readable_handles: bool = True,
 ) -> list[dict[str, Any]]:
     """Materialize one active summary before its retained non-compaction suffix."""
     retained = retained_session_entries(entries, projection)
     messages: list[dict[str, Any]] = []
     if isinstance(projection, ContextProjection) and projection.summary is not None:
-        messages.append({"role": "user", "content": render_compaction_summary(projection.summary)})
+        messages.append(
+            {
+                "role": "user",
+                "content": render_compaction_summary(
+                    projection.summary, re_readable_handles=re_readable_handles
+                ),
+            }
+        )
     messages.extend(
         fold_entries(
             retained,

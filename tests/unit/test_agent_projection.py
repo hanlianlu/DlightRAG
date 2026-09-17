@@ -70,6 +70,36 @@ class TestCompactionSummary:
         assert "g" in first and "p" in first
         assert render_compaction_summary(None) == "No prior context summary."
 
+    def test_render_without_the_tools_drops_the_calls_and_keeps_the_summary(self) -> None:
+        """A Run that owns no `read` tool must not be told to make a re-read call.
+
+        The stored summary is the Run that wrote it; rendering is a projection. Fast
+        composes no tools, so its view of a Research Run's summary states the content
+        and omits calls it cannot make.
+        """
+        summary = CompactionSummary(
+            goal="Keep the decision.",
+            decisions="Decided to keep the spill handles.",
+            durable_handles=[
+                '[spill] spill_read_ab12 (4096 bytes) — re-read with read(resource_id="spill_read_ab12")'
+            ],
+            run_notes=[
+                "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
+            ],
+        ).canonical_json()
+
+        rendered = render_compaction_summary(summary, re_readable_handles=False)
+
+        assert "Keep the decision." in rendered
+        assert "Decided to keep the spill handles." in rendered
+        assert "re-read with" not in rendered
+        assert "durable handles" not in rendered
+        assert "Run Notes" not in rendered
+        # The record itself is untouched: the same summary still renders its calls.
+        with_calls = render_compaction_summary(summary)
+        assert "re-read with read(resource_id=" in with_calls
+        assert "re-read with read(path=" in with_calls
+
     def test_render_states_run_notes_as_paths_to_read_again(self) -> None:
         summary = CompactionSummary(
             goal="g",

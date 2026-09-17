@@ -1502,6 +1502,10 @@ class AnswerExecutor:
                 included_incomplete_host_user_entry_id=_trailing_unanswered_host_turn(
                     canonical_snapshot.tree.graph.ancestry(fork_head)
                 ),
+                # Pre-routing: this fold serves the router and, for Fast, the
+                # synthesizer's history. Research's model-facing fold is the
+                # orchestrator's own, and Fast composes no tools at all.
+                re_readable_handles=False,
             )
         else:
             history_lane_id = (
@@ -1521,6 +1525,10 @@ class AnswerExecutor:
                 included_incomplete_host_user_entry_id=_trailing_unanswered_host_turn(
                     canonical_snapshot.tree.ancestry(history_lane_id)
                 ),
+                # Pre-routing: this fold serves the router and, for Fast, the
+                # synthesizer's history. Research's model-facing fold is the
+                # orchestrator's own, and Fast composes no tools at all.
+                re_readable_handles=False,
             )
         has_agent_history = bool(authoritative_messages)
         if has_agent_history:
@@ -3051,6 +3059,8 @@ def _project_fast_history_before_current_user(
         ancestry,
         projection,
         included_incomplete_host_user_entry_id=accepted_user_entry_id,
+        # Fast composes no tools, so its history must not name re-read calls.
+        re_readable_handles=False,
     )
     if not messages or messages[-1].get("role") != "user":
         raise ValueError("Fast compaction projection did not retain the current User query")
