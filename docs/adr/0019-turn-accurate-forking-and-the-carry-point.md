@@ -9,9 +9,16 @@ branch at one Run's exact state — and makes the mutable plane travel with it.
 
 ## Status
 
-Accepted, not implemented. The glossary terms land with this decision; the
-recording, seeding, carry, reclamation, and their tests land in the slices under
-[Consequences](#consequences).
+Accepted and implemented. The slices under [Consequences](#consequences) have
+landed: Fork Point recording, turn-accurate seeding, workspace reclamation, Run
+Note carry, and history derived from the branch point. Live specs name the terms.
+
+Evidence for the compaction and carry experiments is unit- and integration-level
+at the product seams (the write tool, Inventory settlement, `bind_run_workspace`,
+the request assembler, coordinator PG tests), not a live-provider run. "The model
+actually re-reads a carried note" is therefore structurally demonstrated — a later
+turn can `read` the file, the summary names it, the continuation copies it — and
+not empirically demonstrated against a provider.
 
 ## Context
 
@@ -110,9 +117,11 @@ propagates generated junk and multiplies the epoch-copy headroom every Run needs
 and an empty Workspace is rejected because a branch with no tree is not a branch.
 
 **History is derived from the branch point.** A continuation whose branch point
-already contains the conversation injects no history at all; only a caller that
-supplies history with no Agent Session branch point — a stateless REST or MCP call
-— has it injected. `include_answer` retires to a history-only flag, and because
+already contains the conversation injects no history at all; only a caller with no
+Agent Session branch point — a stateless REST or MCP call — has its parent's
+accepted history injected. Where the branch point holds a turn that never got an
+answer, the Fold carries that turn, because it is the one turn the continuation is
+continuing. `include_answer` retires to a history-only flag, and because
 turn-accurate forking already covers "redo this answer" (fork at the preceding
 turn and ask again), no separate retry operation is introduced.
 
@@ -185,7 +194,13 @@ rewind (a Run's internal turns are not product checkpoints), merge, diff, compar
 or linearize operations, working-tree history, and any branch/commit/ref vocabulary
 in the product surface. Lane and Web Conversation remain the names.
 
-Residual risks, to revisit rather than extend silently: existing Runs have no
+Residual risks, to revisit rather than extend silently: a Fork's own new Lane
+identity and a stateless continuation's Session identity are minted per request and
+enter the submission fingerprint, so a caller retrying one of those with the same
+idempotency key conflicts instead of replaying — a Session-backed Follow-Up, whose
+identities come from its parent, is already deterministic, and deriving the two
+minted identities from `(parent_run_id, submission key)` would make the rest
+idempotent by construction; existing Runs have no
 recorded Fork Point, so the new column is populated from the point of deployment
 and older Runs refuse a Fork with the remedy instead of branching from the tip
 (acceptable, since the dialog copy they shipped with was already untrue); a Fork's

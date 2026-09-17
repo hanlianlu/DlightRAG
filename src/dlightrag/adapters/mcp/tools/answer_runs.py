@@ -410,7 +410,7 @@ async def _mcp_continuation(
 
 @mcp_app.tool(
     name="follow_up_answer_run",
-    description="Start a continuation using one terminal run's answer as context.",
+    description="Start a continuation that appends to one terminal run.",
     annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
 )
 async def follow_up_answer_run_tool(

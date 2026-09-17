@@ -337,7 +337,11 @@ A Follow-Up continues on the Lane it came from, at its tip. A Fork does not: it
 opens a new Lane at the state its parent Run settled at, so a branch from an earlier
 turn sees that turn's summary and retained tail rather than everything the
 conversation has since become, and it starts from that state's projection rather
-than the one the source Lane is on now.
+than the one the source Lane is on now. Either kind whose parent recorded an Agent
+Session injects no history: the fold at that branch point is the context. Only a
+stateless caller — a REST or MCP continuation whose parent recorded none — has the
+parent's accepted history injected, and `include_answer` only governs whether the
+parent's answer joins that injected history.
 
 Either kind also carries the parent Run's Run Notes when it has a workspace to carry
 them into: the parent's registered notes are copied into the continuation's own

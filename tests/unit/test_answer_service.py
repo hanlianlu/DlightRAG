@@ -26,6 +26,7 @@ from dlightrag.application.runs import (
 from dlightrag.application.runs import (
     RunEvent as ApplicationRunEvent,
 )
+from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
@@ -38,10 +39,12 @@ from dlightrag.engine.answer.errors import (
     UnsupportedAnswerModeError,
     UnsupportedResourceCapabilityError,
 )
+from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution import AnswerResourceResolver, AnswerResourceSettings
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.input import AnswerRunInput, AnswerRunRequest
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
+from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.runs.routing import decide_resolved_mode
 from dlightrag.engine.runtime.records import (
@@ -1793,17 +1796,11 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
     fork_request = service.create.await_args.kwargs["request"]
 
     assert follow == created and fork == created
-    assert follow_request.history == (
-        {"role": "user", "content": "ancestor question"},
-        {"role": "assistant", "content": "ancestor answer"},
-        {"role": "user", "content": "parent question"},
-        {"role": "assistant", "content": "parent answer"},
-    )
-    assert fork_request.history == (
-        {"role": "user", "content": "ancestor question"},
-        {"role": "assistant", "content": "ancestor answer"},
-        {"role": "user", "content": "parent question"},
-    )
+    # The parent recorded an Agent Session, so the fold at the branch point is
+    # the context. Injecting the accepted history here would state the parent's
+    # question and answer twice, in two roles.
+    assert follow_request.history == ()
+    assert fork_request.history == ()
     assert follow_request.episodic_summary == "Older accepted context."
     assert follow_request.retrieval.top_k == 7
     assert follow_request.retrieval.chunk_top_k == 11
@@ -1823,3 +1820,102 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
     assert fork_request.agent_session_id == follow_request.agent_session_id
     assert fork_request.agent_lane_id != "main"
     assert fork_request.source_lane_id == "main"
+
+
+@pytest.mark.parametrize("kind", ("follow_up", "fork"))
+async def test_session_backed_continuations_state_the_parent_once(kind: str) -> None:
+    """The fold is the only copy of the parent's question and answer.
+
+    Research concatenates injected history with the Session fold. A Session-backed
+    continuation must not supply a second copy through that channel, or the child's
+    first request would state the parent twice, in two roles.
+    """
+    terminal = _record(
+        status="succeeded",
+        result={"answer": "parent answer"},
+        accepted_input={
+            "query": "parent question",
+            "workspaces": ["finance"],
+            "history": [
+                {"role": "user", "content": "ancestor question"},
+                {"role": "assistant", "content": "ancestor answer"},
+            ],
+            "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            "agent_lane_id": "main",
+        },
+    )
+    service = _service(store=_Store(run=terminal))
+    request = await service.continuation_request(
+        owner_id=_OWNER,
+        run_id="run-1",
+        query="next question" if kind == "follow_up" else "other branch",
+        include_answer=kind == "follow_up",
+        authorized_workspaces=("finance",),
+    )
+    assert request is not None
+    assert request.history == ()
+
+    working = WorkingContextProjection()
+    working.record(
+        [
+            {"role": "user", "content": "parent question"},
+            {"role": "assistant", "content": "parent answer"},
+        ]
+    )
+    messages = await ContextAssembler(
+        model_profile=_PROFILE,
+        query=request.query,
+        history=PriorTurns([dict(message) for message in request.history]),
+        query_images=None,
+        resource_manifest=(),
+    ).control_turn(evidence=EvidenceLedger(), working=working)
+    composed = str(messages)
+    assert composed.count("parent question") == 1
+    assert composed.count("parent answer") == 1
+
+
+async def test_a_continuation_without_a_session_injects_parent_history() -> None:
+    """A stateless continuation still injects history, and include_answer gates the answer."""
+    terminal = _record(
+        status="succeeded",
+        result={"answer": "parent answer"},
+        accepted_input={
+            "query": "parent question",
+            "workspaces": ["finance"],
+            "history": [
+                {"role": "user", "content": "ancestor question"},
+                {"role": "assistant", "content": "ancestor answer"},
+            ],
+        },
+    )
+    service = _service(store=_Store(run=terminal))
+    follow = await service.continuation_request(
+        owner_id=_OWNER,
+        run_id="run-1",
+        query="next question",
+        include_answer=True,
+        authorized_workspaces=("finance",),
+    )
+    fork = await service.continuation_request(
+        owner_id=_OWNER,
+        run_id="run-1",
+        query="other branch",
+        include_answer=False,
+        authorized_workspaces=("finance",),
+    )
+    assert follow is not None and fork is not None
+    assert follow.history == (
+        {"role": "user", "content": "ancestor question"},
+        {"role": "assistant", "content": "ancestor answer"},
+        {"role": "user", "content": "parent question"},
+        {"role": "assistant", "content": "parent answer"},
+    )
+    assert fork.history == (
+        {"role": "user", "content": "ancestor question"},
+        {"role": "assistant", "content": "ancestor answer"},
+        {"role": "user", "content": "parent question"},
+    )
+    assert follow.continuation_kind == "follow_up"
+    assert fork.continuation_kind == "fork"
+    assert follow.agent_session_id
+    assert fork.agent_session_id

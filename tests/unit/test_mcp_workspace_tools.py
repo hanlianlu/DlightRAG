@@ -423,6 +423,9 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "retry_files",
         "steer_answer_run",
     }
+    follow_tool = next(tool for tool in tools if tool.name == "follow_up_answer_run")
+    assert follow_tool.description == "Start a continuation that appends to one terminal run."
+    assert "answer as context" not in (follow_tool.description or "")
     fork_tool = next(tool for tool in tools if tool.name == "fork_answer_run")
     assert (
         fork_tool.description

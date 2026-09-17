@@ -9,9 +9,17 @@ identity, and never treated as a record that can contradict the Session.
 
 ## Status
 
-Accepted, not implemented. The glossary terms land with this decision; the
-behaviour, its tests, and the live-spec revisions land in the slices under
-[Consequences](#consequences).
+Accepted and implemented. The three slices under [Consequences](#consequences)
+have landed: committed spills join `durable_handles`, a write under the reserved
+notes path registers a Run Note, and the compaction summary carries the notes
+field. Live specs name the terms.
+
+The experiment that gates the notes field was run at the seam: forced compaction
+in unit tests asserts the summary carries the handle, a later turn can read the
+path, and the field stays capped. It was not a live-provider run, so "the model
+does read the note back" is structurally true (the request names the
+`read(path=…)` call and the file is there) and not an empirical observation of a
+provider choosing to call it.
 
 ## Context
 

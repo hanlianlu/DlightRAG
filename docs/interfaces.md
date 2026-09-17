@@ -40,7 +40,7 @@ finally:
 | `parts` | Ordered Markdown, Artifact, and explicitly inline Evidence Image parts. |
 | `usage` | Root, child, and inclusive provider usage when available. |
 | `evidence` | Counts of admitted chunks, entities, relationships, and cited sources. |
-| `parent_run_id`, `continuation_kind` | Follow-up/fork lineage. |
+| `parent_run_id`, `continuation_kind` | Follow-up/fork lineage. A Session-backed continuation injects no history; only a caller with no Agent Session branch point has its parent's accepted history injected. |
 
 Answer **attachments** are files or HTTP(S) references used only by one answer.
 They never become workspace documents or appear in `/retrieve`. The separate
@@ -201,7 +201,7 @@ cursors return 422 before storage access.
 | `query_images` | retrieve | none | Up to three current images for visual search |
 | `attachments` | answer | none | Link descriptors or multipart files used only by this answer |
 | `semantic_highlights` | answer | `false` | Add answer-aware source highlights when globally enabled |
-| `history` | answer | none | Up to 100 caller-supplied user/assistant messages |
+| `history` | answer | none | Up to 100 caller-supplied user/assistant messages. Independent `/answer` calls re-send whatever they need. A Session-backed follow-up or fork injects none: the Agent Session fold at the branch point is the context. Only a continuation whose parent recorded no `agent_session_id` has the parent's accepted history injected, and only there does the parent's answer join it. |
 | `effort` | answer | unset | Agent effort for this Run's answering agent: `low`, `high`, or `max` |
 | `filters` | both | none | Built-in and custom metadata filters |
 
@@ -284,8 +284,8 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `GET /answer/{run_id}/artifacts/{resource_id}` | Stream Answer Artifact bytes with Range support; `download=true` forces attachment. |
 | `GET /answer/{run_id}/artifacts/{resource_id}/presentation` | Project an available Markdown Artifact as typed `AnswerResponse`, including that Artifact's validated citation sources. |
 | `POST /answer/{run_id}/steer` | Queue an instruction for live Research. |
-| `POST /answer/{run_id}/follow-up` | Create a child run using the selected terminal answer as context. |
-| `POST /answer/{run_id}/fork` | Create a sibling branch from the state that run settled at. |
+| `POST /answer/{run_id}/follow-up` | Create a child run that appends to the selected terminal run's Lane. Session-backed callers inject no history; the fold at the tip is the context. |
+| `POST /answer/{run_id}/fork` | Create a sibling branch from the state that run settled at. Session-backed callers inject no history; the fold at the Fork Point is the context. |
 | `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |

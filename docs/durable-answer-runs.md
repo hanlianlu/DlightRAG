@@ -440,7 +440,9 @@ model history, projected from the run rather than copied.
 
 A follow-up adds a linked turn and appends to the Lane's tip. Fork atomically opens
 a conversation branch with parent lineage, seeded at the parent Run's recorded Fork
-Point. Conversation deletion removes linked runs in one transaction;
+Point. A Session-backed continuation injects no history: the fold at the branch
+point already contains the conversation. Only a caller with no Agent Session
+branch point has the parent's accepted history injected. Conversation deletion removes linked runs in one transaction;
 workers cannot append after the fenced rows disappear. Cascades remove events
 and references, then ownership-safe cleanup removes unreferenced blobs.
 

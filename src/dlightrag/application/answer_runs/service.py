@@ -1580,9 +1580,14 @@ class AnswerService:
     ) -> AnswerRequest | None:
         """Build the selected accepted context after transport authorization.
 
-        History injection here is a transport convenience: a Fork still branches
-        from the parent's recorded Fork Point (the state it settled at, including
-        its answer), and a Follow-Up still appends to the Lane tip.
+        History is derived from the branch point. A continuation whose parent
+        recorded an Agent Session injects none: the fold at that point is the
+        context, and it is the caller's arrival at this endpoint — not history —
+        that says whether the run continues the Lane or branches from a Fork Point.
+        ``include_answer`` is the endpoint's own choice of kind (a Follow-Up
+        appends to the Lane tip, a Fork opens at the recorded Fork Point) and, for
+        a caller with no Session branch point, it also decides whether the parent's
+        answer joins the history that only such a caller receives.
         """
         text = query.strip()
         if not text:
@@ -1595,18 +1600,21 @@ class AnswerService:
         if authorized_workspaces is None:
             raise ValueError("continuation requires a currently authorized workspace set")
         accepted = record.request_input()
-        history: list[Mapping[str, Any]] = [
-            dict(message)
-            for message in accepted.get("history") or ()
-            if isinstance(message, Mapping)
-        ]
-        parent_query = str(accepted.get("query") or "")
-        if parent_query:
-            history.append({"role": "user", "content": parent_query})
-        if include_answer:
-            parent_answer = str((record.result or {}).get("answer") or "")
-            if parent_answer:
-                history.append({"role": "assistant", "content": parent_answer})
+        parent_session_id = str(accepted.get("agent_session_id") or "")
+        history: list[Mapping[str, Any]] = []
+        if not parent_session_id:
+            history = [
+                dict(message)
+                for message in accepted.get("history") or ()
+                if isinstance(message, Mapping)
+            ]
+            parent_query = str(accepted.get("query") or "")
+            if parent_query:
+                history.append({"role": "user", "content": parent_query})
+            if include_answer:
+                parent_answer = str((record.result or {}).get("answer") or "")
+                if parent_answer:
+                    history.append({"role": "assistant", "content": parent_answer})
 
         history_resources: list[AnswerHistoryResource] = []
         for reference_kind, items in (
@@ -1636,7 +1644,7 @@ class AnswerService:
             if isinstance(item, Mapping) and item.get("url")
         )
         filters = accepted.get("filters")
-        agent_session_id = str(accepted.get("agent_session_id") or "") or SessionId.new().value
+        agent_session_id = parent_session_id or SessionId.new().value
         parent_lane_id = str(accepted.get("agent_lane_id") or LaneId.main().value)
         continuation_kind = "follow_up" if include_answer else "fork"
         agent_lane_id = parent_lane_id if include_answer else LaneId.new().value

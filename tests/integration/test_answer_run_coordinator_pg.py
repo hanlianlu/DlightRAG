@@ -1345,6 +1345,68 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
     assert not any(isinstance(record.value, HostTurnReservation) for record in snapshot.registers)
 
 
+async def test_a_continuation_of_a_failed_fast_turn_still_sees_its_question(
+    store: FingerprintingRunStore,
+) -> None:
+    """The turn being continued is the context, even when it never got an answer.
+
+    A failed Fast turn leaves its user entry unanswered, and `fold_entries` omits an
+    unanswered Host turn from model history — correctly, since it is not history. A
+    continuation then has neither that fold nor any injected history (a Session-backed
+    continuation injects none), so the question would vanish entirely.
+    """
+    histories: list[PriorTurns] = []
+
+    class FailingSynthesizer:
+        async def generate_stream(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("generation failed")
+
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    failing = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, FailingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="fast",
+    )
+    application, coordinator = _answer_runtime(store, orchestrator=failing, history_sink=histories)
+    await coordinator.start()
+    try:
+        request = _answer_run_request()
+        creation = await store.create_run(
+            owner_id=_OWNER,
+            request=request,
+            idempotency_fingerprint=run_request_fingerprint(request),
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, creation.run.run_id, "failed"))
+        parent_routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert parent_routing is not None
+
+        continuation = {
+            **request,
+            "query": "try that again",
+            "agent_session_id": parent_routing.agent_session_id,
+            "agent_lane_id": "main",
+            "parent_run_id": creation.run.run_id,
+            "continuation_kind": "follow_up",
+        }
+        child = await store.create_run(
+            owner_id=_OWNER,
+            request=continuation,
+            idempotency_fingerprint=run_request_fingerprint(continuation),
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, child.run.run_id, "failed"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    child_history = str(histories[-1].messages)
+    assert "why" in child_history
+
+
 async def test_async_children_run_while_parent_progresses_and_barrier_adopts_results(
     store: FingerprintingRunStore,
 ) -> None:

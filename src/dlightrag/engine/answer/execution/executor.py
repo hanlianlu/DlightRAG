@@ -22,7 +22,12 @@ from dlightrag.engine.agent.environment import (
 from dlightrag.engine.agent.session.effects import (
     canonical_json,
 )
-from dlightrag.engine.agent.session.entries import CompactionEntry, UserMessageEntry
+from dlightrag.engine.agent.session.entries import (
+    AssistantMessageEntry,
+    CompactionEntry,
+    SessionEntry,
+    UserMessageEntry,
+)
 from dlightrag.engine.agent.session.fold import (
     PriorTurns,
     host_turn_starts,
@@ -1494,6 +1499,9 @@ class AnswerExecutor:
             authoritative_messages = project_session_messages(
                 canonical_snapshot.tree.graph.ancestry(fork_head),
                 fork_projection,
+                included_incomplete_host_user_entry_id=_trailing_unanswered_host_turn(
+                    canonical_snapshot.tree.graph.ancestry(fork_head)
+                ),
             )
         else:
             history_lane_id = (
@@ -1510,6 +1518,9 @@ class AnswerExecutor:
             authoritative_messages = project_session_messages(
                 canonical_snapshot.tree.ancestry(history_lane_id),
                 selected_snapshot.active_projection,
+                included_incomplete_host_user_entry_id=_trailing_unanswered_host_turn(
+                    canonical_snapshot.tree.ancestry(history_lane_id)
+                ),
             )
         has_agent_history = bool(authoritative_messages)
         if has_agent_history:
@@ -3171,6 +3182,28 @@ def answer_trace_output(
     if capture_sensitive_data:
         output["answer"] = answer or ""
     return output
+
+
+def _trailing_unanswered_host_turn(entries: Sequence[SessionEntry]) -> EntryId | None:
+    """Return the host turn a branch ends on while it still has no answer.
+
+    A continuation of a failed or cancelled Fast turn continues that question, and
+    its Fold would otherwise drop it: `fold_entries` omits a Host user entry whose
+    Assistant never committed, which is right for history and wrong for the one turn
+    a continuation is continuing. A Research question carries no acceptance id and is
+    already folded, so this names nothing for it.
+    """
+    if not entries or not isinstance(entries[-1], UserMessageEntry):
+        return None
+    last = entries[-1]
+    if last.acceptance_id is None:
+        return None
+    if any(
+        isinstance(entry, AssistantMessageEntry) and entry.acceptance_id == last.acceptance_id
+        for entry in entries
+    ):
+        return None
+    return last.entry_id
 
 
 def _lane_projection(
