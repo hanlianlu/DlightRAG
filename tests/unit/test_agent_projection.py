@@ -70,6 +70,38 @@ class TestCompactionSummary:
         assert "g" in first and "p" in first
         assert render_compaction_summary(None) == "No prior context summary."
 
+    def test_render_states_run_notes_as_paths_to_read_again(self) -> None:
+        summary = CompactionSummary(
+            goal="g",
+            run_notes=[
+                '[note] notes/plan.md (1240 bytes) — re-read with read(path="notes/plan.md")'
+            ],
+        ).canonical_json()
+
+        rendered = render_compaction_summary(summary)
+
+        assert "Run Notes (re-readable, not evidence):" in rendered
+        assert "  - [note] notes/plan.md (1240 bytes)" in rendered
+        assert "{" not in rendered
+
+    def test_a_summary_without_run_notes_still_decodes(self) -> None:
+        """Adding a field is backward compatible; removing one is not.
+
+        A projection committed before this field existed carries no key for it, and
+        `from_canonical_json` rejects a key it does not know — so the decoder must
+        keep accepting the older payload while the field's default stands in.
+        """
+        legacy = (
+            '{"constraints_preferences":"","critical_context":"","decisions":"",'
+            '"durable_handles":null,"goal":"g","next_steps":"","paths":null,"progress":""}'
+        )
+
+        summary = CompactionSummary.from_canonical_json(legacy)
+
+        assert summary.goal == "g"
+        assert summary.run_notes is None
+        assert render_compaction_summary(legacy).endswith("goal: g")
+
     def test_render_states_durable_handles_as_a_re_readable_list(self) -> None:
         summary = CompactionSummary(
             goal="g",

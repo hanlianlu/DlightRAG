@@ -33,6 +33,7 @@ from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.ai.reasoning import cheapest_supported_reasoning
 from dlightrag.engine.ai.tokens import estimate_messages_tokens, estimate_tokens
+from dlightrag.engine.answer.continuation_handles import MAX_RUN_NOTES
 from dlightrag.engine.answer.prompts.compaction import (
     COMPACTION_SYSTEM_PROMPT,
     compaction_user_prompt,
@@ -188,6 +189,26 @@ def _durable_handles(handles: Sequence[str]) -> list[str] | None:
 _MAX_DURABLE_HANDLES = 40
 
 
+def _run_notes(notes: Sequence[str]) -> list[str] | None:
+    """Return the Run Note lines one summary keeps for the model.
+
+    A note is a file the Run owns, so unlike a handle this is a locator and its
+    content is whatever the file holds now. Nothing is inferred from the covered
+    entries: the caller reads the Workspace Inventory, which is the framework's own
+    observation of what the Run wrote. The cap is applied here as well as where the
+    lines are composed, so no caller can spend the summary's budget on notes.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for note in notes:
+        text = note.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+    return ordered[:MAX_RUN_NOTES] or None
+
+
 class CompactionCoordinator:
     """Prepare one bounded automatic compaction effect for Runtime settlement."""
 
@@ -211,6 +232,7 @@ class CompactionCoordinator:
         tail_target_tokens: int,
         accounted_before: int,
         durable_handles: Sequence[str] = (),
+        run_notes: Sequence[str] = (),
         trace: dict[str, Any],
     ) -> tuple[ContextProjection, CompactionOutcome]:
         """Prepare one projection effect result; Runtime owns its atomic commit."""
@@ -288,6 +310,7 @@ class CompactionCoordinator:
             parsed,
             paths=None,
             durable_handles=_durable_handles(durable_handles),
+            run_notes=_run_notes(run_notes),
         )
         summary_json = summary.canonical_json()
 
@@ -452,6 +475,7 @@ def _with_framework_fields(
     *,
     paths: list[str] | None,
     durable_handles: list[str] | None,
+    run_notes: list[str] | None = None,
 ) -> CompactionSummary:
     return CompactionSummary(
         goal=summary.goal,
@@ -462,6 +486,7 @@ def _with_framework_fields(
         critical_context=summary.critical_context,
         paths=paths,
         durable_handles=durable_handles,
+        run_notes=run_notes,
     )
 
 

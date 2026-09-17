@@ -13,7 +13,7 @@ from dlightrag.engine.answer.compaction import (
     CompactionCoordinator,
     parse_compaction_summary,
 )
-from dlightrag.engine.answer.continuation_handles import MAX_SPILL_HANDLES
+from dlightrag.engine.answer.continuation_handles import MAX_RUN_NOTES, MAX_SPILL_HANDLES
 from dlightrag.engine.answer.fast import FastSessionHost
 
 
@@ -197,3 +197,73 @@ def test_the_spill_share_leaves_room_for_evidence_under_the_summary_cap() -> Non
     share exists to prevent, so the relationship is asserted rather than assumed.
     """
     assert MAX_SPILL_HANDLES + 1 <= _MAX_DURABLE_HANDLES
+
+
+@pytest.mark.asyncio
+async def test_the_summary_carries_the_bounded_deduplicated_run_notes() -> None:
+    """One coordinator call is where a note list becomes committed continuation memory.
+
+    The orchestrator test records the argument and the compose test bounds the
+    lines, so without this the field could stop accepting notes and every test
+    would stay green — the hole the spill handle test was written to close.
+    """
+    store = MemoryAgentSessionRepository[None]()
+
+    async def no_result() -> None:
+        return None
+
+    session_id = SessionId.new()
+    host = FastSessionHost(
+        repository=store,
+        initial_snapshot=await store.load(session_id),
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        idempotency_key="old-key",
+        content="old question " * 200,
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        content="old answer " * 200,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        idempotency_key="current-key",
+        content="current question",
+    )
+
+    async def stream_model(**_kwargs):
+        yield "## Goal\nKeep working from the notes."
+
+    coordinator = CompactionCoordinator(
+        model_profile=ModelProfile(context_window_tokens=100_000),
+        context_policy=ContextPolicy(
+            requested_output_reserve_tokens=1_000,
+            dynamic_context_reserve_tokens=1_000,
+            retained_tail_tokens=0,
+        ),
+        stream_model=stream_model,
+        exchange_starts_func=host_turn_starts,
+    )
+    notes = [f"[note] notes/{index}.md (12 bytes)" for index in range(MAX_RUN_NOTES + 4)]
+    projection, _outcome = await coordinator.prepare(
+        await store.load(session_id),
+        tail_target_tokens=0,
+        accounted_before=100,
+        run_notes=(*notes, "  ", notes[0]),
+        trace={},
+    )
+
+    summary_json = projection.summary
+    assert summary_json is not None
+    summary = CompactionSummary.from_canonical_json(summary_json)
+    assert summary.run_notes == notes[:MAX_RUN_NOTES]
+    assert "Run Notes (re-readable, not evidence):" in render_compaction_summary(summary_json)

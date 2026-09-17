@@ -743,3 +743,25 @@ async def test_bash_does_not_inherit_seeded_secrets(
     )
     assert "sk-secret" not in result.text_content
     assert "pw" not in result.text_content
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_path_read_admits_no_evidence(tmp_path: Path) -> None:
+    """A Run Note is continuation memory, and reading one back must not mint a source.
+
+    The summary names a note by exactly this call, so if a path read admitted
+    Evidence, compaction would turn the Run's own working state into citations.
+    """
+    from dlightrag.engine.answer.tools.composition import _resource_rows
+
+    environment = LocalExecutionEnvironment(tmp_path)
+    note = tmp_path / "notes" / "plan.md"
+    note.parent.mkdir()
+    note.write_text("decided: keep the spill handles\n", encoding="utf-8")
+    tool = read_tool(environment, AccessScheduler())
+
+    result = await tool.execute(ReadArgs(path="notes/plan.md"), tool_runtime(tool_name="read"))
+
+    assert "decided: keep the spill handles" in result.text_content
+    assert result.effects.evidence_sources == ()
+    assert _resource_rows("read", result) == []

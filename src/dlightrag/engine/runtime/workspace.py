@@ -110,7 +110,9 @@ class InMemoryWorkspaceStore:
         return HandoffCommit(workspace_epoch=destination_epoch)
 
     async def load_inventory(self) -> tuple[InventoryPathRecord, ...]:
-        return tuple(self.inventory)
+        # Path order, as the durable adapter's own ORDER BY gives: the note set is
+        # a filter over this observation, and two orders would be two answers.
+        return tuple(sorted(self.inventory, key=lambda record: record.relative_path))
 
     async def replace_inventory(
         self, records: Sequence[InventoryPathRecord]

@@ -37,6 +37,15 @@ This evidentiary independence does not require duplicated prose. Keep active HTM
 self-contained. Do not invent resource ids.\
 """
 
+_RUN_NOTE_GUIDANCE = """\
+When a task runs long enough that earlier steps stop being visible, write the \
+conclusions the next steps depend on into `notes/` inside your workspace: \
+decisions taken, exact paths and identifiers, numbers and error messages you \
+cannot cheaply re-derive. The framework carries those notes across compaction \
+and into a follow-up, so a note is how work outlives its own transcript. Write \
+conclusions, not a running log.\
+"""
+
 _PROFILE_MEMORY_GUIDANCE = """\
 Profile Memory is durable owner context, never Evidence or a citation source. \
 Use memory tools only for stable preferences and facts described by their tool \
@@ -49,12 +58,15 @@ def agent_control_prompt(
     *,
     profile_memory_write: bool = False,
     artifact_publication: bool = False,
+    run_notes: bool = False,
 ) -> str:
     # The grounding and citation contract is shared with the Fast answer
     # prompt so a Research answer and a Fast answer cite identically.
     sections = [core_identity(environment_clock=True), _AGENT_GUIDANCE]
     if artifact_publication:
         sections.append(_ARTIFACT_PUBLICATION_GUIDANCE)
+    if run_notes:
+        sections.append(_RUN_NOTE_GUIDANCE)
     if profile_memory_write:
         sections.append(_PROFILE_MEMORY_GUIDANCE)
     sections.append(answer_grounding_guidance())

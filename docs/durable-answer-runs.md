@@ -348,11 +348,14 @@ Assistant settlement records the complete response and ordered Tool Batch Plan.
 Tool clearance, effect settlement, ToolResult placement, Host deltas, and
 progress then commit under the lease/epoch predicate.
 
-A committed compaction carries two kinds of re-readable identity into the summary
-it stores: the Evidence ledger's citation handles and the run's newest committed
-spills. Both are read from durable authority when the summary is prepared, never
-inferred from message text, so a reclaimed Run composes exactly the list its live
-worker composed.
+A committed compaction carries three kinds of continuation identity into the
+summary it stores: the Evidence ledger's citation handles, the run's newest
+committed spills, and the Run Notes the Workspace Inventory observes under the
+reserved notes path. The first two are read from durable authority when the summary
+is prepared, never inferred from message text, so a reclaimed Run composes exactly
+the list its live worker composed. The third is a filter over the Inventory, which
+is why a verified Workspace Epoch handoff records the copied epoch's observation
+instead of emptying it: a reader after a recovery has to see what the Run holds.
 
 Recovery treats effects by contract:
 

@@ -50,6 +50,7 @@ class ContextAssembler:
         tool_guidance: tuple[str, ...] = (),
         profile_memory_write: bool = False,
         artifact_publication: bool = False,
+        run_notes: bool = False,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -61,6 +62,7 @@ class ContextAssembler:
         self._tool_guidance = tool_guidance
         self._profile_memory_write = profile_memory_write
         self._artifact_publication = artifact_publication
+        self._run_notes = run_notes
         #: Provider-anchored estimator correction; see ``observe_provider_input``.
         self._estimated_bias_tokens = 0
         self._last_measured_tokens: int | None = None
@@ -181,6 +183,7 @@ class ContextAssembler:
             "content": agent_control_prompt(
                 profile_memory_write=self._profile_memory_write,
                 artifact_publication=self._artifact_publication,
+                run_notes=self._run_notes,
             ),
         }
         head = self._head(system, working.messages())

@@ -59,6 +59,8 @@ def research_history_input_measure(
             tool_guidance=tool_guidance,
             profile_memory_write=any(tool.name == "remember" for tool in tools),
             artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
+            # The measurement must carry the same habit the run's own request does.
+            run_notes=any(tool.name == "write" for tool in tools),
         )
         return (
             context.measure_control_input(

@@ -73,6 +73,7 @@ from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.continuation_handles import (
     MAX_SPILL_HANDLES,
     compose_durable_handles,
+    compose_run_notes,
 )
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
@@ -548,6 +549,7 @@ class AnswerOrchestrator:
                 + _tool_schema_tokens(run.tools)
             ),
             durable_handles=await self._continuation_handles(run),
+            run_notes=await self._run_notes(),
             trace=run.trace,
         )
         return CompactionResult(
@@ -583,6 +585,17 @@ class AnswerOrchestrator:
             spills=spills,
             evidence_handles=run.evidence.citation_handles(),
         )
+
+    async def _run_notes(self) -> list[str]:
+        """Return the Run Notes the next summary may name, by path.
+
+        The Workspace Inventory is the authority on what the Run holds, so the note
+        set is a filter over it rather than a second registry that could disagree
+        with it after a `bash` call re-observes the whole workspace.
+        """
+        if self._workspace_store is None:
+            return []
+        return compose_run_notes(await self._workspace_store.load_inventory())
 
     def restore_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
         """Project a terminal Runtime snapshot into the product's live result cache."""
@@ -654,6 +667,10 @@ class AnswerOrchestrator:
                 tool_guidance=_tool_guidance(tools),
                 profile_memory_write=any(tool.name == "remember" for tool in tools),
                 artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
+                # Writing notes needs a workspace, so the habit rides the same
+                # composed-tool fact the publication guidance uses: a read-only
+                # Child Session is told nothing about a path it cannot write.
+                run_notes=any(tool.name == "write" for tool in tools),
             ),
             tools=tools,
             evidence=evidence,

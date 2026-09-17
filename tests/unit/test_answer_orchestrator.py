@@ -21,6 +21,7 @@ from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.workspace import RunWorkspace
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
@@ -184,6 +185,11 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
     assert "attach_artifact" in str(with_messages[0]["content"])
     assert "attach_artifact" not in str(without_messages[0]["content"])
 
+    # The notes habit is a workspace capability too, and a Run without a workspace
+    # cannot act on it, so it must not be advertised there either.
+    assert "`notes/`" in str(with_messages[0]["content"])
+    assert "`notes/`" not in str(without_messages[0]["content"])
+
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
     from dlightrag.engine.agent.session.ids import EntryId, SessionId
@@ -320,6 +326,48 @@ async def test_compaction_handles_put_the_runs_spills_before_its_evidence(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_run_notes_come_from_the_workspace_inventory(tmp_path: Path) -> None:
+    """The note set is a filter over the framework's own workspace observation.
+
+    A `bash` call re-observes the whole workspace without digests, so a second
+    registry could disagree with the Inventory about what the Run holds. The
+    `artifacts/` path proves the filter is a directory rule, not a file-pattern one.
+    """
+    orchestrator = _orchestrator(mode="research")
+    store = _RecordingWorkspaceStore()
+    await store.replace_inventory(
+        (
+            _inventory_record("artifacts/report.md"),
+            _inventory_record("notes/plan.md", size_bytes=1_240, digest=None),
+            _inventory_record("notes/decisions.md", size_bytes=310),
+            _inventory_record("readme.md"),
+        )
+    )
+    orchestrator.bind_workspace(
+        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
+        store,
+    )
+
+    notes = await orchestrator._run_notes()
+
+    assert notes == [
+        "[note] notes/decisions.md (310 bytes) — re-read with read(path='notes/decisions.md')",
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')",
+    ]
+
+
+def _inventory_record(
+    relative_path: str, *, size_bytes: int = 8, digest: str | None = "d" * 64
+) -> InventoryPathRecord:
+    return InventoryPathRecord(
+        relative_path=relative_path,
+        entry_type="file",
+        size_bytes=size_bytes,
+        content_digest=digest,
+    )
+
+
+@pytest.mark.asyncio
 async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path: Path) -> None:
     """The join between composing handles and committing a projection.
 
@@ -332,6 +380,7 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
     orchestrator = _orchestrator(mode="research")
     store = _RecordingWorkspaceStore()
     await store.register_spill(_spill_record("spill_grep_7f21"))
+    await store.replace_inventory((_inventory_record("notes/plan.md", size_bytes=1_240),))
     orchestrator.bind_workspace(
         RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
@@ -366,6 +415,9 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
 
     assert captured["durable_handles"] == [
         '[spill] spill_grep_7f21 (4096 bytes) — re-read with read(resource_id="spill_grep_7f21")'
+    ]
+    assert captured["run_notes"] == [
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
     ]
     assert result.entry.projection_id == result.projection.projection_id
 

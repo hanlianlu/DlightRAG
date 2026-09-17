@@ -333,6 +333,13 @@ effect intent. A spill handle states the `read(resource_id=…)` call it authori
 and reading one back admits no Evidence and mints no citation handle — a spilled
 output is continuation memory, never a source.
 
+The summary also names the run's Run Notes: the files it wrote under `notes/` in
+its Agent Workspace, bounded to a small list and named by the `read(path=…)` call
+that reads each one again. They come from the Workspace Inventory — the framework's
+own observation of the workspace, carried forward across a verified Workspace Epoch
+handoff — rather than from a separate note registry, and reading one back is an
+ordinary workspace read that admits no Evidence either.
+
 Full attachment bytes never enter model context. Only bounded text windows,
 capped observations, and budgeted images do.
 

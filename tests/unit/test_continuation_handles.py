@@ -1,11 +1,22 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The handle list one compaction summary carries forward."""
+"""The continuation identities one compaction summary carries forward.
+
+Two of them are handles the next turn reads by identity, and a Run Note is a path
+it reads again — the file itself is what outlives the summary.
+"""
 
 from dlightrag.engine.answer.continuation_handles import (
+    MAX_RUN_NOTE_PATH_CHARS,
+    MAX_RUN_NOTES,
     MAX_SPILL_HANDLES,
+    RUN_NOTE_DIRECTORY,
     compose_durable_handles,
+    compose_run_notes,
+    is_run_note,
+    run_note_handle,
     spill_handle,
 )
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord
 
 
@@ -69,3 +80,89 @@ def test_either_class_alone_still_composes() -> None:
     assert compose_durable_handles(spills=[_spill("spill_a")], evidence_handles=[]) == [
         spill_handle(_spill("spill_a"))
     ]
+
+
+def _inventory(
+    relative_path: str, *, size_bytes: int = 1_240, entry_type: str = "file"
+) -> InventoryPathRecord:
+    return InventoryPathRecord(
+        relative_path=relative_path,
+        entry_type=entry_type,
+        size_bytes=size_bytes,
+        content_digest="c" * 64,
+    )
+
+
+def test_only_the_notes_directory_holds_run_notes() -> None:
+    """`artifacts/` is a publication surface, and a sibling prefix is not a note."""
+    assert is_run_note("notes/plan.md")
+    assert is_run_note("notes/2026/decisions.md")
+    assert not is_run_note("notes")
+    assert not is_run_note("notes/")
+    assert not is_run_note("artifacts/notes.md")
+    assert not is_run_note("noteset/plan.md")
+    assert not is_run_note("notes/../artifacts/report.md")
+
+
+def test_run_note_handle_names_the_path_call_and_not_a_frozen_digest() -> None:
+    """A note is a live file: the read that follows serves its current bytes.
+
+    The recorded digest is absent on purpose. The Inventory holds one only for
+    paths the framework wrote itself — a `bash` call re-observes the whole
+    workspace without digests — so a handle that printed one would be claiming a
+    guarantee the inventory cannot keep.
+    """
+    handle = run_note_handle(_inventory("notes/plan.md"))
+
+    assert handle == ("[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')")
+    assert "c" * 64 not in handle
+
+
+def test_compose_keeps_inventory_order_bounds_the_list_and_skips_directories() -> None:
+    records = [
+        _inventory("artifacts/report.md"),
+        _inventory("notes/a.md"),
+        _inventory("notes", entry_type="directory"),
+        _inventory("readme.md"),
+        *(_inventory(f"notes/{index:02d}.md") for index in range(MAX_RUN_NOTES + 3)),
+    ]
+
+    notes = compose_run_notes(records)
+
+    assert len(notes) == MAX_RUN_NOTES
+    assert notes[0] == ("[note] notes/a.md (1240 bytes) — re-read with read(path='notes/a.md')")
+    assert all("artifacts" not in note and "readme" not in note for note in notes)
+
+
+def test_a_note_name_that_needs_quoting_still_renders_a_call_that_parses() -> None:
+    """A name may hold a quote; a call the model cannot reproduce is worse than none."""
+    handle = run_note_handle(_inventory('notes/say "hello".md'))
+
+    assert handle.endswith("""re-read with read(path='notes/say "hello".md')""")
+
+
+def test_an_absurd_note_path_is_not_named_at_all() -> None:
+    """The count cap does not bound prose, and the summary's budget is not a note's."""
+    records = [
+        _inventory(f"notes/{'x' * MAX_RUN_NOTE_PATH_CHARS}.md"),
+        _inventory("notes/plan.md"),
+    ]
+
+    notes = compose_run_notes(records)
+
+    assert notes == ["[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"]
+
+
+def test_the_reserved_directory_the_prompt_teaches_is_the_one_the_rule_reads() -> None:
+    """Two modules know the prefix, so one test has to hold them together.
+
+    The prompt states the directory in prose (prompts stay import-light), and the
+    filter has the constant; a rename that moved only one of them would leave the
+    habit pointing at a directory nothing recognizes.
+    """
+    from dlightrag.engine.answer.prompts.agent import agent_control_prompt
+
+    taught = agent_control_prompt(run_notes=True)
+
+    assert f"`{RUN_NOTE_DIRECTORY}/`" in taught
+    assert f"`{RUN_NOTE_DIRECTORY}/`" not in agent_control_prompt(run_notes=False)

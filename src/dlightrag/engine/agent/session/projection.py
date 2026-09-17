@@ -30,6 +30,7 @@ COMPACTION_SUMMARY_FIELDS: tuple[str, ...] = (
     "critical_context",
     "paths",
     "durable_handles",
+    "run_notes",
 )
 
 
@@ -50,6 +51,10 @@ class CompactionSummary:
     critical_context: str = ""
     paths: JsonValue | None = None
     durable_handles: JsonValue | None = None
+    #: The Run Notes the next turn may read again, by path. Added after
+    #: ``durable_handles`` and never removed: a summary field may only ever be
+    #: added, because decoding an older projection rejects fields it does not know.
+    run_notes: JsonValue | None = None
 
     def __post_init__(self) -> None:
         if not self.goal.strip():
@@ -96,6 +101,13 @@ def render_compaction_summary(summary_json: str | None) -> str:
         sections.append(f"critical context: {critical}")
     if summary.paths is not None:
         sections.append(f"paths: {canonical_json(summary.paths)}")
+    notes = summary.run_notes
+    if isinstance(notes, list):
+        rendered = "\n".join(
+            f"  - {note}" for note in notes if isinstance(note, str) and note.strip()
+        )
+        if rendered:
+            sections.append(f"Run Notes (re-readable, not evidence):\n{rendered}")
     handles = summary.durable_handles
     if isinstance(handles, list):
         rendered = "\n".join(

@@ -400,7 +400,7 @@ The current Workspace Epoch's path, type, size, and digest observation of an Age
 _Avoid_: Journal Entry, checkpoint, historical epoch listing
 
 **Run Note**:
-A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction. Settlement registers it as a re-readable, non-Evidence handle under its path and current digest; the Context Projection carries that handle; and a Continuation carries the file itself from its Fork Point's own Agent Workspace. It is never citable, never a second statement of what happened, and never a Memory Record.
+A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction. The Workspace Inventory is the authority on which paths are notes: the note set is a filter over that one observation, not a second registry, and identity is the path with the size it states rather than a digest the observation may not have. The Context Projection names each note by the `read(path=…)` call that reads it again; a Continuation carries the files themselves from its Fork Point's own Agent Workspace. A Run Note is never citable, never a second statement of what happened, and never a Memory Record.
 _Avoid_: scratchpad, agent journal, second transcript, Memory Record, Artifact, Evidence
 
 ## Configuration And Deployment

@@ -69,18 +69,28 @@ note must never be able to assert something the Entries do not.
 
 **Run Notes are declared by path, not by a tool argument.** A write inside the
 Agent Workspace's reserved notes directory, outside `artifacts/` (whose meaning is
-publication authorization for user-facing deliverables), registers that path at
-settlement with its raw digest and byte size. Identity is the path with its
-current digest: rewriting a note replaces its handle rather than adding one, which
-is the same rule an Artifact Attachment already uses for a reattached path. No
-Tool schema changes, so no pinned Tool Plan changes.
+publication authorization for user-facing deliverables), makes that path a Run
+Note. There is no second registry: the Workspace Inventory the framework already
+observes is the one authority on what the Run holds, and the note set is a filter
+over it. That makes the Inventory's own completeness a precondition rather than a
+detail — a verified Workspace Epoch handoff therefore records the copied epoch's
+observation instead of emptying the table, because a filter over an authority that
+forgets on recovery is not an authority. No Tool schema changes, so no pinned Tool
+Plan changes. A note's identity is its path with the size the Inventory states —
+never a digest it may not have, because a `bash` call re-observes the whole
+workspace without digests and only the paths this framework wrote itself carry one.
+Rewriting a note keeps that identity and replaces its size, which is the same
+replace-by-path rule an Artifact Attachment already uses for a reattached path.
 
 **Notes render in their own typed field, and non-Evidence handles join the existing
-list.** The summary gains a notes field with a small cap, so the deliberately
-written continuation files cannot be crowded out by a retrieval-heavy Run's
-Evidence handles. `durable_handles` keeps its existing role and cap and starts
-receiving every re-readable non-Evidence handle the Run holds — committed spills
-first, because their omission is a defect rather than a design choice.
+list.** The summary gains a notes field with a small cap, ordered by path so a note
+the Run keeps updating holds its place, and a note is named by the call that reads
+it again — a path, not a resource handle, because the file is the Run's own working
+state. The deliberately written continuation files therefore cannot be crowded out
+by a retrieval-heavy Run's Evidence handles. `durable_handles` keeps its existing
+role and cap and starts receiving every re-readable non-Evidence handle the Run
+holds — committed spills first, because their omission is a defect rather than a
+design choice.
 
 **Registration is non-Evidence by construction.** Reading a Run Note admits no
 Evidence row and mints no citation handle. The committed-spill read path already
@@ -148,9 +158,13 @@ habit, and the deterministic reward only guarantees that a note that exists
 survives — the experiment measures adoption, not enthusiasm; the notes directory
 consumes Workspace quota and its bytes are not free, which is why Workspace
 reclamation travels with the continuation carry in
-[ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md); and a note whose
-digest changes between compaction and re-read must produce an explicit stale
-answer rather than silently serving different bytes.
+[ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md); and a note is a live
+file, so a re-read serves the bytes it holds now rather than bytes frozen at the
+compaction that named it. That last property is deliberate rather than overlooked:
+the writer is the same Run, and the newest content is what the next steps want. If
+a note ever misleads a turn by having moved on, revisiting it means recording the
+projection's note digests and refusing a changed note explicitly — a new decision,
+not a quiet tightening of this one.
 
 Stop conditions: Run Notes being used for user-facing deliverables (that is what
 Artifacts are for), the notes field displacing Evidence handles or the reverse, or
