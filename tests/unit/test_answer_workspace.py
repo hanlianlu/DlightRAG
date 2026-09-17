@@ -372,3 +372,46 @@ async def test_recovery_rejects_corrupt_spill_and_removes_temp_tree(tmp_path: Pa
         await copy_epoch_verified(root, 1, 2, store)
 
     _assert_no_temp_recovery_tree(root, 2)
+
+
+@pytest.mark.asyncio
+async def test_handoff_records_the_copied_epochs_observation(tmp_path: Path) -> None:
+    """A verified copy is an observation, not an unknown.
+
+    The Run Note set is a filter over the Workspace Inventory, so a handoff that
+    replaced the table with nothing left every note unnamed after a crash-recovery
+    claim — the bytes copied, the names gone — while the copy itself had just
+    proven every path, size, and digest it was throwing away.
+    """
+    store = InMemoryWorkspaceStore()
+    first = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-notes",
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=store,
+    )
+    payload = "decided: keep the spill handles\n"
+    note = first.workspace / "notes" / "plan.md"
+    note.parent.mkdir()
+    note.write_text(payload, encoding="utf-8")
+
+    recovered = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-notes",
+        fencing_epoch=2,
+        recorded_epoch=1,
+        store=store,
+    )
+
+    assert recovered.epoch == 2
+    observed = await store.load_inventory()
+    assert [(item.relative_path, item.entry_type, item.size_bytes) for item in observed] == [
+        ("notes/plan.md", "file", len(payload.encode("utf-8")))
+    ]
+    assert observed[0].content_digest == hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    # The retiring epoch is gone and the note is not: the observation describes the copy.
+    assert not (note).exists()
+    assert (recovered.workspace / "notes" / "plan.md").read_text(encoding="utf-8") == payload

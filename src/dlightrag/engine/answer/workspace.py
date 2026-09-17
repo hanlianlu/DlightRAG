@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -21,6 +22,7 @@ from dlightrag.engine.agent.environment import (
 )
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
     CommittedSpillRecord,
     HandoffCommit,
@@ -97,10 +99,16 @@ async def bind_run_workspace(
             environment=adapter.create(workspace),
         )
     if source_epoch != destination:
-        await copy_epoch_verified(root, source_epoch, destination, store)
+        observed = await copy_epoch_verified(root, source_epoch, destination, store)
         if store is not None:
+            # The copy was just verified byte-identical to the source, so the new
+            # epoch's observation is known rather than unknown: discarding it here
+            # left every reader of the inventory — a Run Note set is exactly that —
+            # empty until the Run happened to write again.
             result = await store.handoff_epoch(
-                expected_epoch=source_epoch, destination_epoch=destination, inventory=()
+                expected_epoch=source_epoch,
+                destination_epoch=destination,
+                inventory=observed,
             )
             if not isinstance(result, HandoffCommit):
                 raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
@@ -121,8 +129,14 @@ async def bind_run_workspace(
 
 async def copy_epoch_verified(
     root: Path, source_epoch: int, destination: int, store: WorkspaceStore | None
-) -> None:
-    """Copy a stable source; the one fenced claimed run keeps spills immutable while paging."""
+) -> tuple[InventoryPathRecord, ...]:
+    """Copy a stable source; the one fenced claimed run keeps spills immutable while paging.
+
+    Returns the verified observation of the copied workspace, which is the source
+    manifest the copy had to match: the caller records it as the new epoch's
+    Workspace Inventory, so a reader after a recovery sees what the Run holds
+    rather than an empty table.
+    """
     source_ws, source_spill = epoch_paths(root, source_epoch)
     dest_parent = root / "epochs" / str(destination)
     temp_parent = root / "epochs" / f".tmp-{destination}-{uuid.uuid4().hex}"
@@ -153,6 +167,26 @@ async def copy_epoch_verified(
     except BaseException:
         shutil.rmtree(temp_parent, ignore_errors=True)
         raise
+    return _inventory_observation(manifest_a)
+
+
+def _inventory_observation(
+    manifest: Mapping[str, tuple[str, int, str]],
+) -> tuple[InventoryPathRecord, ...]:
+    """Return a copied epoch's observation from the manifest that verified it.
+
+    ``mode`` stays unobserved here: the manifest proves type, size, and content,
+    and the caller of a copy needs those, not the permission bits.
+    """
+    return tuple(
+        InventoryPathRecord(
+            relative_path=relative_path,
+            entry_type=entry_type,
+            size_bytes=size_bytes,
+            content_digest=digest,
+        )
+        for relative_path, (entry_type, size_bytes, digest) in sorted(manifest.items())
+    )
 
 
 class FileOutputStage(OutputStage):
