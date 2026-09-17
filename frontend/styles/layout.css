@@ -564,14 +564,12 @@ body.files-panel-open #files-btn {
     cursor: pointer;
 }
 
-/* Room for the level's glyph, its label, and the trailing Default marker. */
-.composer-effort-menu {
-    min-width: 10.5rem;
-}
-
 .composer-effort-menu button {
+    /* Glyph, label, then the Default marker beside the label it qualifies: content-sized
+       tracks only, so free space never separates a qualifier from what it describes. The
+       rows keep the shared menu width and rhythm the mode picker uses. */
     display: grid;
-    grid-template-columns: var(--size-icon-md) minmax(max-content, 1fr) auto;
+    grid-template-columns: var(--size-icon-md) max-content max-content;
     align-items: center;
     gap: var(--space-component);
 }

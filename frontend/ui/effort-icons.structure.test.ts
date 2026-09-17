@@ -39,24 +39,38 @@ test('every offered effort renders the dial with its own needle stop', () => {
   assert.equal(new Set(needles).size, LEVELS.length, 'each level must own a distinct stop');
 });
 
-function ruleFor(css: string, selector: string): string {
+/** The one rule whose selector is exactly `selector`, never a shared list's member. */
+function ruleMaybe(css: string, selector: string): string | null {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
   for (const match of source.matchAll(/(?:^|\n)([^{}]+)\{([^}]*)\}/g)) {
     const names = match[1].split(',').map((part) => part.trim());
     if (names.length === 1 && names[0] === selector) return match[2];
   }
-  assert.fail(`no rule declares ${selector}`);
+  return null;
 }
 
-test('a level row keeps room for its glyph, its label, and the Default marker', () => {
-  const css = readFileSync(join(FRONTEND_DIR, 'styles', 'layout.css'), 'utf8');
+function ruleFor(css: string, selector: string): string {
+  const rule = ruleMaybe(css, selector);
+  assert.ok(rule !== null, `no rule declares ${selector}`);
+  return rule;
+}
 
-  const menu = ruleFor(css, '.composer-effort-menu');
-  assert.match(menu, /min-width:\s*(?!7\.5rem)[^;]+;/, 'the menu must outgrow the shared default');
-  // The label column grows but never shrinks below its own text, so the label and
-  // the trailing Default marker cannot crowd each other.
+test('a level row keeps its Default marker beside the label it qualifies', () => {
+  const css = readFileSync(join(FRONTEND_DIR, 'styles', 'layout.css'), 'utf8');
+  const row = ruleFor(css, '.composer-effort-menu button');
+
+  // Content-sized tracks only: a growing or auto track would push the marker away
+  // from its label, which is a qualifier rather than a selection column.
   assert.match(
-    ruleFor(css, '.composer-effort-menu button'),
-    /grid-template-columns:\s*[^;]*minmax\(max-content,\s*1fr\)[^;]*;/,
+    row,
+    /grid-template-columns:\s*var\(--size-icon-md\)\s+max-content\s+max-content;/,
+  );
+  assert.doesNotMatch(row, /grid-template-columns:[^;]*(?:1fr|\bauto\b)/);
+  // The row shares the mode picker's menu width instead of widening its own.
+  const dedicated = ruleMaybe(css, '.composer-effort-menu');
+  assert.equal(
+    dedicated !== null && /min-width/.test(dedicated),
+    false,
+    'the effort menu must not widen itself past the shared default',
   );
 });
