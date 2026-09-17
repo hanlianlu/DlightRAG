@@ -1574,7 +1574,7 @@ class AnswerService:
         include_answer: bool,
         authorized_workspaces: Sequence[str] | None,
     ) -> AnswerRequest | None:
-        """Build the selected accepted context after transport authorization.
+        """Build one continuation's request after transport authorization.
 
         History is derived from the branch point. A continuation whose parent
         recorded an Agent Session injects none: the fold at that point is the

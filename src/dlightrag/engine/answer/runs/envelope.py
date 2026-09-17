@@ -9,7 +9,7 @@ def accepted_input_envelope(prepared: Mapping[str, Any]) -> dict[str, Any]:
     """Derive the terminal-surviving public envelope from a prepared input.
 
     Continuations are ordinary newly authorized runs, but they must be able to
-    reconstruct the selected run's accepted context after execution-private
+    reconstruct the selected run's accepted input after execution-private
     prepared input is cleared. Pinned model facts and resource manifests remain
     execution-only; normalized history, retrieval controls, and input-resource
     identities remain in this bounded public envelope.
