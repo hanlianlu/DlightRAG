@@ -602,6 +602,7 @@ def _service(
     resources: Any = None,
     memory_capability: Any = None,
     bind_research: Any = None,
+    models: Any = None,
 ) -> AnswerService:
     selected_store = store or _Store()
     return AnswerService(
@@ -611,7 +612,8 @@ def _service(
         retrieval=retrieval or _Retrieval(),
         capabilities=capabilities or _Capabilities(),
         capability_view=capability_view or _CapabilityView(AnswerCapabilities(None, "unknown")),
-        models=MagicMock(
+        models=models
+        or MagicMock(
             query_image_describer=MagicMock(return_value=MagicMock()),
             model_settings=MagicMock(return_value=ModelSettings(model="test")),
         ),

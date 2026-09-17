@@ -1,8 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """One accepted run may re-level its own answering agent and nothing else."""
 
+from collections.abc import Mapping
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -214,6 +217,57 @@ async def test_an_effort_no_level_can_honor_is_refused_at_admission(test_config)
     assert refusal.value.error_kind == "unsupported_effort"
 
 
+def test_an_effort_is_refused_when_raw_kwargs_own_the_reasoning():
+    """A role that states its own reasoning fields cannot also take a typed level.
+
+    The single-owner rule rejects typed-beside-raw at configuration time, so applying
+    a caller's effort would bypass that validation (`model_copy` re-validates nothing)
+    and raise where the request is planned, which reaches the caller as a provider
+    rejection on a run that already started.
+    """
+    from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
+
+    service = cast(
+        Any,
+        _service_stub(agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}}),
+    )
+    request = AnswerRunRequest.from_request({"query": "q", "effort": "max"})
+
+    with pytest.raises(UnsupportedAnswerEffortError) as refusal:
+        service._reject_unhonorable_effort(request)
+
+    assert "raw model kwargs" in refusal.value.public_message
+    assert refusal.value.error_kind == "unsupported_effort"
+
+
+@pytest.mark.asyncio
+async def test_admission_refuses_the_effort_a_raw_kwargs_role_cannot_take():
+    """The refusal lands at admission, before any run work, through the real seam."""
+    from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
+    from tests.unit.test_answer_service import _request as service_request
+    from tests.unit.test_answer_service import _service as answer_service
+
+    service = answer_service(
+        models=MagicMock(
+            model_settings=MagicMock(
+                return_value=ModelSettings(
+                    model="test",
+                    agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}},
+                )
+            ),
+        )
+    )
+
+    with pytest.raises(UnsupportedAnswerEffortError) as refusal:
+        await service.create(
+            request=service_request(mode="research", effort="max"),
+            owner_id="owner-1",
+            auth_mode="jwt",
+        )
+
+    assert "raw model kwargs" in refusal.value.public_message
+
+
 def test_an_effort_a_below_top_model_can_clamp_is_still_admitted():
     """The documented clamp stands: only a model with no level at all is refused."""
     from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
@@ -240,11 +294,16 @@ def test_an_effort_a_below_top_model_can_clamp_is_still_admitted():
     )
 
 
-def _service_stub() -> Any:
-    """The one method `_reject_unhonorable_effort` reads from its service."""
+def _service_stub(*, agentic_model_kwargs: Mapping[str, Any] | None = None) -> Any:
+    """The two facts `_reject_unhonorable_effort` reads from its service."""
 
     class _Stub:
         answering_model_profile = staticmethod(lambda: None)
+        _models = SimpleNamespace(
+            model_settings=lambda role: ModelSettings(
+                model="test", agentic_model_kwargs=agentic_model_kwargs or {}
+            )
+        )
 
     stub: Any = _Stub()
     stub._reject_unhonorable_effort = AnswerService._reject_unhonorable_effort.__get__(stub)

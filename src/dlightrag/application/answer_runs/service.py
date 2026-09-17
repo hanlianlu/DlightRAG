@@ -29,6 +29,7 @@ from dlightrag.engine.ai.capacity import (
 )
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.reasoning import conflicting_reasoning_keys
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
@@ -1742,20 +1743,26 @@ class AnswerService:
         return self._capabilities.current_profiles()["query"]
 
     def _reject_unhonorable_effort(self, request: AnswerRunRequest) -> None:
-        """Refuse a chosen agent effort the answering model cannot express at all.
+        """Refuse a chosen agent effort the answering role cannot apply.
 
         A level below the model's ladder is clamped by reasoning resolution, as ADR
-        0014 records. A model that names no non-off level has nothing to clamp to, so
-        admitting the run would either answer silently without the requested thinking
-        or fail inside the provider call and misreport a configuration fact as a
-        provider rejection.
+        0014 records. Two configurations have nowhere to clamp to. A model that names
+        no non-off level would either answer silently without the requested thinking or
+        fail inside the provider call, misreporting a configuration fact as a provider
+        rejection. And a role that owns its reasoning through raw model kwargs cannot
+        take a typed level at all: applying one bypasses the single-owner validation
+        (`model_copy` re-validates nothing) and raises where the request is planned,
+        which reaches the caller as a provider rejection.
         """
         effort = request.effort
         if effort is None:
             return
+        settings = self._models.model_settings("query")
+        if conflicting_reasoning_keys({**settings.model_kwargs, **settings.agentic_model_kwargs}):
+            raise UnsupportedAnswerEffortError(effort, reason="raw_kwargs")
         if offered_answer_efforts(self.answering_model_profile()):
             return
-        raise UnsupportedAnswerEffortError(effort)
+        raise UnsupportedAnswerEffortError(effort, reason="no_level")
 
     async def read_input_artifact(
         self,

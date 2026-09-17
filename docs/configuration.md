@@ -355,7 +355,9 @@ operations and revision rules are in
 
 `agentic_reasoning` inherits `reasoning`. When typed reasoning is configured,
 raw provider reasoning keys in `model_kwargs` are rejected to keep one owner for
-translation. `agentic_model_kwargs` is a shallow overlay for Research calls.
+translation, and a role that owns reasoning through `agentic_model_kwargs` refuses a
+caller-chosen agent effort at admission for the same reason: there is no typed level
+left to apply. `agentic_model_kwargs` is a shallow overlay for Research calls.
 
 `agentic_reasoning` on the answering role is the deployment **default**, not a
 ceiling or a whitelist. One Answer request may name its own effort

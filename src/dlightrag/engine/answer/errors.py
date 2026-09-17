@@ -11,6 +11,8 @@ validation.
 
 from __future__ import annotations
 
+from typing import Literal
+
 CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
 CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
 CURRENT_DOCUMENT_PARSE_FAILED = "CURRENT_DOCUMENT_PARSE_FAILED"
@@ -98,23 +100,28 @@ class UnsupportedAnswerModeError(AnswerInputError):
 
 
 class UnsupportedAnswerEffortError(AnswerInputError):
-    """A caller-chosen agent effort this deployment's answering model cannot express.
+    """A caller-chosen agent effort this deployment's answering role cannot apply.
 
-    A level the model can express but does not name at the top of its ladder is
-    clamped by reasoning resolution, as ADR 0014 records. A model that names no
-    level at all has nothing to clamp to, so the run is refused here instead of
-    being admitted and failing deep inside a provider call, where a configuration
-    fact would be reported as a provider rejection.
+    Two configurations leave a chosen effort with nowhere to go, and both are
+    refusals rather than late failures inside a provider call, where a configuration
+    fact would be reported as a provider rejection. ``no_level``: the answering model
+    names no non-off level, so there is nothing to clamp to. ``raw_kwargs``: the role
+    configures its own reasoning through raw model kwargs, which owns that decision by
+    the same single-owner rule that rejects a typed level beside them.
     """
 
-    def __init__(self, effort: str) -> None:
-        super().__init__(
-            public_message=(
+    def __init__(self, effort: str, *, reason: Literal["no_level", "raw_kwargs"]) -> None:
+        message = {
+            "no_level": (
                 f"The answering model does not offer the {effort!r} agent effort; "
                 "it names no effort level at all"
             ),
-            error_kind="unsupported_effort",
-        )
+            "raw_kwargs": (
+                f"The deployment configures the answering role's reasoning through raw "
+                f"model kwargs, so the {effort!r} agent effort cannot be applied to this run"
+            ),
+        }[reason]
+        super().__init__(public_message=message, error_kind="unsupported_effort")
 
 
 class UnsupportedResourceCapabilityError(AnswerInputError):
