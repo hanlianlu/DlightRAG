@@ -518,15 +518,27 @@ async def test_reclaim_skips_non_answer_runs(tmp_path: Path) -> None:
     assert root.exists()
 
 
-def test_a_disabled_execution_environment_produces_no_reclaimer(tmp_path: Path) -> None:
+def test_a_configured_root_still_builds_a_reclaimer_when_execution_is_disabled(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ws"
+    reclaimer = agent_workspace_reclaimer(
+        execution_environment="disabled",
+        workspace_root=str(root),
+    )
+    assert reclaimer is not None
+    assert reclaimer._root == root.resolve()
+    assert not root.exists()
+
+
+def test_no_workspace_root_produces_no_reclaimer() -> None:
     assert (
         agent_workspace_reclaimer(
             execution_environment="disabled",
-            workspace_root=str(tmp_path / "ws"),
+            workspace_root=None,
         )
         is None
     )
-    assert not (tmp_path / "ws").exists()
 
 
 @pytest.mark.asyncio
@@ -686,6 +698,10 @@ async def test_a_chain_of_two_carries_accumulates_the_file_itself(
 ) -> None:
     """The unit that accumulates is the file, and each hop is a real bind.
 
+    This pins the bind/Inventory chain: three production binds with real Inventory and
+    digest checks. That the middle hop is a *Fast execute* is pinned separately by
+    `tests/unit/test_answer_executor.py::test_a_fast_continuation_binds_the_parent_note_into_its_own_epoch`.
+
     A chain that carried the inherited note but dropped the one the first
     continuation wrote would pass a test that only exercised the copy helper, so
     this drives two bindings and reads each hop's own Inventory back.
@@ -747,6 +763,68 @@ async def test_a_chain_of_two_carries_accumulates_the_file_itself(
         "notes/findings.md",
         "notes/plan.md",
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_bind_chain_carries_the_note_through_a_middle_hop(tmp_path: Path) -> None:
+    """Research writes a note, Fast binds it without writing, Research reads it back.
+
+    Fast composes no tools, so it cannot rewrite the file; it only holds the
+    Inventory naming it so the next Research turn can carry it again. A hop that
+    bound an empty workspace would pass the two-Research chain and fail this one.
+    """
+    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+
+    owner = "owner"
+    parent_id = "01930000-0000-7000-8000-0000000000b1"
+    fast_id = "01930000-0000-7000-8000-0000000000b2"
+    grandchild_id = "01930000-0000-7000-8000-0000000000b3"
+    parent_store = InMemoryWorkspaceStore()
+    parent = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner,
+        run_id=parent_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=parent_store,
+    )
+    (parent.workspace / "notes").mkdir()
+    payload = b"the error was ECONNRESET on shard 4"
+    (parent.workspace / "notes" / "plan.md").write_bytes(payload)
+    await parent_store.replace_inventory(_note_records(parent.workspace, ("notes/plan.md",)))
+    parent_digest = hashlib.sha256(payload).hexdigest()
+
+    fast_store = InMemoryWorkspaceStore()
+    fast = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner,
+        run_id=fast_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=fast_store,
+        carried_notes=select_carried_run_notes(await parent_store.load_inventory()),
+        carry_source=parent.workspace,
+    )
+    fast_inventory = await fast_store.load_inventory()
+    assert [item.relative_path for item in fast_inventory] == ["notes/plan.md"]
+    assert fast_inventory[0].content_digest == parent_digest
+    assert (fast.workspace / "notes" / "plan.md").read_bytes() == payload
+
+    grandchild_store = InMemoryWorkspaceStore()
+    grandchild = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id=owner,
+        run_id=grandchild_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=grandchild_store,
+        carried_notes=select_carried_run_notes(fast_inventory),
+        carry_source=fast.workspace,
+    )
+    grandchild_inventory = await grandchild_store.load_inventory()
+    assert [item.relative_path for item in grandchild_inventory] == ["notes/plan.md"]
+    assert grandchild_inventory[0].content_digest == parent_digest
+    assert (grandchild.workspace / "notes" / "plan.md").read_bytes() == payload
 
 
 def _note_records(workspace: Path, relative_paths: tuple[str, ...]) -> list[InventoryPathRecord]:

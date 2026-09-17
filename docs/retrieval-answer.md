@@ -204,9 +204,10 @@ context, tools, and effects.
 ### Fast
 
 Fast performs planning, KB retrieval, and one lightweight generation call. It
-uses shared Context Contribution, Evidence, citation, model-call, usage, and
-Agent Session infrastructure, but creates no Agent Operation, workspace, tools,
-publication, or Profile Memory interaction.
+uses shared Context Contribution, Evidence, citation, model-call, usage, Agent
+Session infrastructure, the Workspace plane (inert: it receives and carries Run
+Notes, and Fast composes no tools that could write or read them), and Profile
+Memory recall, but creates no Agent Operation, tools, skills, or publication.
 
 ### Research
 
@@ -343,10 +344,12 @@ stateless caller — a REST or MCP continuation whose parent recorded none — h
 parent's accepted history injected, and `include_answer` only governs whether the
 parent's answer joins that injected history.
 
-Either kind also carries the parent Run's Run Notes when it has a workspace to carry
-them into: the parent's registered notes are copied into the continuation's own
-Workspace Epoch and recorded in its Inventory before the first request, and that
-first request states the carry once as static text beside the system prompt. Only
+Either kind also copies the parent Run's Run Notes when it has a workspace to carry
+them into: the parent's registered notes are written into the continuation's own
+Workspace Epoch and recorded in its Inventory before the first request. A
+tool-capable first request also states that carry once as static text beside the
+system prompt; a Fast first request does not, because it has no tool that could read
+a note — the files are there for the turn after it. Only
 registered notes travel, so a Run with none carries none; a parent in another Agent
 Session, a registered note whose bytes are gone or no longer match, and a parent
 Workspace already reclaimed are typed refusals rather than a silent empty carry. A

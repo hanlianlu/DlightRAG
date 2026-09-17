@@ -1646,3 +1646,311 @@ async def test_a_run_with_no_notes_carries_nothing() -> None:
     )
     assert notes == ()
     assert source is None
+
+
+def _pinned_models() -> tuple[Any, ...]:
+    from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ModelSettings
+    from dlightrag.engine.answer.execution.input import (
+        PinnedModelProfile,
+        model_reasoning_settings,
+    )
+
+    return tuple(
+        PinnedModelProfile(
+            role=role,
+            fingerprint=_fingerprint(role),
+            profile=ModelProfile(context_window_tokens=1_000_000),
+            reasoning_settings=model_reasoning_settings(ModelSettings(model=f"test-{role}")),
+        )
+        for role in CHAT_MODEL_SELECTORS
+    )
+
+
+def _fast_prepared_input(
+    *,
+    session_id: str,
+    parent_run_id: str | None = None,
+    profile_memory_enabled: bool = True,
+) -> dict[str, Any]:
+    from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
+    from dlightrag.engine.ai.catalog import current_model_catalog_revision
+    from dlightrag.engine.answer.execution.input import AnswerRunInput
+
+    run_input = AnswerRunInput(
+        query="try that again",
+        workspaces=("default",),
+        pinned_models=_pinned_models(),
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+        model_catalog_revision=current_model_catalog_revision(),
+        idempotency_fingerprint="fast-slice-9",
+        agent_session_id=session_id,
+        agent_lane_id="main",
+        parent_run_id=parent_run_id,
+        continuation_kind="follow_up" if parent_run_id else None,
+    )
+    return {
+        **run_input.as_request(),
+        "profile_memory_enabled": profile_memory_enabled,
+        "profile_memory_epoch": 1,
+        "auth_mode": "jwt",
+    }
+
+
+async def _drive_fast_execute(
+    *,
+    tmp_path: Path,
+    parent_run_id: str | None = None,
+    parent_inventory: tuple[Any, ...] = (),
+    memory: Any = None,
+    memory_capability_current: Any = None,
+    synthesizer: Any,
+    compose_tools: Any = None,
+) -> tuple[Any, Any, Any]:
+    import uuid
+
+    from dlightrag.engine.agent.session.fold import PriorTurns
+    from dlightrag.engine.answer.execution.executor import OrchestratorRun
+    from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+    from dlightrag.engine.answer.resources.models import TextWindowBudget
+    from dlightrag.engine.answer.workspace import bind_run_workspace
+    from dlightrag.engine.runtime.progress import StageCommit
+    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+
+    session_id = SessionId.new()
+    repository = MemoryAgentSessionRepository[Any](fencing_epoch=1)
+    workspace_store = InMemoryWorkspaceStore()
+    child_id = str(uuid.uuid4())
+    owner = "owner"
+    workspace_root = tmp_path / "ws"
+    (tmp_path / "corpus").mkdir()
+    if parent_run_id is not None:
+        parent_store = InMemoryWorkspaceStore()
+        parent = await bind_run_workspace(
+            workspace_root=workspace_root,
+            owner_id=owner,
+            run_id=parent_run_id,
+            fencing_epoch=1,
+            recorded_epoch=None,
+            store=parent_store,
+        )
+        if parent_inventory:
+            (parent.workspace / "notes").mkdir(exist_ok=True)
+            for record in parent_inventory:
+                path = parent.workspace / record.relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"the error was ECONNRESET on shard 4")
+            await parent_store.replace_inventory(parent_inventory)
+
+    async def load_parent_inventory(_owner: str, run_id: str) -> tuple[Any, ...]:
+        if parent_run_id is None:
+            return ()
+        assert run_id == parent_run_id
+        return parent_inventory
+
+    orchestrator = AnswerOrchestrator(
+        synthesizer=synthesizer,
+        retrieve_knowledge_base=AsyncMock(
+            return_value=MagicMock(
+                contexts={"chunks": [], "entities": [], "relationships": []},
+                trace={},
+            )
+        ),
+        model_profile=ModelProfile(context_window_tokens=1_000_000),
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="fast",
+    )
+
+    async def prepare(**_kwargs: Any) -> OrchestratorRun:
+        return OrchestratorRun(
+            orchestrator=orchestrator,
+            image_descriptions=[],
+            query_images=None,
+            history=PriorTurns(),
+            fast_history_targets=(),
+            current_image_count=0,
+            workspaces=["default"],
+            registry=None,
+        )
+
+    executor = _executor()
+    executor._execution_environment = "trust"
+    executor._workspace_root_setting = str(workspace_root)
+    executor._working_dir = str(tmp_path / "corpus")
+    executor._workspace_inventory_loader = load_parent_inventory
+    executor._memory = memory
+    executor._memory_capability_current = memory_capability_current
+    executor.prepare_orchestrated_run = prepare  # type: ignore[method-assign]
+    payload = _fast_prepared_input(session_id=session_id.value, parent_run_id=parent_run_id)
+    executor.validate_pinned_model_profiles = MagicMock(
+        return_value={item.role: item.profile for item in _pinned_models()}
+    )
+    executor._store.load_routing = AsyncMock(
+        return_value=_routing_record(session_id.value, fork_point_entry_id=None)
+    )
+    progress = MagicMock()
+    progress.load_stage = AsyncMock(return_value=None)
+    progress.settle_stage = AsyncMock(
+        return_value=StageCommit(
+            progress_version=1,
+            stage_intent_id=MagicMock(),
+            evidence_count=0,
+        )
+    )
+    session = MagicMock(
+        owner_id=owner,
+        run_id=child_id,
+        worker_id="worker-1",
+        fencing_epoch=1,
+        durable_progress_version=0,
+        prepared_input=payload,
+        workspace_epoch=None,
+        checkpoint=None,
+    )
+    session.check_cancelled = AsyncMock()
+    session.enter_phase = AsyncMock()
+    session.emit_token = AsyncMock()
+    session.flush_tokens = AsyncMock()
+    session.reset_output = AsyncMock()
+    session.execution.session_repository = repository
+    session.execution.progress_store = progress
+    session.execution.workspace_store = workspace_store
+    session.execution.fencing_epoch = 1
+    if compose_tools is not None:
+        import dlightrag.engine.answer.tools.composition as composition
+
+        composition.compose_research_tools = compose_tools  # type: ignore[method-assign]
+    return executor, session, workspace_store
+
+
+@pytest.mark.asyncio
+async def test_a_fast_continuation_binds_the_parent_note_into_its_own_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Research writes a note; Fast execute carries it; Fast's Inventory names it."""
+    import hashlib
+    import uuid
+
+    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+    from dlightrag.engine.answer.tools import composition as composition_module
+    from dlightrag.engine.answer.workspace import run_root
+    from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+    parent_id = str(uuid.uuid4())
+    payload = b"the error was ECONNRESET on shard 4"
+    digest = hashlib.sha256(payload).hexdigest()
+    record = InventoryPathRecord(
+        relative_path="notes/plan.md",
+        entry_type="file",
+        size_bytes=len(payload),
+        content_digest=digest,
+    )
+    captured: dict[str, Any] = {}
+
+    class _Synthesizer:
+        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            raise RuntimeError("stop after Fast generation")
+
+    composed = MagicMock(side_effect=AssertionError("Fast must not compose tools"))
+    monkeypatch.setattr(composition_module, "compose_research_tools", composed)
+    executor, session, workspace_store = await _drive_fast_execute(
+        tmp_path=tmp_path,
+        parent_run_id=parent_id,
+        parent_inventory=(record,),
+        synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
+    )
+    with pytest.raises(RunExecutionError):
+        await executor.execute(cast(RunSession, session))
+
+    inventory = await workspace_store.load_inventory()
+    assert [item.relative_path for item in inventory] == ["notes/plan.md"]
+    assert inventory[0].content_digest == digest
+    child_root = run_root(tmp_path / "ws", "owner", session.run_id)
+    note = child_root / "epochs" / "1" / "workspace" / "notes" / "plan.md"
+    assert note.read_bytes() == payload
+    composed.assert_not_called()
+    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+    from dlightrag.engine.answer.workspace import bind_run_workspace
+    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+
+    grandchild_store = InMemoryWorkspaceStore()
+    grandchild = await bind_run_workspace(
+        workspace_root=tmp_path / "ws",
+        owner_id="owner",
+        run_id=str(uuid.uuid4()),
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=grandchild_store,
+        carried_notes=select_carried_run_notes(inventory),
+        carry_source=note.parent.parent,
+    )
+    assert (grandchild.workspace / "notes" / "plan.md").read_bytes() == payload
+    assert (await grandchild_store.load_inventory())[0].content_digest == digest
+
+
+@pytest.mark.asyncio
+async def test_fast_receives_recalled_profile_memory(tmp_path: Path) -> None:
+    from dlightrag_memory.memory import RecallResult
+    from dlightrag_memory.models import MemoryProvenance, MemoryRecord
+
+    from dlightrag.engine.answer.memory import render_auto_recall
+    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+
+    record = MemoryRecord(
+        owner_id="owner",
+        memory_id="m1",
+        kind="fact",
+        body="prefers short answers",
+        provenance=MemoryProvenance(origin_kind="answer_run", origin_id="origin", run_id="origin"),
+    )
+    captured: dict[str, Any] = {}
+
+    class _Memory:
+        async def recall(self, **_kwargs: Any) -> RecallResult:
+            return RecallResult(records=(record,), strategy="test", content_chars=len(record.body))
+
+    class _Synthesizer:
+        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            raise RuntimeError("stop after Fast generation")
+
+    executor, session, _store = await _drive_fast_execute(
+        tmp_path=tmp_path,
+        memory=_Memory(),
+        synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
+    )
+    with pytest.raises(RunExecutionError):
+        await executor.execute(cast(RunSession, session))
+    assert captured["memory_text"] == render_auto_recall((record,))
+
+
+@pytest.mark.asyncio
+async def test_fast_recall_is_suppressed_when_memory_capability_is_disabled(
+    tmp_path: Path,
+) -> None:
+    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+
+    captured: dict[str, Any] = {}
+
+    class _Memory:
+        async def recall(self, **_kwargs: Any) -> Any:
+            raise AssertionError("disabled capability must not recall")
+
+    class _Synthesizer:
+        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            raise RuntimeError("stop after Fast generation")
+
+    async def disabled(**_kwargs: Any) -> bool:
+        return False
+
+    executor, session, _store = await _drive_fast_execute(
+        tmp_path=tmp_path,
+        memory=_Memory(),
+        memory_capability_current=disabled,
+        synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
+    )
+    with pytest.raises(RunExecutionError):
+        await executor.execute(cast(RunSession, session))
+    assert captured.get("memory_text") == ""

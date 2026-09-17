@@ -674,13 +674,13 @@ async def test_an_accepted_effort_is_recorded_and_distinguishes_replays() -> Non
     assert chosen["idempotency_fingerprint"] != defaulted["idempotency_fingerprint"]
 
 
-async def test_fast_acceptance_never_enters_profile_memory_capability() -> None:
+async def test_fast_acceptance_pins_profile_memory_capability() -> None:
     store = _Store()
 
-    async def unexpected(**_kwargs: Any) -> tuple[bool, int]:
-        raise AssertionError("Fast mode must not read Profile Memory settings")
+    async def enabled(**_kwargs: Any) -> tuple[bool, int]:
+        return True, 3
 
-    service = _service(store=store, memory_capability=unexpected)
+    service = _service(store=store, memory_capability=enabled)
     await service.create(
         request=_request(mode="fast"),
         owner_id=_OWNER,
@@ -688,8 +688,8 @@ async def test_fast_acceptance_never_enters_profile_memory_capability() -> None:
     )
 
     prepared = store.created[0]["prepared_input"]
-    assert prepared["profile_memory_enabled"] is False
-    assert prepared["profile_memory_epoch"] == 0
+    assert prepared["profile_memory_enabled"] is True
+    assert prepared["profile_memory_epoch"] == 3
 
 
 async def test_explicit_fast_with_text_query_and_current_image_creates_no_run() -> None:
@@ -916,7 +916,7 @@ async def test_auto_removes_fast_before_persisting_routing_when_40k_cannot_fit(
     )
 
 
-async def test_auto_fast_capacity_excludes_research_only_profile_memory(
+async def test_auto_fast_capacity_includes_profile_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import dlightrag.application.answer_runs.service as service_module
@@ -933,7 +933,9 @@ async def test_auto_fast_capacity_excludes_research_only_profile_memory(
         observed_fast_memory.append(memory_text)
         return lambda _history, _summary="": 50 + len(memory_text)
 
-    monkeypatch.setattr(service_module, "standing_memory_for_acceptance", lambda _auth: "m" * 100)
+    monkeypatch.setattr(
+        service_module, "standing_memory_for_acceptance", lambda _auth: "m" * 10_000
+    )
     monkeypatch.setattr(
         service_module.AnswerSynthesizer,
         "history_input_measure",
@@ -953,8 +955,10 @@ async def test_auto_fast_capacity_excludes_research_only_profile_memory(
         auth_mode="jwt",
     )
 
-    assert observed_fast_memory == [""]
-    assert store.created[0]["routing"].valid_modes == ("fast", "research")
+    assert observed_fast_memory == ["m" * 10_000]
+    # The standing block does not fit Fast's remaining window, so auto keeps
+    # Research rather than overflowing at generation.
+    assert store.created[0]["routing"].valid_modes == ("research",)
 
 
 async def test_explicit_fast_rejects_when_40k_cannot_fit() -> None:

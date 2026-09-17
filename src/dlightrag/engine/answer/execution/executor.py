@@ -102,7 +102,10 @@ from dlightrag.engine.answer.citations.sources import project_contexts_for_clien
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
 from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.compaction import CompactionCoordinator
-from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+from dlightrag.engine.answer.continuation_handles import (
+    compose_run_notes,
+    select_carried_run_notes,
+)
 from dlightrag.engine.answer.errors import (
     AnswerInputError,
     AnswerResourceAdmissionError,
@@ -143,7 +146,11 @@ from dlightrag.engine.answer.image_capability import (
 )
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.media import evidence_images_from_sources
-from dlightrag.engine.answer.memory import memory_owner_allowed, render_auto_recall
+from dlightrag.engine.answer.memory import (
+    memory_owner_allowed,
+    render_auto_recall,
+    standing_memory_for_acceptance,
+)
 from dlightrag.engine.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
@@ -194,6 +201,7 @@ from dlightrag.engine.answer.tools.subagents import (
 )
 from dlightrag.engine.answer.web_sources import WebSourceService
 from dlightrag.engine.answer.workspace import (
+    RunWorkspace,
     WorkspaceIntegrityError,
     WorkspaceRecoveryFailed,
     WorkspaceUnavailableError,
@@ -1181,6 +1189,64 @@ class AnswerExecutor:
             )
         return notes, source
 
+    async def _claim_run_workspace(
+        self,
+        *,
+        session: RunSession,
+        request: AnswerRunInput,
+        workspace_store: WorkspaceStore | None,
+    ) -> tuple[RunWorkspace | None, tuple[InventoryPathRecord, ...]]:
+        """Bind this Run's Agent Workspace epoch, including a continuation carry.
+
+        Fast composes no tools, so the workspace is inert for it: it exists to
+        receive carried Run Notes and to carry them onward. A disabled execution
+        environment has no root, so this returns nothing and there is no carry.
+        """
+        from dlightrag.engine.answer.execution_settings import validate_agent_execution
+
+        root = validate_agent_execution(
+            execution_environment=self._execution_environment,
+            workspace_root=self._workspace_root_setting,
+            working_dir=self._working_dir,
+            sandbox_adapter=(
+                self._execution_adapter if self._execution_environment == "sandbox" else None
+            ),
+        )
+        if root is None:
+            return None, ()
+        carried_notes: tuple[InventoryPathRecord, ...] = ()
+        carry_source: Path | None = None
+        try:
+            carried_notes, carry_source = await self._parent_notes_for_bind(
+                session=session,
+                owner_id=session.owner_id,
+                parent_run_id=request.parent_run_id,
+                workspace_root=root,
+                materialize=session.workspace_epoch is None,
+                workspace_store=workspace_store,
+            )
+            bound = await bind_run_workspace(
+                workspace_root=root,
+                owner_id=session.owner_id,
+                run_id=session.run_id,
+                fencing_epoch=session.execution.fencing_epoch,
+                recorded_epoch=session.workspace_epoch,
+                store=workspace_store,
+                execution_adapter=self._execution_adapter,
+                carried_notes=(carried_notes if session.workspace_epoch is None else ()),
+                carry_source=carry_source,
+            )
+        except WorkspaceUnavailableError as exc:
+            raise RunExecutionError("run_notes_unavailable", str(exc)) from exc
+        except WorkspaceRecoveryFailed as exc:
+            raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
+        except WorkspaceIntegrityError as exc:
+            kind = (
+                "run_notes_unavailable" if carry_source is not None else "workspace_integrity_error"
+            )
+            raise RunExecutionError(kind, str(exc)) from exc
+        return bound, carried_notes
+
     async def _execute_run(
         self,
         session: RunSession,
@@ -1337,6 +1403,7 @@ class AnswerExecutor:
         accepted_user_entry_id: EntryId,
         targets: Sequence[HistoryProjectionTarget],
         compaction_model_profile: ModelProfile,
+        workspace_store: WorkspaceStore | None = None,
     ) -> tuple[PriorTurns, dict[str, Any], bool]:
         """Commit one canonical projection satisfying every reachable Fast serializer."""
         snapshot = await host.snapshot(session_id, selected_lane_id=lane_id)
@@ -1368,11 +1435,20 @@ class AnswerExecutor:
             tail = CONTEXT_POLICY.retained_tail_target(compaction_model_profile) // (
                 2**tail_reductions
             )
+            run_notes = (
+                compose_run_notes(await workspace_store.load_inventory())
+                if workspace_store is not None
+                else []
+            )
             try:
                 projection, _outcome = await coordinator.prepare(
                     snapshot,
                     tail_target_tokens=tail,
                     accounted_before=max(item["input_tokens"] for item in before.values()),
+                    # Fast has no EvidenceLedger at compaction — that happens
+                    # before retrieval — and inventing citation ordinals the model
+                    # never saw is worse than naming none.
+                    run_notes=run_notes,
                     trace=attempt_trace,
                 )
                 candidate = _project_fast_history_before_current_user(
@@ -1591,6 +1667,7 @@ class AnswerExecutor:
         run = await self.prepare_orchestrated_run(
             query=request.query,
             agent_effort=request.effort,
+            worst_case_memory=_worst_case_recall_block(session.prepared_input),
             workspaces=list(request.workspaces),
             retrieval=request.retrieval,
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
@@ -1630,9 +1707,7 @@ class AnswerExecutor:
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         prepared_input = session.prepared_input or {}
-        recall_allowed = resolved_mode == "research" and bool(
-            prepared_input.get("profile_memory_enabled", True)
-        )
+        recall_allowed = bool(prepared_input.get("profile_memory_enabled", True))
         memory_epoch = int(prepared_input.get("profile_memory_epoch") or 0)
         memory_recall_record_count = 0
         memory_recall_chars = 0
@@ -1671,56 +1746,14 @@ class AnswerExecutor:
                 # A Fork Point that could not open a branch is a stale point, not a
                 # Session race: the caller asked for a state that is no longer there.
                 raise RunExecutionError("fork_point_stale", exc.public_message) from exc
+            bound, carried_notes = await self._claim_run_workspace(
+                session=session,
+                request=request,
+                workspace_store=workspace_store,
+            )
             prepared_early: Any = None
             if resolved_mode == "research":
-                from dlightrag.engine.answer.execution_settings import validate_agent_execution
-
-                root = validate_agent_execution(
-                    execution_environment=self._execution_environment,
-                    workspace_root=self._workspace_root_setting,
-                    working_dir=self._working_dir,
-                    sandbox_adapter=(
-                        self._execution_adapter
-                        if self._execution_environment == "sandbox"
-                        else None
-                    ),
-                )
-                if root is not None:
-                    carried_notes: tuple[InventoryPathRecord, ...] = ()
-                    carry_source: Path | None = None
-                    try:
-                        carried_notes, carry_source = await self._parent_notes_for_bind(
-                            session=session,
-                            owner_id=session.owner_id,
-                            parent_run_id=request.parent_run_id,
-                            workspace_root=root,
-                            materialize=session.workspace_epoch is None,
-                            workspace_store=workspace_store,
-                        )
-                        bound = await bind_run_workspace(
-                            workspace_root=root,
-                            owner_id=session.owner_id,
-                            run_id=session.run_id,
-                            fencing_epoch=session.execution.fencing_epoch,
-                            recorded_epoch=session.workspace_epoch,
-                            store=workspace_store,
-                            execution_adapter=self._execution_adapter,
-                            carried_notes=(
-                                carried_notes if session.workspace_epoch is None else ()
-                            ),
-                            carry_source=carry_source,
-                        )
-                    except WorkspaceUnavailableError as exc:
-                        raise RunExecutionError("run_notes_unavailable", str(exc)) from exc
-                    except WorkspaceRecoveryFailed as exc:
-                        raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
-                    except WorkspaceIntegrityError as exc:
-                        kind = (
-                            "run_notes_unavailable"
-                            if carry_source is not None
-                            else "workspace_integrity_error"
-                        )
-                        raise RunExecutionError(kind, str(exc)) from exc
+                if bound is not None:
                     run.orchestrator.bind_workspace(
                         bound, workspace_store, carried_run_notes=carried_notes
                     )
@@ -2019,6 +2052,16 @@ class AnswerExecutor:
                             raise LeaseLostError
                 run.orchestrator.restore_runtime_snapshot(prepared_early, snapshot)
             else:
+                memory_text = ""
+                if self._memory is not None and recall_allowed:
+                    recalled = await self._memory.recall(
+                        owner_id=session.owner_id,
+                        query=request.query,
+                    )
+                    memory_text = render_auto_recall(recalled.records)
+                    memory_recall_record_count = len(recalled.records)
+                    memory_recall_chars = recalled.content_chars
+                run.orchestrator.bind_recall(memory_text)
                 fast_boundaries = FastRunBoundaries(
                     session=session,
                     progress=progress_store,
@@ -2092,6 +2135,7 @@ class AnswerExecutor:
                         accepted_user_entry_id=fast_turn.user_entry_id,
                         targets=run.fast_history_targets,
                         compaction_model_profile=model_profiles["query"],
+                        workspace_store=workspace_store,
                     )
                     run.history = compacted_history
                     if "fast_compaction_attempt" in compaction_trace:
@@ -2397,6 +2441,10 @@ class AnswerExecutor:
         resources: list[ResourceInput] | None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
         pinned_image_descriptions: tuple[str, ...],
+        #: A worst case, not the injected text: the capability check that can disable
+        #: recall runs later, and reserving a block recall does not use is the safe
+        #: direction, while under-reserving spends the difference on chunks.
+        worst_case_memory: str = "",
         projected_history: PriorTurns,
         model_profiles: Mapping[ChatModelSelector, ModelProfile],
         environment: ExecutionEnvironment | None = None,
@@ -2441,13 +2489,17 @@ class AnswerExecutor:
                     preserve_query=None,
                 )
                 synthesizer = self._models.answer_synthesizer(models.query)
+                # The standing memory block joins this envelope because generation
+                # injects it; measuring without it would under-count the request by
+                # the worst-case recall and quietly spend the difference on chunks.
                 generation_measure = (
                     synthesizer.history_input_measure(
                         query,
+                        memory_text=worst_case_memory,
                         current_images=resolved.current_images,
                     )
                     if resolved.current_images
-                    else synthesizer.history_input_measure(query)
+                    else synthesizer.history_input_measure(query, memory_text=worst_case_memory)
                 )
                 fast_history_targets = (
                     HistoryProjectionTarget(
@@ -3192,6 +3244,20 @@ def answer_trace_output(
     if capture_sensitive_data:
         output["answer"] = answer or ""
     return output
+
+
+def _worst_case_recall_block(prepared_input: Mapping[str, Any] | None) -> str:
+    """Return the largest standing memory block one prepared input could inject.
+
+    Mirrors acceptance's own reservation, minus the per-owner capability read that
+    only the execute path performs: an owner whose memory is disabled, or whose
+    auth mode owns nothing, reserves nothing.
+    """
+    prepared = prepared_input if isinstance(prepared_input, Mapping) else {}
+    if not bool(prepared.get("profile_memory_enabled", True)):
+        return ""
+    auth_mode = str(prepared.get("auth_mode") or "none")
+    return standing_memory_for_acceptance(auth_mode) if memory_owner_allowed(auth_mode) else ""
 
 
 def _trailing_unanswered_host_turn(entries: Sequence[SessionEntry]) -> EntryId | None:

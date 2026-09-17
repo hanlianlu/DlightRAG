@@ -718,20 +718,24 @@ def agent_workspace_reclaimer(
     execution_environment: str,
     workspace_root: str | None,
 ) -> AgentWorkspaceReclaimer | None:
-    """Return a reclaimer only when execution has a workspace root."""
-    if execution_environment == "disabled":
-        return None
-    if execution_environment not in {"trust", "sandbox"}:
+    """Return a reclaimer when a workspace root is configured.
+
+    Deletion creates nothing, so a deployment that turns execution off still
+    reclaims the trees earlier enabled runs left behind. No configured root
+    means none: disabled does not invent the default path, because that path
+    was never this process's workspace.
+    """
+    if execution_environment not in {"disabled", "trust", "sandbox"}:
         raise ValueError(f"unknown agent execution mode: {execution_environment}")
     raw = (workspace_root or "").strip()
     if not raw or raw in {"null", "None"}:
+        if execution_environment == "disabled":
+            return None
         root = default_local_workspace_root()
     else:
         root = Path(raw).expanduser()
         if not root.is_absolute():
-            raise ValueError(
-                "agent.workspace_root must be an absolute path when execution is trust or sandbox"
-            )
+            raise ValueError("agent.workspace_root must be an absolute path")
         root = root.resolve()
     return AgentWorkspaceReclaimer(root)
 

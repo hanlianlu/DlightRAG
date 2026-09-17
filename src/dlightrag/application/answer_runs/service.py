@@ -888,11 +888,7 @@ class AnswerService:
             self._history_resource_input(owner_id, resource)
             for resource in request.history_resources
         )
-        memory_enabled = (
-            requested_mode != "fast"
-            and "research" in allowed_modes
-            and memory_owner_allowed(auth_mode)
-        )
+        memory_enabled = memory_owner_allowed(auth_mode)
         memory_epoch = 0
         if memory_enabled and self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
@@ -1945,14 +1941,14 @@ class AnswerService:
                     fast_generation_measure = (
                         synthesizer.history_input_measure(
                             request.query,
-                            memory_text="",
+                            memory_text=memory_text,
                             episodic_summary=request.episodic_summary,
                             current_images=resolved.current_images,
                         )
                         if resolved.current_images
                         else synthesizer.history_input_measure(
                             request.query,
-                            memory_text="",
+                            memory_text=memory_text,
                             episodic_summary=request.episodic_summary,
                         )
                     )

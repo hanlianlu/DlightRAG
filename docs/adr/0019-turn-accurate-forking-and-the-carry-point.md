@@ -198,11 +198,9 @@ Residual risks, to revisit rather than extend silently: a summary is rendered to
 the Run that reads it rather than rewritten for it, so a Run without a `read` tool
 sees the summary's content and not the re-read calls it cannot make — but the
 framework fields themselves are recomposed by each compaction from the compacting
-Run's own Evidence and Workspace, so a Run that has none clears them for the Lane's
-next reader (a Fast compaction after a Research one). Making the fields travel
-across a mode change is a decision this ADR leaves open, because the planes differ:
-a note path can be honoured by a continuation whose Workspace carries the file,
-while a spill handle cannot be read by any later Run; a Fork's own new Lane
+Run's own Evidence and Workspace. [ADR 0020](0020-uniform-environment-fast-inert-workspace.md)
+makes those planes uniform — Fast binds an inert workspace and names the notes it
+carries — and records the residual that a spill handle still cannot cross Runs; a Fork's own new Lane
 identity and a stateless continuation's Session identity are minted per request and
 enter the submission fingerprint, so a caller retrying one of those with the same
 idempotency key conflicts instead of replaying — a Session-backed Follow-Up, whose

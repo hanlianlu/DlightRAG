@@ -13,7 +13,7 @@ from dlightrag.engine.agent.session.entries import (
     CompactionEntry,
     UserMessageEntry,
 )
-from dlightrag.engine.agent.session.fold import project_session_messages
+from dlightrag.engine.agent.session.fold import host_turn_starts, project_session_messages
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -49,7 +49,8 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionCommit,
     TransactionLeaseLost,
 )
-from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.execution.executor import (
     AnswerExecutor,
     _project_fast_history_before_current_user,
@@ -59,6 +60,8 @@ from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.fast.session_host import projection_from_compaction_at
 from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime.errors import RunExecutionError
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
+from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
 
 async def _no_settled_result() -> None:
@@ -1232,6 +1235,220 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
     assert snapshot.active_projection is not None
     assert store.load_calls == 1
     assert store.decoded_rows == 0
+
+
+@pytest.mark.asyncio
+async def test_fast_compaction_names_the_notes_its_workspace_holds() -> None:
+    """Fast compaction recomposes run_notes from this Run's Inventory."""
+    store = _CountingFastRepository()
+    session_id = SessionId.new()
+    host = await _fast_host(store, session_id)
+    old_question = "question " * 4_000
+    old_answer = "answer " * 4_000
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        idempotency_key="old-key",
+        content=old_question,
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="old",
+        content=old_answer,
+    )
+    current = await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        idempotency_key="current-key",
+        content="current question",
+    )
+
+    def planner_measure(messages, projected_summary=""):
+        return len(projected_summary) + sum(
+            len(str(item.get("content") or "")) for item in messages
+        )
+
+    def generation_measure(messages, projected_summary=""):
+        del messages, projected_summary
+        return 100
+
+    class _ToolModel:
+        @staticmethod
+        async def stream_text(**_kwargs):
+            yield "## Goal\nPreserve the prior turn."
+
+    class _Models:
+        @staticmethod
+        def query_tool_model():
+            return _ToolModel()
+
+    workspace_store = InMemoryWorkspaceStore()
+    await workspace_store.replace_inventory(
+        (
+            InventoryPathRecord(
+                relative_path="notes/plan.md",
+                entry_type="file",
+                size_bytes=1_240,
+                content_digest="d" * 64,
+            ),
+        )
+    )
+    executor = object.__new__(AnswerExecutor)
+    executor._models = cast(Any, _Models())
+    query_profile = ModelProfile(context_window_tokens=1_000_000)
+    extract_profile = ModelProfile(context_window_tokens=100_000)
+    _compacted, _trace, committed = await executor._compact_fast_history_if_needed(
+        host=host,
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        accepted_user_entry_id=current.user_entry_id,
+        targets=(
+            HistoryProjectionTarget(
+                "fast_planner",
+                extract_profile,
+                planner_measure,
+                proactive_compaction=True,
+                require_full_dynamic_reserve=True,
+            ),
+            HistoryProjectionTarget(
+                "fast_generation",
+                query_profile,
+                generation_measure,
+                proactive_compaction=True,
+                require_full_dynamic_reserve=True,
+            ),
+        ),
+        compaction_model_profile=query_profile,
+        workspace_store=workspace_store,
+    )
+
+    assert committed is True
+    snapshot = await host.snapshot(session_id)
+    assert snapshot.active_projection is not None
+    assert snapshot.active_projection.summary is not None
+    summary = CompactionSummary.from_canonical_json(snapshot.active_projection.summary)
+    assert summary.run_notes == [
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
+    ]
+    assert summary.durable_handles is None
+
+
+@pytest.mark.asyncio
+async def test_a_fast_compaction_clears_the_lanes_previous_handles() -> None:
+    """The decision ADR 0020 records: handles are recomposed, not carried forward.
+
+    A handle bundles the minting Run's own citation ordinal with a resource alias, so
+    carrying the previous list would teach the next reader ordinals it never minted
+    and crowd its own Evidence out of the shared cap. Fast has no Evidence at
+    compaction time, so the Lane's previous handles go with it.
+    """
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        idempotency_key="one-key",
+        content="first",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        content="first answer",
+    )
+    snapshot = await repository.load(session_id)
+    ancestry = snapshot.tree.ancestry(LaneId.main())
+    user, assistant = ancestry[0], ancestry[1]
+    previous_summary = CompactionSummary(
+        goal="Carry the citation handles.",
+        durable_handles=["[1] report.pdf [resource: res-adoptable]"],
+    ).canonical_json()
+    previous = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=3,
+        covered_through_sequence=2,
+        summary=previous_summary,
+        covered_through_entry_id=assistant.entry_id,
+        first_retained_entry_id=None,
+        source_digest=projection_source_digest([user.entry_id, assistant.entry_id]),
+    )
+    compaction = CompactionEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        parent_entry_id=assistant.entry_id,
+        projection_id=previous.projection_id,
+        summary=previous_summary,
+        covered_through_sequence=2,
+        first_retained_sequence=3,
+        covered_through_entry_id=assistant.entry_id,
+        first_retained_entry_id=None,
+        source_digest=previous.source_digest,
+    )
+    head = snapshot.tree.lane(LaneId.main()).head
+    projection_register = ContextProjectionRegister(LaneId.main(), previous)
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[compaction],
+            register_writes=[
+                SetRegister(LaneHead(LaneId.main(), compaction.entry_id)),
+                SetRegister(projection_register),
+            ],
+            expectations=[
+                RegisterExpectation(head.ref, head.sequence),
+                RegisterExpectation(projection_register.ref, None),
+            ],
+        ),
+    )
+
+    # Two turns after the previous projection: the newest exchange is always retained,
+    # so a compaction needs an older one to cover.
+    for reservation, content in (("two", "second"), ("three", "third")):
+        await host.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id=reservation,
+            idempotency_key=f"{reservation}-key",
+            content=content,
+        )
+        await host.complete(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id=reservation,
+            content=f"{content} answer",
+        )
+
+    async def stream_model(**_kwargs):
+        yield "## Goal\nRecompose from this Run."
+
+    coordinator = CompactionCoordinator(
+        model_profile=ModelProfile(context_window_tokens=100_000),
+        context_policy=ContextPolicy(
+            requested_output_reserve_tokens=1_000,
+            dynamic_context_reserve_tokens=1_000,
+            retained_tail_tokens=0,
+        ),
+        stream_model=stream_model,
+        exchange_starts_func=host_turn_starts,
+    )
+
+    projection, _outcome = await coordinator.prepare(
+        await repository.load(session_id),
+        tail_target_tokens=0,
+        accounted_before=100,
+        trace={},
+    )
+
+    assert projection.summary is not None
+    assert CompactionSummary.from_canonical_json(projection.summary).durable_handles is None
 
 
 @pytest.mark.asyncio

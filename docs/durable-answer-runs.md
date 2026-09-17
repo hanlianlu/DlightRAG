@@ -282,8 +282,10 @@ cleanup; shared Sessions and child trees still referenced by Runs survive.
 When a Run row is pruned, its Agent Workspace root
 (`workspace_root/<owner shard>/<run_id>`) is removed with it. An orphan sweep then
 deletes roots whose Run row is already gone, checking the row rather than
-directory age. A disabled execution environment has no workspace root and does
-not reclaim.
+directory age. Reclamation follows the configured workspace root rather than the
+execution mode, so a deployment that turns execution off still reclaims what
+earlier enabled Runs left behind; with no root configured there is nothing to
+reclaim, and every mode has no Workspace, no Run Notes, and no carry.
 
 ### `dlightrag_run_events`
 
