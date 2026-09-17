@@ -565,14 +565,13 @@ body.files-panel-open #files-btn {
 }
 
 .composer-effort-menu button {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--size-icon-md) minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--space-component);
 }
 
 .composer-effort-default {
-    margin-left: auto;
     color: var(--color-text-dim);
     font-size: 0.7rem;
 }

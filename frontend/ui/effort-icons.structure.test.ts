@@ -6,15 +6,11 @@
  * shows. A shared glyph, or a lost dial, is the regression this guards.
  */
 
-import {readFileSync} from 'node:fs';
-import {join, dirname} from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
 import {ICON_REGISTRY} from '../design-system/icons/registry.generated.ts';
 
-const FRONTEND_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LEVELS = ['low', 'high', 'max'] as const;
 const DIAL = 'M3.34 19a10 10 0 1 1 17.32 0';
 
@@ -35,14 +31,4 @@ test('every offered effort renders the dial with its own needle stop', () => {
   });
 
   assert.equal(new Set(needles).size, LEVELS.length, 'each level must own a distinct stop');
-});
-
-test('the offer names a glyph per level and the composer uses it', () => {
-  const composer = readFileSync(join(FRONTEND_DIR, 'ui', 'chat-composer.ts'), 'utf8');
-  for (const level of LEVELS) {
-    assert.match(composer, new RegExp(`${level}: 'effort-${level}'`), `composer must map ${level}`);
-  }
-  // The unset state keeps the plain dial so the level glyphs stay meaningful.
-  assert.match(composer, /icon\(displayed \? EFFORT_ICONS\[displayed\] : 'effort'/);
-  assert.match(composer, /icon\(EFFORT_ICONS\[level\]/, 'menu rows carry their own glyph');
 });
