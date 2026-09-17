@@ -47,8 +47,12 @@ The product capability that validates and accepts Answer input and owns Answer-s
 _Avoid_: Answer manager, transport-specific runtime service
 
 **Continuation**:
-A new durable Answer Run with `parent_run_id` and kind `follow_up` or `fork`. Follow-up includes the selected answer as context; fork starts a sibling branch from its accepted context.
-_Avoid_: in-place run mutation, session checkout, hidden conversation copy
+A new durable Answer Run with `parent_run_id` and kind `follow_up` or `fork`. Follow-Up is a line operation and appends to the selected Lane's tip; Fork is a tree operation and opens a new Lane and Web Conversation at its Fork Point. Neither re-injects context its branch already carries.
+_Avoid_: in-place run mutation, session checkout, hidden conversation copy, rewind to an arbitrary Entry
+
+**Fork Point**:
+The exact state a Fork branches from: the Lane head one Run settled at, plus the Context Projection active at that head, both recorded at that Run's terminal settlement whatever its outcome. It is neither the Lane's current head nor a Stable Checkpoint, so forking an earlier turn branches from that turn rather than from the conversation as it now stands.
+_Avoid_: current Lane head, Stable Checkpoint, latest conversation state, Workspace Epoch
 
 **Retrieval**:
 An owner-scoped Run with `run_kind=retrieval` and `lane=query` that returns corpus Evidence without generating an Answer. Top-level Retrieval is durable; retrieval inside an Answer is an internal Retrieval Stage, never a nested Run.
@@ -254,11 +258,15 @@ An immutable semantic fact with one physical `parent_entry_id` in an Agent Sessi
 _Avoid_: generic journal row, custom entry, mutable message
 
 **Agent Session Tree**:
-The immutable Entry set plus stable Lane heads and Lane state. Branch ancestry follows parent links; Fork creates a new Lane at a stable checkpoint without copying or deleting shared Entries.
+The immutable Entry set plus stable Lane heads and Lane state. Branch ancestry follows parent links; Fork creates a new Lane at one Run's Fork Point without copying or deleting shared Entries.
 _Avoid_: linear log, DAG merge, navigation operation
 
+**Stable Checkpoint**:
+The one property a Lane head must have before a branch may open on it: no provider Tool Call anywhere in its ancestry lacks its Tool Result. It says a branch never starts inside an unfinished Tool batch; it says nothing about where the branch starts.
+_Avoid_: Fork Point, Lane tip, turn boundary, compaction boundary
+
 **Context Projection**:
-The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence. Evidence text admitted before the retained suffix survives as its recorded source handles, not as re-rendered passages.
+The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence. Evidence text admitted before the retained suffix, and every committed spill or Run Note, survive as their recorded handles rather than as re-rendered content.
 _Avoid_: authority, checkpoint, transcript snapshot
 
 **Context Contribution**:
@@ -390,6 +398,10 @@ _Avoid_: Durable Progress, Fencing Epoch, checkpoint
 **Workspace Inventory**:
 The current Workspace Epoch's path, type, size, and digest observation of an Agent Workspace.
 _Avoid_: Journal Entry, checkpoint, historical epoch listing
+
+**Run Note**:
+A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction. Settlement registers it as a re-readable, non-Evidence handle under its path and current digest; the Context Projection carries that handle; and a Continuation carries the file itself from its Fork Point's own Agent Workspace. It is never citable, never a second statement of what happened, and never a Memory Record.
+_Avoid_: scratchpad, agent journal, second transcript, Memory Record, Artifact, Evidence
 
 ## Configuration And Deployment
 
