@@ -701,8 +701,6 @@ class ResearchRuntimeEffects:
         validated = tool.input_model.model_validate(arguments)
 
         async def update(result: ToolResult) -> None:
-            details = result.details if isinstance(result.details, dict) else {}
-            object_label = details.get("object_label")
             await emit_ephemeral(
                 AgentSessionEvent(
                     kind="tool_update",
@@ -715,11 +713,7 @@ class ResearchRuntimeEffects:
                         "call_id": item.call_id,
                         "source_index": item.source_index,
                         "text_chars": len(result.text_content),
-                        **(
-                            {"object_label": object_label}
-                            if isinstance(object_label, str) and object_label
-                            else {}
-                        ),
+                        **({"object_label": result.subject} if result.subject else {}),
                     },
                     ephemeral=True,
                 )

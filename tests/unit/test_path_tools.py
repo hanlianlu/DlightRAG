@@ -7,12 +7,13 @@ import shutil
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from dlightrag.engine.agent.environment import AccessScheduler, FullOutputUnavailable
 from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
+from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.files import (
     BashArgs,
@@ -35,7 +36,7 @@ from dlightrag.engine.agent.tools.files import (
     view_tool,
     write_tool,
 )
-from tests.tool_helpers import tool_runtime
+from tests.tool_helpers import recording_tool_runtime, tool_runtime
 
 
 def _env(tmp_path: Path) -> tuple[LocalExecutionEnvironment, AccessScheduler]:
@@ -346,6 +347,69 @@ async def test_path_tool_order_and_hardened_contract_versions(tmp_path: Path) ->
         "find": 2,
         "ls": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_every_path_tool_reports_its_subject_before_it_works(tmp_path: Path) -> None:
+    """The activity row names what a call acts on, and a rejected target is not one."""
+    env, scheduler = _env(tmp_path)
+    (tmp_path / "report.txt").write_text("quarterly revenue\n", encoding="utf-8")
+    toolchain = SearchToolchain(
+        fd=_compatible_binary(tmp_path, "fd", "fd 10.5.0"),
+        ripgrep=_compatible_binary(tmp_path, "rg", "ripgrep 15.2.0"),
+    )
+    tools = {
+        tool.name: tool for tool in path_tools(env, scheduler=scheduler, search_toolchain=toolchain)
+    }
+    cases: list[tuple[str, BaseModel, str]] = [
+        ("read", ReadArgs(path="report.txt"), "report.txt"),
+        # The subject is reported once the target resolves, so a call that fails its own
+        # content check still says what it acted on.
+        ("view", ViewArgs(path="report.txt"), "report.txt"),
+        ("write", WriteArgs(path="built.txt", content="annual revenue\n"), "built.txt"),
+        (
+            "edit",
+            EditArgs(
+                path="report.txt",
+                edits=[EditOperation(old_text="quarterly", new_text="annual")],
+            ),
+            "report.txt",
+        ),
+        ("grep", GrepArgs(pattern="revenue"), "revenue"),
+        ("bash", BashArgs(command="echo revenue"), "echo revenue"),
+        ("find", FindArgs(pattern="*.txt"), "*.txt"),
+        ("ls", LsArgs(path="."), "."),
+    ]
+
+    for name, args, expected in cases:
+        updates: list[ToolResult] = []
+        await tools[name].execute(args, recording_tool_runtime(updates, tool_name=name))
+        # The subject arrives first, once; later streaming snapshots never restate it.
+        assert updates[0].subject == expected, name
+        assert [update.subject for update in updates[1:]] == [None] * (len(updates) - 1), name
+
+    rejected: list[ToolResult] = []
+    escaped = await tools["read"].execute(
+        ReadArgs(path="../escape.txt"),
+        recording_tool_runtime(rejected, tool_name="read"),
+    )
+
+    assert escaped.is_error is True
+    # A host path can never become a subject: resolve runs before the report.
+    assert rejected == []
+
+    # An empty target names nothing, so the row stays verb-only rather than inventing a label.
+    named_nothing: list[ToolResult] = []
+
+    async def resource_reader(_request: object, _runtime: ToolRuntime) -> ToolResult:
+        return ToolResult.text("resource body")
+
+    await read_tool(env, scheduler, resource_reader=resource_reader).execute(
+        ReadArgs(url=""),
+        recording_tool_runtime(named_nothing, tool_name="read"),
+    )
+
+    assert named_nothing == []
 
 
 async def test_find_is_stable_hidden_ignore_aware_and_never_follows_symlinks(

@@ -103,16 +103,45 @@ class ToolEffects:
     attached_resources: tuple[ResourceAttachmentBytes, ...] = ()
 
 
+TOOL_SUBJECT_MAX_CHARS = 64
+"""Longest Tool Subject one producer may report; the browser edge keeps its own cap."""
+
+_SUBJECT_DROPPED_CHARS = {code: None for code in (*range(0x20), 0x7F, *range(0x80, 0xA0))}
+
+
+def _bounded_tool_subject(value: str) -> str:
+    """Normalize one reported subject into the single bounded line the trace shows.
+
+    Control characters are dropped rather than escaped: they are invisible in a one-line
+    row, and U+0000 is not representable in the durable JSON payload at all.
+    """
+    line = " ".join(value.split()).translate(_SUBJECT_DROPPED_CHARS)
+    if len(line) <= TOOL_SUBJECT_MAX_CHARS:
+        return line
+    return line[: TOOL_SUBJECT_MAX_CHARS - 1] + "…"
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """Typed model content plus transport-private execution facts."""
 
     parts: ToolContent
     details: dict[str, Any] | None = None
+    subject: str | None = None
+    """One bounded line naming what this call acts on, when the tool reports one.
+
+    It reaches a viewer only through an update, never through a settled result: it exists
+    for the live activity row. Because it is the one producer-reported fact that crosses to
+    the browser, the bound belongs to the field rather than to each producer's discipline.
+    """
     cached: bool = False
     protected_text: str = ""
     is_error: bool = False
     effects: ToolEffects = ToolEffects()
+
+    def __post_init__(self) -> None:
+        if self.subject is not None:
+            object.__setattr__(self, "subject", _bounded_tool_subject(self.subject))
 
     @classmethod
     def text(
@@ -120,6 +149,7 @@ class ToolResult:
         text: str,
         *,
         details: dict[str, Any] | None = None,
+        subject: str | None = None,
         cached: bool = False,
         protected_text: str = "",
         is_error: bool = False,
@@ -129,6 +159,7 @@ class ToolResult:
         return cls(
             parts=(ToolTextPart(text),),
             details=details,
+            subject=subject,
             cached=cached,
             protected_text=protected_text,
             is_error=is_error,

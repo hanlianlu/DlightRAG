@@ -263,7 +263,7 @@ def _requested_skill_contribution(name: str | None) -> ContextContribution | Non
 def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(LoadSkillInput, raw)
-        await runtime.emit_update(ToolResult.text("", details={"object_label": args.name}))
+        await runtime.emit_update(ToolResult.text("", subject=args.name))
         try:
             text = catalog.read(args.name, args.path)
         except (KeyError, ValueError, FileNotFoundError) as exc:
@@ -287,7 +287,7 @@ def publish_skill_tool(owner_root: Path | None) -> AgentTool:
 
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(PublishSkillInput, raw)
-        await runtime.emit_update(ToolResult.text("", details={"object_label": args.name}))
+        await runtime.emit_update(ToolResult.text("", subject=args.name))
         if owner_root is None:
             return ToolResult.text("Skill publication is unavailable for this run.", is_error=True)
         error = _validate_publish_payload(args.name, args.files)
@@ -326,7 +326,7 @@ def publish_skill_tool(owner_root: Path | None) -> AgentTool:
 def delete_skill_tool(owner_root: Path | None) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(DeleteSkillInput, raw)
-        await runtime.emit_update(ToolResult.text("", details={"object_label": args.name}))
+        await runtime.emit_update(ToolResult.text("", subject=args.name))
         if owner_root is None:
             return ToolResult.text("Skill deletion is unavailable for this run.", is_error=True)
         if _SKILL_NAME_PATTERN.fullmatch(args.name) is None:

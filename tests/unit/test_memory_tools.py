@@ -4,6 +4,7 @@
 from dlightrag_memory import Memory, MemoryProvenance
 from dlightrag_memory.store import InMemoryMemoryStore
 
+from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.composition import compose_research_tools
 from dlightrag.engine.answer.tools.memory import (
@@ -15,7 +16,7 @@ from dlightrag.engine.answer.tools.memory import (
     recall_memory_tool,
     remember_tool,
 )
-from tests.tool_helpers import tool_runtime
+from tests.tool_helpers import recording_tool_runtime, tool_runtime
 
 
 async def _retrieve(_query: str) -> object:
@@ -100,6 +101,17 @@ async def test_recall_returns_ids_with_relevant_records() -> None:
     assert receipt.memory_id is not None
     assert receipt.memory_id in result.text_content
     assert "No email." in result.text_content
+
+
+async def test_recall_reports_its_query_as_the_live_subject() -> None:
+    updates: list[ToolResult] = []
+
+    await recall_memory_tool(host=_host()).execute(
+        RecallInput(query="email"),
+        recording_tool_runtime(updates, tool_name="recall_memory"),
+    )
+
+    assert [update.subject for update in updates] == ["email"]
 
 
 async def test_disabled_or_stale_capability_rejects_tools() -> None:

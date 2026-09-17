@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.tools.artifacts import AttachArtifactArgs, attach_artifact_tool
-from tests.tool_helpers import tool_runtime
+from tests.tool_helpers import recording_tool_runtime, tool_runtime
 
 
 @pytest.mark.asyncio
@@ -60,3 +61,22 @@ async def test_attach_artifact_rejects_missing_and_unsafe_paths(tmp_path: Path) 
     assert missing.text_content.startswith("missing_file:")
     assert unsafe.is_error is True
     assert unsafe.text_content.startswith("invalid_reference:")
+
+
+@pytest.mark.asyncio
+async def test_attach_artifact_reports_its_path_as_the_live_subject(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "analysis.md").write_text("Grounded analysis.", encoding="utf-8")
+    updates: list[ToolResult] = []
+
+    await attach_artifact_tool(
+        root,
+        scheduler=AccessScheduler(),
+        limits=PublicationLimits(),
+    ).execute(
+        AttachArtifactArgs(path="analysis.md"),
+        recording_tool_runtime(updates, tool_name="attach_artifact"),
+    )
+
+    assert [update.subject for update in updates] == ["analysis.md"]

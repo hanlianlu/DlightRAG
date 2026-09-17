@@ -39,8 +39,9 @@ def attach_artifact_tool(
 ) -> AgentTool:
     """Build the optional parent-Research publication-intent tool."""
 
-    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         attachment_args = cast(AttachArtifactArgs, args)
+        await runtime.emit_update(ToolResult.text("", subject=attachment_args.path))
         async with scheduler.hold(WorkspaceAccess()):
             try:
                 attachment = prepare_artifact_attachment(

@@ -421,13 +421,11 @@ async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_research_runtime_projects_live_object_label_into_tool_updates() -> None:
+async def test_research_runtime_projects_a_reported_subject_into_tool_updates() -> None:
     emitted: list[Any] = []
 
     async def execute(_input: BaseModel, runtime: ToolRuntime) -> ToolResult:
-        await runtime.emit_update(
-            ToolResult.text("", details={"object_label": "quarterly revenue 2026"})
-        )
+        await runtime.emit_update(ToolResult.text("", subject="quarterly revenue 2026"))
         return ToolResult.text("added 3 new passages.")
 
     tool = AgentTool("search_knowledge_base", "Search.", _EmptyToolInput, execute)

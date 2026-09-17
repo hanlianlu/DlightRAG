@@ -385,6 +385,9 @@ def read_tool(
             if resource_reader is None:
                 return ToolResult.text("resource read is not available", is_error=True)
             target = args.resource_id or url or "resource"
+            subject = args.resource_id or url
+            if subject:
+                await runtime.emit_update(ToolResult.text("", subject=subject))
             options = (
                 args.http or HttpReadOptions() if isinstance(args, ReadArgs) else HttpReadOptions()
             )
@@ -410,6 +413,7 @@ def read_tool(
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
         canonical_path = _workspace_relative_path(environment.root, path)
+        await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical_path)))
         async with scheduler.hold(PathAccess(path=str(path), kind="read")):
             if blocked := _integrity_blocked(environment):
                 return blocked
@@ -538,6 +542,9 @@ def view_tool(
         if args.path is None:
             if resource_viewer is None:
                 return ToolResult.text("resource view is unavailable", is_error=True)
+            subject = args.resource_id or args.url
+            if subject is not None:
+                await runtime.emit_update(ToolResult.text("", subject=subject))
             return await resource_viewer(args, runtime, prepare)
         if environment is None:
             return ToolResult.text("path view requires an execution environment", is_error=True)
@@ -546,6 +553,7 @@ def view_tool(
         try:
             path = environment.resolve(args.path)
             canonical = _workspace_relative_path(environment.root, path)
+            await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
             async with scheduler.hold(PathAccess(path=str(path), kind="read")):
                 if blocked := _integrity_blocked(environment):
                     return blocked
@@ -579,7 +587,7 @@ def view_tool(
 
 
 def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
-    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(WriteArgs, args)
         if blocked := _integrity_blocked(environment):
             return blocked
@@ -587,6 +595,8 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
             path = environment.resolve(args.path)
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
+        canonical = _workspace_relative_path(environment.root, path)
+        await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         async with scheduler.hold(PathAccess(path=str(path), kind="write")):
             if blocked := _integrity_blocked(environment):
                 return blocked
@@ -619,7 +629,7 @@ def edit_tool(
     *,
     spill: SpillWriter | None = None,
 ) -> AgentTool:
-    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         edit_args = cast(EditArgs, args)
         if blocked := _integrity_blocked(environment):
             return blocked
@@ -627,6 +637,8 @@ def edit_tool(
             path = environment.resolve(edit_args.path)
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
+        canonical = _workspace_relative_path(environment.root, path)
+        await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         async with scheduler.hold(PathAccess(path=str(path), kind="readwrite")):
             if blocked := _integrity_blocked(environment):
                 return blocked
@@ -727,6 +739,7 @@ def grep_tool(
             ripgrep = await toolchain.path("rg")
         except RuntimeError as exc:
             return ToolResult.text(str(exc), is_error=True)
+        await runtime.emit_update(ToolResult.text("", subject=grep_args.pattern))
         argv = [
             ripgrep,
             "--json",
@@ -833,6 +846,7 @@ def bash_tool(
         args = cast(BashArgs, args)
         if blocked := _integrity_blocked(environment):
             return blocked
+        await runtime.emit_update(ToolResult.text("", subject=args.command))
         output = _streaming_output("bash", output_stage_factory)
         last_update = 0.0
 
@@ -1092,7 +1106,7 @@ def find_tool(
 ) -> AgentTool:
     toolchain = search_toolchain or SearchToolchain(fd=fd)
 
-    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         find_args = cast(FindArgs, args)
         if blocked := _integrity_blocked(environment):
             return blocked
@@ -1108,6 +1122,7 @@ def find_tool(
             fd = await toolchain.path("fd")
         except (PathRejected, OSError, RuntimeError) as exc:
             return ToolResult.text(str(exc), is_error=True)
+        await runtime.emit_update(ToolResult.text("", subject=find_args.pattern))
 
         argv = [
             fd,
@@ -1172,7 +1187,7 @@ def find_tool(
 
 
 def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
-    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         ls_args = cast(LsArgs, args)
         if blocked := _integrity_blocked(environment):
             return blocked
@@ -1183,6 +1198,8 @@ def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> Ag
                     f"ls path is not a directory: {_escape_path(ls_args.path)}",
                     is_error=True,
                 )
+            relative = _workspace_relative_path(environment.root, root)
+            await runtime.emit_update(ToolResult.text("", subject=_escape_path(relative)))
             async with scheduler.hold(PathAccess(path=str(root), kind="read")):
                 if blocked := _integrity_blocked(environment):
                     return blocked
@@ -1191,7 +1208,7 @@ def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> Ag
             return ToolResult.text(str(exc), is_error=True)
         return _directory_page(
             entries,
-            path=_workspace_relative_path(environment.root, root),
+            path=relative,
             cursor=ls_args.cursor,
             limit=ls_args.limit,
             tool="ls",

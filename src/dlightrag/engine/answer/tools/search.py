@@ -90,7 +90,7 @@ def knowledge_base_search_tool(
 ) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, SearchInput)
-        await runtime.emit_update(ToolResult.text("", details={"object_label": args.query}))
+        await runtime.emit_update(ToolResult.text("", subject=args.query))
         return await _search_corpus(retrieve, args.query, evidence, trace)
 
     return AgentTool(
@@ -110,7 +110,7 @@ def web_search_tool(
 ) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, WebSearchInput)
-        await runtime.emit_update(ToolResult.text("", details={"object_label": args.query}))
+        await runtime.emit_update(ToolResult.text("", subject=args.query))
         return await _search_open_web(search, args.request(), evidence, trace, register_web_source)
 
     return AgentTool(

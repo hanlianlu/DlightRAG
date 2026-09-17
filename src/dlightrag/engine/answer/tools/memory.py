@@ -147,7 +147,7 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 
 
 def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
-    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RecallInput) else RecallInput.model_validate(raw)
         if host.memory is None:
             return ToolResult.text("Memory store is not bound.", is_error=True)
@@ -157,6 +157,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
             )
         if not await _available(host):
             return ToolResult.text("Profile Memory is not active for this owner.", is_error=True)
+        await runtime.emit_update(ToolResult.text("", subject=args.query))
         result = await host.memory.recall(owner_id=host.owner_id, query=args.query)
         if not result.records:
             return ToolResult.text("No relevant memories.")

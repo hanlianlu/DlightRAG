@@ -7,8 +7,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.search import (
     SearchInput,
@@ -29,6 +28,7 @@ from dlightrag.engine.answer.web_sources import (
     WebSourceUnavailable,
 )
 from dlightrag.engine.rag.retrieval import RetrievalResult
+from tests.tool_helpers import recording_tool_runtime
 
 _PAGE = {
     "url": "https://example.org/taylor",
@@ -48,19 +48,6 @@ def _responds(payload: dict, status: int = 200):
         return httpx.Response(status, json=payload)
 
     return handler
-
-
-def _label_capture_runtime(updates: list[ToolResult]) -> ToolRuntime:
-    async def sink(result: ToolResult) -> None:
-        updates.append(result)
-
-    return ToolRuntime(
-        call_id="test-call",
-        tool_name="test-tool",
-        intent_id=IntentId.new(),
-        execution_scope="test-scope",
-        _update_sink=sink,
-    )
 
 
 def test_web_search_schema_exposes_provider_neutral_controls() -> None:
@@ -103,7 +90,7 @@ def test_web_search_schema_exposes_provider_neutral_controls() -> None:
         )
 
 
-async def test_both_search_tools_report_the_query_as_object_label_live() -> None:
+async def test_both_search_tools_report_the_query_as_their_subject_live() -> None:
     updates: list[ToolResult] = []
     query = "quarterly revenue 2026"
 
@@ -117,15 +104,15 @@ async def test_both_search_tools_report_the_query_as_object_label_live() -> None
         retrieve=retrieve,
         evidence=EvidenceLedger(),
         trace={},
-    ).execute(SearchInput(query=query), _label_capture_runtime(updates))
+    ).execute(SearchInput(query=query), recording_tool_runtime(updates))
     await web_search_tool(
         search=search,
         evidence=EvidenceLedger(),
         trace={"web_search_cost_dollars": 0.0},
         register_web_source=None,
-    ).execute(WebSearchInput(query=query), _label_capture_runtime(updates))
+    ).execute(WebSearchInput(query=query), recording_tool_runtime(updates))
 
-    assert [update.details["object_label"] for update in updates if update.details] == [
+    assert [update.subject for update in updates if update.subject] == [
         query,
         query,
     ]
@@ -411,7 +398,7 @@ async def test_search_tool_reports_partial_drop_and_provider_degradation() -> No
         evidence=EvidenceLedger(),
         trace={"web_search_cost_dollars": 0.0},
         register_web_source=lambda _url: "res-1",
-    ).execute(WebSearchInput(query="q"), _label_capture_runtime([]))
+    ).execute(WebSearchInput(query="q"), recording_tool_runtime([]))
 
     assert "Dropped 2 malformed result(s)." in result.text_content
     assert "Provider fallback" in result.text_content
