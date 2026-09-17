@@ -42,8 +42,7 @@ async def enrich_semantic_highlights[SourceT: HighlightSource](
     try:
         llm_model, telemetry = model_factory()
         async with telemetry.observe(
-            "semantic_highlights",
-            as_type="chain",
+            "highlight-sources",
             metadata={"source_count": len(sources), "text_chunk_count": text_chunk_count},
         ) as trace:
             highlighted = await asyncio.wait_for(

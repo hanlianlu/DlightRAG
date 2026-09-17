@@ -109,8 +109,7 @@ class ToolModel:
         )
         model_kwargs = merge_reasoning_kwargs(self._agentic_model_kwargs, resolved)
         async with self._telemetry.observe(
-            "agent_model_turn",
-            as_type="generation",
+            "generate-agent-turn",
             input={"message_count": len(messages)},
             metadata={
                 "model": self.fingerprint.model,
@@ -207,8 +206,7 @@ class ToolModel:
         self._validate_image_inputs(messages, model_profile)
         prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
-            "agent_final_answer",
-            as_type="generation",
+            "generate-final-answer",
             input={"message_count": len(messages)},
             metadata={
                 "model": self.fingerprint.model,
@@ -297,8 +295,7 @@ class ToolModel:
         self._validate_image_inputs(messages, model_profile)
         prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
-            "agent_final_answer",
-            as_type="generation",
+            "generate-final-answer",
             input={"message_count": len(messages)},
             metadata={
                 "model": self.fingerprint.model,

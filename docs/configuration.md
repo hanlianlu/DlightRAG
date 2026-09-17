@@ -831,17 +831,19 @@ Tracing activates only when both Langfuse keys are set in `.env`.
 | `log_level` | `info` | Application logging level |
 | `langfuse_public_key`, `langfuse_secret_key` | unset | Both required; keep in `.env` |
 | `langfuse_host` | `https://cloud.langfuse.com` | Trace destination |
-| `langfuse_trace_sensitive_data` | `true` | Suppress raw content/IDs when false |
+| `langfuse_trace_sensitive_data` | `true` | Suppress raw content — observation inputs, outputs, and error text — when false |
 | `langfuse_export_external_spans` | `false` | Export third-party OTEL spans |
-| `langfuse_environment` | unset | Environment label |
-| `langfuse_release` | unset | Release label |
+| `langfuse_environment` | unset | Deployment label (`local`, `staging`, `production`); keeps deployments in separate buckets |
+| `langfuse_release` | running package version | Release label |
 | `langfuse_sample_rate` | `1.0` | Export fraction |
 | `langfuse_timeout` | SDK default | Export timeout |
 | `langfuse_flush_at` | SDK default | Buffered event count |
 | `langfuse_flush_interval` | SDK default | Flush cadence |
 
-Memory traces include counts and character totals, never record bodies. Run the
-bundled stack with the [Langfuse runbook](operations.md#local-langfuse-observability).
+Memory traces include counts and character totals, never record bodies. Span
+names, observation types, attribution, and redaction follow the
+[observability contract](observability.md). Run the bundled stack with the
+[Langfuse runbook](operations.md#local-langfuse-observability).
 
 ## Advanced LightRAG Fields
 

@@ -76,7 +76,12 @@ from dlightrag.engine.ai.reasoning import (
 )
 from dlightrag.engine.ai.scheduler import model_call_scope
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
-from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
+from dlightrag.engine.ai.telemetry import (
+    Observation,
+    Telemetry,
+    bounded_telemetry_text,
+    safe_log_text,
+)
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilityCoordinator,
@@ -878,58 +883,100 @@ class AnswerExecutor:
         return ToolRegistry(tools).resolve()
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
+        """Execute one claimed run; this is the trace that owns everything the run does."""
+        prepared = session.prepared_input if isinstance(session.prepared_input, Mapping) else {}
+        query = str(prepared.get("query") or "")
         with model_call_scope((session.owner_id, session.run_id)):
-            try:
-                if session.prepared_input is not None:
-                    self.validate_active_prepared_input(session.prepared_input)
-                outcome = await self._execute(session)
-            except IncompatibleActiveRunError as exc:
-                raise RunExecutionError(
-                    "incompatible_answer_run",
-                    "This Answer Run uses an incompatible model or execution contract. Start a new Run.",
-                ) from exc
-            except (
-                asyncio.CancelledError,
-                RunCancellationObserved,
-                LeaseLostError,
-                RunExecutionError,
+            with self._telemetry.trace(
+                session_id=str(prepared.get("agent_session_id") or "") or None,
+                user_id=session.owner_id,
             ):
-                raise
-            except Exception as exc:
-                component = classify_transient_dependency(exc, component_hint="providers")
-                if component is not None:
-                    await session.check_cancelled()
-                    # Clear any durable optimistic draft before releasing the
-                    # Query permit. The same Run and Agent Session resume from
-                    # their fenced durable state after the bounded delay.
-                    await session.reset_output()
-                    checkpoint, delay = next_dependency_retry(
-                        session.checkpoint,
-                        component,
-                        base_seconds=_DEPENDENCY_DEFER_BASE_SECONDS,
-                        max_seconds=_DEPENDENCY_DEFER_MAX_SECONDS,
-                    )
-                    self._notify_dependency(self._on_dependency_unavailable, component)
-                    return Deferred(
-                        checkpoint=checkpoint,
-                        next_attempt_at=self._now() + datetime.timedelta(seconds=delay),
-                    )
-                logger.warning(
-                    "Answer run %s execution failed",
-                    session.run_id,
-                    extra={"error_type": type(exc).__name__},
+                async with self._telemetry.observe(
+                    "run-answer",
+                    input={"query": bounded_telemetry_text(query, max_length=2000)},
+                    metadata={
+                        "run_id": session.run_id,
+                        "parent_run_id": prepared.get("parent_run_id"),
+                        "workspaces": tuple(prepared.get("workspaces") or ()),
+                    },
+                ) as run_trace:
+                    try:
+                        return await self._execute_run(session, run_trace)
+                    except RunCancellationObserved, LeaseLostError:
+                        # A cancelled or fenced Run is a terminal outcome a user
+                        # asked for, not a failure: name it instead of letting
+                        # the generic exception mapping mark the trace ERROR.
+                        run_trace.update(
+                            level="DEFAULT",
+                            output={
+                                "outcome": "cancelled" if session.cancel_requested else "lease_lost"
+                            },
+                        )
+                        raise
+
+    async def _execute_run(
+        self,
+        session: RunSession,
+        run_trace: Observation,
+    ) -> RunExecutionOutcome:
+        """Run one attempt and report its product on the run's own trace.
+
+        Only this layer and the terminal site in :meth:`_execute` write the root
+        output, and never both: the pipeline reports the Answer it produced, the
+        deferral path reports why the attempt ended without one.
+        """
+        try:
+            if session.prepared_input is not None:
+                self.validate_active_prepared_input(session.prepared_input)
+            outcome = await self._execute(session, run_trace)
+        except IncompatibleActiveRunError as exc:
+            raise RunExecutionError(
+                "incompatible_answer_run",
+                "This Answer Run uses an incompatible model or execution contract. Start a new Run.",
+            ) from exc
+        except (
+            asyncio.CancelledError,
+            RunCancellationObserved,
+            LeaseLostError,
+            RunExecutionError,
+        ):
+            raise
+        except Exception as exc:
+            component = classify_transient_dependency(exc, component_hint="providers")
+            if component is not None:
+                await session.check_cancelled()
+                # Clear any durable optimistic draft before releasing the
+                # Query permit. The same Run and Agent Session resume from
+                # their fenced durable state after the bounded delay.
+                await session.reset_output()
+                checkpoint, delay = next_dependency_retry(
+                    session.checkpoint,
+                    component,
+                    base_seconds=_DEPENDENCY_DEFER_BASE_SECONDS,
+                    max_seconds=_DEPENDENCY_DEFER_MAX_SECONDS,
                 )
-                message = (
-                    exc.public_message
-                    if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
-                    and exc.public_message
-                    else reasoning_control_rejection_message(exc) or "Answer run failed."
+                self._notify_dependency(self._on_dependency_unavailable, component)
+                run_trace.update(output={"outcome": "deferred", "component": component})
+                return Deferred(
+                    checkpoint=checkpoint,
+                    next_attempt_at=self._now() + datetime.timedelta(seconds=delay),
                 )
-                raise RunExecutionError(classify_answer_error(exc), message) from exc
-            recovered = dependency_component_from_checkpoint(session.checkpoint)
-            if recovered is not None:
-                self._notify_dependency(self._on_dependency_recovered, recovered)
-            return outcome
+            logger.warning(
+                "Answer run %s execution failed",
+                session.run_id,
+                extra={"error_type": type(exc).__name__},
+            )
+            message = (
+                exc.public_message
+                if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
+                and exc.public_message
+                else reasoning_control_rejection_message(exc) or "Answer run failed."
+            )
+            raise RunExecutionError(classify_answer_error(exc), message) from exc
+        recovered = dependency_component_from_checkpoint(session.checkpoint)
+        if recovered is not None:
+            self._notify_dependency(self._on_dependency_recovered, recovered)
+        return outcome
 
     @staticmethod
     def _notify_dependency(
@@ -1143,7 +1190,7 @@ class AnswerExecutor:
             "Fast Answer could not compact the conversation within model capacity.",
         )
 
-    async def _execute(self, session: RunSession) -> RunExecutionOutcome:
+    async def _execute(self, session: RunSession, run_trace: Observation) -> RunExecutionOutcome:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
         agent_session_id = SessionId(request.agent_session_id)
@@ -1393,6 +1440,7 @@ class AnswerExecutor:
                     prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(
                         orchestrator=run.orchestrator,
+                        telemetry=self._telemetry,
                         repository=repository,
                         session=session,
                         fetched_buffer=fetched_buffer,
@@ -1471,6 +1519,7 @@ class AnswerExecutor:
 
                 effects = ResearchRuntimeEffects(
                     orchestrator=run.orchestrator,
+                    telemetry=self._telemetry,
                     prepared=prepared_early,
                     session=session,
                     session_id=session_id,
@@ -1706,18 +1755,14 @@ class AnswerExecutor:
                 await fast_boundaries.settle_planner()
 
             async with self._telemetry.observe(
-                "answer_orchestration",
-                as_type="chain",
-                input={"query": request.query},
+                "generate-answer",
                 metadata={
-                    "run_id": session.run_id,
                     "resolved_mode": resolved_mode,
-                    "workspaces": run.workspaces,
                     "history_turns": len(run.history or []),
                     "query_image_count": run.current_image_count,
                     "semantic_highlights": request.semantic_highlights,
                 },
-            ) as pipeline_trace:
+            ) as generation_trace:
                 prepared = prepared_early
                 stream: AsyncIterator[str] | None = None
                 if resolved_mode == "research":
@@ -1903,14 +1948,17 @@ class AnswerExecutor:
                 trace["memory_recall_record_count"] = memory_recall_record_count
                 trace["memory_recall_chars"] = memory_recall_chars
                 images = evidence_images_from_sources(finalized.sources, contexts=contexts)
-                pipeline_trace.update(
-                    output=answer_trace_output(
-                        finalized.answer,
-                        finalized.sources,
-                        contexts,
-                        capture_sensitive_data=self._telemetry.capture_sensitive_data,
-                    )
+                answer_output = answer_trace_output(
+                    finalized.answer,
+                    finalized.sources,
+                    contexts,
+                    capture_sensitive_data=self._telemetry.capture_sensitive_data,
                 )
+                generation_trace.update(output=answer_output)
+                # The root drives the trace table, so the answer a reviewer sees
+                # first is written where the answer exists, not derived later
+                # from an outcome that may not carry it (Fast commits terminal).
+                run_trace.update(output=answer_output)
                 publications, artifact_descriptors, artifact_sources = _stage_publications(
                     plan=publication,
                     answer=finalized.answer,

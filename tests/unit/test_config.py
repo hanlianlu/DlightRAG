@@ -203,3 +203,14 @@ def test_load_config_redacts_invalid_secret_input() -> None:
     with pytest.raises(ValueError) as caught:
         load_config(access={"unknown_secret": "do-not-echo"})
     assert "do-not-echo" not in str(caught.value)
+
+
+def test_langfuse_environment_rejects_values_langfuse_would_drop() -> None:
+    """An environment label Langfuse cannot store would silently lose its bucket."""
+    from dlightrag.application.config.sections import ObservabilitySettings
+
+    assert ObservabilitySettings(langfuse_environment="local").langfuse_environment == "local"
+    assert ObservabilitySettings().langfuse_environment is None
+    for rejected in ("Production", "prod/eu", "langfuse-local", "x" * 41):
+        with pytest.raises(ValidationError):
+            ObservabilitySettings(langfuse_environment=rejected)

@@ -291,8 +291,7 @@ class MultimodalEmbedder:
         modality: str,
     ) -> list[list[float]]:
         async with self._telemetry.observe(
-            f"embed_{self.model}",
-            as_type="embedding",
+            "embed-text",
             input={"input_count": expected_count},
             metadata={
                 "context": context,

@@ -381,6 +381,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     retrieval_executor = RetrievalExecutor(
         operation=retrieval,
+        telemetry=telemetry,
         timeout_seconds=config.corpus.retrieval.timeout,
         model_fingerprint_for_role=retrieval_model_fingerprint,
         on_dependency_unavailable=health.mark_component_degraded,

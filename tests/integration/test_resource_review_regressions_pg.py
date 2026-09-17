@@ -297,6 +297,7 @@ async def test_same_host_async_spawn_dispatch_retry_and_continuation_budget(
             finish_child=_fenced_child_writer(store, "finish_child_session", session),
             prepare_dispatch=retried_dispatch,
             run_child=_bound_child_runner(
+                telemetry=NOOP_TELEMETRY,
                 orchestrator=host,
                 repository=session.execution.session_repository,
                 session=session,
@@ -913,6 +914,7 @@ async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recove
             release_children=_fenced_child_writer(pg[0], "release_child_sessions", session),
             prepare_dispatch=_bound_child_dispatch_preparer(host),
             run_child=_bound_child_runner(
+                telemetry=NOOP_TELEMETRY,
                 orchestrator=host,
                 repository=session.execution.session_repository,
                 session=session,

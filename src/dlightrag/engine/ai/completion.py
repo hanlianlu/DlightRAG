@@ -154,7 +154,6 @@ class CompletionModel:
             },
         }
         return {
-            "as_type": "generation",
             "input": (
                 telemetry_messages(messages) if self._telemetry.capture_sensitive_data else None
             ),
@@ -272,7 +271,7 @@ class CompletionModel:
             {**request, **self._reasoning_metadata(resolved)},
         )
         async with self._telemetry.observe(
-            f"llm_{self.settings.model}",
+            "generate-completion",
             **observation_kwargs,
         ) as observation:
             prepared = messages_for_model(messages, self.fingerprint)
@@ -351,7 +350,7 @@ class CompletionModel:
         first_chunk = True
         yielded = False
         async with self._telemetry.observe(
-            f"llm_{self.settings.model}",
+            "generate-completion",
             **observation_kwargs,
         ) as observation:
             prepared = messages_for_model(messages, self.fingerprint)

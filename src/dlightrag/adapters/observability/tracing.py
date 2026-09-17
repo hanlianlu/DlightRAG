@@ -3,13 +3,22 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Mapping
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    ExitStack,
+    asynccontextmanager,
+)
 from types import TracebackType
 from typing import Any
 
-from dlightrag.adapters.observability.langfuse import current_client, trace_sensitive_enabled
-from dlightrag.engine.ai.telemetry import Observation
+from dlightrag.adapters.observability.langfuse import (
+    current_client,
+    trace_attributes,
+    trace_sensitive_enabled,
+)
+from dlightrag.engine.ai.telemetry import SPAN_TYPES, Observation, SpanName, SpanType
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +33,17 @@ def _safe_update(observation: Any, **kwargs: Any) -> None:
 class _ObservationHandle:
     def __init__(self, observation: Any | None) -> None:
         self._observation = observation
+        self.level_set = False
 
     def update(self, **kwargs: Any) -> None:
         if self._observation is not None:
+            if kwargs.get("level") is not None:
+                # A caller that names the level knows the outcome better than
+                # the generic "an exception left the body" mapping below.
+                self.level_set = True
+            if not trace_sensitive_enabled():
+                kwargs.pop("input", None)
+                kwargs.pop("output", None)
             usage_details = kwargs.pop("usage_details", None)
             cost_details = kwargs.pop("cost_details", None)
             kwargs.update(_usage_cost_update(usage_details, cost_details))
@@ -40,23 +57,28 @@ class LangfuseTelemetry:
     def capture_sensitive_data(self) -> bool:
         return trace_sensitive_enabled()
 
+    def trace(
+        self,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AbstractContextManager[None]:
+        return trace_attributes(session_id=session_id, user_id=user_id)
+
     def observe(
         self,
-        name: str,
+        name: SpanName,
         *,
-        as_type: str = "span",
         input: Any | None = None,
         metadata: Any | None = None,
-        session_id: str | None = None,
         model: str | None = None,
         model_parameters: dict[str, Any] | None = None,
     ) -> AbstractAsyncContextManager[Observation]:
         return trace_observation(
             name,
-            as_type=as_type,
+            as_type=SPAN_TYPES[name],
             input=input,
             metadata=metadata,
-            session_id=session_id,
             model=model,
             model_parameters=model_parameters,
         )
@@ -73,7 +95,7 @@ _USAGE_CACHED_INPUT_KEYS = (
 )
 
 
-def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
+def _langfuse_usage_details(raw: Mapping[str, Any]) -> dict[str, int]:
     def _first(keys: tuple[str, ...]) -> int | None:
         for key in keys:
             value = raw.get(key)
@@ -97,7 +119,11 @@ def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
         details["total"] = total
     if cached:
         details["input_cached_tokens"] = cached
-    return details or raw
+    if not details:
+        # An unknown provider dialect must not put arbitrary keys on the span:
+        # Langfuse derives cost only from input/output/total.
+        logger.debug("No recognized usage keys in provider usage payload")
+    return details
 
 
 def _usage_cost_update(
@@ -128,10 +154,9 @@ def _exit_observation(
 async def trace_observation(
     name: str,
     *,
-    as_type: str = "span",
+    as_type: SpanType,
     input: Any | None = None,
     metadata: Any | None = None,
-    session_id: str | None = None,
     model: str | None = None,
     model_parameters: dict[str, Any] | None = None,
 ) -> AsyncIterator[_ObservationHandle]:
@@ -152,10 +177,6 @@ async def trace_observation(
         observation_kwargs["model_parameters"] = model_parameters
     stack = ExitStack()
     try:
-        if session_id is not None:
-            from langfuse import propagate_attributes
-
-            stack.enter_context(propagate_attributes(session_id=session_id))
         observation = stack.enter_context(client.start_as_current_observation(**observation_kwargs))
     except Exception:
         stack.close()
@@ -166,9 +187,10 @@ async def trace_observation(
     exc_type: type[BaseException] | None = None
     exc: BaseException | None = None
     tb: TracebackType | None = None
+    handle = _ObservationHandle(observation)
     try:
         try:
-            yield _ObservationHandle(observation)
+            yield handle
         except asyncio.CancelledError, GeneratorExit:
             raise
         except BaseException as caught:
@@ -176,7 +198,8 @@ async def trace_observation(
             exc = caught
             tb = caught.__traceback__
             status = str(caught) if sensitive else "error"
-            _safe_update(observation, level="ERROR", status_message=status)
+            if not handle.level_set:
+                _safe_update(observation, level="ERROR", status_message=status)
             raise
     finally:
         _exit_observation(stack, exc_type, exc, tb)

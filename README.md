@@ -242,6 +242,7 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [Security](docs/security.md) | Authentication, authorization, ingress and content boundaries |
 | [PostgreSQL](docs/postgresql.md) | PostgreSQL requirements, schema ownership, tuning |
 | [Operations](docs/operations.md) | Executable runbooks and recovery workflows |
+| [Observability](docs/observability.md) | Trace structure, span vocabulary, attribution, redaction, deployment labels |
 | [Evaluation](docs/evaluation.md) | RAGAS workflow |
 | [Web Theme Design](docs/web-theme-design.md) | Web appearance and interaction decisions |
 

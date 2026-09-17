@@ -7,8 +7,10 @@ breaks CI. Tests that mean to exercise a YAML config build their own file.
 """
 
 import os
+from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -123,3 +125,69 @@ def _fresh_json_schema_transport_cache():
     JSON_SCHEMA_TRANSPORT_CACHE.clear()
     yield
     JSON_SCHEMA_TRANSPORT_CACHE.clear()
+
+
+class RecordingObservation:
+    """One recorded Langfuse observation, including its ambient parent."""
+
+    def __init__(self, client: RecordingLangfuse, kwargs: dict[str, Any]) -> None:
+        self.client = client
+        self.kwargs = kwargs
+        self.parent = client.active[-1] if client.active else None
+        self.updates: list[dict[str, Any]] = []
+
+    def __enter__(self) -> RecordingObservation:
+        self.client.active.append(self)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        popped = self.client.active.pop()
+        assert popped is self
+
+    def update(self, **kwargs: Any) -> None:
+        self.updates.append(kwargs)
+
+
+class RecordingLangfuse:
+    """A Langfuse client double that records observations and their nesting."""
+
+    def __init__(self) -> None:
+        self.observations: list[RecordingObservation] = []
+        self.active: list[RecordingObservation] = []
+        self.flushed = False
+        self.shutdown_called = False
+
+    def start_as_current_observation(self, **kwargs: Any) -> RecordingObservation:
+        obs = RecordingObservation(self, kwargs)
+        self.observations.append(obs)
+        return obs
+
+    def flush(self) -> None:
+        self.flushed = True
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
+@pytest.fixture
+def reset_langfuse_client(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Isolate process tracing state, restoring it afterwards.
+
+    The real ``langfuse.propagate_attributes`` reaches for a real client when a
+    double is installed, so tests drive the same call shape through a neutral
+    context manager unless they monkeypatch it themselves.
+    """
+    from contextlib import contextmanager
+
+    from dlightrag.adapters.observability import langfuse as langfuse_state
+
+    @contextmanager
+    def _neutral_propagation(**_kwargs: Any) -> Generator[None]:
+        yield
+
+    monkeypatch.setattr("langfuse.propagate_attributes", _neutral_propagation)
+    previous = langfuse_state.current_client()
+    previous_sensitive = langfuse_state.trace_sensitive_enabled()
+    langfuse_state.install_client(None, trace_sensitive=True)
+    yield
+    langfuse_state.install_client(previous, trace_sensitive=previous_sensitive)

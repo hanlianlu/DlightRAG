@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 from PIL import Image
 
+from dlightrag.adapters.observability import LangfuseTelemetry
+from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
@@ -57,7 +59,7 @@ from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.publication import prepare_artifact_attachment, validate_publication
 from dlightrag.engine.answer.resources import ResourceInput
 from dlightrag.engine.dependencies import ProviderUnavailableError
-from dlightrag.engine.runtime.coordinator import RunSession
+from dlightrag.engine.runtime.coordinator import RunCancellationObserved, RunSession
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
     Deferred,
@@ -65,7 +67,7 @@ from dlightrag.engine.runtime.records import (
     Succeeded,
     artifact_digest,
 )
-from tests.unit.conftest import answer_image_policy
+from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
 
 @pytest.mark.asyncio
@@ -575,7 +577,7 @@ async def test_child_model_calls_inherit_run_scheduler_ownership() -> None:
             await release_first.wait()
         return label
 
-    async def execute(session: Any) -> RunExecutionOutcome:
+    async def execute(session: Any, _run_trace: Any) -> RunExecutionOutcome:
         if session.run_id == "run-a":
             first = asyncio.create_task(scheduler.run(lambda: operation("a1", block=True)))
             await first_started.wait()
@@ -649,6 +651,88 @@ async def test_transient_answer_dependency_interruption_defers_same_run(
     assert (outcome.next_attempt_at - now).total_seconds() == 20
     session.check_cancelled.assert_awaited_once_with()
     session.reset_output.assert_awaited_once_with()
+
+
+@pytest.mark.usefixtures("reset_langfuse_client")
+async def test_the_run_trace_carries_question_attribution_and_hands_the_pipeline_its_root() -> None:
+    """The pipeline that knows the answer writes the root; the root carries the question."""
+    client = RecordingLangfuse()
+    langfuse_state.install_client(client, trace_sensitive=True)
+    executor = _executor()
+    executor._telemetry = LangfuseTelemetry()
+    executor._execute = AsyncMock(return_value=Succeeded({"answer": "the answer"}))  # type: ignore[method-assign]
+    session = MagicMock(
+        owner_id="owner",
+        run_id="run-1",
+        prepared_input={
+            "query": "why the sky is blue",
+            "agent_session_id": "sess-1",
+            "workspaces": ["default"],
+        },
+    )
+
+    await executor.execute(cast(RunSession, session))
+
+    root = client.observations[0]
+    assert root.kwargs["name"] == "run-answer"
+    assert root.kwargs["as_type"] == "agent"
+    assert root.kwargs["input"] == {"query": "why the sky is blue"}
+    assert root.kwargs["metadata"] == {
+        "run_id": "run-1",
+        "parent_run_id": None,
+        "workspaces": ("default",),
+    }
+
+    calls = executor._execute.await_args_list if executor._execute.await_count else []
+    handed = calls[0].args[1]
+    handed.update(output={"answer": "the answer"})
+    assert client.observations[0].updates == [{"output": {"answer": "the answer"}}]
+
+
+@pytest.mark.usefixtures("reset_langfuse_client")
+async def test_a_deferred_run_reports_why_it_has_no_answer() -> None:
+    """One writer per path: the deferral path says which dependency deferred the attempt."""
+    client = RecordingLangfuse()
+    langfuse_state.install_client(client, trace_sensitive=True)
+    executor = _executor()
+    executor._telemetry = LangfuseTelemetry()
+    executor._now = lambda: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    executor._execute = AsyncMock(side_effect=ConnectionError("provider down"))  # type: ignore[method-assign]
+    session = MagicMock(
+        owner_id="owner",
+        run_id="run-1",
+        checkpoint={"providers": 2},
+        prepared_input={"query": "q"},
+    )
+    session.check_cancelled = AsyncMock()
+    session.reset_output = AsyncMock()
+
+    outcome = await executor.execute(cast(RunSession, session))
+
+    assert isinstance(outcome, Deferred)
+    assert client.observations[0].updates == [
+        {"output": {"outcome": "deferred", "component": "providers"}}
+    ]
+
+
+@pytest.mark.usefixtures("reset_langfuse_client")
+async def test_a_cancelled_run_is_recorded_as_a_cancelled_outcome() -> None:
+    """A user-requested stop is terminal, not a failure; the trace must not say ERROR."""
+    client = RecordingLangfuse()
+    langfuse_state.install_client(client, trace_sensitive=True)
+    executor = _executor()
+    executor._telemetry = LangfuseTelemetry()
+    executor._execute = AsyncMock(side_effect=RunCancellationObserved())  # type: ignore[method-assign]
+    session = MagicMock(owner_id="owner", run_id="run-1", prepared_input={"query": "q"})
+    session.cancel_requested = True
+
+    with pytest.raises(RunCancellationObserved):
+        await executor.execute(cast(RunSession, session))
+
+    assert client.observations[0].updates[-1] == {
+        "level": "DEFAULT",
+        "output": {"outcome": "cancelled"},
+    }
 
 
 async def test_unknown_errors_map_to_generic_public_message(

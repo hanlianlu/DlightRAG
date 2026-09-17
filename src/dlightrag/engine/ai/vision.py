@@ -141,8 +141,7 @@ class ModelImageCapabilities:
     async def _probe(self, settings: ModelSettings) -> ImageProbeOutcome:
         provider: Any = None
         async with self._telemetry.observe(
-            "image_capability_probe",
-            as_type="generation",
+            "probe-image-capability",
             metadata={"provider": settings.provider},
             model=settings.model,
         ) as observation:

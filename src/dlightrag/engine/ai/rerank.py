@@ -66,8 +66,7 @@ class RerankModel:
             top_n=top_n,
         )
         async with self._telemetry.observe(
-            f"rerank_request/{self.settings.strategy}",
-            as_type="span",
+            "call-rerank-model",
             metadata={"document_count": len(documents), "top_n": top_n},
             model=self.model,
         ) as observation:

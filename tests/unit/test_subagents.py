@@ -1163,6 +1163,7 @@ async def test_child_session_persists_and_replays_without_rerun() -> None:
     session = _FakeSession(run_id=str(parent_id.value))
 
     first = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         repository=repository,  # type: ignore[arg-type]
         session=session,  # type: ignore[arg-type]
@@ -1188,6 +1189,7 @@ async def test_child_session_persists_and_replays_without_rerun() -> None:
     assert any(record.ref.kind == "operation_state" for record in snapshot.registers)
 
     second = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         repository=repository,  # type: ignore[arg-type]
         session=session,  # type: ignore[arg-type]
@@ -1234,6 +1236,7 @@ async def test_child_continuation_accepts_a_new_operation_in_the_same_session() 
         operation_id=OperationId.deterministic(idempotency_key=initial_key).value,
     )
     first = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         repository=repository,  # type: ignore[arg-type]
         session=_FakeSession(run_id=parent_id.value),  # type: ignore[arg-type]
@@ -1254,6 +1257,7 @@ async def test_child_continuation_accepts_a_new_operation_in_the_same_session() 
         operation_id=OperationId.deterministic(idempotency_key=continuation_key).value,
     )
     second = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         repository=repository,  # type: ignore[arg-type]
         session=_FakeSession(run_id=parent_id.value),  # type: ignore[arg-type]
@@ -1295,6 +1299,7 @@ async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
     child_id = SessionId.deterministic(run_id=str(parent_id.value), name="child:renew")
     renew_child = AsyncMock(return_value=True)
     outcome = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=_child_orchestrator(model),
         repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
         session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
@@ -1450,6 +1455,7 @@ async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
     child_id = SessionId.deterministic(run_id=str(parent_id.value), name="pending-cancel")
     repository = InMemoryAgentSessionRepository()
     outcome = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=_child_orchestrator(model, retrieve_func=cancel_during_search),
         repository=repository,  # type: ignore[arg-type]
         session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
@@ -1487,6 +1493,7 @@ async def test_parent_cancel_marks_the_child_cancelled() -> None:
     parent_id = SessionId.new()
     with pytest.raises(RunCancellationObserved):
         await run_child_session(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=_child_orchestrator(model),
             repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
             session=_CancelSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]

@@ -19,6 +19,7 @@ from dlightrag.application.retrieval import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.rag.retrieval import RetrievalOptions, RetrievalResult
 from dlightrag.engine.runtime.coordinator import RunCoordinator
 from dlightrag.engine.runtime.policy import RETRIEVAL_RUN_RETENTION_SECONDS
@@ -323,6 +324,7 @@ async def test_registered_retrieval_executor_runs_through_the_real_pg_coordinato
     store, _pool = retrieval_pg
     operation = _RetrievalOperation()
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
         model_fingerprint_for_role=lambda _role: _FINGERPRINT,

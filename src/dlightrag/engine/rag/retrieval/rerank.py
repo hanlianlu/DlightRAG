@@ -304,7 +304,7 @@ async def _run_http_rerank(
 
 
 class _RerankCallable:
-    __slots__ = ("_closeable", "_fn", "_observation_name", "_telemetry")
+    __slots__ = ("_closeable", "_fn", "_telemetry")
 
     def __init__(
         self,
@@ -312,12 +312,10 @@ class _RerankCallable:
         *,
         closeable: Any,
         telemetry: Telemetry,
-        observation_name: str,
     ) -> None:
         self._fn = fn
         self._closeable = closeable
         self._telemetry = telemetry
-        self._observation_name = observation_name
 
     async def __call__(
         self,
@@ -326,7 +324,7 @@ class _RerankCallable:
         top_k: int,
     ) -> list[dict[str, Any]]:
         async with self._telemetry.observe(
-            self._observation_name,
+            "rerank-passages",
             input=(
                 {"query": bounded_telemetry_text(query, max_length=1000)}
                 if self._telemetry.capture_sensitive_data
@@ -380,7 +378,6 @@ def build_rerank_func(
             fn,
             closeable=scoring_model,
             telemetry=telemetry,
-            observation_name="rerank/chat_llm_reranker",
         )
 
     modality = resolve_rerank_input_modality(settings.input_modality)
@@ -415,7 +412,6 @@ def build_rerank_func(
         fn,
         closeable=model,
         telemetry=telemetry,
-        observation_name=f"rerank/{settings.strategy}",
     )
 
 

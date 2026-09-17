@@ -4,7 +4,7 @@
 import asyncio
 import io
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -109,6 +109,9 @@ class RecordingTelemetry:
 
     def update(self, **kwargs: Any) -> None:
         self.updates.append(kwargs)
+
+    def trace(self, **_kwargs: Any):
+        return nullcontext()
 
     @asynccontextmanager
     async def observe(self, _name: str, **_kwargs: Any):

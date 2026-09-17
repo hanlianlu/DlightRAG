@@ -4,7 +4,7 @@
 import asyncio
 import json
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from functools import partial
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -134,6 +134,9 @@ async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled(
     class Telemetry:
         capture_sensitive_data = False
         observation = Observation()
+
+        def trace(self, **_kwargs: Any):
+            return nullcontext()
 
         @asynccontextmanager
         async def observe(self, name: str, **_kwargs: Any):
@@ -480,6 +483,9 @@ class TestBuildRerankFunc:
         class Telemetry:
             capture_sensitive_data = True
 
+            def trace(self, **_kwargs: Any):
+                return nullcontext()
+
             @asynccontextmanager
             async def observe(self, name: str, **kwargs: Any):
                 calls.append({"name": name, **kwargs})
@@ -503,7 +509,7 @@ class TestBuildRerankFunc:
 
         await fn("q" * 1200, [{"content": "candidate"}], 1)
 
-        assert calls[0]["name"] == "rerank/voyage_reranker"
+        assert calls[0]["name"] == "rerank-passages"
         assert calls[0]["metadata"] == {"chunk_count": 1, "top_k": 1}
         traced_query = calls[0]["input"]["query"]
         assert len(traced_query) < 1100

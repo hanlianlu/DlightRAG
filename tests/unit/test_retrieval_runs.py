@@ -23,7 +23,7 @@ from dlightrag.application.runs import IdempotencyKeyConflict
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.telemetry import NoopTelemetry
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry
 from dlightrag.engine.dependencies import ProviderUnavailableError
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.errors import RunExecutionError
@@ -277,6 +277,9 @@ async def test_create_translates_atomic_changed_input_conflict() -> None:
 
 class _Session:
     def __init__(self, prepared: dict[str, Any], checkpoint: dict[str, Any] | None = None) -> None:
+        self.owner_id = "owner"
+        self.run_id = "retrieval-run"
+        self.cancel_requested = False
         self.prepared_input = prepared
         self.checkpoint = checkpoint
         self.phases: list[str] = []
@@ -345,6 +348,7 @@ async def test_executor_uses_two_phases_and_stores_no_projection_or_image_bytes(
         )
     )
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
         model_fingerprint_for_role=lambda _role: _FINGERPRINT,
@@ -370,6 +374,7 @@ async def test_executor_rejects_model_catalog_drift_before_operation() -> None:
     prepared = _prepared()
     prepared["model_catalog_revision"] = "stale-catalog"
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
         model_fingerprint_for_role=lambda _role: _FINGERPRINT,
@@ -388,6 +393,7 @@ async def test_executor_timeout_is_a_terminal_public_failure() -> None:
         raise AssertionError
 
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(
             Any,
             SimpleNamespace(
@@ -413,6 +419,7 @@ async def test_executor_defers_provider_unavailability_with_bounded_backoff() ->
         retrieve_result=AsyncMock(side_effect=ProviderUnavailableError()),
     )
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
         model_fingerprint_for_role=lambda _role: _FINGERPRINT,
@@ -435,6 +442,7 @@ async def test_executor_keeps_unknown_failure_terminal() -> None:
         retrieve_result=AsyncMock(side_effect=RuntimeError("unknown")),
     )
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
         model_fingerprint_for_role=lambda _role: _FINGERPRINT,
@@ -455,6 +463,7 @@ async def test_executor_defers_corpus_unavailability_with_bounded_backoff() -> N
         retrieve_result=AsyncMock(side_effect=CorpusUnavailableError("offline")),
     )
     executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
         model_fingerprint_for_role=lambda _role: _FINGERPRINT,

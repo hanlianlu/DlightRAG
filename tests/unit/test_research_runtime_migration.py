@@ -12,6 +12,8 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
+from dlightrag.adapters.observability import LangfuseTelemetry
+from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.session.effects import EffectIntent
 from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
@@ -70,7 +72,7 @@ from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
-from tests.unit.conftest import answer_model_profile
+from tests.unit.conftest import RecordingLangfuse, answer_model_profile
 
 
 class _Session:
@@ -124,6 +126,7 @@ async def _settle_bounded_research_tool(
         evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
         prepared=prepared,
         session=_Session(),  # type: ignore[arg-type]
@@ -218,6 +221,7 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
             return AssistantTurn(text="draft answer", tool_calls=(), stop_reason="stop")
 
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, _Orchestrator()),
         prepared=prepared,
         session=session,  # type: ignore[arg-type]
@@ -271,6 +275,7 @@ async def test_cancellation_during_a_provider_delta_cancels_without_retry() -> N
             raise AssertionError("cancelled callback returned")
 
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, _Orchestrator()),
         prepared=prepared,
         session=session,  # type: ignore[arg-type]
@@ -320,6 +325,7 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
             )
 
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, _Orchestrator()),
         prepared=prepared,
         session=session,  # type: ignore[arg-type]
@@ -365,6 +371,7 @@ async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path
     )
     session_id = SessionId.new()
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
         prepared=prepared,
         session=_Session(),  # type: ignore[arg-type]
@@ -494,6 +501,7 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
         evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
         prepared=prepared,
         session=_Session(),  # type: ignore[arg-type]
@@ -532,6 +540,77 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
     assert settled.result.outcome == "failed"
     assert settled.duration_ms is not None
     assert settled.duration_ms >= 25
+
+
+@pytest.mark.usefixtures("reset_langfuse_client")
+@pytest.mark.asyncio
+async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None:
+    """A Tool call belongs to the agent observation that asked for it, not to the
+    trace root, and its input is the arguments the model chose."""
+
+    async def execute(_input: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        return ToolResult.text("done")
+
+    class _SearchInput(BaseModel):
+        query: str
+
+    tool = AgentTool("mcp_connection_hash", "Call a remote tool.", _SearchInput, execute)
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=EvidenceLedger(),
+    )
+    effects = ResearchRuntimeEffects(
+        telemetry=LangfuseTelemetry(),
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="mcp-call",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+    client = RecordingLangfuse()
+    langfuse_state.install_client(client, trace_sensitive=True)
+    telemetry = LangfuseTelemetry()
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+
+    with telemetry.trace(session_id="sess-1", user_id="owner-1"):
+        async with telemetry.observe("run-answer"):
+            await effects.execute_tool(
+                cast(Any, context),
+                item,
+                {"query": "which filings mention risk"},
+                AttemptId.new(),
+                lambda _event: asyncio.sleep(0),
+            )
+
+    assert [observation.kwargs["name"] for observation in client.observations] == [
+        "run-answer",
+        "execute-agent-tool",
+    ]
+    tool_span = client.observations[1]
+    assert tool_span.kwargs["as_type"] == "tool"
+    assert tool_span.parent is client.observations[0]
+    assert tool_span.kwargs["input"]["tool"] == "mcp_connection_hash"
+    assert "which filings mention risk" in tool_span.kwargs["input"]["arguments"]
+    assert tool_span.kwargs["metadata"]["call_id"] == "mcp-call"
 
 
 @pytest.mark.asyncio
@@ -612,6 +691,7 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
     session_id = SessionId.new()
     store = MemoryAgentSessionRepository[EffectHostUpdate]()
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         prepared=prepared,
         session=_Session(),  # type: ignore[arg-type]
@@ -825,6 +905,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     runtime = AgentSessionRuntime(
         repository=store,
         effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=orchestrator,
             prepared=prepared,
             session=_Session(),  # type: ignore[arg-type]
@@ -946,6 +1027,7 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
     runtime = AgentSessionRuntime(
         repository=store,
         effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=orchestrator,
             prepared=prepared,
             session=_Session(),  # type: ignore[arg-type]
@@ -1119,6 +1201,7 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     runtime = AgentSessionRuntime(
         repository=MemoryAgentSessionRepository[EffectHostUpdate](),
         effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=orchestrator,
             prepared=prepared,
             session=_Session(),  # type: ignore[arg-type]

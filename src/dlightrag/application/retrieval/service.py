@@ -665,8 +665,7 @@ class RetrievalService:
         federated_rerank = retrieval.federated_rerank
         active_planner = planner or self.planner_for(model_profile)
         async with self._telemetry.observe(
-            "retrieval_planning",
-            as_type="chain",
+            "plan-retrieval",
             input={"query": query},
             metadata={
                 "workspaces": list(workspaces),
@@ -729,8 +728,7 @@ class RetrievalService:
             kwargs["bm25_query"] = effective_bm25_query
 
         async with self._telemetry.observe(
-            "retrieve",
-            as_type="retriever",
+            "retrieve-context",
             input={"query": query},
             metadata={
                 "workspaces": list(workspaces),

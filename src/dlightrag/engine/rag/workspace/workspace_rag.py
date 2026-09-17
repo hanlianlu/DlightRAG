@@ -514,8 +514,7 @@ class WorkspaceRag:
         try:
             async with self.backend.coordination.pipeline_recovery():
                 async with self.telemetry.observe(
-                    "ingest_pipeline",
-                    as_type="chain",
+                    "recover-ingestion",
                     metadata={"trigger": "startup_recovery"},
                 ):
                     await self._lightrag.apipeline_process_enqueue_documents()

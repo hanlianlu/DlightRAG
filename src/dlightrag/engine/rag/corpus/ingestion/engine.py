@@ -149,8 +149,7 @@ class UnifiedIngestionEngine:
         existing consistency error instead of waiting forever.
         """
         async with self._telemetry.observe(
-            "ingest_pipeline",
-            as_type="chain",
+            "ingest-documents",
             metadata={"document_count": len(doc_ids), "doc_ids": doc_ids},
         ):
             await self._lightrag.apipeline_process_enqueue_documents()

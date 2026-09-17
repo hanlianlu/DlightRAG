@@ -797,12 +797,23 @@ class ObservabilitySettings(FrozenSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_export_external_spans: bool = False
     langfuse_trace_sensitive_data: bool = True
-    langfuse_environment: str | None = None
+    langfuse_environment: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9][a-z0-9_-]{0,39}$",
+        description="Deployment label; Langfuse drops any other alphabet or length.",
+    )
     langfuse_release: str | None = None
     langfuse_sample_rate: float = Field(default=1.0, ge=0, le=1)
     langfuse_timeout: int | None = Field(default=None, ge=1, le=300)
     langfuse_flush_at: int | None = Field(default=None, ge=1)
     langfuse_flush_interval: float | None = Field(default=None, ge=0.1, le=300)
+
+    @field_validator("langfuse_environment")
+    @classmethod
+    def _reject_reserved_environment_prefix(cls, value: str | None) -> str | None:
+        if value is not None and value.lower().startswith("langfuse"):
+            raise ValueError("langfuse_environment must not start with 'langfuse'")
+        return value
 
 
 class DlightragConfig(BaseSettings):

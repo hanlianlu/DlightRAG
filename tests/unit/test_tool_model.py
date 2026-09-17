@@ -3,7 +3,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -89,6 +89,9 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
     class Telemetry:
         capture_sensitive_data = False
         observation = Observation()
+
+        def trace(self, **_kwargs: Any):
+            return nullcontext()
 
         @asynccontextmanager
         async def observe(self, name: str, **_kwargs: object):

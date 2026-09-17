@@ -44,6 +44,7 @@ from dlightrag.engine.ai.providers.base import (
     provider_input_tokens,
     provider_status_code,
 )
+from dlightrag.engine.ai.telemetry import Telemetry, bounded_telemetry_text
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.errors import AnswerInputError, reasoning_control_rejection_message
 from dlightrag.engine.answer.evidence import (
@@ -553,6 +554,7 @@ class ResearchRuntimeEffects:
         self,
         *,
         orchestrator: AnswerOrchestrator,
+        telemetry: Telemetry,
         prepared: Any,
         session: RunSession,
         session_id: SessionId,
@@ -574,6 +576,7 @@ class ResearchRuntimeEffects:
         self._validate_pins = validate_pins
         self._publish_provider_text = publish_provider_text
         self._tools = {tool.name: tool for tool in prepared.tools}
+        self._telemetry = telemetry
 
     async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot | Any:
         await self._check_cancelled()
@@ -747,7 +750,16 @@ class ResearchRuntimeEffects:
             fencing_epoch=self._session_fencing_epoch,
             _update_sink=update,
         )
-        result = await tool.execute(validated, runtime)
+        async with self._telemetry.observe(
+            "execute-agent-tool",
+            input={
+                "tool": item.tool_name,
+                "arguments": bounded_telemetry_text(validated, max_length=2000),
+            },
+            metadata={"call_id": item.call_id, "intent_id": item.intent_id.value},
+        ) as tool_trace:
+            result = await tool.execute(validated, runtime)
+            tool_trace.update(output={"is_error": result.is_error, "cached": result.cached})
         observation_capacity = _research_dynamic_context_reserve(self._prepared.model_profile)
         evidence = self._prepared.evidence
         if item.intent_id is None:
@@ -997,6 +1009,7 @@ def _bound_child_dispatch_preparer(
 def _bound_child_runner(
     *,
     orchestrator: AnswerOrchestrator,
+    telemetry: Telemetry,
     repository: AgentSessionRepository[EffectHostUpdate],
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
@@ -1021,6 +1034,7 @@ def _bound_child_runner(
     ) -> ChildOutcome:
         return await run_child_session(
             orchestrator=orchestrator,
+            telemetry=telemetry,
             repository=repository,
             session=session,
             fetched_buffer=fetched_buffer,
@@ -1045,6 +1059,7 @@ def _bound_child_runner(
 async def run_child_session(
     *,
     orchestrator: AnswerOrchestrator,
+    telemetry: Telemetry,
     repository: AgentSessionRepository[EffectHostUpdate],
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
@@ -1182,6 +1197,7 @@ async def run_child_session(
         await _restore_durable_evidence(prepared, child_repository, child_id)
     effects = ResearchRuntimeEffects(
         orchestrator=orchestrator,
+        telemetry=telemetry,
         prepared=prepared,
         session=session,
         session_id=child_id,

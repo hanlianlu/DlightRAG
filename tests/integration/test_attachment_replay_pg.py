@@ -119,6 +119,7 @@ async def drive(session, session_id, host, prepared, *, lane="main", fetched_buf
     runtime = AgentSessionRuntime(
         repository=session.execution.session_repository,
         effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=host,
             prepared=prepared,
             session=session,
@@ -584,6 +585,7 @@ async def test_child_pinned_pixels_survive_parent_compaction_and_origin_cleanup(
     claim = _fenced_child_writer(pg[0], "claim_child_session", current)
     assert persist is not None and claim is not None
     outcome = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=host,
         repository=current.execution.session_repository,
         session=current,

@@ -21,6 +21,7 @@ from dlightrag.engine.agent.session.operation import ToolBatchItem
 from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, OperationIdempotencyConflict
 from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
@@ -101,6 +102,7 @@ async def test_child_continuation_terminal_usage_is_operation_local(
             operation_key=key, operation_id=OperationId.deterministic(idempotency_key=key).value
         )
         return await run_child_session(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=orchestrator,
             repository=repo,
             session=cast(Any, _FakeSession(run_id=parent.value)),
@@ -180,6 +182,7 @@ async def test_recovery_preserves_current_pinned_tools():
         plan=oldplan,
     )
     outcome = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         repository=repo,
         session=cast(Any, _FakeSession(run_id=parent.value)),
@@ -344,6 +347,7 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
         await release.wait()
 
     parent_effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         prepared=parent_prepared,
         session=cast(Any, session),
@@ -352,6 +356,7 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
         persist_child_intent=sparse_precreate,
     )
     child_effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         prepared=child_prepared,
         session=cast(Any, session),
@@ -374,6 +379,7 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
     assert captured[0]["context_snapshot"]["parent_session_id"] == parent.value
     assert host.context_snapshot is not None
     result = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=orchestrator,
         repository=repo,
         session=cast(Any, session),

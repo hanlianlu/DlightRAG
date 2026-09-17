@@ -2,7 +2,7 @@
 """Tests for AI-owned completion streaming behavior."""
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime
 from typing import Any
 
@@ -29,6 +29,9 @@ class RecordingTelemetry:
     def __init__(self) -> None:
         self.observation = RecordingObservation()
         self.calls: list[dict[str, Any]] = []
+
+    def trace(self, **_kwargs: Any):
+        return nullcontext()
 
     @asynccontextmanager
     async def observe(self, name: str, **_kwargs: Any):

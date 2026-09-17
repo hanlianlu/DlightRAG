@@ -133,6 +133,7 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
         runtime = AgentSessionRuntime(
             repository=repository,
             effects=ResearchRuntimeEffects(
+                telemetry=NOOP_TELEMETRY,
                 orchestrator=orchestrator,
                 prepared=prepared,
                 session=cast(Any, _Session()),

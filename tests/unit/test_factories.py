@@ -3,7 +3,7 @@
 
 import asyncio
 import operator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import Any
 
 import pytest
@@ -175,10 +175,12 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
         observation = Observation()
         capture_sensitive_data = False
 
+        def trace(self, **_kwargs: Any):
+            return nullcontext()
+
         @asynccontextmanager
         async def observe(self, name: str, **kwargs: Any):
-            assert name == "llm_model-a"
-            assert kwargs["as_type"] == "generation"
+            assert name == "generate-completion"
             yield self.observation
 
     provider = Provider()

@@ -28,6 +28,7 @@ from dlightrag.engine.ai.settings import (
     ModelRoleSettings,
     ModelSettings,
 )
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.capabilities import RequestModelContext
 from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
@@ -205,6 +206,7 @@ async def test_selected_binding_survives_durable_continuation_recovery_and_rejec
             operation_key=key, operation_id=OperationId.deterministic(idempotency_key=key).value
         )
         return await run_child_session(
+            telemetry=NOOP_TELEMETRY,
             orchestrator=orchestrator,
             repository=repo,
             session=cast(Any, _FakeSession(run_id=parent.value)),

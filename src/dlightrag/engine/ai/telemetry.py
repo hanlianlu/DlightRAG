@@ -1,9 +1,74 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Provider-neutral telemetry contracts and the standalone no-op adapter."""
+"""Provider-neutral telemetry contracts, the span vocabulary, and the no-op adapter.
 
-from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any, Protocol
+The vocabulary is the observability contract. A span name is an API for
+reviewers, dashboards, and evaluators, so names are closed, stable, and
+verb-first, and never carry a model id, workspace, run, or other dynamic
+value: those belong in ``model``, ``metadata``, or attribution. One unit of
+work owns exactly one root observation, and everything it does nests inside
+it: :meth:`Telemetry.trace` attributes a trace (conversation session and user)
+for every observation opened in its scope, so no call site threads ids.
+"""
+
+from collections.abc import AsyncIterator, Mapping
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    asynccontextmanager,
+    nullcontext,
+)
+from types import MappingProxyType
+from typing import Any, Final, Literal, Protocol
+
+type SpanName = Literal[
+    "call-rerank-model",
+    "embed-text",
+    "execute-agent-tool",
+    "generate-agent-turn",
+    "generate-answer",
+    "generate-completion",
+    "generate-final-answer",
+    "highlight-sources",
+    "ingest-documents",
+    "plan-retrieval",
+    "probe-image-capability",
+    "recover-ingestion",
+    "rerank-passages",
+    "retrieve-context",
+    "run-answer",
+    "run-retrieval",
+]
+
+type SpanType = Literal[
+    "agent",
+    "chain",
+    "embedding",
+    "generation",
+    "retriever",
+    "span",
+    "tool",
+]
+
+SPAN_TYPES: Final[Mapping[SpanName, SpanType]] = MappingProxyType(
+    {
+        "call-rerank-model": "span",
+        "embed-text": "embedding",
+        "execute-agent-tool": "tool",
+        "generate-agent-turn": "generation",
+        "generate-answer": "chain",
+        "generate-completion": "generation",
+        "generate-final-answer": "generation",
+        "highlight-sources": "chain",
+        "ingest-documents": "chain",
+        "plan-retrieval": "chain",
+        "probe-image-capability": "generation",
+        "recover-ingestion": "chain",
+        "rerank-passages": "span",
+        "retrieve-context": "retriever",
+        "run-answer": "agent",
+        "run-retrieval": "chain",
+    }
+)
 
 
 def safe_log_text(value: object, *, max_length: int = 240) -> str:
@@ -70,14 +135,19 @@ class Telemetry(Protocol):
     @property
     def capture_sensitive_data(self) -> bool: ...
 
+    def trace(
+        self,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AbstractContextManager[None]: ...
+
     def observe(
         self,
-        name: str,
+        name: SpanName,
         *,
-        as_type: str = "span",
         input: Any | None = None,
         metadata: Any | None = None,
-        session_id: str | None = None,
         model: str | None = None,
         model_parameters: dict[str, Any] | None = None,
     ) -> AbstractAsyncContextManager[Observation]: ...
@@ -93,19 +163,26 @@ class NoopTelemetry:
 
     capture_sensitive_data = False
 
+    def trace(
+        self,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AbstractContextManager[None]:
+        del session_id, user_id
+        return nullcontext()
+
     @asynccontextmanager
     async def observe(
         self,
-        name: str,
+        name: SpanName,
         *,
-        as_type: str = "span",
         input: Any | None = None,
         metadata: Any | None = None,
-        session_id: str | None = None,
         model: str | None = None,
         model_parameters: dict[str, Any] | None = None,
     ) -> AsyncIterator[Observation]:
-        del name, as_type, input, metadata, session_id, model, model_parameters
+        del name, input, metadata, model, model_parameters
         yield _NoopObservation()
 
 
@@ -113,8 +190,11 @@ NOOP_TELEMETRY = NoopTelemetry()
 
 __all__ = [
     "NOOP_TELEMETRY",
+    "SPAN_TYPES",
     "NoopTelemetry",
     "Observation",
+    "SpanName",
+    "SpanType",
     "Telemetry",
     "bounded_telemetry_text",
     "safe_log_text",

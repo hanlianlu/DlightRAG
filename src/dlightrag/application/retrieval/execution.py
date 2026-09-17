@@ -13,6 +13,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.reasoning import REASONING_LEVELS, ReasoningLevels, ReasoningProfile
+from dlightrag.engine.ai.telemetry import Observation, Telemetry
 from dlightrag.engine.dependencies import (
     DependencyComponent,
     classify_transient_dependency,
@@ -273,6 +274,7 @@ class RetrievalExecutor:
         self,
         *,
         operation: RetrievalOperation,
+        telemetry: Telemetry,
         timeout_seconds: float,
         model_fingerprint_for_role: Callable[[str], ModelFingerprint],
         now: Callable[[], datetime.datetime] | None = None,
@@ -280,6 +282,7 @@ class RetrievalExecutor:
         on_dependency_recovered: DependencyStateCallback | None = None,
     ) -> None:
         self._operation = operation
+        self._telemetry = telemetry
         self._timeout_seconds = float(timeout_seconds)
         self._model_fingerprint_for_role = model_fingerprint_for_role
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
@@ -294,6 +297,34 @@ class RetrievalExecutor:
         )
 
     async def execute(self, session: RunSession) -> Succeeded | Failed | Deferred:
+        """Execute one claimed retrieval run; this is the trace that owns its work."""
+        prepared = session.prepared_input if isinstance(session.prepared_input, Mapping) else {}
+        with self._telemetry.trace(user_id=session.owner_id):
+            async with self._telemetry.observe(
+                "run-retrieval",
+                input={"query": str(prepared.get("query") or "")},
+                metadata={
+                    "run_id": session.run_id,
+                    "workspaces": tuple(prepared.get("workspaces") or ()),
+                },
+            ) as run_trace:
+                try:
+                    return await self._execute_run(session, run_trace)
+                except RunCancellationObserved, LeaseLostError:
+                    # Cancellation is a terminal outcome, not a failure.
+                    run_trace.update(
+                        level="DEFAULT",
+                        output={
+                            "outcome": "cancelled" if session.cancel_requested else "lease_lost"
+                        },
+                    )
+                    raise
+
+    async def _execute_run(
+        self,
+        session: RunSession,
+        run_trace: Observation,
+    ) -> Succeeded | Failed | Deferred:
         run_input = RetrievalRunInput.from_prepared_input(session.prepared_input)
         self._require_compatible_models(run_input)
         if run_input.context_policy_revision != CONTEXT_POLICY_REVISION:
@@ -347,6 +378,7 @@ class RetrievalExecutor:
                     max_seconds=_DEFER_MAX_SECONDS,
                 )
                 self._notify_dependency(self._on_dependency_unavailable, component)
+                run_trace.update(output={"outcome": "deferred", "component": component})
                 return Deferred(
                     checkpoint=checkpoint,
                     next_attempt_at=self._now() + datetime.timedelta(seconds=delay),
@@ -358,7 +390,9 @@ class RetrievalExecutor:
         recovered = dependency_component_from_checkpoint(session.checkpoint)
         if recovered is not None:
             self._notify_dependency(self._on_dependency_recovered, recovered)
-        return Succeeded(result=canonical_retrieval_result(result))
+        stored = canonical_retrieval_result(result)
+        run_trace.update(output=retrieval_trace_output(stored))
+        return Succeeded(result=stored)
 
     @staticmethod
     def _notify_dependency(
@@ -390,6 +424,17 @@ def canonical_retrieval_result(result: RetrievalResult) -> dict[str, Any]:
         "contexts": _canonical_contexts(result.contexts),
         "trace": _strip_projection_values(result.trace),
         "image_descriptions": [str(item) for item in result.image_descriptions],
+    }
+
+
+def retrieval_trace_output(stored: Mapping[str, Any]) -> dict[str, Any]:
+    """Shape what a retrieval observation reports: counts a reviewer reads first."""
+    contexts = stored.get("contexts")
+    chunks = contexts.get("chunks") if isinstance(contexts, Mapping) else None
+    sources = stored.get("sources")
+    return {
+        "context_chunk_count": len(chunks) if isinstance(chunks, Sequence) else 0,
+        "source_count": len(sources) if isinstance(sources, Sequence) else 0,
     }
 
 
