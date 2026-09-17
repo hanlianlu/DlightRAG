@@ -117,6 +117,21 @@ def validate_credential_free_query(raw_url: str) -> None:
             )
 
 
+def public_http_url_identity(url: str) -> str | None:
+    """Normalize a public HTTP(S) URL, or return None when it is not one.
+
+    Matching a stored source to the URL an answer wrote must use the same policy
+    that admitted the bytes: a private host, another scheme, or a credential in
+    the query is not something this deployment fetched, so it is never addressed
+    by a stored copy.
+    """
+    try:
+        validate_public_http_url(url)
+    except PublicHttpPolicyError:
+        return None
+    return normalize_public_http_url_identity(url)
+
+
 def normalize_public_http_url_identity(url: str) -> str:
     """Normalize scheme/authority and discard fragments that never reach the server."""
     parts = urlsplit(url)

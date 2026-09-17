@@ -41,7 +41,7 @@ from playwright.sync_api import (
 
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import WorkspaceRecord
-from dlightrag.application.answer_runs import AnswerInputArtifact
+from dlightrag.application.answer_runs import RunResourceDescriptor
 from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.corpus_admin import (
     FilePanelCursorCodec,
@@ -366,6 +366,17 @@ class E2EConversationService:
         with self._lock:
             return self._submission_for(submission_id)
 
+    async def run_external_sources(self, _user: Any, run_id: str) -> dict[str, str]:
+        """Return each external URL this E2E run holds stored bytes for.
+
+        Projections resolve stored answer images through this call, so the double
+        answers it the way the durable service does: an empty map unless a test
+        seeded one.
+        """
+        with self._lock:
+            entry = self._runs.get(run_id)
+            return {} if entry is None else dict(entry.get("external_sources") or {})
+
     def requested_effort(self, run_id: str) -> str | None:
         """Return the agent effort the browser asked this run to use, if any."""
         with self._lock:
@@ -480,7 +491,10 @@ class E2EConversationService:
                     run=_run_record(run_id, dict(turn.run.request), status=status, result=result),
                 )
 
-    async def attachment(self, _user: Any, run_id: str, ordinal: int) -> Any:
+    async def run_resource(self, _user: Any, run_id: str, resource_id: str) -> Any:
+        ordinal = _resource_ordinal(resource_id)
+        if ordinal is None:
+            return None
         with self._lock:
             entry = self._runs.get(run_id)
             if entry is None or ordinal not in entry["bytes"]:
@@ -492,20 +506,24 @@ class E2EConversationService:
         reference = next(
             item for item in _request_attachments(turn.run.request) if item["ordinal"] == ordinal
         )
-        return AnswerInputArtifact(
-            reference_kind="current_attachment",
-            ordinal=ordinal,
-            filename=reference["filename"],
-            mime_type=reference["mime_type"],
-            digest=reference["digest"],
-            content=content,
+        return (
+            RunResourceDescriptor(
+                resource_id=resource_id,
+                registry="artifact",
+                reference_kind="current_attachment",
+                ordinal=ordinal,
+                filename=reference["filename"],
+                mime_type=reference["mime_type"],
+                digest=reference["digest"],
+            ),
+            content,
         )
 
-    async def thumbnail(self, user: Any, run_id: str, ordinal: int) -> tuple[bytes, str] | None:
-        stored = await self.attachment(user, run_id, ordinal)
-        if stored is None or not stored.mime_type.lower().startswith("image/"):
+    async def thumbnail(self, user: Any, run_id: str, resource_id: str) -> tuple[bytes, str] | None:
+        stored = await self.run_resource(user, run_id, resource_id)
+        if stored is None or not stored[0].mime_type.lower().startswith("image/"):
             return None
-        return stored.content, stored.mime_type
+        return stored[1], stored[0].mime_type
 
     def seed_image_history(self, *, turn_count: int) -> str:
         """Create one long image conversation for browser loading probes."""
@@ -565,6 +583,17 @@ class E2EConversationService:
         with self._lock:
             self._conversations[conversation_id] = value
         return conversation_id
+
+
+def _resource_ordinal(resource_id: str) -> int | None:
+    """Read the ordinal one accepted upload's resource id spells."""
+    prefix = "attachment-"
+    if not resource_id.startswith(prefix):
+        return None
+    try:
+        return int(resource_id[len(prefix) :])
+    except ValueError:
+        return None
 
 
 def _request_attachments(request: Mapping[str, Any]) -> list[dict[str, Any]]:

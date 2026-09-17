@@ -45,6 +45,7 @@ from dlightrag.adapters.http.browser.presentation import (
     build_answer_presentation,
 )
 from dlightrag.adapters.http.browser.routes.skills import require_known_skill
+from dlightrag.adapters.http.browser.run_resources import image_rewrites
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.application.access import AccessAction, auth_mode_for_owner, owner_id_from_user
 from dlightrag.application.answer_runs import (
@@ -256,7 +257,15 @@ async def answer_run_status(
         raise HTTPException(status_code=404, detail="Answer run not found")
     downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     return project_conversation_turn(
-        turn, downloadable_workspaces=downloadable, visual_workspaces=visual
+        turn,
+        downloadable_workspaces=downloadable,
+        visual_workspaces=visual,
+        image_rewrites=image_rewrites(
+            run_id,
+            await conversation_service.run_external_sources(
+                getattr(request.state, "user_context", None), run_id
+            ),
+        ),
     )
 
 
@@ -645,6 +654,12 @@ async def answer_run_events(
         auth_mode=auth_mode_for_owner(owner),
         run_id=run_id,
     )
+    # The finished answer must show the same stored images a reload would, so the
+    # frame resolver reads the run's own recorded sources once per subscription.
+    image_sources = image_rewrites(
+        run_id,
+        await conversation_service.run_external_sources(user, run_id),
+    )
     events = get_application(request).runs.subscribe(
         owner_id=owner,
         run_id=run_id,
@@ -660,6 +675,7 @@ async def answer_run_events(
                 live_after=turn.run.next_event_sequence - 1,
                 run_id=run_id,
                 tool_labels=tool_labels,
+                image_rewrites=image_sources,
             ),
         ),
         media_type="text/event-stream",
@@ -687,6 +703,14 @@ async def accepted_answer(
             linked,
             downloadable_workspaces=downloadable,
             visual_workspaces=visual,
+            # A run accepted a moment ago has stored nothing yet; the rewrite is
+            # resolved from the same surface so the rule has one home.
+            image_rewrites=image_rewrites(
+                linked.run.run_id,
+                await get_web_conversation_service(request).run_external_sources(
+                    getattr(request.state, "user_context", None), linked.run.run_id
+                ),
+            ),
         ),
     )
 

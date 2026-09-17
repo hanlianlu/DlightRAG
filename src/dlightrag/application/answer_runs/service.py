@@ -84,7 +84,7 @@ from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import compose_research_tools
 from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
-from dlightrag.engine.network_admission import normalize_public_http_url_identity
+from dlightrag.engine.network_admission import public_http_url_identity
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions, RetrievalResult
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
@@ -499,6 +499,10 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
     async def list_fetched_resources(
         self, *, owner_id: str, run_id: str
     ) -> tuple[RunFetchedResource, ...]: ...
+
+    async def read_run_resource_row(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> RunFetchedResource | None: ...
 
 
 class _RunBlobReader(Protocol):
@@ -1121,11 +1125,9 @@ class AnswerService:
         sources: dict[str, str] = {}
         for resource in await self._store.list_fetched_resources(owner_id=owner_id, run_id=run_id):
             for candidate in _resource_source_urls(resource):
-                try:
-                    identity = normalize_public_http_url_identity(candidate)
-                except ValueError:
-                    continue
-                sources.setdefault(identity, resource.resource_id)
+                identity = public_http_url_identity(candidate)
+                if identity is not None:
+                    sources.setdefault(identity, resource.resource_id)
         return sources
 
     async def read_run_resource(
@@ -1150,8 +1152,9 @@ class AnswerService:
         """Resolve an id across both registries, input before run state.
 
         A current-turn upload wins over a carried-forward one sharing its ordinal,
-        which is the precedence the acceptance path already applies; run resources
-        are reached only when no accepted artifact claims the id.
+        which is the precedence the acceptance path already applies; a registered
+        row is reached only when no accepted artifact claims the id, and every
+        kind of row counts including an adopted entry attachment.
         """
         if not resource_id:
             return None
@@ -1176,18 +1179,20 @@ class AnswerService:
                     mime_type=match.mime_type,
                     digest=match.digest,
                 )
-        for resource in await self._store.list_fetched_resources(owner_id=owner_id, run_id=run_id):
-            if resource.resource_id == resource_id:
-                return RunResourceDescriptor(
-                    resource_id=resource.resource_id,
-                    registry="resource",
-                    reference_kind=None,
-                    ordinal=resource.ordinal,
-                    filename=resource.filename,
-                    mime_type=resource.mime_type,
-                    digest=resource.digest,
-                )
-        return None
+        resource = await self._store.read_run_resource_row(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
+        if resource is None:
+            return None
+        return RunResourceDescriptor(
+            resource_id=resource.resource_id,
+            registry="resource",
+            reference_kind=None,
+            ordinal=resource.ordinal,
+            filename=resource.filename,
+            mime_type=resource.mime_type,
+            digest=resource.digest,
+        )
 
     async def open_artifact(
         self,

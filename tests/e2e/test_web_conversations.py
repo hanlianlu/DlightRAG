@@ -1335,8 +1335,9 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
 
     def record_image_request(request) -> None:
         path = urlparse(request.url).path
-        # Uploads live with the run that accepted them, not with the conversation.
-        if not path.startswith("/web/api/runs/") or "/attachments/" not in path:
+        # Stored bytes are addressed by the run that registered them, never by the
+        # conversation, and every kind shares one resource address.
+        if not path.startswith("/web/api/runs/") or "/resources/" not in path:
             return
         if path.endswith("/thumbnail"):
             thumbnail_requests.append(path)

@@ -22,6 +22,7 @@ from dlightrag.adapters.http.browser.answer_events import browser_frame, render_
 from dlightrag.adapters.http.browser.conversations import project_conversation_turn
 from dlightrag.adapters.http.browser.routes import chat as chat_routes
 from dlightrag.adapters.http.browser.routes import conversations as conversation_routes
+from dlightrag.adapters.http.browser.run_resources import image_rewrites
 from dlightrag.adapters.http.server import create_app
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
 from dlightrag.application.access import owner_id_from_user
@@ -99,6 +100,9 @@ def service() -> AsyncMock:
     created.start_answer.return_value = web_answer_submission(conversation_id=_CID)
     created.continue_answer.return_value = web_answer_submission(conversation_id=_CID)
     created.turn_for_run.return_value = linked_turn(conversation_id=_CID)
+    # Projections resolve stored answer images through this call; a double that
+    # leaves it unconfigured would hand the projection an awaitable.
+    created.run_external_sources.return_value = {}
     return created
 
 
@@ -1494,7 +1498,7 @@ async def test_terminal_attachment_is_read_through_the_answer_service() -> None:
         cursor_secret=b"web-answer-runs-cursor-test",
     )
 
-    stored = await service.attachment(None, RUN_ID, "attachment-0")
+    stored = await service.run_resource(None, RUN_ID, "attachment-0")
 
     assert stored is not None
     descriptor, content = stored
@@ -1544,6 +1548,32 @@ async def test_a_stored_answer_image_is_addressed_on_our_own_origin() -> None:
     assert stored_url not in html
 
 
+async def test_every_projection_of_one_answer_carries_the_same_image_address() -> None:
+    """The live frame, the status projection, and history agree on stored images."""
+    stored_url = "https://public6.wolframalpha.com/files/GIF_thz351wxmi.gif"
+    service = AsyncMock()
+    service.turn_for_run.return_value = linked_turn(
+        answer_run(status="succeeded", result=stored_result(f"![图]({stored_url})"))
+    )
+    service.run_external_sources.return_value = {stored_url: "res-view-1"}
+
+    frame = browser_frame(
+        _event(
+            1,
+            "done",
+            {"status": "succeeded", "result": stored_result(f"![图]({stored_url})")},
+        ),
+        downloadable_workspaces=None,
+        visual_workspaces=None,
+        run_id=RUN_ID,
+        image_rewrites=image_rewrites(RUN_ID, await service.run_external_sources(None, RUN_ID)),
+    )
+
+    # The rendered image is ours; the answer text still quotes what it wrote.
+    assert f'<img src=\\"{f"/web/api/runs/{RUN_ID}/resources/res-view-1"}' in frame
+    assert '<img src=\\"https://public6.wolframalpha.com' not in frame
+
+
 async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
     store = AsyncMock()
     store.find_turn_by_run.return_value = None
@@ -1555,7 +1585,7 @@ async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
         cursor_secret=b"web-answer-runs-cursor-test",
     )
 
-    assert await service.attachment(None, RUN_ID, "attachment-0") is None
+    assert await service.run_resource(None, RUN_ID, "attachment-0") is None
     assert answers.reads == []
 
 

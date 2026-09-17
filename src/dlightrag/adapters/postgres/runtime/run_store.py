@@ -2220,6 +2220,12 @@ WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
 ORDER BY ordinal, resource_id
 """
 
+_SELECT_RUN_RESOURCE_BY_ID = """
+SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
+FROM dlightrag_answer_resources
+WHERE owner_id = $1 AND run_id = $2 AND resource_id = $3
+"""
+
 _SELECT_ARTIFACT_ATTACHMENTS = """
 SELECT relative_path, label, content_digest, size_bytes, presentation,
        session_id::text, intent_id::text
@@ -3444,6 +3450,36 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             )
 
         return await self._run(_operation)
+
+    async def read_run_resource_row(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> RunFetchedResource | None:
+        """Read one registered Row of a Run by the id it recorded.
+
+        The read surface accepts every kind a run registered, including an adopted
+        entry attachment whose locator is a digest rather than a URL, so this
+        lookup never filters by kind; the URL-bearing catalog keeps its own query.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None or not resource_id:
+            return None
+
+        async def _operation(conn: Any) -> RunFetchedResource | None:
+            row = await conn.fetchrow(_SELECT_RUN_RESOURCE_BY_ID, owner, run_uuid, resource_id)
+            if row is None:
+                return None
+            return RunFetchedResource(
+                resource_id=str(row["resource_id"]),
+                ordinal=int(row["ordinal"] or 0),
+                digest=str(row["blob_digest"]),
+                filename=str(row["safe_name"] or row["resource_id"]),
+                mime_type=str(row["media_type"] or "application/octet-stream"),
+                source_locator=bytes(row["source_locator"] or b""),
+                capabilities=_json_object(row["capabilities"]),
+            )
+
+        return await self._run_read(_operation)
 
     async def list_fetched_resources(
         self, *, owner_id: str, run_id: str

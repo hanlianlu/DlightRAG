@@ -210,10 +210,8 @@ async def _run_image_rewrites(
     rewrites: dict[str, dict[str, str]] = {}
     for turn in page.turns:
         run = turn.run
-        answer = str((run.result or {}).get("answer") or "")
-        if run.status != "succeeded" or (
-            "](http" not in answer and "<img" not in answer.casefold()
-        ):
+        probed = str((run.result or {}).get("answer") or "").casefold()
+        if run.status != "succeeded" or ("](http" not in probed and "<img" not in probed):
             continue
         sources = await service.run_external_sources(user, run.run_id)
         if sources:
@@ -234,7 +232,7 @@ async def run_resource(
     run fetched, rendered, or adopted, so a conversation keeps one way to reach
     what it showed.
     """
-    stored = await service.attachment(_user(request), run_id, resource_id)
+    stored = await service.run_resource(_user(request), run_id, resource_id)
     if stored is None:
         raise HTTPException(status_code=404, detail="Resource not found")
     descriptor, content = stored

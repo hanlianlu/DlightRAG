@@ -10,9 +10,9 @@ no bytes for is left exactly as the answer wrote it.
 
 import re
 from collections.abc import Mapping
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
-from dlightrag.engine.network_admission import normalize_public_http_url_identity
+from dlightrag.engine.network_admission import public_http_url_identity
 
 RUN_RESOURCE_URL_BASE = "/web/api/runs"
 
@@ -20,19 +20,6 @@ _IMAGE_SOURCE = re.compile(
     r'(<img\b[^>]*?\bsrc\s*=\s*)(["\'])([^"\']+)(\2)',
     re.IGNORECASE,
 )
-
-
-def _public_url_identity(url: str) -> str | None:
-    """Normalize a public HTTP(S) URL, or return None for anything else.
-
-    Only such a URL can name bytes this deployment fetched, so a relative path,
-    a ``data:`` payload, or a script URL is never addressed by a stored copy even
-    if some map key happened to spell the same text.
-    """
-    parts = urlsplit(url)
-    if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
-        return None
-    return normalize_public_http_url_identity(url)
 
 
 def run_resource_url(run_id: str, resource_id: str) -> str:
@@ -46,7 +33,7 @@ def image_rewrites(run_id: str, sources: Mapping[str, str]) -> dict[str, str]:
     """Address each stored source URL by its same-origin Run resource."""
     rewrites: dict[str, str] = {}
     for url, resource_id in sources.items():
-        identity = _public_url_identity(url)
+        identity = public_http_url_identity(url)
         if identity is not None:
             rewrites[identity] = run_resource_url(run_id, resource_id)
     return rewrites
@@ -64,7 +51,7 @@ def rewrite_image_sources(html: str, rewrites: Mapping[str, str]) -> str:
 
     def replace(match: re.Match[str]) -> str:
         head, quote_char, url, tail = match.groups()
-        identity = _public_url_identity(url)
+        identity = public_http_url_identity(url)
         replacement = None if identity is None else rewrites.get(identity)
         if replacement is None:
             return match.group(0)

@@ -337,6 +337,16 @@ class _Store:
             return ()
         return self._resources
 
+    async def read_run_resource_row(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> RunFetchedResource | None:
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return None
+        return next(
+            (row for row in self._resources if row.resource_id == resource_id),
+            None,
+        )
+
     async def stream(
         self,
         *,

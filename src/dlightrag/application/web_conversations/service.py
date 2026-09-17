@@ -365,7 +365,7 @@ class WebConversationService:
         )
         return None if creation is None else _submission(creation)
 
-    async def attachment(
+    async def run_resource(
         self,
         user: UserContext | None,
         run_id: str,
@@ -401,7 +401,7 @@ class WebConversationService:
         resource_id: str,
     ) -> tuple[bytes, str] | None:
         """Derive one bounded UI thumbnail for one stored image resource."""
-        stored = await self.attachment(user, run_id, resource_id)
+        stored = await self.run_resource(user, run_id, resource_id)
         if stored is None or not _is_image_mime(stored[0].mime_type):
             return None
         try:

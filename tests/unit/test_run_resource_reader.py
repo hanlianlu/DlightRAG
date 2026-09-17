@@ -72,6 +72,32 @@ async def test_a_worker_resource_is_reachable_by_the_id_it_recorded() -> None:
     assert read[1] == b"png"
 
 
+async def test_an_adopted_entry_attachment_resolves_like_any_other_id() -> None:
+    # Adopted rows carry a locator digest rather than a URL and are excluded from
+    # the URL-bearing catalog, so only an unfiltered by-id read can reach them.
+    adopted_id = "attachment-occurrence:019893f4-0000-7000-8000-0000000000ff:1"
+    store = _Store()
+    store._resources = (
+        _fetched_resource(resource_id=adopted_id, digest="d9", filename="source image"),
+    )
+    store._blobs["d9"] = b"page"
+    service = _service_with(store)
+
+    resolved = await service.run_resource(
+        owner_id=_OWNER, run_id=store._run.run_id, resource_id=adopted_id
+    )
+
+    assert resolved is not None
+    assert resolved.registry == "resource"
+    assert resolved.digest == "d9"
+    read = await service.read_run_resource(
+        owner_id=_OWNER, run_id=store._run.run_id, resource_id=adopted_id
+    )
+    assert read is not None and read[1] == b"page"
+    # It has no URL, so it never claims an answer source.
+    assert await service.run_external_source_map(owner_id=_OWNER, run_id=store._run.run_id) == {}
+
+
 async def test_a_current_upload_wins_over_a_carried_forward_one_sharing_its_id() -> None:
     shared_id = "attachment-0"
     current = _reference(kind="current_attachment", ordinal=0, digest="current", filename="now.txt")
