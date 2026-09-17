@@ -53,6 +53,7 @@ from dlightrag.engine.runtime.records import (
     RunArtifactReference,
     RunCreation,
     RunEvent,
+    RunFetchedResource,
     RunRecord,
 )
 from tests.unit.conftest import answer_image_policy
@@ -79,6 +80,26 @@ _PROFILE = ModelProfile(
         ),
     ),
 )
+
+
+def _fetched_resource(
+    *,
+    resource_id: str,
+    digest: str,
+    filename: str = "source image",
+    mime_type: str = "image/jpeg",
+    source_url: str = "",
+    aliases: tuple[str, ...] = (),
+) -> RunFetchedResource:
+    return RunFetchedResource(
+        resource_id=resource_id,
+        ordinal=0,
+        digest=digest,
+        filename=filename,
+        mime_type=mime_type,
+        source_locator=source_url.encode("utf-8"),
+        capabilities={"resource_aliases": list(aliases)} if aliases else {},
+    )
 
 
 def _record(
@@ -137,6 +158,7 @@ class _Store:
         self._replay = replay
         self._run = run or _record()
         self._references = references
+        self._resources: tuple[RunFetchedResource, ...] = ()
         self._blobs = dict(blobs or {})
         self.created: list[dict[str, Any]] = []
         self.replay_calls = 0
@@ -307,6 +329,13 @@ class _Store:
         if owner_id != _OWNER or run_id != self._run.run_id:
             return ()
         return self._references
+
+    async def list_fetched_resources(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunFetchedResource, ...]:
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return ()
+        return self._resources
 
     async def stream(
         self,

@@ -15,6 +15,7 @@ from dlightrag.adapters.http.browser.markdown import (
     render_chunk_content,
     render_markdown,
 )
+from dlightrag.adapters.http.browser.run_resources import rewrite_image_sources
 from dlightrag.adapters.http.browser.safe_html import sanitize_html_fragment
 from dlightrag.application.corpus_admin import validate_public_web_url
 from dlightrag.engine.answer.citations.contracts import (
@@ -284,6 +285,7 @@ def build_answer_presentation(
     evidence_images: list[dict[str, Any]],
     artifacts: list[dict[str, Any]] | None = None,
     artifact_outcome: dict[str, Any] | None = None,
+    image_rewrites: Mapping[str, str] | None = None,
 ) -> AnswerPresentation:
     """Build the bounded Web projection used identically by SSE and history."""
     artifact_values = artifacts or []
@@ -301,7 +303,10 @@ def build_answer_presentation(
         PresentationPart(
             type=part["type"],
             text=str(part.get("text") or ""),
-            html=render_answer_html(str(part.get("text") or ""), known_sources=known_sources)
+            html=rewrite_image_sources(
+                render_answer_html(str(part.get("text") or ""), known_sources=known_sources),
+                image_rewrites or {},
+            )
             if part["type"] == "markdown"
             else "",
             artifact=(

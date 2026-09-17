@@ -39,6 +39,7 @@ def render_done_event(
     downloadable_workspaces: set[str] | None,
     visual_workspaces: set[str] | None,
     run_id: str | None = None,
+    image_rewrites: Mapping[str, str] | None = None,
 ) -> AnswerDoneEvent:
     """Derive the finished presentation from the run's canonical result."""
     if str(payload.get("status")) == "cancelled":
@@ -63,6 +64,7 @@ def render_done_event(
             evidence_images=projected["evidence_images"],
             artifacts=projected["artifacts"],
             artifact_outcome=projected["artifact_outcome"],
+            image_rewrites=image_rewrites,
         ),
     )
 
@@ -91,6 +93,7 @@ def _browser_payload(
     live_after: int | None,
     run_id: str | None,
     tool_labels: Mapping[str, str] | None = None,
+    image_rewrites: Mapping[str, str] | None = None,
 ) -> Any:
     payload = dict(event.payload)
     match event.event_type:
@@ -151,6 +154,7 @@ def _browser_payload(
                 downloadable_workspaces=downloadable_workspaces,
                 visual_workspaces=visual_workspaces,
                 run_id=run_id,
+                image_rewrites=image_rewrites,
             )
             return {"status": "cancelled"} if done.status == "cancelled" else done
         case _:
@@ -168,6 +172,7 @@ def browser_frame(
     live_after: int | None = None,
     run_id: str | None = None,
     tool_labels: Mapping[str, str] | None = None,
+    image_rewrites: Mapping[str, str] | None = None,
 ) -> str:
     """Render one durable event as the frame this browser session reads."""
     return sse_frame(
@@ -180,6 +185,7 @@ def browser_frame(
             live_after=live_after,
             run_id=run_id,
             tool_labels=tool_labels,
+            image_rewrites=image_rewrites,
         ),
     )
 

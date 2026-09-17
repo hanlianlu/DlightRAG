@@ -41,6 +41,7 @@ _SERVICE_EXPORTS = {
     "AgentTranscriptTail",
     "AnswerHistoryResource",
     "AnswerInputArtifact",
+    "RunResourceDescriptor",
     "AnswerRequest",
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
@@ -124,6 +125,7 @@ def __getattr__(name: str) -> Any:
             AnswerService,
             ChildControlReceipt,
             ChildObservation,
+            RunResourceDescriptor,
             child_control_receipt_payload,
             child_control_succeeded,
         )
@@ -133,6 +135,7 @@ def __getattr__(name: str) -> Any:
             "AgentTranscriptTail": AgentTranscriptTail,
             "AnswerHistoryResource": AnswerHistoryResource,
             "AnswerInputArtifact": AnswerInputArtifact,
+            "RunResourceDescriptor": RunResourceDescriptor,
             "AnswerRequest": AnswerRequest,
             "AnswerRunAcceptor": AnswerRunAcceptor,
             "AnswerRuntimeUnavailableError": AnswerRuntimeUnavailableError,

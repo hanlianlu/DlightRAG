@@ -12,7 +12,7 @@ import datetime
 import json
 from functools import partial
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -21,6 +21,7 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.adapters.http.browser.answer_events import browser_frame, render_done_event
 from dlightrag.adapters.http.browser.conversations import project_conversation_turn
 from dlightrag.adapters.http.browser.routes import chat as chat_routes
+from dlightrag.adapters.http.browser.routes import conversations as conversation_routes
 from dlightrag.adapters.http.server import create_app
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
 from dlightrag.application.access import owner_id_from_user
@@ -38,6 +39,7 @@ from dlightrag.application.runs import (
 from dlightrag.application.web_conversations import (
     CarriedAttachment,
     ConversationHead,
+    ConversationHistoryPage,
     ConversationSubmissionConflict,
     RecoveryTurnBatch,
     SubmissionSeed,
@@ -1062,10 +1064,10 @@ async def scoped_client(application_double: AsyncMock, test_config):
         ("GET", "/web/api/runs/{run_id}"),
         ("DELETE", "/web/api/runs/{run_id}"),
         ("GET", "/web/api/runs/{run_id}/events"),
-        ("GET", "/web/api/runs/{run_id}/attachments/1"),
-        ("GET", "/web/api/runs/{run_id}/attachments/1/thumbnail"),
+        ("GET", "/web/api/runs/{run_id}/resources/attachment-1"),
+        ("GET", "/web/api/runs/{run_id}/resources/attachment-1/thumbnail"),
     ],
-    ids=["status", "cancel", "events", "attachment", "thumbnail"],
+    ids=["status", "cancel", "events", "resource", "thumbnail"],
 )
 @pytest.mark.parametrize(
     "run_id", ["not-a-uuid", "019", RUN_ID[:-1]], ids=["text", "short", "trunc"]
@@ -1492,11 +1494,54 @@ async def test_terminal_attachment_is_read_through_the_answer_service() -> None:
         cursor_secret=b"web-answer-runs-cursor-test",
     )
 
-    attachment = await service.attachment(None, RUN_ID, 0)
+    stored = await service.attachment(None, RUN_ID, "attachment-0")
 
-    assert attachment is not None
-    assert attachment.content == b"content"
+    assert stored is not None
+    descriptor, content = stored
+    assert content == b"content"
+    assert descriptor.filename == "notes.txt"
     assert answers.reads == [(_ANONYMOUS, RUN_ID, 0)]
+
+
+async def test_a_stored_answer_image_is_addressed_on_our_own_origin() -> None:
+    stored_url = "https://public6.wolframalpha.com/files/GIF_thz351wxmi.gif"
+    store = AsyncMock()
+    store.find_turn_by_run.return_value = linked_turn(
+        answer_run(status="succeeded", result=stored_result(f"重画：\n\n![图]({stored_url})\n"))
+    )
+    answers = FakeAnswers(external_sources={stored_url: "res-view-1"})
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+    page = cast(
+        ConversationHistoryPage,
+        SimpleNamespace(
+            conversation=SimpleNamespace(
+                conversation_id="019893f4-0000-7000-8000-0000000000aa",
+                title="t",
+                created_at=datetime.datetime.now(datetime.UTC),
+                updated_at=datetime.datetime.now(datetime.UTC),
+                forked_from_conversation_id=None,
+                forked_from_title=None,
+            ),
+            turns=(
+                linked_turn(
+                    answer_run(status="succeeded", result=stored_result(f"![图]({stored_url})"))
+                ),
+            ),
+            next_cursor=None,
+        ),
+    )
+
+    rewrites = await conversation_routes._run_image_rewrites(service, None, page)
+    projected = project_conversation_turn(page.turns[0], image_rewrites=rewrites[RUN_ID])
+
+    html = (projected.presentation.parts[0].html or "") if projected.presentation else ""
+    assert f'src="/web/api/runs/{RUN_ID}/resources/res-view-1"' in html
+    assert stored_url not in html
 
 
 async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
@@ -1510,7 +1555,7 @@ async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
         cursor_secret=b"web-answer-runs-cursor-test",
     )
 
-    assert await service.attachment(None, RUN_ID, 0) is None
+    assert await service.attachment(None, RUN_ID, "attachment-0") is None
     assert answers.reads == []
 
 
@@ -1651,8 +1696,8 @@ def test_uploads_are_addressed_through_their_run() -> None:
     turn = project_conversation_turn(linked_turn(answer_run(request=request)))
 
     attachment = turn.user_attachments[0]
-    assert attachment.url == f"/web/api/runs/{RUN_ID}/attachments/1"
-    assert attachment.thumbnail_url == f"/web/api/runs/{RUN_ID}/attachments/1/thumbnail"
+    assert attachment.url == f"/web/api/runs/{RUN_ID}/resources/attachment-1"
+    assert attachment.thumbnail_url == f"/web/api/runs/{RUN_ID}/resources/attachment-1/thumbnail"
     assert attachment.kind == "image"
     assert attachment.byte_size == 9
     assert "digest" not in attachment.model_dump()

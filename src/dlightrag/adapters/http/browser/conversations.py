@@ -11,6 +11,7 @@ from dlightrag.adapters.http.browser.conversation_models import (
     ConversationTurn,
 )
 from dlightrag.adapters.http.browser.presentation import build_answer_presentation
+from dlightrag.adapters.http.browser.run_resources import run_resource_url
 from dlightrag.application.web_conversations import (
     ConversationHead,
     ConversationHistoryPage,
@@ -53,8 +54,15 @@ def project_conversation_history(
     next_cursor: str | None = None,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
+    image_rewrites: Mapping[str, Mapping[str, str]] | None = None,
 ) -> ConversationHistory:
-    """Project one bounded durable page into browser presentation models."""
+    """Project one bounded durable page into browser presentation models.
+
+    ``image_rewrites`` carries, per run id, the finished same-origin address for
+    each external image the run stored bytes for; a run absent from it renders
+    exactly what its answer wrote.
+    """
+    rewrites = image_rewrites or {}
     return ConversationHistory(
         conversation=_head_summary(page.conversation),
         turns=[
@@ -62,6 +70,7 @@ def project_conversation_history(
                 turn,
                 downloadable_workspaces=downloadable_workspaces,
                 visual_workspaces=visual_workspaces,
+                image_rewrites=rewrites.get(turn.run.run_id),
             )
             for turn in page.turns
         ],
@@ -74,6 +83,7 @@ def project_conversation_turn(
     *,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
+    image_rewrites: Mapping[str, str] | None = None,
 ) -> ConversationTurn:
     """Render one linked turn from the authoritative state of its run.
 
@@ -104,6 +114,7 @@ def project_conversation_turn(
             evidence_images=projected["evidence_images"],
             artifacts=projected["artifacts"],
             artifact_outcome=projected["artifact_outcome"],
+            image_rewrites=image_rewrites,
         )
     return ConversationTurn(
         turn_id=turn.turn_id,
@@ -142,7 +153,7 @@ def _attachment_reference(
     attachment: AttachmentReference,
 ) -> ConversationAttachmentReference:
     is_image = _is_image_mime(attachment.mime_type)
-    url = f"/web/api/runs/{run_id}/attachments/{attachment.ordinal}"
+    url = run_resource_url(run_id, attachment.resource_id)
     return ConversationAttachmentReference(
         attachment_id=f"{run_id}:{attachment.ordinal}",
         ordinal=attachment.ordinal,

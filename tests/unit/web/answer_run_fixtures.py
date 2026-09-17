@@ -11,6 +11,7 @@ from dlightrag.application.answer_runs import (
     AnswerRequest,
     AnswerRunAcceptor,
     AnswerService,
+    RunResourceDescriptor,
 )
 from dlightrag.application.runs import RunStatus, RunView
 from dlightrag.application.web_conversations import (
@@ -38,8 +39,13 @@ SUBMISSION_ID = "00000000-0000-0000-0000-0000000000aa"
 class FakeAnswers(AnswerService):
     """The durable Answer operations one Web conversation depends on."""
 
-    def __init__(self, artifacts: dict[tuple[str, int], AnswerInputArtifact] | None = None) -> None:
+    def __init__(
+        self,
+        artifacts: dict[tuple[str, int], AnswerInputArtifact] | None = None,
+        external_sources: dict[str, str] | None = None,
+    ) -> None:
         self.artifacts = dict(artifacts or {})
+        self.external_sources = dict(external_sources or {})
         self.prepared: list[AnswerRequest] = []
         self.reads: list[tuple[str, str, int]] = []
 
@@ -112,11 +118,41 @@ class FakeAnswers(AnswerService):
             references=(),
         )
 
-    async def read_input_artifact(
-        self, *, owner_id: str, run_id: str, ordinal: int
-    ) -> AnswerInputArtifact | None:
+    async def read_run_resource(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> tuple[RunResourceDescriptor, bytes] | None:
+        ordinal = _resource_ordinal(resource_id)
+        if ordinal is None:
+            return None
         self.reads.append((owner_id, run_id, ordinal))
-        return self.artifacts.get((run_id, ordinal))
+        stored = self.artifacts.get((run_id, ordinal))
+        if stored is None:
+            return None
+        descriptor = RunResourceDescriptor(
+            resource_id=resource_id,
+            registry="artifact",
+            reference_kind=stored.reference_kind,
+            ordinal=stored.ordinal,
+            filename=stored.filename,
+            mime_type=stored.mime_type,
+            digest=stored.digest,
+        )
+        return descriptor, stored.content
+
+    async def run_external_source_map(self, *, owner_id: str, run_id: str) -> dict[str, str]:
+        del owner_id, run_id
+        return dict(self.external_sources)
+
+
+def _resource_ordinal(resource_id: str) -> int | None:
+    """Read the ordinal one accepted upload's resource id spells."""
+    prefix = "attachment-"
+    if not resource_id.startswith(prefix):
+        return None
+    try:
+        return int(resource_id[len(prefix) :])
+    except ValueError:
+        return None
 
 
 def input_artifact(

@@ -22,13 +22,15 @@ from dlightrag.adapters.http.browser.deps import (
     get_web_access_gate,
     get_web_conversation_service,
 )
-from dlightrag.application.access import AccessAction
+from dlightrag.adapters.http.browser.run_resources import image_rewrites
+from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.web_conversations import (
     CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT,
     CONVERSATION_HISTORY_PAGE_MAX_LIMIT,
     CONVERSATION_PAGE_DEFAULT_LIMIT,
     CONVERSATION_PAGE_MAX_LIMIT,
     ConversationCursorError,
+    ConversationHistoryPage,
     ConversationHistoryPageRequest,
     ConversationPageRequest,
     WebConversationService,
@@ -152,6 +154,7 @@ async def conversation_history(
         raise HTTPException(status_code=404, detail="Conversation not found")
     return project_conversation_history(
         page,
+        image_rewrites=await _run_image_rewrites(service, _user(request), page),
         next_cursor=(
             service.history_cursor_codec.encode(page.next_cursor)
             if page.next_cursor is not None
@@ -193,33 +196,65 @@ async def delete_conversation(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/runs/{run_id}/attachments/{ordinal}")
-async def run_attachment(
+async def _run_image_rewrites(
+    service: WebConversationService,
+    user: UserContext | None,
+    page: ConversationHistoryPage,
+) -> dict[str, dict[str, str]]:
+    """Resolve a same-origin address per stored answer image on this page.
+
+    Only a succeeded answer that may name an external image costs a lookup, and a
+    run that stored no such bytes contributes nothing, so a page of ordinary
+    turns reads exactly what it read before.
+    """
+    rewrites: dict[str, dict[str, str]] = {}
+    for turn in page.turns:
+        run = turn.run
+        answer = str((run.result or {}).get("answer") or "")
+        if run.status != "succeeded" or (
+            "](http" not in answer and "<img" not in answer.casefold()
+        ):
+            continue
+        sources = await service.run_external_sources(user, run.run_id)
+        if sources:
+            rewrites[run.run_id] = image_rewrites(run.run_id, sources)
+    return rewrites
+
+
+@router.get("/runs/{run_id}/resources/{resource_id}")
+async def run_resource(
     run_id: str,
-    ordinal: int,
+    resource_id: str,
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> Response:
-    stored = await service.attachment(_user(request), run_id, ordinal)
+    """Serve one owned run's stored bytes under the id its registries share.
+
+    The same address answers an accepted upload, a publication, and an image the
+    run fetched, rendered, or adopted, so a conversation keeps one way to reach
+    what it showed.
+    """
+    stored = await service.attachment(_user(request), run_id, resource_id)
     if stored is None:
-        raise HTTPException(status_code=404, detail="Attachment not found")
+        raise HTTPException(status_code=404, detail="Resource not found")
+    descriptor, content = stored
     headers = {
         "Cache-Control": "private, max-age=3600",
         "X-Content-Type-Options": "nosniff",
     }
-    if not stored.mime_type.lower().startswith("image/"):
-        headers["Content-Disposition"] = _attachment_content_disposition(stored.filename)
-    return Response(content=stored.content, media_type=stored.mime_type, headers=headers)
+    if not descriptor.mime_type.lower().startswith("image/"):
+        headers["Content-Disposition"] = _attachment_content_disposition(descriptor.filename)
+    return Response(content=content, media_type=descriptor.mime_type, headers=headers)
 
 
-@router.get("/runs/{run_id}/attachments/{ordinal}/thumbnail")
-async def run_attachment_thumbnail(
+@router.get("/runs/{run_id}/resources/{resource_id}/thumbnail")
+async def run_resource_thumbnail(
     run_id: str,
-    ordinal: int,
+    resource_id: str,
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> Response:
-    thumbnail = await service.thumbnail(_user(request), run_id, ordinal)
+    thumbnail = await service.thumbnail(_user(request), run_id, resource_id)
     if thumbnail is None:
         raise HTTPException(status_code=404, detail="Thumbnail not available")
     payload, mime_type = thumbnail

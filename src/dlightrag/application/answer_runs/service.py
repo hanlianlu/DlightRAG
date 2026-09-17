@@ -4,7 +4,7 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import UUID, uuid7
 
 from dlightrag.application.connections import BoundResearchConnections, ConnectionsError
@@ -84,6 +84,7 @@ from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import compose_research_tools
 from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
+from dlightrag.engine.network_admission import normalize_public_http_url_identity
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions, RetrievalResult
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
@@ -96,6 +97,7 @@ from dlightrag.engine.runtime.records import (
     PreparedRunEnvelope,
     RunAccessScope,
     RunArtifactReference,
+    RunFetchedResource,
     RunRecord,
     artifact_digest,
     require_prepared_input_bounds,
@@ -125,6 +127,19 @@ _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
     "current_attachment",
     "history_attachment",
 )
+
+
+def _resource_source_urls(resource: RunFetchedResource) -> tuple[str, ...]:
+    """Every spelling of the external URL one stored resource answers for."""
+    recorded: list[str] = []
+    if resource.source_locator:
+        recorded.append(resource.source_locator.decode("utf-8", "replace"))
+    aliases = resource.capabilities.get("resource_aliases")
+    if isinstance(aliases, list):
+        recorded.extend(str(alias) for alias in aliases if alias)
+    return tuple(url for url in recorded if url)
+
+
 _AGENT_CONTROL_CONTENT_LIMIT = 20_000
 CHILD_CONTROL_SUCCESS_OUTCOMES: frozenset[str] = frozenset(
     {"queued", "consumed", "accepted", "cancellation_requested"}
@@ -249,6 +264,26 @@ class AnswerInputArtifact:
     mime_type: str
     digest: str
     content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class RunResourceDescriptor:
+    """One run-scoped byte surface, resolved from whichever registry owns it.
+
+    A run records bytes in two registries: the accepted input artifacts and
+    publications of ``dlightrag_answer_run_artifacts``, and the resources a worker
+    fetched, rendered, or adopted during the run. Both name the same
+    content-addressed blob plane, so one id resolves to one digest and one read
+    path serves them all.
+    """
+
+    resource_id: str
+    registry: Literal["artifact", "resource"]
+    reference_kind: ArtifactReferenceKind | None
+    ordinal: int
+    filename: str
+    mime_type: str
+    digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +495,10 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
     ) -> tuple[RunArtifactReference, ...]: ...
+
+    async def list_fetched_resources(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunFetchedResource, ...]: ...
 
 
 class _RunBlobReader(Protocol):
@@ -1016,6 +1055,140 @@ class AnswerService:
         pieces = [piece async for piece in stream]
         return b"".join(pieces)
 
+    async def run_resource(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> RunResourceDescriptor | None:
+        """Resolve one run-scoped resource id for this owner.
+
+        Ids are unique per owner and run, so the same lookup serves an accepted
+        input upload, a publication, and a resource a worker fetched, rendered, or
+        adopted. An id another owner or another run registered resolves to ``None``
+        rather than leaking its existence.
+        """
+        if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
+            return None
+        return await self._resolve_run_resource(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
+
+    async def open_run_resource(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        resource_id: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes] | None:
+        """Open one resolved run resource; an unknown id returns ``None``.
+
+        Callers that serve large bytes stream these chunks; no complete-blob
+        materialization happens on this path.
+        """
+        descriptor = await self.run_resource(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
+        if descriptor is None:
+            return None
+        return self._blob_store.stream(
+            owner_id=owner_id,
+            digest=descriptor.digest,
+            offset=max(0, offset),
+            length=length,
+        )
+
+    async def run_resource_size(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> int | None:
+        """Return one resolved run resource's size; an unknown id returns ``None``."""
+        descriptor = await self.run_resource(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
+        if descriptor is None:
+            return None
+        return await self._blob_store.size(owner_id=owner_id, digest=descriptor.digest)
+
+    async def run_external_source_map(self, *, owner_id: str, run_id: str) -> dict[str, str]:
+        """Map each external URL this run holds bytes for to its resource id.
+
+        One surface decides what a same-origin reader may offer: the row that
+        recorded the bytes. Matching normalizes both sides the way admission did,
+        so a URL the answer text spells slightly differently still resolves to the
+        copy this run fetched; a URL with no stored bytes is simply absent.
+        """
+        if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
+            return {}
+        sources: dict[str, str] = {}
+        for resource in await self._store.list_fetched_resources(owner_id=owner_id, run_id=run_id):
+            for candidate in _resource_source_urls(resource):
+                try:
+                    identity = normalize_public_http_url_identity(candidate)
+                except ValueError:
+                    continue
+                sources.setdefault(identity, resource.resource_id)
+        return sources
+
+    async def read_run_resource(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> tuple[RunResourceDescriptor, bytes] | None:
+        """Read one bounded run resource whole; an unknown id returns ``None``."""
+        descriptor = await self.run_resource(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
+        if descriptor is None:
+            return None
+        return descriptor, await self._read_digest(owner_id=owner_id, digest=descriptor.digest)
+
+    async def _read_digest(self, *, owner_id: str, digest: str) -> bytes:
+        return b"".join(
+            [piece async for piece in self._blob_store.stream(owner_id=owner_id, digest=digest)]
+        )
+
+    async def _resolve_run_resource(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> RunResourceDescriptor | None:
+        """Resolve an id across both registries, input before run state.
+
+        A current-turn upload wins over a carried-forward one sharing its ordinal,
+        which is the precedence the acceptance path already applies; run resources
+        are reached only when no accepted artifact claims the id.
+        """
+        if not resource_id:
+            return None
+        references = await self.list_artifacts(owner_id=owner_id, run_id=run_id)
+        if references:
+            ordered = sorted(
+                (item for item in references if item.resource_id == resource_id),
+                key=lambda item: (
+                    _INPUT_REFERENCE_KINDS.index(item.reference_kind)
+                    if item.reference_kind in _INPUT_REFERENCE_KINDS
+                    else len(_INPUT_REFERENCE_KINDS)
+                ),
+            )
+            if ordered:
+                match = ordered[0]
+                return RunResourceDescriptor(
+                    resource_id=match.resource_id,
+                    registry="artifact",
+                    reference_kind=match.reference_kind,
+                    ordinal=match.ordinal,
+                    filename=match.filename,
+                    mime_type=match.mime_type,
+                    digest=match.digest,
+                )
+        for resource in await self._store.list_fetched_resources(owner_id=owner_id, run_id=run_id):
+            if resource.resource_id == resource_id:
+                return RunResourceDescriptor(
+                    resource_id=resource.resource_id,
+                    registry="resource",
+                    reference_kind=None,
+                    ordinal=resource.ordinal,
+                    filename=resource.filename,
+                    mime_type=resource.mime_type,
+                    digest=resource.digest,
+                )
+        return None
+
     async def open_artifact(
         self,
         *,
@@ -1025,33 +1198,20 @@ class AnswerService:
         offset: int = 0,
         length: int | None = None,
     ) -> AsyncIterator[bytes] | None:
-        """Open an Answer artifact; every other id returns ``None``.
-
-        Callers that serve large published artifacts stream these chunks; no
-        complete-blob materialization happens on this path.
-        """
-        refs = await self.list_artifacts(owner_id=owner_id, run_id=run_id)
-        if refs is None:
-            return None
-        match = next((item for item in refs if item.resource_id == resource_id), None)
-        if match is None:
-            return None
-        return self._blob_store.stream(
+        """Open one published artifact through the shared run-resource reader."""
+        return await self.open_run_resource(
             owner_id=owner_id,
-            digest=match.digest,
-            offset=max(0, offset),
+            run_id=run_id,
+            resource_id=resource_id,
+            offset=offset,
             length=length,
         )
 
     async def artifact_size(self, *, owner_id: str, run_id: str, resource_id: str) -> int | None:
-        """Return an Answer artifact size; every other id returns ``None``."""
-        refs = await self.list_artifacts(owner_id=owner_id, run_id=run_id)
-        if refs is None:
-            return None
-        match = next((item for item in refs if item.resource_id == resource_id), None)
-        if match is None:
-            return None
-        return await self._blob_store.size(owner_id=owner_id, digest=match.digest)
+        """Return one published artifact size through the shared reader."""
+        return await self.run_resource_size(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
 
     async def _get_answer_run(self, *, owner_id: str, run_id: str) -> RunRecord | None:
         """Return one owned Answer; unknown, foreign, and wrong-kind ids are identical."""

@@ -13,10 +13,10 @@ from uuid import UUID, uuid5
 from dlightrag.application.access import UserContext, owner_id_from_user
 from dlightrag.application.answer_runs import (
     AnswerHistoryResource,
-    AnswerInputArtifact,
     AnswerRequest,
     AnswerRunAcceptor,
     AnswerService,
+    RunResourceDescriptor,
 )
 from dlightrag.application.runs import RunView
 from dlightrag.engine.agent.session.fold import PriorTurns
@@ -369,18 +369,28 @@ class WebConversationService:
         self,
         user: UserContext | None,
         run_id: str,
-        ordinal: int,
-    ) -> AnswerInputArtifact | None:
-        """Load one owned run's uploaded attachment bytes by its ordinal."""
+        resource_id: str,
+    ) -> tuple[RunResourceDescriptor, bytes] | None:
+        """Load one owned run's stored resource bytes by its resource id."""
         principal_id = owner_id_from_user(user)
-        turn = await self.turn_for_run(user, run_id)
-        if turn is None:
+        if await self.turn_for_run(user, run_id) is None:
             return None
         return await self._store_call(
-            self._answers.read_input_artifact(
+            self._answers.read_run_resource(
                 owner_id=principal_id,
                 run_id=run_id,
-                ordinal=ordinal,
+                resource_id=resource_id,
+            )
+        )
+
+    async def run_external_sources(
+        self, user: UserContext | None, run_id: str
+    ) -> Mapping[str, str]:
+        """Return each external URL this owned run holds stored bytes for."""
+        return await self._store_call(
+            self._answers.run_external_source_map(
+                owner_id=owner_id_from_user(user),
+                run_id=run_id,
             )
         )
 
@@ -388,16 +398,16 @@ class WebConversationService:
         self,
         user: UserContext | None,
         run_id: str,
-        ordinal: int,
+        resource_id: str,
     ) -> tuple[bytes, str] | None:
-        """Derive one bounded UI thumbnail for an image attachment."""
-        stored = await self.attachment(user, run_id, ordinal)
-        if stored is None or not _is_image_mime(stored.mime_type):
+        """Derive one bounded UI thumbnail for one stored image resource."""
+        stored = await self.attachment(user, run_id, resource_id)
+        if stored is None or not _is_image_mime(stored[0].mime_type):
             return None
         try:
             payload, mime_type = await asyncio.to_thread(
                 thumbnail_bytes,
-                stored.content,
+                stored[1],
                 max_px=_HISTORY_THUMBNAIL_MAX_PX,
                 max_bytes=_HISTORY_THUMBNAIL_MAX_BYTES,
                 quality=_HISTORY_THUMBNAIL_QUALITY,

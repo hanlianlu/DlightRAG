@@ -449,13 +449,21 @@ when it is one of them, its own configured level — never bearer or edge tokens
 both its JSON and its multipart form.
 Route families cover:
 
-- `/conversations`, `/conversations/{id}/history`, and
-  `/runs/{run_id}/attachments/{ordinal}` (plus `/thumbnail`);
+- `/conversations`, `/conversations/{id}/history`, and the one run-resource read
+  surface `/runs/{run_id}/resources/{resource_id}` (plus `/thumbnail`), which
+  serves an accepted upload, a publication, and an image the run fetched,
+  rendered, or adopted under the id its registry recorded;
 - `/answer`, submission reconciliation, status/resume/steer/children,
   child observation/control/guidance reply, follow-up/fork/cancel,
   Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
   status/events/cancel/resume, workspaces, images, Memory, and model catalogue.
+
+An answer that cites a stored image is projected with that image addressed on
+this origin: `<img src>` is rewritten to the run-resource address when the run
+holds the bytes (matched on the URL its own row recorded), and left exactly as
+the answer wrote it otherwise — no image is fetched to make a rewrite possible.
+[ADR 0016](adr/0016-one-run-resource-read-surface.md) owns the decision.
 
 `/web/` is unpersisted New Chat;
 `/web/conversations/{conversation_id}` selects a durable owner-scoped

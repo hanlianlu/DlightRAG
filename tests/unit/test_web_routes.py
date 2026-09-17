@@ -783,6 +783,9 @@ class TestWebBootstrap:
             "/web/files",
             "/web/ingest-status",
             "/web/workspaces/create",
+            # The positional attachment address was replaced by the run-resource
+            # address; the old shape is not kept as an alias.
+            "/web/api/runs/019893f4-0000-7000-8000-000000000001/attachments/0",
         ],
     )
     async def test_old_browser_data_paths_have_no_compatibility_alias(
