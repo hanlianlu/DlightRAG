@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Answer-owned routing record written at accept and resolved later."""
+"""Answer-owned routing record written at accept, resolved, and settled on."""
 
 from __future__ import annotations
 
@@ -55,6 +55,12 @@ class RoutingRecord:
     agent_session_id: str
     agent_lane_id: str
     source_lane_id: str | None
+    #: The state this Run settled at: the Lane head it ended on and the projection
+    #: active there. A Fork branches from exactly this pair, so a Run that never
+    #: recorded one is not forkable rather than forkable from wherever the Lane has
+    #: since moved.
+    fork_point_entry_id: str | None = None
+    fork_point_projection_id: str | None = None
 
 
 def decide_resolved_mode(
@@ -76,7 +82,7 @@ def decide_resolved_mode(
 
 
 class AnswerRoutingStore(Protocol):
-    """Lease-fenced load and CAS for Resolved Mode."""
+    """Lease-fenced load, Resolved Mode CAS, and Fork Point recording."""
 
     async def load_routing(self, *, owner_id: str, run_id: str) -> RoutingRecord | None: ...
 
@@ -89,6 +95,17 @@ class AnswerRoutingStore(Protocol):
         fencing_epoch: int,
         resolved_mode: str,
     ) -> str | None: ...
+
+    async def record_fork_point(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        entry_id: str | None,
+        projection_id: str | None,
+    ) -> bool: ...
 
 
 __all__ = [

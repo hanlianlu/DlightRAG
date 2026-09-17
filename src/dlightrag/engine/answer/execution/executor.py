@@ -41,6 +41,7 @@ from dlightrag.engine.agent.session.operation import (
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
 from dlightrag.engine.agent.session.registers import (
+    ContextProjectionRegister,
     HostTurnReservation,
     LaneHead,
     LaneState,
@@ -48,7 +49,10 @@ from dlightrag.engine.agent.session.registers import (
     RegisterRef,
     SetRegister,
 )
-from dlightrag.engine.agent.session.repository import validate_snapshot_refresh
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionSnapshot,
+    validate_snapshot_refresh,
+)
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
     AgentSessionSnapshotSeed,
@@ -215,6 +219,7 @@ from dlightrag.engine.runtime.records import (
     RunExecutionOutcome,
     RunFetchedResource,
     Succeeded,
+    WaitingForRepair,
     artifact_digest,
 )
 from dlightrag.engine.runtime.settlements import (
@@ -784,6 +789,9 @@ class AnswerExecutor:
         self._blob_store = blob_store
         self._pool = pool
         self._warm = warm
+        #: The settled Session view each running Run already drove, held only until
+        #: its own exit hook records the Fork Point and then dropped.
+        self._settled_views: dict[str, AgentSessionSnapshot] = {}
         self._retrieve_result = retrieve
         self._planner_history_input_measure = planner_history_input_measure
         self._models = models
@@ -901,7 +909,7 @@ class AnswerExecutor:
                     },
                 ) as run_trace:
                     try:
-                        return await self._execute_run(session, run_trace)
+                        outcome = await self._execute_run(session, run_trace)
                     except RunCancellationObserved, LeaseLostError:
                         # A cancelled or fenced Run is a terminal outcome a user
                         # asked for, not a failure: name it instead of letting
@@ -912,7 +920,104 @@ class AnswerExecutor:
                                 "outcome": "cancelled" if session.cancel_requested else "lease_lost"
                             },
                         )
+                        await self._record_fork_point(
+                            session,
+                            run_trace,
+                            snapshot=self._settled_views.pop(session.run_id, None),
+                        )
                         raise
+                    except asyncio.CancelledError:
+                        # Shutdown cancels the task and *requeues* the Run, so this exit
+                        # is not a settlement: a point recorded here would outlive the
+                        # attempt that never ended, and the requeue clears it anyway.
+                        self._settled_views.pop(session.run_id, None)
+                        raise
+                    except BaseException:
+                        # A failure the coordinator will terminalize is still a state
+                        # a Fork may branch from: record before it is written.
+                        await self._record_fork_point(
+                            session,
+                            run_trace,
+                            snapshot=self._settled_views.pop(session.run_id, None),
+                        )
+                        raise
+                    if isinstance(outcome, Deferred | WaitingForRepair):
+                        # The Run keeps its claim and will run again, so its settled
+                        # state does not exist yet. Recording the head it happens to
+                        # be at would leave a stale branch point behind if the attempt
+                        # that does settle could not write its own.
+                        self._settled_views.pop(session.run_id, None)
+                        return outcome
+                    if isinstance(outcome, AlreadyCommittedTerminal):
+                        # Fast already recorded the point before committing its own
+                        # terminal row, and the fence would refuse a second write.
+                        self._settled_views.pop(session.run_id, None)
+                        return outcome
+                    await self._record_fork_point(
+                        session, run_trace, snapshot=self._settled_views.pop(session.run_id, None)
+                    )
+                    return outcome
+
+    async def _record_fork_point(
+        self,
+        session: RunSession,
+        run_trace: Observation,
+        *,
+        snapshot: AgentSessionSnapshot | None = None,
+    ) -> None:
+        """Record the state this Run ended at, for a Fork to branch from.
+
+        Every terminal outcome is a state worth branching from — a Run that died
+        established whatever it established — so this runs on the way out of both.
+        It is deliberately best effort: the fact is one a Fork refuses to guess
+        without, so a lost lease or a store error leaves the Run without a Fork
+        Point rather than turning a settled Run into a failed one.
+
+        The Lane comes from the durable routing row, which is the same record that
+        fixed it at acceptance, rather than from the prepared input: the two ids
+        are routing facts, and decoding the whole pinned contract here would let an
+        unrelated pin problem cost the Run its Fork Point.
+        """
+        try:
+            routing = await self._store.load_routing(
+                owner_id=session.owner_id, run_id=session.run_id
+            )
+            if routing is None:
+                raise LookupError("answer run has no routing row")
+            lane_id = LaneId(routing.agent_lane_id)
+            settled = snapshot
+            if settled is None:
+                # Only a path that never held the settled snapshot pays for it — a Fast
+                # run that failed, say, whose Session is a single turn. A long research
+                # run passes the view it just drove.
+                settled = await session.execution.session_repository.load(
+                    SessionId(routing.agent_session_id)
+                )
+            head = settled.tree.lane(lane_id).head_entry_id
+            projection = _lane_projection(settled, lane_id)
+            written = await self._store.record_fork_point(
+                owner_id=session.owner_id,
+                run_id=session.run_id,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+                entry_id=head.value if head is not None else None,
+                projection_id=(projection.projection_id.value if projection is not None else None),
+            )
+        except LeaseLostError:
+            raise
+        except Exception as exc:
+            # Deliberately no exception text and no traceback: a store failure's
+            # message may carry a connection string, and this hook is a convenience
+            # rather than an operator diagnostic. The kind is enough to find it.
+            logger.warning(
+                "answer run could not record its fork point (%s)",
+                type(exc).__name__,
+                extra={"run_id": session.run_id},
+            )
+            return
+        if not written:
+            # The claim moved on: this worker's state is not the Run's settled one.
+            run_trace.update(metadata={"fork_point": "unwritten"})
 
     async def _execute_run(
         self,
@@ -1580,6 +1685,10 @@ class AnswerExecutor:
                             ),
                         )
                     snapshot = operation.context.snapshot
+                    # The run's settled state is already in hand here, so the exit
+                    # hook records from it rather than loading the whole Session
+                    # again at the one moment a long research run is finishing.
+                    self._settled_views[session.run_id] = snapshot
                     operation_usage = (
                         _usage_from_snapshot_entries(
                             snapshot_entries=(
@@ -1704,6 +1813,16 @@ class AnswerExecutor:
                     fast_boundaries.observe_session_progress()
                 if fast_turn.settled_payload is not None:
                     stored = dict(fast_turn.settled_payload)
+                    # Fast commits its own terminal row, so the Fork Point has to be
+                    # recorded while the claim still reads as running, from the view
+                    # the Host already refreshed rather than a fresh Session load.
+                    await self._record_fork_point(
+                        session,
+                        run_trace,
+                        snapshot=await fast_session_host.snapshot(
+                            agent_session_id, selected_lane_id=agent_lane_id
+                        ),
+                    )
                     terminal = await fast_boundaries.settle_final(
                         result=stored,
                         result_digest=canonical_json(stored),
@@ -1997,7 +2116,14 @@ class AnswerExecutor:
                     fast_reservation_active = False
                     if fast_boundaries is not None and fast_commit is not None:
                         fast_boundaries.observe_session_progress()
-                if fast_boundaries is not None:
+                if fast_boundaries is not None and fast_session_host is not None:
+                    await self._record_fork_point(
+                        session,
+                        run_trace,
+                        snapshot=await fast_session_host.snapshot(
+                            agent_session_id, selected_lane_id=agent_lane_id
+                        ),
+                    )
                     terminal = await fast_boundaries.settle_final(
                         result=stored,
                         result_digest=canonical_json(stored),
@@ -2829,6 +2955,25 @@ def answer_trace_output(
     if capture_sensitive_data:
         output["answer"] = answer or ""
     return output
+
+
+def _lane_projection(
+    snapshot: AgentSessionSnapshot | None, lane_id: LaneId
+) -> ContextProjection | None:
+    """Return one Lane's active projection from an exact register snapshot.
+
+    Read by Lane rather than through the snapshot's selected Lane: this records a
+    settled fact about one specific Lane, and a selection that drifted for any
+    reason would otherwise record another branch's projection at this Run's head.
+    A caller with no snapshot simply has none to read.
+    """
+    if snapshot is None:
+        return None
+    for record in snapshot.registers:
+        value = record.value
+        if isinstance(value, ContextProjectionRegister) and value.lane_id == lane_id:
+            return value.projection
+    return None
 
 
 __all__ = [

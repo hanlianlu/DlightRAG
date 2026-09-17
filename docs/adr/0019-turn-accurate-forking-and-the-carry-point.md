@@ -68,11 +68,16 @@ A Fork opens a new Lane and a new Web Conversation at its Fork Point. The
 per-turn Fork control is therefore correct as a product affordance and the
 per-turn Follow-Up control is not: only the tip offers Follow-Up.
 
-**The Fork Point is recorded, not inferred.** At terminal settlement — success,
-failure, or cancellation alike — the Run's routing row records the Lane head Entry
-its state ended at and the projection active there. The state at a Run's end is a
-real state whether the Run succeeded or died, and a Fork from a failed Run is
-meaningful: everything the Run established before it failed.
+**The Fork Point is recorded under the claim that ends the Run.** Immediately
+before its owner writes the terminal row — success, failure, or cancellation alike
+— the Run's routing row records the Lane head Entry its state ended at and the
+projection active there. A Fast Run commits its own terminal row, so it records
+the point first; every other path records on the way out, before the coordinator's
+terminal write. An attempt that defers or waits for repair records nothing, because
+it has not settled and a head it merely passed through would outlive a later
+attempt whose own write failed. A Run whose worker died before it could record one
+is not forkable, and a Fork from it refuses with the remedy rather than branching
+from wherever the Lane has since moved.
 
 **A Fork inherits the as-of projection, not the raw ancestry.** The new Lane is
 opened with the Fork Point as its head and the projection reconstructed from the
@@ -81,6 +86,19 @@ transcript and forcing an immediate recompaction. That is what "from the same
 context" means, and it keeps the first request bounded by whatever the parent was
 already carrying. It buys no prompt-cache reuse: the new question sits before the
 Session fold in the composed request.
+
+**Recording it reuses the Session seam's own read.** A research Run passes the view
+it just drove, so the point costs nothing extra; a Fast Run refreshes the Host's
+cached view, or reads once on a failure path that never held one. A narrower
+"read two registers" primitive was rejected: the Session repository's seam is
+deliberately snapshot-or-transaction — an architecture test pins exactly that
+method set — and widening it to save one delta refresh would trade a checked
+invariant for a measurably cheap read.
+
+**A Run that has not settled carries no Fork Point.** The two columns are cleared
+with the requeue that follows a graceful shutdown and with a deferral, so an
+attempt that never ended cannot leave a head behind for a later attempt whose own
+write fails to inherit.
 
 **The carry point is the Fork Point's own Agent Workspace, and the carried set is
 its registered Run Notes.** Materialization happens under the consuming Run's own
@@ -138,7 +156,8 @@ acceptance tests below cover both plus the ordering between carrying and pruning
 Landing order continues [ADR 0018](0018-run-notes-and-one-continuation-narrative.md)'s
 sequence:
 
-4. Record the Fork Point on the routing row at terminal settlement.
+4. Record the Fork Point on the routing row under the claim that ends the Run,
+   before its terminal write.
 5. Seed a Fork from that Fork Point with its as-of projection and the typed
    refusals, aligning the MCP and dialog copy in the same change.
 6. Reclaim per-Run Agent Workspaces in the retention prune, with the orphan sweep.

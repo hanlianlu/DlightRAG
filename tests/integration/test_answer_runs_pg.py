@@ -559,6 +559,7 @@ class TestSchema:
                     "interactive_child_controls",
                     "child_cancel_submission_receipts",
                     "attachment_occurrence_reference_index",
+                    "write_model_fork_points",
                 ],
             )
 
@@ -4206,3 +4207,114 @@ async def test_rejected_owner_cancel_receipt_cannot_target_later_continuation(
     current = await store.cancel_child_session_by_owner(**identity, submission_key="new-cancel")
     assert current["operation_id"] == continued["operation_id"]
     assert current["outcome"] == "cancellation_requested"
+
+
+class TestForkPoints:
+    async def test_records_the_settled_head_under_a_live_claim(self, store, pool) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+
+        written = await store.record_fork_point(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            entry_id="01930000-0000-7000-8000-000000000001",
+            projection_id="01930000-0000-7000-8000-000000000002",
+        )
+
+        assert written is True
+        record = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert record is not None
+        assert record.fork_point_entry_id == "01930000-0000-7000-8000-000000000001"
+        assert record.fork_point_projection_id == "01930000-0000-7000-8000-000000000002"
+
+    async def test_a_reclaiming_worker_owns_the_state_the_run_settles_at(self, store, pool) -> None:
+        """Only the claim that ends the Run may say where it ended."""
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        await _claimed(store)
+        await store.record_fork_point(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=1,
+            entry_id="01930000-0000-7000-8000-00000000000a",
+            projection_id=None,
+        )
+        await _expire_lease(pool, creation.run.run_id)
+        reclaim = await _claimed(store, worker_id="worker-2")
+
+        written = await store.record_fork_point(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id="worker-2",
+            fencing_epoch=reclaim.run.fencing_epoch,
+            entry_id="01930000-0000-7000-8000-00000000000b",
+            projection_id=None,
+        )
+
+        assert written is True
+        # The fenced-out worker cannot revise the state it lost.
+        assert (
+            await store.record_fork_point(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                worker_id=_WORKER,
+                fencing_epoch=1,
+                entry_id="01930000-0000-7000-8000-00000000000c",
+                projection_id=None,
+            )
+            is False
+        )
+        record = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert record is not None
+        assert record.fork_point_entry_id == "01930000-0000-7000-8000-00000000000b"
+
+    async def test_a_terminal_run_cannot_record_one(self, store, pool) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        await store.finish_cancelled(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        assert (
+            await store.record_fork_point(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                entry_id="01930000-0000-7000-8000-00000000000d",
+                projection_id=None,
+            )
+            is False
+        )
+
+    async def test_fork_point_columns_arrive_for_an_older_deployment(self, store, pool) -> None:
+        """A deployment whose routing table predates the point converges by migration."""
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "ALTER TABLE dlightrag_answer_run_routing "
+                "DROP COLUMN fork_point_entry_id, "
+                "DROP COLUMN fork_point_projection_id"
+            )
+            await conn.execute(
+                "DELETE FROM dlightrag_schema_migrations "
+                "WHERE scope = 'runs' AND version = 'write_model_fork_points'"
+            )
+
+        migrated = PGRunStore(pool=pool)
+        await migrated.initialize()
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'dlightrag_answer_run_routing' "
+                "AND column_name LIKE 'fork_point%'"
+            )
+        assert {str(row["column_name"]) for row in rows} == {
+            "fork_point_entry_id",
+            "fork_point_projection_id",
+        }

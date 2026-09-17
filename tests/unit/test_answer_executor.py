@@ -18,6 +18,11 @@ from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.registers import ContextProjectionRegister, SetRegister
+from dlightrag.engine.agent.session.transactions import (
+    RegisterExpectation,
+    SessionTransaction,
+)
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
@@ -53,7 +58,7 @@ from dlightrag.engine.answer.execution.input import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.engine.answer.fast import ensure_session_lane
+from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.publication import prepare_artifact_attachment, validate_publication
@@ -1109,3 +1114,239 @@ async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> N
         assert registry.canonical_resource_id(adopted) == adopted
         read = await registry.read(adopted, max_window_tokens=1000)
         assert "Adopted text." in read.content
+
+
+async def test_a_settled_run_records_the_state_it_ended_at() -> None:
+    """A Fork branches from a recorded Fork Point, so the settlement has to write one.
+
+    The head comes from the Lane the routing row fixed at acceptance, and the
+    projection from that Lane's own register: a Run that compacted must hand a Fork
+    the summary it was working from, not the whole transcript it had discarded.
+    """
+    from dlightrag.engine.agent.session.ids import ProjectionId
+    from dlightrag.engine.agent.session.projection import ContextProjection
+    from dlightrag.engine.answer.runs.routing import RoutingRecord
+
+    executor = _executor()
+    executor._execute = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    lane_id = LaneId.main()
+    snapshot = await repository.load(session_id)
+
+    async def no_result() -> None:
+        return None
+
+    host = FastSessionHost(
+        repository=repository,
+        initial_snapshot=snapshot,
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=lane_id,
+        reservation_id="one",
+        idempotency_key="one-key",
+        content="question",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=lane_id,
+        reservation_id="one",
+        content="answer",
+    )
+    head = (await repository.load(session_id)).tree.lane(lane_id).head_entry_id
+    assert head is not None
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=1,
+        covered_through_sequence=0,
+        summary=None,
+    )
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(ContextProjectionRegister(lane_id, projection))],
+            expectations=[
+                RegisterExpectation(ContextProjectionRegister(lane_id, projection).ref, None)
+            ],
+        ),
+    )
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=RoutingRecord(
+                requested_mode="auto",
+                valid_modes=("research",),
+                resolved_mode="research",
+                agent_session_id=session_id.value,
+                agent_lane_id=lane_id.value,
+                source_lane_id=None,
+            )
+        ),
+        record_fork_point=AsyncMock(return_value=head.value),
+    )
+    session = MagicMock(
+        owner_id="owner",
+        run_id="run-fork-point",
+        worker_id="worker-1",
+        fencing_epoch=1,
+    )
+    session.execution.session_repository = repository
+
+    await executor.execute(cast(RunSession, session))
+
+    executor._store.record_fork_point.assert_awaited_once_with(
+        owner_id="owner",
+        run_id="run-fork-point",
+        worker_id="worker-1",
+        fencing_epoch=1,
+        entry_id=head.value,
+        projection_id=projection.projection_id.value,
+    )
+
+
+async def test_a_store_failure_costs_the_point_and_not_the_settled_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A settled Run is not failed by a convenience fact it could not write.
+
+    The log carries the failure kind and nothing else: a store error's own text may
+    hold a connection string, and this hook is not an operator diagnostic.
+    """
+    executor = _executor()
+    executor._execute = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
+    executor._store = MagicMock(
+        load_routing=AsyncMock(side_effect=RuntimeError("postgres://user:secret@host/db"))
+    )
+    session = MagicMock(owner_id="owner", run_id="run-no-fork-point")
+
+    outcome = await executor.execute(cast(RunSession, session))
+
+    assert outcome is not None
+    assert "could not record its fork point (RuntimeError)" in caplog.text
+    assert "postgres://user:secret@host/db" not in caplog.text
+
+
+async def test_a_lost_claim_reports_an_unwritten_point_without_failing_the_run() -> None:
+    """The claim that ends a Run owns the state it settles at; a fenced-out one says so."""
+    from dlightrag.engine.answer.runs.routing import RoutingRecord
+
+    executor = _executor()
+    executor._execute = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=RoutingRecord(
+                requested_mode="auto",
+                valid_modes=("research",),
+                resolved_mode="research",
+                agent_session_id=SessionId.new().value,
+                agent_lane_id=LaneId.main().value,
+                source_lane_id=None,
+            )
+        ),
+        record_fork_point=AsyncMock(return_value=False),
+    )
+    session = MagicMock(owner_id="owner", run_id="run-fenced-out", worker_id="w", fencing_epoch=9)
+    snapshot = MagicMock()
+    snapshot.tree.lane.return_value.head_entry_id = None
+    session.execution.session_repository = MagicMock(load=AsyncMock(return_value=snapshot))
+    run_trace = MagicMock()
+
+    await executor._record_fork_point(cast(RunSession, session), run_trace)
+
+    run_trace.update.assert_called_once_with(metadata={"fork_point": "unwritten"})
+
+
+async def test_the_recorded_point_is_the_runs_lane_not_the_sessions_selected_one() -> None:
+    """The Run's Lane comes from its routing row, so a drifted selection cannot lie.
+
+    Here the Session's selected Lane is `main`, which holds an earlier head and a
+    projection, while the Run ran on a forked Lane with a later head and none. A
+    hook that read the selected Lane would record the wrong pair and pass every
+    other test in this file.
+    """
+    from dlightrag.engine.answer.fast import ensure_session_lane as _ensure_session_lane
+    from dlightrag.engine.answer.runs.routing import RoutingRecord
+
+    executor = _executor()
+    executor._execute = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    fork_lane = LaneId.new()
+
+    async def no_result() -> None:
+        return None
+
+    host = FastSessionHost(
+        repository=repository,
+        initial_snapshot=await repository.load(session_id),
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="main-one",
+        idempotency_key="main-one-key",
+        content="parent question",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="main-one",
+        content="parent answer",
+    )
+    await _ensure_session_lane(
+        repository=repository,
+        snapshot=await repository.load(session_id),
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=fork_lane,
+        source_lane_id=LaneId.main(),
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=fork_lane,
+        reservation_id="fork-one",
+        idempotency_key="fork-one-key",
+        content="branch question",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=fork_lane,
+        reservation_id="fork-one",
+        content="branch answer",
+    )
+    fork_head = (await repository.load(session_id)).tree.lane(fork_lane).head_entry_id
+    assert fork_head is not None
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=RoutingRecord(
+                requested_mode="auto",
+                valid_modes=("research",),
+                resolved_mode="research",
+                agent_session_id=session_id.value,
+                agent_lane_id=fork_lane.value,
+                source_lane_id=LaneId.main().value,
+            )
+        ),
+        record_fork_point=AsyncMock(return_value=True),
+    )
+    session = MagicMock(
+        owner_id="owner", run_id="run-forked", worker_id="worker-1", fencing_epoch=1
+    )
+    session.execution.session_repository = repository
+
+    await executor.execute(cast(RunSession, session))
+
+    # No projection was ever committed on the branch, and the parent's is not it.
+    executor._store.record_fork_point.assert_awaited_once_with(
+        owner_id="owner",
+        run_id="run-forked",
+        worker_id="worker-1",
+        fencing_epoch=1,
+        entry_id=fork_head.value,
+        projection_id=None,
+    )

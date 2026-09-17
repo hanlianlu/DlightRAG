@@ -638,6 +638,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
     agent_session_id         UUID        NOT NULL,
     agent_lane_id            TEXT        NOT NULL,
     source_lane_id           TEXT,
+    fork_point_entry_id      TEXT,
+    fork_point_projection_id TEXT,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, run_id),
@@ -1095,6 +1097,16 @@ RUN_MIGRATIONS = (
             "WHERE kind='fetched_blob' AND capabilities->>'resource_kind'='attachment_occurrence'",
         ),
     ),
+    Migration(
+        "write_model_fork_points",
+        "Record the Lane head and projection each Answer Run settled at",
+        (
+            "ALTER TABLE dlightrag_answer_run_routing "
+            "ADD COLUMN IF NOT EXISTS fork_point_entry_id TEXT",
+            "ALTER TABLE dlightrag_answer_run_routing "
+            "ADD COLUMN IF NOT EXISTS fork_point_projection_id TEXT",
+        ),
+    ),
 )
 
 RUN_SCHEMA_TABLES = (
@@ -1441,6 +1453,8 @@ RUN_SCHEMA_TABLES = (
             "agent_session_id",
             "agent_lane_id",
             "source_lane_id",
+            "fork_point_entry_id",
+            "fork_point_projection_id",
             "created_at",
             "updated_at",
         ),
@@ -1868,9 +1882,23 @@ VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
 
 _SELECT_ROUTING = """
 SELECT requested_mode, valid_modes, resolved_mode,
-       agent_session_id::text, agent_lane_id, source_lane_id
+       agent_session_id::text, agent_lane_id, source_lane_id,
+       fork_point_entry_id, fork_point_projection_id
 FROM dlightrag_answer_run_routing
 WHERE owner_id = $1 AND run_id = $2
+"""
+
+_RECORD_FORK_POINT = """
+UPDATE dlightrag_answer_run_routing AS rt
+SET fork_point_entry_id = $5,
+    fork_point_projection_id = $6,
+    updated_at = NOW()
+FROM dlightrag_runs AS r
+WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
+  AND rt.owner_id = $1 AND rt.run_id = $2
+  AND r.lease_owner = $3 AND r.fencing_epoch = $4
+  AND r.status = 'running' AND r.lease_expires_at > NOW()
+RETURNING TRUE
 """
 
 _RESOLVE_ROUTING = """
@@ -2131,6 +2159,16 @@ WHERE owner_id = $1 AND run_id = $2 AND lease_owner = $3
 RETURNING 1
 """
 
+# A Run that is not settled has no state it ended at, and the two columns are written
+# by whichever attempt does settle it. Clearing them with the requeue keeps that true
+# structurally: a later attempt whose own write fails inherits a refusal, not a head
+# some abandoned attempt left behind.
+_CLEAR_FORK_POINT = """
+UPDATE dlightrag_answer_run_routing
+SET fork_point_entry_id = NULL, fork_point_projection_id = NULL, updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2
+"""
+
 _RESUME_REPAIR = """
 UPDATE dlightrag_runs
 SET status = 'queued', phase = 'repair_resumed', next_attempt_at = NOW(),
@@ -2141,9 +2179,7 @@ SET status = 'queued', phase = 'repair_resumed', next_attempt_at = NOW(),
         TRUE
     ),
     updated_at = NOW()
-WHERE owner_id = $1 AND run_id = $2
-  AND status = 'running' AND phase = 'waiting_for_repair'
-  AND lease_owner IS NULL AND lease_expires_at IS NULL
+WHERE owner_id = $1 AND run_id = $2 AND phase = 'waiting_for_repair'
 RETURNING 1
 """
 
@@ -3023,9 +3059,56 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 agent_session_id=str(row["agent_session_id"]),
                 agent_lane_id=str(row["agent_lane_id"]),
                 source_lane_id=(str(row["source_lane_id"]) if row["source_lane_id"] else None),
+                fork_point_entry_id=(
+                    str(row["fork_point_entry_id"]) if row["fork_point_entry_id"] else None
+                ),
+                fork_point_projection_id=(
+                    str(row["fork_point_projection_id"])
+                    if row["fork_point_projection_id"]
+                    else None
+                ),
             )
 
         return await self._run_read(_operation)
+
+    async def record_fork_point(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        entry_id: str | None,
+        projection_id: str | None,
+    ) -> bool:
+        """Record the state this Run settled at, under its live claim.
+
+        A Run that is reclaim-eligible settles again from durable authority, so the
+        last worker holding the claim owns the answer and overwrites an earlier
+        attempt's row: only `status = 'running'` plus the matching lease/epoch may
+        write, and the terminal transition closes the window behind it. Answers
+        whether the write landed: a Run whose lane has no head yet records two
+        NULLs, which is a recorded refusal-free state rather than a lost claim.
+        """
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            raise ValueError("run_id must be a canonical UUID")
+
+        async def _operation(conn: Any) -> bool:
+            return bool(
+                await conn.fetchval(
+                    _RECORD_FORK_POINT,
+                    owner,
+                    run_uuid,
+                    worker_id,
+                    fencing_epoch,
+                    entry_id,
+                    projection_id,
+                )
+            )
+
+        return await self._run_write(_operation)
 
     async def resolve(
         self,
@@ -4162,16 +4245,20 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             return False
 
         async def _operation(conn: Any) -> bool:
-            value = await conn.fetchval(
-                _DEFER_RUN,
-                owner,
-                run_uuid,
-                worker_id,
-                fencing_epoch,
-                json.dumps(dict(checkpoint), ensure_ascii=False),
-                next_attempt_at,
-            )
-            return value is not None
+            async with conn.transaction():
+                value = await conn.fetchval(
+                    _DEFER_RUN,
+                    owner,
+                    run_uuid,
+                    worker_id,
+                    fencing_epoch,
+                    json.dumps(dict(checkpoint), ensure_ascii=False),
+                    next_attempt_at,
+                )
+                if value is None:
+                    return False
+                await conn.execute(_CLEAR_FORK_POINT, owner, run_uuid)
+                return True
 
         return await self._run_write(_operation)
 
@@ -4227,6 +4314,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             async with conn.transaction():
                 row = await conn.fetchrow(_REQUEUE_RUN, owner, run_uuid, worker_id, fencing_epoch)
                 if row is not None:
+                    await conn.execute(_CLEAR_FORK_POINT, owner, run_uuid)
                     return "requeued"
                 current = await conn.fetchrow(_SELECT_RUN, owner, run_uuid)
                 if current is not None and current["cancel_requested_at"] is not None:

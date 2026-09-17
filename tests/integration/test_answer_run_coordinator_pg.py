@@ -926,8 +926,9 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     session_snapshot = await store.load_routing(owner_id=_OWNER, run_id=run_id)
     assert session_snapshot is not None
     # One refresh establishes the Host-neutral boundary before routing; Fast
-    # acceptance and completion retain their existing refreshes.
-    assert repository_calls == {"load": 1, "refresh": 3}
+    # acceptance and completion retain their existing refreshes, plus the one
+    # delta refresh that records the settled Fork Point from the Host's own view.
+    assert repository_calls == {"load": 1, "refresh": 4}
     agent_snapshot = await store.claim_next(worker_id="unused")
     assert agent_snapshot is None
     session_id = SessionId(session_snapshot.agent_session_id)
@@ -965,6 +966,15 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert "answer_images" not in result
     assert result["trace"]["retrieval"] == "ok"
     assert finish_success_calls == 0
+
+    # Fast commits its own terminal row, so this is the run whose Fork Point has to
+    # be recorded *before* that commit: the exit hook runs too late to be allowed,
+    # and this column would stay NULL. The lane-head identity itself is pinned by
+    # the executor's own tests, which can read the session without perturbing the
+    # repository call counts this test asserts.
+    routing = await store.load_routing(owner_id=_OWNER, run_id=run_id)
+    assert routing is not None
+    assert routing.fork_point_entry_id is not None
 
 
 async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_interleaving(
@@ -1068,7 +1078,7 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     assert routing is not None
     # Cancellation reclaims this run for two execution attempts. Each attempt
     # performs one bounded Host-neutral boundary refresh before routing.
-    assert repository_calls == {"load": 2, "refresh": 5}
+    assert repository_calls == {"load": 2, "refresh": 6}
     reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
@@ -1158,8 +1168,10 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
 
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
-    # The routing boundary adds one refresh before Fast acceptance/failure.
-    assert repository_calls == {"load": 1, "refresh": 3}
+    # The routing boundary adds one refresh before Fast acceptance/failure, and a
+    # failed Fast turn records its Fork Point through the Session read, because no
+    # settled view was driven on a path that produced none.
+    assert repository_calls == {"load": 2, "refresh": 3}
     reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
