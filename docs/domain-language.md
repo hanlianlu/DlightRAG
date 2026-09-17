@@ -388,7 +388,7 @@ An owner-bound remote tool invoked through a bounded foreground Streamable-HTTP 
 _Avoid_: Personal Connection, MCP registry, marketplace, OAuth platform
 
 **Agent Workspace**:
-The model-visible filesystem rooted at the active Workspace Epoch's workspace directory.
+The model-visible filesystem rooted at the active Workspace Epoch's workspace directory. It lives exactly as long as its Run's row: retention removes the tree with the row, and a sweep removes roots whose row is already gone, both guarded by the row rather than by directory age.
 _Avoid_: Corpus Workspace, working_dir, workspace when it could mean a corpus scope
 
 **Workspace Epoch**:

@@ -411,11 +411,21 @@ class SweepOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class DeletedRun:
+    """One run a deletion or retention prune removed."""
+
+    owner_id: str
+    run_id: str
+    run_kind: RunKind
+
+
+@dataclass(frozen=True, slots=True)
 class RunDeletion:
     """Rows and now-unreferenced blobs removed by deletion or retention."""
 
     runs: int
     artifacts: int
+    deleted: tuple[DeletedRun, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +514,7 @@ __all__ = [
     "RunAdmissionLimitExceededError",
     "RunFetchedResource",
     "RunCreation",
+    "DeletedRun",
     "RunDeletion",
     "RunExecutionContext",
     "ShutdownOutcome",

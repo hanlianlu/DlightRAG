@@ -17,7 +17,7 @@ import contextlib
 import logging
 import random
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol, assert_never
 
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase
@@ -26,6 +26,7 @@ from dlightrag.engine.runtime.records import (
     AlreadyCommittedTerminal,
     ClaimedRun,
     Deferred,
+    DeletedRun,
     Failed,
     PendingPublication,
     RunEvent,
@@ -33,7 +34,7 @@ from dlightrag.engine.runtime.records import (
     Succeeded,
     WaitingForRepair,
 )
-from dlightrag.engine.runtime.store import RunStore
+from dlightrag.engine.runtime.store import RunExistenceReader, RunStore
 from dlightrag.engine.runtime.subscription import RunEventBroker, follow_run_events
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,19 @@ class RunExecutor(Protocol):
     """Executes one claimed run or raises an owner-classified failure."""
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome: ...
+
+
+class RunWorkspaceReclaimer(Protocol):
+    """Removes per-run working trees after Runtime deletes the rows.
+
+    Runtime stays filesystem-neutral: it reports deleted identities and asks.
+    A missing root is success. A failed deletion must not raise to the
+    maintenance pass; the next orphan sweep retries it.
+    """
+
+    async def reclaim(self, runs: Sequence[DeletedRun]) -> None: ...
+
+    async def sweep_orphans(self, store: RunExistenceReader) -> int: ...
 
 
 class RunSession:
@@ -459,6 +473,7 @@ class RunCoordinator:
         heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
         maintenance_seconds: float = MAINTENANCE_SECONDS,
+        workspace_reclaimer: RunWorkspaceReclaimer | None = None,
         _token_flush_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if query_worker_concurrency < 1:
@@ -483,6 +498,7 @@ class RunCoordinator:
         self._heartbeat_seconds = heartbeat_seconds
         self._sweep_seconds = sweep_seconds
         self._maintenance_seconds = maintenance_seconds
+        self._workspace_reclaimer = workspace_reclaimer
         # Private deterministic test seam; production always uses asyncio.sleep
         # with the fixed TOKEN_BATCH_SECONDS bound.
         self._token_flush_sleep = _token_flush_sleep
@@ -701,8 +717,21 @@ class RunCoordinator:
         """
         while await self._store.trim_expired_event_logs() > 0:
             await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
-        while (await self._store.prune_expired_runs()).runs > 0:
+        while True:
+            deletion = await self._store.prune_expired_runs()
+            if self._workspace_reclaimer is not None and deletion.deleted:
+                try:
+                    await self._workspace_reclaimer.reclaim(deletion.deleted)
+                except Exception:
+                    logger.warning("Run workspace reclaim failed", exc_info=True)
+            if deletion.runs <= 0:
+                break
             await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
+        if self._workspace_reclaimer is not None:
+            try:
+                await self._workspace_reclaimer.sweep_orphans(self._store)
+            except Exception:
+                logger.warning("Run workspace orphan sweep failed", exc_info=True)
 
     # -- execution ------------------------------------------------------
     async def _execute(self, claimed: ClaimedRun) -> None:
@@ -919,6 +948,7 @@ __all__ = [
     "DurableWrites",
     "RunCoordinator",
     "RunExecutor",
+    "RunWorkspaceReclaimer",
     "LeaseLostError",
     "RunCancellationObserved",
     "RunSession",

@@ -69,6 +69,7 @@ from dlightrag.engine.runtime.policy import (
 from dlightrag.engine.runtime.records import (
     CancellationOutcome,
     ClaimedRun,
+    DeletedRun,
     IdempotencyKeyConflict,
     LeaseRenewal,
     PendingArtifact,
@@ -2282,12 +2283,9 @@ WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
 """
 
 _DELETE_RUNS = """
-WITH deleted AS (
-    DELETE FROM dlightrag_runs
-    WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
-    RETURNING 1
-)
-SELECT count(*)::int FROM deleted
+DELETE FROM dlightrag_runs
+WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
+RETURNING owner_id, run_id, run_kind
 """
 
 _SELECT_RUN_AGENT_SESSIONS = """
@@ -2382,6 +2380,18 @@ SET events_trimmed_at = NOW(),
     updated_at = NOW()
 WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
 """
+
+
+def _deleted_runs(rows: Sequence[Any]) -> tuple[DeletedRun, ...]:
+    """Project RETURNING identities into the storage-neutral deletion record."""
+    return tuple(
+        DeletedRun(
+            owner_id=str(row["owner_id"]),
+            run_id=str(row["run_id"]),
+            run_kind=cast(RunKind, str(row["run_kind"])),
+        )
+        for row in rows
+    )
 
 
 def _digest_pairs(rows: Sequence[Any]) -> tuple[list[str], list[str]]:
@@ -3367,10 +3377,11 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         owners = [owner] * len(run_uuids)
         pairs = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_uuids)
         session_rows = await conn.fetch(_SELECT_RUN_AGENT_SESSIONS, owners, run_uuids)
-        deleted = await conn.fetchval(_DELETE_RUNS, owners, run_uuids)
+        deleted_rows = await conn.fetch(_DELETE_RUNS, owners, run_uuids)
         await _delete_unreferenced_agent_sessions(conn, session_rows)
         artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
-        return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
+        deleted = _deleted_runs(deleted_rows)
+        return RunDeletion(runs=len(deleted), artifacts=artifacts, deleted=deleted)
 
     async def iter_active_run_requirements(
         self,
@@ -4419,10 +4430,11 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 run_ids = [row["run_id"] for row in rows]
                 digest_rows = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_ids)
                 session_rows = await conn.fetch(_SELECT_RUN_AGENT_SESSIONS, owners, run_ids)
-                deleted = await conn.fetchval(_DELETE_RUNS, owners, run_ids)
+                deleted_rows = await conn.fetch(_DELETE_RUNS, owners, run_ids)
                 await _delete_unreferenced_agent_sessions(conn, session_rows)
                 artifacts = await _delete_unreferenced(conn, *_digest_pairs(digest_rows))
-                return RunDeletion(runs=int(deleted), artifacts=artifacts)
+                deleted = _deleted_runs(deleted_rows)
+                return RunDeletion(runs=len(deleted), artifacts=artifacts, deleted=deleted)
 
         return await self._run_write(_operation)
 

@@ -26,6 +26,7 @@ from dlightrag.engine.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.engine.runtime.records import (
     AlreadyCommittedTerminal,
     ClaimedRun,
+    DeletedRun,
     Failed,
     LeaseRenewal,
     RunAccessScope,
@@ -53,7 +54,7 @@ class _MemoryStore:
         self.trims = 0
         self.prunes = 0
         self.trim_batches: list[int] = []
-        self.prune_batches: list[int] = []
+        self.prune_batches: list[int | tuple[DeletedRun, ...]] = []
         self.trim_failures = 0
         self.artifact_writes: list[dict[str, Any]] = []
         self.claim_gate: asyncio.Event | None = None
@@ -486,7 +487,12 @@ class _MemoryStore:
 
     async def prune_expired_runs(self) -> RunDeletion:
         self.prunes += 1
-        return RunDeletion(runs=self.prune_batches.pop(0) if self.prune_batches else 0, artifacts=0)
+        if not self.prune_batches:
+            return RunDeletion(runs=0, artifacts=0)
+        batch = self.prune_batches.pop(0)
+        if isinstance(batch, int):
+            return RunDeletion(runs=batch, artifacts=0)
+        return RunDeletion(runs=len(batch), artifacts=0, deleted=batch)
 
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0
@@ -718,6 +724,30 @@ class TestSchedulingAndLease:
             await coordinator.aclose()
 
 
+class _RecordingReclaimer:
+    def __init__(self) -> None:
+        self.reclaimed: list[tuple[DeletedRun, ...]] = []
+        self.sweeps = 0
+
+    async def reclaim(self, runs: Sequence[DeletedRun]) -> None:
+        self.reclaimed.append(tuple(runs))
+
+    async def sweep_orphans(self, store: object) -> int:
+        del store
+        self.sweeps += 1
+        return 0
+
+
+class _RaisingReclaimer:
+    async def reclaim(self, runs: Sequence[DeletedRun]) -> None:
+        del runs
+        raise RuntimeError("reclaim unavailable")
+
+    async def sweep_orphans(self, store: object) -> int:
+        del store
+        raise RuntimeError("sweep unavailable")
+
+
 class TestRetentionMaintenance:
     """Retention runs on every run-owning process, needs no slot, and leaks no task."""
 
@@ -741,6 +771,45 @@ class TestRetentionMaintenance:
             await _settle(lambda: store.trims >= 2 and store.prunes >= 2)
         finally:
             await coordinator.aclose()
+
+    async def test_a_retention_prune_asks_the_reclaimer_for_exactly_the_deleted_runs(self) -> None:
+        """Runtime reports identities; it does not decide which product owns a tree."""
+        first = DeletedRun(owner_id="owner-alpha", run_id="run-one", run_kind="answer")
+        second = DeletedRun(owner_id="owner-beta", run_id="run-two", run_kind="retrieval")
+        store = _MemoryStore()
+        store.prune_batches = [(first, second)]
+        reclaimer = _RecordingReclaimer()
+        coordinator = RunCoordinator(
+            store=store,
+            executors={
+                "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
+            },
+            query_worker_concurrency=1,
+            workspace_reclaimer=reclaimer,
+        )
+
+        await coordinator._maintain_once()
+
+        assert reclaimer.reclaimed == [(first, second)]
+        assert reclaimer.sweeps == 1
+
+    async def test_a_reclaimer_fault_does_not_fail_the_maintenance_pass(self) -> None:
+        store = _MemoryStore()
+        store.prune_batches = [
+            (DeletedRun(owner_id="owner-alpha", run_id="run-one", run_kind="answer"),)
+        ]
+        coordinator = RunCoordinator(
+            store=store,
+            executors={
+                "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
+            },
+            query_worker_concurrency=1,
+            workspace_reclaimer=_RaisingReclaimer(),
+        )
+
+        await coordinator._maintain_once()
+
+        assert store.prunes == 2
 
     async def test_one_pass_drains_full_batches(self) -> None:
         store = _MemoryStore()

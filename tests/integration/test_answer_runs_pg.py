@@ -38,6 +38,7 @@ from dlightrag.engine.runtime.policy import (
 )
 from dlightrag.engine.runtime.progress import StageTerminalCommit
 from dlightrag.engine.runtime.records import (
+    DeletedRun,
     IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
@@ -2332,6 +2333,9 @@ class TestRetention:
         outcome = await store.prune_expired_runs()
         assert outcome.runs == 1
         assert outcome.artifacts == 1
+        assert outcome.deleted == (
+            DeletedRun(owner_id=_OWNER, run_id=creation.run.run_id, run_kind="answer"),
+        )
         assert await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id) is None
         assert await _blob_store(store).read(owner_id=_OWNER, digest=artifact.digest) is None
         async with pool.acquire() as conn:

@@ -122,7 +122,9 @@ PostgreSQL and LightRAG with fakes, but no paid provider or external parser.
 Retention sweeps run hourly in bounded batches without cron. Each terminal Run
 receives `purge_after` from its accepted retention selection: Answer uses
 `runtime.run_retention_days` (default 365 days), while top-level Retrieval and
-Corpus Mutation use seven days. Nonterminal Runs are never retention-pruned. Event logs may expire
+Corpus Mutation use seven days. Nonterminal Runs are never retention-pruned. A pruned Run's Agent Workspace is
+removed with its row, and an hourly orphan sweep deletes roots whose Run row is
+already gone. Event logs may expire
 before a retained Run, after which SSE returns 410 and status still serves the
 result. Exact lifecycle rules are in
 [RunRuntime and durable query execution](durable-answer-runs.md).

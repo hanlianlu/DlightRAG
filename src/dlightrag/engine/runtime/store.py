@@ -20,6 +20,12 @@ from dlightrag.engine.runtime.records import (
 )
 
 
+class RunExistenceReader(Protocol):
+    """The one read a sweep of derived state needs: identity without an owner."""
+
+    async def get_run_global(self, *, run_id: str) -> object | None: ...
+
+
 class RunStore(Protocol):
     """Lifecycle operations used by the coordinator and Run application service."""
 
@@ -164,4 +170,4 @@ class RunBlobStore(Protocol):
     async def size(self, *, owner_id: str, digest: str) -> int | None: ...
 
 
-__all__ = ["RunBlobStore", "RunStore"]
+__all__ = ["RunExistenceReader", "RunBlobStore", "RunStore"]

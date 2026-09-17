@@ -122,9 +122,15 @@ typed refusal and a remedy. Silently falling back to the Lane tip is exactly the
 divergence between contract and behaviour that this decision removes.
 
 **Reclamation lands with the carry, not after it.** Per-Run Workspace deletion
-joins the existing per-Run retention prune, an orphan sweep removes Run roots with
-no Run row under a row-and-lease guard rather than by directory age, and the
-acceptance tests below cover both plus the ordering between carrying and pruning.
+joins the existing per-Run retention prune, and an orphan sweep removes Run roots
+whose Run row is gone. The guard is the row, not directory age: retention selects
+only terminal Runs, and a lease is renewed through its own row, so a Run with no
+row can hold nothing. A root whose row still exists is never touched. Residual risk,
+noted rather than solved: deleting a conversation removes the rows of its Runs,
+including a turn that is still executing, so a dying worker can see filesystem
+errors for up to one heartbeat while the sweep removes the tree it was writing to.
+The acceptance tests below cover both reclamation paths, the disabled-environment
+gate, and the ordering between carrying and pruning.
 
 ## Considered options
 

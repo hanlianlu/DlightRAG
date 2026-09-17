@@ -133,6 +133,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
     from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
+    from dlightrag.engine.answer.workspace import agent_workspace_reclaimer
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker
     from dlightrag.engine.rag.retrieval.rerank import build_product_reranker
@@ -431,6 +432,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         executors=executors,
         query_worker_concurrency=config.runtime.query.worker_concurrency,
         corpus_mutation_worker_concurrency=(config.runtime.corpus_mutation.worker_concurrency),
+        workspace_reclaimer=agent_workspace_reclaimer(
+            execution_environment=config.answer.agent.execution_environment,
+            workspace_root=config.answer.agent.workspace_root,
+        ),
     )
     retrieval.bind_runtime(store=run_store, coordinator=coordinator)
 

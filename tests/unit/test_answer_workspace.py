@@ -4,6 +4,7 @@
 import hashlib
 import logging
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -11,13 +12,19 @@ import pytest
 
 from dlightrag.engine.answer import workspace as workspace_module
 from dlightrag.engine.answer.workspace import (
+    AgentWorkspaceReclaimer,
     WorkspaceIntegrityError,
+    agent_workspace_reclaimer,
     bind_run_workspace,
     copy_epoch_verified,
     epoch_paths,
+    owner_shard,
+    reclaim_discovered_run_root,
+    reclaim_run_workspace,
     run_root,
     write_spill_file,
 )
+from dlightrag.engine.runtime.records import DeletedRun
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
 
 
@@ -415,3 +422,205 @@ async def test_handoff_records_the_copied_epochs_observation(tmp_path: Path) -> 
     # The retiring epoch is gone and the note is not: the observation describes the copy.
     assert not (note).exists()
     assert (recovered.workspace / "notes" / "plan.md").read_text(encoding="utf-8") == payload
+
+
+def test_reclaim_removes_a_run_root_is_idempotent_and_does_not_follow_symlinks(
+    tmp_path: Path,
+) -> None:
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    root = run_root(tmp_path, owner, run_id)
+    inside = root / "epochs" / "1" / "workspace"
+    inside.mkdir(parents=True)
+    (inside / "note.txt").write_text("gone", encoding="utf-8")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("keep", encoding="utf-8")
+    (inside / "escape").symlink_to(outside)
+
+    reclaim_run_workspace(tmp_path, owner, run_id)
+    assert not root.exists()
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+    reclaim_run_workspace(tmp_path, owner, run_id)
+    assert not root.exists()
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_reclaim_unlinks_a_run_root_symlink_without_following_it(tmp_path: Path) -> None:
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    expected = run_root(tmp_path, owner, run_id)
+    expected.parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("keep", encoding="utf-8")
+    expected.symlink_to(outside)
+
+    reclaim_run_workspace(tmp_path, owner, run_id)
+
+    assert not expected.exists()
+    assert (outside / "secret.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_reclaim_refuses_a_path_that_is_not_the_expected_run_root(tmp_path: Path) -> None:
+    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+        reclaim_run_workspace(tmp_path, "owner", "../not-a-run")
+    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+        reclaim_run_workspace(tmp_path, "owner", "not-a-uuid")
+
+
+@pytest.mark.asyncio
+async def test_orphan_sweep_deletes_a_directory_with_no_run_row_and_keeps_one_whose_row_exists(
+    tmp_path: Path,
+) -> None:
+    owner = "owner"
+    live_id = str(uuid.uuid4())
+    dead_id = str(uuid.uuid4())
+    live = run_root(tmp_path, owner, live_id)
+    dead = run_root(tmp_path, owner, dead_id)
+    for path in (live, dead):
+        path.mkdir(parents=True)
+        (path / "marker.txt").write_text("x", encoding="utf-8")
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            if run_id == live_id:
+                return object()
+            return None
+
+    removed = await AgentWorkspaceReclaimer(tmp_path, page_size=1).sweep_orphans(_Store())
+
+    assert removed == 1
+    assert live.exists()
+    assert not dead.exists()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_skips_non_answer_runs(tmp_path: Path) -> None:
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    root = run_root(tmp_path, owner, run_id)
+    root.mkdir(parents=True)
+    (root / "keep.txt").write_text("x", encoding="utf-8")
+    reclaimer = AgentWorkspaceReclaimer(tmp_path)
+    await reclaimer.reclaim((DeletedRun(owner_id=owner, run_id=run_id, run_kind="retrieval"),))
+    assert root.exists()
+
+
+def test_a_disabled_execution_environment_produces_no_reclaimer(tmp_path: Path) -> None:
+    assert (
+        agent_workspace_reclaimer(
+            execution_environment="disabled",
+            workspace_root=str(tmp_path / "ws"),
+        )
+        is None
+    )
+    assert not (tmp_path / "ws").exists()
+
+
+@pytest.mark.asyncio
+async def test_the_production_reclaimer_removes_an_answer_runs_bytes(tmp_path: Path) -> None:
+    """The claim is that a pruned Run's workspace is gone, not that a fake was asked.
+
+    `reclaim` is the collaborator the retention prune drives, so it is the thing
+    that has to delete: a version of it that only skipped non-answer runs would
+    satisfy every coordinator test while leaving every working tree behind.
+    """
+    owner = "owner"
+    answer_id = str(uuid.uuid4())
+    retrieval_id = str(uuid.uuid4())
+    for run_id in (answer_id, retrieval_id):
+        root = run_root(tmp_path, owner, run_id)
+        root.mkdir(parents=True)
+        (root / "note.txt").write_text("x", encoding="utf-8")
+
+    await AgentWorkspaceReclaimer(tmp_path).reclaim(
+        (
+            DeletedRun(owner_id=owner, run_id=answer_id, run_kind="answer"),
+            DeletedRun(owner_id=owner, run_id=retrieval_id, run_kind="retrieval"),
+        )
+    )
+
+    assert not run_root(tmp_path, owner, answer_id).exists()
+    assert run_root(tmp_path, owner, retrieval_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reclaim_is_retried_by_the_next_orphan_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tree that survived one failure must not survive the pass that follows it."""
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    root = run_root(tmp_path, owner, run_id)
+    root.mkdir(parents=True)
+    (root / "note.txt").write_text("x", encoding="utf-8")
+    real_rmtree = shutil.rmtree
+
+    def fail_this_tree(path: str | Path, *args: Any, **kwargs: Any) -> None:
+        if Path(path) == root:
+            raise PermissionError("simulated undeletable workspace")
+        real_rmtree(path, *args, **kwargs)
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            return None
+
+    reclaimer = AgentWorkspaceReclaimer(tmp_path)
+    monkeypatch.setattr(workspace_module.shutil, "rmtree", fail_this_tree)
+    await reclaimer.reclaim((DeletedRun(owner_id=owner, run_id=run_id, run_kind="answer"),))
+    assert root.exists()
+
+    monkeypatch.setattr(workspace_module.shutil, "rmtree", real_rmtree)
+    assert await reclaimer.sweep_orphans(_Store()) == 1
+    assert not root.exists()
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_walks_every_page_of_orphans(tmp_path: Path) -> None:
+    """A bounded page that stops after the first would leave the rest forever."""
+    owner = "owner"
+    run_ids = [str(uuid.uuid4()) for _ in range(3)]
+    for run_id in run_ids:
+        root = run_root(tmp_path, owner, run_id)
+        root.mkdir(parents=True)
+        (root / "note.txt").write_text("x", encoding="utf-8")
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            return None
+
+    removed = await AgentWorkspaceReclaimer(tmp_path, page_size=1).sweep_orphans(_Store())
+
+    assert removed == 3
+    assert all(not run_root(tmp_path, owner, run_id).exists() for run_id in run_ids)
+
+
+def test_reclaim_refuses_a_path_outside_the_shard_layout(tmp_path: Path) -> None:
+    """The discovered-path jail is the check that keeps a sweep inside the root."""
+    outside = tmp_path / "outside"
+    run_id = str(uuid.uuid4())
+    outside.mkdir()
+    (outside / run_id).mkdir()
+
+    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+        reclaim_discovered_run_root(tmp_path, outside / run_id)
+    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+        reclaim_discovered_run_root(tmp_path, tmp_path / "zz" / run_id)
+    assert (outside / run_id).exists()
+
+
+def test_reclaim_never_follows_a_symlinked_shard(tmp_path: Path) -> None:
+    """A shard is two hex characters of path; following one would leave the root."""
+    owner = "owner"
+    run_id = str(uuid.uuid4())
+    outside = tmp_path / "outside" / owner_shard(owner)
+    (outside / run_id).mkdir(parents=True)
+    (outside / run_id / "keep.txt").write_text("keep", encoding="utf-8")
+    shard = tmp_path / owner_shard(owner)
+    shard.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(WorkspaceIntegrityError, match="not a run root"):
+        reclaim_run_workspace(tmp_path, owner, run_id)
+
+    assert (outside / run_id / "keep.txt").read_text(encoding="utf-8") == "keep"

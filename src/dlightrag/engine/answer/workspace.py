@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -10,7 +11,7 @@ import re
 import shutil
 import stat
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -22,7 +23,10 @@ from dlightrag.engine.agent.environment import (
 )
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
+from dlightrag.engine.answer.execution_settings import default_local_workspace_root
+from dlightrag.engine.runtime.records import DeletedRun, parse_run_id
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
+from dlightrag.engine.runtime.store import RunExistenceReader
 from dlightrag.engine.runtime.workspace import (
     CommittedSpillRecord,
     HandoffCommit,
@@ -41,7 +45,9 @@ class WorkspaceIntegrityError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 _SPILL_RECOVERY_PAGE_SIZE = 128
+_ORPHAN_SWEEP_PAGE_SIZE = 128
 _EPOCH_COPY_TEMP_NAME = re.compile(r"\.tmp-([1-9][0-9]*)-[0-9a-f]{32}")
+_SHARD_NAME = re.compile(r"^[0-9a-f]{2}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,14 +382,254 @@ def _retire_epoch(root: Path, epoch: int) -> None:
         shutil.rmtree(stale, ignore_errors=True)
 
 
+class AgentWorkspaceReclaimer:
+    """Deletes per-Run Agent Workspace roots after their rows are gone."""
+
+    def __init__(self, workspace_root: Path, *, page_size: int = _ORPHAN_SWEEP_PAGE_SIZE) -> None:
+        if not workspace_root.is_absolute():
+            raise ValueError("workspace root must be an absolute path")
+        self._root = workspace_root
+        self._page_size = max(1, int(page_size))
+
+    async def reclaim(self, runs: Sequence[DeletedRun]) -> None:
+        for run in runs:
+            if run.run_kind != "answer":
+                continue
+            try:
+                # A retention batch is bounded but a working tree is not small: the
+                # walk must not run on the coordinator's event loop.
+                await asyncio.to_thread(reclaim_run_workspace, self._root, run.owner_id, run.run_id)
+            except FileNotFoundError:
+                continue
+            except Exception:
+                logger.warning(
+                    "Failed to reclaim Agent Workspace for run %s",
+                    run.run_id,
+                    extra={"run_id": run.run_id, "owner_id": run.owner_id},
+                    exc_info=True,
+                )
+
+    async def sweep_orphans(self, store: RunExistenceReader) -> int:
+        removed = 0
+        after: tuple[str, str] | None = None
+        while True:
+            page = await asyncio.to_thread(
+                list_run_workspace_roots,
+                self._root,
+                after=after,
+                limit=self._page_size,
+            )
+            if not page:
+                return removed
+            for path in page:
+                after = (path.parent.name, path.name)
+                try:
+                    record = await store.get_run_global(run_id=path.name)
+                except Exception:
+                    logger.warning(
+                        "Failed to read run %s during Agent Workspace orphan sweep",
+                        path.name,
+                        exc_info=True,
+                    )
+                    continue
+                if record is not None:
+                    # A live claim owns its epoch directory, and a live claim has a row.
+                    continue
+                try:
+                    await asyncio.to_thread(reclaim_discovered_run_root, self._root, path)
+                    removed += 1
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    logger.warning(
+                        "Failed to reclaim orphan Agent Workspace at %s",
+                        path,
+                        exc_info=True,
+                    )
+            if len(page) < self._page_size:
+                return removed
+
+
+def agent_workspace_reclaimer(
+    *,
+    execution_environment: str,
+    workspace_root: str | None,
+) -> AgentWorkspaceReclaimer | None:
+    """Return a reclaimer only when execution has a workspace root."""
+    if execution_environment == "disabled":
+        return None
+    if execution_environment not in {"trust", "sandbox"}:
+        raise ValueError(f"unknown agent execution mode: {execution_environment}")
+    raw = (workspace_root or "").strip()
+    if not raw or raw in {"null", "None"}:
+        root = default_local_workspace_root()
+    else:
+        root = Path(raw).expanduser()
+        if not root.is_absolute():
+            raise ValueError(
+                "agent.workspace_root must be an absolute path when execution is trust or sandbox"
+            )
+        root = root.resolve()
+    return AgentWorkspaceReclaimer(root)
+
+
+def reclaim_run_workspace(workspace_root: Path, owner_id: str, run_id: str) -> None:
+    """Remove one Run's workspace root. Missing is success; a bad path is refused."""
+    _remove_run_root(_expected_run_root(workspace_root, owner_id, run_id))
+
+
+def reclaim_discovered_run_root(workspace_root: Path, path: Path) -> None:
+    """Remove a listed run root. The path must be the expected shard/run layout."""
+    _require_discovered_run_root(workspace_root, path)
+    _remove_run_root(path)
+
+
+def list_run_workspace_roots(
+    workspace_root: Path,
+    *,
+    after: tuple[str, str] | None = None,
+    limit: int,
+) -> tuple[Path, ...]:
+    """Return a bounded page of candidate run roots in (shard, run_id) order.
+
+    Symlinked shards are skipped rather than traversed. A run root that is itself
+    a symlink is included so the sweep can unlink it without following.
+    """
+    cap = max(1, int(limit))
+    try:
+        root_mode = workspace_root.lstat().st_mode
+    except FileNotFoundError:
+        return ()
+    except OSError:
+        logger.warning("Failed to inspect Agent Workspace root %s", workspace_root, exc_info=True)
+        return ()
+    if stat.S_ISLNK(root_mode) or not stat.S_ISDIR(root_mode):
+        return ()
+
+    shards: list[str] = []
+    try:
+        shard_entries = tuple(workspace_root.iterdir())
+    except OSError:
+        logger.warning("Failed to list Agent Workspace shards in %s", workspace_root, exc_info=True)
+        return ()
+    for entry in shard_entries:
+        try:
+            mode = entry.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("Failed to inspect Agent Workspace shard %s", entry, exc_info=True)
+            continue
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            continue
+        if _SHARD_NAME.fullmatch(entry.name) is None:
+            continue
+        shards.append(entry.name)
+    shards.sort()
+
+    found: list[Path] = []
+    after_shard, after_run = after if after is not None else ("", "")
+    for shard in shards:
+        if after is not None and shard < after_shard:
+            continue
+        shard_path = workspace_root / shard
+        run_ids: list[str] = []
+        try:
+            entries = tuple(shard_path.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("Failed to list Agent Workspace runs in %s", shard_path, exc_info=True)
+            continue
+        for entry in entries:
+            try:
+                mode = entry.lstat().st_mode
+            except FileNotFoundError:
+                continue
+            except OSError:
+                logger.warning("Failed to inspect Agent Workspace run %s", entry, exc_info=True)
+                continue
+            if parse_run_id(entry.name) is None:
+                continue
+            if not (stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+                continue
+            if after is not None and shard == after_shard and entry.name <= after_run:
+                continue
+            run_ids.append(entry.name)
+        run_ids.sort()
+        for run_id in run_ids:
+            found.append(shard_path / run_id)
+            if len(found) >= cap:
+                return tuple(found)
+    return tuple(found)
+
+
+def _expected_run_root(workspace_root: Path, owner_id: str, run_id: str) -> Path:
+    if parse_run_id(run_id) is None or Path(run_id).name != run_id:
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    shard = owner_shard(owner_id)
+    path = run_root(workspace_root, owner_id, run_id)
+    if path.name != run_id or path.parent.name != shard:
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    try:
+        path.parent.relative_to(workspace_root)
+    except ValueError as exc:
+        raise WorkspaceIntegrityError("run workspace path is not a run root") from exc
+    return path
+
+
+def _require_discovered_run_root(workspace_root: Path, path: Path) -> None:
+    if parse_run_id(path.name) is None:
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    if _SHARD_NAME.fullmatch(path.parent.name) is None:
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    try:
+        parent_mode = path.parent.lstat().st_mode
+    except OSError as exc:
+        raise WorkspaceIntegrityError("run workspace path is not a run root") from exc
+    if stat.S_ISLNK(parent_mode):
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    try:
+        path.parent.parent.relative_to(workspace_root)
+    except ValueError as exc:
+        raise WorkspaceIntegrityError("run workspace path is not a run root") from exc
+    if path.parent.parent != workspace_root:
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+
+
+def _remove_run_root(path: Path) -> None:
+    try:
+        parent_mode = path.parent.lstat().st_mode
+    except OSError as exc:
+        raise WorkspaceIntegrityError("run workspace path is not a run root") from exc
+    if stat.S_ISLNK(parent_mode) or not stat.S_ISDIR(parent_mode):
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(mode):
+        path.unlink()
+        return
+    if not stat.S_ISDIR(mode):
+        raise WorkspaceIntegrityError("run workspace path is not a run root")
+    # shutil.rmtree unlinks nested symlinks instead of following them.
+    shutil.rmtree(path)
+
+
 __all__ = [
+    "AgentWorkspaceReclaimer",
     "RunWorkspace",
     "WorkspaceIntegrityError",
     "WorkspaceRecoveryFailed",
+    "agent_workspace_reclaimer",
     "bind_run_workspace",
     "copy_epoch_verified",
     "epoch_paths",
+    "list_run_workspace_roots",
     "owner_shard",
+    "reclaim_discovered_run_root",
+    "reclaim_run_workspace",
     "run_root",
     "spill_receipt",
     "write_spill_file",

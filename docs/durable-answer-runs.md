@@ -279,6 +279,11 @@ Corpus Mutation use seven days. Nonterminal Runs are never retention-pruned. Swe
 `SKIP LOCKED` batches. Conversation turns do not extend Answer retention.
 Deleting the last routed Answer Run makes its Agent Session tree eligible for
 cleanup; shared Sessions and child trees still referenced by Runs survive.
+When a Run row is pruned, its Agent Workspace root
+(`workspace_root/<owner shard>/<run_id>`) is removed with it. An orphan sweep then
+deletes roots whose Run row is already gone, checking the row rather than
+directory age. A disabled execution environment has no workspace root and does
+not reclaim.
 
 ### `dlightrag_run_events`
 
