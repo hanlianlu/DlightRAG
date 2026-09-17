@@ -438,6 +438,7 @@ async def test_research_runtime_projects_live_object_label_into_tool_updates() -
         evidence=EvidenceLedger(),
     )
     effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
         orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
         prepared=prepared,
         session=_Session(),  # type: ignore[arg-type]
