@@ -157,7 +157,7 @@ fold only appends, admitted Evidence text is frozen into the Tool result that
 produced it, and nothing is composed per turn. That shape is what a provider prefix
 cache can reuse. No system message states a clock: a Research agent reads one from
 its environment, and a Fast answer's own request states it
-([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
+([ADR 0014](adr/0015-prompt-prefix-stability-and-cache-anchored-accounting.md)).
 
 Research provider text is an optimistic projection. Native provider deltas flow
 through `emit_token`; `reset` invalidates them before a tool-bearing turn,

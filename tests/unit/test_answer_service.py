@@ -29,6 +29,7 @@ from dlightrag.application.runs import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.errors import (
@@ -61,6 +62,22 @@ _NOW = datetime.datetime(2026, 8, 17, tzinfo=datetime.UTC)
 _PROFILE = ModelProfile(
     context_window_tokens=200_000,
     max_input_tokens=180_000,
+    max_output_tokens=64_000,
+    # An answering model always states an effort ladder: a catalogued profile names
+    # its levels and an uncatalogued one resolves to best-effort mapping, so a fixture
+    # without one would model a state no deployment can be in.
+    reasoning=ReasoningProfile(
+        "openai",
+        ReasoningLevels(
+            off="none",
+            minimal=None,
+            low="low",
+            medium=None,
+            high="high",
+            xhigh=None,
+            max="max",
+        ),
+    ),
 )
 
 

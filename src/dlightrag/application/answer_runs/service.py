@@ -31,10 +31,11 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
-from dlightrag.engine.answer.client_contracts import AnswerEffort
+from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
+    UnsupportedAnswerEffortError,
     UnsupportedAnswerModeError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -826,6 +827,7 @@ class AnswerService:
         # remove resource viewing. This is the authoritative Valid Mode Set persisted
         # with the run; the earlier check only avoids needless acceptance I/O.
         requested_mode, allowed_modes = self._reject_unsupported_mode(run_request)
+        self._reject_unhonorable_effort(run_request)
         acceptance_resources = await build_current_answer_resources(
             links=run_request.links,
             attachments=run_request.attachments,
@@ -1564,6 +1566,31 @@ class AnswerService:
     async def capabilities(self) -> AnswerCapabilities:
         """Return the public image-capability snapshot after its allowed re-probe."""
         return await self._capability_view.read()
+
+    def answering_model_profile(self) -> ModelProfile:
+        """Return the answering role's resolved profile.
+
+        One fact about this deployment is stated by a transport (the efforts the
+        browser may offer) and enforced by admission (the effort a run may carry), so
+        both read the same resolution the run itself will use.
+        """
+        return self._capabilities.current_profiles()["query"]
+
+    def _reject_unhonorable_effort(self, request: AnswerRunRequest) -> None:
+        """Refuse a chosen agent effort the answering model cannot express at all.
+
+        A level below the model's ladder is clamped by reasoning resolution, as ADR
+        0014 records. A model that names no non-off level has nothing to clamp to, so
+        admitting the run would either answer silently without the requested thinking
+        or fail inside the provider call and misreport a configuration fact as a
+        provider rejection.
+        """
+        effort = request.effort
+        if effort is None:
+            return
+        if offered_answer_efforts(self.answering_model_profile()):
+            return
+        raise UnsupportedAnswerEffortError(effort)
 
     async def read_input_artifact(
         self,

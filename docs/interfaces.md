@@ -212,9 +212,10 @@ single-workspace.
 `effort` re-levels the answering agent of one accepted Run and nothing else: a
 subagent keeps the level configured for its own role, and a Run that omits the
 field keeps the deployment default. The value is refused with a validation error
-when it is not one of the three; a level the answering model cannot express is
-clamped to the nearest supported one by the engine, preferring the higher
-neighbour. The accepted Run records the choice in its prepared input, and the
+when it is not one of the three; a level below what the answering model can express
+is clamped to the nearest supported one by the engine, preferring the higher
+neighbour, while a model that names no non-off level refuses the choice as
+`unsupported_effort`. The accepted Run records the choice in its prepared input, and the
 submission's idempotency fingerprint distinguishes it, so reusing a submission
 id with another effort is a conflict rather than a replay. [ADR 0014](adr/0014-caller-chosen-agent-effort.md)
 owns the decision.
@@ -442,7 +443,7 @@ Registered public tool names are:
 Web routes under `/web/api/*` are browser contracts, not compatibility aliases
 for REST. `GET /web/api/bootstrap` (bootstrap contract version 3) returns
 authorized workspace state, Files target, attachment limits, image capability,
-and `agent_effort: {levels, default}` — the efforts this deployment offers and,
+and `agent_effort: {levels, default}` — the efforts the answering profile offers and,
 when it is one of them, its own configured level — never bearer or edge tokens.
 `POST /web/api/answer` accepts the same optional `effort` as REST and MCP, on
 both its JSON and its multipart form.

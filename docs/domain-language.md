@@ -72,10 +72,12 @@ _Avoid_: research bool, inferred path, Web Search as a mode
 
 **Agent Effort**:
 The caller-facing three-level selector `low | high | max` for one Answer Run's own
-answering agent. Omitted means the deployment's configured level for that role;
-a subagent keeps the level configured for its own role, and a level the answering
-model cannot express is clamped by reasoning resolution rather than refused. The
-accepted Run's stored `effort` is this selector's audit surface.
+answering agent. Omitted means the deployment's configured level for that role, and
+a subagent keeps the level configured for its own role. The Web control offers only
+the levels the answering profile can express; a chosen level below that model's
+ladder is clamped by reasoning resolution rather than refused, and a model that
+names no non-off level refuses the choice at admission. The accepted Run's stored
+`effort` is the choice and the run trace's `agent_effort` states the level that ran.
 _Avoid_: reasoning level (the deployment setting), Web Search effort (`fast | balanced | deep`), Answer Mode
 
 **Valid Mode Set**:

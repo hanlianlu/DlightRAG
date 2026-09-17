@@ -359,11 +359,12 @@ translation. `agentic_model_kwargs` is a shallow overlay for Research calls.
 
 `agentic_reasoning` on the answering role is the deployment **default**, not a
 ceiling or a whitelist. One Answer request may name its own effort
-(`low`/`high`/`max`) for that Run's answering agent, and the Web composer offers
-exactly those three levels, marking the configured level as `Default` when it is
-one of them. A subagent always runs the level configured for its own role, and a
-level a model cannot express is clamped by the engine to the nearest supported
-one. [ADR 0014](adr/0014-caller-chosen-agent-effort.md) owns the decision.
+(`low`/`high`/`max`) for that Run's answering agent, and the Web composer offers the
+levels the answering profile can express — the three where it can express all of
+them — marking the configured level as `Default` when it is one of them. A subagent
+always runs the level configured for its own role; a level below that model's ladder
+is clamped by the engine to the nearest supported one, and a model that names no
+non-off level refuses the choice. [ADR 0014](adr/0014-caller-chosen-agent-effort.md) owns the decision.
 
 ### Structured Output
 

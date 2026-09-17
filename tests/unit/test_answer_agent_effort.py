@@ -8,7 +8,9 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.adapters.http.rest.models import AnswerRequest
+from dlightrag.application.answer_runs.service import AnswerService
 from dlightrag.application.settings import default_answer_effort
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.reasoning import ReasoningLevel
 from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelSettings
 from dlightrag.engine.answer.client_contracts import (
@@ -108,3 +110,181 @@ async def test_one_run_binds_the_re_leveled_model_while_children_keep_theirs(mon
     assert all(role == "query" for role, _level in runtime._tool_models)
     assert runtime.tool_model("default").settings.effective_agentic_reasoning == "low"
     assert ("default", "max") not in runtime._tool_models
+
+
+def test_the_offer_names_only_levels_the_answering_model_can_express():
+    """A ladder that stops below a level never advertises it.
+
+    Otherwise the control promises a level reasoning resolution would have to
+    clamp, and the run reads as the caller's choice while running at another one.
+    """
+    from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
+    from dlightrag.engine.answer.client_contracts import offered_answer_efforts
+
+    def profile(levels: ReasoningLevels) -> ModelProfile:
+        return ModelProfile(
+            context_window_tokens=100_000,
+            max_output_tokens=8_000,
+            reasoning=ReasoningProfile("openai", levels),
+        )
+
+    gemini_like = profile(
+        ReasoningLevels(
+            off="none", minimal=None, low="low", medium="medium", high="high", xhigh=None, max=None
+        )
+    )
+    every_level = profile(
+        ReasoningLevels(
+            off="none",
+            minimal="minimal",
+            low="low",
+            medium="medium",
+            high="high",
+            xhigh="xhigh",
+            max="max",
+        )
+    )
+    no_reasoning = ModelProfile(context_window_tokens=100_000, reasoning=None)
+
+    # A best-effort (uncatalogued) endpoint maps every level, so it offers all three.
+    assert offered_answer_efforts(every_level) == ("low", "high", "max")
+    # A model whose ladder stops at `high` offers two, and never the level it cannot be.
+    assert offered_answer_efforts(gemini_like) == ("low", "high")
+    # A model that states no effort at all offers nothing: no picker, no valid choice.
+    assert offered_answer_efforts(no_reasoning) == ()
+
+
+def test_the_deployment_default_is_not_offered_when_the_model_cannot_express_it(test_config):
+    from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
+
+    config = clone_config(test_config)
+    replace_config(
+        config,
+        "models.chat.roles",
+        ModelRoleOverrides(
+            query=ModelSettings(model="strongest", api_key="fake", agentic_reasoning="max"),
+        ),
+    )
+    without_max = ModelProfile(
+        context_window_tokens=100_000,
+        max_output_tokens=8_000,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none", minimal=None, low="low", medium=None, high="high", xhigh=None, max=None
+            ),
+        ),
+    )
+    with_max = ModelProfile(
+        context_window_tokens=100_000,
+        max_output_tokens=8_000,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none", minimal=None, low="low", medium=None, high="high", xhigh=None, max="max"
+            ),
+        ),
+    )
+
+    # The control never marks a default it is not also offering.
+    assert default_answer_effort(config, without_max) is None
+    assert default_answer_effort(config, with_max) == "max"
+    assert default_answer_effort(config) == "max"
+
+
+@pytest.mark.asyncio
+async def test_an_effort_no_level_can_honor_is_refused_at_admission(test_config):
+    """A model that names no level has nothing to clamp to, so the run is refused.
+
+    Admitting it would either answer silently without the requested thinking or fail
+    inside a provider call, reporting a configuration fact as a provider rejection.
+    """
+    from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
+
+    service = cast(Any, _service_stub())
+    service.answering_model_profile = lambda: ModelProfile(
+        context_window_tokens=100_000, reasoning=None
+    )
+    request = AnswerRunRequest.from_request({"query": "q", "effort": "max"})
+
+    with pytest.raises(UnsupportedAnswerEffortError) as refusal:
+        service._reject_unhonorable_effort(request)
+
+    assert "does not offer the 'max' agent effort" in refusal.value.public_message
+    assert refusal.value.error_kind == "unsupported_effort"
+
+
+def test_an_effort_a_below_top_model_can_clamp_is_still_admitted():
+    """The documented clamp stands: only a model with no level at all is refused."""
+    from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
+
+    service = cast(Any, _service_stub())
+    service.answering_model_profile = lambda: ModelProfile(
+        context_window_tokens=100_000,
+        max_output_tokens=8_000,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none",
+                minimal=None,
+                low="low",
+                medium=None,
+                high="high",
+                xhigh=None,
+                max=None,
+            ),
+        ),
+    )
+    service._reject_unhonorable_effort(
+        AnswerRunRequest.from_request({"query": "q", "effort": "max"})
+    )
+
+
+def _service_stub() -> Any:
+    """The one method `_reject_unhonorable_effort` reads from its service."""
+
+    class _Stub:
+        answering_model_profile = staticmethod(lambda: None)
+
+    stub: Any = _Stub()
+    stub._reject_unhonorable_effort = AnswerService._reject_unhonorable_effort.__get__(stub)
+    return stub
+
+
+def test_the_run_trace_states_what_was_chosen_and_what_actually_ran():
+    """The stored effort alone would misreport a clamped run.
+
+    `max` below the model's ladder runs as `xhigh`, a Fast answer never enters an
+    agent loop at all, and no choice means no fact to state.
+    """
+    from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
+    from dlightrag.engine.answer.execution.executor import _agent_effort_trace
+
+    clamped = ModelProfile(
+        context_window_tokens=100_000,
+        max_output_tokens=8_000,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none",
+                minimal=None,
+                low="low",
+                medium=None,
+                high="high",
+                xhigh="xhigh",
+                max=None,
+            ),
+        ),
+    )
+
+    assert _agent_effort_trace(None, "research", clamped) is None
+    assert _agent_effort_trace("max", "research", clamped) == {
+        "requested": "max",
+        "effective": "xhigh",
+    }
+    assert _agent_effort_trace("high", "research", clamped) == {
+        "requested": "high",
+        "effective": "high",
+    }
+    # Fast runs no agent turn, so it claims no effective agentic level.
+    assert _agent_effort_trace("max", "fast", clamped) == {"requested": "max", "effective": None}

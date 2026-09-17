@@ -21,7 +21,11 @@ from dlightrag.engine.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
 )
-from dlightrag.engine.answer.client_contracts import ANSWER_EFFORT_LEVELS, AnswerEffort
+from dlightrag.engine.answer.client_contracts import (
+    ANSWER_EFFORT_LEVELS,
+    AnswerEffort,
+    offered_answer_efforts,
+)
 from dlightrag.engine.answer.execution import (
     AnswerExecutorSettings,
     AnswerResourceSettings,
@@ -110,15 +114,21 @@ def semantic_highlight_settings(config: DlightragConfig) -> SemanticHighlightSet
     )
 
 
-def default_answer_effort(config: DlightragConfig) -> AnswerEffort | None:
+def default_answer_effort(
+    config: DlightragConfig,
+    profile: ModelProfile | None = None,
+) -> AnswerEffort | None:
     """The deployment's own agent effort, when it is one of the offered levels.
 
-    ``None`` means the deployment either configures no agentic level or one the
-    three-level control cannot name; the browser then starts with no level
-    selected instead of mislabelling what a run would actually use.
+    ``None`` means the deployment either configures no agentic level, one the
+    three-level control cannot name, or one this answering profile does not offer;
+    the browser then starts with no level selected instead of mislabelling what a
+    run would actually use.
     """
     level = config.models.chat.resolve("query").effective_agentic_reasoning
     if level not in ANSWER_EFFORT_LEVELS:
+        return None
+    if profile is not None and level not in offered_answer_efforts(profile):
         return None
     return cast(AnswerEffort, level)
 

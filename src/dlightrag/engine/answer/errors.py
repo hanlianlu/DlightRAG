@@ -97,6 +97,26 @@ class UnsupportedAnswerModeError(AnswerInputError):
         )
 
 
+class UnsupportedAnswerEffortError(AnswerInputError):
+    """A caller-chosen agent effort this deployment's answering model cannot express.
+
+    A level the model can express but does not name at the top of its ladder is
+    clamped by reasoning resolution, as ADR 0014 records. A model that names no
+    level at all has nothing to clamp to, so the run is refused here instead of
+    being admitted and failing deep inside a provider call, where a configuration
+    fact would be reported as a provider rejection.
+    """
+
+    def __init__(self, effort: str) -> None:
+        super().__init__(
+            public_message=(
+                f"The answering model does not offer the {effort!r} agent effort; "
+                "it names no effort level at all"
+            ),
+            error_kind="unsupported_effort",
+        )
+
+
 class UnsupportedResourceCapabilityError(AnswerInputError):
     """No mode remains because a prepared resource has no registered branch."""
 

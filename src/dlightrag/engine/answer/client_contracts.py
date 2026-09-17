@@ -19,11 +19,30 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.answer.resources.images import MAX_QUERY_IMAGES
 
 #: The agent efforts a caller may choose, ordered from least to most.
 AnswerEffort = Literal["low", "high", "max"]
 ANSWER_EFFORT_LEVELS: tuple[AnswerEffort, ...] = ("low", "high", "max")
+
+
+def offered_answer_efforts(profile: ModelProfile) -> tuple[AnswerEffort, ...]:
+    """Return the named agent efforts one answering profile can express.
+
+    An uncatalogued endpoint resolves to a best-effort reasoning profile that maps
+    every level, so it offers all three and the provider stays the judge. A
+    catalogued profile offers only the levels whose provider value it names: a model
+    whose ladder stops below a level never advertises it, so the control cannot
+    promise something reasoning resolution would have to clamp.
+
+    An empty tuple means the model states no effort at all, and no caller may offer
+    a picker or honor a choice.
+    """
+    levels = None if profile.reasoning is None else profile.reasoning.levels
+    if levels is None:
+        return ()
+    return tuple(level for level in ANSWER_EFFORT_LEVELS if levels.value(level) is not None)
 
 
 def normalize_answer_effort(value: Any) -> AnswerEffort | None:
@@ -165,6 +184,7 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 
 __all__ = [
     "ANSWER_EFFORT_LEVELS",
+    "offered_answer_efforts",
     "AnswerEffort",
     "normalize_answer_effort",
     "ClientContractModel",

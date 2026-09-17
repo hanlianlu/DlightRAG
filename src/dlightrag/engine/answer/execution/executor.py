@@ -69,7 +69,7 @@ from dlightrag.engine.agent.tools import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.reasoning import ReasoningLevel
+from dlightrag.engine.ai.reasoning import ReasoningLevel, resolve_reasoning
 from dlightrag.engine.ai.scheduler import model_call_scope
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
@@ -82,6 +82,7 @@ from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.citations.projection import link_public_citations
 from dlightrag.engine.answer.citations.sources import project_contexts_for_client
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
+from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.errors import (
     AnswerInputError,
@@ -1859,6 +1860,11 @@ class AnswerExecutor:
                     if resolved_mode == "research" and prepared is not None
                     else getattr(stream, "trace", None) or {}
                 )
+                trace["agent_effort"] = _agent_effort_trace(
+                    request.effort,
+                    resolved_mode,
+                    None if prepared is None else prepared.model_profile,
+                )
                 if fast_compaction_trace:
                     trace.update(fast_compaction_trace)
                 if agent_runtime is not None and research_operation_id is not None:
@@ -2822,3 +2828,27 @@ def _accepted_child_notification_content(
                 return entry.content
         raise RuntimeError("Accepted child notification lost its immutable input")
     return content
+
+
+def _agent_effort_trace(
+    effort: AnswerEffort | None,
+    resolved_mode: ResolvedMode,
+    profile: ModelProfile | None,
+) -> dict[str, str | None] | None:
+    """Return the chosen agent effort and the level the answering model ran at.
+
+    A level below the model's ladder is clamped by reasoning resolution, so the
+    requested value alone would misreport what ran. A Fast answer never enters an
+    agent loop, so it states no effective level rather than claiming the deployment's
+    ordinary synthesis level was the choice, and neither does a run whose profile is
+    unavailable to this point.
+    """
+    if effort is None:
+        return None
+    if resolved_mode != "research" or profile is None:
+        return {"requested": effort, "effective": None}
+    resolved = resolve_reasoning(profile.reasoning, effort)
+    return {
+        "requested": effort,
+        "effective": None if resolved is None else resolved.effective,
+    }

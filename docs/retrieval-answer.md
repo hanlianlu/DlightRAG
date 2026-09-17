@@ -318,7 +318,7 @@ into the Tool result that produced it, and nothing is composed per turn. No syst
 message states the current time — a prefix that moves with wall time forfeits the
 whole cache — so a Research agent reads the clock from its environment and a Fast
 answer's own request states it
-([ADR 0014](adr/0014-prompt-prefix-stability-and-cache-anchored-accounting.md)).
+([ADR 0014](adr/0015-prompt-prefix-stability-and-cache-anchored-accounting.md)).
 The compaction trigger is measured from the character estimator corrected against
 the prompt size the provider itself billed for the previous request, and each
 turn's billed prompt and cache hits are aggregated in the Run trace.

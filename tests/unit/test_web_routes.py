@@ -4,7 +4,7 @@
 import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import jwt
@@ -24,6 +24,8 @@ from dlightrag.application.corpus_admin import (
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
 from dlightrag.engine.agent.skills import owner_skill_root
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
@@ -79,7 +81,27 @@ def mock_application():
             failure_kind=None,
         )
     )
-    application_double.answers = SimpleNamespace(capabilities=capability_view.read)
+    application_double.answers = SimpleNamespace(
+        capabilities=capability_view.read,
+        # The bootstrap offers the efforts the answering profile can express, so the
+        # double states the profile a deployment would have: every level mapped.
+        answering_model_profile=lambda: ModelProfile(
+            context_window_tokens=200_000,
+            max_output_tokens=64_000,
+            reasoning=ReasoningProfile(
+                "openai",
+                ReasoningLevels(
+                    off="none",
+                    minimal=None,
+                    low="low",
+                    medium=None,
+                    high="high",
+                    xhigh=None,
+                    max="max",
+                ),
+            ),
+        ),
+    )
     corpora = SimpleNamespace()
     corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
     corpora.workspace_exists = AsyncMock(return_value=True)
@@ -1479,3 +1501,30 @@ class TestSourcePresentation:
         assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
         assert source.chunks[0].page_number == 1
         assert "first page" in source.chunks[0].content_html
+
+    async def test_the_effort_offer_names_only_levels_the_model_can_express(
+        self, client: AsyncClient, web_app: Any
+    ) -> None:
+        """A ladder that stops below a level never advertises it in the control."""
+        application = web_app.state.application
+        application.answers.answering_model_profile = lambda: ModelProfile(
+            context_window_tokens=200_000,
+            max_output_tokens=64_000,
+            reasoning=ReasoningProfile(
+                "openai",
+                ReasoningLevels(
+                    off="none",
+                    minimal=None,
+                    low="low",
+                    medium=None,
+                    high="high",
+                    xhigh=None,
+                    max=None,
+                ),
+            ),
+        )
+
+        response = await client.get("/web/api/bootstrap")
+
+        assert response.status_code == 200
+        assert response.json()["agent_effort"] == {"levels": ["low", "high"], "default": None}
