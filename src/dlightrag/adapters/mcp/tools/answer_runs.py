@@ -423,7 +423,7 @@ async def follow_up_answer_run_tool(
 
 @mcp_app.tool(
     name="fork_answer_run",
-    description="Start a sibling branch from one terminal run's accepted context.",
+    description="Start a sibling branch from the state one terminal run settled at.",
     annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
 )
 async def fork_answer_run_tool(

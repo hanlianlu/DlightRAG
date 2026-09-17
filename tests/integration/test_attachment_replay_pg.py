@@ -78,7 +78,32 @@ async def new_run(
     return session, session_id
 
 
+async def record_fork_point(store: Any, session: Any) -> None:
+    """Settle the way an executor does: the settled state is recorded while the claim is live.
+
+    A fixture that skips this produces a Run the product would never produce — one
+    with no Fork Point — and every Fork from it would refuse.
+    """
+    from dlightrag.engine.answer.execution.executor import _lane_projection
+
+    routing = await store.load_routing(owner_id=session.owner_id, run_id=session.run_id)
+    assert routing is not None
+    snapshot = await session.execution.session_repository.load(SessionId(routing.agent_session_id))
+    lane_id = LaneId(routing.agent_lane_id)
+    head = snapshot.tree.lane(lane_id).head_entry_id
+    projection = _lane_projection(snapshot, lane_id)
+    await store.record_fork_point(
+        owner_id=session.owner_id,
+        run_id=session.run_id,
+        worker_id=WORKER,
+        fencing_epoch=session.fencing_epoch,
+        entry_id=head.value if head is not None else None,
+        projection_id=(projection.projection_id.value if projection is not None else None),
+    )
+
+
 async def finish(store, session):
+    await record_fork_point(store, session)
     result = await store.finish_success(
         owner_id=session.owner_id,
         run_id=session.run_id,

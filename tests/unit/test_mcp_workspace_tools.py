@@ -423,6 +423,13 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "retry_files",
         "steer_answer_run",
     }
+    fork_tool = next(tool for tool in tools if tool.name == "fork_answer_run")
+    assert (
+        fork_tool.description
+        == "Start a sibling branch from the state one terminal run settled at."
+    )
+    # The old wording promised a branch "from accepted context" without the answer.
+    assert "accepted context" not in (fork_tool.description or "")
     answer_tool = next(tool for tool in tools if tool.name == "answer")
     answer_props = answer_tool.input_schema["properties"]
     assert {

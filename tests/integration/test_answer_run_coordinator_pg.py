@@ -977,6 +977,166 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert routing.fork_point_entry_id is not None
 
 
+async def test_a_fork_from_an_earlier_turn_opens_at_that_runs_head_not_the_tip(
+    store: FingerprintingRunStore,
+) -> None:
+    """Forking turn one after turn two must not inherit turn two's Lane head."""
+    histories: list[PriorTurns] = []
+    application, coordinator = _answer_runtime(store, history_sink=histories)
+    await coordinator.start()
+    try:
+        first = await store.create_run(
+            owner_id=_OWNER,
+            request=_answer_run_request(),
+            idempotency_fingerprint=_REQUEST_FINGERPRINT,
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, first.run.run_id, "succeeded"))
+        first_routing = await store.load_routing(owner_id=_OWNER, run_id=first.run.run_id)
+        assert first_routing is not None
+        assert first_routing.fork_point_entry_id is not None
+        session_id = first_routing.agent_session_id
+        first_head = first_routing.fork_point_entry_id
+
+        second_request = {
+            **_answer_run_request(),
+            "query": "and then",
+            "agent_session_id": session_id,
+            "agent_lane_id": "main",
+            "parent_run_id": first.run.run_id,
+            "continuation_kind": "follow_up",
+        }
+        second = await store.create_run(
+            owner_id=_OWNER,
+            request=second_request,
+            idempotency_fingerprint=run_request_fingerprint(second_request),
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, second.run.run_id, "succeeded"))
+        second_routing = await store.load_routing(owner_id=_OWNER, run_id=second.run.run_id)
+        assert second_routing is not None
+        assert second_routing.fork_point_entry_id != first_head
+
+        fork_lane = str(uuid.uuid4())
+        fork_request = {
+            **_answer_run_request(),
+            "query": "other branch",
+            "agent_session_id": session_id,
+            "agent_lane_id": fork_lane,
+            "source_lane_id": "main",
+            "parent_run_id": first.run.run_id,
+            "continuation_kind": "fork",
+        }
+        fork = await store.create_run(
+            owner_id=_OWNER,
+            request=fork_request,
+            idempotency_fingerprint=run_request_fingerprint(fork_request),
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, fork.run.run_id, "succeeded"))
+        fork_id = fork.run.run_id
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    repository = PGAgentSessionRepository(
+        pool=cast(Any, store)._operation_pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(fork_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    snapshot = await repository.load(SessionId(session_id))
+    tip = snapshot.tree.lane(LaneId.main()).head_entry_id
+    assert tip is not None
+    assert tip.value != first_head
+    fork_ancestry = snapshot.tree.ancestry(LaneId(fork_lane))
+    assert all(entry.entry_id != tip for entry in fork_ancestry)
+    assert any(entry.entry_id.value == first_head for entry in fork_ancestry)
+    fork_user = next(
+        entry
+        for entry in reversed(fork_ancestry)
+        if isinstance(entry, UserMessageEntry) and entry.content == "other branch"
+    )
+    assert fork_user.parent_entry_id is not None
+    assert fork_user.parent_entry_id.value == first_head
+
+    # The Lane structure is not the claim: the Fork's own first request must carry the
+    # state it branched from, and none of the turn that came after it.
+    fork_history = str(histories[-1].messages)
+    assert "why" in fork_history
+    assert "the drawing shows it" in fork_history
+    assert "and then" not in fork_history
+
+
+async def test_a_fork_naming_an_existing_lane_still_checks_its_parent(
+    store: FingerprintingRunStore,
+) -> None:
+    """An existing Lane must not become a way to branch without a Fork Point.
+
+    A re-claimed Fork reuses the Lane its first attempt seeded, so the seed step is
+    skipped for it — but the parent's point is what the Run branches from, and a
+    request that names an existing Lane must still be refused when it has none.
+    """
+    application, coordinator = _answer_runtime(store)
+    await coordinator.start()
+    try:
+        first = await store.create_run(
+            owner_id=_OWNER,
+            request=_answer_run_request(),
+            idempotency_fingerprint=_REQUEST_FINGERPRINT,
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, first.run.run_id, "succeeded"))
+        first_routing = await store.load_routing(owner_id=_OWNER, run_id=first.run.run_id)
+        assert first_routing is not None
+        fork_lane = str(uuid.uuid4())
+        settled_fork = {
+            **_answer_run_request(),
+            "query": "first branch",
+            "agent_session_id": first_routing.agent_session_id,
+            "agent_lane_id": fork_lane,
+            "source_lane_id": "main",
+            "parent_run_id": first.run.run_id,
+            "continuation_kind": "fork",
+        }
+        opened = await store.create_run(
+            owner_id=_OWNER,
+            request=settled_fork,
+            idempotency_fingerprint=run_request_fingerprint(settled_fork),
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, opened.run.run_id, "succeeded"))
+
+        async with cast(Any, store)._operation_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE dlightrag_answer_run_routing "
+                "SET fork_point_entry_id = NULL, fork_point_projection_id = NULL "
+                "WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                uuid.UUID(first.run.run_id),
+            )
+        refused_request = {
+            **settled_fork,
+            "query": "second branch",
+        }
+        refused = await store.create_run(
+            owner_id=_OWNER,
+            request=refused_request,
+            idempotency_fingerprint=run_request_fingerprint(refused_request),
+        )
+        coordinator.wake()
+        await _settle(_status_is(store, refused.run.run_id, "failed"))
+        failed = await store.get_run(owner_id=_OWNER, run_id=refused.run.run_id)
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    assert failed is not None
+    assert failed.error_kind == "fork_point_missing"
+
+
 async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_interleaving(
     store: FingerprintingRunStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -2121,6 +2281,7 @@ def _answer_runtime(
     store: FingerprintingRunStore,
     *,
     orchestrator: AnswerOrchestrator | None = None,
+    history_sink: list[PriorTurns] | None = None,
 ) -> tuple[Application, RunCoordinator]:
     """Compose the final executor and coordinator over the throwaway database."""
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
@@ -2166,11 +2327,14 @@ def _answer_runtime(
     )
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:
+        projected: PriorTurns = kwargs.get("projected_history") or PriorTurns()
+        if history_sink is not None:
+            history_sink.append(projected)
         return OrchestratorRun(
             orchestrator=orchestrator,
             image_descriptions=[],
             query_images=None,
-            history=PriorTurns(),
+            history=projected,
             fast_history_targets=(),
             current_image_count=0,
             workspaces=["default"],

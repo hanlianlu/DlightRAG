@@ -17,8 +17,13 @@ from dlightrag.engine.agent.session.fold import project_session_messages
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
+from dlightrag.engine.agent.session.projection import (
+    CompactionSummary,
+    ContextProjection,
+    projection_source_digest,
+)
 from dlightrag.engine.agent.session.registers import (
+    ContextProjectionRegister,
     DeleteRegister,
     HostTurnReservation,
     LaneHead,
@@ -51,6 +56,7 @@ from dlightrag.engine.answer.execution.executor import (
     _reserve_agent_session_boundary,
 )
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
+from dlightrag.engine.answer.fast.session_host import projection_from_compaction_at
 from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime.errors import RunExecutionError
 
@@ -552,6 +558,142 @@ async def test_first_host_refresh_observes_lane_fork_committed_after_initial_sna
     assert repository.decoded_rows == 2
     assert boundary.selected_lane_id == lane_id
     assert canonical.selected_lane_id == LaneId.main()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_lane_seeds_an_explicit_head_instead_of_the_source_tip() -> None:
+    """A Fork names a recorded head; seeding from the source tip would be the old bug."""
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        idempotency_key="one-key",
+        content="first",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        content="first answer",
+    )
+    first_head = (await repository.load(session_id)).tree.lane(LaneId.main()).head_entry_id
+    assert first_head is not None
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="two",
+        idempotency_key="two-key",
+        content="second",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="two",
+        content="second answer",
+    )
+    tip = (await repository.load(session_id)).tree.lane(LaneId.main()).head_entry_id
+    assert tip is not None and tip != first_head
+    fork_lane = LaneId.new()
+    await ensure_session_lane(
+        repository=repository,
+        snapshot=await repository.load(session_id),
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=fork_lane,
+        source_lane_id=LaneId.main(),
+        head_entry_id=first_head,
+    )
+    forked = await repository.load(session_id)
+    assert forked.tree.lane(fork_lane).head_entry_id == first_head
+    assert forked.tree.lane(LaneId.main()).head_entry_id == tip
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_lane_seeds_the_projection_rebuilt_from_compaction() -> None:
+    """A Fork whose parent compacted inherits that projection, not an empty register."""
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        idempotency_key="one-key",
+        content="first",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        content="first answer",
+    )
+    snapshot = await repository.load(session_id)
+    ancestry = snapshot.tree.ancestry(LaneId.main())
+    user, assistant = ancestry[0], ancestry[1]
+    summary = CompactionSummary(goal="Keep the decision.").canonical_json()
+    digest = projection_source_digest([user.entry_id, assistant.entry_id])
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=3,
+        covered_through_sequence=2,
+        summary=summary,
+        covered_through_entry_id=assistant.entry_id,
+        first_retained_entry_id=None,
+        source_digest=digest,
+    )
+    compaction = CompactionEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        parent_entry_id=assistant.entry_id,
+        projection_id=projection.projection_id,
+        summary=summary,
+        covered_through_sequence=2,
+        first_retained_sequence=3,
+        covered_through_entry_id=assistant.entry_id,
+        first_retained_entry_id=None,
+        source_digest=digest,
+    )
+    head = snapshot.tree.lane(LaneId.main()).head
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[compaction],
+            register_writes=[
+                SetRegister(LaneHead(LaneId.main(), compaction.entry_id)),
+                SetRegister(ContextProjectionRegister(LaneId.main(), projection)),
+            ],
+            expectations=[
+                RegisterExpectation(head.ref, head.sequence),
+                RegisterExpectation(ContextProjectionRegister(LaneId.main(), projection).ref, None),
+            ],
+        ),
+    )
+    rebuilt = projection_from_compaction_at(await repository.load(session_id), compaction.entry_id)
+    assert rebuilt == projection
+    fork_lane = LaneId.new()
+    await ensure_session_lane(
+        repository=repository,
+        snapshot=await repository.load(session_id),
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=fork_lane,
+        source_lane_id=LaneId.main(),
+        head_entry_id=compaction.entry_id,
+        projection=rebuilt,
+    )
+    forked = await repository.load(session_id)
+    assert forked.tree.lane(fork_lane).head_entry_id == compaction.entry_id
+    seeded = next(
+        record.value.projection
+        for record in forked.registers
+        if isinstance(record.value, ContextProjectionRegister) and record.value.lane_id == fork_lane
+    )
+    assert seeded == projection
 
 
 @pytest.mark.asyncio
@@ -1359,3 +1501,166 @@ async def test_runtime_accept_rejects_a_fast_reservation_on_the_same_lane() -> N
                 tools=(),
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_the_fork_point_projection_wins_over_the_source_lanes_newer_one() -> None:
+    """The point names which projection a branch starts from, not which is newest.
+
+    The source Lane compacts twice; a Fork at a head between them must inherit the
+    first projection. Copying the source register — what the tip-seeding path would
+    do — installs the second, so this test can tell the two apart.
+    """
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+
+    async def turn(reservation: str, question: str, answer: str) -> None:
+        await host.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id=reservation,
+            idempotency_key=f"{reservation}-key",
+            content=question,
+        )
+        await host.complete(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id=reservation,
+            content=answer,
+        )
+
+    async def compact(goal: str) -> tuple[ContextProjection, EntryId]:
+        snapshot = await repository.load(session_id)
+        ancestry = snapshot.tree.ancestry(LaneId.main())
+        assistant = ancestry[-1]
+        head = snapshot.tree.lane(LaneId.main()).head
+        covered = [entry.entry_id for entry in ancestry if not isinstance(entry, CompactionEntry)]
+        projection = ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=assistant.sequence + 1,
+            covered_through_sequence=assistant.sequence,
+            summary=CompactionSummary(goal=goal).canonical_json(),
+            covered_through_entry_id=assistant.entry_id,
+            first_retained_entry_id=None,
+            source_digest=projection_source_digest(covered),
+        )
+        entry = CompactionEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=assistant.entry_id,
+            projection_id=projection.projection_id,
+            summary=projection.summary,
+            covered_through_sequence=projection.covered_through_sequence,
+            first_retained_sequence=projection.first_retained_sequence,
+            covered_through_entry_id=projection.covered_through_entry_id,
+            first_retained_entry_id=None,
+            source_digest=projection.source_digest,
+        )
+        writes = [
+            SetRegister(LaneHead(LaneId.main(), entry.entry_id)),
+            SetRegister(ContextProjectionRegister(LaneId.main(), projection)),
+        ]
+        expectations = [RegisterExpectation(head.ref, head.sequence)]
+        register_ref = ContextProjectionRegister(LaneId.main(), projection).ref
+        expectations.append(
+            RegisterExpectation(
+                register_ref,
+                next(
+                    (
+                        record.sequence
+                        for record in snapshot.registers
+                        if record.ref == register_ref
+                    ),
+                    None,
+                ),
+            )
+        )
+        await repository.transact(
+            session_id=session_id,
+            fencing_epoch=1,
+            transaction=SessionTransaction.from_parts(
+                entries=[entry],
+                register_writes=writes,
+                expectations=expectations,
+            ),
+        )
+        return projection, entry.entry_id
+
+    await turn("one", "first", "first answer")
+    older, older_head = await compact("Keep the first decision.")
+    await turn("two", "second", "second answer")
+    newer, _newer_head = await compact("Keep the second decision.")
+    assert older.projection_id != newer.projection_id
+
+    fork_lane = LaneId.new()
+    snapshot = await repository.load(session_id)
+    rebuilt = projection_from_compaction_at(snapshot, older_head)
+    await ensure_session_lane(
+        repository=repository,
+        snapshot=snapshot,
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=fork_lane,
+        source_lane_id=LaneId.main(),
+        head_entry_id=older_head,
+        projection=rebuilt,
+    )
+
+    forked = await repository.load(session_id)
+    seeded = next(
+        record.value.projection
+        for record in forked.registers
+        if isinstance(record.value, ContextProjectionRegister) and record.value.lane_id == fork_lane
+    )
+    assert seeded.projection_id == older.projection_id
+    assert seeded.projection_id != newer.projection_id
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_lane_refuses_a_projection_from_another_branch() -> None:
+    """A branch may only install a projection that covers the head it opens at."""
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        idempotency_key="one-key",
+        content="first",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="one",
+        content="first answer",
+    )
+    snapshot = await repository.load(session_id)
+    ancestry = snapshot.tree.ancestry(LaneId.main())
+    user, assistant = ancestry[0], ancestry[1]
+    foreign = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=3,
+        covered_through_sequence=2,
+        summary=CompactionSummary(goal="Another branch.").canonical_json(),
+        covered_through_entry_id=assistant.entry_id,
+        first_retained_entry_id=None,
+        source_digest=projection_source_digest([user.entry_id, EntryId.new()]),
+    )
+
+    with pytest.raises(RunExecutionError) as raised:
+        await ensure_session_lane(
+            repository=repository,
+            snapshot=snapshot,
+            fencing_epoch=1,
+            session_id=session_id,
+            lane_id=LaneId.new(),
+            source_lane_id=LaneId.main(),
+            head_entry_id=assistant.entry_id,
+            projection=foreign,
+        )
+
+    assert raised.value.kind == "agent_session_conflict"
+    assert "recorded Fork Point" in raised.value.public_message

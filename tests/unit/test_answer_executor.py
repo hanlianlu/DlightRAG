@@ -6,6 +6,7 @@ import datetime
 import io
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -15,7 +16,7 @@ from PIL import Image
 from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.application.errors import CorpusUnavailableError
-from dlightrag.engine.agent.session.ids import LaneId, SessionId
+from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import ContextProjectionRegister, SetRegister
@@ -91,6 +92,117 @@ async def test_missing_fork_session_is_a_typed_run_conflict() -> None:
         )
 
     assert raised.value.kind == "agent_session_conflict"
+
+
+@pytest.mark.asyncio
+async def test_a_fork_without_a_recorded_point_refuses_instead_of_using_the_tip() -> None:
+    """Older Runs have no Fork Point; guessing the Lane tip is the divergence between a recorded Fork Point and a Lane tip."""
+    executor = _executor()
+    session_id = SessionId.new()
+    snapshot = await MemoryAgentSessionRepository[None]().load(session_id)
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(session_id.value, fork_point_entry_id=None)
+        )
+    )
+    session = MagicMock(owner_id="owner", run_id="child")
+    request = SimpleNamespace(
+        parent_run_id="parent",
+        agent_session_id=session_id.value,
+        source_lane_id="main",
+    )
+
+    with pytest.raises(RunExecutionError, match="Fork from a Run that has one") as raised:
+        await executor._resolve_fork_seed(cast(RunSession, session), cast(Any, request), snapshot)
+
+    assert raised.value.kind == "fork_point_missing"
+
+
+@pytest.mark.asyncio
+async def test_a_fork_from_a_missing_parent_refuses() -> None:
+    executor = _executor()
+    session_id = SessionId.new()
+    snapshot = await MemoryAgentSessionRepository[None]().load(session_id)
+    executor._store = MagicMock(load_routing=AsyncMock(return_value=None))
+    session = MagicMock(owner_id="owner", run_id="child")
+    request = SimpleNamespace(
+        parent_run_id="missing",
+        agent_session_id=session_id.value,
+        source_lane_id="main",
+    )
+
+    with pytest.raises(RunExecutionError, match="Fork from a Run that still exists") as raised:
+        await executor._resolve_fork_seed(cast(RunSession, session), cast(Any, request), snapshot)
+
+    assert raised.value.kind == "fork_point_missing"
+
+
+@pytest.mark.asyncio
+async def test_a_fork_from_another_session_refuses() -> None:
+    executor = _executor()
+    session_id = SessionId.new()
+    snapshot = await MemoryAgentSessionRepository[None]().load(session_id)
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(
+                SessionId.new().value, fork_point_entry_id=EntryId.new().value
+            )
+        )
+    )
+    session = MagicMock(owner_id="owner", run_id="child")
+    request = SimpleNamespace(
+        parent_run_id="parent",
+        agent_session_id=session_id.value,
+        source_lane_id="main",
+    )
+
+    with pytest.raises(RunExecutionError, match="Fork from a Run in this conversation") as raised:
+        await executor._resolve_fork_seed(cast(RunSession, session), cast(Any, request), snapshot)
+
+    assert raised.value.kind == "fork_point_missing"
+
+
+@pytest.mark.asyncio
+async def test_a_fork_whose_recorded_head_is_gone_refuses() -> None:
+    executor = _executor()
+    session_id = SessionId.new()
+    snapshot = await MemoryAgentSessionRepository[None]().load(session_id)
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(session_id.value, fork_point_entry_id=EntryId.new().value)
+        )
+    )
+    session = MagicMock(owner_id="owner", run_id="child")
+    request = SimpleNamespace(
+        parent_run_id="parent",
+        agent_session_id=session_id.value,
+        source_lane_id="main",
+    )
+
+    with pytest.raises(RunExecutionError, match="whose head is still present") as raised:
+        await executor._resolve_fork_seed(cast(RunSession, session), cast(Any, request), snapshot)
+
+    assert raised.value.kind == "fork_point_stale"
+
+
+def _routing_record(
+    session_id: str,
+    *,
+    fork_point_entry_id: str | None,
+    fork_point_projection_id: str | None = None,
+) -> Any:
+    from dlightrag.engine.answer.runs.routing import RoutingRecord
+
+    return RoutingRecord(
+        requested_mode="fast",
+        valid_modes=("fast",),
+        resolved_mode="fast",
+        agent_session_id=session_id,
+        agent_lane_id="main",
+        source_lane_id=None,
+        fork_point_entry_id=fork_point_entry_id,
+        fork_point_projection_id=fork_point_projection_id,
+    )
 
 
 def _fingerprint(role: str) -> ModelFingerprint:
@@ -1350,3 +1462,54 @@ async def test_the_recorded_point_is_the_runs_lane_not_the_sessions_selected_one
         entry_id=fork_head.value,
         projection_id=None,
     )
+
+
+async def test_a_fork_request_without_a_parent_refuses() -> None:
+    """A Fork that names no parent has no state to branch from, and says so."""
+    executor = _executor()
+    executor._store = MagicMock(load_routing=AsyncMock(side_effect=AssertionError("no read")))
+    session = MagicMock(owner_id="owner", run_id="child")
+    request = SimpleNamespace(
+        parent_run_id=None,
+        agent_session_id=SessionId.new().value,
+        source_lane_id="main",
+    )
+
+    with pytest.raises(RunExecutionError) as raised:
+        await executor._resolve_fork_seed(
+            cast(RunSession, session),
+            cast(Any, request),
+            await MemoryAgentSessionRepository[None]().load(SessionId.new()),
+        )
+
+    assert raised.value.kind == "fork_point_missing"
+    assert "needs a parent Run" in raised.value.public_message
+
+
+async def test_a_fork_whose_recorded_projection_is_not_the_one_there_refuses() -> None:
+    """The recorded projection identity is checked, so another branch cannot be seeded."""
+    executor = _executor()
+    session_id = SessionId.new()
+    repository = MemoryAgentSessionRepository[None]()
+    snapshot = await repository.load(session_id)
+    executor._store = MagicMock(
+        load_routing=AsyncMock(
+            return_value=_routing_record(
+                session_id.value,
+                fork_point_entry_id=EntryId.new().value,
+                fork_point_projection_id=ProjectionId.new().value,
+            )
+        )
+    )
+    session = MagicMock(owner_id="owner", run_id="child")
+    request = SimpleNamespace(
+        parent_run_id="parent",
+        agent_session_id=session_id.value,
+        source_lane_id="main",
+    )
+
+    with pytest.raises(RunExecutionError) as raised:
+        await executor._resolve_fork_seed(cast(RunSession, session), cast(Any, request), snapshot)
+
+    # The head is not on this Session at all, so the refusal names the stale point.
+    assert raised.value.kind == "fork_point_stale"

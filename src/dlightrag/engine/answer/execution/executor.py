@@ -122,7 +122,12 @@ from dlightrag.engine.answer.execution.input import (
     validate_active_answer_input,
 )
 from dlightrag.engine.answer.execution.lineage import RetainedResourceLoader
-from dlightrag.engine.answer.fast import FastRunBoundaries, FastSessionHost, ensure_session_lane
+from dlightrag.engine.answer.fast import (
+    FastRunBoundaries,
+    FastSessionHost,
+    ensure_session_lane,
+    projection_from_compaction_at,
+)
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.engine.answer.history import HistoryInputMeasure, HistoryProjectionTarget
 from dlightrag.engine.answer.image_capability import (
@@ -1019,6 +1024,87 @@ class AnswerExecutor:
             # The claim moved on: this worker's state is not the Run's settled one.
             run_trace.update(metadata={"fork_point": "unwritten"})
 
+    async def _resolve_fork_seed(
+        self,
+        session: RunSession,
+        request: AnswerRunInput,
+        snapshot: AgentSessionSnapshot,
+    ) -> tuple[EntryId, ContextProjection | None]:
+        """Return the recorded Fork Point a new Lane must open at.
+
+        Missing, foreign, or unrecorded parents refuse with a remedy rather than
+        falling back to the source Lane's current head.
+        """
+        if not request.parent_run_id:
+            raise RunExecutionError(
+                "fork_point_missing",
+                "A Fork needs a parent Run. Fork from a Run that has one.",
+            )
+        parent = await self._store.load_routing(
+            owner_id=session.owner_id, run_id=request.parent_run_id
+        )
+        if parent is None:
+            raise RunExecutionError(
+                "fork_point_missing",
+                "The parent Run is missing. Fork from a Run that still exists.",
+            )
+        if parent.agent_session_id != request.agent_session_id:
+            raise RunExecutionError(
+                "fork_point_missing",
+                "The parent Run belongs to another Session. Fork from a Run in this conversation.",
+            )
+        if parent.fork_point_entry_id is None:
+            raise RunExecutionError(
+                "fork_point_missing",
+                "This Run has no recorded Fork Point. Fork from a Run that has one.",
+            )
+        try:
+            head = EntryId(parent.fork_point_entry_id)
+            reconstructed = projection_from_compaction_at(snapshot, head)
+        except (KeyError, ValueError) as exc:
+            raise RunExecutionError(
+                "fork_point_stale",
+                "The recorded Fork Point is no longer on this Session. "
+                "Fork from a Run whose head is still present.",
+            ) from exc
+        if not snapshot.tree.is_stable_checkpoint(head):
+            # A terminally failed Research run can settle with a Tool Call whose
+            # Result never arrived; branching there would start inside a batch.
+            raise RunExecutionError(
+                "fork_point_stale",
+                "The recorded Fork Point is not a settled turn. Fork from a Run that ended on one.",
+            )
+        if request.source_lane_id:
+            try:
+                source_ids = {
+                    entry.entry_id
+                    for entry in snapshot.tree.ancestry(LaneId(request.source_lane_id))
+                }
+            except KeyError as exc:
+                raise RunExecutionError(
+                    "fork_point_stale",
+                    "The recorded Fork Point is no longer on this Session. "
+                    "Fork from a Run whose head is still present.",
+                ) from exc
+            if head not in source_ids:
+                raise RunExecutionError(
+                    "fork_point_stale",
+                    "The recorded Fork Point is no longer on this Session. "
+                    "Fork from a Run whose head is still present.",
+                )
+        if parent.fork_point_projection_id is None:
+            return head, None
+        if (
+            reconstructed is None
+            or reconstructed.projection_id.value != parent.fork_point_projection_id
+        ):
+            raise RunExecutionError(
+                "fork_point_stale",
+                "The recorded Fork Point is no longer on this Session. "
+                "Fork from a Run whose head is still present.",
+            )
+        return head, reconstructed
+
     async def _execute_run(
         self,
         session: RunSession,
@@ -1317,21 +1403,43 @@ class AnswerExecutor:
         )
         lane_ids = {lane.lane_id for lane in canonical_snapshot.tree.lanes}
         source_lane_id = LaneId(request.source_lane_id) if request.source_lane_id else None
-        history_lane_id = (
-            agent_lane_id
-            if agent_lane_id in lane_ids
-            else source_lane_id
-            if source_lane_id in lane_ids
-            else LaneId.main()
-        )
-        selected_snapshot = replace(
-            canonical_snapshot,
-            selected_lane_id=history_lane_id,
-        )
-        authoritative_messages = project_session_messages(
-            canonical_snapshot.tree.ancestry(history_lane_id),
-            selected_snapshot.active_projection,
-        )
+        fork_head: EntryId | None = None
+        fork_projection: ContextProjection | None = None
+        if request.continuation_kind == "fork":
+            # Every Fork resolves its parent's recorded point, whether or not its own
+            # Lane already exists: a re-claimed Fork reuses the Lane its first attempt
+            # seeded, and skipping the parent checks for an existing Lane would be a
+            # way to branch from the tip without ever naming a Fork Point.
+            fork_head, fork_projection = await self._resolve_fork_seed(
+                session, request, canonical_snapshot
+            )
+        if fork_head is not None and agent_lane_id not in lane_ids:
+            # A Fork's first request is bounded by the recorded Fork Point, not by
+            # whatever the source Lane has since grown to.
+            selected_snapshot = replace(
+                canonical_snapshot,
+                selected_lane_id=source_lane_id or LaneId.main(),
+            )
+            authoritative_messages = project_session_messages(
+                canonical_snapshot.tree.graph.ancestry(fork_head),
+                fork_projection,
+            )
+        else:
+            history_lane_id = (
+                agent_lane_id
+                if agent_lane_id in lane_ids
+                else source_lane_id
+                if source_lane_id in lane_ids
+                else LaneId.main()
+            )
+            selected_snapshot = replace(
+                canonical_snapshot,
+                selected_lane_id=history_lane_id,
+            )
+            authoritative_messages = project_session_messages(
+                canonical_snapshot.tree.ancestry(history_lane_id),
+                selected_snapshot.active_projection,
+            )
         has_agent_history = bool(authoritative_messages)
         if has_agent_history:
             routing_history = PriorTurns(authoritative_messages)
@@ -1452,16 +1560,27 @@ class AnswerExecutor:
         subagent_host = run.orchestrator.subagent_host
         cancel_children_on_exit = False
         try:
-            await ensure_session_lane(
-                repository=repository,
-                snapshot=canonical_snapshot,
-                fencing_epoch=session.execution.fencing_epoch,
-                session_id=agent_session_id,
-                lane_id=agent_lane_id,
-                source_lane_id=(
-                    LaneId(request.source_lane_id) if request.source_lane_id is not None else None
-                ),
-            )
+            try:
+                await ensure_session_lane(
+                    repository=repository,
+                    snapshot=canonical_snapshot,
+                    fencing_epoch=session.execution.fencing_epoch,
+                    session_id=agent_session_id,
+                    lane_id=agent_lane_id,
+                    source_lane_id=(
+                        LaneId(request.source_lane_id)
+                        if request.source_lane_id is not None
+                        else None
+                    ),
+                    head_entry_id=fork_head,
+                    projection=fork_projection,
+                )
+            except RunExecutionError as exc:
+                if fork_head is None or exc.kind != "agent_session_conflict":
+                    raise
+                # A Fork Point that could not open a branch is a stale point, not a
+                # Session race: the caller asked for a state that is no longer there.
+                raise RunExecutionError("fork_point_stale", exc.public_message) from exc
             prepared_early: Any = None
             if resolved_mode == "research":
                 from dlightrag.engine.answer.execution_settings import validate_agent_execution
@@ -1671,6 +1790,9 @@ class AnswerExecutor:
                 await session.enter_phase("researching")
                 while True:
                     usage_floor = accepted.cursor.last_entry_sequence
+                    # A previous operation's settled view is not this operation's
+                    # state: if this one fails, nothing here has settled to record.
+                    self._settled_views.pop(session.run_id, None)
                     operation = await _drive_answer_operation(
                         agent_runtime,
                         session=session,

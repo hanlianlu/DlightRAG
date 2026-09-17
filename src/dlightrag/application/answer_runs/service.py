@@ -1552,7 +1552,7 @@ class AnswerService:
         auth_mode: str = "none",
         authorized_workspaces: Sequence[str] | None,
     ) -> RunCreation | None:
-        """Start a sibling branch from the selected run's accepted context."""
+        """Start a sibling branch from the state the selected run settled at."""
         request = await self.continuation_request(
             owner_id=owner_id,
             run_id=run_id,
@@ -1580,9 +1580,9 @@ class AnswerService:
     ) -> AnswerRequest | None:
         """Build the selected accepted context after transport authorization.
 
-        The parent's question always joins the history; the parent's answer
-        joins only for a follow-up. A fork therefore branches from the same
-        starting point without carrying the answer it is meant to redo.
+        History injection here is a transport convenience: a Fork still branches
+        from the parent's recorded Fork Point (the state it settled at, including
+        its answer), and a Follow-Up still appends to the Lane tip.
         """
         text = query.strip()
         if not text:

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +12,7 @@ from typing import Any
 from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
+    SessionEntry,
     UserMessageEntry,
 )
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
@@ -575,6 +576,25 @@ class FastSessionHost:
             return outcome
 
 
+def projection_from_compaction_at(
+    snapshot: AgentSessionSnapshot,
+    head_entry_id: EntryId,
+) -> ContextProjection | None:
+    """Rebuild the projection from the newest CompactionEntry at or before this head."""
+    for entry in reversed(snapshot.tree.graph.ancestry(head_entry_id)):
+        if isinstance(entry, CompactionEntry):
+            return ContextProjection(
+                projection_id=entry.projection_id,
+                first_retained_sequence=entry.first_retained_sequence,
+                covered_through_sequence=entry.covered_through_sequence,
+                summary=entry.summary,
+                covered_through_entry_id=entry.covered_through_entry_id,
+                first_retained_entry_id=entry.first_retained_entry_id,
+                source_digest=entry.source_digest,
+            )
+    return None
+
+
 async def ensure_session_lane(
     *,
     repository: AgentSessionRepository[Any],
@@ -583,8 +603,15 @@ async def ensure_session_lane(
     session_id: SessionId,
     lane_id: LaneId,
     source_lane_id: LaneId | None,
+    head_entry_id: EntryId | None = None,
+    projection: ContextProjection | None = None,
 ) -> None:
-    """Open or fork a Lane from the executor's authoritative cold-load boundary."""
+    """Open or fork a Lane from the executor's authoritative cold-load boundary.
+
+    An explicit ``head_entry_id`` seeds the new Lane at that Entry instead of the
+    source Lane's current head; a Fork passes the parent's recorded Fork Point, and
+    a caller that omits it seeds from the source Lane's current head.
+    """
     if snapshot.session_id != session_id:
         raise ValueError("Agent Session Lane snapshot belongs to another Session")
     try:
@@ -598,26 +625,45 @@ async def ensure_session_lane(
         raise RunExecutionError("agent_session_conflict", "Agent Lane mapping is missing.")
     try:
         source = snapshot.tree.lane(source_lane_id)
-        target = source.head_entry_id
+        target = head_entry_id if head_entry_id is not None else source.head_entry_id
         if target is None or not snapshot.tree.is_stable_checkpoint(target):
             raise ValueError("source Lane is not a stable fork checkpoint")
+        if head_entry_id is not None:
+            source_ids = {entry.entry_id for entry in snapshot.tree.ancestry(source_lane_id)}
+            if head_entry_id not in source_ids:
+                raise ValueError("fork head is not on the source Lane")
         head = LaneHead(lane_id, target)
         state = LaneState(lane_id)
+        writes: list[SetRegister] = [SetRegister(head), SetRegister(state)]
+        expectations = [
+            RegisterExpectation(head.ref, None),
+            RegisterExpectation(state.ref, None),
+        ]
+        if projection is not None:
+            if projection.covered_through_entry_id is not None and not _projection_covers_ancestry(
+                snapshot.tree.graph.ancestry(target), projection
+            ):
+                raise ValueError("fork projection does not cover the seeded head")
+            projection_register = ContextProjectionRegister(lane_id, projection)
+            writes.append(SetRegister(projection_register))
+            expectations.append(RegisterExpectation(projection_register.ref, None))
         outcome = await repository.transact(
             session_id=session_id,
             fencing_epoch=fencing_epoch,
             transaction=SessionTransaction.from_parts(
-                register_writes=[SetRegister(head), SetRegister(state)],
-                expectations=[
-                    RegisterExpectation(head.ref, None),
-                    RegisterExpectation(state.ref, None),
-                ],
+                register_writes=writes,
+                expectations=expectations,
             ),
         )
     except (KeyError, ValueError) as exc:
         raise RunExecutionError(
             "agent_session_conflict",
-            "The Agent Session changed before its branch could be created.",
+            (
+                "The recorded Fork Point could not open a branch. "
+                "Fork from a Run whose head is still present."
+                if head_entry_id is not None
+                else "The Agent Session changed before its branch could be created."
+            ),
         ) from exc
     if isinstance(outcome, TransactionLeaseLost):
         raise LeaseLostError
@@ -689,15 +735,12 @@ def _unanswered_user_at_head(
     return current if isinstance(current, UserMessageEntry) else None
 
 
-def _projection_belongs_to_lane(
-    snapshot: AgentSessionSnapshot,
-    lane_id: LaneId,
+def _projection_covers_ancestry(
+    ancestry: Sequence[SessionEntry],
     projection: ContextProjection,
 ) -> bool:
-    """Verify a candidate's branch identities against its preparation snapshot."""
-    branch = [
-        entry for entry in snapshot.tree.ancestry(lane_id) if not isinstance(entry, CompactionEntry)
-    ]
+    """Verify a candidate's branch identities against one exact ancestry."""
+    branch = [entry for entry in ancestry if not isinstance(entry, CompactionEntry)]
     covered_index = next(
         (
             index
@@ -724,6 +767,15 @@ def _projection_belongs_to_lane(
         None,
     )
     return retained_index is not None and retained_index > covered_index
+
+
+def _projection_belongs_to_lane(
+    snapshot: AgentSessionSnapshot,
+    lane_id: LaneId,
+    projection: ContextProjection,
+) -> bool:
+    """Verify a candidate's branch identities against its preparation snapshot."""
+    return _projection_covers_ancestry(snapshot.tree.ancestry(lane_id), projection)
 
 
 def _is_reserved_turn_head(
@@ -771,4 +823,9 @@ def _reservation(
     return record
 
 
-__all__ = ["AcceptedFastTurn", "FastSessionHost", "ensure_session_lane"]
+__all__ = [
+    "AcceptedFastTurn",
+    "FastSessionHost",
+    "ensure_session_lane",
+    "projection_from_compaction_at",
+]

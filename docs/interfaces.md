@@ -285,7 +285,7 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `GET /answer/{run_id}/artifacts/{resource_id}/presentation` | Project an available Markdown Artifact as typed `AnswerResponse`, including that Artifact's validated citation sources. |
 | `POST /answer/{run_id}/steer` | Queue an instruction for live Research. |
 | `POST /answer/{run_id}/follow-up` | Create a child run using the selected terminal answer as context. |
-| `POST /answer/{run_id}/fork` | Create a sibling branch from accepted context. |
+| `POST /answer/{run_id}/fork` | Create a sibling branch from the state that run settled at. |
 | `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |

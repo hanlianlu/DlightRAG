@@ -2,11 +2,17 @@
 """Fast Answer execution internals."""
 
 from .boundaries import FastRunBoundaries
-from .session_host import AcceptedFastTurn, FastSessionHost, ensure_session_lane
+from .session_host import (
+    AcceptedFastTurn,
+    FastSessionHost,
+    ensure_session_lane,
+    projection_from_compaction_at,
+)
 
 __all__ = [
     "AcceptedFastTurn",
     "FastRunBoundaries",
     "FastSessionHost",
     "ensure_session_lane",
+    "projection_from_compaction_at",
 ]

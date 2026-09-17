@@ -343,6 +343,13 @@ parent-linked ancestry; Lane registers select branches without copying shared
 history. Research restores complete `OperationState` and invokes the same pure
 `NextAction` interpreter used live.
 
+A Fork opens its Lane at the parent Run's recorded Fork Point instead of at the
+source Lane's current head, so a branch from an earlier turn starts at that turn
+and inherits the projection that was active there. A Run with no recorded point —
+one that predates the recording, or whose worker died before it could write one —
+refuses a Fork with a remedy rather than branching from wherever the Lane has since
+moved.
+
 Before a provider call, Runtime commits the exact request snapshot and attempt.
 Assistant settlement records the complete response and ordered Tool Batch Plan.
 Tool clearance, effect settlement, ToolResult placement, Host deltas, and
@@ -419,8 +426,9 @@ per request). Queued/running turns remain resubscribable pending entries; failed
 and cancelled turns remain until run retention. Only succeeded turns become
 model history, projected from the run rather than copied.
 
-A follow-up adds a linked turn. Fork atomically opens a conversation branch with
-parent lineage. Conversation deletion removes linked runs in one transaction;
+A follow-up adds a linked turn and appends to the Lane's tip. Fork atomically opens
+a conversation branch with parent lineage, seeded at the parent Run's recorded Fork
+Point. Conversation deletion removes linked runs in one transaction;
 workers cannot append after the fenced rows disappear. Cascades remove events
 and references, then ownership-safe cleanup removes unreferenced blobs.
 

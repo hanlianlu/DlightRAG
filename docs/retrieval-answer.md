@@ -333,6 +333,12 @@ effect intent. A spill handle states the `read(resource_id=…)` call it authori
 and reading one back admits no Evidence and mints no citation handle — a spilled
 output is continuation memory, never a source.
 
+A Follow-Up continues on the Lane it came from, at its tip. A Fork does not: it
+opens a new Lane at the state its parent Run settled at, so a branch from an earlier
+turn sees that turn's summary and retained tail rather than everything the
+conversation has since become, and it starts from that state's projection rather
+than the one the source Lane is on now.
+
 The summary also names the run's Run Notes: the files it wrote under `notes/` in
 its Agent Workspace, bounded to a small list and named by the `read(path=…)` call
 that reads each one again. They come from the Workspace Inventory — the framework's

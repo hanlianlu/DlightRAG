@@ -59,7 +59,7 @@ export class DlContinuationDialog extends LightElement {
       ? msg('Fork this answer', {id: 'runDialogs.forkTitle'})
       : msg('Follow up', {id: 'runDialogs.followUpTitle'});
     const note = forking
-      ? msg('Start a new conversation from the same context. The previous answer is not carried over.', {
+      ? msg('Start a new conversation from the state this answer settled at, including its answer.', {
           id: 'runDialogs.forkNote',
         })
       : msg('Ask a follow-up question; the previous answer is included as context.', {

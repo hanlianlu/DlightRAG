@@ -291,7 +291,7 @@ export const templates: Record<
   // Run dialogs
   'runDialogs.forkTitle': '分叉此回答',
   'runDialogs.followUpTitle': '继续追问',
-  'runDialogs.forkNote': '基于相同上下文开启新会话。先前的回答不会带入。',
+  'runDialogs.forkNote': '从这条回答当时的状态开启新会话，包含该回答。',
   'runDialogs.followUpNote': '提出追问；先前的回答会作为上下文。',
   'runDialogs.askPlaceholder': '输入问题…',
   'runDialogs.questionLabel': '你的问题',
