@@ -3,7 +3,7 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
-import {icon} from '../design-system/index.ts';
+import {icon, type IconName} from '../design-system/index.ts';
 import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer-request.ts';
 import {formatFileSize} from '../lib/file-size.ts';
@@ -37,6 +37,17 @@ import {detectDropItems, type RelativeFile} from './folder-upload.ts';
 const STORAGE_KEY = 'dlightrag.answerMode';
 const MODES = ['auto', 'fast', 'research'] as const satisfies readonly AnswerMode[];
 export type {AnswerMode} from '../lib/answer-request.ts';
+
+/** One glyph per level: the lucide dial with its needle at that level's stop.
+
+ * The needle carries no accessible meaning, the label and aria do, so a level the
+ * deployment does not offer never renders one of these.
+ */
+const EFFORT_ICONS: Record<AgentEffort, IconName> = {
+  low: 'effort-low',
+  high: 'effort-high',
+  max: 'effort-max',
+};
 
 const MODE_LABELS: Record<AnswerMode, string> = {
   auto: 'Auto',
@@ -584,7 +595,7 @@ export class DlChatComposer extends LightElement {
                   ? msg(str`Agent effort: ${EFFORT_LABELS[displayed]}`, {id: `chatComposer.effortAria.${displayed}`})
                   : msg('Agent effort', {id: 'chatComposer.effortAria'})}
                 @click=${this.#toggleEffortMenu} @keydown=${this.#effortTriggerKeydown}>
-          ${icon('effort', {size: 'sm', className: 'composer-effort-icon'})}
+          ${icon(displayed ? EFFORT_ICONS[displayed] : 'effort', {size: 'sm', className: 'composer-effort-icon'})}
           <span class="composer-effort-label">${displayed
             ? msg(EFFORT_LABELS[displayed], {id: `chatComposer.effort.${displayed}`})
             : msg('Effort', {id: 'chatComposer.effortLabel'})}</span>
@@ -596,6 +607,7 @@ export class DlChatComposer extends LightElement {
             <button type="button" role="menuitemradio" data-effort=${level}
                     aria-checked=${String(displayed === level)} tabindex="-1"
                     @click=${() => this.#selectEffort(level)}>
+              ${icon(EFFORT_ICONS[level], {size: 'sm', className: 'composer-effort-icon'})}
               <span>${msg(EFFORT_LABELS[level], {id: `chatComposer.effort.${level}`})}</span>
               ${this.agentEffortOffer.default === level
                 ? html`<span class="composer-effort-default">${msg('Default', {id: 'chatComposer.effortDefault'})}</span>`

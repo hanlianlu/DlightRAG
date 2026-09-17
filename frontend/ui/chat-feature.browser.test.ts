@@ -727,6 +727,15 @@ it('Composer offers only bootstrap levels, remembers the choice, and hides effor
   expect(composer.querySelector('.composer-effort-menu')?.hasAttribute('hidden')).to.equal(true);
   expect(document.activeElement).to.equal(trigger);
 
+  // Each level shows its own dial: the trigger's needle follows the choice, and
+  // every menu row carries that level's stop rather than one shared glyph.
+  const needle = () => composer.querySelector('.composer-effort-trigger path:last-of-type')?.getAttribute('d');
+  const rowNeedles = () => [...composer.querySelectorAll<HTMLButtonElement>('[data-effort]')]
+    .map((row) => row.querySelector('path:last-of-type')?.getAttribute('d'));
+  const stops = rowNeedles();
+  expect(new Set(stops).size).to.equal(3, 'each level owns a distinct needle stop');
+  expect(needle()).to.equal(stops[1], 'the deployment default is shown at its own stop');
+
   // Choosing a level stores the caller's own override and carries it in the intent.
   const intents: {effort: string | null}[] = [];
   composer.addEventListener('dl-composer-submit', (event) => {
@@ -740,6 +749,8 @@ it('Composer offers only bootstrap levels, remembers the choice, and hides effor
   await composer.updateComplete;
   expect(localStorage.getItem(AGENT_EFFORT_STORAGE_KEY)).to.equal('max');
   expect(composer.querySelector('.composer-effort-label')?.textContent).to.equal('Max');
+  expect(needle()).to.equal(stops[2], 'the trigger shows the chosen level stop');
+  expect(needle()).to.not.equal(stops[0]);
   composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
   await composer.updateComplete;
   expect(intents.at(-1)?.effort).to.equal('max');

@@ -572,6 +572,7 @@ body.files-panel-open #files-btn {
 }
 
 .composer-effort-default {
+    margin-left: auto;
     color: var(--color-text-dim);
     font-size: 0.7rem;
 }

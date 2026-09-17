@@ -247,6 +247,78 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "effort-high": {
+    source: "dlightrag",
+    sourceName: "effort-high",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M3.34 19a10 10 0 1 1 17.32 0"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M12 14L12.98 8.43"
+        }
+      ]
+    ]
+  },
+  "effort-low": {
+    source: "dlightrag",
+    sourceName: "effort-low",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M3.34 19a10 10 0 1 1 17.32 0"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M12 14L7.10 11.17"
+        }
+      ]
+    ]
+  },
+  "effort-max": {
+    source: "dlightrag",
+    sourceName: "effort-max",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M3.34 19a10 10 0 1 1 17.32 0"
+        }
+      ],
+      [
+        "path",
+        {
+          "d": "M12 14L17.32 12.07"
+        }
+      ]
+    ]
+  },
   "files": {
     source: "lucide",
     sourceName: "folder",
