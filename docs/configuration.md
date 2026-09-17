@@ -355,9 +355,9 @@ operations and revision rules are in
 
 `agentic_reasoning` inherits `reasoning`. When typed reasoning is configured,
 raw provider reasoning keys in `model_kwargs` are rejected to keep one owner for
-translation, and a role that owns reasoning through `agentic_model_kwargs` refuses a
-caller-chosen agent effort at admission for the same reason: there is no typed level
-left to apply. `agentic_model_kwargs` is a shallow overlay for Research calls.
+translation, and a role that owns reasoning through `agentic_model_kwargs` ignores a
+caller-chosen agent effort for the same reason: there is no typed level left to apply.
+`agentic_model_kwargs` is a shallow overlay for Research calls.
 
 `agentic_reasoning` on the answering role is the deployment **default**, not a
 ceiling or a whitelist. One Answer request may name its own effort
@@ -365,8 +365,9 @@ ceiling or a whitelist. One Answer request may name its own effort
 levels the answering profile can express — the three where it can express all of
 them — marking the configured level as `Default` when it is one of them. A subagent
 always runs the level configured for its own role; a level below that model's ladder
-is clamped by the engine to the nearest supported one, and a model that names no
-non-off level refuses the choice. [ADR 0014](adr/0014-caller-chosen-agent-effort.md) owns the decision.
+is clamped by the engine to the nearest supported one, and a choice that cannot apply
+is ignored and recorded rather than failed — the control simply does not offer what the
+deployment cannot apply. [ADR 0014](adr/0014-caller-chosen-agent-effort.md) owns the decision.
 
 ### Structured Output
 

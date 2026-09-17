@@ -68,7 +68,6 @@ from dlightrag.application.web_conversations import (
     WebConversationUnavailableError,
 )
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
-from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
 from dlightrag.engine.answer.results import (
     project_answer_result,
     project_artifact_sources,
@@ -200,8 +199,6 @@ async def start_answer_run(
             "submission_conflict",
             "This submission id was already used for a different request",
         ) from None
-    except UnsupportedAnswerEffortError as exc:
-        raise _command_error(422, "invalid_request", exc.public_message) from None
     except ConnectionsError:
         raise _command_error(
             409, "submission_conflict", "Connections changed; submit the Answer again"

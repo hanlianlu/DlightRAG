@@ -2,7 +2,6 @@
 """Map root Pydantic configuration into provider-neutral AI settings."""
 
 from pathlib import Path
-from typing import cast
 
 from dlightrag.application.access import (
     AccessRule,
@@ -20,11 +19,6 @@ from dlightrag.engine.ai.settings import ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
-)
-from dlightrag.engine.answer.client_contracts import (
-    ANSWER_EFFORT_LEVELS,
-    AnswerEffort,
-    offered_answer_efforts,
 )
 from dlightrag.engine.answer.execution import (
     AnswerExecutorSettings,
@@ -112,25 +106,6 @@ def semantic_highlight_settings(config: DlightragConfig) -> SemanticHighlightSet
         max_input_chars=highlights.max_input_chars,
         cache_size=highlights.cache_size,
     )
-
-
-def default_answer_effort(
-    config: DlightragConfig,
-    profile: ModelProfile | None = None,
-) -> AnswerEffort | None:
-    """The deployment's own agent effort, when it is one of the offered levels.
-
-    ``None`` means the deployment either configures no agentic level, one the
-    three-level control cannot name, or one this answering profile does not offer;
-    the browser then starts with no level selected instead of mislabelling what a
-    run would actually use.
-    """
-    level = config.models.chat.resolve("query").effective_agentic_reasoning
-    if level not in ANSWER_EFFORT_LEVELS:
-        return None
-    if profile is not None and level not in offered_answer_efforts(profile):
-        return None
-    return cast(AnswerEffort, level)
 
 
 def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntimeSettings:

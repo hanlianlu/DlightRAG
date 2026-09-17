@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.application.answer_runs.service import AgentEffortOffer
 from dlightrag.application.corpus_admin import FilePanelCursorCodec
 from tests.unit.conftest import answer_capability_view
 
@@ -49,6 +50,9 @@ def app(test_config):
 
     capability_view = answer_capability_view()
     mock_application.answers.capabilities = capability_view.read
+    mock_application.answers.agent_effort_offer = lambda: AgentEffortOffer(
+        ("low", "high", "max"), None
+    )
 
     return real_app
 

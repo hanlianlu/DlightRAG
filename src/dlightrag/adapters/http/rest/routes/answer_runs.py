@@ -50,7 +50,6 @@ from dlightrag.application.retrieval import RetrievalOptions
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.client_contracts import conversation_history_as_dicts
-from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
 from dlightrag.engine.answer.execution.input import ResourceInput
 from dlightrag.engine.answer.resources.links import answer_link_resources
 from dlightrag.engine.answer.results import (
@@ -445,8 +444,6 @@ async def create_answer_run(
             status_code=503,
             detail="Deployment-wide nonterminal admission limit reached",
         ) from None
-    except UnsupportedAnswerEffortError as exc:
-        raise HTTPException(status_code=422, detail=exc.public_message) from None
     return run_descriptor(creation.run)
 
 

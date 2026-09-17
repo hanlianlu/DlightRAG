@@ -42,6 +42,7 @@ from playwright.sync_api import (
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import WorkspaceRecord
 from dlightrag.application.answer_runs import RunResourceDescriptor
+from dlightrag.application.answer_runs.service import AgentEffortOffer
 from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.corpus_admin import (
     FilePanelCursorCodec,
@@ -71,7 +72,6 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
-from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.settings import (
     MODEL_ROLE_NAMES,
     EmbeddingSettings,
@@ -712,24 +712,8 @@ def e2e_base_url(
                 vlm_status="unknown",
             )
         ),
-        # The bootstrap offers the efforts the answering profile can express, so the
-        # double states the profile a deployment has: every level mapped.
-        answering_model_profile=lambda: ModelProfile(
-            context_window_tokens=200_000,
-            max_output_tokens=64_000,
-            reasoning=ReasoningProfile(
-                "openai",
-                ReasoningLevels(
-                    off="none",
-                    minimal=None,
-                    low="low",
-                    medium=None,
-                    high="high",
-                    xhigh=None,
-                    max="max",
-                ),
-            ),
-        ),
+        # The bootstrap offers exactly what this deployment can apply.
+        agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
     )
     workspace_records = [dict(record) for record in MOCK_WORKSPACES]
 

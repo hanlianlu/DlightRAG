@@ -78,7 +78,9 @@ async def list_workspaces_tool() -> dict[str, Any]:
         "answer_image_capability with status (supported/unsupported/unknown), "
         "effective_max_images (max images the answer model accepts; 0 means send none), "
         "configured_ceiling, and model — query images reach the answer model only when "
-        "status is 'supported'."
+        "status is 'supported'. Also returns answer_agent_effort_levels, the agent "
+        "efforts this deployment applies to a Research run; a request's `effort` outside "
+        "that set is accepted and ignored."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
 )
@@ -87,6 +89,9 @@ async def get_capabilities_tool() -> dict[str, Any]:
     capabilities = await application.answers.capabilities()
     return {
         "answer_image_capability": answer_image_capability_summary(capabilities.answer),
+        # An answer request may name its own agent effort; a level outside this set is
+        # accepted and ignored, so an agent can check before submitting.
+        "answer_agent_effort_levels": list(application.answers.agent_effort_offer().levels),
     }
 
 

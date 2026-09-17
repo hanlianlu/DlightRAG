@@ -110,16 +110,22 @@ class ModelSettings(FrozenSettings):
                 raise ValueError(
                     "reasoning conflicts with model_kwargs fields: " + ", ".join(conflicts)
                 )
-        if self.effective_agentic_reasoning is not None:
-            conflicts = conflicting_reasoning_keys(
-                {**self.model_kwargs, **self.agentic_model_kwargs}
+        if self.effective_agentic_reasoning is not None and self.raw_agentic_reasoning_keys:
+            raise ValueError(
+                "agentic_reasoning conflicts with agentic model kwargs fields: "
+                + ", ".join(self.raw_agentic_reasoning_keys)
             )
-            if conflicts:
-                raise ValueError(
-                    "agentic_reasoning conflicts with agentic model kwargs fields: "
-                    + ", ".join(conflicts)
-                )
         return self
+
+    @property
+    def raw_agentic_reasoning_keys(self) -> tuple[str, ...]:
+        """Reasoning controls this role's raw kwargs own, if any.
+
+        A typed level and raw provider fields are mutually exclusive here, so one fact
+        answers both the configuration check above and what a caller may choose: a role
+        that owns its reasoning this way has no typed level to re-level.
+        """
+        return conflicting_reasoning_keys({**self.model_kwargs, **self.agentic_model_kwargs})
 
     @property
     def effective_agentic_reasoning(self) -> ReasoningLevel | None:

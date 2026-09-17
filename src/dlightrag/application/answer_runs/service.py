@@ -29,14 +29,12 @@ from dlightrag.engine.ai.capacity import (
 )
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.reasoning import conflicting_reasoning_keys
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
-    UnsupportedAnswerEffortError,
     UnsupportedAnswerModeError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -224,6 +222,14 @@ class AnswerHistoryResource:
     mime_type: str
     byte_size: int
     reference_kind: ArtifactReferenceKind = "current_attachment"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentEffortOffer:
+    """The agent efforts one deployment applies, and its own configured level."""
+
+    levels: tuple[AnswerEffort, ...]
+    default: AnswerEffort | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,7 +877,6 @@ class AnswerService:
         # remove resource viewing. This is the authoritative Valid Mode Set persisted
         # with the run; the earlier check only avoids needless acceptance I/O.
         requested_mode, allowed_modes = self._reject_unsupported_mode(run_request)
-        self._reject_unhonorable_effort(run_request)
         acceptance_resources = await build_current_answer_resources(
             links=run_request.links,
             attachments=run_request.attachments,
@@ -1737,32 +1742,29 @@ class AnswerService:
         """Return the answering role's resolved profile.
 
         One fact about this deployment is stated by a transport (the efforts the
-        browser may offer) and enforced by admission (the effort a run may carry), so
-        both read the same resolution the run itself will use.
+        browser may offer) and enforced by the run (the level it applies), so both read
+        the same resolution the run itself will use.
         """
         return self._capabilities.current_profiles()["query"]
 
-    def _reject_unhonorable_effort(self, request: AnswerRunRequest) -> None:
-        """Refuse a chosen agent effort the answering role cannot apply.
+    def agent_effort_offer(self) -> AgentEffortOffer:
+        """Return the agent efforts this deployment applies, and its own level among them.
 
-        A level below the model's ladder is clamped by reasoning resolution, as ADR
-        0014 records. Two configurations have nowhere to clamp to. A model that names
-        no non-off level would either answer silently without the requested thinking or
-        fail inside the provider call, misreporting a configuration fact as a provider
-        rejection. And a role that owns its reasoning through raw model kwargs cannot
-        take a typed level at all: applying one bypasses the single-owner validation
-        (`model_copy` re-validates nothing) and raises where the request is planned,
-        which reaches the caller as a provider rejection.
+        One call states both, so a control can neither advertise a level the run would
+        ignore nor mark a default it is not offering. A role that owns its reasoning
+        through raw model kwargs applies no typed level at all, so it offers none; an
+        uncatalogued model offers all three because its best-effort profile maps
+        every level.
         """
-        effort = request.effort
-        if effort is None:
-            return
         settings = self._models.model_settings("query")
-        if conflicting_reasoning_keys({**settings.model_kwargs, **settings.agentic_model_kwargs}):
-            raise UnsupportedAnswerEffortError(effort, reason="raw_kwargs")
-        if offered_answer_efforts(self.answering_model_profile()):
-            return
-        raise UnsupportedAnswerEffortError(effort, reason="no_level")
+        levels: tuple[AnswerEffort, ...] = ()
+        if not settings.raw_agentic_reasoning_keys:
+            levels = offered_answer_efforts(self.answering_model_profile())
+        configured = settings.effective_agentic_reasoning
+        default: AnswerEffort | None = None
+        if configured is not None and configured in levels:
+            default = cast(AnswerEffort, configured)
+        return AgentEffortOffer(levels=levels, default=default)
 
     async def read_input_artifact(
         self,

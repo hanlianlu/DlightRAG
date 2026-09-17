@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """One accepted run may re-level its own answering agent and nothing else."""
 
-from collections.abc import Mapping
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
@@ -11,19 +10,17 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.adapters.http.rest.models import AnswerRequest
-from dlightrag.application.answer_runs.service import AnswerService
-from dlightrag.application.settings import default_answer_effort
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.reasoning import ReasoningLevel
-from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelSettings
+from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.answer.client_contracts import (
     ANSWER_EFFORT_LEVELS,
     AnswerRequestContract,
     normalize_answer_effort,
 )
 from dlightrag.engine.answer.execution.input import AnswerRunRequest
-from tests.config_helpers import clone_config, replace_config
 from tests.unit.test_answer_model_runtime import _runtime
+from tests.unit.test_answer_service import _Store
 from tests.unit.test_child_model_roles import _prepared_executor, _roles
 
 
@@ -58,26 +55,6 @@ def test_one_run_carries_its_choice_through_the_accepted_input():
     # An unsupported level never reaches an accepted run.
     with pytest.raises(ValueError, match="effort"):
         AnswerRunRequest.from_request({"query": "q", "effort": "medium"})
-
-
-def test_the_deployment_default_is_reported_only_when_it_is_one_of_the_three(test_config):
-    def configured(level: ReasoningLevel | None):
-        config = clone_config(test_config)
-        replace_config(
-            config,
-            "models.chat.roles",
-            ModelRoleOverrides(
-                # A role override counts only with explicit auth; the default
-                # endpoint's environment key never authorizes another model.
-                query=ModelSettings(model="strongest", api_key="fake", agentic_reasoning=level),
-            ),
-        )
-        return config
-
-    assert default_answer_effort(configured("high")) == "high"
-    # A level the three-level control cannot name is never mislabelled as one it can.
-    assert default_answer_effort(configured("xhigh")) is None
-    assert default_answer_effort(configured(None)) is None
 
 
 def test_re_leveling_the_answering_model_never_touches_another_role_or_run():
@@ -157,123 +134,12 @@ def test_the_offer_names_only_levels_the_answering_model_can_express():
     assert offered_answer_efforts(no_reasoning) == ()
 
 
-def test_the_deployment_default_is_not_offered_when_the_model_cannot_express_it(test_config):
+def test_the_offer_states_the_levels_and_the_deployment_default():
+    """One call states both, so a control cannot mark a default it does not offer."""
     from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
-
-    config = clone_config(test_config)
-    replace_config(
-        config,
-        "models.chat.roles",
-        ModelRoleOverrides(
-            query=ModelSettings(model="strongest", api_key="fake", agentic_reasoning="max"),
-        ),
-    )
-    without_max = ModelProfile(
-        context_window_tokens=100_000,
-        max_output_tokens=8_000,
-        reasoning=ReasoningProfile(
-            "openai",
-            ReasoningLevels(
-                off="none", minimal=None, low="low", medium=None, high="high", xhigh=None, max=None
-            ),
-        ),
-    )
-    with_max = ModelProfile(
-        context_window_tokens=100_000,
-        max_output_tokens=8_000,
-        reasoning=ReasoningProfile(
-            "openai",
-            ReasoningLevels(
-                off="none", minimal=None, low="low", medium=None, high="high", xhigh=None, max="max"
-            ),
-        ),
-    )
-
-    # The control never marks a default it is not also offering.
-    assert default_answer_effort(config, without_max) is None
-    assert default_answer_effort(config, with_max) == "max"
-    assert default_answer_effort(config) == "max"
-
-
-@pytest.mark.asyncio
-async def test_an_effort_no_level_can_honor_is_refused_at_admission(test_config):
-    """A model that names no level has nothing to clamp to, so the run is refused.
-
-    Admitting it would either answer silently without the requested thinking or fail
-    inside a provider call, reporting a configuration fact as a provider rejection.
-    """
-    from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
-
-    service = cast(Any, _service_stub())
-    service.answering_model_profile = lambda: ModelProfile(
-        context_window_tokens=100_000, reasoning=None
-    )
-    request = AnswerRunRequest.from_request({"query": "q", "effort": "max"})
-
-    with pytest.raises(UnsupportedAnswerEffortError) as refusal:
-        service._reject_unhonorable_effort(request)
-
-    assert "does not offer the 'max' agent effort" in refusal.value.public_message
-    assert refusal.value.error_kind == "unsupported_effort"
-
-
-def test_an_effort_is_refused_when_raw_kwargs_own_the_reasoning():
-    """A role that states its own reasoning fields cannot also take a typed level.
-
-    The single-owner rule rejects typed-beside-raw at configuration time, so applying
-    a caller's effort would bypass that validation (`model_copy` re-validates nothing)
-    and raise where the request is planned, which reaches the caller as a provider
-    rejection on a run that already started.
-    """
-    from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
-
-    service = cast(
-        Any,
-        _service_stub(agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}}),
-    )
-    request = AnswerRunRequest.from_request({"query": "q", "effort": "max"})
-
-    with pytest.raises(UnsupportedAnswerEffortError) as refusal:
-        service._reject_unhonorable_effort(request)
-
-    assert "raw model kwargs" in refusal.value.public_message
-    assert refusal.value.error_kind == "unsupported_effort"
-
-
-@pytest.mark.asyncio
-async def test_admission_refuses_the_effort_a_raw_kwargs_role_cannot_take():
-    """The refusal lands at admission, before any run work, through the real seam."""
-    from dlightrag.engine.answer.errors import UnsupportedAnswerEffortError
-    from tests.unit.test_answer_service import _request as service_request
     from tests.unit.test_answer_service import _service as answer_service
 
-    service = answer_service(
-        models=MagicMock(
-            model_settings=MagicMock(
-                return_value=ModelSettings(
-                    model="test",
-                    agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}},
-                )
-            ),
-        )
-    )
-
-    with pytest.raises(UnsupportedAnswerEffortError) as refusal:
-        await service.create(
-            request=service_request(mode="research", effort="max"),
-            owner_id="owner-1",
-            auth_mode="jwt",
-        )
-
-    assert "raw model kwargs" in refusal.value.public_message
-
-
-def test_an_effort_a_below_top_model_can_clamp_is_still_admitted():
-    """The documented clamp stands: only a model with no level at all is refused."""
-    from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
-
-    service = cast(Any, _service_stub())
-    service.answering_model_profile = lambda: ModelProfile(
+    every_level = ModelProfile(
         context_window_tokens=100_000,
         max_output_tokens=8_000,
         reasoning=ReasoningProfile(
@@ -285,36 +151,85 @@ def test_an_effort_a_below_top_model_can_clamp_is_still_admitted():
                 medium=None,
                 high="high",
                 xhigh=None,
-                max=None,
+                max="max",
             ),
         ),
     )
-    service._reject_unhonorable_effort(
-        AnswerRunRequest.from_request({"query": "q", "effort": "max"})
+    without_max = replace(
+        every_level,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none", minimal=None, low="low", medium=None, high="high", xhigh=None, max=None
+            ),
+        ),
     )
 
-
-def _service_stub(*, agentic_model_kwargs: Mapping[str, Any] | None = None) -> Any:
-    """The two facts `_reject_unhonorable_effort` reads from its service."""
-
-    class _Stub:
-        answering_model_profile = staticmethod(lambda: None)
-        _models = SimpleNamespace(
+    def offer(profile: ModelProfile, *, configured: ReasoningLevel | None = None, **settings: Any):
+        service = cast(Any, answer_service())
+        service.answering_model_profile = lambda: profile
+        service._models = SimpleNamespace(
             model_settings=lambda role: ModelSettings(
-                model="test", agentic_model_kwargs=agentic_model_kwargs or {}
+                model="test", agentic_reasoning=configured, **settings
             )
         )
+        return service.agent_effort_offer()
 
-    stub: Any = _Stub()
-    stub._reject_unhonorable_effort = AnswerService._reject_unhonorable_effort.__get__(stub)
-    return stub
+    # The deployment's own level is the default only where the model can express it.
+    assert offer(every_level, configured="high").default == "high"
+    assert offer(without_max, configured="max").default is None
+    assert offer(every_level, configured="xhigh").default is None
+    assert offer(every_level).default is None
+    assert offer(without_max).levels == ("low", "high")
+
+    # A role that owns its reasoning through raw provider fields applies no typed level
+    # at all, so it offers none and marks no default — the control hides.
+    # Configuration validation makes these two mutually exclusive, so a role in this
+    # state necessarily configures no typed level.
+    raw = offer(
+        every_level,
+        agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}},
+    )
+    assert raw.levels == ()
+    assert raw.default is None
+
+
+@pytest.mark.asyncio
+async def test_a_raw_kwargs_role_admits_the_effort_and_ignores_it():
+    """A caller's preference never fails a run over a deployment configuration fact."""
+    from tests.unit.test_answer_service import _request as service_request
+    from tests.unit.test_answer_service import _service as answer_service
+
+    store = _Store()
+    service = answer_service(
+        store=store,
+        models=MagicMock(
+            model_settings=MagicMock(
+                return_value=ModelSettings(
+                    model="test",
+                    agentic_model_kwargs={"chat_template_kwargs": {"enable_thinking": True}},
+                )
+            ),
+        ),
+    )
+
+    creation = await service.create(
+        request=service_request(mode="research", effort="max"),
+        owner_id="owner-1",
+        auth_mode="jwt",
+    )
+
+    assert creation.run.run_id
+    # The choice stays auditable on the accepted input even though nothing applied it.
+    assert store.created[0]["prepared_input"]["effort"] == "max"
 
 
 def test_the_run_trace_states_what_was_chosen_and_what_actually_ran():
-    """The stored effort alone would misreport a clamped run.
+    """The stored effort alone would misreport every ending but the applied one.
 
-    `max` below the model's ladder runs as `xhigh`, a Fast answer never enters an
-    agent loop at all, and no choice means no fact to state.
+    `max` below the model's ladder runs as `xhigh`; a role that owns its reasoning
+    through raw kwargs takes no typed level; a model that names no level has nothing to
+    clamp to; and a Fast answer enters no agent loop at all.
     """
     from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
     from dlightrag.engine.answer.execution.executor import _agent_effort_trace
@@ -335,6 +250,22 @@ def test_the_run_trace_states_what_was_chosen_and_what_actually_ran():
             ),
         ),
     )
+    no_levels = ModelProfile(
+        context_window_tokens=100_000,
+        max_output_tokens=8_000,
+        reasoning=ReasoningProfile(
+            "openai",
+            ReasoningLevels(
+                off="none",
+                minimal=None,
+                low=None,
+                medium=None,
+                high=None,
+                xhigh=None,
+                max=None,
+            ),
+        ),
+    )
 
     assert _agent_effort_trace(None, "research", clamped) is None
     assert _agent_effort_trace("max", "research", clamped) == {
@@ -345,5 +276,19 @@ def test_the_run_trace_states_what_was_chosen_and_what_actually_ran():
         "requested": "high",
         "effective": "high",
     }
+    assert _agent_effort_trace("max", "research", no_levels) == {
+        "requested": "max",
+        "effective": None,
+        "ignored": "no_level",
+    }
+    assert _agent_effort_trace("max", "research", clamped, ("chat_template_kwargs",)) == {
+        "requested": "max",
+        "effective": None,
+        "ignored": "raw_kwargs",
+    }
     # Fast runs no agent turn, so it claims no effective agentic level.
-    assert _agent_effort_trace("max", "fast", clamped) == {"requested": "max", "effective": None}
+    assert _agent_effort_trace("max", "fast", clamped) == {
+        "requested": "max",
+        "effective": None,
+        "ignored": "fast",
+    }

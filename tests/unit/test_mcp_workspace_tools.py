@@ -18,6 +18,7 @@ from dlightrag.application.access import (
     owner_id_from_principal,
     request_scope_context,
 )
+from dlightrag.application.answer_runs.service import AgentEffortOffer
 from dlightrag.application.config import (
     AccessControlConfig,
     AccessControlRuleConfig,
@@ -140,6 +141,7 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
     application.answers = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(run=_run_record(), replayed=False)),
         capabilities=capability_view.read,
+        agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
         list_artifacts=AsyncMock(return_value=()),
         read_artifact=AsyncMock(return_value=None),
         steer=AsyncMock(return_value=None),
@@ -269,7 +271,10 @@ async def test_get_capabilities_reports_answer_image_capability(
 
     result = await mcp_server.mcp_app.call_tool("get_capabilities", {})
 
-    cap = _tool_json(result)["answer_image_capability"]
+    payload = _tool_json(result)
+    cap = payload["answer_image_capability"]
+    # A caller can check what this deployment would apply before submitting an effort.
+    assert payload["answer_agent_effort_levels"] == ["low", "high", "max"]
     assert cap["status"] == "supported"
     assert cap["effective_max_images"] == 6
     assert cap["configured_ceiling"] == 8

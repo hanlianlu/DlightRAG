@@ -212,10 +212,12 @@ single-workspace.
 `effort` re-levels the answering agent of one accepted Run and nothing else: a
 subagent keeps the level configured for its own role, and a Run that omits the
 field keeps the deployment default. The value is refused with a validation error
-when it is not one of the three; a level below what the answering model can express
-is clamped to the nearest supported one by the engine, preferring the higher
-neighbour, while a model that names no non-off level refuses the choice as
-`unsupported_effort`. The accepted Run records the choice in its prepared input, and the
+when it is not one of the three. A level below what the answering model can express is
+clamped by the engine to the nearest supported one, preferring the higher neighbour, and
+a choice the deployment cannot apply at all — a Fast answer, a model that names no
+non-off level, or a role whose reasoning belongs to raw model kwargs — is accepted and
+ignored rather than failed; the Run trace's `agent_effort` states the requested level and
+what ran. The accepted Run records the choice in its prepared input, and the
 submission's idempotency fingerprint distinguishes it, so reusing a submission
 id with another effort is a conflict rather than a replay. [ADR 0014](adr/0014-caller-chosen-agent-effort.md)
 owns the decision.
@@ -443,7 +445,7 @@ Registered public tool names are:
 Web routes under `/web/api/*` are browser contracts, not compatibility aliases
 for REST. `GET /web/api/bootstrap` (bootstrap contract version 3) returns
 authorized workspace state, Files target, attachment limits, image capability,
-and `agent_effort: {levels, default}` — the efforts the answering profile offers and,
+and `agent_effort: {levels, default}` — the efforts this deployment applies and,
 when it is one of them, its own configured level — never bearer or edge tokens.
 `POST /web/api/answer` accepts the same optional `effort` as REST and MCP, on
 both its JSON and its multipart form.
@@ -612,6 +614,11 @@ Image support is a deployment capability. Discover it through REST
 `await application.answers.capabilities()`. Unsupported/unknown image input
 fails closed with `CURRENT_IMAGES_UNSUPPORTED` or
 `ANSWER_IMAGE_CAPABILITY_UNKNOWN`.
+
+The agent efforts a deployment applies are the same kind of fact. MCP
+`get_capabilities` reports them as `answer_agent_effort_levels` and the Web bootstrap as
+`agent_effort.levels`; an `effort` outside that set is accepted and ignored (never a
+validation failure), and the Run trace's `agent_effort` records the level that ran.
 
 ## Workspace And File Management
 

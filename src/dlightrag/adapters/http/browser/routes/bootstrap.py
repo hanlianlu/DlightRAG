@@ -22,11 +22,9 @@ from dlightrag.application.corpus_admin import (
     WorkspaceCatalogPageRequest,
     normalize_workspace,
 )
-from dlightrag.application.settings import default_answer_effort
 from dlightrag.engine.answer.client_contracts import (
     AnswerEffort,
     ClientContractModel,
-    offered_answer_efforts,
 )
 from dlightrag.engine.answer.image_capability import ImageCapabilityStatus
 
@@ -74,7 +72,7 @@ async def build_web_bootstrap(
     """Build the one authorized startup snapshot consumed by the browser."""
     application = get_application(request)
     capabilities = await application.answers.capabilities()
-    profile = application.answers.answering_model_profile()
+    effort_offer = application.answers.agent_effort_offer()
     records: list[WorkspaceRecord]
     try:
         records = await application.corpora.alist_workspace_records()
@@ -165,8 +163,8 @@ async def build_web_bootstrap(
             application.config.answer.conversations.active_html_preview_enabled
         ),
         agent_effort=WebAnswerEffort(
-            levels=list(offered_answer_efforts(profile)),
-            default=default_answer_effort(application.config, profile),
+            levels=list(effort_offer.levels),
+            default=effort_offer.default,
         ),
     )
 

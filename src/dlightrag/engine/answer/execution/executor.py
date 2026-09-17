@@ -69,7 +69,11 @@ from dlightrag.engine.agent.tools import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.reasoning import ReasoningLevel, resolve_reasoning
+from dlightrag.engine.ai.reasoning import (
+    ReasoningConfigurationError,
+    ReasoningLevel,
+    resolve_reasoning,
+)
 from dlightrag.engine.ai.scheduler import model_call_scope
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
@@ -1865,6 +1869,7 @@ class AnswerExecutor:
                     request.effort,
                     resolved_mode,
                     None if prepared is None else prepared.model_profile,
+                    self._models.model_settings("query").raw_agentic_reasoning_keys,
                 )
                 if fast_compaction_trace:
                     trace.update(fast_compaction_trace)
@@ -2835,20 +2840,28 @@ def _agent_effort_trace(
     effort: AnswerEffort | None,
     resolved_mode: ResolvedMode,
     profile: ModelProfile | None,
+    raw_reasoning_keys: tuple[str, ...] = (),
 ) -> dict[str, str | None] | None:
-    """Return the chosen agent effort and the level the answering model ran at.
+    """Return the chosen agent effort and what the answering model did with it.
 
-    A level below the model's ladder is clamped by reasoning resolution, so the
-    requested value alone would misreport what ran. A Fast answer never enters an
-    agent loop, so it states no effective level rather than claiming the deployment's
-    ordinary synthesis level was the choice, and neither does a run whose profile is
-    unavailable to this point.
+    A chosen effort never fails a run: it is applied, clamped to the nearest level the
+    model's ladder has, or ignored. Every ending is stated, because the stored effort
+    alone misreports a clamped run and says nothing about a choice that never applied —
+    a Fast answer enters no agent loop, a role that owns reasoning through raw model
+    kwargs takes no typed level, and a model that names no level has nothing to clamp to.
     """
     if effort is None:
         return None
-    if resolved_mode != "research" or profile is None:
+    if resolved_mode != "research":
+        return {"requested": effort, "effective": None, "ignored": "fast"}
+    if raw_reasoning_keys:
+        return {"requested": effort, "effective": None, "ignored": "raw_kwargs"}
+    if profile is None:
         return {"requested": effort, "effective": None}
-    resolved = resolve_reasoning(profile.reasoning, effort)
+    try:
+        resolved = resolve_reasoning(profile.reasoning, effort)
+    except ReasoningConfigurationError:
+        return {"requested": effort, "effective": None, "ignored": "no_level"}
     return {
         "requested": effort,
         "effective": None if resolved is None else resolved.effective,

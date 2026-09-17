@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.adapters.http.browser.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import DEPLOYMENT_OWNER_ID
+from dlightrag.application.answer_runs.service import AgentEffortOffer
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.corpus_admin import (
     FilePanelCursor,
@@ -24,8 +25,6 @@ from dlightrag.application.corpus_admin import (
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
 from dlightrag.engine.agent.skills import owner_skill_root
-from dlightrag.engine.ai.capacity import ModelProfile
-from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
@@ -83,24 +82,8 @@ def mock_application():
     )
     application_double.answers = SimpleNamespace(
         capabilities=capability_view.read,
-        # The bootstrap offers the efforts the answering profile can express, so the
-        # double states the profile a deployment would have: every level mapped.
-        answering_model_profile=lambda: ModelProfile(
-            context_window_tokens=200_000,
-            max_output_tokens=64_000,
-            reasoning=ReasoningProfile(
-                "openai",
-                ReasoningLevels(
-                    off="none",
-                    minimal=None,
-                    low="low",
-                    medium=None,
-                    high="high",
-                    xhigh=None,
-                    max="max",
-                ),
-            ),
-        ),
+        # The bootstrap offers exactly what this deployment can apply.
+        agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
     )
     corpora = SimpleNamespace()
     corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
@@ -1505,29 +1488,14 @@ class TestSourcePresentation:
         assert source.chunks[0].page_number == 1
         assert "first page" in source.chunks[0].content_html
 
-    async def test_the_effort_offer_names_only_levels_the_model_can_express(
+    async def test_the_effort_offer_states_exactly_what_the_deployment_offers(
         self, client: AsyncClient, web_app: Any
     ) -> None:
-        """A ladder that stops below a level never advertises it in the control."""
+        """The control renders the deployment's own offer, never a fixed three levels."""
         application = web_app.state.application
-        application.answers.answering_model_profile = lambda: ModelProfile(
-            context_window_tokens=200_000,
-            max_output_tokens=64_000,
-            reasoning=ReasoningProfile(
-                "openai",
-                ReasoningLevels(
-                    off="none",
-                    minimal=None,
-                    low="low",
-                    medium=None,
-                    high="high",
-                    xhigh=None,
-                    max=None,
-                ),
-            ),
-        )
+        application.answers.agent_effort_offer = lambda: AgentEffortOffer(("low",), None)
 
         response = await client.get("/web/api/bootstrap")
 
         assert response.status_code == 200
-        assert response.json()["agent_effort"] == {"levels": ["low", "high"], "default": None}
+        assert response.json()["agent_effort"] == {"levels": ["low"], "default": None}
