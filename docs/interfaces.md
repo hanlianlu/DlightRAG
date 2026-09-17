@@ -319,12 +319,14 @@ Tool events carry metadata only; the browser projection adds fields of its own:
 | `source_index` | all three | Position of the call in its model turn |
 | `outcome` | `tool_end` | `succeeded`, or a typed failure such as `failed`, `invalid_arguments`, `tool_contract_changed`, `outcome_unknown` |
 | `duration_ms` | `tool_end` | Measured wall time of the attempt that settled; absent when no call ran |
-| `object_label` | `tool_progress` | Bounded current object a Tool reports (a query, a path, a skill name) |
+| `object_label` | `tool_progress` | The bounded one-line Tool Subject a Tool reports for its live row (a query, a path, a command, a pattern, a skill name, an anonymous public URL, a Resource Handle). A Tool reports it at its own discretion: a call whose only candidate subject is prose rather than a name, or an identity no viewer could act on — a Child Session id, a Memory Record id, an Outbound MCP Tool's unknowable arguments — reports none |
 | `text_chars`, `attachment_count`, `output_bytes`, `spill_state` | either | Bounded size and spill metadata when a producer reports it |
 | `elapsed_ms` | `tool_start` | Browser projection only: how long a replayed start has already been running, so a reloaded trace keeps counting |
 | `tool_label` | all three | Browser projection only: a human name for a pinned Connection tool, resolved from the Run's pins |
 
-No tool event carries stdout, stderr, arguments, or Tool output.
+No tool event carries stdout, stderr, arguments as such, or Tool output. The one
+producer-chosen fact that does cross is `object_label`: a bounded Tool Subject, never the
+argument payload, and a Tool reports it only when it names one thing.
 
 Each durable sequence is the SSE `id`. Supplying conflicting header/query
 cursors returns 400. Without a cursor, replay starts at sequence 1. Ten-second

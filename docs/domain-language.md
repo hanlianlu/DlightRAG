@@ -235,6 +235,14 @@ _Avoid_: placeholder message, fake reply, client-side Answer Run
 The browser-side fold of one Answer Run's event stream into a presentable turn view. Replaying the same events yields the same view.
 _Avoid_: answer parser, incremental rendering state, second transcript
 
+**Tool Activity**:
+The ordered viewer-side rows describing the Tool calls of one Answer Run while it runs: one verb, the Tool Subject the call reports, its state, and its elapsed time. It is a live affordance folded from the run's Tool events, not a durable record of its own; a reader that arrives after the run keeps no rows.
+_Avoid_: Tool log, execution history, run transcript
+
+**Tool Subject**:
+The single bounded thing a Tool call reports it is acting on, so a viewer can name the call while it runs: a query, a workspace path, a command, a pattern, a skill name, an anonymous public URL, or a run-scoped Resource Handle. It is a producer-reported fact rather than a display string, it is one line and bounded by construction, and a Tool whose only candidate is prose rather than a name reports none.
+_Avoid_: arguments, Tool Label, display name, `object`
+
 **Wire Format**:
 The snake_case field spelling of REST and SSE payloads at the transport boundary. It is translated exactly once at the consuming edge and never appears beyond it.
 _Avoid_: DTO leak, dual naming convention, camelCase server contract
