@@ -45,7 +45,7 @@ from dlightrag.engine.runtime.records import (
     RunAdmissionLimitExceededError,
     run_request_fingerprint,
 )
-from dlightrag.engine.runtime.workspace import HandoffCommit
+from dlightrag.engine.runtime.workspace import CommittedSpillRecord, HandoffCommit
 from tests.conftest import FingerprintingRunStore
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
@@ -1167,6 +1167,44 @@ class TestClaiming:
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None
         assert record.agent_workspace_epoch == claim.run.fencing_epoch
+
+    async def test_recent_spills_are_newest_first_by_producing_intent(self, store, pool) -> None:
+        """A summary's spill handles come from the row, ordered by its intent.
+
+        The epoch-copy read walks every spill by resource id; this one has to name
+        the newest few, and the producing effect intent is the only monotone mark
+        the row carries.
+        """
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        workspace = PGWorkspaceStore(
+            pool=pool,
+            owner_id=_OWNER,
+            run_id=uuid.UUID(creation.run.run_id),
+            worker_id=_WORKER,
+            lease_owner=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        for resource_id, ordinal in (("spill_z", 1), ("spill_m", 3), ("spill_a", 2)):
+            assert (
+                await workspace.register_spill(
+                    CommittedSpillRecord(
+                        resource_id=resource_id,
+                        content_digest="b" * 64,
+                        size_bytes=8,
+                        session_id="01930000-0000-7000-8000-0000000000ff",
+                        intent_id=f"01930000-0000-7000-8000-00000000000{ordinal}",
+                    )
+                )
+                == "committed"
+            )
+
+        newest = await workspace.load_recent_spills(limit=2)
+
+        # The ids sort against the intents, so resource-id order cannot pass.
+        assert [spill.resource_id for spill in newest] == ["spill_m", "spill_a"]
+        with pytest.raises(ValueError, match="spill page limit"):
+            await workspace.load_recent_spills(limit=0)
 
     async def test_reclaim_abandonment_persists_the_exact_public_error(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())

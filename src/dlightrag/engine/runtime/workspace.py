@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from heapq import nsmallest
 from typing import Literal, Protocol
 
@@ -69,6 +69,8 @@ class WorkspaceStore(Protocol):
         self, *, after_resource_id: str | None, limit: int
     ) -> tuple[CommittedSpillRecord, ...]: ...
 
+    async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]: ...
+
     async def clear_spills(self) -> InventoryReplaceResult: ...
 
 
@@ -121,6 +123,13 @@ class InMemoryWorkspaceStore:
     async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult:
         if not self.live:
             return "lease_lost"
+        # The durable adapter keeps the first commit's intent on conflict, and the
+        # intent is what orders the newest-first read, so the double must too.
+        existing = next(
+            (item for item in self.spills if item.resource_id == spill.resource_id), None
+        )
+        if existing is not None:
+            spill = replace(spill, intent_id=existing.intent_id)
         self.spills = [item for item in self.spills if item.resource_id != spill.resource_id]
         self.spills.append(spill)
         return "committed"
@@ -135,6 +144,23 @@ class InMemoryWorkspaceStore:
             if after_resource_id is None or spill.resource_id > after_resource_id
         )
         return tuple(nsmallest(limit, matching, key=lambda spill: spill.resource_id))
+
+    async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]:
+        """Return this Run's newest committed spills first.
+
+        The producing effect intent is the only monotone marker a committed spill
+        carries: its resource id is a random handle and the row records no
+        settlement time. The cursor-paged recovery read stays a separate method
+        because it walks every spill, while this one only needs the newest few.
+        """
+        _validate_spill_page_limit(limit)
+        return tuple(
+            sorted(
+                self.spills,
+                key=lambda spill: (spill.intent_id, spill.resource_id),
+                reverse=True,
+            )[:limit]
+        )
 
     async def clear_spills(self) -> InventoryReplaceResult:
         if not self.live:

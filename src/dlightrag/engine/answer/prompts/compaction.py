@@ -4,8 +4,9 @@
 The summarizer writes one structured markdown document whose headings map
 onto :class:`~dlightrag.engine.agent.session.projection.CompactionSummary` fields.
 The framework parses the headings back into the typed summary; the model is
-never asked to invent paths or durable handles — the caller supplies the handle
-list from the run's Evidence ledger, the one record of what the run admitted.
+never asked to invent paths or durable handles — the caller composes that list
+from the run's Evidence ledger and its committed spill rows, the two records of
+what the run admitted and what it can still re-read.
 Prompts modules stay import-free:
 the caller passes the pre-rendered previous summary text.
 

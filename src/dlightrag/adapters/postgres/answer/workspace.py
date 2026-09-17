@@ -178,6 +178,29 @@ class PGWorkspaceStore:
             for row in rows
         )
 
+    async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]:
+        _validate_spill_page_limit(limit)
+        async with self._connection() as conn:
+            rows = await conn.fetch(
+                "SELECT resource_id, content_digest, size_bytes, session_id::text,"
+                " intent_id::text FROM dlightrag_answer_committed_spills"
+                " WHERE owner_id = $1 AND run_id = $2"
+                " ORDER BY intent_id DESC, resource_id DESC LIMIT $3",
+                self._owner_id,
+                self._run_id,
+                limit,
+            )
+        return tuple(
+            CommittedSpillRecord(
+                resource_id=str(row["resource_id"]),
+                content_digest=str(row["content_digest"]),
+                size_bytes=int(row["size_bytes"]),
+                session_id=str(row["session_id"]),
+                intent_id=str(row["intent_id"]),
+            )
+            for row in rows
+        )
+
     async def clear_spills(self) -> InventoryReplaceResult:
         async with self._connection() as conn:
             async with conn.transaction():

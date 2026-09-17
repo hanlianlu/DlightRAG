@@ -1386,7 +1386,7 @@ class AnswerExecutor:
                         raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
                     except WorkspaceIntegrityError as exc:
                         raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
-                    run.orchestrator.bind_workspace(bound)
+                    run.orchestrator.bind_workspace(bound, workspace_store)
                 session_id = agent_session_id
                 store = self._store
                 run.orchestrator.bind_memory(

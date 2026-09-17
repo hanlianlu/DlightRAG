@@ -162,10 +162,12 @@ def _transcript(messages: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _durable_handles(handles: Sequence[str]) -> list[str] | None:
-    """Return the re-readable source handles one compaction keeps for the model.
+    """Bound the re-readable handles one compaction keeps for the model.
 
-    Authority is the run's Evidence ledger, which is the one record of what the
-    run actually admitted. The former source was the covered entries' Tool
+    The list arrives composed and ordered by the caller: the run's Evidence
+    ledger supplies its citation identities, and its committed spill rows supply
+    the outputs whose bytes outlive the covered prefix. Neither source is
+    inferred from message text. The former source was the covered entries' Tool
     Arguments, and that inference was withdrawn with the temporary Arguments
     themselves — correctly, because a replayed or deleted argument is not
     evidence. A compacted transcript otherwise loses every passage it had shown,

@@ -8,7 +8,12 @@ from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.projection import CompactionSummary, render_compaction_summary
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
-from dlightrag.engine.answer.compaction import CompactionCoordinator, parse_compaction_summary
+from dlightrag.engine.answer.compaction import (
+    _MAX_DURABLE_HANDLES,
+    CompactionCoordinator,
+    parse_compaction_summary,
+)
+from dlightrag.engine.answer.continuation_handles import MAX_SPILL_HANDLES
 from dlightrag.engine.answer.fast import FastSessionHost
 
 
@@ -182,3 +187,13 @@ async def test_compaction_keeps_the_runs_source_handles_re_readable() -> None:
     assert "durable handles (re-readable, not evidence)" in render_compaction_summary(
         projection.summary
     )
+
+
+def test_the_spill_share_leaves_room_for_evidence_under_the_summary_cap() -> None:
+    """Two numbers in two modules decide whether Evidence can be starved.
+
+    Raising the spill share to the summary's whole cap would make a retrieval-heavy
+    Run's citation handles silently disappear, which is the failure the reserved
+    share exists to prevent, so the relationship is asserted rather than assumed.
+    """
+    assert MAX_SPILL_HANDLES + 1 <= _MAX_DURABLE_HANDLES

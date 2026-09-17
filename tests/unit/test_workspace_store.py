@@ -82,13 +82,13 @@ async def test_inventory_replace_is_all_or_nothing() -> None:
     assert paths == ["c"]
 
 
-def _spill(resource_id: str) -> CommittedSpillRecord:
+def _spill(resource_id: str, *, intent_id: str = "i") -> CommittedSpillRecord:
     return CommittedSpillRecord(
         resource_id=resource_id,
         content_digest="b" * 64,
         size_bytes=8,
         session_id="s",
-        intent_id="i",
+        intent_id=intent_id,
     )
 
 
@@ -122,3 +122,33 @@ async def test_spill_register_and_clear() -> None:
     assert len(await store.load_spills_page(after_resource_id=None, limit=1)) == 1
     await store.clear_spills()
     assert await store.load_spills_page(after_resource_id=None, limit=1) == ()
+
+
+@pytest.mark.asyncio
+async def test_recent_spills_are_newest_first_and_bounded() -> None:
+    """The producing effect intent is the only monotone marker a spill carries.
+
+    A spill resource id is a random handle and the row records no settlement
+    time, so newest-first comes from the UUIDv7 intent, not from the page cursor
+    the epoch-copy recovery read uses. The ids sort against the intents on
+    purpose: fixtures where both keys agree cannot tell the two orders apart.
+    """
+    store = InMemoryWorkspaceStore()
+    for resource_id, ordinal in (("res_z", 1), ("res_m", 2), ("res_a", 3)):
+        await store.register_spill(_spill(resource_id, intent_id=_intent(ordinal)))
+
+    newest = await store.load_recent_spills(limit=2)
+
+    assert [spill.resource_id for spill in newest] == ["res_a", "res_m"]
+
+
+def _intent(ordinal: int) -> str:
+    return f"01930000-0000-7000-8000-00000000000{ordinal}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, -1, 1_001])
+async def test_recent_spills_reject_invalid_limit(limit: int) -> None:
+    store = InMemoryWorkspaceStore()
+    with pytest.raises(ValueError, match="spill page limit"):
+        await store.load_recent_spills(limit=limit)

@@ -323,6 +323,16 @@ The compaction trigger is measured from the character estimator corrected agains
 the prompt size the provider itself billed for the previous request, and each
 turn's billed prompt and cache hits are aggregated in the Run trace.
 
+A committed compaction keeps the run's re-readable identities beside its typed
+summary: the Evidence ledger supplies its citation handles, and the run's committed
+spill rows supply the newest spilled Tool outputs, whose bytes and rows survive the
+covered prefix while their receipts do not. Spills claim a reserved share of the
+summary's handle list and Evidence fills the remainder, so neither class can crowd
+the other out; the spill read is bounded and ordered newest-first by the producing
+effect intent. A spill handle states the `read(resource_id=…)` call it authorizes,
+and reading one back admits no Evidence and mints no citation handle — a spilled
+output is continuation memory, never a source.
+
 Full attachment bytes never enter model context. Only bounded text windows,
 capped observations, and budgeted images do.
 

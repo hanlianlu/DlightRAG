@@ -70,6 +70,10 @@ from dlightrag.engine.ai.providers.base import provider_input_tokens
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.compaction import CompactionCoordinator
+from dlightrag.engine.answer.continuation_handles import (
+    MAX_SPILL_HANDLES,
+    compose_durable_handles,
+)
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
@@ -87,6 +91,7 @@ from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest, SubagentHost
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.rag.retrieval import RetrievalContexts
+from dlightrag.engine.runtime.workspace import WorkspaceStore
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +211,9 @@ class AnswerOrchestrator:
         self._resource_reader = resource_reader
         self._resource_viewer = resource_viewer
         self._workspace: RunWorkspace | None = None
+        #: The Run's durable spill rows, read when a summary must name the handles
+        #: the covered prefix is about to take with it.
+        self._workspace_store: WorkspaceStore | None = None
         self._resolved_mode: ResolvedMode = resolved_mode
         self._subagent_host = subagent_host
         self._memory_host = memory_host
@@ -366,10 +374,11 @@ class AnswerOrchestrator:
         """Attach the non-citable auto-recall block for this run."""
         self._memory_text = text
 
-    def bind_workspace(self, workspace: RunWorkspace) -> None:
+    def bind_workspace(self, workspace: RunWorkspace, store: WorkspaceStore | None = None) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
         self._workspace = workspace
         self._environment = workspace.environment
+        self._workspace_store = store
 
     def artifact_root(self) -> Path | None:
         """Return this run's request-local Artifact root, when execution owns one."""
@@ -538,7 +547,7 @@ class AnswerOrchestrator:
                 run.context.corrected_input_tokens(evidence=run.evidence, working=run.working)
                 + _tool_schema_tokens(run.tools)
             ),
-            durable_handles=run.evidence.citation_handles(),
+            durable_handles=await self._continuation_handles(run),
             trace=run.trace,
         )
         return CompactionResult(
@@ -555,6 +564,24 @@ class AnswerOrchestrator:
                 source_digest=projection.source_digest,
             ),
             projection=projection,
+        )
+
+    async def _continuation_handles(self, run: PreparedRun) -> list[str]:
+        """Return every re-readable identity this Run holds for the next turn.
+
+        Evidence alone left a spilled Tool output unreachable by identity once the
+        prefix carrying its handle was covered, although its bytes and its row
+        survived. The spill read is bounded here so a Run with hundreds of them
+        never turns one summary into a spill listing.
+        """
+        spills = (
+            await self._workspace_store.load_recent_spills(limit=MAX_SPILL_HANDLES)
+            if self._workspace_store is not None
+            else ()
+        )
+        return compose_durable_handles(
+            spills=spills,
+            evidence_handles=run.evidence.citation_handles(),
         )
 
     def restore_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
