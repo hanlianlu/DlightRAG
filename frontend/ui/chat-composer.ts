@@ -385,7 +385,9 @@ export class DlChatComposer extends LightElement {
   #inputChanged(event: Event): void {
     this.draft = (event.currentTarget as HTMLTextAreaElement).value;
     this.skillNotice = false;
-    this.skillMenuOpen = skillDirectiveState(this.draft) !== null;
+    const skillMenuOpen = skillDirectiveState(this.draft) !== null;
+    if (skillMenuOpen) this.#closePickers('skill');
+    this.skillMenuOpen = skillMenuOpen;
     this.skillActive = -1;
     if (this.draft.startsWith('/')) {
       void listSkills()
@@ -626,8 +628,10 @@ export class DlChatComposer extends LightElement {
 
   #toggleEffortMenu = (event: Event): void => {
     event.stopPropagation();
-    this.effortOpen = !this.effortOpen;
-    if (!this.effortOpen) return;
+    const open = !this.effortOpen;
+    this.#closePickers(open ? 'effort' : null);
+    this.effortOpen = open;
+    if (!open) return;
     const levels = offeredLevels(this.agentEffortOffer);
     const displayed = this.#displayedEffort(levels);
     void this.updateComplete.then(() => this.#focusEffort(displayed ?? levels[0]));
@@ -672,9 +676,21 @@ export class DlChatComposer extends LightElement {
 
   #toggleModeMenu = (event: Event): void => {
     event.stopPropagation();
-    this.modeOpen = !this.modeOpen;
-    if (this.modeOpen) void this.updateComplete.then(() => this.#focusMode(this.mode));
+    const open = !this.modeOpen;
+    this.#closePickers(open ? 'mode' : null);
+    this.modeOpen = open;
+    if (open) void this.updateComplete.then(() => this.#focusMode(this.mode));
   };
+
+  /** One composer popup at a time: opening or closing one settles the others. */
+  #closePickers(keep: 'mode' | 'effort' | 'skill' | null): void {
+    if (keep !== 'mode') this.modeOpen = false;
+    if (keep !== 'effort') this.effortOpen = false;
+    if (keep !== 'skill') {
+      this.skillMenuOpen = false;
+      this.skillActive = -1;
+    }
+  }
 
   #selectMode(mode: AnswerMode): void {
     this.mode = mode;
@@ -715,8 +731,7 @@ export class DlChatComposer extends LightElement {
   }
 
   #closeMenus = (): void => {
-    if (this.modeOpen) this.modeOpen = false;
-    if (this.effortOpen) this.effortOpen = false;
+    this.#closePickers(null);
   };
 
   #dragEnter = (event: DragEvent): void => {

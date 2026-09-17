@@ -564,9 +564,14 @@ body.files-panel-open #files-btn {
     cursor: pointer;
 }
 
+/* Room for the level's glyph, its label, and the trailing Default marker. */
+.composer-effort-menu {
+    min-width: 10.5rem;
+}
+
 .composer-effort-menu button {
     display: grid;
-    grid-template-columns: var(--size-icon-md) minmax(0, 1fr) auto;
+    grid-template-columns: var(--size-icon-md) minmax(max-content, 1fr) auto;
     align-items: center;
     gap: var(--space-component);
 }

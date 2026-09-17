@@ -829,6 +829,38 @@ it('Composer pickers share one keyboard contract for their menus', async () => {
   composer.remove();
 });
 
+it('Composer keeps one popup open at a time and gives the label room', async () => {
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  composer.agentEffortOffer = {levels: ['low', 'high', 'max'], default: 'high'};
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+  const open = (selector: string) => !composer.querySelector(selector)?.hasAttribute('hidden');
+  const click = async (selector: string) => {
+    composer.querySelector<HTMLButtonElement>(selector)!.click();
+    await composer.updateComplete;
+  };
+
+  // Opening one picker settles the other: two menus never stack over the composer.
+  await click('.composer-effort-trigger');
+  expect(open('.composer-effort-menu')).to.equal(true);
+  await click('.composer-mode-trigger');
+  expect(open('.composer-mode-menu')).to.equal(true);
+  expect(open('.composer-effort-menu')).to.equal(false);
+  await click('.composer-effort-trigger');
+  expect(open('.composer-effort-menu')).to.equal(true);
+  expect(open('.composer-mode-menu')).to.equal(false);
+
+  // A skill directive takes the same single slot.
+  const input = composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = '/';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  expect(open('.composer-effort-menu')).to.equal(false);
+
+  composer.remove();
+});
+
 it('Composer shows no effort picker when the deployment offers none', async () => {
   const composer = document.createElement('dl-chat-composer') as DlChatComposer;
   composer.attachmentPolicy = policy;
