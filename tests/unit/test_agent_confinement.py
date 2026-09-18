@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -480,3 +481,25 @@ async def test_the_corpus_is_readable_by_the_process_and_denied_to_its_children(
     assert completed.returncode == 0
     assert "DENIED" in output.text
     assert "READABLE" not in output.text
+
+
+def test_the_runtime_grants_cover_the_interpreter_and_its_standard_library() -> None:
+    """A venv's interpreter lives in the base prefix, not in ``sys.prefix``.
+
+    Landlock checks the binary's *resolved* path and gates reading the standard
+    library too, so granting only the virtual environment's prefix refuses the exec
+    with ``PermissionError`` and leaves ``import json`` unreadable. macOS did not
+    show it — this host reports no Landlock ABI and degrades to an unconfined exec —
+    while Linux CI, whose base interpreter sits outside ``/usr``, refused every
+    confined command. The invariant is checked here so it fails wherever Python is
+    installed, not only where the kernel enforces it.
+    """
+    roots = ConfinementPolicy().runtime_roots()
+    resolved_roots = tuple(root.resolve() for root in roots)
+
+    interpreter = Path(sys.executable).resolve()
+    stdlib = Path(os.__file__).resolve()
+    for needed, why in ((interpreter, "executed"), (stdlib, "imported")):
+        assert any(needed.is_relative_to(root) for root in resolved_roots), (
+            f"{needed} is {why} by every confined command but no runtime root grants it: {roots}"
+        )

@@ -69,11 +69,16 @@ spawns through one call (`ExecutionEnvironment.run`), already rooted at one
 admitted workspace. The local environment applies a kernel-enforced allow-list
 to each child: the Agent Workspace with full rights, the runtime read-only
 (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/proc`, `/dev` without its
-create rights, and the interpreter's own prefix), and nothing else — no corpus
+create rights, and the interpreter's prefixes), and nothing else — no corpus
 tree, no deployment configuration, no project tree, no `/tmp`, no other Run's
-workspace. The interpreter prefix is granted because the toolchain lives in it: a
-Run that cannot execute Python cannot do the work it was given, and the installed
-package sits under the same prefix. What that costs is recorded below. The one mechanism this distribution relies on
+workspace. The interpreter prefixes are granted because the toolchain lives in
+them: a Run that cannot execute Python cannot do the work it was given, and the
+installed package sits under one of them. Plurals are load-bearing. A virtual
+environment keeps its own prefix beside the installation it borrows an interpreter
+and a standard library from, and Landlock resolves the binary before deciding, so
+granting only the virtual environment refused the exec on hosts whose base
+interpreter sits outside `/usr` — how CI installs Python — while macOS, reporting
+no Landlock ABI, degraded to an unconfined exec and showed nothing. What that costs is recorded below. The one mechanism this distribution relies on
 is Landlock, which is unprivileged, has no false positives, and cannot be
 bypassed by how a command is spelled; a command that names the corpus returns
 nothing, because the kernel never let it look.
@@ -218,7 +223,7 @@ is unconfined and only `agent_shell_confinement` on `/health` and in the Run's t
 offers Landlock while refusing it to this process is not distinguishable per
 command — that one belongs to the deployment's own seccomp and capability setup,
 which is also the only place it can be seen; the grant that keeps the toolchain
-working is the interpreter prefix, so the installed package's source is readable
+working is the interpreter prefixes, so the installed package's source is readable
 from inside the confinement even though the corpus, the deployment's configuration,
 and the project tree are not; tools that hardcode
 `/tmp` rather than honouring `TMPDIR` fail, which is the price of not handing
