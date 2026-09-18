@@ -611,9 +611,15 @@ class AnswerOrchestrator:
             if self._workspace_store is not None
             else ()
         )
+        artifacts = (
+            await self._workspace_store.load_run_artifacts()
+            if self._workspace_store is not None
+            else ()
+        )
         return compose_durable_handles(
             spills=spills,
             evidence_handles=run.evidence.citation_handles(),
+            artifacts=artifacts,
         )
 
     async def _session_note_names(self) -> list[str]:

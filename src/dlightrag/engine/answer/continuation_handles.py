@@ -20,8 +20,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from dlightrag.engine.answer.publication import artifact_read_call
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord, SessionNoteRecord
+from dlightrag.engine.runtime.workspace import (
+    CommittedSpillRecord,
+    RunArtifactRecord,
+    SessionNoteRecord,
+)
 
 #: How many committed spills one summary may name. The share is reserved, not
 #: first-come: the omitted handle is the expensive failure, and Evidence, which
@@ -36,6 +41,12 @@ MAX_SPILL_HANDLES = 20
 #: on purpose, because an attached file means publication to the user.
 SESSION_NOTE_DIRECTORY = "notes"
 
+#: How many published Artifacts one summary may name. Like the spill share, it is
+#: reserved rather than first-come: a conversation that iterates on one deliverable
+#: must keep the handle that reads its last published version even after the receipt
+#: that taught it has been compacted away.
+MAX_ARTIFACT_HANDLES = 8
+
 #: How many Session Notes one compaction summary may name. A note is written to be read
 #: again, so the cap is generous for a plan file and a findings file and still bounds
 #: the summary's prose. Ordering is the working copy's own: by path, so a note the
@@ -47,6 +58,20 @@ MAX_NAMED_SESSION_NOTES = 8
 #: strictly-reducing check counts it, so an absurd name would spend the summary's
 #: budget instead of the note's.
 MAX_SESSION_NOTE_PATH_CHARS = 512
+
+
+def published_artifact_handle(record: RunArtifactRecord) -> str:
+    """Render one published Artifact as the call that reads its version again.
+
+    The address is the one publication binds (the Artifact path, hashed), so the handle
+    a Run names and the bytes a later Run adopts are the same statement: a conversation
+    that keeps working on one deliverable reads the version it published earlier, and
+    the next publication is a new version rather than a rewrite of that one.
+    """
+    return (
+        f"[artifact] {record.relative_path} ({record.size_bytes} bytes) — "
+        f"revisit it with {artifact_read_call(record.relative_path)} before editing it again"
+    )
 
 
 def session_notes_message(records: Sequence[SessionNoteRecord]) -> str:
@@ -129,29 +154,42 @@ def compose_session_notes(records: Sequence[InventoryPathRecord]) -> list[str]:
     return notes[:MAX_NAMED_SESSION_NOTES]
 
 
+def published_artifact_handles(
+    records: Sequence[RunArtifactRecord],
+) -> list[str]:
+    """Return this Run's published Artifact handles, by path, bounded by their share."""
+    return [published_artifact_handle(record) for record in records[:MAX_ARTIFACT_HANDLES]]
+
+
 def compose_durable_handles(
     *,
     spills: Sequence[CommittedSpillRecord],
     evidence_handles: Sequence[str],
+    artifacts: Sequence[RunArtifactRecord] = (),
 ) -> list[str]:
-    """Return the summary's handle list: the newest spills, then Evidence.
+    """Return the summary's handle list: the newest spills, published products, Evidence.
 
-    ``spills`` arrives newest-first from the Run's durable spill rows. Evidence
-    handles keep their own admission order behind them and are bounded by the
-    summary's cap, never by this function.
+    ``spills`` arrives newest-first from the Run's durable spill rows. Each non-Evidence
+    class has its own reserved share, because the omitted handle is the expensive
+    failure and a retrieval-heavy Run admits Evidence in tens; Evidence keeps its own
+    admission order behind them and is bounded by the summary's cap, never here.
     """
     handles = [spill_handle(spill) for spill in spills[:MAX_SPILL_HANDLES]]
+    handles.extend(published_artifact_handles(artifacts))
     handles.extend(evidence_handles)
     return handles
 
 
 __all__ = [
+    "MAX_ARTIFACT_HANDLES",
     "MAX_NAMED_SESSION_NOTES",
     "MAX_SESSION_NOTE_PATH_CHARS",
     "MAX_SPILL_HANDLES",
     "SESSION_NOTE_DIRECTORY",
     "compose_durable_handles",
     "compose_session_notes",
+    "published_artifact_handle",
+    "published_artifact_handles",
     "is_session_note",
     "session_note_handle",
     "session_notes_message",

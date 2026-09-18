@@ -53,6 +53,7 @@ from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
+from dlightrag.engine.answer.execution.lineage import ADOPTABLE_LINEAGE_KINDS
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.runtime.cancellation import (
     RunCancellationListener,
@@ -98,7 +99,10 @@ from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
 RUN_MIGRATION_SCOPE = "runs"
 
 # Resource kinds a later Run may adopt from an earlier Run on the same Session.
-_ADOPTABLE_RESOURCE_KINDS = frozenset({"web", "tool_attachment"})
+#: What a later Run of the same Session may adopt by naming a handle. It lives in
+#: the engine beside the loader that gates on it, and one declaration drives both
+#: this adapter's read and that gate, so a new adoptable kind is added once.
+_ADOPTABLE_LINEAGE_KINDS = ADOPTABLE_LINEAGE_KINDS
 
 
 def _parse_uuid(value: str) -> uuid.UUID | None:
@@ -562,7 +566,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_answer_resources_kind_check
-        CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill')),
+        CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill',
+                        'published_artifact')),
     CONSTRAINT dlightrag_answer_resources_blob_link_check
         CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL)
                OR (kind = 'fetched_blob'
@@ -571,7 +576,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
                         OR source_locator IS NOT NULL))
                OR (kind = 'evidence' AND locator_digest IS NOT NULL)
                OR (kind = 'committed_spill'
-                   AND blob_digest IS NULL AND locator_digest IS NULL))
+                   AND blob_digest IS NULL AND locator_digest IS NULL)
+               OR (kind = 'published_artifact' AND blob_digest IS NOT NULL))
 )
 """
 
@@ -1139,6 +1145,31 @@ RUN_MIGRATIONS = (
         "answer_session_notes",
         "Give each Agent Session a note plane, so memory outlives the Run that wrote it",
         (_CREATE_SESSION_NOTES,),
+    ),
+    Migration(
+        "published_artifact_resources",
+        "Register a published Artifact as a Resource its Session may adopt",
+        (
+            "ALTER TABLE dlightrag_answer_resources "
+            "DROP CONSTRAINT dlightrag_answer_resources_kind_check",
+            "ALTER TABLE dlightrag_answer_resources "
+            "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
+            "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill', "
+            "'published_artifact'))",
+            "ALTER TABLE dlightrag_answer_resources "
+            "DROP CONSTRAINT dlightrag_answer_resources_blob_link_check",
+            "ALTER TABLE dlightrag_answer_resources "
+            "ADD CONSTRAINT dlightrag_answer_resources_blob_link_check "
+            "CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL) "
+            "OR (kind = 'fetched_blob' "
+            "AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL "
+            "AND (capabilities->>'resource_kind' IS DISTINCT FROM 'web' "
+            "OR source_locator IS NOT NULL)) "
+            "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
+            "OR (kind = 'committed_spill' "
+            "AND blob_digest IS NULL AND locator_digest IS NULL) "
+            "OR (kind = 'published_artifact' AND blob_digest IS NOT NULL))",
+        ),
     ),
 )
 
@@ -2294,12 +2325,14 @@ SELECT run_id, resource_id, ordinal, blob_digest, safe_name, media_type, source_
 FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND session_id = $2 AND blob_digest IS NOT NULL
   AND (
-      (resource_id = $3 AND kind = 'fetched_blob'
-       AND capabilities->>'resource_kind' = ANY($5::text[]))
+      (resource_id = $3
+       AND (kind, capabilities->>'resource_kind') IN (
+           SELECT * FROM unnest($5::text[], $6::text[])
+       ))
       OR (source_locator = $4::bytea AND kind = 'fetched_blob'
           AND capabilities->>'resource_kind' = ANY(ARRAY['conversion_snapshot', 'conversion_asset']))
   )
-ORDER BY (resource_id = $3) DESC, resource_id
+ORDER BY (resource_id = $3) DESC, created_at DESC, run_id DESC, resource_id
 FOR SHARE
 """
 
@@ -2949,6 +2982,35 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 item.mime_type,
                 "{}",
             )
+            if item.session_id is None:
+                # A publication with no Agent Session stamp cannot be adopted by any
+                # later Run, so it stays a Run-owned product and registers no Resource.
+                continue
+            await conn.execute(
+                _INSERT_RESOURCE,
+                owner,
+                run_uuid,
+                item.resource_id,
+                "published_artifact",
+                item.filename,
+                item.mime_type,
+                json.dumps(
+                    {
+                        "resource_kind": "published_artifact",
+                        "artifact_path": item.relative_path,
+                        "presentation": item.presentation,
+                        "label": item.label,
+                    },
+                    ensure_ascii=False,
+                ),
+                index,
+                blob.digest,
+                None,
+                None,
+                uuid.UUID(item.session_id),
+                None,
+                None,
+            )
 
     async def _write_blobs(self, conn: Any, owner: str, blobs: Sequence[PendingArtifact]) -> None:
         """Acquire new blob identities in one canonical order per transaction."""
@@ -3580,7 +3642,8 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 session_uuid,
                 resource_id,
                 resource_id.encode("utf-8"),
-                sorted(_ADOPTABLE_RESOURCE_KINDS),
+                [table_kind for _capability, table_kind in _ADOPTABLE_LINEAGE_KINDS],
+                [capability for capability, _table_kind in _ADOPTABLE_LINEAGE_KINDS],
             )
             return tuple(
                 RunFetchedResource(

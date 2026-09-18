@@ -189,6 +189,39 @@ async def test_view_adopts_an_earlier_image_without_any_snapshot() -> None:
         assert any(part for part in restored if part.type == "resource_attachment")
 
 
+def adopted_product() -> LineageResourceBytes:
+    """One published Markdown product: no conversion route, so no stored view."""
+    content = b"# Analysis\n\nversion one\n"
+    return LineageResourceBytes(
+        resource_id="artifact-431b1900963e6cd2f4a1",
+        origin_run_id="01a0a737-e1d3-7421-8e25-27ca8abd3dad",
+        filename="analysis.md",
+        media_type="text/markdown",
+        content=content,
+        conversion_snapshot=None,
+        assets={},
+    )
+
+
+async def test_reading_a_published_product_decodes_it_without_a_stored_view() -> None:
+    """The handle the Tool returns must actually read: a product is directly decodable.
+
+    A convertible document needs the earlier Run's own view because reading it here
+    would convert it again; a Markdown report has no conversion route, so demanding a
+    view would refuse the one call ADR 0023 teaches.
+    """
+    lineage = Loader(adopted_product())
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+
+        result = await call(read, resource_id="artifact-431b1900963e6cd2f4a1")
+
+        assert result.is_error is False
+        assert "version one" in result.text_content
+        assert lineage.reads == 1
+        assert registry.canonical_resource_id("artifact-431b1900963e6cd2f4a1") is not None
+
+
 async def test_reading_a_document_the_earlier_run_never_converted_refuses(monkeypatch) -> None:
     """Text needs the earlier Run's own view; converting it here would invent one."""
 

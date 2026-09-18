@@ -4,6 +4,12 @@ A later Answer Run on the same Agent Session may re-materialize a Resource an ea
 
 ## Status
 
+Adoption's reach is extended by
+[ADR 0023](0023-a-published-product-is-a-resource.md): a Published Artifact registers a
+Resource of its Agent Session, so a later turn reads the version the conversation
+published. The owner-and-Session admission rule, the alias semantics, and the
+filesystem-backed rejection recorded here are unchanged.
+
 Accepted and implemented for the handle-triggered adoption path. `bfc1c5ae` (a reused historical handle fails as a typed refusal) and `c4ee5f5b` (an attachment image may not cut a tool batch) are its landed prerequisites. This ADR narrows nothing already decided: the run-scoped meaning of a Resource Handle, the lineage authorization of attachment replay, and `replay`/never-reparse semantics all stand.
 
 ## Context

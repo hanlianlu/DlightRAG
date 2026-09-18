@@ -2406,6 +2406,7 @@ class AnswerExecutor:
                     plan=publication,
                     answer=finalized.answer,
                     contexts=contexts,
+                    session_id=agent_session_id.value,
                 )
                 # Fast terminal settlement has no publication channel; Research
                 # leaves publication ownership with the coordinator.
@@ -3241,6 +3242,7 @@ def _stage_publications(
     plan: PublicationPlan,
     answer: str,
     contexts: RetrievalContexts,
+    session_id: str,
 ) -> tuple[list[PendingPublication], list[dict[str, Any]], dict[str, list[Any]]]:
     """Stage one accepted answer's publications, or reject an answer-less run."""
     if is_empty_answer(answer=answer, has_artifacts=bool(plan.artifacts)):
@@ -3248,6 +3250,10 @@ def _stage_publications(
     publications: list[PendingPublication] = []
     artifact_sources: dict[str, list[Any]] = {}
     descriptors = [dict(item) for item in plan.descriptors]
+    labels = {
+        str(descriptor.get("resource_id")): str(descriptor.get("label") or "")
+        for descriptor in descriptors
+    }
     for item in plan.artifacts:
         payload = item.content
         if item.media_type == "text/markdown":
@@ -3268,6 +3274,10 @@ def _stage_publications(
                 filename=item.filename,
                 mime_type=item.media_type,
                 content=payload,
+                session_id=session_id,
+                relative_path=item.relative_path,
+                presentation=item.presentation,
+                label=labels.get(item.resource_id) or item.filename,
             )
         )
     return publications, descriptors, artifact_sources

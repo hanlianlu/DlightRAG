@@ -304,7 +304,7 @@ A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Age
 _Avoid_: Web Search result, URL attachment, raw URL, Bash output
 
 **Resource Handle**:
-An opaque owner/run-scoped identity through which prepared, fetched, evidence-backed, or spilled content remains addressable across recovery. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle and the earlier handle stays readable only as its alias.
+An owner/run-scoped identity through which prepared, fetched, evidence-backed, spilled, or published content remains addressable across recovery; it is opaque except for a Published Artifact's deterministic address (`artifact-<hash of its Artifact path>`), which is derived on purpose so the Tool can name it before the publication exists. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle and the earlier handle stays readable only as its alias. What a later Run may adopt is declared once, as (capability, resource kind) pairs, so a new re-readable kind is added where it is written rather than in each reader.
 _Avoid_: File path, URL, blob id
 
 **Blob**:
@@ -324,7 +324,7 @@ A run-scoped publication authorization settled by the parent Research Session fo
 _Avoid_: Published Artifact, Workspace file, `artifact:` link, upload attachment
 
 **Published Artifact**:
-An optional owner-visible, run-scoped output descriptor created by fenced publication of an authorized Root Artifact Attachment or its validated dependency bytes. It is a separate reading, presentation, or download surface for a user-requested file, an impractically long or structurally rich deliverable, or content materially improved by that surface. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
+An optional owner-visible, run-scoped output descriptor created by fenced publication of an authorized Root Artifact Attachment or its validated dependency bytes. It is a separate reading, presentation, or download surface for a user-requested file, an impractically long or structurally rich deliverable, or content materially improved by that surface. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path. Publication also registers it as a Resource of its Agent Session, so a later turn of that conversation reads the version it published with the same handle the answer references: a conversation can iterate on one deliverable without the product becoming a mutable file, because each publication is a new version that keeps its own authoring Run, digest, and evidence.
 _Avoid_: Answer, parallel Answer, routine Research by-product, Spill, Blob when referring to the reference rather than the bytes, unattached workspace file
 
 **Artifact Canvas**:

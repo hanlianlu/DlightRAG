@@ -120,8 +120,32 @@ class ResourceReadResult:
     note: str | None = None
 
 
+#: The handle families this system mints. A durable handle is whatever its minter
+#: declares it to be: the Resource registry mints ``res-…`` for prepared, fetched,
+#: evidence-backed, and spilled bytes, and publication mints ``artifact-…`` for a
+#: Published Artifact. Declaring them here is what lets the alias binder, the registry's
+#: mint, and publication's mint agree without any of them matching on a literal, and it
+#: is why a handle a Tool taught the model stays readable after adoption whatever family
+#: it belongs to.
+PREPARED_RESOURCE_HANDLE_PREFIX = "res-"
+PUBLISHED_ARTIFACT_HANDLE_PREFIX = "artifact-"
+RESOURCE_HANDLE_PREFIXES: tuple[str, ...] = (
+    PREPARED_RESOURCE_HANDLE_PREFIX,
+    PUBLISHED_ARTIFACT_HANDLE_PREFIX,
+)
+
+
+def is_resource_handle(value: str) -> bool:
+    """Return whether one string is a durable Resource handle this system mints."""
+    return value.startswith(RESOURCE_HANDLE_PREFIXES)
+
+
 __all__ = [
     "EXTRACTION_TEXT",
+    "PREPARED_RESOURCE_HANDLE_PREFIX",
+    "PUBLISHED_ARTIFACT_HANDLE_PREFIX",
+    "RESOURCE_HANDLE_PREFIXES",
+    "is_resource_handle",
     "ResourceAdmissionError",
     "ResourceCursorError",
     "ResourceDecodeError",

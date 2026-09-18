@@ -21,6 +21,7 @@ from dlightrag.engine.runtime.workspace import (
     HandoffLeaseLost,
     HandoffResult,
     InventoryReplaceResult,
+    RunArtifactRecord,
     SessionNoteRecord,
     SessionNotesLimits,
     SessionNotesPromotion,
@@ -142,6 +143,17 @@ class PGWorkspaceStore:
                     return "lease_lost"
                 await self._replace_inventory_locked(conn, records)
                 return "committed"
+
+    async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
+        """Read this Run's attached Artifact roots, ordered by path.
+
+        The rows are this Run's own settlement records, so the read is claim-local like
+        the Inventory and the committed spills beside it: a summary names what this Run
+        attached, and the address it renders is the published version's.
+        """
+        return await load_run_artifacts(
+            owner_id=self._owner_id, run_id=self._run_id, pool=self._pool
+        )
 
     async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]:
         """Read one Session's notes without needing a live claim.
@@ -356,6 +368,35 @@ class PGWorkspaceStore:
             )
 
 
+async def load_run_artifacts(
+    *,
+    owner_id: str,
+    run_id: uuid.UUID,
+    pool: ConnectionPool | None = None,
+) -> tuple[RunArtifactRecord, ...]:
+    """Read one Run's attached Artifact roots without a live claim."""
+    connection_pool = pool if pool is not None else await pg_pool.get()
+    async with connection_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, label, size_bytes, content_digest, presentation"
+            " FROM dlightrag_answer_artifact_attachments"
+            " WHERE owner_id = $1 AND run_id = $2"
+            " ORDER BY relative_path",
+            owner_id,
+            run_id,
+        )
+    return tuple(
+        RunArtifactRecord(
+            relative_path=str(row["relative_path"]),
+            label=str(row["label"]),
+            size_bytes=int(row["size_bytes"]),
+            content_digest=str(row["content_digest"]),
+            presentation=str(row["presentation"]),
+        )
+        for row in rows
+    )
+
+
 async def load_session_notes(
     *,
     owner_id: str,
@@ -444,4 +485,4 @@ async def _upsert_spill(
     )
 
 
-__all__ = ["PGWorkspaceStore", "load_run_inventory", "load_session_notes"]
+__all__ = ["PGWorkspaceStore", "load_run_artifacts", "load_run_inventory", "load_session_notes"]

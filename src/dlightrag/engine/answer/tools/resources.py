@@ -24,7 +24,11 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReadRequest, ViewArgs
-from dlightrag.engine.answer.resources.converters import ConversionLimitError, UnsafeArchiveError
+from dlightrag.engine.answer.resources.converters import (
+    ConversionLimitError,
+    UnsafeArchiveError,
+    is_convertible,
+)
 from dlightrag.engine.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,
@@ -101,16 +105,24 @@ async def _adopt_earlier_then_retry(
 
     The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
     refusal. Adoption effects ride the retried call's own settlement, which is what
-    pins the adopted bytes under this Run before the model sees the content. A text
-    read additionally requires the earlier Run's own view, because converting the
-    document here would record a history that Run never had.
+    pins the adopted bytes under this Run before the model sees the content.
+
+    A read of a *convertible* resource requires the earlier Run's own view, because
+    converting it here would record a parse history that Run never had. A resource with
+    no conversion route — a published Markdown report, a fetched text page — is read by
+    decoding the adopted bytes, so demanding a view for it would refuse the very read
+    the handle teaches.
     """
     if lineage is None or not resource_id:
         return ToolResult.text(refusal, is_error=True)
     loaded = await lineage.load(resource_id)
     if loaded is None:
         return ToolResult.text(refusal, is_error=True)
-    if requires_stored_view and loaded.conversion_snapshot is None:
+    if (
+        requires_stored_view
+        and loaded.conversion_snapshot is None
+        and is_convertible(loaded.filename, loaded.media_type)
+    ):
         return ToolResult.text(_unconverted_refusal(loaded.filename), is_error=True)
     try:
         adopted = adopt_lineage_resource(registry, loaded)

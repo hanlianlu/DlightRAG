@@ -42,6 +42,7 @@ from dlightrag.engine.answer.resources.formatting import format_resource_read
 from dlightrag.engine.answer.resources.lexical import bm25_rank, mixed_script_terms
 from dlightrag.engine.answer.resources.models import (
     EXTRACTION_TEXT,
+    PREPARED_RESOURCE_HANDLE_PREFIX,
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceInput,
@@ -50,6 +51,7 @@ from dlightrag.engine.answer.resources.models import (
     ResourceReadResult,
     TextWindowLocator,
     VisualHandle,
+    is_resource_handle,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.resources.text import build_text_windows, decode_text
@@ -389,7 +391,7 @@ class ResourceRegistry:
         never reach content the Run did not adopt; a collision is therefore a state
         mismatch rather than a silent rebind.
         """
-        if not alias.startswith("res-") or alias == canonical:
+        if not is_resource_handle(alias) or alias == canonical:
             return
         bound = self._aliases.get(alias)
         if bound is not None and self._canonical_resource_id(bound) != canonical:
@@ -467,7 +469,7 @@ class ResourceRegistry:
         self._fetched_ordinals[resource_id] = ordinal
         self._next_fetched_ordinal = max(self._next_fetched_ordinal, ordinal + 1)
         for alias in aliases:
-            if not alias.startswith("res-"):
+            if not is_resource_handle(alias):
                 raise ResourceStateMismatchError("durable Web resource alias is invalid")
             if alias == resource_id:
                 continue
@@ -1486,7 +1488,7 @@ class ResourceRegistry:
         digest = hmac.new(
             self._secret, kind.encode("utf-8") + b"|" + payload, hashlib.sha256
         ).hexdigest()
-        return f"res-{digest[:24]}"
+        return f"{PREPARED_RESOURCE_HANDLE_PREFIX}{digest[:24]}"
 
     async def _cursor_plan(
         self,

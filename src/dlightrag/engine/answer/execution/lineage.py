@@ -26,7 +26,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ADOPTABLE_KINDS = frozenset({"web", "tool_attachment"})
+#: What a later Run of the same Agent Session may adopt by naming a handle: a
+#: (capability, resource kind) pair each. One declaration drives both this loader's
+#: gate and the adapter's read, so "adoptable" is stated where the kind is known
+#: rather than remembered in two layers.
+#:
+#: A published Artifact is here for the same reason a fetched Web body is: it is
+#: digest-addressed bytes that outlive the Run that produced them, and a
+#: conversation that keeps working on one deliverable must be able to read the
+#: version it published earlier.
+ADOPTABLE_LINEAGE_KINDS: tuple[tuple[str, str], ...] = (
+    ("web", "fetched_blob"),
+    ("tool_attachment", "fetched_blob"),
+    ("published_artifact", "published_artifact"),
+)
+
+_ADOPTABLE_KINDS = frozenset(capability for capability, _kind in ADOPTABLE_LINEAGE_KINDS)
 
 
 class LineageResourceStore(Protocol):
@@ -135,4 +150,4 @@ def _source_url(row: RunFetchedResource) -> str | None:
     return decoded if decoded.startswith(("http://", "https://")) else None
 
 
-__all__ = ["LineageResourceStore", "RetainedResourceLoader"]
+__all__ = ["ADOPTABLE_LINEAGE_KINDS", "LineageResourceStore", "RetainedResourceLoader"]

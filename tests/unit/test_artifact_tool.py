@@ -35,12 +35,15 @@ async def test_attach_artifact_validates_and_returns_a_structured_receipt(tmp_pa
     assert result.is_error is False
     assert "[Open analysis](artifact:analysis.md)" in result.text_content
     assert result.details is not None
+    # The receipt names the address a later turn reads the published version with:
+    # it is the same deterministic id publication binds, so it is known now.
     assert result.details["artifact_attachment"] == {
         "relative_path": "analysis.md",
         "label": "Open analysis",
         "content_digest": hashlib.sha256(b"Grounded analysis.").hexdigest(),
         "size_bytes": len(b"Grounded analysis."),
         "presentation": "markdown",
+        "resource_id": "artifact-431b1900963e6cd2f4a1",
     }
 
 

@@ -4292,6 +4292,55 @@ class TestForkPoints:
             is False
         )
 
+    async def test_published_artifact_resources_arrive_for_an_older_deployment(
+        self, store, pool
+    ) -> None:
+        """A deployment whose constraint predates the kind converges by migration."""
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "ALTER TABLE dlightrag_answer_resources "
+                "DROP CONSTRAINT dlightrag_answer_resources_kind_check"
+            )
+            await conn.execute(
+                "ALTER TABLE dlightrag_answer_resources "
+                "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
+                "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill'))"
+            )
+            await conn.execute(
+                "DELETE FROM dlightrag_schema_migrations"
+                " WHERE scope = 'runs' AND version = 'published_artifact_resources'"
+            )
+
+        migrated = PGRunStore(pool=pool)
+        await migrated.initialize()
+
+        async with pool.acquire() as conn:
+            definition = await conn.fetchval(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+                " WHERE conname = 'dlightrag_answer_resources_kind_check'"
+            )
+        assert definition is not None and "published_artifact" in definition
+
+        # The kind a later turn adopts has to be insertable, not merely allowed by text.
+        accepted = await store.create_run(owner_id=_OWNER, request=_request("older deployment"))
+        digest = hashlib.sha256(b"recovered product").hexdigest()
+        async with pool.acquire() as conn, conn.transaction():
+            await write_blob_content(
+                conn, owner_id=_OWNER, digest=digest, content=b"recovered product"
+            )
+            await conn.execute(
+                "INSERT INTO dlightrag_answer_resources ("
+                " owner_id, run_id, resource_id, kind, safe_name, media_type, capabilities,"
+                " ordinal, blob_digest, session_id)"
+                " VALUES ($1, $2, $3, 'published_artifact', 'analysis.md', 'text/markdown',"
+                " '{}'::jsonb, 0, $4, $5)",
+                _OWNER,
+                uuid.UUID(str(accepted.run.run_id)),
+                "artifact-recovered",
+                digest,
+                uuid.uuid4(),
+            )
+
     async def test_fork_point_columns_arrive_for_an_older_deployment(self, store, pool) -> None:
         """A deployment whose routing table predates the point converges by migration."""
         async with pool.acquire() as conn:

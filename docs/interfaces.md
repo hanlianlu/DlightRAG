@@ -40,6 +40,11 @@ finally:
 | `parts` | Ordered Markdown, Artifact, and explicitly inline Evidence Image parts. |
 | `usage` | Root, child, and inclusive provider usage when available. |
 | `evidence` | Counts of admitted chunks, entities, relationships, and cited sources. |
+A Resource handle a later turn may name includes a Published Artifact of the same Agent
+Session (`artifact-<hash of its path>`), because publication registers it as a Resource
+([ADR 0023](adr/0023-a-published-product-is-a-resource.md)); the handle is what the
+attaching Tool returns and what the compaction summary keeps naming.
+
 | `parent_run_id`, `continuation_kind` | Follow-up/fork lineage. A Session-backed continuation injects no history; only a caller with no Agent Session branch point has its parent's accepted history injected. |
 
 Answer **attachments** are files or HTTP(S) references used only by one answer.

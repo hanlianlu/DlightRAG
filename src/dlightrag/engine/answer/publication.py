@@ -27,6 +27,9 @@ import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
+from dlightrag.engine.answer.resources.converters import is_convertible
+from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
+
 PresentationCapability = Literal["image", "markdown", "html", "pdf", "text", "download"]
 ArtifactIssueKind = Literal[
     "invalid_reference",
@@ -249,6 +252,27 @@ def prepare_artifact_attachment(
         size_bytes=staged.source_size_bytes,
         presentation=staged.presentation,
     )
+
+
+def artifact_read_call(
+    relative_path: str,
+    *,
+    filename: str | None = None,
+    mime_type: str | None = None,
+) -> str:
+    """Return the agent call that reaches one published Artifact again.
+
+    A product whose type has no conversion route is read by decoding the adopted bytes,
+    so the call is ``read(resource_id=…)``. One whose type routes to a converter is not
+    converted retrospectively — the earlier Run never recorded that view, and recording
+    one here would invent a history it never had — so the call a later turn can actually
+    make is ``view(resource_id=…)``. Naming ``read`` for such a product would teach a
+    call that refuses, which is why this choice lives beside the address it renders.
+    """
+    handle = artifact_resource_id(relative_path)
+    if is_convertible(filename or relative_path, mime_type):
+        return f"view(resource_id={handle!r})"
+    return f"read(resource_id={handle!r})"
 
 
 def validate_publication(
@@ -649,7 +673,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         raise ArtifactValidationError(
             "media_mismatch", f"Artifact {Path(relative).name} does not match its file extension."
         ) from exc
-    resource_id = _resource_id(relative)
+    resource_id = artifact_resource_id(relative)
     return StagedArtifact(
         relative_path=relative,
         media_type=media_type,
@@ -780,8 +804,17 @@ def _cycle_nodes(graph: Mapping[str, Sequence[str]]) -> set[str]:
     return cyclic
 
 
-def _resource_id(relative: str) -> str:
-    return f"artifact-{hashlib.sha256(relative.encode('utf-8')).hexdigest()[:20]}"
+def artifact_resource_id(relative: str) -> str:
+    """Return the public address of one Artifact root: its path, hashed.
+
+    Deterministic on purpose. The address is what an Answer's own references carry,
+    what the browser read surface serves, and what a later Run of the same Session
+    names to read the published version again, so it must be computable before the
+    publication row exists — which is exactly what lets the writing Tool hand the
+    model a handle it can still use in its next turn.
+    """
+    digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()
+    return f"{PUBLISHED_ARTIFACT_HANDLE_PREFIX}{digest[:20]}"
 
 
 def _unavailable_id(value: str) -> str:
@@ -853,6 +886,8 @@ def _reject_special(path: Path) -> None:
 
 
 __all__ = [
+    "artifact_read_call",
+    "artifact_resource_id",
     "ArtifactAttachment",
     "ArtifactIssue",
     "ArtifactIssueKind",

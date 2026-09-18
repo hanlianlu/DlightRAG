@@ -290,6 +290,7 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
         plan=plan,
         answer=plan.answer,
         contexts=contexts,
+        session_id="01930000-0000-7000-8000-000000000001",
     )
 
     resource_by_filename = {
@@ -1139,6 +1140,7 @@ def test_public_document_citations_are_projected_into_the_published_artifact(
         plan=plan,
         answer=plan.answer,
         contexts=contexts,
+        session_id="01930000-0000-7000-8000-000000000001",
     )
 
     (publication,) = publications

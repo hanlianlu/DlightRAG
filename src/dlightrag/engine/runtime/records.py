@@ -437,6 +437,15 @@ class PendingPublication:
     filename: str
     mime_type: str
     content: bytes
+    #: The Agent Session that published it, so the durable row is adoptable by this
+    #: conversation's later Runs and by no other Session or owner.
+    session_id: str | None = None
+    #: The Artifact root inside the publishing Run's workspace, and how the browser
+    #: should present it. The resource id is derived from this path, which is what
+    #: makes the handle a later turn can name already known when the tool returns.
+    relative_path: str = ""
+    presentation: str = "download"
+    label: str = ""
 
 
 @dataclass(frozen=True, slots=True)

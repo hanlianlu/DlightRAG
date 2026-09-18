@@ -134,6 +134,185 @@ async def test_adopts_an_earlier_runs_document_and_its_stored_view() -> None:
             assert "Text the earlier run already extracted." in text.content
 
 
+async def test_adopts_the_artifact_a_conversation_published_earlier() -> None:
+    """A published product is a Resource: the next turn reads the version it published.
+
+    This is the whole point of registering it — the address is the path hashed, so the
+    Tool can hand the model a handle before the publication exists, and the bytes a
+    later Run of the same Session adopts are the version that was published.
+    """
+    from dlightrag.engine.answer.publication import artifact_resource_id
+    from dlightrag.engine.runtime.records import PendingPublication
+
+    async with isolated_run_runtime("resource_lineage_artifact") as (_, db):
+        store = await _store(db)
+        session_id = str(uuid.uuid4())
+        accepted = await store.accept_run(
+            envelope=run_envelope("answer", key=f"artifact-{uuid.uuid4().hex[:8]}", owner=OWNER),
+            run_id=str(uuid.uuid7()),
+            connection_bindings=(),
+        )
+        run_id = str(accepted.run.run_id)
+        claim = await store.claim_next(worker_id="artifact-worker")
+        assert claim is not None
+        resource_id = artifact_resource_id("reports/analysis.md")
+        content = b"# analysis\nversion one\n"
+
+        outcome = await store.finish_success(
+            owner_id=OWNER,
+            run_id=run_id,
+            worker_id="artifact-worker",
+            fencing_epoch=claim.run.fencing_epoch,
+            result={"answer": "published"},
+            publications=(
+                PendingPublication(
+                    resource_id=resource_id,
+                    reference_kind="published_artifact",
+                    filename="analysis.md",
+                    mime_type="text/markdown",
+                    content=content,
+                    session_id=session_id,
+                    relative_path="reports/analysis.md",
+                    presentation="markdown",
+                    label="analysis.md",
+                ),
+            ),
+        )
+        assert outcome is not None
+
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT kind, blob_digest, session_id::text AS session_id, capabilities"
+                " FROM dlightrag_answer_resources WHERE owner_id = $1 AND resource_id = $2",
+                OWNER,
+                resource_id,
+            )
+        assert row is not None
+        assert row["kind"] == "published_artifact"
+        assert row["blob_digest"] == hashlib.sha256(content).hexdigest()
+        assert row["session_id"] == session_id
+        capabilities = json.loads(row["capabilities"])
+        assert capabilities["resource_kind"] == "published_artifact"
+        assert capabilities["artifact_path"] == "reports/analysis.md"
+        assert capabilities["presentation"] == "markdown"
+
+        loader = RetainedResourceLoader(
+            store=store,
+            blobs=PGRunBlobStore(pool=db),
+            owner_id=OWNER,
+            session_id=session_id,
+        )
+        loaded = await loader.load(resource_id)
+        assert loaded is not None
+        assert loaded.content == content
+        assert loaded.origin_run_id == run_id
+        assert loaded.filename == "analysis.md"
+
+        # The call the Tool teaches must actually read it: a product has no conversion
+        # route, so the reader decodes the adopted bytes instead of demanding a view.
+        from dlightrag.engine.agent.environment.access import AccessScheduler
+        from dlightrag.engine.agent.tools.files import read_tool
+        from dlightrag.engine.answer.resources.models import TextWindowBudget
+        from dlightrag.engine.answer.resources.registry import ResourceRegistry
+        from dlightrag.engine.answer.tools.resources import make_resource_reader
+        from tests.tool_helpers import tool_runtime
+
+        async with ResourceRegistry() as registry:
+            tool = read_tool(
+                None,
+                AccessScheduler(),
+                resource_reader=make_resource_reader(
+                    registry, TextWindowBudget(1000), lineage=loader
+                ),
+            )
+            read = await tool.execute(
+                tool.input_model.model_validate({"resource_id": resource_id}),
+                tool_runtime(tool_name=tool.name),
+            )
+        assert read.is_error is False, read.text_content
+        assert "version one" in read.text_content
+
+        # Another conversation cannot reach it, and neither can another owner.
+        other_session = RetainedResourceLoader(
+            store=store,
+            blobs=PGRunBlobStore(pool=db),
+            owner_id=OWNER,
+            session_id=str(uuid.uuid4()),
+        )
+        assert await other_session.load(resource_id) is None
+        other_owner = RetainedResourceLoader(
+            store=store,
+            blobs=PGRunBlobStore(pool=db),
+            owner_id="another-owner",
+            session_id=session_id,
+        )
+        assert await other_owner.load(resource_id) is None
+
+
+async def test_adoption_reads_the_newest_published_version_of_one_path() -> None:
+    """Republishing a path makes a new version; the handle reads the newest one.
+
+    The address is derived from the path, so every version of one Artifact shares it.
+    Without a recency tie-break the read could return the version the conversation
+    published first, which is the opposite of iterating on a deliverable.
+    """
+    from dlightrag.engine.answer.publication import artifact_resource_id
+    from dlightrag.engine.runtime.records import PendingPublication
+
+    async with isolated_run_runtime("resource_lineage_versions") as (_, db):
+        store = await _store(db)
+        session_id = str(uuid.uuid4())
+        resource_id = artifact_resource_id("reports/analysis.md")
+
+        async def publish(version: int) -> str:
+            accepted = await store.accept_run(
+                envelope=run_envelope(
+                    "answer", key=f"version-{version}-{uuid.uuid4().hex[:8]}", owner=OWNER
+                ),
+                run_id=str(uuid.uuid7()),
+                connection_bindings=(),
+            )
+            run_id = str(accepted.run.run_id)
+            claim = await store.claim_next(worker_id=f"version-worker-{version}")
+            assert claim is not None
+            await store.finish_success(
+                owner_id=OWNER,
+                run_id=run_id,
+                worker_id=f"version-worker-{version}",
+                fencing_epoch=claim.run.fencing_epoch,
+                result={"answer": f"version {version}"},
+                publications=(
+                    PendingPublication(
+                        resource_id=resource_id,
+                        reference_kind="published_artifact",
+                        filename="analysis.md",
+                        mime_type="text/markdown",
+                        content=f"# version {version}\n".encode(),
+                        session_id=session_id,
+                        relative_path="reports/analysis.md",
+                        presentation="markdown",
+                        label=f"version {version}",
+                    ),
+                ),
+            )
+            return run_id
+
+        await publish(1)
+        newest_run = await publish(2)
+
+        loader = RetainedResourceLoader(
+            store=store,
+            blobs=PGRunBlobStore(pool=db),
+            owner_id=OWNER,
+            session_id=session_id,
+        )
+        loaded = await loader.load(resource_id)
+
+        assert loaded is not None
+        assert loaded.content == b"# version 2\n"
+        assert loaded.origin_run_id == newest_run
+
+
 async def test_the_session_stamp_decides_admission() -> None:
     async with isolated_run_runtime("resource_lineage_scope") as (_, db):
         store = await _store(db)

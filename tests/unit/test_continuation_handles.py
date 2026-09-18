@@ -6,6 +6,7 @@ it reads again — the file itself is what outlives the summary.
 """
 
 from dlightrag.engine.answer.continuation_handles import (
+    MAX_ARTIFACT_HANDLES,
     MAX_NAMED_SESSION_NOTES,
     MAX_SESSION_NOTE_PATH_CHARS,
     MAX_SPILL_HANDLES,
@@ -13,6 +14,7 @@ from dlightrag.engine.answer.continuation_handles import (
     compose_durable_handles,
     compose_session_notes,
     is_session_note,
+    published_artifact_handle,
     session_note_handle,
     session_notes_message,
     spill_handle,
@@ -174,6 +176,83 @@ def test_the_reserved_directory_the_prompt_teaches_is_the_one_the_rule_reads() -
 
     assert f"`{SESSION_NOTE_DIRECTORY}/`" in taught
     assert f"`{SESSION_NOTE_DIRECTORY}/`" not in agent_control_prompt(run_notes=False)
+
+
+def test_a_published_artifact_renders_the_handle_a_later_turn_reads_it_with() -> None:
+    """One handle family: the address is the path hashed, so it exists before the row."""
+    from dlightrag.engine.answer.publication import artifact_resource_id
+    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+
+    record = RunArtifactRecord(
+        relative_path="reports/analysis.md",
+        label="analysis.md",
+        size_bytes=1_234,
+        content_digest="d" * 64,
+        presentation="markdown",
+    )
+
+    handle = published_artifact_handle(record)
+
+    assert handle.startswith("[artifact] reports/analysis.md (1234 bytes)")
+    assert f"read(resource_id={artifact_resource_id('reports/analysis.md')!r})" in handle
+    assert "editing it again" in handle
+
+
+def test_a_product_whose_type_needs_conversion_is_taught_the_view_call() -> None:
+    """The taught call has to be one that works for that product's type.
+
+    A Markdown report is decoded, so `read` reaches it. A PDF is not converted
+    retrospectively — the earlier Run never recorded that view — so the call a later
+    turn can actually make is `view`, and teaching `read` there would teach a refusal.
+    """
+    from dlightrag.engine.answer.publication import artifact_read_call
+    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+
+    markdown = artifact_read_call("reports/analysis.md", mime_type="text/markdown")
+    assert markdown.startswith("read(resource_id='artifact-")
+    assert artifact_read_call("reports/data.csv", mime_type="text/csv").startswith(
+        "view(resource_id='artifact-"
+    )
+
+    record = RunArtifactRecord(
+        relative_path="reports/report.pdf",
+        label="report.pdf",
+        size_bytes=2_048,
+        content_digest="e" * 64,
+        presentation="pdf",
+    )
+    handle = published_artifact_handle(record)
+
+    assert "view(resource_id='artifact-" in handle
+    assert "read(resource_id=" not in handle
+
+
+def test_the_handle_list_reserves_a_share_for_each_non_evidence_class() -> None:
+    """Spills keep their place, published products keep theirs, Evidence fills the rest."""
+    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+
+    artifacts = tuple(
+        RunArtifactRecord(
+            relative_path=f"reports/{index:02d}.md",
+            label=f"{index:02d}.md",
+            size_bytes=10,
+            content_digest="d" * 64,
+            presentation="markdown",
+        )
+        for index in range(MAX_ARTIFACT_HANDLES + 3)
+    )
+
+    handles = compose_durable_handles(
+        spills=(_spill("spill-1"),),
+        evidence_handles=("[evidence] res-1",),
+        artifacts=artifacts,
+    )
+
+    assert handles[0].startswith("[spill] spill-1")
+    assert len([handle for handle in handles if handle.startswith("[artifact]")]) == (
+        MAX_ARTIFACT_HANDLES
+    )
+    assert handles[-1] == "[evidence] res-1"
 
 
 def test_the_notes_message_is_empty_when_the_session_holds_no_memory() -> None:

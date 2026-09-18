@@ -12,6 +12,8 @@ from dlightrag.engine.answer.publication import (
     ArtifactValidationError,
     PublicationLimits,
     artifact_link,
+    artifact_read_call,
+    artifact_resource_id,
     prepare_artifact_attachment,
 )
 
@@ -56,9 +58,16 @@ def attach_artifact_tool(
                     is_error=True,
                 )
         link = artifact_link(attachment)
+        resource_id = artifact_resource_id(attachment.relative_path)
+        read_call = artifact_read_call(
+            attachment.relative_path,
+            filename=attachment.relative_path,
+            mime_type="",
+        )
         return ToolResult.text(
             f"attached {attachment.relative_path} ({attachment.size_bytes} bytes); "
-            f"place it with {link}",
+            f"place it with {link}; a later turn continues from this published version "
+            f"with {read_call}",
             details={
                 "artifact_attachment": {
                     "relative_path": attachment.relative_path,
@@ -66,6 +75,7 @@ def attach_artifact_tool(
                     "content_digest": attachment.content_digest,
                     "size_bytes": attachment.size_bytes,
                     "presentation": attachment.presentation,
+                    "resource_id": resource_id,
                 }
             },
         )

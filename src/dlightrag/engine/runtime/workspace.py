@@ -156,6 +156,29 @@ type HandoffResult = HandoffCommit | HandoffConflict | HandoffLeaseLost
 type InventoryReplaceResult = Literal["committed", "lease_lost"]
 
 
+@dataclass(frozen=True, slots=True)
+class RunArtifactRecord:
+    """One Artifact root this Run attached, as its own settlement recorded it.
+
+    The address is derived from the relative path, so a summary can name the handle a
+    later turn will read the published version with before that publication exists.
+    """
+
+    relative_path: str
+    label: str
+    size_bytes: int
+    content_digest: str
+    presentation: str
+
+    def __post_init__(self) -> None:
+        if not self.relative_path.strip():
+            raise ValueError("artifact record path cannot be empty")
+        if self.size_bytes < 0:
+            raise ValueError("artifact record size cannot be negative")
+        if len(self.content_digest) != 64:
+            raise ValueError("artifact record digest must be a SHA-256 hex digest")
+
+
 class WorkspaceStore(Protocol):
     """Fenced workspace metadata. Handoff never advances durable progress."""
 
@@ -172,6 +195,8 @@ class WorkspaceStore(Protocol):
     async def replace_inventory(
         self, records: Sequence[InventoryPathRecord]
     ) -> InventoryReplaceResult: ...
+
+    async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]: ...
 
     async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]: ...
 
@@ -210,6 +235,7 @@ class InMemoryWorkspaceStore:
         self.progress_version = progress_version
         self.inventory: list[InventoryPathRecord] = []
         self.spills: list[CommittedSpillRecord] = []
+        self.artifacts: list[RunArtifactRecord] = []
         self.session_notes: dict[str, dict[str, bytes]] = {}
 
     async def handoff_epoch(
@@ -243,6 +269,9 @@ class InMemoryWorkspaceStore:
             return "lease_lost"
         self.inventory = list(records)
         return "committed"
+
+    async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
+        return tuple(sorted(self.artifacts, key=lambda record: record.relative_path))
 
     async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]:
         return tuple(
@@ -345,6 +374,7 @@ __all__ = [
     "HandoffResult",
     "InMemoryWorkspaceStore",
     "InventoryReplaceResult",
+    "RunArtifactRecord",
     "SESSION_NOTES_BUDGET_REFUSED",
     "SESSION_NOTES_LEASE_LOST",
     "SESSION_NOTES_MATERIALIZE_FAILED",

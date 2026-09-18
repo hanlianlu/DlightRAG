@@ -609,6 +609,41 @@ class _RecordingWorkspaceStore(InMemoryWorkspaceStore):
         return await super().load_recent_spills(limit=limit)
 
 
+async def test_the_summary_names_the_products_the_run_attached(tmp_path: Path) -> None:
+    """An attached Artifact joins the summary's handles, so a later turn can read it.
+
+    The handle is the address publication binds, and the Run's own attachment rows are
+    where it comes from — the same durable, claim-local source the spill handles use.
+    """
+    from dlightrag.engine.runtime.workspace import RunArtifactRecord
+
+    orchestrator = _orchestrator(mode="research")
+    store = _RecordingWorkspaceStore()
+    store.artifacts = [
+        RunArtifactRecord(
+            relative_path="reports/analysis.md",
+            label="analysis.md",
+            size_bytes=1_234,
+            content_digest="d" * 64,
+            presentation="markdown",
+        )
+    ]
+    orchestrator.bind_workspace(
+        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
+        store,
+    )
+    run = MagicMock()
+    run.evidence = _one_passage_ledger()
+
+    handles = await orchestrator._continuation_handles(run)
+
+    # The fixture ledger contributes one Evidence handle; the product is named too.
+    artifacts = [handle for handle in handles if handle.startswith("[artifact]")]
+    (handle,) = artifacts
+    assert handle.startswith("[artifact] reports/analysis.md (1234 bytes)")
+    assert "read(resource_id='artifact-" in handle
+
+
 def _one_passage_ledger() -> EvidenceLedger:
     evidence = EvidenceLedger()
     evidence.add_rows(

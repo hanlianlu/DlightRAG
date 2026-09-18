@@ -352,6 +352,14 @@ stateless caller — a REST or MCP continuation whose parent recorded none — h
 parent's accepted history injected, and `include_answer` only governs whether the
 parent's answer joins that injected history.
 
+A published Artifact joins the same re-readable family: publication registers it as a
+Resource of its Agent Session ([ADR 0023](adr/0023-a-published-product-is-a-resource.md)),
+the Tool hands the model the deterministic handle (`read(resource_id='artifact-…')`)
+when it attaches, and the summary keeps naming it after the receipt is compacted away.
+A later turn of that conversation therefore reads the version it published, edits it in
+its own working copy, and publishes a new version — each version keeping its authoring
+Run, digest, and Evidence — while another conversation cannot reach those bytes at all.
+
 Either kind also binds the Session's notes, and neither copies a parent Run's. Memory
 belongs to the Agent Session: its notes are laid down into the continuation's own
 Workspace Epoch and recorded in its Inventory before the first request, so a
