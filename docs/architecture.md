@@ -361,8 +361,9 @@ LightRAG is not a separate deployment node. The default `writer` owns
 migrations, claims corpus mutations, and serves every interface. A `reader` is
 **corpus-read-only**, not process-read-only: it may write operational state for
 answers, events, Root Artifact Attachments, Published Artifacts, and Web
-conversations. It may enqueue an authorized Corpus Mutation Run for a writer to
-claim, but never claims or executes that work itself. Reader startup validates
+conversations. It registers no corpus-mutation executor and so refuses
+corpus writes at acceptance, answering HTTP 503 with the remedy rather than
+enqueueing a Run no process here can execute. Reader startup validates
 the migrated schemas and uses LightRAG's read-only attach path without issuing
 DDL.
 
