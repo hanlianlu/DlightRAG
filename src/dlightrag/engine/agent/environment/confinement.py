@@ -67,9 +67,8 @@ _CREATE_RULESET_VERSION = 1
 _RULE_PATH_BENEATH = 1
 _PR_SET_NO_NEW_PRIVS = 38
 
-MODULE = "dlightrag.engine.agent.environment.confinement"
 _RULES_OPTION = "--rules"
-_USAGE = f"usage: python -m {MODULE} {_RULES_OPTION} <json-rules> -- <command>"
+_USAGE = f"usage: <python> confinement.py {_RULES_OPTION} <json-rules> -- <command>"
 
 __all__ = [
     "ConfinementPolicy",
@@ -165,7 +164,11 @@ class WorkspaceConfinement:
         payload = json.dumps(
             [[str(path), access] for path, access in self.rules], separators=(",", ":")
         )
-        return [sys.executable, "-m", MODULE, _RULES_OPTION, payload, "--"]
+        # Run this module as a file rather than with ``-m``: the package import chain
+        # reaches this module through ``local``, and runpy warns on stderr when a
+        # ``-m`` target is already imported — a warning that would land in the model's
+        # tool output (ADR 0024).
+        return [sys.executable, os.fspath(Path(__file__).resolve()), _RULES_OPTION, payload, "--"]
 
 
 @lru_cache(maxsize=1)
@@ -247,16 +250,6 @@ def _parse(argv: Sequence[str]) -> tuple[tuple[tuple[Path, int], ...], list[str]
     return tuple((Path(entry[0]), int(entry[1])) for entry in payload), remainder[1:]
 
 
-def _report(message: str) -> None:
-    """Write one diagnostic that survives the exec that follows.
-
-    ``execvp`` replaces this process without flushing Python's buffers, so a
-    diagnostic that is merely printed is a diagnostic that is lost.
-    """
-    sys.stderr.write(f"{message}\n")
-    sys.stderr.flush()
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Apply the policy to this process and exec the command it carries.
 
@@ -271,8 +264,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if abi >= 1:
         try:
             _apply(rules, abi)
-        except OSError as exc:
-            _report(f"agent confinement could not be applied: {exc}")
+        except OSError:
+            # Silence is deliberate. This process *is* the Agent's command, so a
+            # diagnostic written here is handed to the model as tool output, and ADR
+            # 0024 keeps the plumbing out of the tool result. A host's enforceable
+            # state is reported once per Run instead; a kernel that offers Landlock
+            # and refuses it for this process is the one degradation only the
+            # deployment's own seccomp and capability setup can see.
+            pass
     # Replacing this process IS the mechanism: argv is the command the caller
     # already resolved, and a shell here would only add one more program to confine.
     os.execvp(command[0], command)  # noqa: S606

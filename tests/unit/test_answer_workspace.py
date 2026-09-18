@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.answer import workspace as workspace_module
 from dlightrag.engine.answer.session_notes import SessionNotesPlane
 from dlightrag.engine.answer.workspace import (
@@ -98,6 +99,30 @@ def _assert_no_temp_recovery_tree(root: Path, destination: int) -> None:
     epochs = root / "epochs"
     assert not (epochs / str(destination)).exists()
     assert list(epochs.glob(f".tmp-{destination}-*")) == []
+
+
+@pytest.mark.asyncio
+async def test_binding_without_an_adapter_still_binds_a_confined_environment(
+    tmp_path: Path,
+) -> None:
+    """The fallback adapter is confined, so no bind path is an unconfined one.
+
+    Confinement is part of what an enabled execution environment *is* (ADR 0024): a
+    caller that binds without supplying an adapter gets a rooted environment under the
+    default policy rather than a host-authority one.
+    """
+    bound = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-confined",
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=InMemoryWorkspaceStore(),
+    )
+
+    environment = bound.environment
+    assert isinstance(environment, LocalExecutionEnvironment)
+    assert environment._confinement is not None  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.asyncio

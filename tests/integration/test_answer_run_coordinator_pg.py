@@ -32,6 +32,7 @@ from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationS
 from dlightrag.application import Application
 from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, RuntimeConfig
 from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry, UserMessageEntry
 from dlightrag.engine.agent.session.fold import PriorTurns
@@ -2386,6 +2387,7 @@ def _answer_runtime(
             "openai", f"test-{role}-model", None
         ),
         execution_environment=config.answer.agent.execution_environment,
+        shell_confinement=ConfinementPolicy(),
     )
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:

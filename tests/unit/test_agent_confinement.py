@@ -10,14 +10,15 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.agent.environment import (
+from dlightrag.engine.agent.environment.child import build_child_environment
+from dlightrag.engine.agent.environment.confinement import (
     ConfinementPolicy,
     DeclaredLayer,
     WorkspaceConfinement,
+    _parse,
+    _supported_rights,
     landlock_abi,
 )
-from dlightrag.engine.agent.environment.child import build_child_environment
-from dlightrag.engine.agent.environment.confinement import _parse, _supported_rights
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 
 #: Rights that change bytes: write, remove, truncate, move, and every create right.
@@ -227,3 +228,72 @@ def test_the_reported_state_names_the_abi_or_says_unavailable() -> None:
     state = ConfinementPolicy().state()
 
     assert state == "unavailable" or state.startswith("landlock:abi")
+
+
+def test_the_composition_root_refuses_the_corpus_and_the_project_tree() -> None:
+    """A deployment cannot hand the Agent the corpus by configuring it away.
+
+    The deny set is built where the application is composed, so it cannot be a value
+    an operator changes: this is the "retrieval is the path to knowledge" guard
+    (ADR 0024), and the test pins it where composition decides it.
+    """
+    from types import SimpleNamespace
+
+    from dlightrag._compose import agent_confinement_policy
+
+    policy = agent_confinement_policy(
+        SimpleNamespace(working_dir_path=Path("/app/dlightrag_storage"))  # type: ignore[arg-type]
+    )
+
+    assert Path("/app/dlightrag_storage") in policy.forbidden
+    assert Path.cwd() in policy.forbidden
+    for tree in policy.forbidden:
+        with pytest.raises(ValueError, match="overlaps"):
+            ConfinementPolicy(
+                forbidden=(tree,),
+                declared=(DeclaredLayer(path=tree / "anything", capability="sneaky"),),
+            )
+
+
+def test_a_policy_whose_paths_do_not_exist_still_runs_the_command(tmp_path: Path) -> None:
+    """A declared layer that is absent is skipped, never a reason to fail a Run."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = ConfinementPolicy(
+        declared=(DeclaredLayer(path=tmp_path / "not-installed", capability="skills"),)
+    )
+    prefix = policy.for_workspace(workspace).launch_prefix()
+
+    completed = subprocess.run(
+        [*prefix, sys.executable, "-c", "print('ran')"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=workspace,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "ran"
+
+
+def test_the_helper_never_writes_plumbing_to_the_command_output(tmp_path: Path) -> None:
+    """The tool result stays clean: confinement plumbing is not the model's business.
+
+    A diagnostic written here would be streamed into the Tool result (ADR 0024), so
+    the helper is silent whether it applied the policy or could not.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    prefix = ConfinementPolicy().for_workspace(workspace).launch_prefix()
+
+    completed = subprocess.run(
+        [*prefix, sys.executable, "-c", "print('payload')"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=workspace,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "payload"
+    assert completed.stderr == ""

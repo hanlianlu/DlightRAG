@@ -20,6 +20,7 @@ import pytest
 from docx import Document
 
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.fold import PriorTurns, project_session_messages
 from dlightrag.engine.agent.session.ids import LaneId
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
@@ -626,6 +627,7 @@ def _fast_executor(pg, provider: _FastProjectionProvider, profile):
             "openai", f"projection-{role}", None
         ),
         execution_environment="disabled",
+        shell_confinement=ConfinementPolicy(),
     )
 
 

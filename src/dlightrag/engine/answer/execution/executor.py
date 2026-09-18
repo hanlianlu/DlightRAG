@@ -808,7 +808,7 @@ class AnswerExecutor:
         telemetry: Telemetry,
         model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
         execution_environment: str = "trust",
-        shell_confinement: ConfinementPolicy | None = None,
+        shell_confinement: ConfinementPolicy,
         workspace_root: str | None = None,
         session_notes_limits: SessionNotesLimits | None = None,
         search_toolchain: SearchToolchain | None = None,

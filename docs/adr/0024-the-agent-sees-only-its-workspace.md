@@ -67,9 +67,12 @@ There is no configuration value that widens what the Agent's children may see.
 spawns through one call (`ExecutionEnvironment.run`), already rooted at one
 admitted workspace. The local environment applies a kernel-enforced allow-list
 to each child: the Agent Workspace with full rights, the runtime read-only
-(`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/proc`, and `/dev` without
-its create rights), and nothing else — no corpus tree, no application tree, no
-`/tmp`, no other Run's workspace. The one mechanism this distribution relies on
+(`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/proc`, `/dev` without its
+create rights, and the interpreter's own prefix), and nothing else — no corpus
+tree, no deployment configuration, no project tree, no `/tmp`, no other Run's
+workspace. The interpreter prefix is granted because the toolchain lives in it: a
+Run that cannot execute Python cannot do the work it was given, and the installed
+package sits under the same prefix. What that costs is recorded below. The one mechanism this distribution relies on
 is Landlock, which is unprivileged, has no false positives, and cannot be
 bypassed by how a command is spelled; a command that names the corpus returns
 nothing, because the kernel never let it look.
@@ -176,9 +179,11 @@ Landing order, one sequence:
 
 1. The confined local environment: a helper that applies the allow-list to
    itself and then `exec`s the real command (a pre-exec callback is unsafe in a
-   threaded event loop), the policy that composes the base layer and validates
-   declared layers against the deny set, and the wiring at the one place the
-   adapter is resolved.
+   threaded event loop; the helper runs as a file, because `-m` warns on stderr for
+   a module the package import chain already reached, and that warning would land
+   in the model's tool output), the policy that composes the base layer and
+   validates declared layers against the deny set, and the wiring at the one place
+   the adapter is resolved.
 2. The Skills capability declares its three roots, and the composition root
    refuses any declared layer that overlaps the corpus working directory or the
    application tree.
@@ -201,7 +206,13 @@ Live documents to revise with the implementation:
 and [architecture](../architecture.md) (the mode list and the shared-mount note).
 
 Residual risks, recorded rather than solved: on a host without Landlock the Agent
-is unconfined and only the trace and the health bit say so; tools that hardcode
+is unconfined and only the trace and the health bit say so, and a kernel that
+offers Landlock while refusing it to this process is not distinguishable per
+command — that one belongs to the deployment's own seccomp and capability setup,
+which is also the only place it can be seen; the grant that keeps the toolchain
+working is the interpreter prefix, so the installed package's source is readable
+from inside the confinement even though the corpus, the deployment's configuration,
+and the project tree are not; tools that hardcode
 `/tmp` rather than honouring `TMPDIR` fail, which is the price of not handing
 over a world-writable directory another Run — or another user's in-flight
 upload — can write into; a capability that needs a display server or input

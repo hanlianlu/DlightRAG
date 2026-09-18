@@ -16,6 +16,7 @@ from PIL import Image
 from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.application.errors import CorpusUnavailableError
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -235,6 +236,7 @@ def _executor() -> AnswerExecutor:
         ),
         telemetry=NOOP_TELEMETRY,
         model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
+        shell_confinement=ConfinementPolicy(),
     )
 
     # These unit doubles replace execution; dedicated model-contract tests exercise preflight.
@@ -322,6 +324,7 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         telemetry=NOOP_TELEMETRY,
         model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
+        shell_confinement=ConfinementPolicy(),
         memory_store=MagicMock(),
         skills_bundle_factory=lambda owner_id, requested_skill=None: SkillsBundle(
             global_root=Path("/nonexistent-global-skills"),
@@ -417,6 +420,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         telemetry=NOOP_TELEMETRY,
         model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
+        shell_confinement=ConfinementPolicy(),
     )
     accepted = executor.acceptance_research_tools()
 

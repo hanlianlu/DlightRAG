@@ -21,6 +21,7 @@ from dlightrag.engine.agent.environment import (
     ExecutionEnvironmentAdapter,
     TrustExecutionAdapter,
 )
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY, is_session_note
@@ -104,7 +105,9 @@ async def bind_run_workspace(
     attempt: memory degrades rather than failing the Run that could not read it.
     """
     root = run_root(workspace_root, owner_id, run_id)
-    adapter = execution_adapter or TrustExecutionAdapter()
+    # A caller that binds without an adapter still gets a confined environment: the
+    # confinement is part of what an enabled execution environment is (ADR 0024).
+    adapter = execution_adapter or TrustExecutionAdapter(ConfinementPolicy())
     source_epoch = recorded_epoch
     destination = fencing_epoch
     # This is deliberately claim-local, not a startup sweep: bind's caller already owns

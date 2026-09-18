@@ -68,6 +68,17 @@ async def _close_process() -> None:
         shutdown_tracing()
 
 
+def agent_confinement_policy(config: DlightragConfig) -> ConfinementPolicy:
+    """Return what an Agent's processes may see beyond their own workspace.
+
+    The corpus working directory and the project tree are the two trees an Agent may
+    never see (ADR 0024), refused here rather than configured so a deployment cannot
+    trade the property away. Declared layers belong to the capabilities that need
+    them and arrive as those capabilities land.
+    """
+    return ConfinementPolicy(forbidden=(config.working_dir_path, Path.cwd()))
+
+
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
     """Construct this process's collaborators from one resolved configuration."""
     from dlightrag_memory.postgres import PostgresMemoryStore
@@ -374,12 +385,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             model_settings_for_role(config, role)
         ),
         execution_environment=config.answer.agent.execution_environment,
-        # What an Agent's processes may see beyond their own workspace, and the two
-        # trees they may never see (ADR 0024). Declared layers belong to the
-        # capabilities that need them, never to configuration.
-        shell_confinement=ConfinementPolicy(
-            forbidden=(config.working_dir_path, Path.cwd()),
-        ),
+        shell_confinement=agent_confinement_policy(config),
         workspace_root=config.answer.agent.workspace_root,
         session_notes_limits=SessionNotesLimits(
             max_count=config.answer.agent.session_notes.max_count,

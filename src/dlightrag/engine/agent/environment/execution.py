@@ -73,12 +73,12 @@ class ExecutionEnvironmentAdapter(Protocol):
 class TrustExecutionAdapter:
     """Bind DlightRAG's rooted host environment under a confinement policy.
 
-    The policy is not optional in a deployment: it is what makes ``trust`` mean the
-    deployment is trusted rather than the Agent being unconfined (ADR 0024). An
-    absent policy exists for tests that exercise the environment's own mechanics.
+    The policy is required: it is what makes ``trust`` mean the deployment is
+    trusted rather than the Agent being unconfined (ADR 0024). Tests that exercise
+    the environment's own mechanics build a ``LocalExecutionEnvironment`` directly.
     """
 
-    def __init__(self, confinement: ConfinementPolicy | None = None) -> None:
+    def __init__(self, confinement: ConfinementPolicy) -> None:
         self._confinement = confinement
         self._environments: WeakSet[LocalExecutionEnvironment] = WeakSet()
         self._closed = False
@@ -107,7 +107,7 @@ class SandboxUnavailableError(RuntimeError):
 def resolve_execution_adapter(
     mode: ExecutionMode,
     *,
-    confinement: ConfinementPolicy | None = None,
+    confinement: ConfinementPolicy,
     trust: ExecutionEnvironmentAdapter | None = None,
     sandbox: ExecutionEnvironmentAdapter | None = None,
 ) -> ExecutionEnvironmentAdapter | None:

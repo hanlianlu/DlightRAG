@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from dlightrag.engine.agent.environment import PathRejected, TrustExecutionAdapter
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment, ProcessChunk
 from dlightrag.engine.agent.environment.text import decode_workspace_text, encode_workspace_text
 
@@ -336,7 +337,7 @@ async def test_cancelling_process_run_terminates_its_process_group(tmp_path: Pat
 async def test_closing_trust_adapter_terminates_and_reaps_active_process(
     tmp_path: Path,
 ) -> None:
-    adapter = TrustExecutionAdapter()
+    adapter = TrustExecutionAdapter(ConfinementPolicy())
     env = adapter.create(tmp_path)
     pid_path = tmp_path / "adapter-close-pid"
     task = asyncio.create_task(
