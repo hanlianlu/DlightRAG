@@ -59,6 +59,17 @@ single summary node and a fork seeding a child from an existing log — its sess
 and compaction subsystem documents contain no Workspace, filesystem, or carry
 concept at all. Both design around the Session for context and let files be files.
 
+**Why the Session is the scope a note belongs to.** A coding harness's memory
+outlives a conversation because its working directory is the artifact the agent
+edits: a file left in the repository is still there for the next session, and the
+harness never had to design cross-session recall. DlightRAG's corpus is read-only
+input, not something an agent edits, and a conversation's products are its Run-owned
+Answers and Artifacts. The conversation is therefore the project: one conversation is
+one line of work over a corpus, its forks share it, and a new conversation is a new
+one. Continuity *between* conversations is a different mechanism with different
+semantics — owner-scoped long-range memory, today Profile Memory and later experience
+memory in the memory package — not a wider scope for this plane.
+
 What Run-owned trees buy is real, and none of it is about memory: per-Run
 provenance for publication, safe deletion at retention, per-lane fencing for
 writers, and a Workspace quota. Those belong to products and scratch.
@@ -171,9 +182,11 @@ Landing order, one sequence:
 5. Revisit ADR 0020's inert Workspace: a Fast Run now carries nothing forward,
    and whether it keeps an inert Workspace at all is that decision's to make.
 
-Residual risks, recorded rather than solved. Two lanes writing one path is
-last-settled-wins, which suits prose memory and is observable through the row's
-writer and revision — but it is a lost update, not a merge; a deletion is confirmed
+Residual risks, recorded rather than solved. Two Runs writing one path —
+in sequence, since a takeover is the only way two lanes are ever alive on one
+Session: the fence refuses a second live Run — is last-settled-wins, which suits
+prose memory and is observable through the row's writer and revision, but it is a
+lost update, not a merge; a deletion is confirmed
 against the plane's current bytes, so a sibling's newer rewrite is never removed by
 the Lane it replaced. Promotion takes the Session row's lock, which serializes the
 budget admission of two Runs of one Session against the newest state.
