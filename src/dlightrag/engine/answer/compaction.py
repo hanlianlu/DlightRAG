@@ -33,7 +33,7 @@ from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.ai.reasoning import cheapest_supported_reasoning
 from dlightrag.engine.ai.tokens import estimate_messages_tokens, estimate_tokens
-from dlightrag.engine.answer.continuation_handles import MAX_RUN_NOTES
+from dlightrag.engine.answer.continuation_handles import MAX_NAMED_SESSION_NOTES
 from dlightrag.engine.answer.prompts.compaction import (
     COMPACTION_SYSTEM_PROMPT,
     compaction_user_prompt,
@@ -206,7 +206,7 @@ def _run_notes(notes: Sequence[str]) -> list[str] | None:
             continue
         seen.add(text)
         ordered.append(text)
-    return ordered[:MAX_RUN_NOTES] or None
+    return ordered[:MAX_NAMED_SESSION_NOTES] or None
 
 
 class CompactionCoordinator:

@@ -1323,6 +1323,70 @@ async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
     }
 
 
+async def test_a_child_tool_settlement_promotes_the_parent_runs_notes() -> None:
+    """A Child writes into the parent Run's working copy, so it promotes the same plane.
+
+    ADR 0022 promotes at Tool settlement, and a Child's settlements are its own: without
+    this, a note a Child writes reaches memory only if the parent happens to settle
+    another Tool afterwards.
+    """
+    from dlightrag.engine.ai.messages import ToolCall
+
+    class _Plane:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def reconcile(self) -> str | None:
+            self.calls += 1
+            return None
+
+    calls = {"n": 0}
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="search-notes",
+                        name="search_knowledge_base",
+                        arguments={"query": "anything"},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    async def retrieve(_query: str) -> Any:
+        return MagicMock(
+            contexts={"chunks": [], "entities": [], "relationships": []},
+            trace={},
+        )
+
+    plane = _Plane()
+    parent_id = SessionId.new()
+    child_id = SessionId.deterministic(run_id=str(parent_id.value), name="child:notes:1")
+    outcome = await run_child_session(
+        telemetry=NOOP_TELEMETRY,
+        orchestrator=_child_orchestrator(model, retrieve_func=retrieve),
+        repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
+        session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
+        fetched_buffer=FetchedResourceBuffer(),
+        child_id=child_id,
+        request=ChildRequest(objective="write a note"),
+        parent_call_id="call-notes",
+        parent_session_id=parent_id,
+        context_snapshot=_context_snapshot(parent_id),
+        persist_child_runtime=AsyncMock(),
+        claim_child=AsyncMock(return_value=1),
+        session_notes=plane,  # type: ignore[arg-type]
+    )
+
+    assert outcome.status == "succeeded"
+    assert plane.calls == 1
+
+
 async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> None:
     async def model(**_kwargs: object) -> AssistantTurn:
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")

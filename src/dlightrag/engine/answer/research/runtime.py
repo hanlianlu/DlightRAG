@@ -59,6 +59,10 @@ from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
     ResourceEffectOwner,
 )
+from dlightrag.engine.answer.session_notes import (
+    SESSION_NOTES_DEGRADED_KEY,
+    SessionNotesPlane,
+)
 from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
     ChildOutcome,
@@ -564,6 +568,7 @@ class ResearchRuntimeEffects:
         validate_pins: Callable[[], None] | None = None,
         publish_provider_text: bool = False,
         session_fencing_epoch: int | None = None,
+        session_notes: SessionNotesPlane | None = None,
     ) -> None:
         self._orchestrator = orchestrator
         self._prepared = prepared
@@ -578,6 +583,7 @@ class ResearchRuntimeEffects:
         self._publish_provider_text = publish_provider_text
         self._tools = {tool.name: tool for tool in prepared.tools}
         self._telemetry = telemetry
+        self._session_notes = session_notes
 
     async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot | Any:
         await self._check_cancelled()
@@ -832,7 +838,22 @@ class ResearchRuntimeEffects:
             tool_effects=fitted.effects,
             details=fitted.details,
         )
+        await self._promote_session_notes()
         return ToolEffectResult(durable, delta, _elapsed_ms(started))
+
+    async def _promote_session_notes(self) -> None:
+        """Promote the Session notes this Tool batch changed, and never fail the Run.
+
+        Memory is best effort (ADR 0022): a Run that cannot promote a note keeps the
+        working copy for its own turns and loses it with the Run, and the reason is
+        stated on the Run's trace rather than raised.
+        """
+        plane = self._session_notes
+        if plane is None:
+            return
+        reason = await plane.reconcile()
+        if reason is not None:
+            self._prepared.trace[SESSION_NOTES_DEGRADED_KEY] = reason
 
     async def compact(self, context: RuntimeContext, attempt: int) -> Any:
         return await self._orchestrator.compact_runtime_context(
@@ -1020,6 +1041,7 @@ def _bound_child_runner(
     control_reader: Callable[..., Awaitable[Any]] | None = None,
     control_ack: Callable[..., Awaitable[Any]] | None = None,
     is_detaching: Callable[[], bool] | None = None,
+    session_notes: SessionNotesPlane | None = None,
 ) -> Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]:
     async def run_child(
         child_id: SessionId,
@@ -1046,6 +1068,7 @@ def _bound_child_runner(
             control_reader=control_reader,
             control_ack=control_ack,
             is_detaching=is_detaching,
+            session_notes=session_notes,
         )
 
     return run_child
@@ -1074,8 +1097,14 @@ async def run_child_session(
     control_reader: Callable[..., Awaitable[Any]] | None = None,
     control_ack: Callable[..., Awaitable[Any]] | None = None,
     is_detaching: Callable[[], bool] | None = None,
+    session_notes: SessionNotesPlane | None = None,
 ) -> ChildOutcome:
-    """Run or restore one Child through the same deep AgentSessionRuntime."""
+    """Run or restore one Child through the same deep AgentSessionRuntime.
+
+    A Child shares its parent Run's working copy, so it promotes the Session's notes
+    under the same lease: a note a Child writes must reach memory at the Child's own
+    Tool settlement, not only if the parent happens to settle another one.
+    """
     if context_snapshot.parent_session_id != parent_session_id:
         raise RunExecutionError(
             "run_execution_failed",
@@ -1199,6 +1228,7 @@ async def run_child_session(
         session_fencing_epoch=child_epoch,
         fetched_buffer=fetched_buffer,
         persist_child_intent=None,
+        session_notes=session_notes,
     )
 
     async def check_child_cancelled() -> None:

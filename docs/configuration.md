@@ -699,7 +699,7 @@ answer:
 
 `trust` runs rooted tools as the service user; Bash still has process-level
 filesystem and network access. `disabled` means no workspace root for any mode:
-no path tools, no artifacts, no Run Notes, and no carry. Reclamation still runs
+no path tools, no artifacts, and no Session notes. Reclamation still runs
 when a root is configured, so a deployment that turns execution off continues to
 delete the trees earlier enabled runs left behind. `attach_artifact` is available
 only to the parent Research Session; Fast and Child Sessions cannot authorize

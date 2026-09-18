@@ -173,8 +173,16 @@ Landing order, one sequence:
 
 Residual risks, recorded rather than solved. Two lanes writing one path is
 last-settled-wins, which suits prose memory and is observable through the row's
-writer and revision — but it is a lost update, not a merge. A fork reads memory
-that may have moved after its Fork Point. The plane's rows now outlive individual
+writer and revision — but it is a lost update, not a merge; a deletion is confirmed
+against the plane's current bytes, so a sibling's newer rewrite is never removed by
+the Lane it replaced. Promotion takes the Session row's lock, which serializes the
+budget admission of two Runs of one Session against the newest state. A Run that has
+lost the **Session** fence while still holding its own Run lease can promote once
+more from the Tool batch in flight before its next settlement discovers the loss:
+memory may then be settled by a Run whose answer will not commit, which is the same
+last-settled-wins window, and moving promotion inside the settlement transaction is
+the fix if that window ever matters. A fork reads memory that may have moved after
+its Fork Point. The plane's rows now outlive individual
 Runs, so its bounds and the degradation event are the only guards against memory
 becoming a second transcript. A stateless REST or MCP caller keeps memory across
 calls only by continuing the Run, because naming a Session is not part of

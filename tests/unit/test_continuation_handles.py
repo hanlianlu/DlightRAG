@@ -1,26 +1,24 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The continuation identities one compaction summary carries forward.
 
-Two of them are handles the next turn reads by identity, and a Run Note is a path
+Two of them are handles the next turn reads by identity, and a Session Note is a path
 it reads again — the file itself is what outlives the summary.
 """
 
 from dlightrag.engine.answer.continuation_handles import (
-    MAX_CARRIED_RUN_NOTE_BYTES,
-    MAX_RUN_NOTE_PATH_CHARS,
-    MAX_RUN_NOTES,
+    MAX_NAMED_SESSION_NOTES,
+    MAX_SESSION_NOTE_PATH_CHARS,
     MAX_SPILL_HANDLES,
-    RUN_NOTE_DIRECTORY,
-    carried_run_notes_message,
+    SESSION_NOTE_DIRECTORY,
     compose_durable_handles,
-    compose_run_notes,
-    is_run_note,
-    run_note_handle,
-    select_carried_run_notes,
+    compose_session_notes,
+    is_session_note,
+    session_note_handle,
+    session_notes_message,
     spill_handle,
 )
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord
+from dlightrag.engine.runtime.workspace import CommittedSpillRecord, SessionNoteRecord
 
 
 def _spill(
@@ -98,16 +96,16 @@ def _inventory(
 
 def test_only_the_notes_directory_holds_run_notes() -> None:
     """`artifacts/` is a publication surface, and a sibling prefix is not a note."""
-    assert is_run_note("notes/plan.md")
-    assert is_run_note("notes/2026/decisions.md")
-    assert not is_run_note("notes")
-    assert not is_run_note("notes/")
-    assert not is_run_note("artifacts/notes.md")
-    assert not is_run_note("noteset/plan.md")
-    assert not is_run_note("notes/../artifacts/report.md")
+    assert is_session_note("notes/plan.md")
+    assert is_session_note("notes/2026/decisions.md")
+    assert not is_session_note("notes")
+    assert not is_session_note("notes/")
+    assert not is_session_note("artifacts/notes.md")
+    assert not is_session_note("noteset/plan.md")
+    assert not is_session_note("notes/../artifacts/report.md")
 
 
-def test_run_note_handle_names_the_path_call_and_not_a_frozen_digest() -> None:
+def test_session_note_handle_names_the_path_call_and_not_a_frozen_digest() -> None:
     """A note is a live file: the read that follows serves its current bytes.
 
     The recorded digest is absent on purpose. The Inventory holds one only for
@@ -115,7 +113,7 @@ def test_run_note_handle_names_the_path_call_and_not_a_frozen_digest() -> None:
     workspace without digests — so a handle that printed one would be claiming a
     guarantee the inventory cannot keep.
     """
-    handle = run_note_handle(_inventory("notes/plan.md"))
+    handle = session_note_handle(_inventory("notes/plan.md"))
 
     assert handle == (
         "[note] notes/plan.md (1240 bytes) — "
@@ -130,12 +128,12 @@ def test_compose_keeps_inventory_order_bounds_the_list_and_skips_directories() -
         _inventory("notes/a.md"),
         _inventory("notes", entry_type="directory"),
         _inventory("readme.md"),
-        *(_inventory(f"notes/{index:02d}.md") for index in range(MAX_RUN_NOTES + 3)),
+        *(_inventory(f"notes/{index:02d}.md") for index in range(MAX_NAMED_SESSION_NOTES + 3)),
     ]
 
-    notes = compose_run_notes(records)
+    notes = compose_session_notes(records)
 
-    assert len(notes) == MAX_RUN_NOTES
+    assert len(notes) == MAX_NAMED_SESSION_NOTES
     assert notes[0] == (
         "[note] notes/a.md (1240 bytes) — re-read with read(path='notes/a.md') before a step that needs a value this summary does not state"
     )
@@ -144,7 +142,7 @@ def test_compose_keeps_inventory_order_bounds_the_list_and_skips_directories() -
 
 def test_a_note_name_that_needs_quoting_still_renders_a_call_that_parses() -> None:
     """A name may hold a quote; a call the model cannot reproduce is worse than none."""
-    handle = run_note_handle(_inventory('notes/say "hello".md'))
+    handle = session_note_handle(_inventory('notes/say "hello".md'))
 
     assert """re-read with read(path='notes/say "hello".md')""" in handle
 
@@ -152,11 +150,11 @@ def test_a_note_name_that_needs_quoting_still_renders_a_call_that_parses() -> No
 def test_an_absurd_note_path_is_not_named_at_all() -> None:
     """The count cap does not bound prose, and the summary's budget is not a note's."""
     records = [
-        _inventory(f"notes/{'x' * MAX_RUN_NOTE_PATH_CHARS}.md"),
+        _inventory(f"notes/{'x' * MAX_SESSION_NOTE_PATH_CHARS}.md"),
         _inventory("notes/plan.md"),
     ]
 
-    notes = compose_run_notes(records)
+    notes = compose_session_notes(records)
 
     assert notes == [
         "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
@@ -174,42 +172,20 @@ def test_the_reserved_directory_the_prompt_teaches_is_the_one_the_rule_reads() -
 
     taught = agent_control_prompt(run_notes=True)
 
-    assert f"`{RUN_NOTE_DIRECTORY}/`" in taught
-    assert f"`{RUN_NOTE_DIRECTORY}/`" not in agent_control_prompt(run_notes=False)
+    assert f"`{SESSION_NOTE_DIRECTORY}/`" in taught
+    assert f"`{SESSION_NOTE_DIRECTORY}/`" not in agent_control_prompt(run_notes=False)
 
 
-def test_select_carried_run_notes_reuses_the_summary_caps_and_skips_long_names() -> None:
-    records = [
-        _inventory("artifacts/report.md"),
-        _inventory(f"notes/{'x' * MAX_RUN_NOTE_PATH_CHARS}.md"),
-        _inventory("notes/a.md", size_bytes=12),
-        _inventory("notes/b.md", size_bytes=20),
-        *(_inventory(f"notes/{index:02d}.md") for index in range(MAX_RUN_NOTES)),
-    ]
-
-    selected = select_carried_run_notes(records)
-
-    assert [item.relative_path for item in selected] == [
-        "notes/a.md",
-        "notes/b.md",
-        *[f"notes/{index:02d}.md" for index in range(MAX_RUN_NOTES - 2)],
-    ]
+def test_the_notes_message_is_empty_when_the_session_holds_no_memory() -> None:
+    assert session_notes_message(()) == ""
 
 
-def test_select_carried_run_notes_stops_at_the_byte_ceiling() -> None:
-    first = _inventory("notes/a.md", size_bytes=MAX_CARRIED_RUN_NOTE_BYTES - 10)
-    second = _inventory("notes/b.md", size_bytes=20)
-
-    assert select_carried_run_notes((first, second)) == (first,)
-
-
-def test_the_carry_message_is_empty_when_nothing_was_carried() -> None:
-    assert carried_run_notes_message(()) == ""
-
-
-def test_the_carry_message_names_paths_once_without_a_clock_or_run_id() -> None:
-    message = carried_run_notes_message(
-        (_inventory("notes/plan.md"), _inventory("notes/decisions.md", size_bytes=310))
+def test_the_notes_message_names_paths_once_without_a_clock_or_run_id() -> None:
+    message = session_notes_message(
+        (
+            SessionNoteRecord(relative_path="notes/plan.md", content=b"x" * 1240),
+            SessionNoteRecord(relative_path="notes/decisions.md", content=b"y" * 310),
+        )
     )
 
     assert message.count("already in this workspace") == 1

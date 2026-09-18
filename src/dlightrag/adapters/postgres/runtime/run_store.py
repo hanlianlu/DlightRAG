@@ -918,6 +918,32 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
 )
 """
 
+# Agent Session memory: the notes a Session owns (ADR 0022). It cascades with its
+# Session, which is deleted only when no routing row references it, and it holds no
+# reference to the Run that wrote a note: memory outlives the Run that wrote it, so
+# the writer is attribution rather than a dependency whose cleanup reaches it.
+_CREATE_SESSION_NOTES = """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_session_notes (
+    owner_id           TEXT        NOT NULL,
+    session_id         UUID        NOT NULL,
+    relative_path      TEXT        NOT NULL,
+    size_bytes         BIGINT      NOT NULL,
+    content_digest     TEXT        NOT NULL,
+    content            BYTEA       NOT NULL,
+    revision           BIGINT      NOT NULL,
+    written_by_run_id  UUID        NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (owner_id, session_id, relative_path),
+    FOREIGN KEY (owner_id, session_id)
+        REFERENCES dlightrag_agent_sessions (owner_id, session_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_session_notes_size_check
+        CHECK (size_bytes = octet_length(content)),
+    CONSTRAINT dlightrag_answer_session_notes_digest_check
+        CHECK (length(content_digest) = 64),
+    CONSTRAINT dlightrag_answer_session_notes_revision_check CHECK (revision >= 1)
+)
+"""
+
 # The baseline bakes the current schema directly into CREATE statements. Later
 # migrations advance initialized databases without adding runtime compatibility paths.
 
@@ -952,6 +978,7 @@ RUN_MIGRATIONS = (
             _CREATE_ARTIFACT_ATTACHMENT_ORDER,
             _CREATE_ARTIFACT_ATTACHMENTS,
             _CREATE_COMMITTED_SPILLS,
+            _CREATE_SESSION_NOTES,
             *MEMORY_SETTINGS_DDL,
         ),
     ),
@@ -1108,9 +1135,39 @@ RUN_MIGRATIONS = (
             "ADD COLUMN IF NOT EXISTS fork_point_projection_id TEXT",
         ),
     ),
+    Migration(
+        "answer_session_notes",
+        "Give each Agent Session a note plane, so memory outlives the Run that wrote it",
+        (_CREATE_SESSION_NOTES,),
+    ),
 )
 
 RUN_SCHEMA_TABLES = (
+    TableRequirement(
+        name="dlightrag_answer_session_notes",
+        columns=(
+            "owner_id",
+            "session_id",
+            "relative_path",
+            "size_bytes",
+            "content_digest",
+            "content",
+            "revision",
+            "written_by_run_id",
+            "updated_at",
+        ),
+        primary_key=("owner_id", "session_id", "relative_path"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "session_id"), references="dlightrag_agent_sessions"
+            ),
+        ),
+        checks=(
+            "dlightrag_answer_session_notes_size_check",
+            "dlightrag_answer_session_notes_digest_check",
+            "dlightrag_answer_session_notes_revision_check",
+        ),
+    ),
     TableRequirement(
         name="dlightrag_runs",
         columns=(

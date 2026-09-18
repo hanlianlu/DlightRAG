@@ -426,6 +426,15 @@ JOIN dlightrag_runs AS r
 ORDER BY t.turn_number ASC
 """  # noqa: S608 - interpolates only trusted column-projection constants
 
+_GET_TIP_RUN = """
+SELECT t.answer_run_id::text AS answer_run_id
+FROM web_conversation_turns AS t
+WHERE t.principal_id = $1
+  AND t.conversation_id = $2::text::uuid
+ORDER BY t.turn_number DESC
+LIMIT 1
+"""
+
 _GET_CARRIED_ATTACHMENTS = """
 SELECT
     t.answer_run_id::text AS run_id,
@@ -983,6 +992,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                 row = await conn.fetchrow(_GET_CONVERSATION, principal_id, conversation_id)
                 if row is None:
                     return None
+                tip_run_id = await conn.fetchval(_GET_TIP_RUN, principal_id, conversation_id)
                 attachment_rows = (
                     await conn.fetch(
                         _GET_CARRIED_ATTACHMENTS,
@@ -1007,6 +1017,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                 return SubmissionSeed(
                     head=_conversation_head(row),
                     attachments=attachments,
+                    parent_run_id=(str(tip_run_id) if tip_run_id is not None else None),
                 )
 
         return await self._run_read(_operation)

@@ -469,17 +469,18 @@ async def test_evidence_images_stay_after_the_transcript() -> None:
     assert "image_url" not in str(messages[0]["content"])
 
 
-async def test_carried_notes_are_stated_once_in_the_static_prefix() -> None:
-    from dlightrag.engine.runtime.settlements import InventoryPathRecord
+async def test_session_notes_are_stated_once_in_the_static_prefix() -> None:
+    from dlightrag.engine.runtime.workspace import SessionNoteRecord
 
-    notes = (InventoryPathRecord(relative_path="notes/plan.md", entry_type="file", size_bytes=12),)
+    notes = (SessionNoteRecord(relative_path="notes/plan.md", content=b"x" * 12),)
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW),
         query="continue",
         history=PriorTurns(),
         query_images=None,
         resource_manifest=(),
-        carried_run_notes=notes,
+        run_notes=True,
+        session_notes=notes,
     )
     first = await assembler.control_turn(
         evidence=EvidenceLedger(), working=WorkingContextProjection()
@@ -505,7 +506,7 @@ async def test_carried_notes_are_stated_once_in_the_static_prefix() -> None:
     assert second[-1]["content"] == "and then"
 
 
-async def test_a_run_with_nothing_carried_says_nothing_about_carrying() -> None:
+async def test_a_run_with_nothing_bound_says_nothing_about_memory() -> None:
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW),
         query="start",

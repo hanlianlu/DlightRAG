@@ -55,6 +55,7 @@ class TestMigrationDeclaration:
             "dlightrag_answer_artifact_attachments",
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
+            "dlightrag_answer_session_notes",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
             "dlightrag_answer_child_operations",

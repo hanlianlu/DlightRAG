@@ -532,19 +532,16 @@ class WebConversationService:
                 return _submission(replay)
             raise
 
-    async def continue_answer(
+    async def fork_answer(
         self,
         user: UserContext | None,
         *,
         parent_run_id: str,
         submission_id: str,
         query: str,
-        kind: str,
         authorized_workspaces: Sequence[str] | None,
     ) -> WebAnswerSubmission | None:
-        """Start a linked follow-up or a new conversation branch."""
-        if kind not in {"follow_up", "fork"}:
-            raise ValueError(f"unsupported continuation kind: {kind}")
+        """Open a new conversation branch at the state the named Run settled at."""
         principal_id = owner_id_from_user(user)
         parent = await self.turn_for_run(user, parent_run_id)
         if parent is None or not parent.conversation_id:
@@ -553,22 +550,17 @@ class WebConversationService:
             owner_id=principal_id,
             run_id=parent_run_id,
             query=query,
-            include_answer=kind == "follow_up",
+            include_answer=False,
             authorized_workspaces=authorized_workspaces,
         )
         if request is None:
             return None
-        create_conversation = kind == "fork"
-        conversation_id = (
-            _new_conversation_id(principal_id, submission_id)
-            if create_conversation
-            else parent.conversation_id
-        )
+        conversation_id = _new_conversation_id(principal_id, submission_id)
         fingerprint = run_request_fingerprint(
             {
                 "conversation_id": conversation_id,
                 "parent_run_id": parent_run_id,
-                "continuation_kind": kind,
+                "continuation_kind": "fork",
                 "query": query.strip(),
             }
         )
@@ -582,8 +574,8 @@ class WebConversationService:
                 store=self._store,
                 conversation_id=conversation_id,
                 title_hint=_auto_title(query),
-                create_conversation=create_conversation,
-                forked_from_conversation_id=(parent.conversation_id if kind == "fork" else None),
+                create_conversation=True,
+                forked_from_conversation_id=parent.conversation_id,
             ),
         )
 
@@ -708,9 +700,18 @@ def _prepare_submission(
     requested_skill: str | None = None,
     effort: AnswerEffort | None = None,
 ) -> _PreparedSubmission:
-    """Normalize a browser submission without coupling it to a UI history page."""
+    """Normalize a browser submission without coupling it to a UI history page.
+
+    The submission names the conversation's newest Run as its parent: a Web turn is a
+    line append, and recording that once is cheaper than leaving lineage implied by
+    turn order. Memory does not travel on it — the Session owns that (ADR 0022) — so
+    the submission keeps its own mode, effort, attachments, and workspaces rather than
+    inheriting the parent's.
+    """
     request = AnswerRequest(
         query=query,
+        parent_run_id=seed.parent_run_id,
+        continuation_kind=("follow_up" if seed.parent_run_id else None),
         workspaces=tuple(workspaces),
         history=(),
         semantic_highlights=True,

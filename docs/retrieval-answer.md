@@ -344,24 +344,27 @@ stateless caller — a REST or MCP continuation whose parent recorded none — h
 parent's accepted history injected, and `include_answer` only governs whether the
 parent's answer joins that injected history.
 
-Either kind also copies the parent Run's Run Notes when it has a workspace to carry
-them into: the parent's registered notes are written into the continuation's own
-Workspace Epoch and recorded in its Inventory before the first request. A
-tool-capable first request also states that carry once as static text beside the
-system prompt; a Fast first request does not, because it has no tool that could read
-a note — the files are there for the turn after it. Only
-registered notes travel, so a Run with none carries none; a parent in another Agent
-Session, a registered note whose bytes are gone or no longer match, and a parent
-Workspace already reclaimed are typed refusals rather than a silent empty carry. A
-recovered attempt states what its own epoch holds rather than re-reading the parent,
-because it may have written a note of its own before it was interrupted.
+Either kind also binds the Session's notes, and neither copies a parent Run's. Memory
+belongs to the Agent Session: its notes are laid down into the continuation's own
+Workspace Epoch and recorded in its Inventory before the first request, so a
+conversation, its forks, and every later turn of the Session read the same set. A
+tool-capable first request also states that they are there, once, as static text
+beside the system prompt; a Fast first request does not, because it has no tool that
+could read a note — the files are there for the turn after it. A Session whose plane
+cannot be read, a note the plane refuses for budget, and a promotion that fails are
+degradations recorded on the Run's trace: a Run always proceeds, because a Run that
+cannot read its Session's memory still has its transcript, its Evidence, and its
+Products. A recovered attempt states what its own epoch holds rather than
+re-materializing, because it may have written a note of its own before it was
+interrupted. Nothing is asked of an older Run: a Run whose tree retention reclaimed
+leaves the Session's memory untouched.
 
-The summary also names the run's Run Notes: the files it wrote under `notes/` in
-its Agent Workspace, bounded to a small list and named by the `read(path=…)` call
-that reads each one again. They come from the Workspace Inventory — the framework's
-own observation of the workspace, carried forward across a verified Workspace Epoch
-handoff — rather than from a separate note registry, and reading one back is an
-ordinary workspace read that admits no Evidence either.
+The summary also names the Session's notes this Run holds: the files under `notes/` in
+its Agent Workspace, bounded to a small list and named by the `read(path=…)` call that
+reads each one again. They come from the Run's own Workspace Inventory — the framework's
+observation of the working copy, carried forward across a verified Workspace Epoch
+handoff — so the summary names what this Run can actually open, and reading one back is
+an ordinary workspace read that admits no Evidence either.
 
 Full attachment bytes never enter model context. Only bounded text windows,
 capped observations, and budgeted images do.

@@ -236,7 +236,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
 
     from dlightrag.engine.agent.environment import AccessScheduler
     from dlightrag.engine.agent.tools.files import WriteArgs, write_tool
-    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
+    from dlightrag.engine.answer.session_notes import SessionNotesPlane
     from dlightrag.engine.answer.workspace import bind_run_workspace
     from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
@@ -274,9 +274,17 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
         )
     )
     registered = await store.load_inventory()
+    assert registered  # the tool's own registration is what the settlement keeps
 
-    carried = select_carried_run_notes(registered)
+    # The settlement's other half: the Tool batch promotes the working copy into the
+    # Session's plane, after which the parent Run may be reclaimed.
+    session_id = "01930000-0000-7000-8000-0000000000aa"
+    parent_notes = SessionNotesPlane(store=store, session_id=session_id)
+    parent_notes.rebind(workspace=parent.workspace, records=())
+    assert await parent_notes.reconcile() is None
+
     child_store = InMemoryWorkspaceStore()
+    child_store.session_notes = store.session_notes
     child = await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id=owner_id,
@@ -284,15 +292,14 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
         fencing_epoch=1,
         recorded_epoch=None,
         store=child_store,
-        carried_notes=carried,
-        carry_source=parent.workspace,
+        notes=await child_store.load_session_notes(session_id=session_id),
     )
     environment = LocalExecutionEnvironment(child.workspace)
     orchestrator = _orchestrator(mode="research", model=model, environment=environment)
     orchestrator.bind_workspace(
         child,
         child_store,
-        carried_run_notes=select_carried_run_notes(await child_store.load_inventory()),
+        session_notes=await child_store.load_session_notes(session_id=session_id),
     )
     prepared = orchestrator.prepare_run("continue the task")
     first = await prepared.context.control_turn(
@@ -450,7 +457,7 @@ async def test_compaction_handles_put_the_runs_spills_before_its_evidence(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_run_notes_come_from_the_workspace_inventory(tmp_path: Path) -> None:
+async def test_session_note_names_come_from_the_runs_working_copy(tmp_path: Path) -> None:
     """The note set is a filter over the framework's own workspace observation.
 
     A `bash` call re-observes the whole workspace without digests, so a second
@@ -472,7 +479,7 @@ async def test_run_notes_come_from_the_workspace_inventory(tmp_path: Path) -> No
         store,
     )
 
-    notes = await orchestrator._run_notes()
+    notes = await orchestrator._session_note_names()
 
     assert notes == [
         "[note] notes/decisions.md (310 bytes) — re-read with read(path='notes/decisions.md') before a step that needs a value this summary does not state",

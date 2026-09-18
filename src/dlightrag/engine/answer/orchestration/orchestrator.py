@@ -73,7 +73,7 @@ from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.continuation_handles import (
     MAX_SPILL_HANDLES,
     compose_durable_handles,
-    compose_run_notes,
+    compose_session_notes,
 )
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
@@ -86,14 +86,14 @@ from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest, SubagentHost
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.rag.retrieval import RetrievalContexts
-from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import WorkspaceStore
+from dlightrag.engine.runtime.workspace import SessionNoteRecord, WorkspaceStore
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +216,12 @@ class AnswerOrchestrator:
         #: The Run's durable spill rows, read when a summary must name the handles
         #: the covered prefix is about to take with it.
         self._workspace_store: WorkspaceStore | None = None
-        #: Parent notes copied at bind. Empty means this Run inherited nothing and
-        #: the first request says nothing about carrying.
-        self._carried_run_notes: tuple[InventoryPathRecord, ...] = ()
+        #: The Session notes materialized into this Run's working copy at bind. Empty
+        #: means the Session holds no memory and the first request says nothing about it.
+        self._session_notes: tuple[SessionNoteRecord, ...] = ()
+        #: Why materializing memory degraded, when it did: stated on the Run's trace
+        #: rather than failing a Run that could still answer without its notes.
+        self._memory_degradation: str | None = None
         self._resolved_mode: ResolvedMode = resolved_mode
         self._subagent_host = subagent_host
         self._memory_host = memory_host
@@ -384,13 +387,15 @@ class AnswerOrchestrator:
         workspace: RunWorkspace,
         store: WorkspaceStore | None = None,
         *,
-        carried_run_notes: Sequence[InventoryPathRecord] = (),
+        session_notes: Sequence[SessionNoteRecord] = (),
+        memory_degradation: str | None = None,
     ) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
         self._workspace = workspace
         self._environment = workspace.environment
         self._workspace_store = store
-        self._carried_run_notes = tuple(carried_run_notes)
+        self._session_notes = tuple(session_notes)
+        self._memory_degradation = memory_degradation
 
     def artifact_root(self) -> Path | None:
         """Return this run's request-local Artifact root, when execution owns one."""
@@ -560,7 +565,7 @@ class AnswerOrchestrator:
                 + _tool_schema_tokens(run.tools)
             ),
             durable_handles=await self._continuation_handles(run),
-            run_notes=await self._run_notes(),
+            run_notes=await self._session_note_names(),
             trace=run.trace,
         )
         return CompactionResult(
@@ -597,16 +602,17 @@ class AnswerOrchestrator:
             evidence_handles=run.evidence.citation_handles(),
         )
 
-    async def _run_notes(self) -> list[str]:
-        """Return the Run Notes the next summary may name, by path.
+    async def _session_note_names(self) -> list[str]:
+        """Return the Session Notes the next summary may name, by path.
 
-        The Workspace Inventory is the authority on what the Run holds, so the note
-        set is a filter over it rather than a second registry that could disagree
-        with it after a `bash` call re-observes the whole workspace.
+        The next turn reads the working copy, so the names come from what this Run's
+        working copy holds rather than from the plane: a `bash` call re-observes the
+        whole workspace, and a note composed from the plane could name a file this Run
+        cannot open.
         """
         if self._workspace_store is None:
             return []
-        return compose_run_notes(await self._workspace_store.load_inventory())
+        return compose_session_notes(await self._workspace_store.load_inventory())
 
     def restore_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
         """Project a terminal Runtime snapshot into the product's live result cache."""
@@ -658,6 +664,9 @@ class AnswerOrchestrator:
         self._parent_history = conversation_history or PriorTurns()
         evidence = EvidenceLedger(image_budget=self._image_budget)
         trace = _fresh_research_trace()
+        if self._memory_degradation is not None:
+            # The Run proceeds without its notes; the trace is what says so.
+            trace[SESSION_NOTES_DEGRADED_KEY] = self._memory_degradation
         skills = self._skills
         tools = self._compose_tools(
             evidence,
@@ -682,7 +691,7 @@ class AnswerOrchestrator:
                 # composed-tool fact the publication guidance uses: a read-only
                 # Child Session is told nothing about a path it cannot write.
                 run_notes=any(tool.name == "write" for tool in tools),
-                carried_run_notes=self._carried_run_notes,
+                session_notes=self._session_notes,
             ),
             tools=tools,
             evidence=evidence,

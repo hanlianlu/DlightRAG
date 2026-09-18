@@ -66,6 +66,9 @@ class SubmissionSeed:
 
     head: ConversationHead
     attachments: tuple[CarriedAttachment, ...] = ()
+    #: The conversation's newest turn's Run: what this submission follows in its
+    #: conversation. It is lineage, not a memory transport (ADR 0022).
+    parent_run_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

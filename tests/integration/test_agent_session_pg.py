@@ -1331,6 +1331,122 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     assert all(item.content_digest == "c" * 64 for item in spills)
 
 
+async def test_session_notes_are_owned_by_the_session_and_outlive_the_run(pool) -> None:
+    """The notes plane: attributed to its writer, updated in place, and kept.
+
+    A note's row references the Session, never the Run that wrote it, so per-Run
+    reclamation cannot take memory with it — which is the whole reason the plane
+    exists (ADR 0022).
+    """
+    from dlightrag.engine.runtime.workspace import SessionNoteRecord as Note
+
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    workspace = claimed.execution.workspace_store
+    assert workspace is not None
+
+    first = await workspace.promote_session_notes(
+        session_id=session_id.value,
+        upserts=(Note(relative_path="notes/plan.md", content=b"first"),),
+    )
+    assert (first.promoted, first.deleted, first.degraded_reason) == (1, 0, None)
+    assert await workspace.load_session_notes(session_id=session_id.value) == (
+        Note(relative_path="notes/plan.md", content=b"first"),
+    )
+    async with pool.acquire() as conn:
+        writer, revision = await conn.fetchrow(
+            "SELECT written_by_run_id, revision FROM dlightrag_answer_session_notes"
+            " WHERE owner_id = $1 AND session_id = $2::uuid",
+            _OWNER,
+            uuid.UUID(session_id.value),
+        )
+    assert str(writer) == str(claimed.run.run_id)
+    assert int(revision) == 1
+
+    second = await workspace.promote_session_notes(
+        session_id=session_id.value,
+        upserts=(
+            Note(relative_path="notes/plan.md", content=b"second"),
+            Note(relative_path="notes/findings.md", content=b"found"),
+        ),
+    )
+    assert (second.promoted, second.deleted) == (2, 0)
+    third = await workspace.promote_session_notes(
+        session_id=session_id.value,
+        upserts=(),
+        deletes=("notes/plan.md",),
+    )
+    assert (third.promoted, third.deleted) == (0, 1)
+    assert await workspace.load_session_notes(session_id=session_id.value) == (
+        Note(relative_path="notes/findings.md", content=b"found"),
+    )
+
+    # The Run's own rows go away; the Session's memory does not.
+    await _delete_run_row(pool, str(claimed.run.run_id))
+    assert await workspace.load_session_notes(session_id=session_id.value) == (
+        Note(relative_path="notes/findings.md", content=b"found"),
+    )
+
+    # The Session's rows go away with the Session.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM dlightrag_agent_sessions WHERE owner_id = $1 AND session_id = $2::uuid",
+            _OWNER,
+            uuid.UUID(session_id.value),
+        )
+        remaining = await conn.fetchval(
+            "SELECT count(*) FROM dlightrag_answer_session_notes"
+            " WHERE owner_id = $1 AND session_id = $2::uuid",
+            _OWNER,
+            uuid.UUID(session_id.value),
+        )
+    assert int(remaining) == 0
+
+
+async def test_session_notes_refuse_an_over_budget_note_without_evicting_one(pool) -> None:
+    from dlightrag.engine.runtime.workspace import (
+        SESSION_NOTES_BUDGET_REFUSED,
+        SESSION_NOTES_MAX_BYTES,
+    )
+    from dlightrag.engine.runtime.workspace import SessionNoteRecord as Note
+
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    workspace = claimed.execution.workspace_store
+    assert workspace is not None
+    await workspace.promote_session_notes(
+        session_id=session_id.value,
+        upserts=(Note(relative_path="notes/kept.md", content=b"k" * 64),),
+    )
+
+    outcome = await workspace.promote_session_notes(
+        session_id=session_id.value,
+        upserts=(Note(relative_path="notes/huge.md", content=b"x" * SESSION_NOTES_MAX_BYTES),),
+    )
+
+    assert outcome.promoted == 0
+    assert outcome.refused_paths == ("notes/huge.md",)
+    assert outcome.degraded_reason == SESSION_NOTES_BUDGET_REFUSED
+    assert await workspace.load_session_notes(session_id=session_id.value) == (
+        Note(relative_path="notes/kept.md", content=b"k" * 64),
+    )
+
+
+async def _delete_run_row(pool, run_id: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM dlightrag_runs WHERE owner_id = $1 AND run_id = $2",
+            _OWNER,
+            uuid.UUID(run_id),
+        )
+
+
 async def test_host_delta_upserts_artifact_attachment_by_root_path(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_repository

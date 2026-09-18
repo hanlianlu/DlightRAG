@@ -23,15 +23,18 @@ from dlightrag.engine.agent.environment import (
 )
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
-from dlightrag.engine.answer.continuation_handles import RUN_NOTE_DIRECTORY, is_run_note
+from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY, is_session_note
 from dlightrag.engine.answer.execution_settings import default_local_workspace_root
 from dlightrag.engine.runtime.records import DeletedRun, parse_run_id
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.store import RunExistenceReader
 from dlightrag.engine.runtime.workspace import (
+    SESSION_NOTES_MATERIALIZE_FAILED,
     CommittedSpillRecord,
     HandoffCommit,
+    SessionNoteRecord,
     WorkspaceStore,
+    note_digest,
 )
 
 
@@ -44,7 +47,7 @@ class WorkspaceIntegrityError(RuntimeError):
 
 
 class WorkspaceUnavailableError(RuntimeError):
-    """The parent Run's Agent Workspace is gone; a continuation cannot carry from it."""
+    """A Run's own Agent Workspace is gone; its working copy cannot be read or written."""
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +66,9 @@ class RunWorkspace:
     workspace: Path
     spill_dir: Path
     environment: ExecutionEnvironment
+    #: Why the Session's notes are missing from this working copy, when they are.
+    #: Memory degrades rather than failing the Run that could not be given it.
+    notes_degraded: str | None = None
 
 
 def owner_shard(owner_id: str) -> str:
@@ -87,15 +93,15 @@ async def bind_run_workspace(
     recorded_epoch: int | None,
     store: WorkspaceStore | None,
     execution_adapter: ExecutionEnvironmentAdapter | None = None,
-    carried_notes: Sequence[InventoryPathRecord] = (),
-    carry_source: Path | None = None,
+    notes: Sequence[SessionNoteRecord] = (),
 ) -> RunWorkspace:
     """Create or recover the active epoch and return a rooted environment.
 
-    A continuation's first bind copies the parent's registered Run Notes into this
-    epoch *before* the handoff records the inventory, so a crash cannot leave the
-    files on disk with an empty observation. Recovery copies the whole epoch and
-    must not copy from the parent again: this Run may have written notes of its own.
+    The Session's notes are materialized into a fresh epoch *before* the handoff
+    records the inventory, so a crash cannot leave the files on disk with an empty
+    observation. Recovery copies the whole epoch and must not materialize again: this
+    Run may have written notes of its own since. Materialization is the caller's to
+    attempt: memory degrades rather than failing the Run that could not read it.
     """
     root = run_root(workspace_root, owner_id, run_id)
     adapter = execution_adapter or TrustExecutionAdapter()
@@ -111,17 +117,9 @@ async def bind_run_workspace(
         _discard_unrecorded_epochs(root, below=destination)
         workspace, spill = _prepare_epoch_dirs(root, destination)
         inventory: tuple[InventoryPathRecord, ...] = ()
-        if carried_notes:
-            if carry_source is None:
-                raise WorkspaceUnavailableError(
-                    "The parent Run's Agent Workspace is gone. "
-                    "Continue from a Run whose workspace still exists."
-                )
-            inventory = carry_run_notes(
-                source_workspace=carry_source,
-                destination_workspace=workspace,
-                notes=carried_notes,
-            )
+        notes_degraded: str | None = None
+        if notes:
+            inventory, notes_degraded = materialize_session_notes(notes, workspace)
         if store is not None:
             committed = await store.handoff_epoch(
                 expected_epoch=None, destination_epoch=destination, inventory=inventory
@@ -137,6 +135,7 @@ async def bind_run_workspace(
             workspace=workspace,
             spill_dir=spill,
             environment=adapter.create(workspace),
+            notes_degraded=notes_degraded,
         )
     if source_epoch != destination:
         observed = await copy_epoch_verified(root, source_epoch, destination, store)
@@ -281,106 +280,58 @@ def active_epoch_workspace(root: Path) -> Path | None:
     return workspace
 
 
-def carry_run_notes(
-    *,
-    source_workspace: Path,
+def materialize_session_notes(
+    notes: Sequence[SessionNoteRecord],
     destination_workspace: Path,
-    notes: Sequence[InventoryPathRecord],
-) -> tuple[InventoryPathRecord, ...]:
-    """Copy the parent's registered Run Notes into this epoch. All or nothing.
+) -> tuple[tuple[InventoryPathRecord, ...], str | None]:
+    """Write the Session's notes into a fresh epoch, degrading rather than refusing.
 
-    The Inventory is the authority on which paths are notes; this function never
-    walks the source tree to discover extras. A missing file, a digest mismatch,
-    a symlink, or a non-file is a typed refusal and leaves the destination's notes
-    directory untouched. The copy is a framework write, so the destination records
-    always carry a digest even when the parent observation did not.
+    The plane owns the bytes, so there is nothing to verify them against: the epoch's
+    Inventory is recorded from what this wrote. Staging then swapping keeps a failed
+    materialization from leaving a half-written notes tree behind the handoff, and an
+    empty note set materializes nothing at all.
+
+    A failure here is memory, not the Run (ADR 0022): the notes are discarded and the
+    typed reason is returned for the Run's trace, because a Run that cannot be given
+    its notes still has its transcript, its Evidence, and its Products.
     """
     if not notes:
-        return ()
+        return (), None
+    staging = destination_workspace / f".materialize-notes-{uuid.uuid4().hex}"
     try:
-        source_mode = source_workspace.lstat().st_mode
-    except FileNotFoundError as exc:
-        raise WorkspaceUnavailableError(
-            "The parent Run's Agent Workspace is gone. "
-            "Continue from a Run whose workspace still exists."
-        ) from exc
-    except OSError as exc:
-        raise WorkspaceUnavailableError(
-            "The parent Run's Agent Workspace is gone. "
-            "Continue from a Run whose workspace still exists."
-        ) from exc
-    if stat.S_ISLNK(source_mode) or not stat.S_ISDIR(source_mode):
-        raise WorkspaceIntegrityError("parent workspace is not a directory")
-    staging = destination_workspace / f".carry-notes-{uuid.uuid4().hex}"
-    try:
-        copied: list[InventoryPathRecord] = []
-        for record in notes:
-            if not is_run_note(record.relative_path):
-                raise WorkspaceIntegrityError("carried path is not a Run Note")
-            source_file = _require_regular_file_inside(source_workspace, record.relative_path)
-            data = source_file.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            if len(data) != record.size_bytes:
-                raise WorkspaceIntegrityError(
-                    f"carried run note {record.relative_path} failed size check"
-                )
-            if record.content_digest is not None and digest != record.content_digest:
-                raise WorkspaceIntegrityError(
-                    f"carried run note {record.relative_path} failed digest check"
-                )
-            staged = staging / record.relative_path
+        written: list[InventoryPathRecord] = []
+        for note in notes:
+            if not is_session_note(note.relative_path):
+                raise WorkspaceIntegrityError("materialized path is not a Session note")
+            staged = staging / note.relative_path
             staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(data)
-            copied.append(
+            staged.write_bytes(note.content)
+            written.append(
                 InventoryPathRecord(
-                    relative_path=record.relative_path,
+                    relative_path=note.relative_path,
                     entry_type="file",
-                    size_bytes=len(data),
-                    content_digest=digest,
+                    size_bytes=len(note.content),
+                    content_digest=note_digest(note.content),
                 )
             )
-        _replace_notes_directory(destination_workspace, staging / RUN_NOTE_DIRECTORY)
-    except WorkspaceIntegrityError, WorkspaceUnavailableError:
+        _replace_notes_directory(destination_workspace, staging / SESSION_NOTE_DIRECTORY)
+    except WorkspaceIntegrityError, OSError:
+        logger.warning("Could not materialize Session notes", exc_info=True)
         shutil.rmtree(staging, ignore_errors=True)
-        raise
-    except OSError as exc:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise WorkspaceIntegrityError(str(exc)) from exc
+        return (), SESSION_NOTES_MATERIALIZE_FAILED
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     else:
         shutil.rmtree(staging, ignore_errors=True)
-    return tuple(copied)
-
-
-def _require_regular_file_inside(root: Path, relative_path: str) -> Path:
-    """Resolve one Inventory path under root without following any symlink."""
-    parts = [part for part in relative_path.split("/") if part]
-    if not parts:
-        raise WorkspaceIntegrityError("carried path is not a Run Note")
-    current = root
-    mode = 0
-    for part in parts:
-        if part in {".", ".."}:
-            raise WorkspaceIntegrityError("carried path is not a Run Note")
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError as exc:
-            raise WorkspaceIntegrityError(f"carried run note {relative_path} is missing") from exc
-        if stat.S_ISLNK(mode):
-            raise WorkspaceIntegrityError(f"carried run note {relative_path} is a symbolic link")
-    if not stat.S_ISREG(mode):
-        raise WorkspaceIntegrityError(f"carried run note {relative_path} is not a regular file")
-    return current
+    return tuple(written), None
 
 
 def _replace_notes_directory(destination_workspace: Path, staged_notes: Path) -> None:
     """Swap the staged notes tree into place. A symlink at the reserved path is refused."""
     if not staged_notes.exists():
-        raise WorkspaceIntegrityError("carried notes directory was not staged")
-    final_notes = destination_workspace / RUN_NOTE_DIRECTORY
+        raise WorkspaceIntegrityError("materialized notes directory was not staged")
+    final_notes = destination_workspace / SESSION_NOTE_DIRECTORY
     try:
         mode = final_notes.lstat().st_mode
     except FileNotFoundError:
@@ -544,21 +495,24 @@ def _prepare_epoch_dirs(root: Path, epoch: int) -> tuple[Path, Path]:
     # A live Run measured the alternative: state a later step needed was written to
     # `tmp/`, which nothing carries, while `notes/` stayed empty until the end of the
     # Run, by which time no summary could name it.
-    (workspace / RUN_NOTE_DIRECTORY).mkdir(exist_ok=True)
+    (workspace / SESSION_NOTE_DIRECTORY).mkdir(exist_ok=True)
     (workspace / "tmp").mkdir(exist_ok=True)
     spill.mkdir(parents=True, exist_ok=True)
-    _discard_carry_staging(workspace)
+    _discard_notes_staging(workspace)
     return workspace, spill
 
 
-def _discard_carry_staging(workspace: Path) -> None:
-    """Remove a staging tree an interrupted carry left behind.
+def _discard_notes_staging(workspace: Path) -> None:
+    """Remove a staging tree an interrupted materialization left behind.
 
-    The swap that installs carried notes is atomic, so anything still named for a
+    The swap that installs the notes tree is atomic, so anything still named for a
     staging pass is residue: a recovery copy would otherwise record it as content.
+    The retired carry's staging name stays in the list: a tree left by an older
+    deployment is the same residue.
     """
+    prefixes = (".materialize-notes-", ".carry-notes-")
     for entry in tuple(workspace.iterdir()):
-        if not entry.name.startswith(".carry-notes-"):
+        if not entry.name.startswith(prefixes):
             continue
         try:
             mode = entry.lstat().st_mode
@@ -569,7 +523,7 @@ def _discard_carry_staging(workspace: Path) -> None:
         except FileNotFoundError:
             continue
         except OSError:
-            logger.warning("Failed to discard carry staging %s", entry, exc_info=True)
+            logger.warning("Failed to discard notes staging %s", entry, exc_info=True)
 
 
 def _workspace_manifest(root: Path) -> dict[str, tuple[str, int, str]]:
@@ -969,7 +923,6 @@ __all__ = [
     "active_epoch_workspace",
     "agent_workspace_reclaimer",
     "bind_run_workspace",
-    "carry_run_notes",
     "copy_epoch_verified",
     "epoch_paths",
     "list_run_workspace_roots",

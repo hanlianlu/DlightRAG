@@ -1401,3 +1401,56 @@ def test_a_provider_without_cache_counters_is_not_a_cold_turn(
     assert trace["prompt_cache"]["cold_turns"] == 0
     assert trace["prompt_cache"]["turns"] == 2
     assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_note_settlement_promotes_the_working_copy_and_states_the_reason() -> None:
+    """Memory is best effort: the Tool batch promotes, and a refusal lands on the trace."""
+    from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
+
+    class _Plane:
+        def __init__(self, reason: str | None) -> None:
+            self.reason = reason
+            self.calls = 0
+
+        async def reconcile(self) -> str | None:
+            self.calls += 1
+            return self.reason
+
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    prepared = SimpleNamespace(tools=(), model_profile=profile, trace={})
+    plane = _Plane("budget_refused")
+    effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
+        orchestrator=cast(Any, SimpleNamespace()),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+        session_notes=cast(Any, plane),
+    )
+
+    await effects._promote_session_notes()
+
+    assert plane.calls == 1
+    assert prepared.trace[SESSION_NOTES_DEGRADED_KEY] == "budget_refused"
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_a_plane_promotes_nothing() -> None:
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    prepared = SimpleNamespace(tools=(), model_profile=profile, trace={})
+    effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
+        orchestrator=cast(Any, SimpleNamespace()),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+
+    await effects._promote_session_notes()
+
+    assert prepared.trace == {}

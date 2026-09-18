@@ -12,14 +12,34 @@ from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
+    SESSION_NOTES_BUDGET_REFUSED,
+    SESSION_NOTES_LEASE_LOST,
     CommittedSpillRecord,
     HandoffCommit,
     HandoffConflict,
     HandoffLeaseLost,
     HandoffResult,
     InventoryReplaceResult,
+    SessionNoteRecord,
+    SessionNotesPromotion,
     _validate_spill_page_limit,
+    note_digest,
+    select_promotable_session_notes,
+    validate_note_path,
 )
+
+#: Serializes same-Session promotions. The row locks below cover the notes that
+#: exist, not the notes that do not, so two Runs of one Session could each admit a note
+#: against a plane neither had seen the other's: the Session row is the one lock they
+#: share. A Session with no row yet (a bind-time migration into a brand-new Session)
+#: has nothing to serialize against, and its write is refused by the note table's own
+#: foreign key instead.
+_LOCK_SESSION_FOR_NOTES = """
+SELECT 1
+FROM dlightrag_agent_sessions
+WHERE owner_id = $1 AND session_id = $2::text::uuid
+FOR UPDATE
+"""
 
 _LEASE = """
 SELECT 1
@@ -120,6 +140,97 @@ class PGWorkspaceStore:
                     return "lease_lost"
                 await self._replace_inventory_locked(conn, records)
                 return "committed"
+
+    async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]:
+        """Read one Session's notes without needing a live claim.
+
+        Memory belongs to the Session, so the read is not fenced by this Run's lease:
+        a recovered attempt reads the same plane a fresh one would, and a Session whose
+        plane is unreadable is the caller's degradation to record, not an error here.
+        """
+        return await load_session_notes(
+            owner_id=self._owner_id, session_id=session_id, pool=self._pool
+        )
+
+    async def promote_session_notes(
+        self,
+        *,
+        session_id: str,
+        upserts: Sequence[SessionNoteRecord],
+        deletes: Sequence[str] = (),
+    ) -> SessionNotesPromotion:
+        """Promote notes under this Run's lease, refusing what the plane cannot hold.
+
+        The plane's budget is the Session's, so admission is decided inside the same
+        transaction that reads it: a note that does not fit is refused for that note
+        alone, and nothing older is evicted to make room.
+        """
+        refused_paths = tuple(
+            note.relative_path for note in upserts if not validate_note_path(note.relative_path)
+        )
+        admissible = tuple(note for note in upserts if validate_note_path(note.relative_path))
+        async with self._connection() as conn:
+            async with conn.transaction():
+                if (
+                    await conn.fetchval(
+                        _LEASE, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
+                    )
+                    is None
+                ):
+                    return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
+                await conn.fetchval(_LOCK_SESSION_FOR_NOTES, self._owner_id, session_id)
+                rows = await conn.fetch(
+                    "SELECT relative_path, size_bytes FROM dlightrag_answer_session_notes"
+                    " WHERE owner_id = $1 AND session_id = $2::uuid FOR UPDATE",
+                    self._owner_id,
+                    session_id,
+                )
+                existing = {str(row["relative_path"]): int(row["size_bytes"]) for row in rows}
+                admitted, over_budget = select_promotable_session_notes(
+                    existing=existing,
+                    upserts=admissible,
+                    deletes=deletes,
+                )
+                deleted = 0
+                for path in deletes:
+                    if path not in existing:
+                        continue
+                    await conn.execute(
+                        "DELETE FROM dlightrag_answer_session_notes"
+                        " WHERE owner_id = $1 AND session_id = $2::uuid AND relative_path = $3",
+                        self._owner_id,
+                        session_id,
+                        path,
+                    )
+                    deleted += 1
+                for note in admitted:
+                    await conn.execute(
+                        "INSERT INTO dlightrag_answer_session_notes ("
+                        " owner_id, session_id, relative_path, size_bytes, content_digest,"
+                        " content, revision, written_by_run_id, updated_at)"
+                        " VALUES ($1, $2::uuid, $3, $4, $5, $6, 1, $7, NOW())"
+                        " ON CONFLICT (owner_id, session_id, relative_path) DO UPDATE SET"
+                        " size_bytes = EXCLUDED.size_bytes,"
+                        " content_digest = EXCLUDED.content_digest,"
+                        " content = EXCLUDED.content,"
+                        " revision = dlightrag_answer_session_notes.revision + 1,"
+                        " written_by_run_id = EXCLUDED.written_by_run_id,"
+                        " updated_at = NOW()",
+                        self._owner_id,
+                        session_id,
+                        note.relative_path,
+                        len(note.content),
+                        note_digest(note.content),
+                        note.content,
+                        self._run_id,
+                    )
+        refused = (*refused_paths, *over_budget)
+        return SessionNotesPromotion(
+            promoted=len(admitted),
+            deleted=deleted,
+            refused_paths=refused,
+            degraded_reason=(SESSION_NOTES_BUDGET_REFUSED if refused else None),
+        )
 
     async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult:
         async with self._connection() as conn:
@@ -241,6 +352,28 @@ class PGWorkspaceStore:
             )
 
 
+async def load_session_notes(
+    *,
+    owner_id: str,
+    session_id: str,
+    pool: ConnectionPool | None = None,
+) -> tuple[SessionNoteRecord, ...]:
+    """Read one Agent Session's notes, by path, without a live claim."""
+    connection_pool = pool if pool is not None else await pg_pool.get()
+    async with connection_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, content FROM dlightrag_answer_session_notes"
+            " WHERE owner_id = $1 AND session_id = $2::uuid"
+            " ORDER BY relative_path",
+            owner_id,
+            session_id,
+        )
+    return tuple(
+        SessionNoteRecord(relative_path=str(row["relative_path"]), content=bytes(row["content"]))
+        for row in rows
+    )
+
+
 async def load_run_inventory(
     *,
     owner_id: str,
@@ -249,9 +382,9 @@ async def load_run_inventory(
 ) -> tuple[InventoryPathRecord, ...]:
     """Read one Run's Workspace Inventory without a live claim.
 
-    A continuation copies another Run's notes. That Run is terminal, so it holds
-    no lease, and the fenced store's write methods would refuse it. The read is
-    the same query; it does not need the claim.
+    The one last carry reads a terminal parent Run's registered notes. That Run
+    holds no lease, and the fenced store's write methods would refuse it. The read
+    is the same query; it does not need the claim.
     """
     connection_pool = pool if pool is not None else await pg_pool.get()
     async with connection_pool.acquire() as conn:
@@ -307,4 +440,4 @@ async def _upsert_spill(
     )
 
 
-__all__ = ["PGWorkspaceStore", "load_run_inventory"]
+__all__ = ["PGWorkspaceStore", "load_run_inventory", "load_session_notes"]

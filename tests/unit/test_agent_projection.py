@@ -94,13 +94,13 @@ class TestCompactionSummary:
         assert "Decided to keep the spill handles." in rendered
         assert "re-read with" not in rendered
         assert "durable handles" not in rendered
-        assert "Run Notes" not in rendered
+        assert "Session notes" not in rendered
         # The record itself is untouched: the same summary still renders its calls.
         with_calls = render_compaction_summary(summary)
         assert "re-read with read(resource_id=" in with_calls
         assert "re-read with read(path=" in with_calls
 
-    def test_render_states_run_notes_as_paths_to_read_again(self) -> None:
+    def test_render_states_session_notes_as_paths_to_read_again(self) -> None:
         summary = CompactionSummary(
             goal="g",
             run_notes=[
@@ -110,7 +110,7 @@ class TestCompactionSummary:
 
         rendered = render_compaction_summary(summary)
 
-        assert "Run Notes (re-readable, not evidence):" in rendered
+        assert "Session notes (re-readable, not evidence):" in rendered
         assert "  - [note] notes/plan.md (1240 bytes)" in rendered
         assert "{" not in rendered
 
@@ -134,9 +134,9 @@ class TestCompactionSummary:
 
         rendered = render_compaction_summary(summary)
 
-        assert rendered.index("Run Notes") < rendered.index("next steps:")
+        assert rendered.index("Session notes") < rendered.index("next steps:")
         assert rendered.index("durable handles") < rendered.index("next steps:")
-        assert rendered.index("Run Notes") < rendered.index("durable handles")
+        assert rendered.index("Session notes") < rendered.index("durable handles")
 
     def test_a_summary_without_run_notes_still_decodes(self) -> None:
         """Adding a field is backward compatible; removing one is not.

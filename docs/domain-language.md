@@ -59,7 +59,7 @@ An owner-scoped Run with `run_kind=retrieval` and `lane=query` that returns corp
 _Avoid_: Fast Answer, inline Retrieval, `QueryRun`
 
 **Fast Answer**:
-A durable Answer Run that plans, retrieves, and generates without an Agent Operation, tools, skills, or publication. It shares Context Contribution, Evidence, citation, the Agent Session, an inert Agent Workspace (to receive and carry Run Notes), and Profile Memory recall. Its Host turn still commits User and Assistant Entries to the routed Agent Session.
+A durable Answer Run that plans, retrieves, and generates without an Agent Operation, tools, skills, or publication. It shares Context Contribution, Evidence, citation, the Agent Session, an inert Agent Workspace (to hold the Session's notes), and Profile Memory recall. Its Host turn still commits User and Assistant Entries to the routed Agent Session.
 _Avoid_: Retrieval, non-durable fast path
 
 **Web Conversation**:
@@ -266,7 +266,7 @@ The one property a Lane head must have before a branch may open on it: no provid
 _Avoid_: Fork Point, Lane tip, turn boundary, compaction boundary
 
 **Context Projection**:
-The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence. Evidence text admitted before the retained suffix, and every committed spill or Run Note, survive as their recorded handles rather than as re-rendered content.
+The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence. Evidence text admitted before the retained suffix, and every committed spill or Session Note, survive as their recorded handles rather than as re-rendered content.
 _Avoid_: authority, checkpoint, transcript snapshot
 
 **Context Contribution**:
@@ -399,8 +399,8 @@ _Avoid_: Durable Progress, Fencing Epoch, checkpoint
 The current Workspace Epoch's path, type, size, and digest observation of an Agent Workspace.
 _Avoid_: Journal Entry, checkpoint, historical epoch listing
 
-**Run Note**:
-A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction. The Workspace Inventory is the authority on which paths are notes: the note set is a filter over that one observation, not a second registry, and identity is the path with the size it states rather than a digest the observation may not have. The Context Projection names each note by the `read(path=…)` call that reads it again. A Continuation materializes the parent Run's registered notes into its own epoch before its Inventory is recorded — registered notes only, so an empty set carries nothing — and refuses explicitly when a registered note cannot be copied: missing bytes, a digest or size mismatch, a symbolic link, or a Workspace already reclaimed. Fast binds that epoch too, even though it composes no tools: the workspace is inert for it, and exists so a later Research turn can read the notes Fast carried through. A Run Note is never citable, never a second statement of what happened, and never a Memory Record.
+**Session Note**:
+A file the answering agent writes under its Agent Workspace's reserved notes path, outside `artifacts/`, so that work product survives one Run's compaction and the next turn of the same Session reads it. Memory belongs to the Agent Session, not to the Run: one authoritative note set per Session holds each note's bytes, size, digest, revision, and writing Run, and every Run of that Session materializes a working copy of it when it binds and promotes its changes back at Tool settlement under its own lease. A session note therefore outlives the Run that wrote it, and per-Run reclamation cannot take it. The Context Projection names each note by the `read(path=…)` call that reads it again. Memory never fails a Run: a plane that cannot be read, a note the plane refuses for budget, or a promotion that fails is recorded on the Run's trace and the Run proceeds with the working copy it has. A Session Note is never citable, never a second statement of what happened, and never a Memory Record.
 _Avoid_: scratchpad, agent journal, second transcript, Memory Record, Artifact, Evidence
 
 ## Configuration And Deployment

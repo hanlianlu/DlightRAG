@@ -412,9 +412,8 @@ async def reply_to_answer_child(
     return child_control_receipt_payload(receipt)
 
 
-async def _continue_answer_run(
+async def _fork_answer_run(
     *,
-    kind: str,
     run_id: str,
     body: _WebContinuation,
     request: Request,
@@ -430,12 +429,11 @@ async def _continue_answer_run(
         for workspace_id in authorized_workspaces:
             await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace_id)
     try:
-        submission = await conversation_service.continue_answer(
+        submission = await conversation_service.fork_answer(
             user,
             parent_run_id=run_id,
             submission_id=str(body.submission_id),
             query=body.content,
-            kind=kind,
             authorized_workspaces=authorized_workspaces,
         )
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
@@ -463,22 +461,6 @@ async def _continue_answer_run(
     return await accepted_answer(request, submission)
 
 
-@router.post("/answer/{run_id}/follow-up", status_code=202)
-async def follow_up_answer_run(
-    run_id: str,
-    body: _WebContinuation,
-    request: Request,
-    conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> AcceptedAnswer:
-    return await _continue_answer_run(
-        kind="follow_up",
-        run_id=run_id,
-        body=body,
-        request=request,
-        conversation_service=conversation_service,
-    )
-
-
 @router.post("/answer/{run_id}/fork", status_code=202)
 async def fork_answer_run(
     run_id: str,
@@ -486,8 +468,12 @@ async def fork_answer_run(
     request: Request,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ) -> AcceptedAnswer:
-    return await _continue_answer_run(
-        kind="fork",
+    """Open a new conversation branch at the state one terminal Answer settled at.
+
+    The browser offers no per-turn Follow-Up: a conversation continues through the
+    composer, which appends at the Lane tip (ADR 0022).
+    """
+    return await _fork_answer_run(
         run_id=run_id,
         body=body,
         request=request,

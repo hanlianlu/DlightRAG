@@ -13,7 +13,7 @@ from dlightrag.engine.answer.compaction import (
     CompactionCoordinator,
     parse_compaction_summary,
 )
-from dlightrag.engine.answer.continuation_handles import MAX_RUN_NOTES, MAX_SPILL_HANDLES
+from dlightrag.engine.answer.continuation_handles import MAX_NAMED_SESSION_NOTES, MAX_SPILL_HANDLES
 from dlightrag.engine.answer.fast import FastSessionHost
 
 
@@ -253,7 +253,7 @@ async def test_the_summary_carries_the_bounded_deduplicated_run_notes() -> None:
         stream_model=stream_model,
         exchange_starts_func=host_turn_starts,
     )
-    notes = [f"[note] notes/{index}.md (12 bytes)" for index in range(MAX_RUN_NOTES + 4)]
+    notes = [f"[note] notes/{index}.md (12 bytes)" for index in range(MAX_NAMED_SESSION_NOTES + 4)]
     projection, _outcome = await coordinator.prepare(
         await store.load(session_id),
         tail_target_tokens=0,
@@ -265,5 +265,5 @@ async def test_the_summary_carries_the_bounded_deduplicated_run_notes() -> None:
     summary_json = projection.summary
     assert summary_json is not None
     summary = CompactionSummary.from_canonical_json(summary_json)
-    assert summary.run_notes == notes[:MAX_RUN_NOTES]
-    assert "Run Notes (re-readable, not evidence):" in render_compaction_summary(summary_json)
+    assert summary.run_notes == notes[:MAX_NAMED_SESSION_NOTES]
+    assert "Session notes (re-readable, not evidence):" in render_compaction_summary(summary_json)

@@ -29,7 +29,7 @@ from dlightrag.adapters.postgres.runtime.run_blob_store import (
     write_blob_content,
     write_complete_blob,
 )
-from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
+from dlightrag.adapters.postgres.runtime.run_store import RUN_MIGRATIONS, PGRunStore
 from dlightrag.engine.agent.session.ids import StageIntentId
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES
 from dlightrag.engine.runtime.policy import (
@@ -551,17 +551,12 @@ class TestSchema:
                 "ADD CONSTRAINT dlightrag_runs_permit_check "
                 "CHECK (NOT active_permit OR (status = 'running' AND lease_owner IS NOT NULL))"
             )
+            versions = [migration.version for migration in RUN_MIGRATIONS]
+            unapplied = versions[versions.index("remove_run_active_permit") :]
             await conn.execute(
-                "DELETE FROM dlightrag_schema_migrations "
-                "WHERE scope = 'runs' AND version = ANY($1::text[])",
-                [
-                    "remove_run_active_permit",
-                    "interactive_child_async_lifecycle",
-                    "interactive_child_controls",
-                    "child_cancel_submission_receipts",
-                    "attachment_occurrence_reference_index",
-                    "write_model_fork_points",
-                ],
+                "DELETE FROM dlightrag_schema_migrations"
+                " WHERE scope = 'runs' AND version = ANY($1::text[])",
+                unapplied,
             )
 
         migrated = PGRunStore(pool=pool)
@@ -597,6 +592,7 @@ class TestSchema:
             "dlightrag_blob_chunks",
             "dlightrag_answer_run_artifacts",
             "dlightrag_answer_artifact_attachments",
+            "dlightrag_answer_session_notes",
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
@@ -4304,9 +4300,12 @@ class TestForkPoints:
                 "DROP COLUMN fork_point_entry_id, "
                 "DROP COLUMN fork_point_projection_id"
             )
+            versions = [migration.version for migration in RUN_MIGRATIONS]
+            unapplied = versions[versions.index("write_model_fork_points") :]
             await conn.execute(
-                "DELETE FROM dlightrag_schema_migrations "
-                "WHERE scope = 'runs' AND version = 'write_model_fork_points'"
+                "DELETE FROM dlightrag_schema_migrations"
+                " WHERE scope = 'runs' AND version = ANY($1::text[])",
+                unapplied,
             )
 
         migrated = PGRunStore(pool=pool)

@@ -11,16 +11,15 @@ from typing import Any
 import pytest
 
 from dlightrag.engine.answer import workspace as workspace_module
-from dlightrag.engine.answer.continuation_handles import MAX_CARRIED_RUN_NOTE_BYTES
+from dlightrag.engine.answer.session_notes import SessionNotesPlane
 from dlightrag.engine.answer.workspace import (
     AgentWorkspaceReclaimer,
     WorkspaceIntegrityError,
-    active_epoch_workspace,
     agent_workspace_reclaimer,
     bind_run_workspace,
-    carry_run_notes,
     copy_epoch_verified,
     epoch_paths,
+    materialize_session_notes,
     owner_shard,
     reclaim_discovered_run_root,
     reclaim_run_workspace,
@@ -29,7 +28,11 @@ from dlightrag.engine.answer.workspace import (
 )
 from dlightrag.engine.runtime.records import DeletedRun
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
+from dlightrag.engine.runtime.workspace import (
+    CommittedSpillRecord,
+    InMemoryWorkspaceStore,
+    SessionNoteRecord,
+)
 
 
 class RecordingWorkspaceStore(InMemoryWorkspaceStore):
@@ -675,18 +678,33 @@ def _parent_workspace(tmp_path: Path, owner: str, run_id: str, epoch: int = 1) -
     return workspace
 
 
-def test_carry_run_notes_copies_bytes_and_records_the_destination_digest(tmp_path: Path) -> None:
-    parent = _parent_workspace(tmp_path, "owner", str(uuid.uuid4()))
-    record, content = _note("notes/plan.md", b"the numbers are 4 and 9")
-    (parent / "notes").mkdir(exist_ok=True)
-    (parent / "notes" / "plan.md").write_bytes(content)
-    dest = tmp_path / "child"
+def _claim_over(plane: dict[str, dict[str, bytes]]) -> InMemoryWorkspaceStore:
+    """Return one Run's claim-bound store over a shared Session notes plane.
+
+    Each Run has its own claim and its own Inventory; the plane is the Session's, so
+    the unit double is split the same way the durable adapter is.
+    """
+    store = InMemoryWorkspaceStore()
+    store.session_notes = plane
+    return store
+
+
+def test_materialize_session_notes_writes_bytes_and_records_the_epoch_digest(
+    tmp_path: Path,
+) -> None:
+    """A materialized note is a framework write: its bytes and its digest are ours."""
+    dest = tmp_path / "workspace"
     dest.mkdir()
+    content = b"the numbers are 4 and 9"
 
-    copied = carry_run_notes(source_workspace=parent, destination_workspace=dest, notes=(record,))
+    written, degraded = materialize_session_notes(
+        (SessionNoteRecord(relative_path="notes/plan.md", content=content),),
+        dest,
+    )
 
+    assert degraded is None
     assert (dest / "notes" / "plan.md").read_bytes() == content
-    assert copied == (
+    assert written == (
         InventoryPathRecord(
             relative_path="notes/plan.md",
             entry_type="file",
@@ -696,109 +714,128 @@ def test_carry_run_notes_copies_bytes_and_records_the_destination_digest(tmp_pat
     )
 
 
-@pytest.mark.asyncio
-async def test_a_chain_of_two_carries_accumulates_the_file_itself(
+def test_a_failed_materialization_degrades_and_leaves_no_notes_behind(
     tmp_path: Path,
 ) -> None:
-    """The unit that accumulates is the file, and each hop is a real bind.
+    """Memory is not worth failing a Run over: a refusal is a reason, not an epoch."""
+    dest = tmp_path / "workspace"
+    dest.mkdir()
+    # The reserved path is a symlink, which the swap refuses by design.
+    (tmp_path / "elsewhere").mkdir()
+    (dest / "notes").symlink_to(tmp_path / "elsewhere")
 
-    This pins the bind/Inventory chain: three production binds with real Inventory and
-    digest checks. That the middle hop is a *Fast execute* is pinned separately by
-    `tests/unit/test_answer_executor.py::test_a_fast_continuation_binds_the_parent_note_into_its_own_epoch`.
+    written, degraded = materialize_session_notes(
+        (SessionNoteRecord(relative_path="notes/plan.md", content=b"value"),),
+        dest,
+    )
 
-    A chain that carried the inherited note but dropped the one the first
-    continuation wrote would pass a test that only exercised the copy helper, so
-    this drives two bindings and reads each hop's own Inventory back.
+    assert written == ()
+    assert degraded == "materialize_failed"
+    assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_sessions_notes_outlive_the_run_that_wrote_them(tmp_path: Path) -> None:
+    """Memory belongs to the Session, so a Run's reclamation cannot take it away.
+
+    Two real binds and two real promotions over one plane. Between them the writing
+    Run's tree is removed, which is what per-Run reclamation does, and the next turn
+    still reads the note: under the retired carry that hop was the failure the plane
+    exists to remove.
     """
-    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
-
     owner = "owner"
-    parent_id = "01930000-0000-7000-8000-0000000000a1"
-    child_id = "01930000-0000-7000-8000-0000000000a2"
-    grandchild_id = "01930000-0000-7000-8000-0000000000a3"
-    store = InMemoryWorkspaceStore()
-    parent = await bind_run_workspace(
+    session = "01930000-0000-7000-8000-0000000000c0"
+    writer_id = "01930000-0000-7000-8000-0000000000c1"
+    reader_id = "01930000-0000-7000-8000-0000000000c2"
+    plane: dict[str, dict[str, bytes]] = {}
+
+    writer_store = _claim_over(plane)
+    writer = await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id=owner,
-        run_id=parent_id,
+        run_id=writer_id,
         fencing_epoch=1,
         recorded_epoch=None,
-        store=store,
+        store=writer_store,
     )
-    (parent.workspace / "notes").mkdir(exist_ok=True)
-    (parent.workspace / "notes" / "plan.md").write_text("inherited", encoding="utf-8")
-    await store.replace_inventory(_note_records(parent.workspace, ("notes/plan.md",)))
+    (writer.workspace / "notes").mkdir(exist_ok=True)
+    (writer.workspace / "notes" / "plan.md").write_text("inherited", encoding="utf-8")
+    writer_notes = SessionNotesPlane(store=writer_store, session_id=session)
+    writer_notes.rebind(workspace=writer.workspace, records=())
+    assert await writer_notes.reconcile() is None
+    assert [
+        note.relative_path for note in await writer_store.load_session_notes(session_id=session)
+    ] == ["notes/plan.md"]
 
-    child_store = InMemoryWorkspaceStore()
-    child = await bind_run_workspace(
+    # What per-Run reclamation does to the Run that wrote the note.
+    shutil.rmtree(run_root(tmp_path, owner, writer_id))
+
+    reader_store = _claim_over(plane)
+    reader = await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id=owner,
-        run_id=child_id,
+        run_id=reader_id,
         fencing_epoch=1,
         recorded_epoch=None,
-        store=child_store,
-        carried_notes=select_carried_run_notes(await store.load_inventory()),
-        carry_source=parent.workspace,
+        store=reader_store,
+        notes=await reader_store.load_session_notes(session_id=session),
     )
-    # The continuation writes a note of its own, observed the way a write settlement does.
-    (child.workspace / "notes" / "findings.md").write_text("written", encoding="utf-8")
-    await child_store.replace_inventory(
-        (
-            *await child_store.load_inventory(),
-            *_note_records(child.workspace, ("notes/findings.md",)),
-        )
+    assert (reader.workspace / "notes" / "plan.md").read_text(encoding="utf-8") == "inherited"
+    (reader.workspace / "notes" / "findings.md").write_text("written", encoding="utf-8")
+    reader_notes = SessionNotesPlane(store=reader_store, session_id=session)
+    reader_notes.rebind(
+        workspace=reader.workspace,
+        records=await reader_store.load_session_notes(session_id=session),
     )
+    assert await reader_notes.reconcile() is None
 
-    grandchild_store = InMemoryWorkspaceStore()
-    grandchild = await bind_run_workspace(
+    third_store = _claim_over(plane)
+    await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id=owner,
-        run_id=grandchild_id,
+        run_id="01930000-0000-7000-8000-0000000000c3",
         fencing_epoch=1,
         recorded_epoch=None,
-        store=grandchild_store,
-        carried_notes=select_carried_run_notes(await child_store.load_inventory()),
-        carry_source=child.workspace,
+        store=third_store,
+        notes=await third_store.load_session_notes(session_id=session),
     )
-
-    assert (grandchild.workspace / "notes" / "plan.md").read_text(encoding="utf-8") == "inherited"
-    assert (grandchild.workspace / "notes" / "findings.md").read_text(encoding="utf-8") == "written"
-    assert [item.relative_path for item in await grandchild_store.load_inventory()] == [
+    assert [item.relative_path for item in await third_store.load_inventory()] == [
         "notes/findings.md",
         "notes/plan.md",
     ]
 
 
 @pytest.mark.asyncio
-async def test_the_bind_chain_carries_the_note_through_a_middle_hop(tmp_path: Path) -> None:
-    """Research writes a note, Fast binds it without writing, Research reads it back.
+async def test_an_inert_hop_holds_the_memory_for_the_next_research_turn(tmp_path: Path) -> None:
+    """Fast composes no tools: it materializes memory and promotes nothing.
 
-    Fast composes no tools, so it cannot rewrite the file; it only holds the
-    Inventory naming it so the next Research turn can carry it again. A hop that
-    bound an empty workspace would pass the two-Research chain and fail this one.
+    A hop that bound an empty workspace would pass a two-Research chain and fail this
+    one, because the note would be missing from the working copy the next turn reads.
     """
-    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
-
     owner = "owner"
-    parent_id = "01930000-0000-7000-8000-0000000000b1"
-    fast_id = "01930000-0000-7000-8000-0000000000b2"
-    grandchild_id = "01930000-0000-7000-8000-0000000000b3"
-    parent_store = InMemoryWorkspaceStore()
-    parent = await bind_run_workspace(
+    session = "01930000-0000-7000-8000-0000000000d0"
+    research_id = "01930000-0000-7000-8000-0000000000d1"
+    fast_id = "01930000-0000-7000-8000-0000000000d2"
+    plane: dict[str, dict[str, bytes]] = {}
+    payload = b"the error was ECONNRESET on shard 4"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    research_store = _claim_over(plane)
+    research = await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id=owner,
-        run_id=parent_id,
+        run_id=research_id,
         fencing_epoch=1,
         recorded_epoch=None,
-        store=parent_store,
+        store=research_store,
     )
-    (parent.workspace / "notes").mkdir(exist_ok=True)
-    payload = b"the error was ECONNRESET on shard 4"
-    (parent.workspace / "notes" / "plan.md").write_bytes(payload)
-    await parent_store.replace_inventory(_note_records(parent.workspace, ("notes/plan.md",)))
-    parent_digest = hashlib.sha256(payload).hexdigest()
+    (research.workspace / "notes").mkdir(exist_ok=True)
+    (research.workspace / "notes" / "plan.md").write_bytes(payload)
+    notes = SessionNotesPlane(store=research_store, session_id=session)
+    notes.rebind(workspace=research.workspace, records=())
+    assert await notes.reconcile() is None
 
-    fast_store = InMemoryWorkspaceStore()
+    fast_store = _claim_over(plane)
     fast = await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id=owner,
@@ -806,67 +843,36 @@ async def test_the_bind_chain_carries_the_note_through_a_middle_hop(tmp_path: Pa
         fencing_epoch=1,
         recorded_epoch=None,
         store=fast_store,
-        carried_notes=select_carried_run_notes(await parent_store.load_inventory()),
-        carry_source=parent.workspace,
+        notes=await fast_store.load_session_notes(session_id=session),
     )
+
     fast_inventory = await fast_store.load_inventory()
     assert [item.relative_path for item in fast_inventory] == ["notes/plan.md"]
-    assert fast_inventory[0].content_digest == parent_digest
+    assert fast_inventory[0].content_digest == digest
     assert (fast.workspace / "notes" / "plan.md").read_bytes() == payload
-
-    grandchild_store = InMemoryWorkspaceStore()
-    grandchild = await bind_run_workspace(
-        workspace_root=tmp_path,
-        owner_id=owner,
-        run_id=grandchild_id,
-        fencing_epoch=1,
-        recorded_epoch=None,
-        store=grandchild_store,
-        carried_notes=select_carried_run_notes(fast_inventory),
-        carry_source=fast.workspace,
-    )
-    grandchild_inventory = await grandchild_store.load_inventory()
-    assert [item.relative_path for item in grandchild_inventory] == ["notes/plan.md"]
-    assert grandchild_inventory[0].content_digest == parent_digest
-    assert (grandchild.workspace / "notes" / "plan.md").read_bytes() == payload
-
-
-def _note_records(workspace: Path, relative_paths: tuple[str, ...]) -> list[InventoryPathRecord]:
-    records: list[InventoryPathRecord] = []
-    for relative_path in relative_paths:
-        data = (workspace / relative_path).read_bytes()
-        records.append(
-            InventoryPathRecord(
-                relative_path=relative_path,
-                entry_type="file",
-                size_bytes=len(data),
-                content_digest=hashlib.sha256(data).hexdigest(),
-            )
-        )
-    return records
 
 
 @pytest.mark.asyncio
-async def test_first_bind_hands_off_the_carried_notes_as_the_new_inventory(
-    tmp_path: Path,
-) -> None:
-    parent_id = str(uuid.uuid4())
-    child_id = str(uuid.uuid4())
-    parent = _parent_workspace(tmp_path, "owner", parent_id)
-    record, content = _note("notes/plan.md", b"after compaction")
-    (parent / "notes").mkdir(exist_ok=True)
-    (parent / "notes" / "plan.md").write_bytes(content)
-    store = InMemoryWorkspaceStore()
+async def test_first_bind_records_the_materialized_notes_as_its_inventory(tmp_path: Path) -> None:
+    """The epoch's Inventory is the observation of the bytes materialization wrote."""
+    owner = "owner"
+    session = "01930000-0000-7000-8000-0000000000e0"
+    content = b"the numbers are 4 and 9"
+    store = _claim_over({})
+    await store.promote_session_notes(
+        session_id=session,
+        upserts=(SessionNoteRecord(relative_path="notes/plan.md", content=content),),
+        deletes=(),
+    )
 
     bound = await bind_run_workspace(
         workspace_root=tmp_path,
-        owner_id="owner",
-        run_id=child_id,
+        owner_id=owner,
+        run_id="01930000-0000-7000-8000-0000000000e1",
         fencing_epoch=1,
         recorded_epoch=None,
         store=store,
-        carried_notes=(record,),
-        carry_source=parent,
+        notes=await store.load_session_notes(session_id=session),
     )
 
     assert (bound.workspace / "notes" / "plan.md").read_bytes() == content
@@ -875,93 +881,36 @@ async def test_first_bind_hands_off_the_carried_notes_as_the_new_inventory(
 
 
 @pytest.mark.asyncio
-async def test_recovery_bind_does_not_copy_from_the_parent_again(tmp_path: Path) -> None:
-    """A recovered Run may have written notes of its own; the parent must not replace them."""
+async def test_recovery_bind_does_not_materialize_over_the_runs_own_notes(
+    tmp_path: Path,
+) -> None:
+    """A recovered Run may have written notes of its own; the plane must not replace them."""
+    owner = "owner"
     child_id = str(uuid.uuid4())
+    store = InMemoryWorkspaceStore()
     first = await bind_run_workspace(
         workspace_root=tmp_path,
-        owner_id="owner",
+        owner_id=owner,
         run_id=child_id,
         fencing_epoch=1,
         recorded_epoch=None,
-        store=InMemoryWorkspaceStore(),
+        store=store,
     )
     (first.workspace / "notes").mkdir(exist_ok=True)
     (first.workspace / "notes" / "own.md").write_text("mine", encoding="utf-8")
-    parent = _parent_workspace(tmp_path, "owner", str(uuid.uuid4()))
-    record, content = _note("notes/plan.md", b"parent")
-    (parent / "notes").mkdir(exist_ok=True)
-    (parent / "notes" / "plan.md").write_bytes(content)
 
     recovered = await bind_run_workspace(
         workspace_root=tmp_path,
-        owner_id="owner",
+        owner_id=owner,
         run_id=child_id,
         fencing_epoch=2,
         recorded_epoch=1,
         store=InMemoryWorkspaceStore(workspace_epoch=1),
-        carried_notes=(record,),
-        carry_source=parent,
+        notes=(SessionNoteRecord(relative_path="notes/plan.md", content=b"memory"),),
     )
 
     assert (recovered.workspace / "notes" / "own.md").read_text(encoding="utf-8") == "mine"
     assert not (recovered.workspace / "notes" / "plan.md").exists()
-
-
-def test_active_epoch_workspace_is_the_highest_numbered_live_tree(tmp_path: Path) -> None:
-    run_id = str(uuid.uuid4())
-    root = run_root(tmp_path, "owner", run_id)
-    older, _ = epoch_paths(root, 1)
-    newer, _ = epoch_paths(root, 4)
-    older.mkdir(parents=True)
-    newer.mkdir(parents=True)
-    (older / "stale.txt").write_text("old", encoding="utf-8")
-    (newer / "live.txt").write_text("new", encoding="utf-8")
-
-    assert active_epoch_workspace(root) == newer
-    assert active_epoch_workspace(tmp_path / "missing") is None
-
-
-def test_a_note_over_the_byte_ceiling_is_not_selected() -> None:
-    from dlightrag.engine.answer.continuation_handles import select_carried_run_notes
-
-    huge = InventoryPathRecord(
-        relative_path="notes/dump.md",
-        entry_type="file",
-        size_bytes=MAX_CARRIED_RUN_NOTE_BYTES + 1,
-    )
-    small = InventoryPathRecord(relative_path="notes/plan.md", entry_type="file", size_bytes=12)
-    # Path order puts the dump first; the ceiling stops selection rather than skipping ahead.
-    assert select_carried_run_notes((huge, small)) == ()
-
-
-def test_carry_refuses_a_size_mismatch_and_a_directory(tmp_path: Path) -> None:
-    """A registration that describes something other than a regular file is refused.
-
-    Size is the one check a `bash`-written note has (its observation carries no
-    digest), so a mismatch there is the only thing standing between a stale
-    registration and carrying the wrong bytes.
-    """
-    parent = tmp_path / "parent"
-    (parent / "notes" / "dir.md").mkdir(parents=True)
-    (parent / "notes" / "plan.md").write_text("short", encoding="utf-8")
-    child = tmp_path / "child"
-    child.mkdir()
-
-    oversized = InventoryPathRecord(
-        relative_path="notes/plan.md",
-        entry_type="file",
-        size_bytes=999,
-        content_digest=hashlib.sha256(b"short").hexdigest(),
-    )
-    with pytest.raises(WorkspaceIntegrityError, match="size check"):
-        carry_run_notes(source_workspace=parent, destination_workspace=child, notes=(oversized,))
-    assert not (child / "notes").exists()
-
-    not_a_file = InventoryPathRecord(relative_path="notes/dir.md", entry_type="file", size_bytes=0)
-    with pytest.raises(WorkspaceIntegrityError, match="not a regular file"):
-        carry_run_notes(source_workspace=parent, destination_workspace=child, notes=(not_a_file,))
-    assert not (child / "notes").exists()
 
 
 @pytest.mark.asyncio

@@ -458,7 +458,7 @@ Route families cover:
   serves an accepted upload, a publication, and an image the run fetched,
   rendered, or adopted under the id its registry recorded;
 - `/answer`, submission reconciliation, status/resume/steer/children,
-  child observation/control/guidance reply, follow-up/fork/cancel,
+  child observation/control/guidance reply, fork/cancel,
   Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
   status/events/cancel/resume, workspaces, images, Memory, and model catalogue.
@@ -488,7 +488,7 @@ only succeeded turns become model history.
 
 History defaults to the newest 40 turns and accepts a signed cursor plus a limit
 up to 100. Attachments are owner-scoped, content-addressed run blobs and are
-re-registered lazily for follow-ups. Count, per-file, and total-byte limits are
+re-registered lazily for continuations. Count, per-file, and total-byte limits are
 validated before acceptance; read failures after acceptance produce a terminal
 error rather than silent omission. Lifecycle details are centralized in
 [RunRuntime and durable query execution](durable-answer-runs.md).

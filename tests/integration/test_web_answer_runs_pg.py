@@ -547,6 +547,31 @@ async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
     assert branch.agent_lane_id != parent.agent_lane_id
 
 
+async def test_submission_seed_names_the_conversations_newest_turn_as_parent(
+    store: PGWebConversationStore,
+) -> None:
+    """A composer submission follows the newest turn, which is what lineage records.
+
+    The unit tests mock the seed, so this is the only place the seed's own query is
+    pinned: an order other than newest-first would still leave every other test green.
+    """
+    conversation_id = await _conversation(store)
+    first = await _submit(store, conversation_id, submission_id=str(uuid.uuid4()))
+    assert first is not None
+    empty = await store.submission_seed(_OWNER, conversation_id, attachment_limit=0)
+    assert empty is not None
+    assert empty.parent_run_id == first.turn.run.run_id
+
+    second = await _submit(store, conversation_id, submission_id=str(uuid.uuid4()))
+    assert second is not None
+    assert second.turn.turn_number > first.turn.turn_number
+
+    seed = await store.submission_seed(_OWNER, conversation_id, attachment_limit=0)
+    assert seed is not None
+    assert seed.parent_run_id == second.turn.run.run_id
+    assert seed.parent_run_id != first.turn.run.run_id
+
+
 async def test_replaying_a_submission_returns_the_same_run_and_turn(
     store: PGWebConversationStore, pool: Any
 ) -> None:

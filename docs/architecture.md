@@ -135,7 +135,7 @@ create a nested Retrieval Run:
 - **Fast** reserves one Host turn on the canonical Agent Session, plans,
   retrieves, and generates without an Agent Operation, tools, skills, or
   publication; it shares the Workspace plane with Research, where that plane is
-  inert (it receives and carries Run Notes).
+  inert (it holds the Session's materialized notes).
 - **Research** drives product-neutral `AgentSessionRuntime` on one Lane with a
   closed run-local tool registry. Tools may read attachments, search the corpus
   or Web, use rooted files/Bash when enabled, call owner-authorized MCP Connections,

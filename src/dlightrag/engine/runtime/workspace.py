@@ -1,14 +1,104 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Claim-bound workspace epoch, inventory, and committed-spill port."""
+"""Claim-bound workspace epoch, inventory, committed spills, and Session notes."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from heapq import nsmallest
 from typing import Literal, Protocol
 
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
+
+#: How many notes one Agent Session keeps. Memory belongs to the Session (ADR 0022),
+#: so the bound is the Session's rather than a Run's: a note outlives the Run that
+#: wrote it, and the plane must still stay small enough to be memory rather than a
+#: second transcript.
+SESSION_NOTES_MAX_COUNT = 64
+
+#: Total bytes one Agent Session's notes may hold. Refusal, never eviction: an
+#: over-budget note is the writing Run's to see refused, not an older note's to lose.
+SESSION_NOTES_MAX_BYTES = 256 * 1024
+
+#: Why memory degraded instead of landing. The Run records the reason and continues:
+#: a Run that cannot be given its notes still has its transcript, its Evidence, and
+#: its Products.
+SESSION_NOTES_BUDGET_REFUSED = "budget_refused"
+SESSION_NOTES_LEASE_LOST = "lease_lost"
+SESSION_NOTES_MATERIALIZE_FAILED = "materialize_failed"
+
+
+def note_digest(content: bytes) -> str:
+    """Return the digest a note's bytes are compared by."""
+    return hashlib.sha256(content).hexdigest()
+
+
+def validate_note_path(relative_path: str) -> bool:
+    """Return whether a promotion may address this Session-relative path at all.
+
+    Note semantics belong to the answer layer (`is_session_note`); this is the plane's own
+    path safety, so a plane never stores an absolute path or escapes its Session.
+    """
+    path = relative_path.strip()
+    if not path or path != relative_path or path.startswith("/") or len(path) > 1024:
+        return False
+    return ".." not in path.split("/") and not path.endswith("/")
+
+
+def select_promotable_session_notes(
+    *,
+    existing: Mapping[str, int],
+    upserts: Sequence[SessionNoteRecord],
+    deletes: Sequence[str],
+) -> tuple[tuple[SessionNoteRecord, ...], tuple[str, ...]]:
+    """Return the upserts the plane's budget admits, and the paths it refuses.
+
+    ``existing`` is the plane's current state as path to byte size. Deletion is
+    priced first, so a Run that removes a note frees that budget in the same
+    promotion. Admission is by path, so the same payload always admits the same
+    subset rather than depending on the order a Run happened to write in.
+    """
+    removed = set(deletes)
+    kept = {path: size for path, size in existing.items() if path not in removed}
+    total_bytes = sum(kept.values())
+    accepted: list[SessionNoteRecord] = []
+    refused: list[str] = []
+    for note in sorted(upserts, key=lambda item: item.relative_path):
+        path = note.relative_path
+        replacing = path in kept
+        size_bytes = len(note.content)
+        next_count = len(kept) + (0 if replacing else 1)
+        next_bytes = total_bytes - (kept[path] if replacing else 0) + size_bytes
+        if next_count > SESSION_NOTES_MAX_COUNT or next_bytes > SESSION_NOTES_MAX_BYTES:
+            refused.append(path)
+            continue
+        kept[path] = size_bytes
+        total_bytes = next_bytes
+        accepted.append(note)
+    return tuple(accepted), tuple(refused)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionNoteRecord:
+    """The bytes of one Session note, as materialized into or promoted from a copy."""
+
+    relative_path: str
+    content: bytes
+
+    def __post_init__(self) -> None:
+        if not validate_note_path(self.relative_path):
+            raise ValueError("session note path must be a Session-relative file path")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionNotesPromotion:
+    """What one promotion landed, and the reason memory degraded when it did not."""
+
+    promoted: int = 0
+    deleted: int = 0
+    refused_paths: tuple[str, ...] = ()
+    degraded_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +153,16 @@ class WorkspaceStore(Protocol):
         self, records: Sequence[InventoryPathRecord]
     ) -> InventoryReplaceResult: ...
 
+    async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]: ...
+
+    async def promote_session_notes(
+        self,
+        *,
+        session_id: str,
+        upserts: Sequence[SessionNoteRecord],
+        deletes: Sequence[str] = (),
+    ) -> SessionNotesPromotion: ...
+
     async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult: ...
 
     async def load_spills_page(
@@ -89,6 +189,7 @@ class InMemoryWorkspaceStore:
         self.progress_version = progress_version
         self.inventory: list[InventoryPathRecord] = []
         self.spills: list[CommittedSpillRecord] = []
+        self.session_notes: dict[str, dict[str, bytes]] = {}
 
     async def handoff_epoch(
         self,
@@ -121,6 +222,40 @@ class InMemoryWorkspaceStore:
             return "lease_lost"
         self.inventory = list(records)
         return "committed"
+
+    async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]:
+        return tuple(
+            SessionNoteRecord(relative_path=path, content=content)
+            for path, content in sorted(self.session_notes.get(session_id, {}).items())
+        )
+
+    async def promote_session_notes(
+        self,
+        *,
+        session_id: str,
+        upserts: Sequence[SessionNoteRecord],
+        deletes: Sequence[str] = (),
+    ) -> SessionNotesPromotion:
+        if not self.live:
+            return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
+        plane = dict(self.session_notes.get(session_id, {}))
+        accepted, refused = select_promotable_session_notes(
+            existing={path: len(content) for path, content in plane.items()},
+            upserts=upserts,
+            deletes=deletes,
+        )
+        removed = [path for path in deletes if path in plane]
+        for path in removed:
+            del plane[path]
+        for note in accepted:
+            plane[note.relative_path] = note.content
+        self.session_notes[session_id] = plane
+        return SessionNotesPromotion(
+            promoted=len(accepted),
+            deleted=len(removed),
+            refused_paths=refused,
+            degraded_reason=(SESSION_NOTES_BUDGET_REFUSED if refused else None),
+        )
 
     async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult:
         if not self.live:
@@ -187,5 +322,15 @@ __all__ = [
     "HandoffResult",
     "InMemoryWorkspaceStore",
     "InventoryReplaceResult",
+    "SESSION_NOTES_BUDGET_REFUSED",
+    "SESSION_NOTES_LEASE_LOST",
+    "SESSION_NOTES_MATERIALIZE_FAILED",
+    "SESSION_NOTES_MAX_BYTES",
+    "SESSION_NOTES_MAX_COUNT",
+    "SessionNoteRecord",
+    "SessionNotesPromotion",
     "WorkspaceStore",
+    "note_digest",
+    "select_promotable_session_notes",
+    "validate_note_path",
 ]

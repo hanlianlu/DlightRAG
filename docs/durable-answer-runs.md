@@ -285,7 +285,7 @@ deletes roots whose Run row is already gone, checking the row rather than
 directory age. Reclamation follows the configured workspace root rather than the
 execution mode, so a deployment that turns execution off still reclaims what
 earlier enabled Runs left behind; with no root configured there is nothing to
-reclaim, and every mode has no Workspace, no Run Notes, and no carry.
+reclaim, and every mode has no Workspace and no Session notes.
 
 ### `dlightrag_run_events`
 
@@ -354,12 +354,14 @@ A Fork opens its Lane at the parent Run's recorded Fork Point instead of at the
 source Lane's current head, so a branch from an earlier turn starts at that turn
 and inherits the projection that was active there.
 
-A continuation's first bind copies the parent Run's registered Run Notes into its
-own epoch and records them in its Inventory before the handoff, so a crash cannot
-leave carried files on disk with no observation of them; a recovered attempt copies
-the whole epoch instead and never the parent again, because the Run may have written
-notes of its own. A numbered epoch that no Run row records is residue from an
-interrupted bind, and the next attempt discards it rather than copying it forward. A Run with no recorded point —
+A Run's first bind materializes its Session's notes into its own epoch and records
+them in its Inventory before the handoff, so a crash cannot leave those files on disk
+with no observation of them; a recovered attempt copies the whole epoch instead and
+never re-materializes, because the Run may have written notes of its own. A numbered
+epoch that no Run row records is residue from an interrupted bind, and the next
+attempt discards it rather than copying it forward. A Session that predates the notes
+plane takes them from the parent Run it continues, once, best effort: the one last
+carry, after which the Session owns them. A Run with no recorded point —
 one that predates the recording, or whose worker died before it could write one —
 refuses a Fork with a remedy rather than branching from wherever the Lane has since
 moved.
@@ -371,12 +373,14 @@ progress then commit under the lease/epoch predicate.
 
 A committed compaction carries three kinds of continuation identity into the
 summary it stores: the Evidence ledger's citation handles, the run's newest
-committed spills, and the Run Notes the Workspace Inventory observes under the
-reserved notes path. The first two are read from durable authority when the summary
-is prepared, never inferred from message text, so a reclaimed Run composes exactly
-the list its live worker composed. The third is a filter over the Inventory, which
-is why a verified Workspace Epoch handoff records the copied epoch's observation
-instead of emptying it: a reader after a recovery has to see what the Run holds.
+committed spills, and the Session notes the Run's own Workspace Inventory observes
+under the reserved notes path. The first two are read from durable authority when
+the summary is prepared, never inferred from message text, so a reclaimed Run
+composes exactly the list its live worker composed. The third is a filter over the
+Inventory — the working copy, not the Session's plane, so the summary names what the
+Run can actually open — which is why a verified Workspace Epoch handoff records the
+copied epoch's observation instead of emptying it: a reader after a recovery has to
+see what the Run holds.
 
 Recovery treats effects by contract:
 
@@ -440,8 +444,10 @@ per request). Queued/running turns remain resubscribable pending entries; failed
 and cancelled turns remain until run retention. Only succeeded turns become
 model history, projected from the run rather than copied.
 
-A follow-up adds a linked turn and appends to the Lane's tip. Fork atomically opens
-a conversation branch with parent lineage, seeded at the parent Run's recorded Fork
+A follow-up adds a linked turn and appends to the Lane's tip; the Web's composer is
+that operation, and it records the conversation's newest Run as the turn's parent for
+lineage rather than for memory, which the Session owns. Fork atomically opens a
+conversation branch with parent lineage, seeded at the parent Run's recorded Fork
 Point. A Session-backed continuation injects no history: the fold at the branch
 point already contains the conversation. Only a caller with no Agent Session
 branch point has the parent's accepted history injected. Conversation deletion removes linked runs in one transaction;

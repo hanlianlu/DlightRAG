@@ -106,7 +106,7 @@ def render_compaction_summary(summary_json: str | None, *, re_readable_handles: 
             f"  - {note}" for note in notes if isinstance(note, str) and note.strip()
         )
         if rendered:
-            sections.append(f"Run Notes (re-readable, not evidence):\n{rendered}")
+            sections.append(f"Session notes (re-readable, not evidence):\n{rendered}")
     handles = summary.durable_handles if re_readable_handles else None
     if isinstance(handles, list):
         rendered = "\n".join(

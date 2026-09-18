@@ -9,7 +9,7 @@ from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
-from dlightrag.engine.answer.continuation_handles import carried_run_notes_message
+from dlightrag.engine.answer.continuation_handles import session_notes_message
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.memory import standing_memory_message
@@ -18,7 +18,7 @@ from dlightrag.engine.answer.prompts import agent_control_prompt
 from dlightrag.engine.answer.resources.converters import conversion_format
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
-from dlightrag.engine.runtime.settlements import InventoryPathRecord
+from dlightrag.engine.runtime.workspace import SessionNoteRecord
 
 
 class ContextAssembler:
@@ -54,7 +54,7 @@ class ContextAssembler:
         profile_memory_write: bool = False,
         artifact_publication: bool = False,
         run_notes: bool = False,
-        carried_run_notes: Sequence[InventoryPathRecord] = (),
+        session_notes: Sequence[SessionNoteRecord] = (),
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -67,7 +67,7 @@ class ContextAssembler:
         self._profile_memory_write = profile_memory_write
         self._artifact_publication = artifact_publication
         self._run_notes = run_notes
-        self._carried_run_notes = tuple(carried_run_notes)
+        self._session_notes = tuple(session_notes)
         #: Provider-anchored estimator correction; see ``observe_provider_input``.
         self._estimated_bias_tokens = 0
         self._last_measured_tokens: int | None = None
@@ -254,16 +254,21 @@ class ContextAssembler:
                 compressible=False,
             )
         ]
-        carry = carried_run_notes_message(self._carried_run_notes)
-        if carry:
+        memory = session_notes_message(self._session_notes) if self._run_notes else ""
+        if memory:
             # Workspace authority sits after system and before conversation, so the
             # statement is in the static prefix: the same bytes on every turn of this
             # Run, never restated after the growing fold.
             contributions.append(
                 ContextContribution(
-                    source="answer.carried_notes",
+                    source="answer.session_notes",
                     authority="workspace",
-                    messages=({"role": "user", "content": carry},),
+                    messages=(
+                        {
+                            "role": "user",
+                            "content": memory,
+                        },
+                    ),
                     compressible=False,
                 )
             )

@@ -102,10 +102,7 @@ from dlightrag.engine.answer.citations.sources import project_contexts_for_clien
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
 from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.compaction import CompactionCoordinator
-from dlightrag.engine.answer.continuation_handles import (
-    compose_run_notes,
-    select_carried_run_notes,
-)
+from dlightrag.engine.answer.continuation_handles import compose_session_notes
 from dlightrag.engine.answer.errors import (
     AnswerInputError,
     AnswerResourceAdmissionError,
@@ -193,6 +190,13 @@ from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.results import store_answer_result
 from dlightrag.engine.answer.router import AnswerModeRouter
 from dlightrag.engine.answer.runs.routing import AnswerRoutingStore, decide_resolved_mode
+from dlightrag.engine.answer.session_notes import (
+    SESSION_NOTES_DEGRADED_KEY,
+    SessionNotesBinding,
+    SessionNotesPlane,
+    read_legacy_notes,
+    read_working_copy_or_reason,
+)
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.answer.tools.subagents import (
@@ -204,7 +208,6 @@ from dlightrag.engine.answer.workspace import (
     RunWorkspace,
     WorkspaceIntegrityError,
     WorkspaceRecoveryFailed,
-    WorkspaceUnavailableError,
     active_epoch_workspace,
     bind_run_workspace,
     run_root,
@@ -249,7 +252,7 @@ from dlightrag.engine.runtime.settlements import (
     EffectHostUpdate,
     InventoryPathRecord,
 )
-from dlightrag.engine.runtime.workspace import WorkspaceStore
+from dlightrag.engine.runtime.workspace import SessionNoteRecord, WorkspaceStore
 
 logger = logging.getLogger(__name__)
 _FAST_COMPACTION_ATTEMPT_LIMIT = 3
@@ -1132,62 +1135,50 @@ class AnswerExecutor:
             )
         return head, reconstructed
 
-    async def _continuation_parent_is_local(self, session: RunSession, parent_run_id: str) -> bool:
-        """Whether a continuation's parent is a Run of this Run's own Agent Session.
-
-        A Fork refuses a foreign parent before it seeds; collecting notes needs the
-        same rule, or a caller who names a same-owner Run from another conversation
-        would have its notes presented as this conversation's.
-        """
-        prepared = session.prepared_input if isinstance(session.prepared_input, Mapping) else {}
-        parent = await self._store.load_routing(owner_id=session.owner_id, run_id=parent_run_id)
-        return parent is not None and parent.agent_session_id == str(
-            prepared.get("agent_session_id") or ""
-        )
-
-    async def _parent_notes_for_bind(
+    async def _migrate_legacy_parent_notes(
         self,
         *,
         session: RunSession,
-        owner_id: str,
-        parent_run_id: str | None,
+        request: AnswerRunInput,
+        workspace_store: WorkspaceStore | None,
+        session_id: str,
         workspace_root: Path,
-        materialize: bool,
-        workspace_store: WorkspaceStore | None = None,
-    ) -> tuple[tuple[InventoryPathRecord, ...], Path | None]:
-        """Return the parent's Run Notes and, when copying, the workspace they live in.
+    ) -> tuple[SessionNoteRecord, ...]:
+        """Promote one legacy parent Run's registered notes into an empty plane.
 
-        Follow-Up and Fork share this path: both name a parent Run, and the carried
-        set is that Run's registered notes. The inventory read is injected because
-        AgentSessionRepository is snapshot-or-transaction and RunStore stays
-        product-neutral. Composition provides the callable.
+        The one last carry (ADR 0022): a Session that predates the notes plane gets its
+        memory from the parent Run this Run continues, once. Every path here is best
+        effort — a reclaimed parent tree, an unreadable file, or a plane that refuses
+        the write leaves that note behind rather than failing the Run that happened to
+        bind first — and after it lands, the Session owns the notes and no Run is ever
+        asked for them again.
         """
-        if not parent_run_id or self._workspace_inventory_loader is None:
-            return (), None
-        if not materialize:
-            # A recovered attempt states what its own epoch holds, not what the parent
-            # holds now: the parent may have been reclaimed since, and this Run may
-            # have rewritten a carried note before it crashed.
-            if workspace_store is None:
-                return (), None
-            return select_carried_run_notes(await workspace_store.load_inventory()), None
-        if not await self._continuation_parent_is_local(session, parent_run_id):
-            raise RunExecutionError(
-                "run_notes_unavailable",
-                "The parent Run belongs to another Session. "
-                "Continue from a Run in this conversation.",
+        if workspace_store is None or not request.parent_run_id:
+            return ()
+        if self._workspace_inventory_loader is None:
+            return ()
+        try:
+            registered = await self._workspace_inventory_loader(
+                session.owner_id, request.parent_run_id
             )
-        records = await self._workspace_inventory_loader(owner_id, parent_run_id)
-        notes = select_carried_run_notes(records)
-        if not notes:
-            return (), None
-        source = active_epoch_workspace(run_root(workspace_root, owner_id, parent_run_id))
-        if source is None:
-            raise WorkspaceUnavailableError(
-                "The parent Run's Agent Workspace is gone. "
-                "Continue from a Run whose workspace still exists."
+            notes = read_legacy_notes(
+                source_workspace=active_epoch_workspace(
+                    run_root(workspace_root, session.owner_id, request.parent_run_id)
+                ),
+                records=registered,
             )
-        return notes, source
+            if not notes:
+                return ()
+            result = await workspace_store.promote_session_notes(
+                session_id=session_id, upserts=notes
+            )
+        except Exception:
+            logger.warning("Could not migrate a parent Run's notes", exc_info=True)
+            return ()
+        if result.degraded_reason is not None and result.promoted == 0:
+            return ()
+        refused = set(result.refused_paths)
+        return tuple(note for note in notes if note.relative_path not in refused)
 
     async def _claim_run_workspace(
         self,
@@ -1195,12 +1186,16 @@ class AnswerExecutor:
         session: RunSession,
         request: AnswerRunInput,
         workspace_store: WorkspaceStore | None,
-    ) -> tuple[RunWorkspace | None, tuple[InventoryPathRecord, ...]]:
-        """Bind this Run's Agent Workspace epoch, including a continuation carry.
+        session_id: str | None,
+    ) -> tuple[RunWorkspace | None, SessionNotesBinding, SessionNotesPlane | None]:
+        """Bind this Run's Agent Workspace epoch and materialize the Session's notes.
 
-        Fast composes no tools, so the workspace is inert for it: it exists to
-        receive carried Run Notes and to carry them onward. A disabled execution
-        environment has no root, so this returns nothing and there is no carry.
+        Fast composes no tools, so its workspace is inert: it exists so a later
+        Research turn of the same Session can read what Fast's memory holds, and so
+        Fast's own compaction can name it. A disabled execution environment has no
+        root, so this returns nothing and there is no memory to materialize. Memory
+        degrades rather than failing the Run: an unreadable plane costs this Run the
+        notes, not the answer.
         """
         from dlightrag.engine.answer.execution_settings import validate_agent_execution
 
@@ -1213,18 +1208,32 @@ class AnswerExecutor:
             ),
         )
         if root is None:
-            return None, ()
-        carried_notes: tuple[InventoryPathRecord, ...] = ()
-        carry_source: Path | None = None
+            return None, SessionNotesBinding(), None
+        binding = SessionNotesBinding()
+        notes: tuple[SessionNoteRecord, ...] = ()
+        plane: SessionNotesPlane | None = None
+        if workspace_store is not None and session_id:
+            plane = SessionNotesPlane(store=workspace_store, session_id=session_id)
+            # A fresh epoch materializes the Session's notes; a recovered one already
+            # holds what this Run had, and must not be materialized over.
+            if session.workspace_epoch is None:
+                binding = await plane.load()
+                notes = binding.records
+                # The one last carry runs only when this Run knows the plane is empty.
+                # An unreadable plane is not an empty one, and promoting a parent Run's
+                # notes into a plane whose state is unknown would replace memory that
+                # may already be there.
+                if not notes and binding.degraded_reason is None:
+                    notes = await self._migrate_legacy_parent_notes(
+                        session=session,
+                        request=request,
+                        workspace_store=workspace_store,
+                        session_id=session_id,
+                        workspace_root=root,
+                    )
+                    if notes:
+                        binding = SessionNotesBinding(records=notes)
         try:
-            carried_notes, carry_source = await self._parent_notes_for_bind(
-                session=session,
-                owner_id=session.owner_id,
-                parent_run_id=request.parent_run_id,
-                workspace_root=root,
-                materialize=session.workspace_epoch is None,
-                workspace_store=workspace_store,
-            )
             bound = await bind_run_workspace(
                 workspace_root=root,
                 owner_id=session.owner_id,
@@ -1233,19 +1242,24 @@ class AnswerExecutor:
                 recorded_epoch=session.workspace_epoch,
                 store=workspace_store,
                 execution_adapter=self._execution_adapter,
-                carried_notes=(carried_notes if session.workspace_epoch is None else ()),
-                carry_source=carry_source,
+                notes=(notes if session.workspace_epoch is None else ()),
             )
-        except WorkspaceUnavailableError as exc:
-            raise RunExecutionError("run_notes_unavailable", str(exc)) from exc
         except WorkspaceRecoveryFailed as exc:
             raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
         except WorkspaceIntegrityError as exc:
-            kind = (
-                "run_notes_unavailable" if carry_source is not None else "workspace_integrity_error"
+            raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
+        if plane is not None:
+            # The baseline is the working copy itself, on both paths: a recovered
+            # attempt states what its own epoch holds (so its first request names
+            # notes it can actually open), and any change this Run already made is
+            # promoted at its next settlement rather than silently reverted.
+            records, reason = read_working_copy_or_reason(bound.workspace)
+            binding = SessionNotesBinding(
+                records=records,
+                degraded_reason=(binding.degraded_reason or reason or bound.notes_degraded),
             )
-            raise RunExecutionError(kind, str(exc)) from exc
-        return bound, carried_notes
+            plane.rebind(workspace=bound.workspace, records=binding.records)
+        return bound, binding, plane
 
     async def _execute_run(
         self,
@@ -1436,7 +1450,7 @@ class AnswerExecutor:
                 2**tail_reductions
             )
             run_notes = (
-                compose_run_notes(await workspace_store.load_inventory())
+                compose_session_notes(await workspace_store.load_inventory())
                 if workspace_store is not None
                 else []
             )
@@ -1746,16 +1760,31 @@ class AnswerExecutor:
                 # A Fork Point that could not open a branch is a stale point, not a
                 # Session race: the caller asked for a state that is no longer there.
                 raise RunExecutionError("fork_point_stale", exc.public_message) from exc
-            bound, carried_notes = await self._claim_run_workspace(
+            bound, notes_binding, notes_plane = await self._claim_run_workspace(
                 session=session,
                 request=request,
                 workspace_store=workspace_store,
+                session_id=agent_session_id.value,
             )
+            if notes_binding.degraded_reason is not None:
+                # Memory is not worth failing a Run over, so the degradation is stated
+                # where it can be seen instead: the Run's own trace.
+                logger.warning(
+                    "Session notes degraded for run %s: %s",
+                    session.run_id,
+                    notes_binding.degraded_reason,
+                )
+                run_trace.update(
+                    metadata={SESSION_NOTES_DEGRADED_KEY: notes_binding.degraded_reason}
+                )
             prepared_early: Any = None
             if resolved_mode == "research":
                 if bound is not None:
                     run.orchestrator.bind_workspace(
-                        bound, workspace_store, carried_run_notes=carried_notes
+                        bound,
+                        workspace_store,
+                        session_notes=notes_binding.records,
+                        memory_degradation=notes_binding.degraded_reason,
                     )
                 session_id = agent_session_id
                 store = self._store
@@ -1815,6 +1844,7 @@ class AnswerExecutor:
                         session=session,
                         fetched_buffer=fetched_buffer,
                         parent_session_id=session_id,
+                        session_notes=notes_plane,
                         restore_child_attachments=lambda child_id, context: (
                             self._restore_child_attachments(session, child_id, context)
                         ),
@@ -1899,6 +1929,7 @@ class AnswerExecutor:
                     ),
                     validate_pins=validate_research_pins,
                     publish_provider_text=True,
+                    session_notes=notes_plane,
                 )
                 control_reader = _fenced_control_reader(store, session)
                 control_ack = _fenced_control_ack(store, session)

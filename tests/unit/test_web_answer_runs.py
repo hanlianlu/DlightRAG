@@ -98,7 +98,7 @@ def _with_artifact(result: dict[str, Any], *, answer: str | None = None) -> dict
 def service() -> AsyncMock:
     created = AsyncMock()
     created.start_answer.return_value = web_answer_submission(conversation_id=_CID)
-    created.continue_answer.return_value = web_answer_submission(conversation_id=_CID)
+    created.fork_answer.return_value = web_answer_submission(conversation_id=_CID)
     created.turn_for_run.return_value = linked_turn(conversation_id=_CID)
     # Projections resolve stored answer images through this call; a double that
     # leaves it unconfigured would hand the projection an awaitable.
@@ -412,6 +412,62 @@ async def test_start_answer_passes_requested_skill_into_the_prepared_request() -
     prepared = answers.prepared[0]
     assert prepared.query == "Check this plan"
     assert prepared.requested_skill == "review"
+    # A first submission follows nothing, so it states no lineage and is not a
+    # continuation of any kind.
+    assert prepared.parent_run_id is None
+    assert prepared.continuation_kind is None
+
+
+async def test_a_composer_submission_records_lineage_and_keeps_its_own_parameters() -> None:
+    """The Web turn names the conversation's tip Run; memory does not travel on it.
+
+    ADR 0022: lineage is stated once instead of implied by turn order, and the
+    submission keeps the mode and effort this caller chose rather than inheriting the
+    parent's — the Session's notes are already in the working copy either way.
+    """
+    from dlightrag.application.web_conversations.models import ConversationHead, SubmissionSeed
+
+    now = datetime.datetime.now(datetime.UTC)
+    store = AsyncMock()
+    store.replay_answer_turn.return_value = None
+    store.submission_seed.return_value = SubmissionSeed(
+        head=ConversationHead(
+            principal_id="anonymous",
+            conversation_id=_CID,
+            agent_session_id=_CID,
+            agent_lane_id="main",
+            content_revision=1,
+            title="Conversation",
+            created_at=now,
+            updated_at=now,
+        ),
+        parent_run_id=RUN_ID,
+    )
+    store.recovery_page.return_value = RecoveryTurnBatch((), False, 0)
+    store.create_answer_turn.return_value = answer_turn_creation(conversation_id=_CID)
+    answers = FakeAnswers()
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+
+    await service.start_answer(
+        None,
+        conversation_id=_CID,
+        submission_id=SUBMISSION_ID,
+        query="And then?",
+        workspaces=["default"],
+        mode="mix",
+        effort="high",
+    )
+
+    prepared = answers.prepared[0]
+    assert prepared.parent_run_id == RUN_ID
+    assert prepared.continuation_kind == "follow_up"
+    assert prepared.mode == "mix"
+    assert prepared.effort == "high"
 
 
 async def test_durable_recovery_reads_more_than_100_succeeded_turns_in_bounded_pages() -> None:
@@ -481,13 +537,7 @@ async def test_durable_recovery_reads_more_than_100_succeeded_turns_in_bounded_p
     assert all(call.kwargs["page"].limit == 64 for call in store.recovery_page.await_args_list)
 
 
-@pytest.mark.parametrize(
-    ("kind", "same_conversation", "include_answer"),
-    [("follow_up", True, True), ("fork", False, False)],
-)
-async def test_service_continuation_uses_shared_answer_contract_and_branch_target(
-    kind: str, same_conversation: bool, include_answer: bool
-) -> None:
+async def test_service_fork_opens_a_new_conversation_from_the_named_runs_state() -> None:
     store = AsyncMock()
     store.find_turn_by_run.return_value = linked_turn(
         answer_run(status="succeeded"), conversation_id=_CID
@@ -503,21 +553,22 @@ async def test_service_continuation_uses_shared_answer_contract_and_branch_targe
         cursor_secret=b"web-answer-runs-cursor-test",
     )
 
-    result = await service.continue_answer(
+    result = await service.fork_answer(
         None,
         parent_run_id=RUN_ID,
         submission_id=SUBMISSION_ID,
         query="What next?",
-        kind=kind,
         authorized_workspaces=("default",),
     )
 
     assert result is marker
-    assert answers.continuation_request.await_args.kwargs["include_answer"] is include_answer
+    # A Fork branches at the state the named Run settled at, so no answer joins the
+    # context and no history is injected: the fold at the Fork Point is the context.
+    assert answers.continuation_request.await_args.kwargs["include_answer"] is False
     assert answers.continuation_request.await_args.kwargs["authorized_workspaces"] == ("default",)
     acceptor = answers.accept.await_args.kwargs["acceptor"]
-    assert (acceptor.conversation_id == _CID) is same_conversation
-    assert acceptor.create_conversation is (not same_conversation)
+    assert acceptor.conversation_id != _CID
+    assert acceptor.create_conversation is True
 
 
 async def test_first_submission_uses_one_stable_server_conversation_and_atomic_store_write() -> (
@@ -805,25 +856,32 @@ async def test_web_child_control_terminal_is_conflict(
     assert response.json()["detail"] == "terminal_child"
 
 
-@pytest.mark.parametrize(
-    ("operation", "kind"),
-    [("follow-up", "follow_up"), ("fork", "fork")],
-)
-async def test_web_continuations_return_a_linked_descriptor(
+async def test_the_browser_fork_returns_a_linked_descriptor(
     client: AsyncClient,
     service: AsyncMock,
-    operation: str,
-    kind: str,
 ) -> None:
     response = await client.post(
-        f"/web/api/answer/{RUN_ID}/{operation}",
+        f"/web/api/answer/{RUN_ID}/fork",
         json={"content": "What next?", "submission_id": SUBMISSION_ID},
     )
 
     assert response.status_code == 202
     assert response.json()["conversation"]["conversation_id"] == _CID
-    assert service.continue_answer.await_args.kwargs["kind"] == kind
-    assert service.continue_answer.await_args.kwargs["parent_run_id"] == RUN_ID
+    assert service.fork_answer.await_args.kwargs["parent_run_id"] == RUN_ID
+
+
+async def test_the_browser_offers_no_follow_up_route(
+    client: AsyncClient,
+    service: AsyncMock,
+) -> None:
+    """A conversation continues through the composer; the browser has no line control."""
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/follow-up",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 404
+    service.fork_answer.assert_not_awaited()
 
 
 async def test_status_projects_the_linked_turn_at_the_common_run_url(
