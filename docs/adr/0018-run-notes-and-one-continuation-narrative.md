@@ -22,7 +22,7 @@ Inventory. The path rule, the notes field, the render cap, and the one-narrative
 rule are untouched by that revision.
 
 The experiment that gates the notes field has now been run at the seam and against
-a live provider (DeepSeek Flash, the low agent level, seven Runs, about $0.49).
+a live provider (DeepSeek Flash, the low agent level, ten Runs, about $0.72).
 Measured: a registered note is carried by every later compaction and rendered as
 the call that reads it again (2/2 compactions in the one Run that wrote a note
 before compacting); the note stays bounded (227–3065 bytes against 0.5M–1.8M
@@ -61,17 +61,28 @@ a note were arithmetically re-derivable, which is the category this decision say
 note is not for, so the write side holds once the floor applies — with the caveat
 that one Run writing one note is one data point and not a rate.
 
-The read side is still unobserved, and the fixture says why rather than excusing it.
-Within that Run the note was never read and the values were re-derived, but the stage
-that needed them again asked for verbatim quotations, where the source text is the
-only authority a summary and a note cannot replace; a continuation of the same
-Session then answered from the fold at its tip without opening the note, because it
-did not need to. No experiment has yet made the note the cheapest path *inside* a
-Run — a value its own arithmetic derived, or a set too large for the summary's
-budget — so "the model chooses the note over re-deriving" remains the open question,
-and the evidence so far is that a Run reads its notes when its context no longer
-carries the answer, which is what the continuation carried and the within-Run case
-did not.
+The read side was then measured where reading is the only cheap path, and it holds.
+The fixture asked a Run to generate 1200 random IDs into `notes/ids.txt` without
+pasting them into the chat, so the bytes existed in the file and nowhere else within
+reach: the transcript held the generating command rather than its output, a summary
+can say what an eight-hex-digit list is but cannot state one, and nothing re-derives
+a CSPRNG. A compaction then named the note, and on its own initiative the Run went
+back to the file, read the three lines it was asked for, recomputed the SHA-256 it
+reported, and checked the file's shape; every value it answered with matches the
+bytes on disk exactly. It also flagged, unprompted, that a later edit of the note
+would change both the lines and the hash — the live-file property this decision
+records as a residual, understood by the Run it applies to.
+
+Two properties of that observation are worth keeping rather than smoothing over. It
+read through `bash` (`awk`, `sha256sum`) rather than the `read(path=…)` call its
+handle names, which is the freedom ADR 0022 kept when it refused to route `notes/`
+through framework Tools: a note is a file, and the call in the handle is a
+suggestion rather than the only door. And the read was conditional on need rather
+than habitual — the same guidance produced no read at all in the four Runs whose
+context already carried the answer, which is the behaviour the decision asks for.
+Memory is where a value lives, not a ritual performed on every compaction, and the
+earlier negative results are a statement about those fixtures rather than about the
+habit.
 
 ## Context
 
