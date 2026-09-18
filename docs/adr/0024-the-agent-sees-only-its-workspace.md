@@ -108,8 +108,9 @@ process view therefore does not grow when such a capability arrives.
 **Nothing here narrows how a Run organizes its agents.** A child session shares
 its parent Run's working copy, so the confinement root is the same for a child as
 for its parent: fan-out, swarms, and workflow-style compositions keep exactly the
-file access they have today, and a Child spawned with the default read-only tool
-set has no shell to confine at all. What changes for every agent of the Run is the
+file access they have today, and a Child's own shell is confined by the same policy
+as its parent's, because it runs in the same workspace (ADR 0025). What changes for
+every agent of the Run is the
 same single thing — the corpus is reached through retrieval, which composition
 offers to a Child first — and no new boundary appears between a parent and its
 children.
@@ -202,8 +203,9 @@ Landing order, one sequence:
    cannot read the corpus tree while `search_knowledge_base`, retrieval image
    hydration, ingestion, and source download all still work; the degrade branch
    without depending on the platform; the `/health` value; a skill's bundled script
-   runs; and an outbound MCP tool still works (it is an HTTP session, so
-   confinement does not reach it).
+   runs. An outbound MCP call is not covered by a test and does not need one: it is an
+   app-side HTTP session, so a policy over the Agent's own processes cannot reach it —
+   reasoning recorded rather than a test invented to restate it.
 
 Live documents to revise with the implementation:
 [domain language](../domain-language.md) (the Execution Environment term),

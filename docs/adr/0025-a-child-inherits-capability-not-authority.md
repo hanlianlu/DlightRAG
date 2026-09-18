@@ -1,10 +1,10 @@
 # A Child Session inherits its parent's capability, not its authority
 
-`spawn_agent` admits a Child Session that shares its parent Run's working copy.
-Its tool set is pinned per child, and the default is read-only: a child that must
-compute, fetch, or build files has to be granted the tools for it on every spawn.
-This decision makes the default match what a child actually does, and states the
-line the default may never cross.
+`spawn_agent` admits a Child Session that shares its parent Run's working copy. Its
+tool set is pinned per child, and it defaults to the parent's composed set minus the
+tools that spend the Run's authority. This decision makes that default match what a
+child actually does — compute, fetch, build — and states the line it may never
+cross.
 
 ## Status
 
