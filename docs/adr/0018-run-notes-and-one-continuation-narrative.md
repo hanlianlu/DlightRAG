@@ -52,11 +52,26 @@ triggers a model can check for itself and states that `tmp/` is scratch; and a
 note handle names the moment as well as the call while the re-readable identities
 render before the plan they serve. The guidance's promise now matches ADR 0022's
 ownership: `notes/` is the conversation's memory, every Run of it starts with what
-was written there, and no wording promises a carry that no longer exists. Whether an unprompted Run now
-writes a note when this decision's own admission floor applies — values the next
-turn cannot cheaply re-derive — is the open question the next experiment must
-answer; the fixtures measured so far were arithmetically re-derivable, which is
-the category this decision says a note is not for.
+was written there, and no wording promises a carry that no longer exists. The admission floor was measured
+next, with a fixture that asks for corpus facts rather than arithmetic: an
+unsteered Run over five definitions in a textbook wrote `notes/findings.md` on its
+sixth turn, *before* the first of its four compactions, and all four named it
+(444 bytes against 1.09M prompt tokens). The four earlier fixtures that never saw
+a note were arithmetically re-derivable, which is the category this decision says a
+note is not for, so the write side holds once the floor applies — with the caveat
+that one Run writing one note is one data point and not a rate.
+
+The read side is still unobserved, and the fixture says why rather than excusing it.
+Within that Run the note was never read and the values were re-derived, but the stage
+that needed them again asked for verbatim quotations, where the source text is the
+only authority a summary and a note cannot replace; a continuation of the same
+Session then answered from the fold at its tip without opening the note, because it
+did not need to. No experiment has yet made the note the cheapest path *inside* a
+Run — a value its own arithmetic derived, or a set too large for the summary's
+budget — so "the model chooses the note over re-deriving" remains the open question,
+and the evidence so far is that a Run reads its notes when its context no longer
+carries the answer, which is what the continuation carried and the within-Run case
+did not.
 
 ## Context
 
