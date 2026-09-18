@@ -185,7 +185,8 @@ already restricted network boundary.
 `GET /health` and `GET /ready` are unauthenticated by design. Health performs
 no database, corpus, parser, or model I/O. Readiness short-caches only the
 writable Operational State verdict; it does not probe corpus or provider state.
-Both surfaces expose only fixed component details and storage class names, never
+Both surfaces expose only fixed component details, storage class names, and the
+confinement state an Agent's processes run under on this host (ADR 0024), never
 credentials, endpoint URIs, or inherited environment values.
 
 ### Per-Surface Front Doors

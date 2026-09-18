@@ -105,6 +105,12 @@ class ApplicationHealth:
             "model": None,
         }
         self._search_toolchain: dict[str, dict[str, str]] = {}
+        #: What an Agent's processes can be confined to on this host: `disabled` when
+        #: the deployment runs no Agent environment, otherwise the host's own answer
+        #: (`unavailable`, or the Landlock ABI it offers). Composition declares it, and
+        #: a Run records the same value, so an unconfined host is stated rather than
+        #: inferred (ADR 0024).
+        self._agent_shell_confinement: str = "disabled"
 
     @property
     def is_ready(self) -> bool:
@@ -150,6 +156,13 @@ class ApplicationHealth:
     @property
     def search_toolchain(self) -> Mapping[str, Mapping[str, str]]:
         return {name: dict(provenance) for name, provenance in self._search_toolchain.items()}
+
+    @property
+    def agent_shell_confinement(self) -> str:
+        return self._agent_shell_confinement
+
+    def set_agent_shell_confinement(self, state: str) -> None:
+        self._agent_shell_confinement = state
 
     def add_warning(self, warning: str) -> None:
         """Compatibility shim: record a bounded generic dependency warning."""

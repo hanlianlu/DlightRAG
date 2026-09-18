@@ -371,7 +371,9 @@ Canonical successful Answer result:
 }
 ```
 
-`trace.bm25_enabled` reports lexical-lane participation. If one retrieval lane
+`trace.agent_shell_confinement` states what the answering Agent's processes could be
+confined to on the host that produced the Run, in the same closed shape `/health`
+reports. `trace.bm25_enabled` reports lexical-lane participation. If one retrieval lane
 fails and the other succeeds, the result continues with `bm25_error_type` or
 `lightrag_error_type`; `lightrag_mix_chunk_count` records the pre-fusion
 LightRAG count.
@@ -695,7 +697,10 @@ corpus, or database I/O. Its bounded `components` map distinguishes `process`,
 `operational_state`, `run_coordinator`, `cancellation_listener`,
 `corpus_storage`, `parser`, and `providers`; details and warnings use fixed
 sanitized text. The four LightRAG storage class names and
-`answer_image_capability` are also reported. Degraded state remains HTTP 200.
+`answer_image_capability` are also reported, as is `agent_shell_confinement`: what an
+Agent's processes can be confined to on this host, one of `disabled` (no Agent
+environment), `unavailable` (no kernel seam), or `landlock:abiN`. Degraded state
+remains HTTP 200.
 
 `GET /ready` checks only the authority required to durably admit and coordinate
 Runs: Application Operational State plus the injected writable Operational

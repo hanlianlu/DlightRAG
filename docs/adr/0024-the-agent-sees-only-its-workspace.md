@@ -125,7 +125,8 @@ enforced, not with a path list that cannot enforce it.
 needs a Linux kernel at 5.13 or newer with the syscalls reachable; a native
 macOS development host or a hardened container profile may not have them. The
 environment detects this before it spawns, applies what it can, and reports the
-effective state: a capability bit in `/health` and the Run's own trace. The Run
+effective state as a closed value — `disabled`, `unavailable`, or `landlock:abiN` —
+in `/health` and in the Run's own trace. The Run
 proceeds unconfined, because a Run that cannot be confined is still a Run the
 user asked for — but nothing about that is invisible afterwards.
 
@@ -200,7 +201,7 @@ Landing order, one sequence:
    degrades without Landlock); an integration test asserting an Agent child
    cannot read the corpus tree while `search_knowledge_base`, retrieval image
    hydration, ingestion, and source download all still work; the degrade branch
-   without depending on the platform; the `/health` bit; a skill's bundled script
+   without depending on the platform; the `/health` value; a skill's bundled script
    runs; and an outbound MCP tool still works (it is an HTTP session, so
    confinement does not reach it).
 

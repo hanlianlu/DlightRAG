@@ -7,16 +7,15 @@ PostgreSQL, so an unauthenticated poll loop cannot turn it into database load.
 the database/corpus probe; this transport imports no storage implementation.
 """
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
 from dlightrag.adapters.http.application import get_application
 from dlightrag.application.config import ServiceRole
 from dlightrag.application.health import ApplicationHealth
-from dlightrag.engine.agent.environment import confinement_state
 
 router = APIRouter()
 
@@ -50,11 +49,19 @@ class SearchToolProvenanceResponse(_StatusModel):
     sha256: str
 
 
+#: The closed shape an operator reads: no Agent environment, none enforceable here, or
+#: the Landlock ABI this kernel offers. Produced by `confinement_state`, validated here
+#: so the wire contract cannot drift into free text.
+type AgentShellConfinementState = Annotated[
+    str, StringConstraints(pattern=r"^(disabled|unavailable|landlock:abi[0-9]+)$")
+]
+
+
 class HealthResponse(_StatusModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
     service_role: ServiceRole
-    agent_shell_confinement: str
+    agent_shell_confinement: AgentShellConfinementState
     crafted_by: str
     maintained_by: str
     storage: HealthStorageResponse
@@ -94,9 +101,7 @@ async def health(request: Request) -> dict[str, object]:
         "status": "degraded" if application_health.is_degraded else "healthy",
         "rag_initialized": application_health.is_ready,
         "service_role": config.deployment.service_role,
-        # What an Agent's processes can be confined to on this host: an operator reads
-        # it here so an unconfined deployment is stated rather than assumed.
-        "agent_shell_confinement": confinement_state(config.answer.agent.execution_environment),
+        "agent_shell_confinement": application_health.agent_shell_confinement,
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {

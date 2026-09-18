@@ -12,6 +12,7 @@ from dlightrag.application.application import Application, _ApplicationComponent
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.opaque_cursor import CursorSecretBox
 from dlightrag.application.skills import skill_read_layers, skill_roots, skills_bundle_factory
+from dlightrag.engine.agent.environment import confinement_state
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
@@ -176,6 +177,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         path="models.catalogue",
     )
     health = ApplicationHealth(readiness_probe=PGReadinessProbe(config))
+    health.set_agent_shell_confinement(confinement_state(config.answer.agent.execution_environment))
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
     corpus_backend = build_pg_corpus_backend(config)
