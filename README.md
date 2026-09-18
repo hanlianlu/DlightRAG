@@ -1,6 +1,5 @@
 # DlightRAG
 
-[![PyPI](https://img.shields.io/pypi/v/dlightrag)](https://pypi.org/project/dlightrag/)
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
@@ -167,8 +166,8 @@ For a local stdio client:
 {
   "mcpServers": {
     "dlightrag": {
-      "command": "uvx",
-      "args": ["dlightrag-mcp", "--env-file", "/absolute/path/to/.env"]
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/dlightrag", "dlightrag-mcp", "--env-file", "/absolute/path/to/dlightrag/.env"]
     }
   }
 }
@@ -181,9 +180,19 @@ is in [Interfaces](docs/interfaces.md#mcp-server).
 
 ### Python
 
+There is no PyPI distribution: the runtime is consumed from a clone, where
+`uv run` uses the locked environment.
+
 ```bash
-uv add dlightrag
+git clone https://github.com/hanlianlu/dlightrag.git
+cd dlightrag
+uv sync
+uv run python your_script.py
 ```
+
+An application in its own project can add the clone as an editable path
+dependency instead (`uv add --editable /absolute/path/to/dlightrag`); the Memory
+workspace package resolves from the same clone.
 
 Create an application with `create_application(config)`, use
 `application.corpus_mutations` for durable corpus writes,

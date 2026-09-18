@@ -137,17 +137,19 @@ root rather than the execution mode, so this command reaches the same trees — 
 bound the report. A deployment whose execution is `disabled` and which names no root
 owns no workspace path and has nothing to audit.
 
-## Trusted Publisher Prerequisite
+## Release Distribution
 
-One tag publishes lockstep `dlightrag` and `dlightrag-memory` projects. Configure
-this GitHub trusted publisher on both PyPI projects before tagging:
-
-- repository `hanlianlu/DlightRAG`
-- workflow `.github/workflows/publish.yml`
-- environment `pypi`
-
-The workflow uses GitHub OIDC (`id-token: write`) and has no token fallback.
-Publishing is not transactional; rerun after fixing a missing project/binding.
+DlightRAG ships as a repository, not as a PyPI project: a deployment clones this
+repository and runs Compose or a native process, so an uploaded wheel reaches no
+user. The `dlightrag` and `dlightrag-memory` PyPI projects are archived and
+reject uploads; there is no publish workflow, no `pypi` environment, and no
+trusted publisher binding. `v*` tags mark releases on GitHub and trigger no
+workflow. Lockstep versions across `pyproject.toml`,
+`packages/memory/pyproject.toml`, `frontend/package.json`, and the Memory runtime
+are still enforced by `make release-check`, which `make ci` runs. Nothing
+installs DlightRAG from a package index: use the clone directly, or add it as an
+editable path dependency. `make workspace-wheels` remains a local packaging
+check (isolated install smoke test); it distributes nothing.
 
 ## Parser Services
 
