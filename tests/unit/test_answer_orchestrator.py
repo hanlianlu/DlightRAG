@@ -359,6 +359,20 @@ def test_child_preparation_excludes_every_parent_subagent_control() -> None:
     )
 
 
+def test_a_child_is_told_its_own_scratch_directory() -> None:
+    """Simultaneous children share one workspace, so the prefix names their own corner.
+
+    Nothing enforces it — two children that write one path are last-writer-wins — which
+    is exactly why the convention has to be stated where the child reads it (ADR 0025).
+    """
+    from dlightrag.engine.answer.orchestration.orchestrator import child_question
+
+    question = child_question("investigate widgets", child_session_id="child-7")
+
+    assert "tmp/children/child-7/" in question
+    assert "investigate widgets" in question
+
+
 def _research_owner_with_subagents(tmp_path: Path):
     """A parent that can compose path tools, so capability and authority both exist."""
     from dlightrag.engine.answer.tools.subagents import SubagentHost

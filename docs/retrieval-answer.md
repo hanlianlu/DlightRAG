@@ -223,10 +223,10 @@ run-local registry may include:
   return.
 
 `spawn_agent` admits up to eight children per call and returns durable handles
-immediately. Children default to read-only tools (`search_knowledge_base`,
-`search_web`, `read`, `view`, `grep`, `find`, `ls`, `recall_memory`,
-`load_skill`, `ask_parent`); the parent may list a narrower host-permitted
-subset, including side-effecting tools only when the host already allows them.
+immediately. A child runs with its parent's tools except the ones that spend the Run's
+authority: the roster controls, `remember`/`forget`, and the publication tools.
+The parent's `tools` list narrows that set for one child — a read-only
+investigator, say — and can never restore what the Run withholds.
 Children cannot spawn grandchildren. Same-Session continuation creates a new
 Operation on the existing Child Session. The built-in `council` Skill is a
 parent recipe for independent first-pass investigations and at most one curated

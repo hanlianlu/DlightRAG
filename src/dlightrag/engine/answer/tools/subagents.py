@@ -53,7 +53,10 @@ class ChildRequest(BaseModel):
     )
     tools: tuple[str, ...] | None = Field(
         default=None,
-        description="Optional inherited tool-name subset; spawn tools are always removed.",
+        description=(
+            "Optional narrowing subset for this child. It can never restore what the Run "
+            "withholds: roster controls, durable owner memory writes, and publication."
+        ),
     )
 
 
@@ -467,6 +470,15 @@ class SubagentHost:
         self.tasks.clear()
 
 
+_SPAWN_DESCRIPTION = (
+    "Accept one or many asynchronous child Agent Sessions and return stable handles "
+    "immediately. A child runs with its parent's tools except the ones that spend the "
+    "Run's authority — its roster controls, durable owner memory, and publication — so "
+    "pass `tools` to narrow a child (a read-only investigator, say) rather than to grant "
+    "one."
+)
+
+
 def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     """Return versioned spawn/status/wait/cancel tools over one durable roster."""
 
@@ -570,18 +582,14 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         )
     elif host.interactive_controls:
         descriptions = (
-            "Accept one or many asynchronous child Agent Sessions and return stable handles "
-            "immediately. Children default to read-only tools; explicitly list a narrower "
-            "host-permitted set when side effects are required.",
+            _SPAWN_DESCRIPTION,
             "Read one accepted asynchronous or completed child session status.",
             "Wait for one known asynchronous child session to settle.",
             "Durably cancel one known child session without cancelling its siblings.",
         )
     else:
         descriptions = (
-            "Accept one or many asynchronous child Agent Sessions and return stable handles "
-            "immediately. Children default to read-only tools; explicitly list a narrower "
-            "host-permitted set when side effects are required.",
+            _SPAWN_DESCRIPTION,
             "Read one accepted asynchronous or completed child session status.",
             "Wait for one known asynchronous child session to settle.",
             "Durably cancel one known child session without cancelling its siblings.",

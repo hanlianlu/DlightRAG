@@ -143,7 +143,7 @@ create a nested Retrieval Run:
 
 Research parents admit Child Sessions asynchronously: `spawn_agent` returns
 stable handles without waiting for children to finish. Children default to the
-host's read-only tool subset, cannot spawn grandchildren, and remain attached
+parent's tools minus the Run's authority, cannot spawn grandchildren, and remain attached
 to the accepting parent Answer Run. Independent critique uses the built-in
 [`council`](../src/dlightrag/engine/agent/builtin_skills/council/SKILL.md)
 Skill as a recipe over those Child Sessions; it is not a runtime, Run kind,

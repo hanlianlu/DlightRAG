@@ -157,7 +157,7 @@ The narrow Host-facing read/transaction seam for immutable Session snapshots. Ru
 _Avoid_: generic store, lifecycle hook registry, mutable transcript
 
 **Child Session**:
-A first-class foreground Agent Session inside one parent Answer Run, admitted asynchronously by `spawn_agent` with a durable handle. It has explicit parent/call lineage, ContextSnapshot, bounded depth and concurrency, pinned plan/model/tool allowlist/budget/Host state, and an independently renewed lease. Targeted steer applies only to its current Operation; continue starts a new Operation on the same Child Session; `ask_parent` is one correlated guidance wait until reply, expiry, or cancellation; observation is the public transcript, control, question, and result projection.
+A first-class foreground Agent Session inside one parent Answer Run, admitted asynchronously by `spawn_agent` with a durable handle. It has explicit parent/call lineage, ContextSnapshot, bounded depth and concurrency, pinned plan/model/tool allowlist/budget/Host state, and an independently renewed lease. Its tool allowlist is its parent's composition minus the Run's authority — roster controls, durable owner memory writes, and publication — while an explicit `tools` list only narrows it (ADR 0025). Targeted steer applies only to its current Operation; continue starts a new Operation on the same Child Session; `ask_parent` is one correlated guidance wait until reply, expiry, or cancellation; observation is the public transcript, control, question, and result projection.
 _Avoid_: child run, detached job, mission, background swarm
 
 **Subagent Roster**:

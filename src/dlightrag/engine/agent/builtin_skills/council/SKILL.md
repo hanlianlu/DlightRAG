@@ -28,7 +28,7 @@ Completion: the declared plan is written, first-pass children are accepted, opti
 1. **Select investigations.** Choose two or three independent objectives that can change the answer. One child failure does not abort siblings; inspect the failure and decide whether to continue, replace the path, or cancel.
    Completion: each objective is unique, concrete, and inside the user's scope.
 
-2. **First pass, read-only.** Call `spawn_agent` and continue useful parent work. Omit `tools` or list only read-only names (`search_knowledge_base`, `search_web`, `read`, `view`, `grep`, `find`, `ls`, `recall_memory`, `load_skill`, `ask_parent`). Do not pass `write`, `edit`, `bash`, or `attach_artifact`. Host permission ceilings remain the real enforcement; this Skill cannot widen them.
+2. **First pass, read-only.** Call `spawn_agent` and continue useful parent work. **Pass an explicit `tools` list** — `search_knowledge_base`, `search_web`, `read`, `view`, `grep`, `find`, `ls`, `recall_memory`, `load_skill` — because a child with no `tools` runs with the parent's whole capability, `bash` and `write` included. Never list `attach_artifact`, and list `bash` or `edit` only when the investigation genuinely needs them. Host permission ceilings remain the real enforcement; this Skill cannot widen them.
    Completion: `spawn_agent` returned stable `child_session_id` handles without waiting for every child to finish.
 
 3. **Optional cross-examination.** If a material dispute remains that child Evidence could settle, call `continue_subagent` on the original Child Sessions with a curated challenge packet. Do not dump peer transcripts. Do not spawn replacement children for a user-cancelled objective unless the user explicitly reauthorized that work.
@@ -40,7 +40,7 @@ Completion: the declared plan is written, first-pass children are accepted, opti
 ## Hard limits
 
 - Delegation is one level: children cannot spawn grandchildren or control siblings.
-- Side-effecting child tools require explicit parent authorization already permitted by the host; independent deliberation stays read-only.
+- A child inherits its parent's capability except the Run's authority (roster controls, durable owner memory, publication); read-only deliberation is therefore requested explicitly, by listing the tools.
 - Steer, status, and recovery never revive a terminal or user-cancelled child.
 - Waiting for `ask_parent` guidance is the child's correlated request path; completion results use the normal child result path.
 - Cancel outstanding children you no longer need before parent finalization.

@@ -165,19 +165,17 @@ def compose_research_tools(
         selected_names = tool_names
         if (
             child
-            and selected_names is None
-            and (subagent_host is None or subagent_host.async_lifecycle)
+            and selected_names is not None
+            and any(tool.name == "ask_parent" for tool in tools)
         ):
-            # A Child's default is its parent's capability minus the authority groups,
-            # computed rather than listed: a capability nobody has written yet is a
-            # Child's the moment its parent has it, and withholding one is the explicit
-            # act of adding it to the table above (ADR 0025).
-            selected_names = tuple(
-                tool.name for tool in tools if tool.name not in CHILD_FORBIDDEN_TOOLS
-            )
-        elif child and any(tool.name == "ask_parent" for tool in tools):
-            selected_names = tuple(dict.fromkeys((*(selected_names or ()), "ask_parent")))
+            # Supervision is part of every hosted Child contract, independent of the
+            # narrower task-tool subset its parent selected.
+            selected_names = tuple(dict.fromkeys((*selected_names, "ask_parent")))
         return list(
+            # A Child's default is its parent's capability minus the authority groups:
+            # resolving "everything" with the table excluded means a capability nobody
+            # has written yet is a Child's the moment its parent has it, and withholding
+            # one is the explicit act of adding it to the table above (ADR 0025).
             registry.resolve(
                 selected_names,
                 exclude=CHILD_FORBIDDEN_TOOLS if child else (),

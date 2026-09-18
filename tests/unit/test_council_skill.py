@@ -50,6 +50,10 @@ def test_council_skill_body_is_a_bounded_read_only_recipe() -> None:
     assert "spawn_agent" in text
     assert "continue_subagent" in text
     assert "read-only" in lowered
+    # A child with no `tools` now inherits the parent's whole capability, so the recipe
+    # has to *ask* for the read-only set instead of omitting the field (ADR 0025).
+    assert "pass an explicit `tools` list" in lowered
+    assert "runs with the parent's whole capability" in lowered
     assert "`view`" in text and "`inspect`" not in text
     assert "user veto" in lowered
     assert "dissent" in lowered

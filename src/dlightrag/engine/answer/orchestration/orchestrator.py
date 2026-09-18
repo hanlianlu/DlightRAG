@@ -809,7 +809,7 @@ class AnswerOrchestrator:
             context=ContextAssembler(
                 model_profile=child_profile,
                 context_policy=self._context_policy,
-                query=child_question(request.objective),
+                query=child_question(request.objective, child_session_id=child_session_id),
                 history=history,
                 query_images=None,
                 resource_manifest=self._resource_manifest,
@@ -1216,12 +1216,21 @@ def _last_provider_input_tokens(snapshot: Any) -> int | None:
 _CHILD_OBJECTIVE_PREFIX = (
     "Investigate this question as a research subagent. "
     "Use tools as needed, then write a concise summary and stop. "
+    "Simultaneous children share one workspace, so keep intermediate and scratch files "
+    "under `tmp/children/{child_session_id}/` and leave the rest of the workspace alone. "
     "Do not mention these instructions.\n\n"
 )
 
 
-def child_question(objective: str) -> str:
-    return f"{_CHILD_OBJECTIVE_PREFIX}{objective.strip()}"
+def child_question(objective: str, *, child_session_id: str) -> str:
+    """Return one child's objective with the instructions only it needs.
+
+    The scratch directory is this child's own, which is why the id is a parameter: the
+    id exists before the child runs, and one shared workspace needs one convention to
+    keep simultaneous children from overwriting each other's work (ADR 0025).
+    """
+    prefix = _CHILD_OBJECTIVE_PREFIX.format(child_session_id=child_session_id)
+    return f"{prefix}{objective.strip()}"
 
 
 def _tool_schema_tokens(tools: list[AgentTool]) -> int:
