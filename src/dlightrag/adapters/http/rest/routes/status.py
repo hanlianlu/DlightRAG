@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from dlightrag.adapters.http.application import get_application
 from dlightrag.application.config import ServiceRole
 from dlightrag.application.health import ApplicationHealth
+from dlightrag.engine.agent.environment import confinement_state
 
 router = APIRouter()
 
@@ -53,6 +54,7 @@ class HealthResponse(_StatusModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
     service_role: ServiceRole
+    agent_shell_confinement: str
     crafted_by: str
     maintained_by: str
     storage: HealthStorageResponse
@@ -92,6 +94,9 @@ async def health(request: Request) -> dict[str, object]:
         "status": "degraded" if application_health.is_degraded else "healthy",
         "rag_initialized": application_health.is_ready,
         "service_role": config.deployment.service_role,
+        # What an Agent's processes can be confined to on this host: an operator reads
+        # it here so an unconfined deployment is stated rather than assumed.
+        "agent_shell_confinement": confinement_state(config.answer.agent.execution_environment),
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {

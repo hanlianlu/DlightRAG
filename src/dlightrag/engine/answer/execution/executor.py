@@ -18,6 +18,7 @@ from dlightrag.engine.agent.environment import (
     ExecutionEnvironment,
     ExecutionMode,
     SearchToolchain,
+    confinement_state,
     resolve_execution_adapter,
 )
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
@@ -2353,6 +2354,7 @@ class AnswerExecutor:
                     if resolved_mode == "research" and prepared is not None
                     else getattr(stream, "trace", None) or {}
                 )
+                trace["agent_shell_confinement"] = confinement_state(self._execution_environment)
                 trace["agent_effort"] = _agent_effort_trace(
                     request.effort,
                     resolved_mode,

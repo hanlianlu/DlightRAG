@@ -230,6 +230,20 @@ def test_the_reported_state_names_the_abi_or_says_unavailable() -> None:
     assert state == "unavailable" or state.startswith("landlock:abi")
 
 
+def test_the_reported_state_says_disabled_or_what_this_host_enforces() -> None:
+    """An operator reads the effective state, so an unconfined host is stated.
+
+    A deployment with no Agent environment is a fact about the deployment; every
+    other answer is the host's, which is what keeps the absence of a kernel seam
+    visible instead of implied (ADR 0024).
+    """
+    from dlightrag.engine.agent.environment import confinement_state
+
+    assert confinement_state("disabled") == "disabled"
+    trust = confinement_state("trust")
+    assert trust == "unavailable" or trust.startswith("landlock:abi")
+
+
 def test_the_composition_root_refuses_the_corpus_and_the_project_tree(
     test_config: Any,
 ) -> None:

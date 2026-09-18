@@ -24,6 +24,7 @@ from dlightrag.engine.agent.environment.execution import (
     ExecutionEnvironmentAdapter,
     ExecutionMode,
     TrustExecutionAdapter,
+    confinement_state,
     resolve_execution_adapter,
 )
 from dlightrag.engine.agent.environment.toolchain import (
@@ -45,6 +46,7 @@ __all__ = [
     "ExecutionEnvironment",
     "ExecutionEnvironmentAdapter",
     "ExecutionMode",
+    "confinement_state",
     "ExternalAccess",
     "FullOutputUnavailable",
     "PathAccess",

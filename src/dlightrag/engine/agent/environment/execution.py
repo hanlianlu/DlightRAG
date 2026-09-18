@@ -99,6 +99,18 @@ class TrustExecutionAdapter:
         await asyncio.gather(*(environment.aclose() for environment in tuple(self._environments)))
 
 
+def confinement_state(mode: ExecutionMode) -> str:
+    """Return what this deployment can enforce, as `/health` and a Run report it.
+
+    ``disabled`` is a fact about the deployment rather than about the host, so it is
+    answered here; every other answer is the host's, which is what keeps an
+    unconfined host visible instead of implied (ADR 0024).
+    """
+    if mode == "disabled":
+        return "disabled"
+    return ConfinementPolicy().state()
+
+
 def resolve_execution_adapter(
     mode: ExecutionMode,
     *,
@@ -115,5 +127,6 @@ __all__ = [
     "ExecutionEnvironmentAdapter",
     "ExecutionMode",
     "TrustExecutionAdapter",
+    "confinement_state",
     "resolve_execution_adapter",
 ]

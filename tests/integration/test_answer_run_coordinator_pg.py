@@ -1464,6 +1464,14 @@ async def test_async_children_run_while_parent_progresses_and_barrier_adopts_res
         "output_tokens": 2,
     }
     assert run.result["trace"]["usage"]["inclusive_usage_details"]["input_tokens"] >= 16
+    # The Run states what its Agent's processes could be confined to, so a deployment
+    # without a kernel seam is visible in the record it produced (ADR 0024).
+    confinement = run.result["trace"]["agent_shell_confinement"]
+    assert (
+        confinement == "disabled"
+        or confinement.startswith("landlock:abi")
+        or confinement == "unavailable"
+    )
 
 
 class _SiblingFailSucceedProvider(_AsyncChildProvider):

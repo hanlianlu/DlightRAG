@@ -1344,6 +1344,11 @@ class TestHealthEndpoint:
         body = resp.json()
         assert body["status"] == "healthy"
         assert "rag_initialized" in body
+        # An operator reads what an Agent's processes can be confined to here, so an
+        # unconfined host is stated rather than assumed (ADR 0024).
+        assert body["agent_shell_confinement"] in {"disabled", "unavailable"} or body[
+            "agent_shell_confinement"
+        ].startswith("landlock:abi")
         assert body["storage"]["doc_status"] == "PGDocStatusStorage"
         assert set(body["components"]) == {
             "process",
