@@ -95,9 +95,11 @@ touch this list at all.
 
 **Capabilities declare what they need; the core declares nothing.** Skills are
 the one capability that needs more today: they are documents the Agent reads and
-may reference executable assets, so the three skill roots (packaged built-ins,
-the operator-global root, and the owner root) are granted read-only with
-execute. Capabilities whose state cannot live in a file — a browser session, a
+may reference executable assets, so the operator-global and owner skill roots are
+granted read-only with execute. The packaged built-ins are not declared: the
+serving process loads them through its own `load_skill` tool, their assets are
+reachable where the install puts them under the runtime prefix, and a source
+checkout keeps them in the project tree the Agent may not see. Capabilities whose state cannot live in a file — a browser session, a
 desktop — are not paths to add: they are providers that run in their own
 environment (a driver or an outbound MCP endpoint), reached through a tool, in
 the shape DeepSeek Harness uses for browser-use and computer-use. The Agent's

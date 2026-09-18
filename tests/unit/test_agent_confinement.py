@@ -230,22 +230,20 @@ def test_the_reported_state_names_the_abi_or_says_unavailable() -> None:
     assert state == "unavailable" or state.startswith("landlock:abi")
 
 
-def test_the_composition_root_refuses_the_corpus_and_the_project_tree() -> None:
+def test_the_composition_root_refuses_the_corpus_and_the_project_tree(
+    test_config: Any,
+) -> None:
     """A deployment cannot hand the Agent the corpus by configuring it away.
 
     The deny set is built where the application is composed, so it cannot be a value
     an operator changes: this is the "retrieval is the path to knowledge" guard
     (ADR 0024), and the test pins it where composition decides it.
     """
-    from types import SimpleNamespace
-
     from dlightrag._compose import agent_confinement_policy
 
-    policy = agent_confinement_policy(
-        SimpleNamespace(working_dir_path=Path("/app/dlightrag_storage"))  # type: ignore[arg-type]
-    )
+    policy = agent_confinement_policy(test_config)
 
-    assert Path("/app/dlightrag_storage") in policy.forbidden
+    assert test_config.working_dir_path in policy.forbidden
     assert Path.cwd() in policy.forbidden
     for tree in policy.forbidden:
         with pytest.raises(ValueError, match="overlaps"):
@@ -253,6 +251,38 @@ def test_the_composition_root_refuses_the_corpus_and_the_project_tree() -> None:
                 forbidden=(tree,),
                 declared=(DeclaredLayer(path=tree / "anything", capability="sneaky"),),
             )
+
+
+def test_the_policy_declares_the_roots_skills_are_loaded_from(test_config: Any) -> None:
+    """The capability declares what it reads, beside the capability (ADR 0024).
+
+    The packaged built-ins are deliberately not declared: the serving process loads
+    them through its own ``load_skill`` tool, and their assets are reachable from
+    inside the confinement wherever the install puts them under the runtime prefix. A
+    source checkout keeps them in the project tree, which the Agent may not see at all.
+    """
+    from dlightrag._compose import agent_confinement_policy
+    from dlightrag.application.settings import agent_skills_root, owner_skills_root
+    from dlightrag.engine.agent.skills import builtin_skills_root
+
+    policy = agent_confinement_policy(test_config)
+
+    declared = {layer.resolved() for layer in policy.declared}
+    assert declared == {agent_skills_root(test_config), owner_skills_root(test_config)}
+    assert all(layer.capability.startswith("skills") for layer in policy.declared)
+    assert Path(str(builtin_skills_root())).resolve() not in declared
+
+
+def test_a_skills_root_inside_the_project_tree_is_refused(test_config: Any, tmp_path: Path) -> None:
+    """A Skill root inside the project tree would expose what the Agent may not see."""
+    from dlightrag._compose import agent_confinement_policy
+    from tests.config_helpers import replace_config
+
+    inside = Path.cwd() / "skills-in-the-project"
+    config = replace_config(test_config, "answer.agent.skills_root", str(inside))
+
+    with pytest.raises(ValueError, match="overlaps"):
+        agent_confinement_policy(config)
 
 
 def test_a_policy_whose_paths_do_not_exist_still_runs_the_command(tmp_path: Path) -> None:
@@ -297,3 +327,51 @@ def test_the_helper_never_writes_plumbing_to_the_command_output(tmp_path: Path) 
     assert completed.returncode == 0
     assert completed.stdout.strip() == "payload"
     assert completed.stderr == ""
+
+
+@pytest.mark.skipif(landlock_abi() < 1, reason="host kernel offers no Landlock")
+@pytest.mark.asyncio
+async def test_a_declared_skill_root_serves_its_script_while_a_sibling_stays_out(
+    tmp_path: Path,
+) -> None:
+    """A declared layer is the point of the declaration: a skill's asset runs.
+
+    The roots a Skill is loaded from are the reason this capability declares anything
+    at all, so the property is that the Agent's own process can execute what a skill
+    points at — and still cannot read a directory nobody declared.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    script = skills / "run.sh"
+    script.write_text("#!/bin/sh\necho skill-ran\n")
+    script.chmod(0o755)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret.txt").write_text("corpus-like bytes")
+    policy = ConfinementPolicy(declared=(DeclaredLayer(path=skills, capability="skills"),))
+    environment = LocalExecutionEnvironment(workspace, confinement=policy.for_workspace(workspace))
+    home, tmp = environment.prepare_process_directories()
+    output = _Output()
+    script_body = (
+        "import pathlib, subprocess\n"
+        f"print(subprocess.run(['sh', {str(script)!r}], capture_output=True, text=True).stdout.strip())\n"
+        "try:\n"
+        f"    pathlib.Path({str(elsewhere / 'secret.txt')!r}).read_text()\n"
+        "except OSError:\n"
+        "    print('DENIED')\n"
+        "else:\n"
+        "    print('READABLE')\n"
+    )
+
+    completed = await environment.run(
+        [sys.executable, "-c", script_body],
+        env=build_child_environment(home=home, tmp=tmp),
+        on_output=output.feed,
+    )
+
+    assert completed.returncode == 0
+    assert "skill-ran" in output.text
+    assert "DENIED" in output.text
+    assert "READABLE" not in output.text
