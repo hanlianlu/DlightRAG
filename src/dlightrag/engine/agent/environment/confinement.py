@@ -254,10 +254,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Apply the policy to this process and exec the command it carries.
 
     This runs in the child, never in the answering process: a policy the kernel
-    rejects costs one Tool call and cannot fail a Run. A kernel with no Landlock is
-    the host's recorded state and stays quiet here; a kernel that offers Landlock
-    and refuses it is an anomaly, so the reason reaches stderr. ``execvp`` keeps the
-    environment the caller already scrubbed, and the restriction survives it.
+    rejects costs one Tool call and cannot fail a Run. Silence is the contract in both
+    cases — a host with no Landlock is recorded once per Run, and a kernel that offers
+    Landlock and refuses it is the one degradation only the deployment's own seccomp
+    and capability setup can see, because a word written here would be read by the
+    model. ``execvp`` keeps the environment the caller already scrubbed, and the
+    restriction survives it.
     """
     rules, command = _parse(list(sys.argv[1:] if argv is None else argv))
     abi = landlock_abi()

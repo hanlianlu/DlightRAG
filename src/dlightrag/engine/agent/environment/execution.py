@@ -87,10 +87,7 @@ class TrustExecutionAdapter:
         if self._closed:
             raise RuntimeError("execution adapter is closed")
         environment = LocalExecutionEnvironment(
-            workspace,
-            confinement=(
-                None if self._confinement is None else self._confinement.for_workspace(workspace)
-            ),
+            workspace, confinement=self._confinement.for_workspace(workspace)
         )
         self._environments.add(environment)
         return environment
