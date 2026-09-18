@@ -14,12 +14,36 @@ have landed: committed spills join `durable_handles`, a write under the reserved
 notes path registers a Run Note, and the compaction summary carries the notes
 field. Live specs name the terms.
 
-The experiment that gates the notes field was run at the seam: forced compaction
-in unit tests asserts the summary carries the handle, a later turn can read the
-path, and the field stays capped. It was not a live-provider run, so "the model
-does read the note back" is structurally true (the request names the
-`read(path=…)` call and the file is there) and not an empirical observation of a
-provider choosing to call it.
+The experiment that gates the notes field has now been run at the seam and against
+a live provider (DeepSeek Flash, the low agent level, seven Runs, about $0.49).
+Measured: a registered note is carried by every later compaction and rendered as
+the call that reads it again (2/2 compactions in the one Run that wrote a note
+before compacting); the note stays bounded (227–3065 bytes against 0.5M–1.8M
+prompt tokens); and a continuation reads it, unprompted — the carry named two
+notes, the new Run opened both, and it appended its own recomputation to one of
+them.
+
+The write side did not hold, and the reason was where the habit landed rather
+than whether it was stated. Across four unsteered Runs and five
+compactions, no Run wrote a note *before* a compaction; two wrote one only as a
+closing summary. `notes/` was the only one of the workspace's
+three planes the Run had to create for itself, so a Run's working state — a stage
+table, in the measured case — went to `tmp/`, which nothing carries, and the
+guidance's trigger, "when a task runs long enough that earlier steps stop being
+visible", is a condition the model cannot observe: it knows neither its own token
+count nor the compaction trigger. A Run told by an accepted Steer to write its
+values before the next search did so on its third turn, and every later
+compaction carried them.
+
+Three follow-ups landed in the change that measured them: the workspace
+pre-creates `notes/` beside `artifacts/` and `tmp/`; the guidance names two
+triggers a model can check for itself and states that `tmp/` is not carried; and
+a note handle names the moment as well as the call while the re-readable
+identities render before the plan they serve. Whether an unprompted Run now
+writes a note when this decision's own admission floor applies — values the next
+turn cannot cheaply re-derive — is the open question the next experiment must
+answer; the fixtures measured so far were arithmetically re-derivable, which is
+the category this decision says a note is not for.
 
 ## Context
 
