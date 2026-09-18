@@ -211,7 +211,7 @@ Live documents to revise with the implementation:
 and [architecture](../architecture.md) (the mode list and the shared-mount note).
 
 Residual risks, recorded rather than solved: on a host without Landlock the Agent
-is unconfined and only the trace and the health bit say so, and a kernel that
+is unconfined and only `agent_shell_confinement` on `/health` and in the Run's trace says so, and a kernel that
 offers Landlock while refusing it to this process is not distinguishable per
 command — that one belongs to the deployment's own seccomp and capability setup,
 which is also the only place it can be seen; the grant that keeps the toolchain
