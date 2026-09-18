@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Dependency constraint policy tests."""
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -439,3 +440,35 @@ def test_manual_e2e_ci_builds_the_gitignored_frontend() -> None:
     assert [commands.index(command) for command in expected] == sorted(
         commands.index(command) for command in expected
     )
+
+
+def test_compose_reader_service_is_a_profiled_second_role() -> None:
+    """The read-only replica is topology, not a hand-assembled docker run.
+
+    A reader is a second process over the same database whose role, port, mounts,
+    config, and healthcheck must be reviewable and reproducible. It stays out of a
+    default `docker compose up` (profile-gated), publishes loopback only, and must
+    never appear in the writer's service definition.
+    """
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+    reader = services["dlightrag-reader"]
+    writer = services["dlightrag-api"]
+
+    assert reader["profiles"] == ["reader"]
+    assert reader["environment"]["DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE"] == "reader"
+    assert reader["environment"]["DLIGHTRAG_STORAGE__POSTGRES__HOST"] == "postgres"
+    assert reader["ports"] == ["127.0.0.1:8102:8100"]
+    assert reader["configs"] == [{"source": "dlightrag_config", "target": "/app/config.yaml"}]
+    assert reader["healthcheck"]["test"] == writer["healthcheck"]["test"]
+    assert "DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE" not in writer["environment"]
+
+    # The role is exercised against the shared corpus root, so a reader must see
+    # the same storage and Answer-workspace mounts as the writer.
+    def mounts(volumes: object) -> list[str]:
+        assert isinstance(volumes, list)
+        return sorted(
+            json.dumps(v, sort_keys=True) if isinstance(v, dict) else str(v) for v in volumes
+        )
+
+    assert mounts(reader["volumes"]) == mounts(writer["volumes"])

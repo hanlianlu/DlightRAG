@@ -127,14 +127,12 @@ A `reader` serves every read surface against the same database and refuses
 corpus writes at acceptance:
 
 ```bash
-docker compose run -d --rm --name dlightrag-reader \
-  -p 127.0.0.1:8102:8100 \
-  -e DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE=reader \
-  dlightrag-api
+docker compose --profile reader up -d dlightrag-reader
 ```
 
-`curl -s localhost:8102/health` answers `service_role: reader`, and an upload in
-Web Files answers `503 This deployment is a read-only replica of the knowledge
+`docker compose --profile reader stop dlightrag-reader` stops it. `curl -s
+localhost:8102/health` answers `service_role: reader`, and an upload in Web Files
+answers `503 This deployment is a read-only replica of the knowledge
 base: it accepts no corpus writes. Send the upload, retry, or delete to a
 writer.` Retry, Delete, and Corpus Reset answer the same way; add a read-only
 corpus mount to serve source downloads. See

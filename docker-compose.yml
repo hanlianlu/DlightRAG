@@ -99,6 +99,52 @@ services:
         condition: service_healthy
     command: ["dlightrag-mcp"]
 
+  # A second, corpus-read-only process over the same database. It serves every
+  # read surface (Web, REST) and refuses corpus writes at acceptance with the
+  # remedy, registering no corpus-mutation executor:
+  #   docker compose --profile reader up -d dlightrag-reader
+  # The corpus root stays writable here because a reader still writes its own
+  # operational state (Runs, events, Web conversations) and Answer workspaces;
+  # corpus writes are refused in the application layer, not by the mount.
+  dlightrag-reader:
+    profiles: [reader]
+    restart: unless-stopped
+    image: dlightrag:local
+    build:
+      context: .
+    ports:
+      - "127.0.0.1:8102:8100"
+    environment:
+      DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE: reader
+      # Compose Service DNS; the native application default remains localhost.
+      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
+      DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
+      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
+    env_file: .env
+    configs:
+      - source: dlightrag_config
+        target: /app/config.yaml
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - dlightrag_data:/app/dlightrag_storage
+      - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
+      - *global-skills-mount
+      - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8100/ready', timeout=3); response.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   postgres:
     restart: unless-stopped
     image: dlightrag-postgres:pg18
