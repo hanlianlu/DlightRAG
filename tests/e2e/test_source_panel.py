@@ -126,7 +126,7 @@ def _inject_answer_with_sources(page, *, image_url: str | None = None) -> None:
     page.wait_for_selector("[aria-current='page']", timeout=10000)
     page.locator(".composer-input").fill("show cited source")
     page.click(".composer-send")
-    page.get_by_role("button", name="Follow up").last.wait_for(timeout=10000)
+    page.get_by_role("button", name="Fork").last.wait_for(timeout=10000)
     page.locator("dl-answer-presentation").last.evaluate(
         """(element, presentation) => {
           element.presentation = presentation;

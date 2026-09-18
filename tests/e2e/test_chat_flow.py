@@ -97,11 +97,13 @@ def test_terminal_answer_exposes_minimal_agent_branch_controls(page):
     page.goto("/web/")
     page.locator(".composer-input").fill("Show controls")
     page.click(".composer-send")
-    page.get_by_role("button", name="Follow up").last.wait_for(timeout=10000)
+    page.get_by_role("button", name="Fork").last.wait_for(timeout=10000)
 
     actions = page.locator('[class*="runActions"]').last
-    assert actions.get_by_role("button", name="Follow up").is_visible()
     assert actions.get_by_role("button", name="Fork").is_visible()
+    # A Follow-Up appends to the Lane tip, which the composer owns; a settled turn
+    # offers only the branch control, whose point is choosing where to branch from.
+    assert actions.get_by_role("button", name="Follow up").count() == 0
     assert actions.get_by_role("button", name="Child agents").count() == 0
 
 
@@ -116,9 +118,9 @@ def test_chat_history_appends_turns(page):
     page.click(".composer-send")
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
     page.wait_for_selector(".app.has-messages", timeout=10000)
-    # One answer at a time: wait for terminal answer controls before submitting
+    # One answer at a time: wait for the terminal branch control before submitting
     # the next query.
-    page.get_by_role("button", name="Follow up").last.wait_for(timeout=10000)
+    page.get_by_role("button", name="Fork").last.wait_for(timeout=10000)
 
     initial_user_messages = page.locator('[class*="userMessageWrapper"]').count()
 
@@ -185,7 +187,7 @@ def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
     page.wait_for_selector(".composer-input", timeout=10000)
     page.locator(".composer-input").fill("What is DlightRAG?")
     page.click(".composer-send")
-    page.get_by_role("button", name="Follow up").last.wait_for(timeout=15000)
+    page.get_by_role("button", name="Fork").last.wait_for(timeout=15000)
 
     replay = page.evaluate(
         """
