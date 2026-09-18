@@ -137,7 +137,7 @@ async def bind_run_workspace(
             epoch=destination,
             workspace=workspace,
             spill_dir=spill,
-            environment=adapter.create(workspace),
+            environment=adapter.create(workspace, owner_id=owner_id),
             notes_degraded=notes_degraded,
         )
     if source_epoch != destination:
@@ -166,7 +166,7 @@ async def bind_run_workspace(
         epoch=destination,
         workspace=workspace,
         spill_dir=spill,
-        environment=adapter.create(workspace),
+        environment=adapter.create(workspace, owner_id=owner_id),
     )
 
 

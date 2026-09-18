@@ -8,8 +8,11 @@ loader never imports or executes Skill code.
 Skills merge in three tiers: packaged built-ins, operator-provisioned global
 skills, then per-owner skills. Publication is the only write channel:
 ``publish_skill`` writes into the caller's owner directory through validation,
-quotas, and an atomic swap; the answer agent's filesystem tools never reach
-these directories.
+quotas, and an atomic swap. Reading is not: a Skill may point at an executable
+asset, so the capability declares the operator-global root and the Run owner's own
+shard to the Execution Environment, which confines every Agent process to the
+Agent Workspace plus those declarations (ADR 0024). Nothing here is ever written
+by an Agent's filesystem tools.
 """
 
 from __future__ import annotations

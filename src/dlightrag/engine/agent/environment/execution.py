@@ -65,7 +65,7 @@ class ExecutionEnvironment(Protocol):
 class ExecutionEnvironmentAdapter(Protocol):
     """Trusted host seam that binds one already-admitted workspace."""
 
-    def create(self, workspace: Path) -> ExecutionEnvironment: ...
+    def create(self, workspace: Path, *, owner_id: str | None = None) -> ExecutionEnvironment: ...
 
     async def aclose(self) -> None: ...
 
@@ -83,11 +83,12 @@ class TrustExecutionAdapter:
         self._environments: WeakSet[LocalExecutionEnvironment] = WeakSet()
         self._closed = False
 
-    def create(self, workspace: Path) -> LocalExecutionEnvironment:
+    def create(self, workspace: Path, *, owner_id: str | None = None) -> LocalExecutionEnvironment:
         if self._closed:
             raise RuntimeError("execution adapter is closed")
         environment = LocalExecutionEnvironment(
-            workspace, confinement=self._confinement.for_workspace(workspace)
+            workspace,
+            confinement=self._confinement.for_workspace(workspace, owner_id=owner_id),
         )
         self._environments.add(environment)
         return environment

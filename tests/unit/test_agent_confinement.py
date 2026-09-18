@@ -263,14 +263,68 @@ def test_the_policy_declares_the_roots_skills_are_loaded_from(test_config: Any) 
     """
     from dlightrag._compose import agent_confinement_policy
     from dlightrag.application.settings import agent_skills_root, owner_skills_root
-    from dlightrag.engine.agent.skills import builtin_skills_root
+    from dlightrag.engine.agent.skills import builtin_skills_root, owner_skill_root
 
     policy = agent_confinement_policy(test_config)
+    alice = {layer.resolved() for layer in policy.for_owner("alice")}
 
-    declared = {layer.resolved() for layer in policy.declared}
-    assert declared == {agent_skills_root(test_config), owner_skills_root(test_config)}
-    assert all(layer.capability.startswith("skills") for layer in policy.declared)
-    assert Path(str(builtin_skills_root())).resolve() not in declared
+    assert alice == {
+        agent_skills_root(test_config),
+        owner_skill_root(owner_skills_root(test_config), "alice"),
+    }
+    assert Path(str(builtin_skills_root())).resolve() not in alice
+
+
+def test_one_owners_skills_are_not_another_owners(test_config: Any) -> None:
+    """Owner publishing is per owner, so the grant is the shard and never the parent.
+
+    Declaring the shared owner root would hand every Run's shell every owner's
+    published skills; the shard is the unit an Agent may see (ADR 0024, owner
+    isolation).
+    """
+    from dlightrag._compose import agent_confinement_policy
+    from dlightrag.application.settings import agent_skills_root, owner_skills_root
+    from dlightrag.engine.agent.skills import owner_skill_root
+
+    policy = agent_confinement_policy(test_config)
+    alice = {layer.resolved() for layer in policy.for_owner("alice")}
+    bob = {layer.resolved() for layer in policy.for_owner("bob")}
+
+    assert alice & bob == {agent_skills_root(test_config)}
+    assert owner_skills_root(test_config) not in alice | bob
+    assert owner_skill_root(owner_skills_root(test_config), "bob") not in alice
+
+
+@pytest.mark.asyncio
+async def test_binding_a_run_grants_only_its_own_owners_skills(
+    test_config: Any, tmp_path: Path
+) -> None:
+    """The binder is where an owner becomes known, so the shard arrives with the Run."""
+    from dlightrag._compose import agent_confinement_policy
+    from dlightrag.application.settings import owner_skills_root
+    from dlightrag.engine.agent.environment.execution import TrustExecutionAdapter
+    from dlightrag.engine.agent.skills import owner_skill_root
+    from dlightrag.engine.answer.workspace import bind_run_workspace
+    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+
+    policy = agent_confinement_policy(test_config)
+    bound = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="alice",
+        run_id="run-alice",
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=InMemoryWorkspaceStore(),
+        execution_adapter=TrustExecutionAdapter(policy),
+    )
+    environment = bound.environment
+    assert isinstance(environment, LocalExecutionEnvironment)
+    confinement = environment._confinement  # pyright: ignore[reportPrivateUsage]
+
+    assert confinement is not None
+    granted = {path for path, _access in confinement.rules}
+    assert owner_skill_root(owner_skills_root(test_config), "alice") in granted
+    assert owner_skill_root(owner_skills_root(test_config), "bob") not in granted
 
 
 def test_a_skills_root_inside_the_project_tree_is_refused(test_config: Any, tmp_path: Path) -> None:

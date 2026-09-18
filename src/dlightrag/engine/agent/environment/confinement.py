@@ -23,7 +23,7 @@ import ctypes
 import json
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -107,21 +107,35 @@ class ConfinementPolicy:
     forbidden: tuple[Path, ...] = ()
     declared: tuple[DeclaredLayer, ...] = ()
     runtime: tuple[Path, ...] = ()
+    #: Layers that depend on who the Run belongs to, resolved when a Run binds. Owner
+    #: publishing is the case: one owner's skills must be readable by that owner's Runs
+    #: and by no other, so the shard is declared per Run rather than once per process.
+    per_owner: Callable[[str], Sequence[DeclaredLayer]] | None = None
 
     def __post_init__(self) -> None:
         for layer in self.declared:
-            resolved = layer.resolved()
-            for forbidden in self.forbidden:
-                refused = forbidden.expanduser().resolve()
-                if (
-                    resolved == refused
-                    or resolved.is_relative_to(refused)
-                    or refused.is_relative_to(resolved)
-                ):
-                    raise ValueError(
-                        f"declared capability layer {layer.path} ({layer.capability}) "
-                        f"overlaps {forbidden}, which the Agent may never see"
-                    )
+            self.refuse(layer.path, layer.capability)
+
+    def refuse(self, path: Path, capability: str) -> None:
+        """Refuse one path a capability intends to serve, and say which tree it hit.
+
+        Composition calls this for every root a capability *may* serve, not only the
+        ones this Run grants: a root nobody declares today is still a root an operator
+        can misconfigure, and this is the line where that fails the process instead of
+        leaking it into one Run.
+        """
+        resolved = path.expanduser().resolve()
+        for forbidden in self.forbidden:
+            refused = forbidden.expanduser().resolve()
+            if (
+                resolved == refused
+                or resolved.is_relative_to(refused)
+                or refused.is_relative_to(resolved)
+            ):
+                raise ValueError(
+                    f"declared capability layer {path} ({capability}) "
+                    f"overlaps {forbidden}, which the Agent may never see"
+                )
 
     def runtime_roots(self) -> tuple[Path, ...]:
         """Return the runtime directories every Agent command needs.
@@ -134,17 +148,27 @@ class ConfinementPolicy:
         roots = self.runtime or (Path(sys.prefix), *map(Path, _RUNTIME_DIRECTORIES))
         return tuple(root for root in roots if root.is_dir())
 
-    def for_workspace(self, workspace: Path) -> WorkspaceConfinement:
+    def for_workspace(
+        self, workspace: Path, *, owner_id: str | None = None
+    ) -> WorkspaceConfinement:
         """Return the grants one Run's processes receive."""
+        for layer in self.for_owner(owner_id):
+            self.refuse(layer.path, layer.capability)
         grants: list[tuple[Path, int]] = [(workspace, _ACCESS_WORKSPACE)]
         grants.extend((root, _ACCESS_RUNTIME) for root in self.runtime_roots())
         if _DEVICES.is_dir():
             grants.append((_DEVICES, _ACCESS_DEVICES))
-        grants.extend((layer.resolved(), _ACCESS_RUNTIME) for layer in self.declared)
+        grants.extend((layer.resolved(), _ACCESS_RUNTIME) for layer in self.for_owner(owner_id))
         merged: dict[Path, int] = {}
         for path, access in grants:
             merged[path] = merged.get(path, 0) | access
         return WorkspaceConfinement(workspace=workspace, rules=tuple(merged.items()))
+
+    def for_owner(self, owner_id: str | None) -> tuple[DeclaredLayer, ...]:
+        """Return the layers this Run's owner adds to the process-wide ones."""
+        if owner_id is None or self.per_owner is None:
+            return self.declared
+        return (*self.declared, *self.per_owner(owner_id))
 
     def state(self) -> str:
         """Return what this host can enforce, for `/health` and a Run's trace."""

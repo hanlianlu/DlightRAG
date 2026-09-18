@@ -11,7 +11,7 @@ from typing import Any
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.opaque_cursor import CursorSecretBox
-from dlightrag.application.skills import skill_read_layers, skills_bundle_factory
+from dlightrag.application.skills import skill_read_layers, skill_roots, skills_bundle_factory
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
@@ -76,10 +76,13 @@ def agent_confinement_policy(config: DlightragConfig) -> ConfinementPolicy:
     trade the property away. Declared layers belong to the capabilities that need
     them and arrive as those capabilities land.
     """
-    return ConfinementPolicy(
+    policy = ConfinementPolicy(
         forbidden=(config.working_dir_path, Path.cwd()),
-        declared=skill_read_layers(config),
+        per_owner=lambda owner_id: skill_read_layers(config, owner_id=owner_id),
     )
+    for path, capability in skill_roots(config):
+        policy.refuse(path, capability)
+    return policy
 
 
 def _compose(config: DlightragConfig) -> _ApplicationComponents:

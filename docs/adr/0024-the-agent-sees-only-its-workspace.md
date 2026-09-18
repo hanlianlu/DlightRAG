@@ -186,9 +186,11 @@ Landing order, one sequence:
    in the model's tool output), the policy that composes the base layer and
    validates declared layers against the deny set, and the wiring at the one place
    the adapter is resolved.
-2. The Skills capability declares its three roots, and the composition root
-   refuses any declared layer that overlaps the corpus working directory or the
-   application tree.
+2. The Skills capability declares the roots it serves — the operator-global root,
+   and the shard of the owner whose Run is binding rather than the shared parent —
+   and the composition root refuses every root it may serve, not only the ones this
+   Run grants, when one overlaps the corpus working directory or the application
+   tree.
 3. Delete the `sandbox` mode: the mode literal, its resolver branch, its error
    type, the four validation sites, and the configuration description. A
    configuration that still names it fails validation; no alias is added.
