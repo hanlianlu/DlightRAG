@@ -176,16 +176,25 @@ last-settled-wins, which suits prose memory and is observable through the row's
 writer and revision — but it is a lost update, not a merge; a deletion is confirmed
 against the plane's current bytes, so a sibling's newer rewrite is never removed by
 the Lane it replaced. Promotion takes the Session row's lock, which serializes the
-budget admission of two Runs of one Session against the newest state. A Run that has
-lost the **Session** fence while still holding its own Run lease can promote once
-more from the Tool batch in flight before its next settlement discovers the loss:
-memory may then be settled by a Run whose answer will not commit, which is the same
-last-settled-wins window. Moving promotion *inside* the settlement transaction is
-rejected as the fix: a refused note would then poison the settlement transaction,
-which turns a memory refusal into a failed Run and breaks the one guarantee this
-decision makes. Requiring the Session fence on promotion is the smaller lever, and
-its cost is that the one-time migration would land a settlement later, because a
-continuation takes the Session fence in its first transaction — after bind. A fork reads memory that may have moved after
+budget admission of two Runs of one Session against the newest state.
+
+**Memory is not fenced by the Session lease, and that is the decision rather than a
+gap.** A Session's own rows — entries, registers, host deltas — are written under
+`lease_run_id` and the fencing epoch, so a worker whose claim was taken over cannot
+append to a Session's durable history. A note is not history: a Run that has lost the
+Session fence while still holding its own Run lease may promote once more from the
+Tool batch in flight, and the successor's next settlement supersedes it, because
+memory is last-settled-wins and a note is prose written to be read again rather than
+a record that must never be lost. Both ways of closing that window cost more than it
+is worth: promoting *inside* the settlement transaction would let a refused note
+poison that transaction and fail the Run, breaking the one guarantee this decision
+makes; requiring the Session fence on promotion would land the one-time migration a
+settlement later, since a continuation takes that fence in its first transaction,
+after bind. The reference harnesses set the proportion — neither fences a session at
+all (Pi is one process appending to one session file; DeepSeek's harness records one
+narrow in-log lock for compaction), because neither has multi-worker durable
+execution — and this decision adopts that proportion for memory while the fence keeps
+doing what it is for on history. A fork reads memory that may have moved after
 its Fork Point. The plane's rows now outlive individual
 Runs, so its bounds and the degradation event are the only guards against memory
 becoming a second transcript. A stateless REST or MCP caller keeps memory across
