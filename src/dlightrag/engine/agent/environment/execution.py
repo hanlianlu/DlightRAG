@@ -103,12 +103,11 @@ def resolve_execution_adapter(
     mode: ExecutionMode,
     *,
     confinement: ConfinementPolicy,
-    trust: ExecutionEnvironmentAdapter | None = None,
 ) -> ExecutionEnvironmentAdapter | None:
-    """Resolve one mode, with no backend discovery and no third state to fall into."""
+    """Resolve one mode: an Agent either has an environment or it does not."""
     if mode == "disabled":
         return None
-    return trust or TrustExecutionAdapter(confinement)
+    return TrustExecutionAdapter(confinement)
 
 
 __all__ = [

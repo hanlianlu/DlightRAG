@@ -346,10 +346,13 @@ roots. Published descriptors and bytes remain owner/run scoped. See
 Execution modes:
 
 - `disabled`: no local execution tools;
-- `trust`: rooted file tools, but Bash retains all host/container filesystem and
-  network authority of the service user; and
-- `sandbox`: fails because this distribution ships no backend; it never
-  downgrades to trust.
+- `trust`: rooted file tools, and every Agent process runs under a kernel-enforced
+  allow-list — the Agent Workspace plus the runtime the toolchain needs and the
+  layers capabilities declare. The corpus tree, the deployment's configuration, the
+  project tree, and other Runs' workspaces stay outside that view
+  ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md)). Bash keeps the service
+  user's network authority, which is the deployment's to enforce with a network
+  policy rather than a path list.
 
 Root checks are not a shell sandbox. Outbound MCP tools now belong to owner-scoped
 Connections, with immutable Run pins and a pending-effect/Run/Child lease gate.

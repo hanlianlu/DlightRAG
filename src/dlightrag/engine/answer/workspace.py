@@ -19,6 +19,7 @@ from typing import BinaryIO
 from dlightrag.engine.agent.environment import (
     ExecutionEnvironment,
     ExecutionEnvironmentAdapter,
+    ExecutionMode,
     TrustExecutionAdapter,
 )
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
@@ -678,7 +679,7 @@ class AgentWorkspaceReclaimer:
 
 def agent_workspace_reclaimer(
     *,
-    execution_environment: str,
+    execution_environment: ExecutionMode,
     workspace_root: str | None,
 ) -> AgentWorkspaceReclaimer | None:
     """Return a reclaimer when a workspace root is configured.
@@ -707,8 +708,6 @@ def resolve_workspace_root(
     enabled configuration owns — disabled does not invent it, because that path was
     never this process's workspace.
     """
-    if execution_environment not in {"disabled", "trust"}:
-        raise ValueError(f"unknown agent execution mode: {execution_environment}")
     raw = (workspace_root or "").strip()
     if not raw or raw in {"null", "None"}:
         if execution_environment == "disabled":

@@ -166,7 +166,7 @@ def _workspace_root(
     execution = env.get("DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT") or agent.get(
         "execution_environment"
     )
-    if str(execution or "disabled").strip() not in {"trust", "sandbox"}:
+    if str(execution or "disabled").strip() != "trust":
         return None
     configured = env.get("DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT") or agent.get("workspace_root")
     if configured is None or str(configured).strip() in {"", "null", "None", "~"}:

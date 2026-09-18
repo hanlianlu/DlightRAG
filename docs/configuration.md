@@ -708,8 +708,10 @@ workspace. A note the plane cannot hold is refused for that note alone — never
 truncated and never evicted — and the writing Run records
 `session_notes_degraded` with the reason while its answer proceeds.
 
-`trust` runs rooted tools as the service user; Bash still has process-level
-filesystem and network access. `disabled` means no workspace root for any mode:
+`trust` runs rooted tools as the service user, and confines every Agent process to
+its Agent Workspace: the corpus tree, the deployment's configuration, the project
+tree, and other Runs' workspaces stay outside the process view, while Bash keeps the
+service user's network authority for the deployment to enforce. `disabled` means no workspace root for any mode:
 no path tools, no artifacts, and no Session notes. Reclamation still runs
 when a root is configured, so a deployment that turns execution off continues to
 delete the trees earlier enabled runs left behind. `attach_artifact` is available

@@ -6,11 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dlightrag.engine.agent.environment import (
-    WORKSPACE_MAX_BYTES,
-    resolve_execution_adapter,
-)
-from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
+from dlightrag.engine.agent.environment import WORKSPACE_MAX_BYTES, ExecutionMode
 
 DEFAULT_LOCAL_WORKSPACE_ROOT = Path.home() / ".dlightrag" / "agent_workspaces"
 
@@ -22,19 +18,11 @@ def default_local_workspace_root() -> Path:
 
 def validate_agent_execution(
     *,
-    execution_environment: str,
+    execution_environment: ExecutionMode,
     workspace_root: str | None,
     working_dir: str,
 ) -> Path | None:
-    """Validate the execution mode before any path is created."""
-    if execution_environment not in {"disabled", "trust"}:
-        raise ValueError(f"unknown agent execution mode: {execution_environment}")
-    resolve_execution_adapter(  # validates the mode before creating any paths
-        execution_environment,  # type: ignore[arg-type]
-        # This call validates the mode; the policy a Run actually runs under is the
-        # composition root's, and it arrives at the executor that runs commands.
-        confinement=ConfinementPolicy(),
-    )
+    """Resolve the Agent Workspace root one enabled mode may use, or None."""
     if execution_environment == "disabled":
         return None
     raw = (workspace_root or "").strip()

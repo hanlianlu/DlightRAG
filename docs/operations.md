@@ -90,7 +90,7 @@ Workspaces in a running deployment. Neither delegates to the other.
   a database must use compatible model roles, execution mode, MCP allowlists,
   and Answer policy.
 - Mount one shared POSIX `deployment.working_dir` for corpus artifacts. With
-  trusted/sandboxed Research, mount one shared RWX
+  trusted Research, mount one shared RWX
   `answer.agent.workspace_root` on every worker (Compose:
   `/home/app/.dlightrag/agent_workspaces`).
 - Graceful shutdown fenced-requeues unfinished work; crash recovery waits for

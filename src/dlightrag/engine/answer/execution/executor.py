@@ -16,6 +16,7 @@ from dlightrag_memory import Memory, MemoryStore
 
 from dlightrag.engine.agent.environment import (
     ExecutionEnvironment,
+    ExecutionMode,
     SearchToolchain,
     resolve_execution_adapter,
 )
@@ -807,7 +808,7 @@ class AnswerExecutor:
         settings: AnswerExecutorSettings,
         telemetry: Telemetry,
         model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
-        execution_environment: str = "trust",
+        execution_environment: ExecutionMode = "trust",
         shell_confinement: ConfinementPolicy,
         workspace_root: str | None = None,
         session_notes_limits: SessionNotesLimits | None = None,
@@ -838,7 +839,7 @@ class AnswerExecutor:
         self._settings = settings
         self._telemetry = telemetry
         self._model_fingerprint_for_role = model_fingerprint_for_role
-        self._execution_environment = execution_environment
+        self._execution_environment: ExecutionMode = execution_environment
         self._workspace_root_setting = workspace_root
         self._session_notes_limits = session_notes_limits or DEFAULT_SESSION_NOTES_LIMITS
         self._search_toolchain = search_toolchain
