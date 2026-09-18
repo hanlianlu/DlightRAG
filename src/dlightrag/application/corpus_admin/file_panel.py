@@ -11,7 +11,6 @@ from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspac
 
 FILE_PANEL_PAGE_DEFAULT_LIMIT = 50
 FILE_PANEL_PAGE_MAX_LIMIT = 100
-PUBLIC_FAILURE_DIAGNOSTIC_MAX_CHARS = 512
 _GENERIC_PUBLIC_FAILURE_DIAGNOSTIC = "Document processing failed."
 # Arbitrary parser/provider/storage exception text is not a safe public
 # protocol. Only diagnostics authored by this application and containing no
@@ -256,6 +255,5 @@ __all__ = [
     "FilePanelPageRequest",
     "FilePanelRowPage",
     "ProcessedFileRow",
-    "PUBLIC_FAILURE_DIAGNOSTIC_MAX_CHARS",
     "public_failure_diagnostic",
 ]

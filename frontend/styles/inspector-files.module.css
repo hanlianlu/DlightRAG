@@ -102,30 +102,6 @@
 }
 
 
-/* === Progress Bar === */
-
-.progress-bar-track {
-    margin: var(--space-tight) var(--space-related);
-    height: var(--space-inline);
-    background: var(--color-border-subtle);
-    border-radius: var(--radius-highlight);
-    overflow: hidden;
-}
-
-.progress-bar-fill {
-    height: 100%;
-    background: var(--color-progress-fill);
-    border-radius: var(--radius-highlight);
-    transition: width 0.5s ease;
-}
-
-.progress-label {
-    padding: 0 var(--space-related) var(--space-tight);
-    font-size: var(--font-size-caption);
-    color: var(--color-text-muted);
-    text-align: center;
-}
-
 /* === Ingest Queue Notice === */
 
 .ingest-queue-notice {

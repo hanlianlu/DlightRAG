@@ -104,6 +104,7 @@ from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.continuation_handles import compose_session_notes
 from dlightrag.engine.answer.errors import (
+    ROUTING_FAILED,
     AnswerInputError,
     AnswerResourceAdmissionError,
     CurrentImagePayloadError,
@@ -1356,7 +1357,7 @@ class AnswerExecutor:
     ) -> ResolvedMode:
         record = await self._store.load_routing(owner_id=session.owner_id, run_id=session.run_id)
         if record is None:
-            raise RunExecutionError("routing_failed", "Routing record is missing.")
+            raise RunExecutionError(ROUTING_FAILED, "Routing record is missing.")
         if record.resolved_mode:
             return _require_resolved_mode(record.resolved_mode)
         try:
@@ -1365,7 +1366,7 @@ class AnswerExecutor:
                 valid_modes=frozenset(record.valid_modes),
             )
         except ValueError as exc:
-            raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
+            raise RunExecutionError(ROUTING_FAILED, "Answer mode routing failed.") from exc
         if decided is None:
             decided = _require_resolved_mode(
                 await self._route_with_model(
@@ -1419,7 +1420,7 @@ class AnswerExecutor:
             )
             if "research" in valid_modes:
                 return "research"
-            raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
+            raise RunExecutionError(ROUTING_FAILED, "Answer mode routing failed.") from exc
 
     async def _compact_fast_history_if_needed(
         self,
@@ -3190,7 +3191,7 @@ async def _close_execution_resources(
 def _require_resolved_mode(value: str | None) -> ResolvedMode:
     if value == "fast" or value == "research":
         return value
-    raise RunExecutionError("routing_failed", "Answer mode routing failed.")
+    raise RunExecutionError(ROUTING_FAILED, "Answer mode routing failed.")
 
 
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:

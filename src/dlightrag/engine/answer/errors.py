@@ -18,7 +18,6 @@ ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 INVALID_TOOL_CONFIGURATION = "invalid_tool_configuration"
-MODEL_CAPABILITY_UNAVAILABLE = "MODEL_CAPABILITY_UNAVAILABLE"
 ANSWER_RESOURCE_INVALID = "ANSWER_RESOURCE_INVALID"
 UNSUPPORTED_ANSWER_MODE = "unsupported_answer_mode"
 UNSUPPORTED_RESOURCE_CAPABILITY = "unsupported_resource_capability"
@@ -75,16 +74,6 @@ class AnswerInputOverflowError(AnswerInputError):
 
     def __init__(self, public_message: str) -> None:
         super().__init__(public_message, error_kind=ANSWER_INPUT_OVERFLOW)
-
-
-class AnswerModelCapabilityError(AnswerInputError):
-    """The request requires a capability absent from its resolved model profile."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "The configured query model cannot use the tools required for this answer request.",
-            error_kind=MODEL_CAPABILITY_UNAVAILABLE,
-        )
 
 
 class UnsupportedAnswerModeError(AnswerInputError):
@@ -169,7 +158,6 @@ __all__ = [
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "INVALID_TOOL_CONFIGURATION",
-    "MODEL_CAPABILITY_UNAVAILABLE",
     "UNSUPPORTED_ANSWER_MODE",
     "UNSUPPORTED_RESOURCE_CAPABILITY",
     "REASONING_CONTROL_REJECTED_MESSAGE",
@@ -177,7 +165,6 @@ __all__ = [
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",
-    "AnswerModelCapabilityError",
     "AnswerResourceAdmissionError",
     "CurrentDocumentParseError",
     "CurrentImagePayloadError",

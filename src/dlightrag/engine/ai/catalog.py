@@ -45,19 +45,6 @@ class _JSONObject:
         self.pairs = pairs
 
 
-class UnknownModelProfileError(ValueError):
-    """Raised by callers that require catalogue facts instead of fallback facts."""
-
-    def __init__(self, fingerprint: ModelFingerprint) -> None:
-        self.fingerprint = fingerprint
-        endpoint = fingerprint.endpoint_fingerprint or "default"
-        super().__init__(
-            "No trusted model profile for "
-            f"provider={fingerprint.provider!r}, model={fingerprint.model!r}, "
-            f"endpoint={endpoint[:12]!r}; configure or publish an explicit catalogue entry"
-        )
-
-
 @dataclass(frozen=True, slots=True)
 class CatalogueEntry:
     """One complete endpoint profile; runtime overlays never patch fields."""
@@ -587,7 +574,6 @@ __all__ = [
     "MODEL_CATALOGUE",
     "MODEL_CATALOG_REVISION",
     "ModelCatalogue",
-    "UnknownModelProfileError",
     "catalogue_overlay_data",
     "catalogue_overlay_revision",
     "current_model_catalog_revision",

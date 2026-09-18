@@ -176,12 +176,6 @@ def model_dump_json_safe(value: Any) -> Any:
     return value
 
 
-def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
-    if value is None:
-        return None
-    return model_dump_json_safe(value)
-
-
 __all__ = [
     "ANSWER_EFFORT_LEVELS",
     "offered_answer_efforts",
@@ -200,6 +194,5 @@ __all__ = [
     "QueryRequestContract",
     "RetrieveRequestContract",
     "conversation_history_as_dicts",
-    "dump_optional_list",
     "model_dump_json_safe",
 ]
