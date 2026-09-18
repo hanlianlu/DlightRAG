@@ -142,20 +142,20 @@ class ConfinementPolicy:
 
         The interpreter's prefixes are among them because the toolchain lives in
         them: a Run that cannot execute Python cannot do the work it was given. Both
-        prefixes are needed. A virtual environment keeps ``sys.prefix`` (the venv)
-        beside ``sys.base_prefix`` (the installation it borrows an interpreter and a
-        standard library from), and Landlock resolves the binary before deciding, so
-        a venv whose base prefix sits outside ``/usr`` — how CI installs Python — was
-        refused at exec, and could not import its standard library either. The
-        resolved interpreter's own directory covers a binary installed even further
-        away, since the kernel checks that path and not the symlink used to launch
-        it. That the installed package also sits under a prefix is the price of a
-        working toolchain, and ADR 0024 records it.
+        prefixes are needed, and the base prefix is what covers the binary itself: a
+        virtual environment keeps ``sys.prefix`` (the venv, and the installed package
+        inside it) while its ``bin/python`` is a symlink into ``sys.base_prefix``,
+        which is also where the standard library lives. Landlock resolves that
+        symlink before deciding, so granting only the venv refused the exec on hosts
+        whose base interpreter sits outside ``/usr`` — how CI installs Python — and
+        left ``import json`` unreadable. One root, not a directory per binary: the
+        interpreter is inside its base prefix by construction, and the test asserts
+        exactly that. That the installed package also sits under a prefix is the price
+        of a working toolchain, and ADR 0024 records it.
         """
         roots = self.runtime or (
             Path(sys.prefix),
             Path(sys.base_prefix),
-            Path(sys.executable).resolve().parent,
             *map(Path, _RUNTIME_DIRECTORIES),
         )
         return tuple(root for root in roots if root.is_dir())

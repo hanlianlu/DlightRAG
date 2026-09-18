@@ -499,6 +499,12 @@ def test_the_runtime_grants_cover_the_interpreter_and_its_standard_library() -> 
 
     interpreter = Path(sys.executable).resolve()
     stdlib = Path(os.__file__).resolve()
+    # Why granting the base prefix is enough, and a directory per binary is not
+    # needed: the interpreter a virtual environment launches resolves into the
+    # installation it borrows from, which is also where the standard library sits.
+    assert interpreter.is_relative_to(Path(sys.base_prefix).resolve()), (
+        f"{interpreter} is outside {sys.base_prefix}, so the runtime roots are incomplete"
+    )
     for needed, why in ((interpreter, "executed"), (stdlib, "imported")):
         assert any(needed.is_relative_to(root) for root in resolved_roots), (
             f"{needed} is {why} by every confined command but no runtime root grants it: {roots}"
