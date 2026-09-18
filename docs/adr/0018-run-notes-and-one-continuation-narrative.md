@@ -110,6 +110,14 @@ a staged task that establishes page numbers early and needs them two compactions
   earlier fixture, whose values had to be gathered sequentially and quoted later, saw an
   unsteered Run write its note on turn six. So the habit fires on the shape the guidance
   names — a value a later step depends on — and not on a Run that never stops searching.
+  **The shortfall is accepted as measured, and the write side will not be strengthened.**
+  A framework sentence at compaction time was considered and refused: it would arrive
+  after the values were already lost, and it cannot make a retrieval sweep cheaper,
+  because what such a Run re-searches for is the source's own citable text. Reading a
+  note costs a Tool call while the summary is already in the request, and an Evidence
+  handle for retrieved corpus text carries no `read(resource_id=…)` identity, so a note
+  is the model's own paraphrase rather than the authority. The deterministic half is what
+  this decision owes, and it holds on every run of both experiments.
 - **The confinement changed the model's behaviour as intended**: that Run tried four
   direct routes into the corpus (a bare filename, a `local://` uri, an absolute path, a
   parsed-element id). All four were refused by the workspace-rooted tools, and it went
