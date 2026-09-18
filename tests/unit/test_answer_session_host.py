@@ -838,6 +838,7 @@ async def test_fast_turn_accepts_user_and_reservation_then_settles_assistant() -
     assistant = settled.tree.ancestry()[-1]
     assert isinstance(assistant, AssistantMessageEntry)
     assert assistant.acceptance_id == "run-1"
+    assert assistant.usage == {"input_tokens": 2, "output_tokens": 1}
     assert assistant.provider_state is None
     settled_replay = await host.accept(
         session_id=session_id,
@@ -1881,3 +1882,45 @@ async def test_ensure_session_lane_refuses_a_projection_from_another_branch() ->
 
     assert raised.value.kind == "agent_session_conflict"
     assert "recorded Fork Point" in raised.value.public_message
+
+
+@pytest.mark.asyncio
+async def test_a_recorded_usage_record_is_stored_as_counters() -> None:
+    """The Entry records counters, so the next Run can bill against them.
+
+    The Run trace holds a usage record whose counters nest under ``usage_details``
+    with child and inclusive breakdowns beside them. Recording that record raised
+    TypeError in every reader that measured the previous prompt, which failed a
+    Research continuation on a Fast lane while assembling turn 0, before its first
+    provider call.
+    """
+    store = MemoryAgentSessionRepository[None]()
+
+    async def load_settled_result() -> dict[str, Any] | None:
+        return None
+
+    session_id = SessionId.new()
+    host = await _fast_host(store, session_id, load_settled_result=load_settled_result)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-1",
+        idempotency_key="submission-1",
+        content="question",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-1",
+        content="answer",
+        usage={
+            "usage_details": {"prompt_tokens": 18_211, "prompt_cache_hit_tokens": 384},
+            "child_usage_details": {"prompt_tokens": 900},
+            "inclusive_usage_details": {"prompt_tokens": 19_111},
+        },
+    )
+
+    settled = await store.load(session_id)
+    assistant = settled.tree.ancestry()[-1]
+    assert isinstance(assistant, AssistantMessageEntry)
+    assert assistant.usage == {"prompt_tokens": 18_211, "prompt_cache_hit_tokens": 384}

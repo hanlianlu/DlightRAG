@@ -42,6 +42,7 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionCommit,
     TransactionLeaseLost,
 )
+from dlightrag.engine.ai.providers.base import usage_counters
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.errors import RunExecutionError
 
@@ -490,7 +491,11 @@ class FastSessionHost:
             parent_entry_id=head.value.entry_id,
             content=content,
             stop_reason="stop",
-            usage=usage,
+            # An Entry records the counters themselves: the caller may hand over the
+            # Run's usage record (counters under `usage_details`, with child and
+            # inclusive breakdowns beside them), and a reader that took that record for
+            # the provider's payload used to fail the next Run while assembling turn 0.
+            usage=usage_counters(usage),
             cost=cost,
             acceptance_id=reservation_id,
         )

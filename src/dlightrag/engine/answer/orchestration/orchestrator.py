@@ -66,7 +66,7 @@ from dlightrag.engine.ai.capacity import (
 )
 from dlightrag.engine.ai.media import decode_image_base64, detect_image_mime
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
-from dlightrag.engine.ai.providers.base import provider_input_tokens
+from dlightrag.engine.ai.providers.base import provider_input_tokens, usage_counters
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.compaction import CompactionCoordinator
@@ -1227,10 +1227,7 @@ def _last_provider_input_tokens(snapshot: Any) -> int | None:
     for entry in reversed(list(ancestry)):
         if not isinstance(entry, AssistantMessageEntry):
             continue
-        usage = entry.usage if isinstance(entry.usage, Mapping) else None
-        billed = provider_input_tokens(
-            {str(key): int(value) for key, value in usage.items()} if usage else None
-        )
+        billed = provider_input_tokens(usage_counters(entry.usage))
         if billed is not None:
             return billed
     return None

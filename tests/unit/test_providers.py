@@ -16,6 +16,7 @@ from dlightrag.engine.ai.providers.base import (
     provider_cache_hit_tokens,
     provider_input_tokens,
     provider_status_code,
+    usage_counters,
 )
 from dlightrag.engine.ai.providers.base import (
     is_provider_reasoning_rejection as provider_reasoning_rejection,
@@ -1733,6 +1734,32 @@ class TestProviderUsageDialects:
 
     def test_a_reported_zero_hit_is_a_measured_miss(self) -> None:
         assert provider_cache_hit_tokens({"prompt_cache_hit_tokens": 0}) == 0
+
+    def test_a_recorded_usage_record_yields_the_counters_it_wraps(self) -> None:
+        """A Run's usage record is not the provider's payload, but it is a usage shape.
+
+        The record nests the counters under ``usage_details`` with child and inclusive
+        breakdowns beside them; a Session Entry has recorded one since Fast turns began
+        committing, and a reader that took it for provider counters failed the Run.
+        """
+        record = {
+            "usage_details": {"prompt_tokens": 18_211, "prompt_cache_hit_tokens": 384},
+            "child_usage_details": {"prompt_tokens": 900},
+            "inclusive_usage_details": {"prompt_tokens": 19_111},
+        }
+
+        assert usage_counters(record) == {"prompt_tokens": 18_211, "prompt_cache_hit_tokens": 384}
+        assert provider_input_tokens(usage_counters(record)) == 18_211
+        assert provider_cache_hit_tokens(usage_counters(record)) == 384
+
+    def test_counters_pass_through_and_unstated_usage_stays_unstated(self) -> None:
+        assert usage_counters({"prompt_tokens": 4_096}) == {"prompt_tokens": 4_096}
+        assert usage_counters({"prompt_tokens": 4_096, "extra": {"deep": 1}}) == {
+            "prompt_tokens": 4_096,
+            "extra.deep": 1,
+        }
+        assert usage_counters(None) is None
+        assert usage_counters({}) is None
 
 
 class TestReasoningControlRejection:

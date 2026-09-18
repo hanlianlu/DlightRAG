@@ -195,6 +195,20 @@ def usage_mapping(usage: Any) -> dict[str, Any]:
     return {k: v for k, v in raw.items() if not (isinstance(k, str) and k.startswith("_"))}
 
 
+def usage_counters(usage: Any) -> dict[str, int] | None:
+    """Return flat token counters from any shape a usage payload arrives in.
+
+    Three shapes reach the same readers: a provider's own usage payload, the
+    product's per-Run usage record (the counters under ``usage_details`` with child
+    and inclusive breakdowns beside them), and a Session Entry's recorded usage,
+    which is whichever of the two its writer had. Unwrapping here is what keeps a
+    Fast turn's record from being read as if it were the provider's counters.
+    """
+    if isinstance(usage, Mapping) and isinstance(usage.get("usage_details"), Mapping):
+        return usage_to_dict(usage["usage_details"])
+    return usage_to_dict(usage)
+
+
 def provider_input_tokens(usage: Mapping[str, int] | None) -> int | None:
     """Return the total prompt tokens one provider billed, or None when unstated.
 

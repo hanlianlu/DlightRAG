@@ -43,6 +43,7 @@ from dlightrag.engine.ai.providers.base import (
     provider_cache_hit_tokens,
     provider_input_tokens,
     provider_status_code,
+    usage_counters,
 )
 from dlightrag.engine.ai.telemetry import Telemetry, bounded_telemetry_text
 from dlightrag.engine.ai.tokens import estimate_tokens
@@ -177,7 +178,7 @@ def _record_prompt_cache(trace: dict[str, Any], assistant: AssistantTurn) -> Non
     regression reaches logs instead of only the provider's bill.
     """
     usage = assistant.usage_details if isinstance(assistant.usage_details, Mapping) else None
-    counts = {str(key): int(value) for key, value in (usage or {}).items()}
+    counts = usage_counters(usage) or {}
     billed = provider_input_tokens(counts)
     if billed is None:
         return
@@ -1416,12 +1417,10 @@ def _usage_from_operation(*, snapshot: Any, operation: Any) -> dict[str, int] | 
 def _usage_from_snapshot_entries(*, snapshot_entries: Any) -> dict[str, int] | None:
     total: dict[str, int] = {}
     for entry in snapshot_entries or ():
-        usage = getattr(entry, "usage", None)
-        if not isinstance(usage, Mapping):
-            continue
-        for key, value in usage.items():
-            if isinstance(value, int):
-                total[key] = total.get(key, 0) + value
+        # An Entry records whichever usage shape its writer had; a Fast turn's record
+        # is unwrapped rather than dropped, so its tokens still count here.
+        for key, value in (usage_counters(getattr(entry, "usage", None)) or {}).items():
+            total[key] = total.get(key, 0) + value
     return total or None
 
 

@@ -1,14 +1,17 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer Host coordination around the deep AgentSessionRuntime."""
 
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-from dlightrag.engine.agent.session.ids import ProjectionId, SessionId
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry
+from dlightrag.engine.agent.session.ids import EntryId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.projection import ContextProjection
 from dlightrag.engine.agent.skills import SkillsBundle
 from dlightrag.engine.agent.tools.files import ResourceReadRequest
@@ -17,6 +20,11 @@ from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.continuation_handles import MAX_SPILL_HANDLES
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.orchestration.orchestrator import _last_provider_input_tokens
+from dlightrag.engine.answer.research.runtime import (
+    _record_prompt_cache,
+    _usage_from_snapshot_entries,
+)
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import _resource_rows
@@ -606,3 +614,95 @@ def _one_passage_ledger() -> EvidenceLedger:
         ]
     )
     return evidence
+
+
+# ---------------------------------------------------------------------------
+# The provider-input anchor reads an Entry's recorded usage
+# ---------------------------------------------------------------------------
+
+#: The shape a Fast turn records: the Run's usage record, not the provider's payload.
+_RECORDED_USAGE_RECORD: dict[str, Any] = {
+    "usage_details": {
+        "prompt_tokens": 18_211,
+        "completion_tokens": 41,
+        "prompt_cache_hit_tokens": 384,
+    },
+    "child_usage_details": {"prompt_tokens": 900},
+    "inclusive_usage_details": {"prompt_tokens": 19_111},
+}
+
+
+def _assistant_entry(usage: object) -> AssistantMessageEntry:
+    return AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=SessionId.new(),
+        timestamp=datetime.now(UTC),
+        content="108",
+        stop_reason="stop",
+        usage=usage,  # type: ignore[arg-type]
+    )
+
+
+def test_anchor_reads_counters_out_of_a_recorded_usage_record() -> None:
+    """Regression: a Fast turn's usage record must not fail the next Request.
+
+    The record nests the counters under ``usage_details`` with child and inclusive
+    breakdowns beside them. Reading it as if it were the provider's own payload raised
+    ``TypeError: int() argument must be ... not 'dict'`` while assembling turn 0 of any
+    Research continuation on a lane whose previous turn was Fast, which surfaced as a
+    ``runtime_fault`` and failed the Run before its first provider call.
+    """
+    snapshot = SimpleNamespace(entries=[_assistant_entry(_RECORDED_USAGE_RECORD)])
+
+    assert _last_provider_input_tokens(snapshot) == 18_211
+
+
+def test_anchor_reads_flat_provider_counters_and_skips_absent_usage() -> None:
+    flat = SimpleNamespace(
+        entries=[_assistant_entry({"prompt_tokens": 4_096, "total_tokens": 4_200})]
+    )
+    assert _last_provider_input_tokens(flat) == 4_096
+
+    # No recorded usage is an anchor that is simply unknown, never a failure.
+    absent = SimpleNamespace(entries=[_assistant_entry(None)])
+    assert _last_provider_input_tokens(absent) is None
+
+
+def test_prompt_cache_notice_reads_a_recorded_usage_record() -> None:
+    """A turn whose usage arrives as a record still reports its cache counters.
+
+    The same record shape that broke the anchor is read by the cache notice, which
+    turned a bookkeeping line into a Run failure; it must aggregate counters instead.
+    """
+    trace: dict[str, Any] = {}
+    _record_prompt_cache(
+        trace,
+        AssistantTurn(
+            text="answer",
+            stop_reason="stop",
+            tool_calls=(),
+            # The reading under test is exactly the shape the type forbids.
+            usage_details=dict(_RECORDED_USAGE_RECORD),  # type: ignore[arg-type]
+        ),
+    )
+
+    assert trace["prompt_cache"]["turns"] == 1
+    assert trace["prompt_cache"]["prompt_tokens"] == 18_211
+    assert trace["prompt_cache"]["cache_hit_tokens"] == 384
+
+
+def test_recorded_child_usage_is_summed_not_dropped() -> None:
+    """A Fast turn's recorded usage still counts toward the child usage total.
+
+    Summing integers out of the recorded usage silently skipped the nested counters, so
+    a Run that followed a Fast turn under-reported what it spent.
+    """
+    total = _usage_from_snapshot_entries(
+        snapshot_entries=[_assistant_entry(_RECORDED_USAGE_RECORD)],
+    )
+
+    assert total == {
+        "prompt_tokens": 18_211,
+        "completion_tokens": 41,
+        "prompt_cache_hit_tokens": 384,
+    }
