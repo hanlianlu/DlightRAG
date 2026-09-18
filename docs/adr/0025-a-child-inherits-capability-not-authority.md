@@ -8,7 +8,8 @@ cross.
 
 ## Status
 
-Proposed. It refines the Child Session contract in
+Accepted and implemented. Every slice under [Consequences](#consequences) has
+landed and passed a two-axis review (Standards and Spec) before the next one began. It refines the Child Session contract in
 [domain language](../domain-language.md#current-execution-and-workspace-concepts)
 and complements [ADR 0024](0024-the-agent-sees-only-its-workspace.md): a child's
 processes are confined by the same policy as its parent's, because the working

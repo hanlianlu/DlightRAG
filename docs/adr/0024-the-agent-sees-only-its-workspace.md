@@ -8,7 +8,8 @@ distribution never shipped.
 
 ## Status
 
-Proposed. Supersedes the `sandbox` clause of the Execution Environment term in
+Accepted and implemented. Every slice under [Consequences](#consequences) has
+landed and passed a two-axis review (Standards and Spec) before the next one began. Supersedes the `sandbox` clause of the Execution Environment term in
 [domain language](../domain-language.md#current-execution-and-workspace-concepts)
 and the mode list in [Configuration](../configuration.md); it does not touch
 [ADR 0020](0020-uniform-environment-fast-inert-workspace.md)'s uniformity

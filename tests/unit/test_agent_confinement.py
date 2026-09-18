@@ -443,3 +443,40 @@ async def test_a_declared_skill_root_serves_its_script_while_a_sibling_stays_out
     assert "skill-ran" in output.text
     assert "DENIED" in output.text
     assert "READABLE" not in output.text
+
+
+@pytest.mark.skipif(landlock_abi() < 1, reason="host kernel offers no Landlock")
+@pytest.mark.asyncio
+async def test_the_corpus_is_readable_by_the_process_and_denied_to_its_children(
+    test_config: Any, tmp_path: Path
+) -> None:
+    """The property the whole decision exists for, on one path, from both sides.
+
+    A deployment is trusted: the serving process opens the corpus it serves. The Agent
+    it hosts is not: the same path is outside every grant its children receive, which is
+    what makes retrieval the Agent's path to knowledge instead of a suggestion
+    (ADR 0024).
+    """
+    corpus = test_config.working_dir_path
+    corpus.mkdir(parents=True, exist_ok=True)
+    source = corpus / "source.txt"
+    source.write_text("corpus bytes")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = ConfinementPolicy(forbidden=(corpus,))
+    environment = LocalExecutionEnvironment(workspace, confinement=policy.for_workspace(workspace))
+    home, tmp = environment.prepare_process_directories()
+    output = _Output()
+
+    completed = await environment.run(
+        [sys.executable, "-c", _probe_script(source)],
+        env=build_child_environment(home=home, tmp=tmp),
+        on_output=output.feed,
+    )
+
+    # The application reads what it serves…
+    assert source.read_text() == "corpus bytes"
+    # …and its Agent's own process cannot.
+    assert completed.returncode == 0
+    assert "DENIED" in output.text
+    assert "READABLE" not in output.text
