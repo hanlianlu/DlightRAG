@@ -77,13 +77,13 @@ def test_chat_answer_shows_text(page):
     page.locator(".composer-input").fill("test")
     page.click(".composer-send")
 
-    # Wait for text content to appear in any AI message
+    # Wait for the text this test asserts on, not merely for a non-empty streaming
+    # tail: the fake provider streams in two tokens, so a length check can win the
+    # race against the first token that carries the asserted phrase.
     page.wait_for_function(
         """
-        () => {
-          const msgs = document.querySelectorAll('[class*="aiMessageContent"]');
-          return Array.from(msgs).some(m => m.textContent.trim().length > 0);
-        }
+        () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
+          .some((message) => message.textContent.includes('DlightRAG'))
         """,
         timeout=15000,
     )

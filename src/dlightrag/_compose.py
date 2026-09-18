@@ -16,6 +16,7 @@ from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.runtime.workspace import SessionNotesLimits
 
 logger = logging.getLogger(__name__)
 
@@ -373,6 +374,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         execution_environment=config.answer.agent.execution_environment,
         workspace_root=config.answer.agent.workspace_root,
+        session_notes_limits=SessionNotesLimits(
+            max_count=config.answer.agent.session_notes.max_count,
+            max_bytes=config.answer.agent.session_notes.max_bytes,
+        ),
         search_toolchain=search_toolchain,
         working_dir=config.deployment.working_dir,
         memory_store=memory_store,

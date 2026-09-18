@@ -180,8 +180,12 @@ budget admission of two Runs of one Session against the newest state. A Run that
 lost the **Session** fence while still holding its own Run lease can promote once
 more from the Tool batch in flight before its next settlement discovers the loss:
 memory may then be settled by a Run whose answer will not commit, which is the same
-last-settled-wins window, and moving promotion inside the settlement transaction is
-the fix if that window ever matters. A fork reads memory that may have moved after
+last-settled-wins window. Moving promotion *inside* the settlement transaction is
+rejected as the fix: a refused note would then poison the settlement transaction,
+which turns a memory refusal into a failed Run and breaks the one guarantee this
+decision makes. Requiring the Session fence on promotion is the smaller lever, and
+its cost is that the one-time migration would land a settlement later, because a
+continuation takes the Session fence in its first transaction — after bind. A fork reads memory that may have moved after
 its Fork Point. The plane's rows now outlive individual
 Runs, so its bounds and the degradation event are the only guards against memory
 becoming a second transcript. A stateless REST or MCP caller keeps memory across

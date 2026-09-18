@@ -249,6 +249,37 @@ async def test_a_refused_promotion_reports_a_reason_and_keeps_the_note_for_retry
 
 
 @pytest.mark.asyncio
+async def test_the_planes_bounds_come_from_the_deployment(tmp_path: Path) -> None:
+    """``answer.agent.session_notes`` bounds one Session's memory, not a Run's copy.
+
+    The plane admits against the configured bound: a note that fits the default and
+    not the deployment's is refused by name, and the working copy keeps it.
+    """
+    from dlightrag.engine.runtime.workspace import SessionNotesLimits
+
+    workspace = tmp_path / "workspace"
+    (workspace / "notes").mkdir(parents=True)
+    (workspace / "notes" / "plan.md").write_bytes(b"x" * 2_048)
+    store = InMemoryWorkspaceStore()
+    plane = SessionNotesPlane(
+        store=store,
+        session_id=SESSION,
+        limits=SessionNotesLimits(max_count=8, max_bytes=1_024),
+    )
+    plane.rebind(workspace=workspace, records=())
+
+    assert await plane.reconcile() == SESSION_NOTES_BUDGET_REFUSED
+    assert store.session_notes == {}
+
+    # A note inside the deployment's bound lands.
+    (workspace / "notes" / "plan.md").write_bytes(b"x" * 512)
+    assert await plane.reconcile() is None
+    assert [note.relative_path for note in await store.load_session_notes(session_id=SESSION)] == [
+        "notes/plan.md"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_symlinked_notes_root_is_refused_rather_than_followed(tmp_path: Path) -> None:
     """A linked notes root neither reads outside the workspace nor wipes the plane.
 
@@ -349,7 +380,7 @@ async def test_a_plane_that_refuses_the_write_degrades(tmp_path: Path) -> None:
     (workspace / "notes" / "plan.md").write_bytes(b"value")
     store = InMemoryWorkspaceStore()
 
-    async def lease_lost(*, session_id: str, upserts, deletes):
+    async def lease_lost(*, session_id: str, upserts, deletes, limits):
         from dlightrag.engine.runtime.workspace import SessionNotesPromotion
 
         return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
@@ -367,7 +398,7 @@ async def test_a_plane_that_raises_degrades(tmp_path: Path) -> None:
     (workspace / "notes" / "plan.md").write_bytes(b"value")
     store = InMemoryWorkspaceStore()
 
-    async def exploding(*, session_id: str, upserts, deletes):
+    async def exploding(*, session_id: str, upserts, deletes, limits):
         raise RuntimeError("write refused")
 
     store.promote_session_notes = exploding  # type: ignore[method-assign]
@@ -381,7 +412,7 @@ def test_an_unreadable_working_copy_degrades(tmp_path: Path, monkeypatch) -> Non
     (workspace / "notes").mkdir(parents=True)
     (workspace / "notes" / "plan.md").write_bytes(b"value")
 
-    def exploding(path: Path):
+    def exploding(path: Path, limits: object = None):
         raise OSError("working copy is gone")
 
     monkeypatch.setattr("dlightrag.engine.answer.session_notes.read_working_copy_notes", exploding)

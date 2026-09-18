@@ -680,6 +680,9 @@ answer:
     execution_environment: trust   # disabled | trust | sandbox
     workspace_root: null
     child_guidance_timeout_seconds: 300  # default ask_parent expiry; 1–86400
+    session_notes:                 # durable Agent memory per Agent Session
+      max_count: 64                # 1–1024 notes
+      max_bytes: 262144            # 1024–16 MiB total; a larger note is refused by name
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
     owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
     disabled_builtin_skills: []    # packaged Skill names only
@@ -696,6 +699,14 @@ answer:
   conversations:
     active_html_preview_enabled: true
 ```
+
+Session notes are the Agent's durable memory: one authoritative set per Agent
+Session, materialized into every Run's own working copy and promoted back at Tool
+settlement (ADR 0022). `max_count` and `max_bytes` bound that set for the whole
+Session, independently of `publication.workspace_max_bytes`, which bounds one Run's
+workspace. A note the plane cannot hold is refused for that note alone — never
+truncated and never evicted — and the writing Run records
+`session_notes_degraded` with the reason while its answer proceeds.
 
 `trust` runs rooted tools as the service user; Bash still has process-level
 filesystem and network access. `disabled` means no workspace root for any mode:

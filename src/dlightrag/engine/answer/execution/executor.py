@@ -252,7 +252,12 @@ from dlightrag.engine.runtime.settlements import (
     EffectHostUpdate,
     InventoryPathRecord,
 )
-from dlightrag.engine.runtime.workspace import SessionNoteRecord, WorkspaceStore
+from dlightrag.engine.runtime.workspace import (
+    DEFAULT_SESSION_NOTES_LIMITS,
+    SessionNoteRecord,
+    SessionNotesLimits,
+    WorkspaceStore,
+)
 
 logger = logging.getLogger(__name__)
 _FAST_COMPACTION_ATTEMPT_LIMIT = 3
@@ -802,6 +807,7 @@ class AnswerExecutor:
         model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
         execution_environment: str = "trust",
         workspace_root: str | None = None,
+        session_notes_limits: SessionNotesLimits | None = None,
         search_toolchain: SearchToolchain | None = None,
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
@@ -831,6 +837,7 @@ class AnswerExecutor:
         self._model_fingerprint_for_role = model_fingerprint_for_role
         self._execution_environment = execution_environment
         self._workspace_root_setting = workspace_root
+        self._session_notes_limits = session_notes_limits or DEFAULT_SESSION_NOTES_LIMITS
         self._search_toolchain = search_toolchain
         self._working_dir = working_dir
         self._memory_store = memory_store
@@ -1166,11 +1173,12 @@ class AnswerExecutor:
                     run_root(workspace_root, session.owner_id, request.parent_run_id)
                 ),
                 records=registered,
+                limits=self._session_notes_limits,
             )
             if not notes:
                 return ()
             result = await workspace_store.promote_session_notes(
-                session_id=session_id, upserts=notes
+                session_id=session_id, upserts=notes, limits=self._session_notes_limits
             )
         except Exception:
             logger.warning("Could not migrate a parent Run's notes", exc_info=True)
@@ -1213,7 +1221,11 @@ class AnswerExecutor:
         notes: tuple[SessionNoteRecord, ...] = ()
         plane: SessionNotesPlane | None = None
         if workspace_store is not None and session_id:
-            plane = SessionNotesPlane(store=workspace_store, session_id=session_id)
+            plane = SessionNotesPlane(
+                store=workspace_store,
+                session_id=session_id,
+                limits=self._session_notes_limits,
+            )
             # A fresh epoch materializes the Session's notes; a recovered one already
             # holds what this Run had, and must not be materialized over.
             if session.workspace_epoch is None:
@@ -1253,7 +1265,9 @@ class AnswerExecutor:
             # attempt states what its own epoch holds (so its first request names
             # notes it can actually open), and any change this Run already made is
             # promoted at its next settlement rather than silently reverted.
-            records, reason = read_working_copy_or_reason(bound.workspace)
+            records, reason = read_working_copy_or_reason(
+                bound.workspace, self._session_notes_limits
+            )
             binding = SessionNotesBinding(
                 records=records,
                 degraded_reason=(binding.degraded_reason or reason or bound.notes_degraded),

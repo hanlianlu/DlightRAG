@@ -25,11 +25,11 @@ from dlightrag.engine.answer.continuation_handles import (
 )
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
+    DEFAULT_SESSION_NOTES_LIMITS,
     SESSION_NOTES_BUDGET_REFUSED,
     SESSION_NOTES_LEASE_LOST,
-    SESSION_NOTES_MAX_BYTES,
-    SESSION_NOTES_MAX_COUNT,
     SessionNoteRecord,
+    SessionNotesLimits,
     WorkspaceStore,
     note_digest,
 )
@@ -61,7 +61,10 @@ class WorkingCopyNotes:
     degraded_reason: str | None = None
 
 
-def read_working_copy_notes(workspace: Path) -> WorkingCopyNotes:
+def read_working_copy_notes(
+    workspace: Path,
+    limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
+) -> WorkingCopyNotes:
     """Return the notes this Run's working copy holds, by path, and what it skipped.
 
     A note that is a symbolic link, a non-file, unreadable, or larger than the plane's
@@ -92,7 +95,7 @@ def read_working_copy_notes(workspace: Path) -> WorkingCopyNotes:
                     continue
                 if not path.is_file():
                     continue
-                if path.stat().st_size > SESSION_NOTES_MAX_BYTES:
+                if path.stat().st_size > limits.max_bytes:
                     oversized.append(relative)
                     continue
                 records.append(SessionNoteRecord(relative_path=relative, content=path.read_bytes()))
@@ -118,6 +121,7 @@ def read_legacy_notes(
     *,
     source_workspace: Path | None,
     records: Sequence[InventoryPathRecord],
+    limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
 ) -> tuple[SessionNoteRecord, ...]:
     """Read one legacy parent Run's registered notes for the one-time migration.
 
@@ -135,9 +139,9 @@ def read_legacy_notes(
             continue
         if len(record.relative_path) > MAX_SESSION_NOTE_PATH_CHARS:
             continue
-        if len(selected) >= SESSION_NOTES_MAX_COUNT:
+        if len(selected) >= limits.max_count:
             break
-        if total_bytes + record.size_bytes > SESSION_NOTES_MAX_BYTES:
+        if total_bytes + record.size_bytes > limits.max_bytes:
             break
         path = source_workspace / record.relative_path
         try:
@@ -156,10 +160,13 @@ def read_legacy_notes(
     return tuple(selected)
 
 
-def read_working_copy_safely(workspace: Path) -> WorkingCopyNotes:
+def read_working_copy_safely(
+    workspace: Path,
+    limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
+) -> WorkingCopyNotes:
     """Return a working copy read that never raises: a failure is a typed reason."""
     try:
-        return read_working_copy_notes(workspace)
+        return read_working_copy_notes(workspace, limits)
     except OSError:
         logger.warning("Could not read the Run's notes working copy", exc_info=True)
         return WorkingCopyNotes(degraded_reason=SESSION_NOTES_WORKING_COPY_UNREADABLE)
@@ -167,9 +174,10 @@ def read_working_copy_safely(workspace: Path) -> WorkingCopyNotes:
 
 def read_working_copy_or_reason(
     workspace: Path,
+    limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
 ) -> tuple[tuple[SessionNoteRecord, ...], str | None]:
     """Return a working copy's notes, or the reason the Run holds no memory from it."""
-    read = read_working_copy_safely(workspace)
+    read = read_working_copy_safely(workspace, limits)
     reason = read.degraded_reason
     if reason is None and read.oversized:
         reason = SESSION_NOTES_BUDGET_REFUSED
@@ -200,10 +208,12 @@ class SessionNotesPlane:
         store: WorkspaceStore,
         session_id: str,
         workspace: Path | None = None,
+        limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
     ) -> None:
         self._store = store
         self._session_id = session_id
         self._workspace = workspace
+        self._limits = limits
         self._baseline: dict[str, str] = {}
 
     def rebind(self, *, workspace: Path, records: Sequence[SessionNoteRecord]) -> None:
@@ -238,6 +248,7 @@ class SessionNotesPlane:
                 session_id=self._session_id,
                 upserts=upserts,
                 deletes=deletes,
+                limits=self._limits,
             )
         except Exception:
             logger.warning("Could not promote Session notes", exc_info=True)
@@ -277,7 +288,7 @@ class SessionNotesPlane:
         workspace = self._workspace
         if workspace is None:
             return None
-        read = read_working_copy_safely(workspace)
+        read = read_working_copy_safely(workspace, self._limits)
         if read.degraded_reason is not None:
             return read.degraded_reason
         current = read.records

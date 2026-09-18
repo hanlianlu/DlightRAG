@@ -288,6 +288,39 @@ class ArtifactPublicationConfig(BaseModel):
     active_html_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
 
 
+class SessionNotesConfig(BaseModel):
+    """Bounds on the durable memory one Agent Session keeps.
+
+    Memory belongs to the Session (ADR 0022), so these bound the Session's notes
+    plane rather than any Run's workspace: a note outlives the Run that wrote it, and
+    the plane stays small enough to be memory rather than a second transcript. A note
+    that does not fit is refused for that note alone — never truncated, never evicted.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_count: int = Field(
+        default=64,
+        ge=1,
+        le=1_024,
+        description=(
+            "How many notes one Agent Session's plane holds. The compaction summary "
+            "names at most eight of them, so a larger plane keeps memory that later "
+            "turns can still read with read(path=...) without spending prompt budget."
+        ),
+    )
+    max_bytes: int = Field(
+        default=256 * 1024,
+        ge=1_024,
+        le=16 * 1024 * 1024,
+        description=(
+            "Total bytes one Agent Session's notes may hold. A note larger than this "
+            "whole budget can never be remembered: it is refused by name on the Run's "
+            "trace and stays in the Run's own working copy."
+        ),
+    )
+
+
 class AgentExecutionConfig(BaseModel):
     """Optional Agent execution; sandbox requires a trusted adapter extension."""
 
@@ -331,6 +364,7 @@ class AgentExecutionConfig(BaseModel):
         le=86_400,
         description="Default expiry for a durable ask_parent request.",
     )
+    session_notes: SessionNotesConfig = Field(default_factory=SessionNotesConfig)
     workspace_root: str | None = Field(
         default=None,
         description=(

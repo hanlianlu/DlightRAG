@@ -66,6 +66,29 @@ def test_defaults_preserve_runtime_contract(tmp_path: Path) -> None:
     assert config.input_dir_path == tmp_path / "inputs"
 
 
+def test_session_notes_bounds_are_configurable_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Memory bounds ride the canonical config, with the ADR's defaults and a floor."""
+    from dlightrag.application.config import SessionNotesConfig
+
+    defaults = DlightragConfig(_env_file=None)
+    assert defaults.answer.agent.session_notes == SessionNotesConfig(
+        max_count=64, max_bytes=256 * 1024
+    )
+
+    monkeypatch.setenv("DLIGHTRAG_ANSWER__AGENT__SESSION_NOTES__MAX_COUNT", "8")
+    monkeypatch.setenv("DLIGHTRAG_ANSWER__AGENT__SESSION_NOTES__MAX_BYTES", "4096")
+    tuned = DlightragConfig(_env_file=None)
+    assert tuned.answer.agent.session_notes.max_count == 8
+    assert tuned.answer.agent.session_notes.max_bytes == 4096
+
+    with pytest.raises(ValidationError):
+        SessionNotesConfig(max_count=0)
+    with pytest.raises(ValidationError):
+        SessionNotesConfig(max_bytes=16)  # below the floor: a note could never fit
+
+
 def test_nested_environment_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DLIGHTRAG_STORAGE__POSTGRES__HOST", "db.internal")
     monkeypatch.setenv("DLIGHTRAG_MODELS__EMBEDDING__DIM", "768")

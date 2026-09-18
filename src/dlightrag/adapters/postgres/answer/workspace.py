@@ -12,6 +12,7 @@ from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
+    DEFAULT_SESSION_NOTES_LIMITS,
     SESSION_NOTES_BUDGET_REFUSED,
     SESSION_NOTES_LEASE_LOST,
     CommittedSpillRecord,
@@ -21,6 +22,7 @@ from dlightrag.engine.runtime.workspace import (
     HandoffResult,
     InventoryReplaceResult,
     SessionNoteRecord,
+    SessionNotesLimits,
     SessionNotesPromotion,
     _validate_spill_page_limit,
     note_digest,
@@ -158,12 +160,13 @@ class PGWorkspaceStore:
         session_id: str,
         upserts: Sequence[SessionNoteRecord],
         deletes: Sequence[str] = (),
+        limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
     ) -> SessionNotesPromotion:
         """Promote notes under this Run's lease, refusing what the plane cannot hold.
 
-        The plane's budget is the Session's, so admission is decided inside the same
-        transaction that reads it: a note that does not fit is refused for that note
-        alone, and nothing older is evicted to make room.
+        The plane's budget is the Session's — and configurable — so admission is decided
+        inside the same transaction that reads it: a note that does not fit is refused
+        for that note alone, and nothing older is evicted to make room.
         """
         refused_paths = tuple(
             note.relative_path for note in upserts if not validate_note_path(note.relative_path)
@@ -190,6 +193,7 @@ class PGWorkspaceStore:
                     existing=existing,
                     upserts=admissible,
                     deletes=deletes,
+                    limits=limits,
                 )
                 deleted = 0
                 for path in deletes:
