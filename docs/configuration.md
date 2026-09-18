@@ -677,7 +677,7 @@ answer image count is clamped to the query model's discovered capability.
 ```yaml
 answer:
   agent:
-    execution_environment: trust   # disabled | trust | sandbox
+    execution_environment: trust   # disabled | trust
     workspace_root: null
     child_guidance_timeout_seconds: 300  # default ask_parent expiry; 1–86400
     session_notes:                 # durable Agent memory per Agent Session
@@ -715,8 +715,9 @@ when a root is configured, so a deployment that turns execution off continues to
 delete the trees earlier enabled runs left behind. `attach_artifact` is available
 only to the parent Research Session; Fast and Child Sessions cannot authorize
 publication.
-This distribution has no sandbox backend, so selecting `sandbox` fails rather
-than downgrading.
+`trust` confines every Agent process to its Agent Workspace. Isolation stronger than
+the host kernel belongs to the environment the application is deployed in, so there is
+no third mode and selecting `sandbox` fails configuration rather than downgrading.
 
 An explicit workspace root must be absolute, must not overlap
 `deployment.working_dir`, and must be the same shared RWX path on every worker.

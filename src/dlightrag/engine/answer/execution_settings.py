@@ -8,7 +8,6 @@ from pathlib import Path
 
 from dlightrag.engine.agent.environment import (
     WORKSPACE_MAX_BYTES,
-    ExecutionEnvironmentAdapter,
     resolve_execution_adapter,
 )
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
@@ -26,17 +25,15 @@ def validate_agent_execution(
     execution_environment: str,
     workspace_root: str | None,
     working_dir: str,
-    sandbox_adapter: ExecutionEnvironmentAdapter | None = None,
 ) -> Path | None:
-    """Validate disabled/trust/sandbox without silently downgrading sandbox."""
-    if execution_environment not in {"disabled", "trust", "sandbox"}:
+    """Validate the execution mode before any path is created."""
+    if execution_environment not in {"disabled", "trust"}:
         raise ValueError(f"unknown agent execution mode: {execution_environment}")
     resolve_execution_adapter(  # validates the mode before creating any paths
         execution_environment,  # type: ignore[arg-type]
         # This call validates the mode; the policy a Run actually runs under is the
         # composition root's, and it arrives at the executor that runs commands.
         confinement=ConfinementPolicy(),
-        sandbox=sandbox_adapter,
     )
     if execution_environment == "disabled":
         return None
@@ -47,7 +44,7 @@ def validate_agent_execution(
         root = Path(raw).expanduser()
         if not root.is_absolute():
             raise ValueError(
-                "agent.workspace_root must be an absolute path when execution is trust or sandbox"
+                "agent.workspace_root must be an absolute path when execution is trust"
             )
     root.mkdir(parents=True, exist_ok=True)
     working = Path(working_dir).expanduser().resolve()

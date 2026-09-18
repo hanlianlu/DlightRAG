@@ -376,7 +376,7 @@ _Avoid_: Connection Generation, Fencing Epoch
 ### Current execution and workspace concepts
 
 **Execution Environment**:
-The adapter behind exactly three modes: `disabled`, host-trusted `trust`, and `sandbox`. Trust grants the Agent the host user's process and network authority, so evidence-tool guidance cannot enforce network egress. Sandbox is the only seam that may enforce egress policy and has an explicit unavailable failure unless trusted host code supplies a backend.
+The adapter behind exactly two modes: `disabled` and `trust`. Trust runs the Agent's processes in the host user's authority **confined to its Agent Workspace**: the corpus, the deployment's configuration, the project tree, and other Runs' workspaces are outside the process view, while the toolchain's runtime stays readable. The allow-list is code, capabilities declare the layers they need, and one that overlaps the corpus or the project tree fails composition. Network egress is the deployment's to enforce, because a path list cannot enforce it.
 _Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
 
 **Agent Skill**:

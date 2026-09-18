@@ -214,9 +214,13 @@ fetches use owner-scoped content-addressed blobs so recovery does not re-fetch
 or cross owner boundaries. They never become corpus documents, chunks, vectors,
 BM25 rows, or KG data.
 
-Agent execution is `disabled`, `trust`, or `sandbox`. `trust` exposes rooted
-file tools but Bash retains host/network capability. This distribution has no
-sandbox backend, so `sandbox` fails instead of downgrading. Skills are discovered
+Agent execution is `disabled` or `trust`. `trust` exposes rooted file tools and
+confines every Agent process to its Agent Workspace: the corpus, the deployment's
+configuration, the project tree, and other Runs' workspaces stay outside the process
+view, while the toolchain's runtime stays readable and Bash keeps network authority
+for the deployment to enforce. A mode stronger than the host kernel belongs to the
+environment the application is deployed in, so the retired `sandbox` name fails
+configuration rather than selecting a mode. Skills are discovered
 from packaged built-ins, the configured global root (default
 `~/.dlightrag/skills`), and the viewer's own published skills under the
 per-owner root (default `~/.dlightrag/owner_skills`), and loaded progressively.
@@ -373,7 +377,7 @@ DDL.
 
 Every process that serves corpus images/downloads must mount one shared POSIX
 `deployment.working_dir` at the same absolute path. Every process executing
-trusted/sandboxed Research must also mount one shared RWX
+trusted Research must also mount one shared RWX
 `answer.agent.workspace_root`; it must not overlap the corpus working directory.
 The deployment view intentionally omits the separately configured global and
 per-owner Skills mounts. Writer migrations must run before readers start.

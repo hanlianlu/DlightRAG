@@ -322,7 +322,7 @@ class SessionNotesConfig(BaseModel):
 
 
 class AgentExecutionConfig(BaseModel):
-    """Optional Agent execution; sandbox requires a trusted adapter extension."""
+    """Optional Agent execution: no environment, or one confined to its workspace."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -350,12 +350,13 @@ class AgentExecutionConfig(BaseModel):
             raise ValueError("search tool paths containing directories must be absolute")
         return value
 
-    execution_environment: Literal["disabled", "trust", "sandbox"] = Field(
+    execution_environment: Literal["disabled", "trust"] = Field(
         default="trust",
         description=(
-            "disabled | trust | sandbox. Default trust runs the rooted local "
-            "adapter; set disabled to expose no path or Bash tools. sandbox "
-            "requires an installed adapter and never downgrades."
+            "disabled | trust. Default trust runs the rooted local adapter, which "
+            "confines every Agent process to its Agent Workspace; set disabled to "
+            "expose no path or Bash tools. Isolation stronger than the host kernel "
+            "belongs to the environment the application is deployed in."
         ),
     )
     child_guidance_timeout_seconds: int = Field(
@@ -368,7 +369,7 @@ class AgentExecutionConfig(BaseModel):
     workspace_root: str | None = Field(
         default=None,
         description=(
-            "Absolute Agent Workspace root. When trust or sandbox and unset, "
+            "Absolute Agent Workspace root. When trust and unset, "
             "defaults to ~/.dlightrag/agent_workspaces. Multi-host deployments "
             "must set the same absolute path on every worker."
         ),

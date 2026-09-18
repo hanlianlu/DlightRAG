@@ -23,7 +23,6 @@ from dlightrag.engine.agent.environment.execution import (
     ExecutionEnvironment,
     ExecutionEnvironmentAdapter,
     ExecutionMode,
-    SandboxUnavailableError,
     TrustExecutionAdapter,
     resolve_execution_adapter,
 )
@@ -52,7 +51,6 @@ __all__ = [
     "PathRejected",
     "FD_MIN_VERSION",
     "RG_MIN_VERSION",
-    "SandboxUnavailableError",
     "SearchToolBinary",
     "SearchToolUnavailable",
     "SearchToolchain",

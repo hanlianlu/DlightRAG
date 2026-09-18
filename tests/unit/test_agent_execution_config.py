@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.application.config import AgentExecutionConfig, DlightragConfig
-from dlightrag.engine.agent.environment import SandboxUnavailableError
 from dlightrag.engine.answer.execution_settings import (
     default_local_workspace_root,
     validate_agent_execution,
@@ -59,13 +58,16 @@ def test_trust_rejects_a_relative_root(tmp_path: Path) -> None:
         )
 
 
-def test_sandbox_without_adapter_fails_explicitly(tmp_path: Path) -> None:
-    with pytest.raises(SandboxUnavailableError, match="requires a configured sandbox adapter"):
-        validate_agent_execution(
-            execution_environment="sandbox",
-            workspace_root=str(tmp_path / "sandbox"),
-            working_dir=str(tmp_path / "corpus"),
-        )
+def test_the_retired_sandbox_mode_is_refused_with_no_alias() -> None:
+    """Stronger-than-the-kernel isolation left the application, so the name is gone.
+
+    A configuration that still names it fails validation rather than selecting a mode
+    that does nothing, and no alias accepts it in its place (ADR 0024).
+    """
+    with pytest.raises(ValidationError, match="execution_environment"):
+        AgentExecutionConfig.model_validate({"execution_environment": "sandbox"})
+    with pytest.raises(ValidationError, match="execution_environment"):
+        AgentExecutionConfig.model_validate({"execution_environment": "isolated"})
 
 
 def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:

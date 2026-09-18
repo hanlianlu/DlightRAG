@@ -1,9 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Execution modes and the trusted adapter boundary.
 
-The kernel defines the seam but provides only the explicitly trusted local
-adapter. ``sandbox`` never falls back to host execution: deployments must
-supply a sandbox adapter or startup fails.
+A Run's Agent either has an environment or it does not. The kernel defines the seam
+and ships the local adapter, which confines every Agent process to its Agent
+Workspace under the deployment's policy; isolation stronger than the host kernel is
+the environment the application is deployed in, not a mode (ADR 0024).
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from dlightrag.engine.agent.environment.local import (
     ProcessOutputSink,
 )
 
-type ExecutionMode = Literal["disabled", "trust", "sandbox"]
+type ExecutionMode = Literal["disabled", "trust"]
 
 
 class ExecutionEnvironment(Protocol):
@@ -98,34 +99,22 @@ class TrustExecutionAdapter:
         await asyncio.gather(*(environment.aclose() for environment in tuple(self._environments)))
 
 
-class SandboxUnavailableError(RuntimeError):
-    """The operator selected sandbox mode without installing a backend."""
-
-
 def resolve_execution_adapter(
     mode: ExecutionMode,
     *,
     confinement: ConfinementPolicy,
     trust: ExecutionEnvironmentAdapter | None = None,
-    sandbox: ExecutionEnvironmentAdapter | None = None,
 ) -> ExecutionEnvironmentAdapter | None:
-    """Resolve one mode without implicit downgrade or backend discovery."""
+    """Resolve one mode, with no backend discovery and no third state to fall into."""
     if mode == "disabled":
         return None
-    if mode == "trust":
-        return trust or TrustExecutionAdapter(confinement)
-    if sandbox is None:
-        raise SandboxUnavailableError(
-            "agent execution mode 'sandbox' requires a configured sandbox adapter"
-        )
-    return sandbox
+    return trust or TrustExecutionAdapter(confinement)
 
 
 __all__ = [
     "ExecutionEnvironment",
     "ExecutionEnvironmentAdapter",
     "ExecutionMode",
-    "SandboxUnavailableError",
     "TrustExecutionAdapter",
     "resolve_execution_adapter",
 ]

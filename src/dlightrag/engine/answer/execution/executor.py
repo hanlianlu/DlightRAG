@@ -858,7 +858,7 @@ class AnswerExecutor:
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
-        if execution_environment not in {"disabled", "trust", "sandbox"}:
+        if execution_environment not in {"disabled", "trust"}:
             raise ValueError(f"unknown agent execution mode: {execution_environment}")
         self._shell_confinement = shell_confinement
         self._execution_adapter = resolve_execution_adapter(
@@ -1216,9 +1216,6 @@ class AnswerExecutor:
             execution_environment=self._execution_environment,
             workspace_root=self._workspace_root_setting,
             working_dir=self._working_dir,
-            sandbox_adapter=(
-                self._execution_adapter if self._execution_environment == "sandbox" else None
-            ),
         )
         if root is None:
             return None, SessionNotesBinding(), None

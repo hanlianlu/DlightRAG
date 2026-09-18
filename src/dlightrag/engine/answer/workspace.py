@@ -707,7 +707,7 @@ def resolve_workspace_root(
     enabled configuration owns — disabled does not invent it, because that path was
     never this process's workspace.
     """
-    if execution_environment not in {"disabled", "trust", "sandbox"}:
+    if execution_environment not in {"disabled", "trust"}:
         raise ValueError(f"unknown agent execution mode: {execution_environment}")
     raw = (workspace_root or "").strip()
     if not raw or raw in {"null", "None"}:
