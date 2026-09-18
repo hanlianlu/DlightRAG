@@ -117,7 +117,10 @@ def test_run_note_handle_names_the_path_call_and_not_a_frozen_digest() -> None:
     """
     handle = run_note_handle(_inventory("notes/plan.md"))
 
-    assert handle == ("[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')")
+    assert handle == (
+        "[note] notes/plan.md (1240 bytes) — "
+        "re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
+    )
     assert "c" * 64 not in handle
 
 
@@ -133,7 +136,9 @@ def test_compose_keeps_inventory_order_bounds_the_list_and_skips_directories() -
     notes = compose_run_notes(records)
 
     assert len(notes) == MAX_RUN_NOTES
-    assert notes[0] == ("[note] notes/a.md (1240 bytes) — re-read with read(path='notes/a.md')")
+    assert notes[0] == (
+        "[note] notes/a.md (1240 bytes) — re-read with read(path='notes/a.md') before a step that needs a value this summary does not state"
+    )
     assert all("artifacts" not in note and "readme" not in note for note in notes)
 
 
@@ -141,7 +146,7 @@ def test_a_note_name_that_needs_quoting_still_renders_a_call_that_parses() -> No
     """A name may hold a quote; a call the model cannot reproduce is worse than none."""
     handle = run_note_handle(_inventory('notes/say "hello".md'))
 
-    assert handle.endswith("""re-read with read(path='notes/say "hello".md')""")
+    assert """re-read with read(path='notes/say "hello".md')""" in handle
 
 
 def test_an_absurd_note_path_is_not_named_at_all() -> None:
@@ -153,7 +158,9 @@ def test_an_absurd_note_path_is_not_named_at_all() -> None:
 
     notes = compose_run_notes(records)
 
-    assert notes == ["[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"]
+    assert notes == [
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
+    ]
 
 
 def test_the_reserved_directory_the_prompt_teaches_is_the_one_the_rule_reads() -> None:

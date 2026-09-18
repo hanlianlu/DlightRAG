@@ -38,12 +38,14 @@ self-contained. Do not invent resource ids.\
 """
 
 _RUN_NOTE_GUIDANCE = """\
-When a task runs long enough that earlier steps stop being visible, write the \
-conclusions the next steps depend on into `notes/` inside your workspace: \
-decisions taken, exact paths and identifiers, numbers and error messages you \
-cannot cheaply re-derive. The framework carries those notes across compaction \
-and into a follow-up, so a note is how work outlives its own transcript. Write \
-conclusions, not a running log.\
+Before a step that uses a value you established earlier — a number, a path, an id, \
+a page or table number — write that value into `notes/` inside your workspace, with \
+where it came from and any choice you made where sources disagree. Do the same before \
+you look something up a second time. The framework carries those notes across \
+compaction and into a follow-up, and a compaction names each one with the call that \
+reads it again, so a note outlives your transcript for less than re-deriving it \
+costs. `tmp/` is scratch the framework does not carry: a result a later step needs \
+belongs in `notes/`. Write conclusions, not a running log.\
 """
 
 _PROFILE_MEMORY_GUIDANCE = """\

@@ -87,10 +87,18 @@ def run_note_handle(record: InventoryPathRecord) -> str:
     The path is rendered with its repr for the same reason the spill handle is: a
     name may hold a quote, and a call the model cannot reproduce is worse than no
     call.
+
+    The moment is named as well as the call. A handle that only states the capability
+    leaves the reader to decide when a re-read is worth it, and a live Research Run
+    measured that decision: two compactions named the note and the Run re-derived the
+    values with fresh searches instead of reading them. Naming the moment the read is
+    for costs one clause and points at exactly the step where a value the summary does
+    not state is needed.
     """
     return (
         f"[note] {record.relative_path} ({record.size_bytes} bytes) — "
-        f"re-read with read(path={record.relative_path!r})"
+        f"re-read with read(path={record.relative_path!r}) before a step that needs a "
+        f"value this summary does not state"
     )
 
 

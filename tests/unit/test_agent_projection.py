@@ -84,7 +84,7 @@ class TestCompactionSummary:
                 '[spill] spill_read_ab12 (4096 bytes) — re-read with read(resource_id="spill_read_ab12")'
             ],
             run_notes=[
-                "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
+                "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
             ],
         ).canonical_json()
 
@@ -104,7 +104,7 @@ class TestCompactionSummary:
         summary = CompactionSummary(
             goal="g",
             run_notes=[
-                '[note] notes/plan.md (1240 bytes) — re-read with read(path="notes/plan.md")'
+                '[note] notes/plan.md (1240 bytes) — re-read with read(path="notes/plan.md") before a step that needs a value this summary does not state'
             ],
         ).canonical_json()
 
@@ -113,6 +113,30 @@ class TestCompactionSummary:
         assert "Run Notes (re-readable, not evidence):" in rendered
         assert "  - [note] notes/plan.md (1240 bytes)" in rendered
         assert "{" not in rendered
+
+    def test_re_readable_handles_render_before_the_plan_they_serve(self) -> None:
+        """A step that needs a value the summary omits reads the handle while planning.
+
+        The live experiment this ordering answers: a Run was told twice that a note
+        held its values and re-derived them with fresh searches both times, because the
+        plan was written before the call that reads the note was seen.
+        """
+        summary = CompactionSummary(
+            goal="Keep the decision.",
+            next_steps="3. Divide the Stage 1 number by the Stage 2 number.",
+            run_notes=[
+                "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
+            ],
+            durable_handles=[
+                '[spill] spill_read_ab12 (4096 bytes) — re-read with read(resource_id="spill_read_ab12")'
+            ],
+        ).canonical_json()
+
+        rendered = render_compaction_summary(summary)
+
+        assert rendered.index("Run Notes") < rendered.index("next steps:")
+        assert rendered.index("durable handles") < rendered.index("next steps:")
+        assert rendered.index("Run Notes") < rendered.index("durable handles")
 
     def test_a_summary_without_run_notes_still_decodes(self) -> None:
         """Adding a field is backward compatible; removing one is not.

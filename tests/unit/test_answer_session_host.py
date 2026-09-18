@@ -1333,7 +1333,7 @@ async def test_fast_compaction_names_the_notes_its_workspace_holds() -> None:
     assert snapshot.active_projection.summary is not None
     summary = CompactionSummary.from_canonical_json(snapshot.active_projection.summary)
     assert summary.run_notes == [
-        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
     ]
     assert summary.durable_handles is None
 

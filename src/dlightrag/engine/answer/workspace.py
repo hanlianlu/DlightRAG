@@ -539,6 +539,12 @@ def _prepare_epoch_dirs(root: Path, epoch: int) -> tuple[Path, Path]:
     workspace, spill = epoch_paths(root, epoch)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "artifacts").mkdir(exist_ok=True)
+    # The reserved notes directory is created with the other two so the one plane the
+    # framework carries is as visible as the publication plane and the scratch plane.
+    # A live Run measured the alternative: state a later step needed was written to
+    # `tmp/`, which nothing carries, while `notes/` stayed empty until the end of the
+    # Run, by which time no summary could name it.
+    (workspace / RUN_NOTE_DIRECTORY).mkdir(exist_ok=True)
     (workspace / "tmp").mkdir(exist_ok=True)
     spill.mkdir(parents=True, exist_ok=True)
     _discard_carry_staging(workspace)

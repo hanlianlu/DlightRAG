@@ -110,6 +110,10 @@ async def test_first_bind_creates_workspace_and_handoffs(tmp_path: Path) -> None
     )
     assert bound.epoch == 3
     assert (bound.workspace / "artifacts").is_dir()
+    # The carried plane is created with the other two: a Run that never creates the
+    # directory itself still sees the one place a later step can read a value again.
+    assert (bound.workspace / "notes").is_dir()
+    assert (bound.workspace / "tmp").is_dir()
     assert store.workspace_epoch == 3
     write_spill_file(bound.spill_dir, "res_1", "overflow")
     assert (bound.spill_dir / "res_1.txt").read_text(encoding="utf-8") == "overflow"
@@ -412,7 +416,7 @@ async def test_handoff_records_the_copied_epochs_observation(tmp_path: Path) -> 
     )
     payload = "decided: keep the spill handles\n"
     note = first.workspace / "notes" / "plan.md"
-    note.parent.mkdir()
+    note.parent.mkdir(exist_ok=True)
     note.write_text(payload, encoding="utf-8")
 
     recovered = await bind_run_workspace(
@@ -674,7 +678,7 @@ def _parent_workspace(tmp_path: Path, owner: str, run_id: str, epoch: int = 1) -
 def test_carry_run_notes_copies_bytes_and_records_the_destination_digest(tmp_path: Path) -> None:
     parent = _parent_workspace(tmp_path, "owner", str(uuid.uuid4()))
     record, content = _note("notes/plan.md", b"the numbers are 4 and 9")
-    (parent / "notes").mkdir()
+    (parent / "notes").mkdir(exist_ok=True)
     (parent / "notes" / "plan.md").write_bytes(content)
     dest = tmp_path / "child"
     dest.mkdir()
@@ -721,7 +725,7 @@ async def test_a_chain_of_two_carries_accumulates_the_file_itself(
         recorded_epoch=None,
         store=store,
     )
-    (parent.workspace / "notes").mkdir()
+    (parent.workspace / "notes").mkdir(exist_ok=True)
     (parent.workspace / "notes" / "plan.md").write_text("inherited", encoding="utf-8")
     await store.replace_inventory(_note_records(parent.workspace, ("notes/plan.md",)))
 
@@ -788,7 +792,7 @@ async def test_the_bind_chain_carries_the_note_through_a_middle_hop(tmp_path: Pa
         recorded_epoch=None,
         store=parent_store,
     )
-    (parent.workspace / "notes").mkdir()
+    (parent.workspace / "notes").mkdir(exist_ok=True)
     payload = b"the error was ECONNRESET on shard 4"
     (parent.workspace / "notes" / "plan.md").write_bytes(payload)
     await parent_store.replace_inventory(_note_records(parent.workspace, ("notes/plan.md",)))
@@ -850,7 +854,7 @@ async def test_first_bind_hands_off_the_carried_notes_as_the_new_inventory(
     child_id = str(uuid.uuid4())
     parent = _parent_workspace(tmp_path, "owner", parent_id)
     record, content = _note("notes/plan.md", b"after compaction")
-    (parent / "notes").mkdir()
+    (parent / "notes").mkdir(exist_ok=True)
     (parent / "notes" / "plan.md").write_bytes(content)
     store = InMemoryWorkspaceStore()
 
@@ -882,11 +886,11 @@ async def test_recovery_bind_does_not_copy_from_the_parent_again(tmp_path: Path)
         recorded_epoch=None,
         store=InMemoryWorkspaceStore(),
     )
-    (first.workspace / "notes").mkdir()
+    (first.workspace / "notes").mkdir(exist_ok=True)
     (first.workspace / "notes" / "own.md").write_text("mine", encoding="utf-8")
     parent = _parent_workspace(tmp_path, "owner", str(uuid.uuid4()))
     record, content = _note("notes/plan.md", b"parent")
-    (parent / "notes").mkdir()
+    (parent / "notes").mkdir(exist_ok=True)
     (parent / "notes" / "plan.md").write_bytes(content)
 
     recovered = await bind_run_workspace(

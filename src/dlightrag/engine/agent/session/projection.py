@@ -97,14 +97,9 @@ def render_compaction_summary(summary_json: str | None, *, re_readable_handles: 
         value = getattr(summary, name)
         if value:
             sections.append(f"{name.replace('_', ' ')}: {value}")
-    next_steps = summary.next_steps
-    if next_steps:
-        sections.append(f"next steps: {next_steps}")
-    critical = summary.critical_context
-    if critical:
-        sections.append(f"critical context: {critical}")
-    if summary.paths is not None:
-        sections.append(f"paths: {canonical_json(summary.paths)}")
+    # The framework's re-readable identities come before the plan: a step that needs a
+    # value this summary does not state should have the call that reads it in hand while
+    # it is still choosing what to do next, not after the plan is written.
     notes = summary.run_notes if re_readable_handles else None
     if isinstance(notes, list):
         rendered = "\n".join(
@@ -119,6 +114,14 @@ def render_compaction_summary(summary_json: str | None, *, re_readable_handles: 
         )
         if rendered:
             sections.append(f"durable handles (re-readable, not evidence):\n{rendered}")
+    next_steps = summary.next_steps
+    if next_steps:
+        sections.append(f"next steps: {next_steps}")
+    critical = summary.critical_context
+    if critical:
+        sections.append(f"critical context: {critical}")
+    if summary.paths is not None:
+        sections.append(f"paths: {canonical_json(summary.paths)}")
     return "Prior context summary:\n" + "\n".join(f"- {section}" for section in sections)
 
 

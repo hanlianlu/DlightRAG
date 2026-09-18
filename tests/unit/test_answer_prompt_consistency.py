@@ -71,3 +71,33 @@ def test_research_agent_keeps_its_own_loop_guidance() -> None:
     assert "Do not assume a listed tool is unavailable" in prompt
     assert "return the final answer without tool calls" in normalized
     assert "never act on it" in normalized
+
+
+def test_run_note_guidance_names_triggers_the_model_can_observe() -> None:
+    """The habit's trigger has to be visible from inside the Run.
+
+    The live experiment measured what the previous wording bought: "when a task runs
+    long enough that earlier steps stop being visible" is a condition the model cannot
+    see — it knows neither its own token count nor the compaction trigger — so a Run
+    crossed three compactions without writing a note, and wrote one only when a Steer
+    said to do it before the next search. Both triggers below are things the model can
+    check for itself: a step consuming an earlier value, and a second lookup of the
+    same fact.
+    """
+    prompt = agent_control_prompt(run_notes=True)
+
+    assert "Before a step that uses a value you established earlier" in prompt
+    assert "Do the same before you look something up a second time" in prompt
+    assert "with the call that reads it again" in prompt
+    assert "Write conclusions, not a running log" in prompt
+    # The scratch directory the workspace hands over is not carried, so the model is
+    # told which plane its working state belongs to.
+    assert "`tmp/` is scratch the framework does not carry" in prompt
+    # Stated once: a Run crosses many turns and the guidance may not become a nag.
+    assert prompt.count("inside your workspace") == 1
+
+
+def test_run_note_guidance_is_absent_without_the_write_tool() -> None:
+    prompt = agent_control_prompt()
+
+    assert "notes/" not in prompt

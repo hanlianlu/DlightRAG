@@ -475,8 +475,8 @@ async def test_run_notes_come_from_the_workspace_inventory(tmp_path: Path) -> No
     notes = await orchestrator._run_notes()
 
     assert notes == [
-        "[note] notes/decisions.md (310 bytes) — re-read with read(path='notes/decisions.md')",
-        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')",
+        "[note] notes/decisions.md (310 bytes) — re-read with read(path='notes/decisions.md') before a step that needs a value this summary does not state",
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state",
     ]
 
 
@@ -541,7 +541,7 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
         '[spill] spill_grep_7f21 (4096 bytes) — re-read with read(resource_id="spill_grep_7f21")'
     ]
     assert captured["run_notes"] == [
-        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md')"
+        "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
     ]
     assert result.entry.projection_id == result.projection.projection_id
 
