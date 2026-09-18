@@ -77,6 +77,16 @@ class _CompactionAttemptFailed(Exception):
     """One compaction attempt produced no committable projection."""
 
 
+class CompactionUnavailable(Exception):
+    """No compaction can advance the projection, whatever tail is asked for.
+
+    The projection's uncovered prefix holds no complete exchange, so a summary
+    would have nothing to state. Retrying with a smaller tail cannot help — that
+    only moves the boundary further back — so this is reported separately from an
+    attempt that failed, and the Run proceeds with the projection it already has.
+    """
+
+
 def parse_compaction_summary(markdown: str) -> CompactionSummary:
     """Parse the summarizer's markdown output into the typed summary.
 
@@ -265,7 +275,7 @@ class CompactionCoordinator:
                 )
             summarizable = branch_entries[retained_index:]
         if not summarizable:
-            raise _CompactionAttemptFailed("nothing left to compact")
+            raise CompactionUnavailable("nothing left to compact")
         tail_index = select_compaction_boundary(
             summarizable,
             retained_tail_tokens=tail_target_tokens,
@@ -273,7 +283,7 @@ class CompactionCoordinator:
         )
         target = summarizable[:tail_index]
         if not target:
-            raise _CompactionAttemptFailed("no complete exchanges to summarize")
+            raise CompactionUnavailable("no complete exchanges to summarize")
         covered = self._fit_summary_slice(target, previous_summary=previous.summary)
         if covered is None:
             raise _CompactionAttemptFailed(

@@ -11,6 +11,7 @@ from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.answer.compaction import (
     _MAX_DURABLE_HANDLES,
     CompactionCoordinator,
+    CompactionUnavailable,
     parse_compaction_summary,
 )
 from dlightrag.engine.answer.continuation_handles import MAX_NAMED_SESSION_NOTES, MAX_SPILL_HANDLES
@@ -267,3 +268,58 @@ async def test_the_summary_carries_the_bounded_deduplicated_run_notes() -> None:
     summary = CompactionSummary.from_canonical_json(summary_json)
     assert summary.run_notes == notes[:MAX_NAMED_SESSION_NOTES]
     assert "Session notes (re-readable, not evidence):" in render_compaction_summary(summary_json)
+
+
+@pytest.mark.asyncio
+async def test_a_prefix_with_no_complete_exchange_is_unavailable_not_a_failure() -> None:
+    """Unavailability is a property of the Session, so the Run keeps going.
+
+    Measured live: a Run whose retained tail was one oversized exchange was over the
+    trigger again, and the projection's whole uncovered prefix held no exchange start,
+    so every attempt — three of them, each with a smaller tail — failed identically and
+    the Run died. Nothing about retrying could have helped, and the request was inside
+    the hard input limit, so the honest answer is "no compaction is possible".
+    """
+    store = MemoryAgentSessionRepository[None]()
+
+    async def no_result() -> None:
+        return None
+
+    session_id = SessionId.new()
+    host = FastSessionHost(
+        repository=store,
+        initial_snapshot=await store.load(session_id),
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="current",
+        idempotency_key="current-key",
+        content="current question",
+    )
+    summarized = False
+
+    async def stream_model(**_kwargs):
+        nonlocal summarized
+        summarized = True
+        yield "## Goal\nnever reached"
+
+    coordinator = CompactionCoordinator(
+        model_profile=ModelProfile(context_window_tokens=100_000),
+        context_policy=ContextPolicy(retained_tail_tokens=0),
+        stream_model=stream_model,
+        # Every exchange this Session holds is already retained, which is the state a
+        # boundary pinned at an oversized newest exchange leaves behind.
+        exchange_starts_func=lambda _entries: (),
+    )
+
+    with pytest.raises(CompactionUnavailable):
+        await coordinator.prepare(
+            await store.load(session_id),
+            tail_target_tokens=0,
+            accounted_before=100,
+            trace={},
+        )
+    assert summarized is False

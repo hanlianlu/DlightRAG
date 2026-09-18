@@ -164,6 +164,12 @@ class ReadyForProvider:
     turn_count: int = 0
     provider_attempts: int = 0
     steers: tuple[AcceptedSteer, ...] = ()
+    #: True when this turn's compaction request was declined because the projection
+    #: could not advance. The Runtime then asks for the request itself instead of
+    #: asking the same effect for the same compaction again, which would spin without
+    #: a provider call; a later turn may compact again, because a new exchange can
+    #: give the projection something to cover.
+    compaction_declined: bool = False
     state_type: Literal["ready_for_provider"] = "ready_for_provider"
 
 

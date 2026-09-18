@@ -324,6 +324,14 @@ The compaction trigger is measured from the character estimator corrected agains
 the prompt size the provider itself billed for the previous request, and each
 turn's billed prompt and cache hits are aggregated in the Run trace.
 
+A compaction the projection cannot advance is declined rather than failed. Once a
+retained tail is a whole oversized exchange, the uncovered prefix holds no complete
+exchange for a summary to state, and no smaller tail changes that, so the run
+assembles its request against the projection it already has; a request that genuinely
+cannot fit still fails on the hard input limit, by name. The decline is recorded on
+the operation state for that turn, which is what keeps an over-trigger turn from
+asking for the same impossible compaction again instead of reaching the provider.
+
 A committed compaction keeps the run's re-readable identities beside its typed
 summary: the Evidence ledger supplies its citation handles, and the run's committed
 spill rows supply the newest spilled Tool outputs, whose bytes and rows survive the

@@ -26,9 +26,13 @@ a live provider (DeepSeek Flash, the low agent level, seven Runs, about $0.49).
 Measured: a registered note is carried by every later compaction and rendered as
 the call that reads it again (2/2 compactions in the one Run that wrote a note
 before compacting); the note stays bounded (227–3065 bytes against 0.5M–1.8M
-prompt tokens); and a continuation reads it, unprompted — the carry named two
-notes, the new Run opened both, and it appended its own recomputation to one of
-them.
+prompt tokens); and a later Run reads it, unprompted — the one continuation this
+experiment ran opened both notes it had inherited and appended its own
+recomputation to one. That last observation was taken through the continuation
+carry, which [ADR 0022](0022-session-owned-memory-and-run-owned-products.md) has
+since replaced with a Session-owned plane; the property it measured, a later Run
+reading the note instead of re-deriving it, is the same one the plane serves
+without a copy.
 
 The write side did not hold, and the reason was where the habit landed rather
 than whether it was stated. Across four unsteered Runs and five
@@ -44,9 +48,11 @@ compaction carried them.
 
 Three follow-ups landed in the change that measured them: the workspace
 pre-creates `notes/` beside `artifacts/` and `tmp/`; the guidance names two
-triggers a model can check for itself and states that `tmp/` is not carried; and
-a note handle names the moment as well as the call while the re-readable
-identities render before the plan they serve. Whether an unprompted Run now
+triggers a model can check for itself and states that `tmp/` is scratch; and a
+note handle names the moment as well as the call while the re-readable identities
+render before the plan they serve. The guidance's promise now matches ADR 0022's
+ownership: `notes/` is the conversation's memory, every Run of it starts with what
+was written there, and no wording promises a carry that no longer exists. Whether an unprompted Run now
 writes a note when this decision's own admission floor applies — values the next
 turn cannot cheaply re-derive — is the open question the next experiment must
 answer; the fixtures measured so far were arithmetically re-derivable, which is

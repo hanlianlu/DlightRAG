@@ -585,11 +585,18 @@ class ResearchRuntimeEffects:
         self._telemetry = telemetry
         self._session_notes = session_notes
 
-    async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot | Any:
+    async def assemble_request(
+        self,
+        context: RuntimeContext,
+        *,
+        compaction_declined: bool = False,
+    ) -> RequestSnapshot | Any:
         await self._check_cancelled()
         self._check_pins()
         try:
-            return await self._orchestrator.assemble_runtime_request(self._prepared, context)
+            return await self._orchestrator.assemble_runtime_request(
+                self._prepared, context, compaction_declined=compaction_declined
+            )
         except AnswerInputError as exc:
             raise OperationEffectFailed("context_overflow", str(exc)) from exc
 

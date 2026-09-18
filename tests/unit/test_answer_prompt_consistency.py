@@ -90,9 +90,11 @@ def test_run_note_guidance_names_triggers_the_model_can_observe() -> None:
     assert "Do the same before you look something up a second time" in prompt
     assert "with the call that reads it again" in prompt
     assert "Write conclusions, not a running log" in prompt
-    # The scratch directory the workspace hands over is not carried, so the model is
-    # told which plane its working state belongs to.
-    assert "`tmp/` is scratch the framework does not carry" in prompt
+    # The scratch directory the workspace hands over is not memory, so the model is
+    # told which plane its working state belongs to, under the ownership ADR 0022 set.
+    assert "`tmp/` is scratch that dies with this Run" in prompt
+    assert "this conversation's memory" in prompt
+    assert "follow-up" not in prompt
     # Stated once: a Run crosses many turns and the guidance may not become a nag.
     assert prompt.count("inside your workspace") == 1
 

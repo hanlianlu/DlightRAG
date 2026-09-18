@@ -247,7 +247,9 @@ class Effects:
             AssistantTurn(text="done", tool_calls=(), stop_reason="stop"),
         ]
 
-    async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot:
+    async def assemble_request(
+        self, context: RuntimeContext, *, compaction_declined: bool = False
+    ) -> RequestSnapshot:
         return RequestSnapshot.from_values(
             operation_id=context.operation_id,
             turn_number=getattr(context.state, "turn_count", 0) + 1,

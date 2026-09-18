@@ -23,16 +23,20 @@ Live specs name the terms.
 
 Evidence for the compaction and carry experiments is unit- and integration-level
 at the product seams (the write tool, Inventory settlement, `bind_run_workspace`,
-the request assembler, coordinator PG tests), and the carry has since been
-measured against a live provider (seven Runs, DeepSeek Flash, the low agent
-level). A continuation of a Run that had registered two notes copied them into
-its own epoch with matching bytes — the untouched note's SHA-256 is identical in
-both epochs — and its first turns opened both notes unprompted before answering
-from them, appending its own recomputation to the second (carried 227 bytes,
-rewritten to 687 under the new Run's own fence, which is the live-file property
-this decision relies on). "The first request states the carry once" stays verified
-structurally, as the one static prefix `carried_run_notes_message` composes, plus
-the behavioural consequence above rather than a wire capture.
+the request assembler, coordinator PG tests), and the carry was measured against a
+live provider before ADR 0022 deleted it (seven Runs, DeepSeek Flash, the low
+agent level). A continuation of a Run that had registered two notes copied them
+into its own epoch with matching bytes — the untouched note's SHA-256 was
+identical in both epochs — and its first turns opened both notes unprompted
+before answering from them (carried 227 bytes, rewritten to 687 under the new
+Run's own fence, which is the live-file property this decision relies on). That is
+the record of what the carry did and not a description of the current mechanism,
+which materializes the Session's notes instead of copying a parent's; the property
+it measured — a later Run reads the note rather than re-deriving it — is what
+ADR 0018's experiment follows. "The first request states the carry once" was
+verified structurally, as the one static prefix the deleted
+`carried_run_notes_message` composed, plus the behavioural consequence above
+rather than a wire capture.
 
 ## Context
 

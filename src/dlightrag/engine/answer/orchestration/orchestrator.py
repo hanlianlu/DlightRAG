@@ -69,7 +69,7 @@ from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.providers.base import provider_input_tokens, usage_counters
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.engine.answer.compaction import CompactionCoordinator
+from dlightrag.engine.answer.compaction import CompactionCoordinator, CompactionUnavailable
 from dlightrag.engine.answer.continuation_handles import (
     MAX_SPILL_HANDLES,
     compose_durable_handles,
@@ -479,8 +479,15 @@ class AnswerOrchestrator:
         self,
         run: PreparedRun,
         runtime_context: RuntimeContext,
+        *,
+        compaction_declined: bool = False,
     ) -> RequestSnapshot | CompactionRequired:
-        """Build one exact provider request without executing an external effect."""
+        """Build one exact provider request without executing an external effect.
+
+        ``compaction_declined`` states that this turn already asked to compact and was
+        told the projection cannot advance: the request is built against the projection
+        the Run holds instead of asking for the same compaction again.
+        """
         self._record_working_fold(run, runtime_context.snapshot)
         tool_schema_tokens = _tool_schema_tokens(run.tools)
         # Anchor on what the provider billed for the previous request before
@@ -494,7 +501,7 @@ class AnswerOrchestrator:
             run.context.accounted_input_tokens(evidence=run.evidence, working=run.working)
             + tool_schema_tokens
         )
-        if should_compact(
+        if not compaction_declined and should_compact(
             run.model_profile,
             input_tokens=accounted,
             context_policy=self._context_policy,
@@ -557,18 +564,26 @@ class AnswerOrchestrator:
         tail = self._context_policy.retained_tail_target(run.model_profile) // (
             2 ** max(0, attempt - 1)
         )
-        projection, _outcome = await coordinator.prepare(
-            snapshot,
-            tail_target_tokens=tail,
-            accounted_before=(
-                run.context.corrected_input_tokens(evidence=run.evidence, working=run.working)
-                + _tool_schema_tokens(run.tools)
-            ),
-            durable_handles=await self._continuation_handles(run),
-            run_notes=await self._session_note_names(),
-            trace=run.trace,
-        )
+        try:
+            projection, _outcome = await coordinator.prepare(
+                snapshot,
+                tail_target_tokens=tail,
+                accounted_before=(
+                    run.context.corrected_input_tokens(evidence=run.evidence, working=run.working)
+                    + _tool_schema_tokens(run.tools)
+                ),
+                durable_handles=await self._continuation_handles(run),
+                run_notes=await self._session_note_names(),
+                trace=run.trace,
+            )
+        except CompactionUnavailable as unavailable:
+            # A Run over the trigger whose uncovered prefix holds no complete
+            # exchange cannot compact, and failing it would kill a Run that is
+            # within its hard limit for no reason a reader could act on.
+            run.trace["compaction_declined"] = str(unavailable)
+            return CompactionResult(declined=str(unavailable))
         return CompactionResult(
+            projection=projection,
             entry=CompactionEntry(
                 entry_id=EntryId.new(),
                 session_id=runtime_context.session_id,
@@ -581,7 +596,6 @@ class AnswerOrchestrator:
                 first_retained_entry_id=projection.first_retained_entry_id,
                 source_digest=projection.source_digest,
             ),
-            projection=projection,
         )
 
     async def _continuation_handles(self, run: PreparedRun) -> list[str]:

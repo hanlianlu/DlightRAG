@@ -550,6 +550,10 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
     assert captured["run_notes"] == [
         "[note] notes/plan.md (1240 bytes) — re-read with read(path='notes/plan.md') before a step that needs a value this summary does not state"
     ]
+    # A committed compaction always carries the projection it committed; only a
+    # declined one has neither.
+    assert result.entry is not None
+    assert result.projection is not None
     assert result.entry.projection_id == result.projection.projection_id
 
 
@@ -713,3 +717,56 @@ def test_recorded_child_usage_is_summed_not_dropped() -> None:
         "completion_tokens": 41,
         "prompt_cache_hit_tokens": 384,
     }
+
+
+@pytest.mark.asyncio
+async def test_a_declined_compaction_still_assembles_the_request(tmp_path: Path) -> None:
+    """Over the trigger is not a reason to ask twice for one impossible compaction.
+
+    The Runtime refuses to ask a second time in a turn by stating the decline; the
+    orchestrator's half of that contract is this flag, without which a Run whose
+    projection cannot advance reassembles, declines, and reassembles forever
+    without ever calling the provider.
+    """
+    from dlightrag.engine.agent.session.registers import RequestSnapshot
+    from dlightrag.engine.agent.session.runtime import CompactionRequired
+    from dlightrag.engine.ai.capacity import ModelProfile
+    from dlightrag.engine.answer.orchestration.orchestrator import PreparedRun
+
+    orchestrator = _orchestrator(mode="research")
+    context = MagicMock()
+    context.observe_provider_input = MagicMock()
+    context.accounted_input_tokens = MagicMock(return_value=200_000)
+    context.control_turn = AsyncMock(return_value=[{"role": "user", "content": "exact"}])
+    context.output_allowance = MagicMock(return_value=256)
+    # The fixed envelope fits, so compaction is requested rather than refused as
+    # an overflow: this test is about the decline, not the floor.
+    context.measure_control_input = MagicMock(return_value=1_024)
+    run = PreparedRun(
+        context=context,
+        tools=[],
+        evidence=MagicMock(),
+        working=MagicMock(),
+        registry=None,
+        trace={},
+        model_func=MagicMock(),
+        stream_model_func=None,
+        # A profile whose trigger the accounted input clears by two orders of magnitude.
+        model_profile=ModelProfile(context_window_tokens=100_000),
+    )
+    runtime_context = MagicMock()
+    # A Session whose projection is the initial one: nothing is covered yet, and the
+    # anchor has no ancestry to read a previous request from.
+    runtime_context.snapshot = SimpleNamespace(active_projection=None, graph=None, entries=[])
+    runtime_context.operation_id = "operation-1"
+    runtime_context.state = MagicMock(turn_count=3)
+    runtime_context.meta.plan_digest = "a" * 64
+
+    required = await orchestrator.assemble_runtime_request(run, runtime_context)
+    assert isinstance(required, CompactionRequired)
+
+    declined = await orchestrator.assemble_runtime_request(
+        run, runtime_context, compaction_declined=True
+    )
+    assert isinstance(declined, RequestSnapshot)
+    assert declined.turn_number == 4

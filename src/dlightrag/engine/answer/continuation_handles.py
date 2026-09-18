@@ -96,8 +96,9 @@ def session_note_handle(record: InventoryPathRecord) -> str:
 
     The recorded digest is deliberately absent: the Inventory keeps a digest only
     for paths this framework wrote itself (a `bash` call re-observes the whole
-    workspace without one), and a note is a live file the Run owns, so the read
-    that follows serves its current bytes rather than bytes frozen at a compaction.
+    workspace without one), and a note is live memory — the Session owns the bytes
+    and this Run holds a working copy (ADR 0022) — so the read that follows serves
+    the current copy rather than bytes frozen at a compaction.
     The path is rendered with its repr for the same reason the spill handle is: a
     name may hold a quote, and a call the model cannot reproduce is worse than no
     call.

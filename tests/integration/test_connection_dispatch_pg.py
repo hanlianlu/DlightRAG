@@ -349,7 +349,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
                 self.fake = _Effects(turns)
                 self.executed_sources = []
 
-            async def assemble_request(self, context):
+            async def assemble_request(self, context, *, compaction_declined=False):
                 return await self.fake.assemble_request(context)
 
             async def call_provider(self, context, request, attempt_id, emit_ephemeral):
@@ -643,7 +643,7 @@ async def test_research_runtime_continues_other_tools_and_reports_unavailable_pa
         tools = {tool.name: tool, healthy.name: healthy}
 
         class Effects:
-            async def assemble_request(self, context):
+            async def assemble_request(self, context, *, compaction_declined=False):
                 self.results = [
                     entry.result
                     for entry in context.snapshot.entries

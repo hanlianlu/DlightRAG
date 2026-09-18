@@ -109,9 +109,11 @@ class _Effects:
         self._compacted = False
 
     async def assemble_request(
-        self, context: RuntimeContext
+        self, context: RuntimeContext, *, compaction_declined: bool = False
     ) -> RequestSnapshot | CompactionRequired:
-        if self.compaction_required and not self._compacted:
+        # The Runtime states that this turn already declined a compaction, so the Run
+        # proceeds instead of asking for the same one again.
+        if not compaction_declined and self.compaction_required and not self._compacted:
             return CompactionRequired()
         return RequestSnapshot.from_values(
             operation_id=context.operation_id,
@@ -599,7 +601,9 @@ async def test_runtime_invariant_faults_session_and_rejects_new_work() -> None:
     tool = _agent_tool()
 
     class BrokenEffects(_Effects):
-        async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot:
+        async def assemble_request(
+            self, context: RuntimeContext, *, compaction_declined: bool = False
+        ) -> RequestSnapshot:
             return RequestSnapshot.from_values(
                 operation_id=context.operation_id,
                 turn_number=1,
@@ -1606,7 +1610,7 @@ class _PoisonSnapshotEffects(_Effects):
     """Effects whose provider request holds a character PostgreSQL rejects."""
 
     async def assemble_request(
-        self, context: RuntimeContext
+        self, context: RuntimeContext, *, compaction_declined: bool = False
     ) -> RequestSnapshot | CompactionRequired:
         return RequestSnapshot.from_values(
             operation_id=context.operation_id,
@@ -1680,3 +1684,95 @@ async def test_unrepresentable_request_snapshot_fails_the_operation_but_not_the_
         plan=_plan(tool),
     )
     assert resumed.operation_id is not None
+
+
+def test_a_declined_turn_never_asks_for_the_same_compaction_again() -> None:
+    """The latch that keeps the decline from spinning.
+
+    The Runtime refuses to ask twice in one turn; without that, an over-trigger turn
+    whose projection cannot advance reassembles, declines, and reassembles without ever
+    reaching the provider — a worse outcome than the failure it replaced.
+    """
+    from dlightrag.engine.agent.session.ids import OperationId
+    from dlightrag.engine.agent.session.interpreter import (
+        AssembleProviderRequest,
+        next_action,
+    )
+    from dlightrag.engine.agent.session.operation import ReadyForProvider
+
+    declined = next_action(
+        ReadyForProvider(OperationId.new(), turn_count=3, compaction_declined=True)
+    )
+    fresh = next_action(ReadyForProvider(OperationId.new(), turn_count=3))
+
+    assert isinstance(declined, AssembleProviderRequest)
+    assert declined.compaction_declined is True
+    assert declined.turn_number == 4
+    assert isinstance(fresh, AssembleProviderRequest)
+    assert fresh.compaction_declined is False
+
+
+@pytest.mark.asyncio
+async def test_a_declined_compaction_continues_the_run_instead_of_failing_it() -> None:
+    """A projection that cannot advance is not a Run failure.
+
+    Measured live before this contract existed: a Run whose retained tail was one
+    oversized exchange reassembled over the trigger, asked to compact again, found no
+    complete exchange outside the projection, and died as `compaction_failed` — after
+    three attempts, each of which could not have helped, with its request inside the
+    hard input limit the whole time.
+    """
+    from dlightrag.engine.agent.session.entries import CompactionEntry
+    from dlightrag.engine.agent.session.runtime import CompactionResult
+
+    tool = _agent_tool()
+
+    class DecliningCompaction(_Effects):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.compaction_attempts: list[int] = []
+            self.declined_assemblies = 0
+
+        async def assemble_request(
+            self, context: RuntimeContext, *, compaction_declined: bool = False
+        ) -> RequestSnapshot | CompactionRequired:
+            if compaction_declined:
+                self.declined_assemblies += 1
+                # The Run proceeds only if THIS state's flag reaches the effect.
+                return RequestSnapshot.from_values(
+                    operation_id=context.operation_id,
+                    turn_number=getattr(context.state, "turn_count", 0) + 1,
+                    plan_digest=context.meta.plan_digest,
+                    model_role="query",
+                    messages=[{"role": "user", "content": "exact"}],
+                    tools=[],
+                    tool_choice="auto",
+                    max_tokens=256,
+                )
+            return CompactionRequired()
+
+        async def compact(self, context: RuntimeContext, attempt: int) -> Any:
+            del context
+            self.compaction_attempts.append(attempt)
+            return CompactionResult(declined="no complete exchanges to summarize")
+
+    effects = DecliningCompaction([_assistant(text="answered anyway")])
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="declined-compaction",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    # Declined once, never retried, and the turn ran anyway: no entry, no failure.
+    assert effects.compaction_attempts == [1]
+    assert effects.declined_assemblies == 1
+    snapshot = await store.load(session_id)
+    assert not any(isinstance(entry, CompactionEntry) for entry in snapshot.entries)

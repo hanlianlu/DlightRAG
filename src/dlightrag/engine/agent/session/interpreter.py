@@ -46,6 +46,9 @@ TOOL_DISPOSITION_OUTCOME: dict[SyntheticToolDisposition, SyntheticToolResultOutc
 @dataclass(frozen=True, slots=True)
 class AssembleProviderRequest:
     turn_number: int
+    #: Set when this turn already declined a compaction: the effect returns the
+    #: request rather than asking to compact a prefix that cannot advance.
+    compaction_declined: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +130,9 @@ def next_action(state: RunOperationState) -> NextAction:
     if isinstance(state, ReadyForProvider):
         if state.steers:
             return ConsumeSteer(state.steers[0].control_id)
-        return AssembleProviderRequest(state.turn_count + 1)
+        return AssembleProviderRequest(
+            state.turn_count + 1, compaction_declined=state.compaction_declined
+        )
     if isinstance(state, ProviderRequestPending):
         return CallProvider(state.turn_number)
     if isinstance(state, ToolBatchReady):

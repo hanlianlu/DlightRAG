@@ -41,11 +41,10 @@ _RUN_NOTE_GUIDANCE = """\
 Before a step that uses a value you established earlier — a number, a path, an id, \
 a page or table number — write that value into `notes/` inside your workspace, with \
 where it came from and any choice you made where sources disagree. Do the same before \
-you look something up a second time. The framework carries those notes across \
-compaction and into a follow-up, and a compaction names each one with the call that \
-reads it again, so a note outlives your transcript for less than re-deriving it \
-costs. `tmp/` is scratch the framework does not carry: a result a later step needs \
-belongs in `notes/`. Write conclusions, not a running log.\
+you look something up a second time. `notes/` is this conversation's memory: every \
+Run of it starts with what you wrote there, and a compaction names each note with \
+the call that reads it again. `tmp/` is scratch that dies with this Run. Write \
+conclusions, not a running log.\
 """
 
 _PROFILE_MEMORY_GUIDANCE = """\

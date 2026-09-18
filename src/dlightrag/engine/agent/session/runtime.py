@@ -180,8 +180,19 @@ class CompactionRequired:
 
 @dataclass(frozen=True, slots=True)
 class CompactionResult:
-    entry: CompactionEntry
-    projection: ContextProjection
+    """One prepared compaction, or this Run's statement that none is possible.
+
+    ``entry`` is None when the projection cannot advance: every exchange the
+    projection does not already cover sits inside the retained tail, so there is
+    nothing left to summarize and no tail the policy could pick would change that.
+    That is a property of the Session, not a failure of the Run, so the Runtime
+    assembles the request against the projection it already has; a request that
+    genuinely cannot fit still fails on the hard input limit, by name.
+    """
+
+    projection: ContextProjection | None = None
+    entry: CompactionEntry | None = None
+    declined: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +238,7 @@ type AgentSessionEventKind = Literal[
     "operation_failed",
     "compaction_required",
     "compaction_retry",
+    "compaction_declined",
     "compaction_committed",
     "model_start",
     "model_end",
@@ -256,7 +268,7 @@ class AgentRuntimeEffects[HostDeltaT](Protocol):
     """Closed effect adapters. Context assembly must be side-effect free."""
 
     async def assemble_request(
-        self, context: RuntimeContext
+        self, context: RuntimeContext, *, compaction_declined: bool = False
     ) -> RequestSnapshot | CompactionRequired: ...
 
     async def call_provider(
@@ -633,7 +645,9 @@ class AgentSessionRuntime[HostDeltaT]:
     async def _execute_action(self, view: OperationView, action: NextAction) -> None:
         """Execute one already-planned closed action and its atomic transition."""
         if isinstance(action, AssembleProviderRequest):
-            await self._assemble_request(view, action.turn_number)
+            await self._assemble_request(
+                view, action.turn_number, compaction_declined=action.compaction_declined
+            )
         elif isinstance(action, CallProvider):
             await self._call_provider(view)
         elif isinstance(action, CommitSyntheticToolResult):
@@ -833,8 +847,16 @@ class AgentSessionRuntime[HostDeltaT]:
             await self.cancel(session_id=session_id, operation_id=operation_id)
         return await self.drive(session_id=session_id, operation_id=operation_id)
 
-    async def _assemble_request(self, view: OperationView, turn_number: int) -> None:
-        assembled = await self._effects.assemble_request(view.context)
+    async def _assemble_request(
+        self,
+        view: OperationView,
+        turn_number: int,
+        *,
+        compaction_declined: bool = False,
+    ) -> None:
+        assembled = await self._effects.assemble_request(
+            view.context, compaction_declined=compaction_declined
+        )
         if isinstance(assembled, CompactionRequired):
             plan = AgentRunPlan.from_payload(_json_object(view.context.meta.plan_json))
             state = CompactionPending(
@@ -1453,6 +1475,20 @@ class AgentSessionRuntime[HostDeltaT]:
                     kind="compaction_failed",
                     detail=str(exc),
                 )
+            return
+        if result.entry is None:
+            # Declined, not failed: the projection cannot advance, and the Run
+            # proceeds against the one it holds.
+            await self._replace_state(
+                view,
+                ReadyForProvider(
+                    view.context.operation_id,
+                    turn_count=state.turn_count,
+                    steers=state.steers,
+                    compaction_declined=True,
+                ),
+                event="compaction_declined",
+            )
             return
         if result.entry.session_id != view.context.session_id:
             raise ValueError("Compaction result belongs to another Session")
