@@ -129,6 +129,14 @@ before a retained Run, after which SSE returns 410 and status still serves the
 result. Exact lifecycle rules are in
 [RunRuntime and durable query execution](durable-answer-runs.md).
 
+`dlightrag-workspace-audit` reports an Agent Workspace root without deleting
+anything: it counts Run roots, names the ones whose Run row is gone, and says so.
+The runtime's hourly orphan sweep is what removes them, and it follows a configured
+root rather than the execution mode, so this command reaches the same trees — pass
+`--root` to audit a path an earlier configuration left behind, and `--sample` to
+bound the report. A deployment whose execution is `disabled` and which names no root
+owns no workspace path and has nothing to audit.
+
 ## Trusted Publisher Prerequisite
 
 One tag publishes lockstep `dlightrag` and `dlightrag-memory` projects. Configure

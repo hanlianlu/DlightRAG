@@ -103,6 +103,7 @@ Issues = "https://github.com/hanlianlu/dlightrag/issues"
 dlightrag-mcp = "dlightrag.adapters.mcp.cli:main"
 dlightrag-api = "dlightrag.adapters.http.server:main"
 dlight-tools = "dlightrag.engine.agent.environment.toolchain:main"
+dlightrag-workspace-audit = "dlightrag.adapters.postgres.workspace_audit:main"
 dlightrag-rebuild-bm25 = "dlightrag.adapters.postgres.rebuild_bm25:main"
 dlightrag-rebuild-vdb = "dlightrag.adapters.postgres.rebuild_vdb:main"
 

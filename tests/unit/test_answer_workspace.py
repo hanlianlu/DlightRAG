@@ -958,3 +958,64 @@ def test_carry_refuses_a_size_mismatch_and_a_directory(tmp_path: Path) -> None:
     with pytest.raises(WorkspaceIntegrityError, match="not a regular file"):
         carry_run_notes(source_workspace=parent, destination_workspace=child, notes=(not_a_file,))
     assert not (child / "notes").exists()
+
+
+@pytest.mark.asyncio
+async def test_the_audit_reports_orphans_and_deletes_nothing(tmp_path: Path) -> None:
+    """The audit is the operator's look at the same fact the sweep acts on.
+
+    It must never delete: a root left by an earlier configuration whose path this
+    deployment does not own has to be countable before anything is asked to remove
+    it. Both directories therefore still exist after the pass.
+    """
+    from dlightrag.engine.answer.workspace import audit_run_workspaces
+
+    owner = "owner"
+    live_id = str(uuid.uuid4())
+    dead_id = str(uuid.uuid4())
+    for run_id in (live_id, dead_id):
+        root = run_root(tmp_path, owner, run_id)
+        root.mkdir(parents=True)
+        (root / "marker.txt").write_text("x", encoding="utf-8")
+
+    class _Store:
+        async def get_run_global(self, *, run_id: str) -> object | None:
+            return object() if run_id == live_id else None
+
+    report = await audit_run_workspaces(
+        workspace_root=tmp_path, store=_Store(), page_size=1, sample=5
+    )
+
+    assert report.roots == 2
+    assert report.unreadable == 0
+    assert report.orphans == (f"{owner_shard(owner)}/{dead_id}",)
+    # Nothing was deleted, and the audit said so by leaving both roots in place.
+    assert run_root(tmp_path, owner, live_id).exists()
+    assert run_root(tmp_path, owner, dead_id).exists()
+
+
+def test_the_root_rule_follows_a_named_path_whatever_the_execution_mode(
+    tmp_path: Path,
+) -> None:
+    """Reclamation and auditing must reach a named root an earlier config left.
+
+    An unnamed root is the default path, and only an enabled configuration owns it;
+    disabled does not invent it.
+    """
+    from dlightrag.engine.answer.workspace import (
+        agent_workspace_reclaimer,
+        resolve_workspace_root,
+    )
+
+    named = str(tmp_path / "dlightrag-named-root")
+    assert resolve_workspace_root(execution_environment="disabled", workspace_root=named) == Path(
+        named
+    )
+    assert resolve_workspace_root(execution_environment="disabled", workspace_root=None) is None
+    default = resolve_workspace_root(execution_environment="trust", workspace_root=None)
+    assert default is not None and default.is_absolute()
+    assert (
+        agent_workspace_reclaimer(execution_environment="disabled", workspace_root=named)
+        is not None
+    )
+    assert agent_workspace_reclaimer(execution_environment="disabled", workspace_root=None) is None

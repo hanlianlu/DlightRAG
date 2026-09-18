@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable answer runs over already-authorized canonical workspaces."""
 
+import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
@@ -120,6 +121,8 @@ from .child_roster import (
     child_result_lineage,
     public_child_status,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
 _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
@@ -780,6 +783,21 @@ class AnswerService:
         self._run_retention_seconds = int(run_retention_seconds)
         self._child_roster_codec = ChildRosterCursorCodec(child_roster_cursor_secret)
 
+    @staticmethod
+    def _continuation_fingerprint(request: AnswerRequest) -> str:
+        """Hash one continuation as the caller submitted it.
+
+        The admission fingerprint decides whether a keyed submission is a replay or a
+        conflict, so it has to describe what the caller asked for. A continuation
+        mints its own Session and Lane, and those two identities are this process's
+        draw rather than the caller's input: leaving them in makes every retry of an
+        identical submission look like changed input.
+        """
+        fields = dict(_normalized_request(request).as_request())
+        fields.pop("agent_session_id", None)
+        fields.pop("agent_lane_id", None)
+        return run_request_fingerprint(fields)
+
     async def create(
         self,
         *,
@@ -787,6 +805,7 @@ class AnswerService:
         owner_id: str,
         idempotency_key: str | None = None,
         auth_mode: str = "none",
+        idempotency_fingerprint: str | None = None,
     ) -> RunCreation:
         """Accept one durable run and return its descriptor without waiting.
 
@@ -800,7 +819,7 @@ class AnswerService:
                 request=request,
                 owner_id=owner_id,
                 idempotency_key=idempotency_key,
-                idempotency_fingerprint=None,
+                idempotency_fingerprint=idempotency_fingerprint,
                 acceptor=self._store,
                 auth_mode=auth_mode,
             )
@@ -1536,6 +1555,7 @@ class AnswerService:
             owner_id=owner_id,
             idempotency_key=idempotency_key,
             auth_mode=auth_mode,
+            idempotency_fingerprint=self._continuation_fingerprint(request),
         )
 
     async def fork(
@@ -1563,6 +1583,7 @@ class AnswerService:
             owner_id=owner_id,
             idempotency_key=idempotency_key,
             auth_mode=auth_mode,
+            idempotency_fingerprint=self._continuation_fingerprint(request),
         )
 
     async def continuation_request(
@@ -1966,6 +1987,19 @@ class AnswerService:
                     except HistoryProjectionOverflowError as exc:
                         if requested_mode == "fast":
                             raise AnswerInputOverflowError(str(exc)) from exc
+                        # Observability for ADR 0020's residual: a reserved standing
+                        # memory block can be what makes Fast unviable, and only a line
+                        # like this says whether that ever happens.
+                        logger.info(
+                            "Fast is not viable for this request; resolving without it",
+                            extra={
+                                "target": exc.target,
+                                "fixed_input_tokens": exc.fixed_input_tokens,
+                                "acceptance_limit_tokens": exc.acceptance_limit_tokens,
+                                "memory_chars": len(memory_text),
+                                "requested_mode": requested_mode,
+                            },
+                        )
                         effective_modes = cast(
                             frozenset[ResolvedMode],
                             frozenset(mode for mode in effective_modes if mode != "fast"),

@@ -1954,3 +1954,14 @@ async def test_fast_recall_is_suppressed_when_memory_capability_is_disabled(
     with pytest.raises(RunExecutionError):
         await executor.execute(cast(RunSession, session))
     assert captured.get("memory_text") == ""
+
+
+def test_the_reserved_recall_block_mirrors_the_gates_that_allow_recall() -> None:
+    """The worst case a Fast measure reserves is bounded by the same facts Research uses."""
+    from dlightrag.engine.answer.execution.executor import _worst_case_recall_block
+
+    assert _worst_case_recall_block(None) != ""
+    assert _worst_case_recall_block({"auth_mode": "jwt"}) != ""
+    assert _worst_case_recall_block({"auth_mode": "jwt", "profile_memory_enabled": False}) == ""
+    # A shared simple-auth caller owns no memory, so nothing is reserved for it.
+    assert _worst_case_recall_block({"auth_mode": "simple"}) == ""

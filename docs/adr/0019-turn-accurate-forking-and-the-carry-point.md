@@ -200,13 +200,14 @@ sees the summary's content and not the re-read calls it cannot make — but the
 framework fields themselves are recomposed by each compaction from the compacting
 Run's own Evidence and Workspace. [ADR 0020](0020-uniform-environment-fast-inert-workspace.md)
 makes those planes uniform — Fast binds an inert workspace and names the notes it
-carries — and records the residual that a spill handle still cannot cross Runs; a Fork's own new Lane
-identity and a stateless continuation's Session identity are minted per request and
-enter the submission fingerprint, so a caller retrying one of those with the same
-idempotency key conflicts instead of replaying — a Session-backed Follow-Up, whose
-identities come from its parent, is already deterministic, and deriving the two
-minted identities from `(parent_run_id, submission key)` would make the rest
-idempotent by construction; existing Runs have no
+carries — and records the residual that a spill handle still cannot cross Runs; a continuation's admission
+fingerprint describes the caller's submission rather than the identities this
+process draws: a Fork mints a Lane and a stateless continuation mints a Session, and
+both are excluded from that hash, because leaving them in made every retry of an
+identical submission look like changed input. Deriving the two identities from the
+submission instead was tried and withdrawn — a Lane outlives the idempotency row
+that named it, so reusing a key after retention would have reopened the branch a
+previous Run left behind; existing Runs have no
 recorded Fork Point, so the new column is populated from the point of deployment
 and older Runs refuse a Fork with the remedy instead of branching from the tip
 (acceptable, since the dialog copy they shipped with was already untrue); a Fork's

@@ -725,19 +725,86 @@ def agent_workspace_reclaimer(
     means none: disabled does not invent the default path, because that path
     was never this process's workspace.
     """
+    root = resolve_workspace_root(
+        execution_environment=execution_environment, workspace_root=workspace_root
+    )
+    return None if root is None else AgentWorkspaceReclaimer(root)
+
+
+def resolve_workspace_root(
+    *,
+    execution_environment: str,
+    workspace_root: str | None,
+) -> Path | None:
+    """Return the Agent Workspace root this deployment owns, or nothing.
+
+    A named root is the deployment's own path and is used whatever the execution
+    mode is: reclamation and auditing must reach trees an earlier enabled
+    configuration left there. An unnamed root means the default path, which only an
+    enabled configuration owns — disabled does not invent it, because that path was
+    never this process's workspace.
+    """
     if execution_environment not in {"disabled", "trust", "sandbox"}:
         raise ValueError(f"unknown agent execution mode: {execution_environment}")
     raw = (workspace_root or "").strip()
     if not raw or raw in {"null", "None"}:
         if execution_environment == "disabled":
             return None
-        root = default_local_workspace_root()
-    else:
-        root = Path(raw).expanduser()
-        if not root.is_absolute():
-            raise ValueError("agent.workspace_root must be an absolute path")
-        root = root.resolve()
-    return AgentWorkspaceReclaimer(root)
+        return default_local_workspace_root()
+    root = Path(raw).expanduser()
+    if not root.is_absolute():
+        raise ValueError("agent.workspace_root must be an absolute path")
+    return root.resolve()
+
+
+@dataclass(frozen=True, slots=True)
+class RunWorkspaceAudit:
+    """What one read-only pass over a workspace root observed."""
+
+    roots: int
+    orphans: tuple[str, ...]
+    unreadable: int
+
+
+async def audit_run_workspaces(
+    *,
+    workspace_root: Path,
+    store: RunExistenceReader,
+    page_size: int = _ORPHAN_SWEEP_PAGE_SIZE,
+    sample: int = 20,
+) -> RunWorkspaceAudit:
+    """Report Run roots, and the ones whose Run row is gone. Deletes nothing.
+
+    The sweep is the thing that deletes, and it runs where a deployment owns a root.
+    This is the operator's look at the same fact: a root left by an earlier enabled
+    configuration whose path this deployment does not own can be counted before
+    anything is asked to remove it.
+    """
+    page_size = max(1, int(page_size))
+    sample = max(0, int(sample))
+    roots = 0
+    orphans: list[str] = []
+    unreadable = 0
+    after: tuple[str, str] | None = None
+    while True:
+        page = await asyncio.to_thread(
+            list_run_workspace_roots, workspace_root, after=after, limit=page_size
+        )
+        if not page:
+            return RunWorkspaceAudit(roots=roots, orphans=tuple(orphans), unreadable=unreadable)
+        for path in page:
+            after = (path.parent.name, path.name)
+            roots += 1
+            try:
+                record = await store.get_run_global(run_id=path.name)
+            except Exception:
+                logger.warning("Failed to read run %s during Agent Workspace audit", path.name)
+                unreadable += 1
+                continue
+            if record is None and len(orphans) < sample:
+                orphans.append(f"{path.parent.name}/{path.name}")
+        if len(page) < page_size:
+            return RunWorkspaceAudit(roots=roots, orphans=tuple(orphans), unreadable=unreadable)
 
 
 def reclaim_run_workspace(workspace_root: Path, owner_id: str, run_id: str) -> None:
@@ -886,6 +953,9 @@ def _remove_run_root(path: Path) -> None:
 
 __all__ = [
     "AgentWorkspaceReclaimer",
+    "RunWorkspaceAudit",
+    "audit_run_workspaces",
+    "resolve_workspace_root",
     "RunWorkspace",
     "WorkspaceIntegrityError",
     "WorkspaceRecoveryFailed",

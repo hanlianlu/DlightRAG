@@ -35,7 +35,12 @@ def deterministic_uuid(*, seed: str, name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class SessionId:
-    """One agent session identity, pinned at acceptance for Research runs."""
+    """One agent session identity, pinned at acceptance for Research runs.
+
+    ``deterministic`` exists for the callers that must be idempotent by
+    construction: a child session and a Fast stage derive their identity from the
+    fact that authorizes them rather than from a fresh draw.
+    """
 
     value: str
 

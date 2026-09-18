@@ -4,6 +4,7 @@
 import asyncio
 import contextlib
 import datetime
+import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -58,6 +59,7 @@ from dlightrag.engine.runtime.records import (
     RunEvent,
     RunFetchedResource,
     RunRecord,
+    run_request_fingerprint,
 )
 from tests.unit.conftest import answer_image_policy
 
@@ -918,9 +920,11 @@ async def test_auto_removes_fast_before_persisting_routing_when_40k_cannot_fit(
 
 async def test_auto_fast_capacity_includes_profile_memory(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     import dlightrag.application.answer_runs.service as service_module
 
+    caplog.set_level(logging.INFO)
     observed_fast_memory: list[str] = []
 
     def history_measure(
@@ -959,6 +963,14 @@ async def test_auto_fast_capacity_includes_profile_memory(
     # The standing block does not fit Fast's remaining window, so auto keeps
     # Research rather than overflowing at generation.
     assert store.created[0]["routing"].valid_modes == ("research",)
+    # And the operator can see that, with the numbers that say whether the memory
+    # reservation is what did it (ADR 0020's residual).
+    dropped = [record for record in caplog.records if "Fast is not viable" in record.getMessage()]
+    assert len(dropped) == 1
+    # LogRecord's `extra` lands as attributes; read them through one mapping view.
+    extra = vars(dropped[0])
+    assert extra["memory_chars"] == 10_000
+    assert extra["requested_mode"] == "auto"
 
 
 async def test_explicit_fast_rejects_when_40k_cannot_fit() -> None:
@@ -1923,3 +1935,44 @@ async def test_a_continuation_without_a_session_injects_parent_history() -> None
     assert fork.continuation_kind == "fork"
     assert follow.agent_session_id
     assert fork.agent_session_id
+
+
+async def test_a_continuation_hashes_the_submission_and_not_its_own_identities() -> None:
+    """A retry must replay, and the identities this process draws are not input.
+
+    A continuation mints a Session or a Lane per attempt, so the raw request hash
+    differs between two identical submissions; the continuation fingerprint drops
+    exactly those two fields, which is what makes the retry a replay.
+    """
+    terminal = _record(
+        status="succeeded",
+        result={"answer": "parent answer"},
+        accepted_input={"query": "parent question", "workspaces": ["finance"]},
+    )
+    service = _service(store=_Store(run=terminal))
+    import dlightrag.application.answer_runs.service as service_module
+
+    async def request(include_answer: bool = False, query: str = "other branch"):
+        return await service.continuation_request(
+            owner_id=_OWNER,
+            run_id="run-1",
+            query=query,
+            include_answer=include_answer,
+            authorized_workspaces=("finance",),
+        )
+
+    first = await request()
+    retry = await request()
+    other = await request(query="a different branch")
+    follow = await request(include_answer=True)
+    assert first is not None and retry is not None and other is not None and follow is not None
+
+    # Identity minting is per attempt, so the raw hash is not stable...
+    assert first.agent_lane_id != retry.agent_lane_id
+    assert run_request_fingerprint(
+        service_module._normalized_request(first).as_request()
+    ) != run_request_fingerprint(service_module._normalized_request(retry).as_request())
+    # ...and dropping those two fields is what makes the submission stable.
+    assert service._continuation_fingerprint(first) == service._continuation_fingerprint(retry)
+    assert service._continuation_fingerprint(first) != service._continuation_fingerprint(other)
+    assert service._continuation_fingerprint(first) != service._continuation_fingerprint(follow)
