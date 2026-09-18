@@ -9,6 +9,14 @@ Accepted and implemented. Revises the control-placement clause of
 [ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md), which said the
 per-turn Follow-Up control was wrong and that only the tip offers one.
 
+Its residual — a Web turn submitted through the composer carries no Run Notes
+because it records no `parent_run_id` — is resolved by
+[ADR 0022](0022-session-owned-memory-and-run-owned-products.md): memory is
+Session-owned, so the carry no longer travels on lineage and the composer records
+its parent for lineage alone. That ADR also deletes the browser follow-up route
+this one kept for a client that names a Run explicitly, leaving the REST and MCP
+endpoints as the surfaces a caller continues a named Run through.
+
 ## Context
 
 ADR 0019 decided that Fork is a tree operation and Follow-Up is a line operation:

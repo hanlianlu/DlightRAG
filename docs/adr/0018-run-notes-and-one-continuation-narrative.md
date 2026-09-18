@@ -14,6 +14,13 @@ have landed: committed spills join `durable_handles`, a write under the reserved
 notes path registers a Run Note, and the compaction summary carries the notes
 field. Live specs name the terms.
 
+The ownership clause is revised by [ADR 0022](0022-session-owned-memory-and-run-owned-products.md):
+a write under the reserved notes path still declares a note, and the note set is
+still a filter over one observation, but the authority on what a Session
+remembers is the Session's own notes plane rather than a Run's Workspace
+Inventory. The path rule, the notes field, the render cap, and the one-narrative
+rule are untouched by that revision.
+
 The experiment that gates the notes field has now been run at the seam and against
 a live provider (DeepSeek Flash, the low agent level, seven Runs, about $0.49).
 Measured: a registered note is carried by every later compaction and rendered as

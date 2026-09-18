@@ -13,6 +13,13 @@ tools, skills, and publication.
 
 Accepted.
 
+The carry rationale this Decision records for Fast's inert Agent Workspace is
+superseded by [ADR 0022](0022-session-owned-memory-and-run-owned-products.md):
+memory is Session-owned, so a Fast Run carries nothing forward and has nothing to
+receive. Whether Fast keeps an inert Workspace at all is that decision's
+remaining question; the uniformity conclusion here — Fast and Research follow one
+environment contract, differing only in capability — stands either way.
+
 ## Context
 
 [ADR 0018](0018-run-notes-and-one-continuation-narrative.md) made a Run Note a
