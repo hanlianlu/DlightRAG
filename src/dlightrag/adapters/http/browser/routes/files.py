@@ -23,6 +23,7 @@ from dlightrag.application.access import AccessAction, owner_id_from_user
 from dlightrag.application.corpus_admin import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
     FILE_PANEL_PAGE_MAX_LIMIT,
+    CorpusMutationUnavailableError,
     FilePanelCursorError,
     FilePanelPageRequest,
     UnsafeUploadNameError,
@@ -277,6 +278,10 @@ async def start_failed_file_retry(
             status_code=503,
             detail="Deployment-wide nonterminal admission limit reached",
         ) from None
+    except CorpusMutationUnavailableError:
+        # A read-only replica refuses before staging anything; report the role rather
+        # than a generic acceptance failure.
+        raise
     except Exception:
         logger.exception(
             "Could not accept failed-document retry for workspace %s",
@@ -358,6 +363,8 @@ async def upload_files(
                 status_code=503,
                 detail="Deployment-wide nonterminal admission limit reached",
             ) from None
+        except CorpusMutationUnavailableError:
+            raise
         except Exception:
             logger.exception(
                 "Failed to accept ingest Run for workspace %s",
@@ -387,6 +394,8 @@ async def upload_files(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except HTTPException:
+        raise
+    except CorpusMutationUnavailableError:
         raise
     except Exception:
         logger.exception("Upload staging failed")
@@ -434,6 +443,8 @@ async def delete_files(
             status_code=503,
             detail="Deployment-wide nonterminal admission limit reached",
         ) from None
+    except CorpusMutationUnavailableError:
+        raise
     except Exception:
         logger.exception("Delete Run acceptance failed")
         raise HTTPException(status_code=503, detail="Delete could not be accepted") from None

@@ -1499,3 +1499,54 @@ class TestSourcePresentation:
 
         assert response.status_code == 200
         assert response.json()["agent_effort"] == {"levels": ["low"], "default": None}
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body"),
+        [
+            ("POST", "/web/api/files/upload", None),
+            ("POST", "/web/api/files/retry", {"workspace": "default"}),
+            (
+                "DELETE",
+                "/web/api/files?workspace=default&file_path=report.pdf",
+                None,
+            ),
+        ],
+        ids=["upload", "retry", "delete"],
+    )
+    async def test_a_read_only_replica_reports_the_role_not_a_generic_failure(
+        self,
+        client: AsyncClient,
+        mock_application,
+        method: str,
+        path: str,
+        body: dict[str, object] | None,
+    ) -> None:
+        """The Files panel's write controls meet the role refusal, not a 500.
+
+        Every write route catches broadly to turn infrastructure failures into advice.
+        A read-only replica's typed refusal must pass through those catches, so the panel
+        can say why the deployment declined instead of "please try again".
+        """
+        from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+
+        refusal = CorpusMutationUnavailableError(
+            "This deployment is a read-only replica of the knowledge base: it accepts no "
+            "corpus writes. Send the upload, retry, or delete to a writer."
+        )
+        mock_application.corpus_mutations.stage_upload.side_effect = refusal
+        mock_application.corpus_mutations.create_retry.side_effect = refusal
+        mock_application.corpus_mutations.create_delete.side_effect = refusal
+
+        if method == "POST" and path.endswith("upload"):
+            response = await client.post(
+                path, files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))]
+            )
+        elif body is None:
+            response = await client.request(method, path)
+        else:
+            response = await client.request(method, path, json=body)
+
+        assert response.status_code == 503
+        payload = response.json()
+        assert payload["error_type"] == "unavailable"
+        assert "read-only replica" in payload["detail"]

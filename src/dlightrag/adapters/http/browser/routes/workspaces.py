@@ -22,6 +22,7 @@ from dlightrag.application.access import AccessAction, WorkspaceRecord, owner_id
 from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
+    CorpusMutationUnavailableError,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
     normalize_workspace,
@@ -245,6 +246,8 @@ async def reset_workspace(
         )
     except RunAdmissionLimitExceededError:
         return _error("Deployment-wide nonterminal admission limit reached", status_code=503)
+    except CorpusMutationUnavailableError as exc:
+        return _error(str(exc), status_code=503)
     except Exception:
         logger.exception("Workspace reset Run acceptance failed")
         return _error(
