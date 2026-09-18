@@ -84,6 +84,37 @@ Memory is where a value lives, not a ritual performed on every compaction, and t
 earlier negative results are a statement about those fixtures rather than about the
 habit.
 
+### Re-measured under Session-owned memory and a confined shell
+
+The experiment was run again after [ADR 0022](0022-session-owned-memory-and-run-owned-products.md)
+replaced the carry with a Session-owned plane and
+[ADR 0024](0024-the-agent-sees-only-its-workspace.md) confined the Agent's processes, on
+a staged task that establishes page numbers early and needs them two compactions later
+(DeepSeek Flash at the low agent level, three Runs, about $0.35):
+
+- **The mechanism holds end to end.** A note written mid-Run (`notes/page_map.md`) is
+  named by every later compaction (2/2), promoted to the plane under the writing Run's
+  own lease (revision 2, 5298 bytes), and a **later Run of the same Session starts with
+  it materialized** — the continuation's working copy and the plane agree byte for byte
+  (5777 bytes, digest `2bbf85c1…`), and that Run answered, edited the note, and did not
+  search the corpus once.
+- **The model does read it back**, and the read is conditional on need rather than
+  habitual: after a compaction it opened the note it had written, and in the fixtures
+  whose context already carried the answer it did not.
+- **Bounded**: 227–5777 bytes against 0.5M–1.8M prompt tokens across every run of both
+  experiments.
+- **Unprompted adoption is fixture-dependent, and that is the residual this decision
+  already records.** On this staged task the first Run crossed **four compactions without
+  writing a note at all**, re-deriving page numbers by searching again; the steered twin
+  of the same task wrote the note on its twenty-second turn and kept it current. The
+  earlier fixture, whose values had to be gathered sequentially and quoted later, saw an
+  unsteered Run write its note on turn six. So the habit fires on the shape the guidance
+  names — a value a later step depends on — and not on a Run that never stops searching.
+- **The confinement changed the model's behaviour as intended**: that Run tried four
+  direct routes into the corpus (a bare filename, a `local://` uri, an absolute path, a
+  parsed-element id). All four were refused by the workspace-rooted tools, and it went
+  back to retrieval.
+
 ## Context
 
 Continuation memory today is exactly two things, both of them the Context
