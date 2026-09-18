@@ -281,11 +281,54 @@ it('composes stored history through public properties and AnswerPresentation pro
     action = (event as CustomEvent<ChatRunActionDetail>).detail;
   });
   feature.querySelector<HTMLButtonElement>('button')?.focus();
-  const followUp = Array.from(feature.querySelectorAll('button')).find(
-    (button) => button.textContent?.trim() === 'Follow up',
+  const fork = Array.from(feature.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === 'Fork',
   );
-  followUp?.click();
-  expect(action).to.deep.equal({action: 'follow-up', runId: 'run-1'});
+  fork?.click();
+  expect(action).to.deep.equal({action: 'fork', runId: 'run-1'});
+});
+
+it('offers Fork on every settled turn and no per-turn Follow-Up control', async () => {
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId: 'fork-per-turn',
+    lineage: null,
+    history: [
+      storedTurn(),
+      {
+        ...storedTurn(),
+        turnId: 'turn-2',
+        turnNumber: 2,
+        answerRunId: 'run-2',
+        submissionId: 'submission-2',
+      },
+    ],
+  };
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  const labels = (turnId: string): (string | undefined)[] => Array.from(
+    feature.querySelectorAll<HTMLButtonElement>(`[data-turn-id="${turnId}"] button`),
+  ).map((button) => button.textContent?.trim());
+
+  // Fork branches from the turn it names, so every settled turn offers it. A
+  // Follow-Up appends to the Lane tip, which the composer already owns, so the
+  // Web offers no per-turn control for it.
+  expect(labels('turn-1')).to.contain('Fork');
+  expect(labels('turn-1')).to.not.contain('Follow up');
+  expect(labels('turn-2')).to.contain('Fork');
+  expect(labels('turn-2')).to.not.contain('Follow up');
+
+  const actions: ChatRunActionDetail[] = [];
+  feature.addEventListener('dl-chat-run-action', (event) => {
+    actions.push((event as CustomEvent<ChatRunActionDetail>).detail);
+  });
+  const fork = Array.from(
+    feature.querySelectorAll<HTMLButtonElement>('[data-turn-id="turn-2"] button'),
+  ).find((button) => button.textContent?.trim() === 'Fork');
+  fork?.click();
+  expect(actions).to.deep.equal([{action: 'fork', runId: 'run-2'}]);
 });
 
 it('raises background intent without treating interactive message controls as background', async () => {
@@ -303,10 +346,10 @@ it('raises background intent without treating interactive message controls as ba
 
   feature.querySelector<HTMLElement>('main[aria-label="Chat"]')?.click();
   expect(backgroundIntents).to.equal(1);
-  const followUp = Array.from(feature.querySelectorAll<HTMLButtonElement>('button')).find(
-    (button) => button.textContent?.trim() === 'Follow up',
+  const fork = Array.from(feature.querySelectorAll<HTMLButtonElement>('button')).find(
+    (button) => button.textContent?.trim() === 'Fork',
   );
-  followUp?.click();
+  fork?.click();
   expect(backgroundIntents).to.equal(1);
 });
 
@@ -1015,14 +1058,14 @@ it('delayed steering preserves newer text and is aborted when the run detaches',
   expect(second.textContent).not.to.contain('detached steering');
 });
 
-it('detaching invalidates delayed follow-up and fork continuations', async () => {
+it('detaching invalidates a delayed fork continuation', async () => {
   const continuationRequests: Array<{
     resolve: (response: Response) => void;
     signal: AbortSignal;
   }> = [];
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (init?.method === 'POST' && (url.endsWith('/follow-up') || url.endsWith('/fork'))) {
+    if (init?.method === 'POST' && url.endsWith('/fork')) {
       return new Promise<Response>((resolve) => {
         continuationRequests.push({resolve, signal: init.signal as AbortSignal});
       });
@@ -1040,25 +1083,23 @@ it('detaching invalidates delayed follow-up and fork continuations', async () =>
   await settle(feature);
   const originalRoute = webRouter.current;
 
-  for (const kind of ['follow-up', 'fork'] as const) {
-    const conversationId = `stale-${kind}`;
-    const continuation = feature.continueRun(kind, 'run-old', 'Continue');
-    await waitFor(() => continuationRequests.length > 0);
-    const request = continuationRequests.shift()!;
-    feature.detachRun();
-    expect(request.signal.aborted).to.equal(true);
-    request.resolve(new Response(JSON.stringify(continuationDescriptor(conversationId)), {
-      status: 200,
-      headers: {'Content-Type': 'application/json'},
-    }));
-    await continuation;
+  const conversationId = 'stale-fork';
+  const continuation = feature.forkRun('run-old', 'Continue');
+  await waitFor(() => continuationRequests.length > 0);
+  const request = continuationRequests.shift()!;
+  feature.detachRun();
+  expect(request.signal.aborted).to.equal(true);
+  request.resolve(new Response(JSON.stringify(continuationDescriptor(conversationId)), {
+    status: 200,
+    headers: {'Content-Type': 'application/json'},
+  }));
+  await continuation;
 
-    expect(conversationStore.conversations.some(
-      (conversation) => conversation.conversationId === conversationId,
-    )).to.equal(false);
-    expect(conversationStore.activeConversationId).not.to.equal(conversationId);
-    expect(webRouter.current).to.deep.equal(originalRoute);
-  }
+  expect(conversationStore.conversations.some(
+    (conversation) => conversation.conversationId === conversationId,
+  )).to.equal(false);
+  expect(conversationStore.activeConversationId).not.to.equal(conversationId);
+  expect(webRouter.current).to.deep.equal(originalRoute);
 });
 
 it('continuation start failure raises a toast intent instead of a blocking alert', async () => {
@@ -1077,7 +1118,7 @@ it('continuation start failure raises a toast intent instead of a blocking alert
   await settle(feature);
 
   try {
-    await feature.continueRun('follow-up', 'run-old', 'Continue');
+    await feature.forkRun('run-old', 'Continue');
     await waitFor(() => toasts.length === 1);
     expect(toasts[0].message).to.equal('The continuation could not be started.');
     expect(alerts).to.deep.equal([]);

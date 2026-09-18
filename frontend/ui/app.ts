@@ -112,7 +112,7 @@ export class DlApp extends LightElement {
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
   readonly #nativeModalOwners = new Set<HTMLElement>();
   #controller: AbortController | null = null;
-  #pendingContinuation: {kind: 'follow-up' | 'fork'; runId: string} | null = null;
+  #pendingFork: string | null = null;
   readonly #ready: Promise<WebBootstrap>;
   #resolveReady!: (bootstrap: WebBootstrap) => void;
   #readyResolved = false;
@@ -535,9 +535,8 @@ export class DlApp extends LightElement {
       );
       return;
     }
-    this.#pendingContinuation = {kind: event.detail.action, runId: event.detail.runId};
-    this.querySelector<DlContinuationDialog>('dl-continuation-dialog')
-      ?.open(event.detail.action);
+    this.#pendingFork = event.detail.runId;
+    this.querySelector<DlContinuationDialog>('dl-continuation-dialog')?.open();
   }
 
   #childActivity(event: CustomEvent<ChatChildActivityDetail>): void {
@@ -546,11 +545,11 @@ export class DlApp extends LightElement {
   }
 
   #continuationResult(event: CustomEvent<ContinuationResult>): void {
-    const pending = this.#pendingContinuation;
-    this.#pendingContinuation = null;
-    if (!pending || !event.detail.query || event.detail.kind !== pending.kind) return;
+    const runId = this.#pendingFork;
+    this.#pendingFork = null;
+    if (!runId || !event.detail.query) return;
     const chat = this.querySelector<DlChatFeature>('dl-chat-feature');
-    if (chat) void chat.continueRun(pending.kind, pending.runId, event.detail.query);
+    if (chat) void chat.forkRun(runId, event.detail.query);
   }
 
   #bootstrapStatus(): TemplateResult {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ChildControlRejectedError,
-  continueAnswerRun,
+  forkAnswerRun,
   controlAnswerChild,
   getAnswerRunChild,
   getAnswerRunChildren,
@@ -130,7 +130,7 @@ test('continuation posts one submission id to the selected branch operation', as
     }), {status: 202, headers: {'Content-Type': 'application/json'}});
   };
 
-  const result = await continueAnswerRun('parent/run', 'fork', 'branch', 'submission-1');
+  const result = await forkAnswerRun('parent/run', 'branch', 'submission-1');
 
   const request = seen[0]!;
   assert.equal(request.url, 'http://localhost/web/api/answer/parent%2Frun/fork');

@@ -7,7 +7,7 @@ import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
 import {
   ChildControlRejectedError,
   ConversationApiError,
-  continueAnswerRun,
+  forkAnswerRun,
   controlAnswerChild,
   getAnswerRunChild,
   getAnswerRunChildren,
@@ -301,8 +301,7 @@ export class DlChatFeature extends LightElement {
     }
   }
 
-  async continueRun(
-    kind: 'follow-up' | 'fork',
+  async forkRun(
     runId: string,
     query: string,
   ): Promise<void> {
@@ -310,23 +309,15 @@ export class DlChatFeature extends LightElement {
     const controller = new AbortController();
     this.#continuationController = controller;
     try {
-      const descriptor = await continueAnswerRun(
+      const descriptor = await forkAnswerRun(
         runId,
-        kind,
         query,
         crypto.randomUUID(),
         controller.signal,
       );
       if (controller.signal.aborted || this.#continuationController !== controller) return;
       this.handles.conversations.upsertSummary(descriptor.conversation);
-      if (kind === 'fork') {
-        await webRouter.navigate(conversationRoute(descriptor.conversation.conversationId));
-      } else {
-        await this.handles.conversations.open(descriptor.conversation.conversationId, {
-          showLoading: false,
-          preserveOnError: true,
-        });
-      }
+      await webRouter.navigate(conversationRoute(descriptor.conversation.conversationId));
     } catch {
       if (!controller.signal.aborted && this.#continuationController === controller) {
         requestToast(this, {

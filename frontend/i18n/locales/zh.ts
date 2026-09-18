@@ -191,7 +191,6 @@ export const templates: Record<
   'chatMessageList.reconnect.stopping.action': '重新连接',
   'chatMessageList.reconnectAria': '重新连接到此回答',
   'chatMessageList.childAgents': '子代理',
-  'chatMessageList.followUp': '继续追问',
   'chatMessageList.fork': '分叉',
   'chatMessageList.evidenceChunksTitle': str`${0} 条证据分块`,
   'chatMessageList.tokensTitle': str`${0} 个 token`,
@@ -290,9 +289,7 @@ export const templates: Record<
 
   // Run dialogs
   'runDialogs.forkTitle': '分叉此回答',
-  'runDialogs.followUpTitle': '继续追问',
   'runDialogs.forkNote': '从这条回答当时的状态开启新会话，包含该回答。',
-  'runDialogs.followUpNote': '提出追问；先前的回答会作为上下文。',
   'runDialogs.askPlaceholder': '输入问题…',
   'runDialogs.questionLabel': '你的问题',
   'runDialogs.childStatus.running': '运行中',

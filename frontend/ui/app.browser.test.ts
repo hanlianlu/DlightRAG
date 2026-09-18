@@ -293,8 +293,8 @@ it('keeps Undo available across Settings and a sibling native modal', async () =
   expect(toast.querySelector<HTMLButtonElement>('button')?.textContent).to.equal('Undo');
 
   const continuation = app.querySelector<DlContinuationDialog>('dl-continuation-dialog')!;
-  continuation.open('follow-up');
-  const continuationDialog = dialogNamed(continuation, 'Follow up')!;
+  continuation.open();
+  const continuationDialog = dialogNamed(continuation, 'Fork this answer')!;
   await waitFor(() => continuationDialog.open);
   settingsDialog.close();
   await waitFor(() => !settingsDialog.open);

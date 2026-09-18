@@ -1540,7 +1540,7 @@ class AnswerService:
         auth_mode: str = "none",
         authorized_workspaces: Sequence[str] | None,
     ) -> RunCreation | None:
-        """Start a continuation from one terminal result through normal acceptance."""
+        """Append one turn to the selected run's Lane tip through normal acceptance."""
         request = await self.continuation_request(
             owner_id=owner_id,
             run_id=run_id,

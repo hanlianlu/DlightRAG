@@ -679,21 +679,20 @@ export async function replyAnswerChild(
   return parseChildCommand(response, 'Failed to reply to child agent');
 }
 
-export async function continueAnswerRun(
+export async function forkAnswerRun(
   runId: string,
-  operation: 'follow-up' | 'fork',
   content: string,
   submissionId: string,
   signal?: AbortSignal,
 ): Promise<AcceptedAnswer> {
   const id = encodeURIComponent(runId);
-  const response = await fetch(`/web/api/answer/${id}/${operation}`, {
+  const response = await fetch(`/web/api/answer/${id}/fork`, {
     method: 'POST',
     headers: csrfHeaders('application/json'),
     body: JSON.stringify({content, submission_id: submissionId}),
     signal,
   });
-  return parseWire(response, acceptedAnswer, makeError, `Failed to ${operation} the answer`);
+  return parseWire(response, acceptedAnswer, makeError, 'Failed to fork the answer');
 }
 
 export async function cancelRun(

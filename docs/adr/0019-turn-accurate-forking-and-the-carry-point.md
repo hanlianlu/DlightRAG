@@ -11,7 +11,10 @@ branch at one Run's exact state — and makes the mutable plane travel with it.
 
 Accepted and implemented. The slices under [Consequences](#consequences) have
 landed: Fork Point recording, turn-accurate seeding, workspace reclamation, Run
-Note carry, and history derived from the branch point. Live specs name the terms.
+Note carry, and history derived from the branch point. The control placement this
+Decision states was revised by [ADR 0021](0021-web-fork-per-turn-and-composer-continuation.md):
+the Web offers Fork per turn and no per-turn Follow-Up control. Live specs name
+the terms.
 
 Evidence for the compaction and carry experiments is unit- and integration-level
 at the product seams (the write tool, Inventory settlement, `bind_run_workspace`,

@@ -40,7 +40,7 @@ export type ChatView =
 
 
 export interface ChatRunActionDetail {
-  action: 'children' | 'follow-up' | 'fork';
+  action: 'children' | 'fork';
   runId: string;
 }
 
@@ -596,7 +596,6 @@ export class DlChatMessageList extends LightElement {
     const tokenCount = Number(usageDetails?.total_tokens || 0);
     return html`
       <div class=${chatStyles.runActions}>
-        <button type="button" @click=${() => this.#runAction('follow-up', turn.runId)}>${msg('Follow up', {id: 'chatMessageList.followUp'})}</button>
         <button type="button" @click=${() => this.#runAction('fork', turn.runId)}>${msg('Fork', {id: 'chatMessageList.fork'})}</button>
         ${evidenceCount || tokenCount ? html`
           <span class=${chatStyles.runSummary}

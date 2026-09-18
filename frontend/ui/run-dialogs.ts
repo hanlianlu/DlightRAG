@@ -14,25 +14,17 @@ import {isAbortError} from '../lib/errors.ts';
 import {KeysetPager} from '../lib/paged.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 
-export type ContinuationKind = 'follow-up' | 'fork';
-
 export interface ContinuationResult {
-  kind: ContinuationKind;
   query: string | null;
 }
 
 export class DlContinuationDialog extends LightElement {
-  static override properties = {kind: {state: true}};
-  declare kind: ContinuationKind;
-
   constructor() {
     super();
-    this.kind = 'follow-up';
     updateWhenLocaleChanges(this);
   }
 
-  open(kind: ContinuationKind): void {
-    this.kind = kind;
+  open(): void {
     void this.updateComplete.then(() => {
       const dialog = this.#dialog();
       if (!dialog) return;
@@ -54,17 +46,10 @@ export class DlContinuationDialog extends LightElement {
   }
 
   override render() {
-    const forking = this.kind === 'fork';
-    const title = forking
-      ? msg('Fork this answer', {id: 'runDialogs.forkTitle'})
-      : msg('Follow up', {id: 'runDialogs.followUpTitle'});
-    const note = forking
-      ? msg('Start a new conversation from the state this answer settled at, including its answer.', {
-          id: 'runDialogs.forkNote',
-        })
-      : msg('Ask a follow-up question; the previous answer is included as context.', {
-          id: 'runDialogs.followUpNote',
-        });
+    const title = msg('Fork this answer', {id: 'runDialogs.forkTitle'});
+    const note = msg('Start a new conversation from the state this answer settled at, including its answer.', {
+      id: 'runDialogs.forkNote',
+    });
     return html`
       <dialog class="confirm-dialog" aria-labelledby="dl-continuation-title"
               @close=${() => this.#emitClose()}>
@@ -90,7 +75,6 @@ export class DlContinuationDialog extends LightElement {
     this.dispatchEvent(
       new CustomEvent<ContinuationResult>('dl-continuation-result', {
         detail: {
-          kind: this.kind,
           query: value === 'continue' ? (this.#input()?.value.trim() ?? null) : null,
         },
         bubbles: true,
