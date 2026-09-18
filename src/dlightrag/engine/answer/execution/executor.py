@@ -859,12 +859,9 @@ class AnswerExecutor:
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
-        if execution_environment not in {"disabled", "trust"}:
-            raise ValueError(f"unknown agent execution mode: {execution_environment}")
         self._shell_confinement = shell_confinement
         self._execution_adapter = resolve_execution_adapter(
-            execution_environment,  # type: ignore[arg-type]
-            confinement=shell_confinement,
+            execution_environment, confinement=shell_confinement
         )
 
     async def aclose(self) -> None:
