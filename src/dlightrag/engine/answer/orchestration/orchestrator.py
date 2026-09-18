@@ -58,7 +58,6 @@ from dlightrag.engine.agent.tools.files import (
     ResourceReadRequest,
     ResourceViewer,
 )
-from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY,
     ContextPolicy,
@@ -77,7 +76,6 @@ from dlightrag.engine.answer.continuation_handles import (
 )
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
-    InvalidToolConfigurationError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
@@ -936,56 +934,9 @@ class AnswerOrchestrator:
             child=child,
             tool_names=tool_names,
         )
-        try:
-            registry = ToolRegistry(composed)
-        except DuplicateToolError as exc:
-            raise InvalidToolConfigurationError(exc.names) from exc
-        selected_names = tool_names
-        if (
-            child
-            and selected_names is None
-            and (subagent_host is None or subagent_host.async_lifecycle)
-        ):
-            # Independent deliberation is read-only by default. A parent can
-            # explicitly request a narrower side-effecting subset, but resolve
-            # still enforces the host-composed permission ceiling.
-            read_only = {
-                "search_knowledge_base",
-                "search_web",
-                "read",
-                "view",
-                "grep",
-                "find",
-                "ls",
-                "recall_memory",
-                "load_skill",
-                "ask_parent",
-            }
-            selected_names = tuple(tool.name for tool in composed if tool.name in read_only)
-        elif (
-            child
-            and selected_names is not None
-            and any(tool.name == "ask_parent" for tool in composed)
-        ):
-            # Supervision is part of every hosted Child contract, independent
-            # of the narrower task-tool subset selected by its parent.
-            selected_names = tuple(dict.fromkeys((*selected_names, "ask_parent")))
-        return list(
-            registry.resolve(
-                selected_names,
-                exclude={
-                    "spawn_agent",
-                    "subagent_status",
-                    "wait_subagent",
-                    "cancel_subagent",
-                    "steer_subagent",
-                    "continue_subagent",
-                    "reply_subagent",
-                }
-                if child
-                else (),
-            )
-        )
+        # Membership is composition's, and exactly one place decides it: a Child's
+        # default and the ceiling an explicit request narrows within (ADR 0025).
+        return composed
 
     def _prepare_local_image(
         self,

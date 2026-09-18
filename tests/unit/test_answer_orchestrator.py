@@ -359,6 +359,81 @@ def test_child_preparation_excludes_every_parent_subagent_control() -> None:
     )
 
 
+def _research_owner_with_subagents(tmp_path: Path):
+    """A parent that can compose path tools, so capability and authority both exist."""
+    from dlightrag.engine.answer.tools.subagents import SubagentHost
+
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    environment = LocalExecutionEnvironment(tmp_path)
+    orchestrator = _orchestrator(mode="research", model=model, environment=environment)
+    orchestrator.bind_workspace(
+        RunWorkspace(
+            epoch=1,
+            workspace=tmp_path,
+            spill_dir=tmp_path / "spill",
+            environment=environment,
+        )
+    )
+    orchestrator._subagent_host = SubagentHost()
+    return orchestrator
+
+
+def _child_tools(orchestrator, **request_kwargs):
+    from dlightrag.engine.agent.session.ids import EntryId, SessionId
+    from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
+
+    child = orchestrator.prepare_child_session(
+        ChildRequest(objective="investigate", **request_kwargs),
+        context_snapshot=ChildContextSnapshot.from_values(
+            parent_session_id=SessionId.new(),
+            parent_entry_id=EntryId.new(),
+            depth=0,
+            messages=[],
+        ),
+    )
+    return {tool.name for tool in child.tools}
+
+
+def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Path) -> None:
+    """A Child inherits capability, never authority, and the table is the whole rule.
+
+    Listing what a Child may hold made the default wrong for every Child that has to
+    compute something, and left a new capability off a Child until somebody remembered
+    it. Subtracting the authority groups instead means the two sets differ by exactly
+    that table, which is what this pins (ADR 0025).
+    """
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
+    orchestrator = _research_owner_with_subagents(tmp_path)
+    parent_names = {tool.name for tool in orchestrator.prepare_run("question").tools}
+    child_names = _child_tools(orchestrator)
+
+    assert {"bash", "write", "edit"} <= child_names
+    assert child_names & CHILD_FORBIDDEN_TOOLS == set()
+    # Everything the parent holds that a Child does not is in the table, and the
+    # Child's own guidance channel is the one addition for being a Child.
+    assert parent_names - child_names <= CHILD_FORBIDDEN_TOOLS
+    assert child_names - parent_names == {"ask_parent"}
+    for authority in ("remember", "forget", "attach_artifact", "spawn_agent"):
+        assert authority not in child_names
+
+
+def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Path) -> None:
+    """`tools` narrows; a name the Run withholds is refused rather than granted."""
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
+    orchestrator = _research_owner_with_subagents(tmp_path)
+    narrowed = _child_tools(orchestrator, tools=["bash", "search_knowledge_base"])
+
+    assert narrowed == {"bash", "search_knowledge_base", "ask_parent"}
+    assert narrowed & CHILD_FORBIDDEN_TOOLS == set()
+    # Asking for one of them says so, instead of failing as an unknown tool name.
+    with pytest.raises(ValueError, match="never holds: remember"):
+        _child_tools(orchestrator, tools=["bash", "remember"])
+
+
 def test_child_admission_record_is_shared_and_idempotent_across_retry() -> None:
     import hashlib
 

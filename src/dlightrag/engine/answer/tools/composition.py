@@ -157,6 +157,10 @@ def compose_research_tools(
         # then returns an ordinary not-found result rather than changing the Plan.
         tools.extend(skill_tools)
     try:
+        if child and tool_names is not None:
+            withheld = sorted(set(tool_names) & CHILD_FORBIDDEN_TOOLS)
+            if withheld:
+                raise ValueError("a Child Session never holds: " + ", ".join(withheld))
         registry = ToolRegistry(tools)
         selected_names = tool_names
         if (
@@ -164,37 +168,19 @@ def compose_research_tools(
             and selected_names is None
             and (subagent_host is None or subagent_host.async_lifecycle)
         ):
-            read_only = {
-                "search_knowledge_base",
-                "search_web",
-                "read",
-                "view",
-                "grep",
-                "find",
-                "ls",
-                "recall_memory",
-                "load_skill",
-                "ask_parent",
-            }
-            selected_names = tuple(tool.name for tool in tools if tool.name in read_only)
+            # A Child's default is its parent's capability minus the authority groups,
+            # computed rather than listed: a capability nobody has written yet is a
+            # Child's the moment its parent has it, and withholding one is the explicit
+            # act of adding it to the table above (ADR 0025).
+            selected_names = tuple(
+                tool.name for tool in tools if tool.name not in CHILD_FORBIDDEN_TOOLS
+            )
         elif child and any(tool.name == "ask_parent" for tool in tools):
             selected_names = tuple(dict.fromkeys((*(selected_names or ()), "ask_parent")))
         return list(
             registry.resolve(
                 selected_names,
-                exclude={
-                    "spawn_agent",
-                    "subagent_status",
-                    "wait_subagent",
-                    "cancel_subagent",
-                    "steer_subagent",
-                    "continue_subagent",
-                    "reply_subagent",
-                    "remember",
-                    "forget",
-                }
-                if child
-                else (),
+                exclude=CHILD_FORBIDDEN_TOOLS if child else (),
             )
         )
     except DuplicateToolError as exc:
@@ -315,4 +301,25 @@ def _resource_rows(tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
     return rows
 
 
-__all__ = ["compose_research_tools"]
+#: Tools a Child Session never holds, because they spend the Run's authority rather than
+#: its capability (ADR 0025). Splitting and the roster belong to the Run that owns its
+#: shape, durable owner memory and publication belong to the Run that owns the answer,
+#: and an explicit ``tools`` request can narrow a Child but never restore one of these.
+CHILD_FORBIDDEN_TOOLS = frozenset(
+    {
+        "spawn_agent",
+        "subagent_status",
+        "wait_subagent",
+        "cancel_subagent",
+        "steer_subagent",
+        "continue_subagent",
+        "reply_subagent",
+        "remember",
+        "forget",
+        "attach_artifact",
+        "publish_skill",
+        "delete_skill",
+    }
+)
+
+__all__ = ["CHILD_FORBIDDEN_TOOLS", "compose_research_tools"]

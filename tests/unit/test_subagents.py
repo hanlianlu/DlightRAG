@@ -1429,7 +1429,15 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
     assert any(message.get("content") == "parent question" for message in messages)
 
 
-def test_child_defaults_to_read_only_parent_tools() -> None:
+def test_child_defaults_to_its_parents_capability_minus_authority() -> None:
+    """A Child inherits capability, never authority (ADR 0025).
+
+    The read-only default made every Child that had to compute something ask for
+    `bash` on each spawn, and left a capability nobody had written yet off a Child
+    until somebody remembered it. The authority groups are what a Child may not hold.
+    """
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
     child = compose_research_tools(
         evidence=EvidenceLedger(),
         trace={},
@@ -1442,8 +1450,19 @@ def test_child_defaults_to_read_only_parent_tools() -> None:
         child=True,
     )
     names = {tool.name for tool in child}
-    assert names >= {"search_knowledge_base", "read", "grep", "find", "ls"}
-    assert not {"spawn_agent", "attach_artifact", "write", "edit", "bash"} & names
+
+    assert names >= {
+        "search_knowledge_base",
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash",
+        "write",
+        "edit",
+    }
+    assert names & CHILD_FORBIDDEN_TOOLS == set()
+    assert not {"spawn_agent", "attach_artifact"} & names
 
 
 def test_child_can_explicitly_narrow_to_host_permitted_side_effect_tools() -> None:

@@ -15,7 +15,6 @@ _COUNCIL_DESCRIPTION = (
     "independent critique. Skip ordinary factual or trivial questions. User veto, "
     "cancellation, and scope constraints win."
 )
-_SIDE_EFFECT_TOOLS = frozenset({"spawn_agent", "attach_artifact", "write", "edit", "bash"})
 
 
 async def _retrieve(_query: str) -> object:
@@ -93,6 +92,17 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
     assert {tool.name for tool in empty.tools(child=True)} == set()
     assert {tool.name for tool in bundled.tools(child=True)} == {"load_skill"}
     assert with_names - without_names == {"load_skill"}
-    assert not _SIDE_EFFECT_TOOLS & with_names
-    assert "publish_skill" not in with_names
-    assert "delete_skill" not in with_names
+    # A catalog widens only how Skills are read. What a Child never holds is the Run's
+    # authority — its roster, durable memory, and publication — rather than side
+    # effects, which its own workspace tools provide (ADR 0025).
+    assert (
+        not {
+            "spawn_agent",
+            "remember",
+            "forget",
+            "attach_artifact",
+            "publish_skill",
+            "delete_skill",
+        }
+        & with_names
+    )
