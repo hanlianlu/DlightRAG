@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from dlightrag.engine.agent.environment.confinement import WorkspaceConfinement
 from dlightrag.engine.agent.environment.errors import (
     WORKSPACE_MAX_BYTES,
     WORKSPACE_MAX_ENTRIES,
@@ -54,9 +55,9 @@ class CompletedProcess:
 
 
 class LocalExecutionEnvironment:
-    """POSIX workspace rooted at one directory. Not a security boundary."""
+    """POSIX workspace rooted at one directory, confined to it when a policy is set."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, confinement: WorkspaceConfinement | None = None) -> None:
         resolved = root.expanduser().resolve()
         if not resolved.is_absolute():
             raise ValueError("execution environment root must be absolute")
@@ -71,6 +72,7 @@ class LocalExecutionEnvironment:
             entries=self._usage_entries,
             total_bytes=self._usage_bytes,
         )
+        self._confinement = confinement
         self._spawn_lock = asyncio.Lock()
         self._active_processes: set[asyncio.subprocess.Process] = set()
         self._active_processes_empty = asyncio.Event()
@@ -339,8 +341,13 @@ class LocalExecutionEnvironment:
         async with self._spawn_lock:
             if self._closing:
                 raise RuntimeError("execution environment is closed")
+            command = (
+                list(argv)
+                if self._confinement is None
+                else [*self._confinement.launch_prefix(), *argv]
+            )
             process = await asyncio.create_subprocess_exec(
-                *argv,
+                *command,
                 cwd=str(cwd or self._root),
                 env=dict(env),
                 stdout=asyncio.subprocess.PIPE,

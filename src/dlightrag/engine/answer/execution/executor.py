@@ -19,6 +19,7 @@ from dlightrag.engine.agent.environment import (
     SearchToolchain,
     resolve_execution_adapter,
 )
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.effects import (
     canonical_json,
 )
@@ -807,6 +808,7 @@ class AnswerExecutor:
         telemetry: Telemetry,
         model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
         execution_environment: str = "trust",
+        shell_confinement: ConfinementPolicy | None = None,
         workspace_root: str | None = None,
         session_notes_limits: SessionNotesLimits | None = None,
         search_toolchain: SearchToolchain | None = None,
@@ -858,8 +860,10 @@ class AnswerExecutor:
         self._on_dependency_recovered = on_dependency_recovered
         if execution_environment not in {"disabled", "trust", "sandbox"}:
             raise ValueError(f"unknown agent execution mode: {execution_environment}")
+        self._shell_confinement = shell_confinement
         self._execution_adapter = resolve_execution_adapter(
             execution_environment,  # type: ignore[arg-type]
+            confinement=shell_confinement,
         )
 
     async def aclose(self) -> None:

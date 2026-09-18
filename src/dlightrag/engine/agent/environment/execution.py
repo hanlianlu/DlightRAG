@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 from weakref import WeakSet
 
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.environment.local import (
     CompletedProcess,
     DirectoryEntry,
@@ -70,16 +71,27 @@ class ExecutionEnvironmentAdapter(Protocol):
 
 
 class TrustExecutionAdapter:
-    """Bind DlightRAG's rooted host environment. This is not a sandbox."""
+    """Bind DlightRAG's rooted host environment under a confinement policy.
 
-    def __init__(self) -> None:
+    The policy is not optional in a deployment: it is what makes ``trust`` mean the
+    deployment is trusted rather than the Agent being unconfined (ADR 0024). An
+    absent policy exists for tests that exercise the environment's own mechanics.
+    """
+
+    def __init__(self, confinement: ConfinementPolicy | None = None) -> None:
+        self._confinement = confinement
         self._environments: WeakSet[LocalExecutionEnvironment] = WeakSet()
         self._closed = False
 
     def create(self, workspace: Path) -> LocalExecutionEnvironment:
         if self._closed:
             raise RuntimeError("execution adapter is closed")
-        environment = LocalExecutionEnvironment(workspace)
+        environment = LocalExecutionEnvironment(
+            workspace,
+            confinement=(
+                None if self._confinement is None else self._confinement.for_workspace(workspace)
+            ),
+        )
         self._environments.add(environment)
         return environment
 
@@ -95,6 +107,7 @@ class SandboxUnavailableError(RuntimeError):
 def resolve_execution_adapter(
     mode: ExecutionMode,
     *,
+    confinement: ConfinementPolicy | None = None,
     trust: ExecutionEnvironmentAdapter | None = None,
     sandbox: ExecutionEnvironmentAdapter | None = None,
 ) -> ExecutionEnvironmentAdapter | None:
@@ -102,7 +115,7 @@ def resolve_execution_adapter(
     if mode == "disabled":
         return None
     if mode == "trust":
-        return trust or TrustExecutionAdapter()
+        return trust or TrustExecutionAdapter(confinement)
     if sandbox is None:
         raise SandboxUnavailableError(
             "agent execution mode 'sandbox' requires a configured sandbox adapter"

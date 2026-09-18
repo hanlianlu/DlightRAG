@@ -12,6 +12,7 @@ from dlightrag.application.application import Application, _ApplicationComponent
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.opaque_cursor import CursorSecretBox
 from dlightrag.application.skills import skills_bundle_factory
+from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -373,6 +374,12 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             model_settings_for_role(config, role)
         ),
         execution_environment=config.answer.agent.execution_environment,
+        # What an Agent's processes may see beyond their own workspace, and the two
+        # trees they may never see (ADR 0024). Declared layers belong to the
+        # capabilities that need them, never to configuration.
+        shell_confinement=ConfinementPolicy(
+            forbidden=(config.working_dir_path, Path.cwd()),
+        ),
         workspace_root=config.answer.agent.workspace_root,
         session_notes_limits=SessionNotesLimits(
             max_count=config.answer.agent.session_notes.max_count,

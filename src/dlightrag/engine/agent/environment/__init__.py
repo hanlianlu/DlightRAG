@@ -9,6 +9,12 @@ from dlightrag.engine.agent.environment.access import (
     WorkspaceAccess,
 )
 from dlightrag.engine.agent.environment.child import build_child_environment, looks_like_secret_name
+from dlightrag.engine.agent.environment.confinement import (
+    ConfinementPolicy,
+    DeclaredLayer,
+    WorkspaceConfinement,
+    landlock_abi,
+)
 from dlightrag.engine.agent.environment.errors import (
     TOOL_RESULT_MAX_BYTES,
     TOOL_RESULT_MAX_LINES,
@@ -42,6 +48,10 @@ __all__ = [
     "WORKSPACE_MAX_BYTES",
     "WORKSPACE_MAX_ENTRIES",
     "AccessScheduler",
+    "ConfinementPolicy",
+    "DeclaredLayer",
+    "WorkspaceConfinement",
+    "landlock_abi",
     "WorkspaceAccess",
     "ExecutionEnvironment",
     "ExecutionEnvironmentAdapter",
