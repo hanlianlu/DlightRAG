@@ -25,7 +25,10 @@ from dlightrag.adapters.http.rest.models import ANSWER_REQUEST_PART_MAX_BYTES, E
 from dlightrag.adapters.http.rest.routes import router
 from dlightrag.application import ApplicationClosedError
 from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
-from dlightrag.application.corpus_admin import MetadataValidationError
+from dlightrag.application.corpus_admin import (
+    CorpusMutationUnavailableError,
+    MetadataValidationError,
+)
 from dlightrag.application.errors import RunSchemaError, StorageSchemaError
 from dlightrag.application.model_catalogue import (
     ModelCatalogueSchemaError,
@@ -182,6 +185,7 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
             headers=exc.headers,
         )
 
+    @application.exception_handler(CorpusMutationUnavailableError)
     @application.exception_handler(ApplicationClosedError)
     @application.exception_handler(CorpusUnavailableError)
     @application.exception_handler(AnswerRuntimeUnavailableError)
@@ -190,7 +194,8 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     async def rag_unavailable_handler(
         request: Request,  # noqa: ARG001
         exc: (
-            ApplicationClosedError
+            CorpusMutationUnavailableError
+            | ApplicationClosedError
             | CorpusUnavailableError
             | AnswerRuntimeUnavailableError
             | RunRuntimeUnavailableError

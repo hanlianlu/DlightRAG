@@ -51,7 +51,11 @@ from dlightrag.engine.runtime.records import (
     RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
 )
 
-from .errors import UnsafeUploadNameError, UploadTooLargeError
+from .errors import (
+    CorpusMutationUnavailableError,
+    UnsafeUploadNameError,
+    UploadTooLargeError,
+)
 from .service import IngestSpec, safe_upload_basename
 
 type CorpusMutationAction = Literal["ingest", "replace", "delete", "retry", "reset"]
@@ -115,10 +119,20 @@ class CorpusMutationService:
         input_root: Path,
         store: CorpusMutationStore,
         coordinator: CorpusMutationScheduler,
+        writable: bool = True,
     ) -> None:
         self._input_root = Path(input_root)
         self._store = store
         self._coordinator = coordinator
+        self._writable = writable
+
+    def _require_writable(self) -> None:
+        """Refuse a corpus write before any of it happens, or say who can take it."""
+        if not self._writable:
+            raise CorpusMutationUnavailableError(
+                "This deployment is a read-only replica of the knowledge base: it accepts "
+                "no corpus writes. Send the upload, retry, or delete to a writer."
+            )
 
     async def replay(
         self,
@@ -150,6 +164,7 @@ class CorpusMutationService:
         submitted_by: str,
         idempotency_key: str | None = None,
     ) -> RunCreation:
+        self._require_writable()
         action: CorpusMutationAction = "replace" if bool(spec.replace) else "ingest"
         request = {
             "action": action,
@@ -233,6 +248,7 @@ class CorpusMutationService:
         metadata: Mapping[str, Any] | None = None,
         replace: bool = False,
     ) -> RunCreation:
+        self._require_writable()
         run_id = staged.path.parents[1].name
         action: CorpusMutationAction = "replace" if replace else "ingest"
         source_identity = {
@@ -287,6 +303,7 @@ class CorpusMutationService:
         idempotency_key: str | None = None,
         replace: bool = False,
     ) -> RunCreation:
+        self._require_writable()
         """Accept one already-staged multipart cohort as one ingest or replace Run."""
         if not staged:
             raise ValueError("at least one staged source is required")
@@ -343,6 +360,7 @@ class CorpusMutationService:
         document_ids: Sequence[str] = (),
         idempotency_key: str | None = None,
     ) -> RunCreation:
+        self._require_writable()
         selectors = {
             "file_paths": _bounded_unique(file_paths),
             "filenames": _bounded_unique(filenames),
@@ -367,6 +385,7 @@ class CorpusMutationService:
         selector: RetrySelector | None = None,
         idempotency_key: str | None = None,
     ) -> RunCreation:
+        self._require_writable()
         ids = _bounded_unique(document_ids)
         if bool(ids) == bool(selector):
             raise ValueError("provide document_ids or selector='all_retryable', but not both")
@@ -388,6 +407,7 @@ class CorpusMutationService:
         supersedes_run_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> RunCreation:
+        self._require_writable()
         return await self._create_action(
             action="reset",
             workspace=workspace,
@@ -484,6 +504,7 @@ class CorpusMutationService:
         content_sha256: str | None = None,
     ) -> StagedCorpusSource:
         """Stream, hash, bound, and atomically commit one source outside Run blobs."""
+        self._require_writable()
         canonical = require_canonical_workspace_id(workspace)
         try:
             safe_path = safe_upload_relative_path(filename)

@@ -548,3 +548,44 @@ async def test_public_operation_finishes_after_outer_task_cancellation() -> None
 
     release.set()
     assert await joined == "settled"
+
+
+@pytest.mark.asyncio
+async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: Path) -> None:
+    """A read-only replica declines the write instead of accepting a Run it cannot run.
+
+    A `reader` process registers no corpus-mutation executor, so accepting a write staged
+    bytes for a Run that could never execute and failed it later. Every entry point now
+    refuses first, with the remedy, and the workspace stays empty.
+    """
+    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+
+    service = CorpusMutationService(
+        input_root=tmp_path,
+        store=AsyncMock(),
+        coordinator=cast(Any, SimpleNamespace()),
+        writable=False,
+    )
+
+    from dlightrag.application.corpus_admin import IngestSpec
+
+    spec = IngestSpec(source_type="url", url="https://example.com/report.pdf")
+    calls = (
+        service.create_ingest(workspace="default", spec=spec, submitted_by="owner"),
+        service.create_delete(workspace="default", document_ids=["doc-1"], submitted_by="owner"),
+        service.create_retry(workspace="default", submitted_by="owner"),
+        service.create_reset(workspace="default", submitted_by="owner"),
+    )
+    for call in calls:
+        with pytest.raises(CorpusMutationUnavailableError, match="read-only replica"):
+            await call
+
+    with pytest.raises(CorpusMutationUnavailableError, match="read-only replica"):
+        await service.stage_upload(
+            workspace="default",
+            run_id="run-1",
+            filename="report.pdf",
+            reader=AsyncMock(),
+            max_bytes=1024,
+        )
+    assert list(tmp_path.rglob("*")) == []

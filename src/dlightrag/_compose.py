@@ -483,6 +483,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         input_root=config.input_dir_path,
         store=run_store,
         coordinator=coordinator,
+        # A reader registers no corpus-mutation executor, so it refuses writes at
+        # acceptance rather than staging bytes for a Run it can never execute.
+        writable=not config.is_reader,
     )
 
     async def _cancel_local(owner: str, run_id: str) -> None:

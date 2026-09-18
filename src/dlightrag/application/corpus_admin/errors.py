@@ -29,6 +29,16 @@ class SourceDownloadUnavailableError(RuntimeError):
     """A remote source adapter cannot currently sign a download."""
 
 
+class CorpusMutationUnavailableError(RuntimeError):
+    """This deployment cannot accept corpus writes, because it is a read-only replica.
+
+    A `reader` process registers no corpus-mutation executor, so accepting a write would
+    stage bytes for a Run that can never execute and then fail it late. The refusal
+    happens before anything is staged, and names the remedy (ADR-style: a deployment that
+    accepts writes is a `writer`).
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class LocalDownloadTarget:
     """Contained local file ready for a transport to stream."""
