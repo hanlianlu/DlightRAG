@@ -1073,6 +1073,7 @@ class AgentSessionRuntime[HostDeltaT]:
             replay_policy: ReplayPolicy = "never"
             contract_version = 0
             schema = ""
+            definition = ""
             effective = ""
             canonical_input = ""
             pinned_tool = pinned.get(call.name)
@@ -1093,6 +1094,7 @@ class AgentSessionRuntime[HostDeltaT]:
                 resolved.replay_policy != pinned_tool.replay_policy
                 or resolved.contract_version != pinned_tool.contract_version
                 or resolved.input_schema_digest != pinned_tool.input_schema_digest
+                or resolved.definition_digest != pinned_tool.definition_digest
             ):
                 disposition = "contract_changed"
                 synthetic = f'Tool "{call.name}" contract changed; call was not executed.'
@@ -1111,6 +1113,7 @@ class AgentSessionRuntime[HostDeltaT]:
                     replay_policy = pinned_tool.replay_policy
                     contract_version = pinned_tool.contract_version
                     schema = pinned_tool.input_schema_digest
+                    definition = resolved.definition_digest
                     effective = sha256(canonical_input.encode("utf-8")).hexdigest()
                     arguments.append(ToolArguments(intent_id, canonical_input))
             items.append(
@@ -1124,6 +1127,7 @@ class AgentSessionRuntime[HostDeltaT]:
                     replay_policy=replay_policy,
                     contract_version=contract_version,
                     input_schema_digest=schema,
+                    definition_digest=definition,
                     effective_input_digest=effective,
                     synthetic_message=synthetic,
                 )
@@ -1191,6 +1195,7 @@ class AgentSessionRuntime[HostDeltaT]:
             or resolved.replay_policy != item.replay_policy
             or resolved.contract_version != item.contract_version
             or resolved.input_schema_digest != item.input_schema_digest
+            or (item.definition_digest and resolved.definition_digest != item.definition_digest)
         ):
             await self._append_tool_result(
                 view,

@@ -2,13 +2,14 @@
 """The contracts one model-visible tool call is made of."""
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 from pydantic import BaseModel
 
 from dlightrag.engine.agent.session.effects import (
     ReplayPolicy,
+    definition_digest,
     schema_digest,
 )
 from dlightrag.engine.agent.session.ids import IntentId
@@ -202,7 +203,10 @@ class AgentTool:
     intent facts replay must match exactly. Replay is fail-closed: tools opt in
     only when identical persisted arguments are safe to execute again.
     The digest is the SHA-256 of the canonicalized input schema, so presentation
-    fields and declaration order never change it.
+    fields and declaration order never change it. ``definition_digest`` covers what a
+    pinned Plan must compare on replay -- the model-visible definition and the
+    guidance rendered from it -- because a rewritten description is a different
+    prompt prefix even when the arguments are identical.
     """
 
     name: str
@@ -232,6 +236,11 @@ class AgentTool:
             description=self.description,
             parameters=self.input_model.model_json_schema(),
         )
+
+    @property
+    def definition_digest(self) -> str:
+        """Return the digest of this Tool's model-visible definition and guidance."""
+        return definition_digest(asdict(self.definition), self.guidance)
 
 
 @dataclass(frozen=True, slots=True)
