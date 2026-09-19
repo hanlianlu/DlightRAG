@@ -21,6 +21,12 @@ def test_the_published_subject_bound_is_sixty_four_characters() -> None:
     assert TOOL_SUBJECT_MAX_CHARS == 64
 
 
+def test_the_browser_edge_cap_equals_the_engine_bound() -> None:
+    from dlightrag.adapters.http.browser.answer_events import BROWSER_TOOL_SUBJECT_MAX_CHARS
+
+    assert BROWSER_TOOL_SUBJECT_MAX_CHARS == TOOL_SUBJECT_MAX_CHARS
+
+
 def test_a_reported_subject_becomes_one_bounded_line() -> None:
     collapsed = ToolResult.text("", subject="  quarterly\n\trevenue  ")
 

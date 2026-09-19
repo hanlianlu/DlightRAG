@@ -32,6 +32,12 @@ from dlightrag.application.runs import RunEvent
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.results import project_answer_result
 
+#: Longest Tool Subject line this edge renders. The Engine owns the reported bound
+#: (``TOOL_SUBJECT_MAX_CHARS``); the edge deliberately names its own so the browser
+#: projection does not depend on an Engine internal, and a test pins the two equal
+#: so the duplication cannot drift silently.
+BROWSER_TOOL_SUBJECT_MAX_CHARS = 64
+
 
 def render_done_event(
     payload: dict[str, Any],
@@ -120,7 +126,7 @@ def _browser_payload(
             projected = {key: value for key, value in payload.items() if key in allowed}
             label = projected.get("object_label")
             if isinstance(label, str):
-                projected["object_label"] = label[:64]
+                projected["object_label"] = label[:BROWSER_TOOL_SUBJECT_MAX_CHARS]
             name = projected.get("tool_name")
             display = tool_labels.get(name) if isinstance(name, str) and tool_labels else None
             if display:

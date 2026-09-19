@@ -54,6 +54,7 @@ from dlightrag.application.runs import RunRuntimeUnavailableError, RunView
 from dlightrag.application.settings import access_settings
 from dlightrag.engine.answer.client_contracts import (
     MAX_HISTORY_MESSAGES,
+    MAX_QUERY_IMAGES,
     AnswerAttachmentLink,
     QueryImage,
 )
@@ -67,8 +68,8 @@ logger = logging.getLogger(__name__)
 QueryImagesParam = Annotated[
     list[QueryImage],
     Field(
-        max_length=3,
-        description="User-attached image URLs or data URI blocks (max 3)",
+        max_length=MAX_QUERY_IMAGES,
+        description=f"User-attached image URLs or data URI blocks (max {MAX_QUERY_IMAGES})",
     ),
 ]
 AttachmentsParam = Annotated[
