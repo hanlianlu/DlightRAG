@@ -7,9 +7,9 @@ deliberately does not mean: no ingestion, no embed, no loosened sanitizer.
 
 ## Status
 
-Accepted. Publication, delivery, and the two Answer surfaces are implemented
-(see [Consequences](#consequences)). Link auto-detection and link cards are
-accepted here and not yet implemented.
+Accepted. Publication, delivery, the two Answer surfaces, and address
+auto-detection are implemented; link cards are accepted here and not yet
+implemented (see [Consequences](#consequences)).
 
 ## Context
 

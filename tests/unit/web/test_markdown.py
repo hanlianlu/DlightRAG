@@ -638,13 +638,19 @@ def test_a_chinese_component_belongs_to_the_address():
     path = render_answer_html("https://example.com/wiki/中文条目", known_sources={})
     query = render_answer_html("https://example.com/a?id=中文", known_sources={})
     halfwidth = render_answer_html("https://example.com/wiki/ﾃｽﾄ", known_sources={})
+    voiced = render_answer_html("https://example.com/wiki/ﾍﾟｰｼﾞ", known_sources={})
     idn = render_answer_html("https://www.例子.com/x", known_sources={})
+    idn_bare = render_answer_html("https://例子.中国/x", known_sources={})
 
     assert 'href="https://example.com/wiki/%E4%B8%AD%E6%96%87%E6%9D%A1%E7%9B%AE"' in path
     assert 'href="https://example.com/a?id=%E4%B8%AD%E6%96%87"' in query
-    # Halfwidth Katakana is a letter a path may end with, not punctuation.
+    # Halfwidth Katakana is a letter a path may end with, not punctuation, and
+    # its voiced sound marks belong to the run rather than breaking it.
     assert 'href="https://example.com/wiki/%EF%BE%83%EF%BD%BD%EF%BE%84"' in halfwidth
+    assert 'href="https://example.com/wiki/%EF%BE%8D%EF%BE%9F%EF%BD%B0%EF%BD%BC%EF%BE%9E"' in voiced
+    # A dot opens a host label, so an internationalized host links whole...
     assert 'href="https://www.xn--fsqu00a.com/x"' in idn
+    assert 'href="https://xn--fsqu00a.xn--fiqs8s/x"' in idn_bare
 
 
 def test_autolinking_links_no_form_the_sanitizer_would_defang():
@@ -688,6 +694,29 @@ def test_an_address_continuing_a_preceding_token_links_its_own_part(prefix: str)
         f'<p>See {prefix}<a href="https://example.com/x" target="_blank" '
         'rel="noopener noreferrer">https://example.com/x</a> now</p>'
     )
+
+
+def test_a_dot_in_a_path_does_not_make_the_address_ambiguous():
+    """A dot opens a host label; in a path it is what a sentence would follow."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html("https://example.com/report.中文", known_sources={})
+
+    assert result.strip() == "<p>https://example.com/report.中文</p>"
+
+
+def test_both_autolinking_passes_bound_an_address_identically():
+    """The inline pass trims a trailing `*` after the validator; the core pass does not.
+
+    Trimming belongs to the shared boundary, so one address cannot span two
+    different character ranges depending on which pass found it.
+    """
+    from dlightrag.adapters.http.browser.markdown import _bounded_address
+
+    text = "https://example.com/x*。"
+    position = text.index("//")
+
+    assert _bounded_address(text, position, len(text) - position) == len("//example.com/x")
 
 
 def test_autolinking_never_guesses_a_domain_or_an_address_from_text():

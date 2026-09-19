@@ -15,8 +15,8 @@ Two renderers are provided:
 import html as _html
 import re
 from collections.abc import Sequence
-from typing import Any
 
+from linkify_it import LinkifyIt
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline
 from pygments import highlight as pygments_highlight
@@ -29,19 +29,23 @@ _FORMATTER = HtmlFormatter(nowrap=True)
 # CJK punctuation ends an autolinked address; CJK letters may belong to one of
 # its components. The fullwidth block holds both kinds, so it is split: its
 # punctuation forms U+FF01-FF0F, FF1A-FF20, FF3B-FF40, FF5B-FF65 end an address
-# while halfwidth Katakana (FF66-FF9D) and halfwidth Hangul (FFA0-FFDC) are
-# letters a path may legitimately end with.
+# while halfwidth Katakana (FF66-FF9F, including the voiced and semi-voiced
+# sound marks that only modify the kana before them) and halfwidth Hangul
+# (FFA0-FFDC) are letters a path may legitimately end with.
 _CJK_PUNCTUATION = (
     "[\u3000-\u303f\ufe30-\ufe4f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]"
 )
 _CJK_LETTERS = (
     "[\u1100-\u11ff\u2e80-\u2eff\u3040-\u30ff\u3130-\u318f\u31f0-\u31ff"
-    "\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9d\uffa0-\uffdc]"
+    "\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f\uffa0-\uffdc]"
 )
 # Characters that open a new component of an address: a CJK run that follows one
 # is a path, query, or host label; a run that follows a letter continues a
-# segment, which is where the address's meaning becomes a guess.
-_COMPONENT_OPENERS = "/=&?#."
+# segment, which is where the address's meaning becomes a guess. A dot opens a
+# host label but nothing in a path — `www.例子.com` is a name, while
+# `…/report.中文` is a sentence — so it is admitted only inside the authority.
+_COMPONENT_OPENERS = "/=&?#"
+_HOST_OPENERS = _COMPONENT_OPENERS + "."
 # A character that would make an address a continuation of a preceding token:
 # `blob:https://…`, `data:…`, or `xhttps://…` are not addresses of their own.
 _ATTACHED_TO_PREFIX = frozenset(
@@ -93,20 +97,37 @@ def _bounded_address(text: str, position: int, length: int) -> int:
     punctuation = re.search(_CJK_PUNCTUATION, address)
     if punctuation:
         address = address[: punctuation.start()]
+    # The authority ends where the path, query, or fragment begins.
+    authority_end = len(address)
+    for boundary in "/?#":
+        found = address.find(boundary, position - start + 2)
+        if found != -1:
+            authority_end = min(authority_end, found)
     for run in re.finditer(_CJK_LETTERS + "+", address):
-        if run.start() and address[run.start() - 1] not in _COMPONENT_OPENERS:
+        if not run.start():
+            continue
+        openers = _HOST_OPENERS if run.start() < authority_end else _COMPONENT_OPENERS
+        if address[run.start() - 1] not in openers:
             return 0
-    return start + len(address) - position
+    return start + len(address.rstrip("*")) - position
 
 
 class _AddressBoundary:
-    """Bound the schema's own match at the characters a sentence owns."""
+    """Bound the schema's own match at the characters a sentence owns.
 
-    def __init__(self, length_of: Any) -> None:
-        self._length_of = length_of
+    Lengths come from a stock linkifier asked through its documented
+    ``test_schema_at``, so the http matcher itself stays the dependency's and this
+    module never reaches for its internals. The trailing ``*`` is trimmed here
+    rather than left to markdown-it's inline pass, which trims it after the
+    validator and would otherwise bound the same address differently from the
+    core pass (ADR 0026).
+    """
+
+    def __init__(self, reference: LinkifyIt) -> None:
+        self._reference = reference
 
     def validate(self, text: str, pos: int) -> int:
-        length = self._length_of(text, pos)
+        length = self._reference.test_schema_at(text, "http:", pos)
         return _bounded_address(text, pos, length) if length else 0
 
 
@@ -138,7 +159,7 @@ def _configure_autolinking(md: MarkdownIt) -> None:
     if linkify is None:
         raise RuntimeError("the gfm-like preset must provide a linkify instance")
     linkify.set({"fuzzy_link": False, "fuzzy_email": False})
-    boundary = _AddressBoundary(linkify._validate_http)  # noqa: SLF001 - the http matcher
+    boundary = _AddressBoundary(LinkifyIt())
     linkify.add("http:", {"validate": boundary.validate})
     linkify.add("https:", "http:")
     for disabled in ("//", "mailto:", "ftp:"):
