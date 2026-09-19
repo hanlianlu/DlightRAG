@@ -18,7 +18,6 @@ from dlightrag.application.runs import (
     RunFailedError,
     RunRuntimeUnavailableError,
 )
-from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.tools import AgentTool
@@ -375,12 +374,6 @@ class ChildObservation:
             "questions": [dict(item) for item in self.questions],
             "result": dict(self.result) if self.result is not None else None,
         }
-
-
-class HistoryResolver(Protocol):
-    """In-process durable history projection invoked after exact targets exist."""
-
-    def __call__(self, targets: Sequence[HistoryProjectionTarget]) -> Awaitable[PriorTurns]: ...
 
 
 class AnswerRuntimeUnavailableError(RunRuntimeUnavailableError):
@@ -840,7 +833,6 @@ class AnswerService:
         idempotency_fingerprint: str,
         acceptor: AnswerRunAcceptor[T],
         auth_mode: str = "none",
-        history_resolver: HistoryResolver | None = None,
     ) -> T | None:
         """Accept through a typed atomic linker while preserving one run pipeline."""
         try:
@@ -851,7 +843,6 @@ class AnswerService:
                 idempotency_fingerprint=idempotency_fingerprint,
                 acceptor=acceptor,
                 auth_mode=auth_mode,
-                history_resolver=history_resolver,
             )
         except RuntimeIdempotencyKeyConflict as exc:
             raise IdempotencyKeyConflict(str(exc)) from exc
@@ -867,7 +858,6 @@ class AnswerService:
         idempotency_fingerprint: str | None,
         acceptor: AnswerRunAcceptor[T],
         auth_mode: str = "none",
-        history_resolver: HistoryResolver | None = None,
     ) -> T | None:
         run_request = _normalized_request(request)
         fingerprint = idempotency_fingerprint or run_request_fingerprint(run_request.as_request())
@@ -919,7 +909,6 @@ class AnswerService:
             allowed_modes=allowed_modes,
             auth_mode=auth_mode,
             memory_enabled=memory_enabled,
-            history_resolver=history_resolver,
         ) as prepare:
             for attempt in range(2):
                 bound = (
@@ -1848,7 +1837,6 @@ class AnswerService:
         allowed_modes: frozenset[ResolvedMode],
         auth_mode: str = "none",
         memory_enabled: bool = True,
-        history_resolver: HistoryResolver | None = None,
     ) -> AsyncIterator[
         Callable[[Sequence[AgentTool]], Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]]]
     ]:
@@ -1860,7 +1848,6 @@ class AnswerService:
             allowed_modes=allowed_modes,
             auth_mode=auth_mode,
             memory_enabled=memory_enabled,
-            history_resolver=history_resolver,
         ) as project:
 
             async def prepare(
@@ -1904,7 +1891,6 @@ class AnswerService:
         allowed_modes: frozenset[ResolvedMode],
         auth_mode: str = "none",
         memory_enabled: bool = True,
-        history_resolver: HistoryResolver | None = None,
     ) -> AsyncIterator[Callable[[Sequence[AgentTool]], Awaitable[_AcceptanceProjection]]]:
         """Resolve the exact shared-history envelopes without building the run rig."""
         model_profiles = self._capabilities.current_profiles()
@@ -2125,13 +2111,9 @@ class AnswerService:
                         )
                     )
                 try:
-                    history = (
-                        await history_resolver(targets)
-                        if history_resolver is not None
-                        else project_history(
-                            [dict(message) for message in request.history],
-                            targets=targets,
-                        )
+                    history = project_history(
+                        [dict(message) for message in request.history],
+                        targets=targets,
                     )
                 except HistoryProjectionOverflowError as exc:
                     if exc.target == "router":
@@ -2174,7 +2156,6 @@ class AnswerService:
 __all__ = [
     "AnswerHistoryResource",
     "AnswerInputArtifact",
-    "HistoryResolver",
     "AnswerRequest",
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
