@@ -688,53 +688,6 @@ async def test_recovery_contract_change_is_source_index_synthetic_result() -> No
 
 
 @pytest.mark.asyncio
-async def test_a_rewritten_description_is_a_contract_change_on_recovery() -> None:
-    """A pinned Run compares the whole model-visible definition, not just its schema."""
-    original = _agent_tool(replayable=True)
-    first_effects = _Effects(
-        [_assistant(ToolCall("c1", "lookup", {"value": "x"}))],
-        crash_tool=True,
-    )
-    store = MemoryAgentSessionRepository[dict[str, Any]]()
-    first = _runtime(store, first_effects, original)
-    session_id = SessionId.new()
-    accepted = await first.accept(
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        idempotency_key="description-change",
-        content="question",
-        plan=_plan(original),
-    )
-    with pytest.raises(asyncio.CancelledError):
-        await first.drive(session_id=session_id, operation_id=accepted.operation_id)
-
-    rewritten = AgentTool(
-        name="lookup",
-        description="lookup, but rewritten",
-        input_model=_Args,
-        execute=_tool,
-        replay_policy="replayable",
-        contract_version=original.contract_version,
-    )
-    assert rewritten.input_schema_digest == original.input_schema_digest
-    assert rewritten.definition_digest != original.definition_digest
-
-    recovered_effects = _Effects([_assistant(text="done")])
-    final = await _runtime(store, recovered_effects, rewritten).drive(
-        session_id=session_id,
-        operation_id=accepted.operation_id,
-    )
-    assert isinstance(final.state, OperationCompleted)
-    result = next(
-        entry
-        for entry in (await store.load(session_id)).entries
-        if isinstance(entry, ToolResultMessageEntry)
-    )
-    assert result.result.outcome == "tool_contract_changed"
-    assert recovered_effects.executed_sources == []
-
-
-@pytest.mark.asyncio
 async def test_steer_while_cancelling_is_rejected_without_faulting_session() -> None:
     tool = _agent_tool()
     store = MemoryAgentSessionRepository[dict[str, Any]]()

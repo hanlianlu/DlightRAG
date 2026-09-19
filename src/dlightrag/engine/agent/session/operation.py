@@ -99,7 +99,6 @@ class ToolBatchItem:
     replay_policy: ReplayPolicy = "never"
     contract_version: int = 1
     input_schema_digest: str = ""
-    definition_digest: str = ""
     effective_input_digest: str = ""
     synthetic_message: str = ""
 
@@ -116,10 +115,6 @@ class ToolBatchItem:
                 raise ValueError("Tool contract version must be positive")
             if len(self.input_schema_digest) != 64 or len(self.effective_input_digest) != 64:
                 raise ValueError("executable Tool Batch item digests must be SHA-256")
-            # Empty only on a Run persisted before the definition digest existed:
-            # its batch cannot compare a pinned description it never recorded.
-            if self.definition_digest and len(self.definition_digest) != 64:
-                raise ValueError("executable Tool Batch definition digest must be SHA-256")
         elif not self.synthetic_message:
             raise ValueError("non-executable Tool Batch item requires a synthetic result")
 
@@ -134,7 +129,6 @@ class ToolBatchItem:
             "replay_policy": self.replay_policy,
             "contract_version": self.contract_version,
             "input_schema_digest": self.input_schema_digest,
-            "definition_digest": self.definition_digest,
             "effective_input_digest": self.effective_input_digest,
             "synthetic_message": self.synthetic_message,
         }
@@ -384,7 +378,6 @@ def _batch(payload: dict[str, Any]) -> ToolBatchPlan:
                 replay_policy=item.get("replay_policy", "never"),
                 contract_version=int(item.get("contract_version") or 1),
                 input_schema_digest=str(item.get("input_schema_digest") or ""),
-                definition_digest=str(item.get("definition_digest") or ""),
                 effective_input_digest=str(item.get("effective_input_digest") or ""),
                 synthetic_message=str(item.get("synthetic_message") or ""),
             )

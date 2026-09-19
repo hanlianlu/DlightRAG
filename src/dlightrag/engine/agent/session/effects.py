@@ -79,22 +79,6 @@ def schema_digest(schema: Mapping[str, Any]) -> str:
     return sha256(canonical_json(canonical_schema(schema)).encode("utf-8")).hexdigest()
 
 
-def definition_digest(definition: Mapping[str, Any], guidance: str) -> str:
-    """Return the SHA-256 of one definition plus its guidance, description included.
-
-    A Tool spends prompt prefix on more than its input schema: the name and
-    description travel in every request's tool block, and the guidance is rendered
-    into the request's static tail. ``schema_digest`` deliberately drops
-    presentation so a replay decision never moves with a description, which is why
-    this digest uses the definition's own JSON unchanged -- a rewritten description
-    or guidance is a different prefix on a recovered Run, and that is the drift a
-    byte-stable prefix cannot absorb.
-    """
-    return sha256(
-        (canonical_json(dict(definition)) + "\x00" + guidance).encode("utf-8")
-    ).hexdigest()
-
-
 @dataclass(frozen=True, slots=True)
 class EffectIntent:
     """One validated tool call, ordered before execution and settled after it."""
@@ -174,6 +158,5 @@ __all__ = [
     "ToolResultOutcome",
     "canonical_json",
     "canonical_schema",
-    "definition_digest",
     "schema_digest",
 ]

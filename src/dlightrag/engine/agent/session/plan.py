@@ -7,11 +7,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from typing import Any
 
-from dlightrag.engine.agent.session.effects import (
-    ReplayPolicy,
-    canonical_json,
-    definition_digest,
-)
+from dlightrag.engine.agent.session.effects import ReplayPolicy, canonical_json
 from dlightrag.engine.agent.tools.contracts import AgentTool
 from dlightrag.engine.ai.tokens import estimate_tokens
 
@@ -73,11 +69,6 @@ class AgentToolPlan:
     @property
     def name(self) -> str:
         return str(self.definition["name"])
-
-    @property
-    def definition_digest(self) -> str:
-        """Return the digest of the pinned definition and guidance."""
-        return definition_digest(self.definition, self.guidance)
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
