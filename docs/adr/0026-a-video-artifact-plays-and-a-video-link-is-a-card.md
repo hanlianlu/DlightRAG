@@ -89,11 +89,26 @@ or the presence of `og:video` — becomes a card built from the page's own
 `og:title`, `og:image`, and `og:description`. This is a scope, not a site
 allowlist: YouTube (`og:video:url` to `youtube.com/embed/…`) and Bilibili
 (`og:video` to `player.bilibili.com/player.html`) declare it identically, while
-an ordinary page (`og:type: website`) stays a plain link. A bare URL becomes an
-ordinary hyperlink whether or not the card rule matches it, so the two features
-compose rather than compete: every URL is readable and clickable, and only a
-verified video link is additionally presented as a card. Citation links and
-source links never become cards.
+an ordinary page (`og:type: website`) stays a plain link. A bare address the Model
+writes becomes an ordinary hyperlink whether or not the card rule matches it, so
+the two features compose rather than compete: every address is readable and
+clickable, and only a verified video link is additionally presented as a card.
+Citation links and source links never become cards.
+
+Autolinking is deliberately narrower than GFM. It admits an address that names
+its own scheme and refuses to guess one from a top-level domain, because this
+product's own vocabulary is full of words that end in a real one — `report.md`,
+`build.sh`, `clip.mov`, `archive.zip` — and each would otherwise become a link to
+`http://report.md`. Email autolinking is off as well: the fragment sanitiser
+admits only `http`, `https`, `data`, and `blob`, so a `mailto:` href would be
+dropped and leave an inert link behind. The renderer also bounds an address at
+CJK text, which is what a linkify rule reads straight through: CJK punctuation
+always ends the address, a CJK run that opens a path or query component belongs
+to it, and a CJK run that merely continues a segment leaves the address
+ambiguous — an ambiguous address stays text, because a wrong link is worse than
+a plain one. Autolinking applies to what the Model writes (answers and Markdown
+Artifacts); a source chunk quotes a document, so a bare address inside a
+quotation stays as the parser produced it.
 
 Clicking a card leaves the application and plays at the source. No third-party
 `<iframe>` is introduced, and the answer-sanitizing allowlists are unchanged.
@@ -119,11 +134,12 @@ Clicking a card leaves the application and plays at the source. No third-party
 
 ## Consequences
 
-- **Not implemented yet:** bare-URL autolinking and link cards. Both rules above
-  are accepted, and neither is built: the answer and artifact renderers keep
-  `linkify` disabled, and no card surface exists. Until that slice lands a video
-  link is exactly what it is today — a link when the Model writes one as a
-  Markdown link, and plain text when it writes a bare URL.
+- **Link autolinking is implemented; link cards are not.** An answer and a
+  Markdown Artifact autolink an address that names its own scheme
+  (`linkify-it-py`, the engine markdown-it-py's own rule requires), bounded at
+  CJK text as described above. A source chunk keeps its quotation as written. No
+  card surface exists yet, so a video link is still presented as the plain link
+  the autolinker or the Model produced.
 - **Weaker video validation is a recorded residual,** not an oversight; the
   escape hatch in the caption is what a truncated or undecodable file gets.
 - **A browser that cannot decode the codec** (for example HEVC where the user's

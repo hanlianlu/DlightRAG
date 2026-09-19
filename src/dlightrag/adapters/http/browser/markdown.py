@@ -15,6 +15,7 @@ Two renderers are provided:
 import html as _html
 import re
 from collections.abc import Sequence
+from typing import Any
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline
@@ -25,10 +26,92 @@ from pygments.util import ClassNotFound
 
 _FORMATTER = HtmlFormatter(nowrap=True)
 
+# CJK punctuation ends an autolinked address; CJK words may belong to its path.
+_CJK_PUNCTUATION = "[\u3000-\u303f\ufe30-\ufe4f\uff00-\uffef]"
+_CJK_WORDS = "[\u2e80-\u2eff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
+
 # ---------------------------------------------------------------------------
 # Custom inline math rule — recognises $...$ and \(...\) as math tokens
 # so markdown-it-py never tries to interpret underscores etc. inside them.
 # ---------------------------------------------------------------------------
+
+
+def _trim_cjk_boundary(raw: str) -> str | None:
+    """Return one autolinked address without a sentence tail attached to it.
+
+    linkify reads an address up to whitespace, so in a sentence written without
+    spaces it also reads whatever follows: `参考 https://example.com/report。`
+    became a link whose href carried the full stop as an escape, and
+    `见https://example.com/report即可` one that swallowed the sentence.
+
+    CJK punctuation therefore always ends the address. A CJK word run that
+    starts a path or query component (`…/wiki/中文条目`, `…?q=中文`) belongs to it,
+    while one that merely continues a segment (`…/report即可`) leaves the address
+    ambiguous — and an ambiguous address is left as text rather than guessed,
+    because a wrong link is worse than a plain one. ``None`` means "do not
+    autolink this".
+    """
+    punctuation = re.search(_CJK_PUNCTUATION, raw)
+    if punctuation:
+        raw = raw[: punctuation.start()]
+    words = re.search(_CJK_WORDS + "+$", raw)
+    if words and raw[words.start() - 1 : words.start()] not in {"/", "=", "&", "?"}:
+        return None
+    return raw or None
+
+
+def _apply_cjk_boundary(match: Any) -> bool:
+    """Trim one linkify match in place; ``False`` means "leave it as text"."""
+    trimmed = _trim_cjk_boundary(match.raw)
+    if trimmed is None:
+        return False
+    cut = len(match.raw) - len(trimmed)
+    if cut:
+        # The address, its display text, and its source span are one string for
+        # every scheme this renderer enables, so all three shrink together and
+        # the characters stay in the token stream as text.
+        match.raw = match.raw[:-cut]
+        match.text = match.text[:-cut]
+        match.url = match.url[:-cut]
+        match.last_index -= cut
+    return True
+
+
+def _configure_autolinking(md: MarkdownIt) -> None:
+    """Turn on address autolinking for Model-written text, and bound it.
+
+    Only an address that names its own scheme qualifies. linkify's default fuzzy
+    matching also guesses from a top-level domain, and this product's own
+    vocabulary is full of words that end in a real one — `report.md`, `build.sh`,
+    `clip.mov`, `archive.zip` — each of which would become `http://report.md`.
+    Email autolinking is off as well: the fragment sanitiser admits only http,
+    https, data, and blob, so a `mailto:` href would be dropped and leave an
+    inert link behind (ADR 0026).
+
+    markdown-it-py autolinks twice: the inline rule triggers at ``://`` and
+    advances the scan by the address it matched, while the core rule walks
+    finished text tokens and splits them at each match's index and last index.
+    Both read the same ``LinkifyIt`` instance, so one wrapper makes them agree on
+    where a sentence stops being an address.
+    """
+    linkify = md.linkify
+    if linkify is None:
+        raise RuntimeError("the gfm-like preset must provide a linkify instance")
+    linkify.set({"fuzzy_link": False, "fuzzy_email": False})
+
+    def bounded(original: Any) -> Any:
+        def wrapped(text: str) -> Any:
+            found = original(text)
+            if not found:
+                return found
+            if isinstance(found, list):
+                return [match for match in found if _apply_cjk_boundary(match)]
+            return found if _apply_cjk_boundary(found) else None
+
+        return wrapped
+
+    for name in ("match", "match_at_start"):
+        setattr(linkify, name, bounded(getattr(linkify, name)))
 
 
 def _math_inline_rule(state: StateInline, silent: bool) -> bool:
@@ -191,7 +274,8 @@ _md_opts_answer = {
 
 def _make_md() -> MarkdownIt:
     """Create a fresh markdown-it-py instance with the math inline rule."""
-    md = MarkdownIt("gfm-like", _md_opts_answer).disable("linkify")
+    md = MarkdownIt("gfm-like", _md_opts_answer)
+    _configure_autolinking(md)
     # Insert BEFORE the escape rule so \$ still works for literal dollars
     md.inline.ruler.before("escape", "math_inline", _math_inline_rule)
     md.add_render_rule("math_inline", _render_math_inline)
@@ -200,6 +284,8 @@ def _make_md() -> MarkdownIt:
 
 
 _md = _make_md()
+# Source chunks quote a document, so their text keeps the shape the parser
+# produced: a bare address inside a quotation is not this product's link to make.
 _md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).disable("linkify")
 # Also protect math in chunk content
 _md_chunk.inline.ruler.before("escape", "math_inline", _math_inline_rule)

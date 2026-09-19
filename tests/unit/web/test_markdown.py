@@ -583,3 +583,90 @@ def test_badge_tooltip_escapes_markup_from_a_source_title():
 
     assert 'title="A &quot;quoted&quot; &amp; &lt;b&gt;bold&lt;/b&gt; title"' in result
     assert "<b>" not in result
+
+
+def test_a_bare_url_in_an_answer_becomes_a_followable_link():
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html("See https://example.com/report now", known_sources={})
+
+    assert '<a href="https://example.com/report" target="_blank"' in result
+    assert ">https://example.com/report</a>" in result
+
+
+def test_autolinking_leaves_a_chinese_sentence_outside_the_href():
+    """linkify reads to whitespace, so a Chinese sentence would become an address."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    for text, href in [
+        ("参考 https://example.com/x。", "https://example.com/x"),
+        ("参考https://example.com/x，然后继续", "https://example.com/x"),
+        ("见 https://example.com/report（详见文档）", "https://example.com/report"),
+    ]:
+        result = render_answer_html(text, known_sources={})
+
+        assert f'href="{href}"' in result, text
+        # The punctuation the sentence owns stays visible text, not an escape.
+        assert "%E3%80%82" not in result and "%EF%BC%8C" not in result, text
+        assert result.rstrip().endswith(("</p>",)), text
+
+
+def test_an_address_a_chinese_word_run_continues_is_left_as_text():
+    """The same characters end a Chinese path, so the renderer never guesses."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html("见https://example.com/report即可", known_sources={})
+
+    assert "<a " not in result
+    assert "见https://example.com/report即可" in result
+
+
+def test_a_chinese_path_or_query_component_belongs_to_the_address():
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    path = render_answer_html("https://example.com/wiki/中文条目", known_sources={})
+    query = render_answer_html("https://example.com/a?id=中文", known_sources={})
+
+    assert 'href="https://example.com/wiki/%E4%B8%AD%E6%96%87%E6%9D%A1%E7%9B%AE"' in path
+    assert 'href="https://example.com/a?id=%E4%B8%AD%E6%96%87"' in query
+
+
+def test_autolinking_never_guesses_a_domain_or_an_address_from_text():
+    """`report.md`, `build.sh`, and `clip.mov` end in real top-level domains."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    for text in [
+        "The analysis is in report.md",
+        "Run build.sh then clip.mov",
+        "Unpack archive.zip",
+        "See www.example.com/report",
+        "See example.com/report",
+        "Mail dev@example.com now",
+    ]:
+        result = render_answer_html(text, known_sources={})
+
+        assert "<a " not in result, text
+        assert text in result, text
+
+
+def test_autolinking_leaves_code_and_explicit_links_alone():
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    code = render_answer_html(
+        "Inline `https://example.com` and:\n\n```\nhttps://example.com\n```", known_sources={}
+    )
+    explicit = render_answer_html("[Report](https://example.com/x)", known_sources={})
+
+    assert "<code>https://example.com</code>" in code
+    assert "<pre><code>https://example.com\n</code></pre>" in code
+    assert explicit.count("<a ") == 1
+
+
+def test_a_bare_url_in_a_quoted_source_chunk_stays_text():
+    """A chunk quotes a document; its own address is not this product's link."""
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
+
+    result = render_source_chunk_html("See https://example.com/report now")
+
+    assert "<a " not in result
+    assert "https://example.com/report" in result
