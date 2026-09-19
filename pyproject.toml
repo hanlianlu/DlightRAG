@@ -11,7 +11,7 @@ license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Standalone workspace package
-    "dlightrag-memory==2.0.10",
+    "dlightrag-memory==2.0.11",
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
     "anthropic>=1.7.0",
