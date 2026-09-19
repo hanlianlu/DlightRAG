@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "2.0.10"
+version = "2.0.11"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -14,14 +14,14 @@ dependencies = [
     "dlightrag-memory==2.0.10",
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
-    "anthropic>=1.6.0",
-    "google-genai>=2.23.0",
+    "anthropic>=1.7.0",
+    "google-genai>=2.24.0",
     "json-repair>=0.63.4",
     # Built-in RAG and source capabilities
     "lightrag-hku>=1.5.7",
     "aiofiles>=24.1.0",
     "aiobotocore>=3.9.1",
-    "azure-storage-blob>=12.30.1",
+    "azure-storage-blob>=12.30.2",
     "botocore>=1.43.75",
     "lingua-language-detector>=2.2.0",
     # PostgreSQL
@@ -52,7 +52,7 @@ dependencies = [
     "nh3>=0.3.7",
     "pygments>=2.17",
     # Observability
-    "langfuse>=4.15.3",
+    "langfuse>=4.15.4",
     # Native docx parsing: lightrag's docx parser imports python-docx + defusedxml.
     "python-docx>=1.2.0",
     "defusedxml>=0.7.1",
@@ -90,7 +90,7 @@ dev = [
     "questionary>=2",
     "rich>=13",
     "pyyaml>=6.0.3",
-    "ruff>=0.16.7",
+    "ruff>=0.16.8",
     "shellcheck-py>=0.10",
 ]
 
