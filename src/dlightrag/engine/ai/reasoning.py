@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from dlightrag.engine.ai.contracts import ApiFamily
+
 type ReasoningLevel = Literal[
     "off",
     "minimal",
@@ -208,8 +210,12 @@ def conflicting_reasoning_keys(values: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-def reasoning_request_kwargs(resolved: ResolvedReasoning | None) -> dict[str, Any]:
-    """Translate a resolved semantic level into its provider request dialect.
+def reasoning_request_kwargs(
+    resolved: ResolvedReasoning | None,
+    *,
+    api_family: ApiFamily = "chat_completion",
+) -> dict[str, Any]:
+    """Translate a resolved semantic level into its family-native request dialect.
 
     Catalogue validation admits only the formats handled here. Unknown endpoint
     controls remain available through raw model kwargs when typed reasoning is absent.
@@ -219,6 +225,14 @@ def reasoning_request_kwargs(resolved: ResolvedReasoning | None) -> dict[str, An
     level = resolved.effective
     value = resolved.provider_value
     format_name = resolved.profile.format
+
+    if api_family == "response":
+        if format_name not in {"openai", "openrouter", "deepseek"}:
+            raise ReasoningConfigurationError(
+                f"reasoning format {format_name!r} cannot be represented by the Response API"
+            )
+        effort = "none" if level == "off" else value
+        return {"reasoning": {"effort": effort}}
 
     if format_name == "openrouter":
         if level == "off":
@@ -266,6 +280,8 @@ def reasoning_request_kwargs(resolved: ResolvedReasoning | None) -> dict[str, An
 def merge_reasoning_kwargs(
     raw: Mapping[str, Any],
     resolved: ResolvedReasoning | None,
+    *,
+    api_family: ApiFamily = "chat_completion",
 ) -> dict[str, Any]:
     """Merge typed reasoning into raw kwargs after enforcing single ownership."""
     merged = dict(raw)
@@ -276,7 +292,7 @@ def merge_reasoning_kwargs(
         raise ReasoningConfigurationError(
             "typed reasoning conflicts with raw model kwargs: " + ", ".join(conflicts)
         )
-    merged.update(reasoning_request_kwargs(resolved))
+    merged.update(reasoning_request_kwargs(resolved, api_family=api_family))
     return merged
 
 

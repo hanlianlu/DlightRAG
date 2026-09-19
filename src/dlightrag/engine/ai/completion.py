@@ -19,6 +19,7 @@ from dlightrag.engine.ai.reasoning import (
     resolve_reasoning,
 )
 from dlightrag.engine.ai.replay import messages_for_model
+from dlightrag.engine.ai.response_policy import validate_response_extensions
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
@@ -205,7 +206,18 @@ class CompletionModel:
                 # json_object request anyway.
                 response_format = _JSON_OBJECT_FORMAT
         raw = {**self.settings.model_kwargs_copy(), **request}
-        return merge_reasoning_kwargs(raw, resolved), response_format, max_tokens, resolved
+        if self.settings.api_family == "response":
+            validate_response_extensions(raw)
+        return (
+            merge_reasoning_kwargs(
+                raw,
+                resolved,
+                api_family=self.settings.api_family,
+            ),
+            response_format,
+            max_tokens,
+            resolved,
+        )
 
     @staticmethod
     def _reasoning_metadata(resolved: ResolvedReasoning | None) -> dict[str, str]:

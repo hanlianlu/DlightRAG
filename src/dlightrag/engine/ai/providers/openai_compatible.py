@@ -22,6 +22,8 @@ from dlightrag.engine.ai.providers.base import (
     usage_mapping,
     usage_to_dict,
 )
+from dlightrag.engine.ai.providers.openai_response import complete_response
+from dlightrag.engine.ai.response_policy import ResponseRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -155,11 +157,12 @@ def _openai_provider_state(message: Any) -> dict[str, Any] | None:
 
 
 class OpenAICompatibleProvider(CompletionProvider):
-    """OpenAI, Azure OpenAI, Ollama, Xinference, MiniMax, Qwen, OpenRouter.
+    """OpenAI-compatible Chat or Response transport selected by API Family.
 
-    Any endpoint that speaks the OpenAI chat completions protocol.
-    model_kwargs are routed to extra_body for provider extensions
-    (DeepSeek thinking, Kimi partial, etc.).
+    Chat supports OpenAI, Azure OpenAI, Ollama, Xinference, MiniMax, Qwen and
+    OpenRouter. Response support is deliberately narrower and remains stateless.
+    ``model_kwargs`` are routed to ``extra_body`` for provider extensions; on
+    Response requests, product-owned policy fields are rejected first.
 
     Tracks ``last_reasoning`` — the ``reasoning_content`` from the most
     recent completion or stream call, for optional display or observability.
@@ -209,6 +212,16 @@ class OpenAICompatibleProvider(CompletionProvider):
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> CompletionOutput:
+        if self._api_family == "response":
+            return await complete_response(
+                self._get_client(),
+                messages,
+                model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                model_kwargs=model_kwargs,
+            )
         call_kwargs: dict[str, Any] = {"model": model, "messages": _openai_tool_messages(messages)}
         if temperature is not None:
             call_kwargs["temperature"] = temperature
@@ -243,6 +256,8 @@ class OpenAICompatibleProvider(CompletionProvider):
         max_tokens: int | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> AssistantTurn:
+        if self._api_family == "response":
+            raise ResponseRequestError("Response tool transport is not implemented")
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": _openai_tool_messages(messages),
@@ -291,6 +306,8 @@ class OpenAICompatibleProvider(CompletionProvider):
         max_tokens: int | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> AssistantTurn:
+        if self._api_family == "response":
+            raise ResponseRequestError("Response streaming tool transport is not implemented")
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": _openai_tool_messages(messages),
@@ -429,6 +446,8 @@ class OpenAICompatibleProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore
+        if self._api_family == "response":
+            raise ResponseRequestError("Response streaming transport is not implemented")
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": _openai_tool_messages(messages),

@@ -5,11 +5,15 @@ import asyncio
 from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel
 
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.completion import CompletionModel, structured_response_format
+from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
+from dlightrag.engine.ai.response_policy import ResponseRequestError
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
@@ -37,6 +41,117 @@ class RecordingTelemetry:
     async def observe(self, name: str, **_kwargs: Any):
         self.calls.append({"name": name, **_kwargs})
         yield self.observation
+
+
+async def test_response_family_uses_response_reasoning_shape_in_completion_requests(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            return "answer"
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    model = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="deepseek-reasoner",
+            api_family="response",
+            reasoning="high",
+            model_kwargs={"top_p": 0.9},
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    profile = ModelProfile(
+        context_window_tokens=128_000,
+        max_output_tokens=8_000,
+        reasoning=ReasoningProfile(
+            format="deepseek",
+            levels=ReasoningLevels(
+                off="disabled",
+                minimal=None,
+                low="low",
+                medium=None,
+                high="high",
+                xhigh=None,
+                max="max",
+            ),
+        ),
+    )
+
+    result = await model(
+        messages=[{"role": "user", "content": "hi"}],
+        model_profile=profile,
+    )
+
+    assert result == "answer"
+    assert calls[0]["model_kwargs"] == {
+        "top_p": 0.9,
+        "reasoning": {"effort": "high"},
+    }
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "model",
+        "input",
+        "messages",
+        "instructions",
+        "tools",
+        "tool_choice",
+        "previous_response_id",
+        "conversation",
+        "store",
+        "background",
+        "truncation",
+        "stream",
+        "stream_options",
+        "reasoning",
+        "text",
+        "response_format",
+        "max_output_tokens",
+        "max_tokens",
+        "temperature",
+    ],
+)
+async def test_response_family_rejects_product_owned_raw_model_kwargs(
+    monkeypatch,
+    field: str,
+) -> None:
+    class Provider:
+        complete = AsyncMock(return_value="answer")
+
+        async def aclose(self) -> None:
+            return None
+
+    provider = Provider()
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    model = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="model",
+            api_family="response",
+            model_kwargs={field: "override"},
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+
+    with pytest.raises(ResponseRequestError, match=field):
+        await model(messages=[{"role": "user", "content": "hi"}])
+
+    provider.complete.assert_not_awaited()
 
 
 async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disabled(

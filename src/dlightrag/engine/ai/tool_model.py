@@ -20,6 +20,7 @@ from dlightrag.engine.ai.reasoning import (
     resolve_reasoning,
 )
 from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
+from dlightrag.engine.ai.response_policy import validate_response_extensions
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
@@ -108,7 +109,7 @@ class ToolModel:
             self.settings.effective_agentic_reasoning,
             model_profile,
         )
-        model_kwargs = merge_reasoning_kwargs(self._agentic_model_kwargs, resolved)
+        model_kwargs = self._merge_model_kwargs(self._agentic_model_kwargs, resolved)
         async with self._telemetry.observe(
             "generate-agent-turn",
             input={"message_count": len(messages)},
@@ -278,15 +279,28 @@ class ToolModel:
         if model_kwargs is not None or reasoning is not None:
             requested = reasoning if reasoning is not None else self.settings.reasoning
             resolved = self._resolve_reasoning(requested, model_profile)
-            return ((merge_reasoning_kwargs(model_kwargs or {}, resolved), resolved),)
+            return ((self._merge_model_kwargs(model_kwargs or {}, resolved), resolved),)
         agentic = self._resolve_reasoning(
             self.settings.effective_agentic_reasoning,
             model_profile,
         )
         ordinary = self._resolve_reasoning(self.settings.reasoning, model_profile)
         return (
-            (merge_reasoning_kwargs(self._agentic_model_kwargs, agentic), agentic),
-            (merge_reasoning_kwargs(self._ordinary_model_kwargs, ordinary), ordinary),
+            (self._merge_model_kwargs(self._agentic_model_kwargs, agentic), agentic),
+            (self._merge_model_kwargs(self._ordinary_model_kwargs, ordinary), ordinary),
+        )
+
+    def _merge_model_kwargs(
+        self,
+        raw: dict[str, Any],
+        resolved: ResolvedReasoning | None,
+    ) -> dict[str, Any]:
+        if self.settings.api_family == "response":
+            validate_response_extensions(raw)
+        return merge_reasoning_kwargs(
+            raw,
+            resolved,
+            api_family=self.settings.api_family,
         )
 
     def _validate_image_inputs(

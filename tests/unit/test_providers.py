@@ -25,6 +25,8 @@ from dlightrag.engine.ai.providers.openai_compatible import (
     OpenAICompatibleProvider,
     _openai_tool_messages,
 )
+from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
+from dlightrag.engine.ai.response_policy import ResponseRequestError
 
 
 def _openai_error_response(status_code: int) -> httpx2.Response:
@@ -591,6 +593,157 @@ class TestOpenAICompatibleProvider:
 
         assert result == "partial"
         assert result.stop_reason == "length"
+
+    @pytest.mark.parametrize(
+        ("response_format", "expected_text"),
+        [
+            (None, None),
+            ({"type": "json_object"}, {"format": {"type": "json_object"}}),
+        ],
+    )
+    async def test_response_complete_maps_plain_text_and_json_object_formats(
+        self,
+        response_format: dict[str, Any] | None,
+        expected_text: dict[str, Any] | None,
+    ) -> None:
+        p = get_provider(
+            "openai",
+            api_key="test-key",
+            api_family="response",
+        )
+        response = SimpleNamespace(
+            status="completed",
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="answer")],
+                )
+            ],
+            usage=None,
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            create = AsyncMock(return_value=response)
+            mock_client.return_value.responses.create = create
+            result = await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "gpt-5.4",
+                response_format=response_format,
+            )
+
+        assert result == "answer"
+        await_args = create.await_args
+        assert await_args is not None
+        if expected_text is None:
+            assert "text" not in await_args.kwargs
+        else:
+            assert await_args.kwargs["text"] == expected_text
+
+    @pytest.mark.asyncio
+    async def test_response_complete_maps_token_limit_and_nested_usage(self):
+        p = get_provider(
+            "openai",
+            api_key="test-key",
+            api_family="response",
+        )
+        response = SimpleNamespace(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[SimpleNamespace(type="output_text", text="partial")],
+                )
+            ],
+            usage=SimpleNamespace(
+                input_tokens=4,
+                input_tokens_details=SimpleNamespace(cached_tokens=3),
+                output_tokens=2,
+            ),
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=response)
+            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4")
+
+        assert result == "partial"
+        assert result.stop_reason == "length"
+        assert result.usage_details == {
+            "input_tokens": 4,
+            "input_tokens_details.cached_tokens": 3,
+            "output_tokens": 2,
+        }
+
+    @pytest.mark.parametrize(
+        ("status", "output", "incomplete_reason", "message"),
+        [
+            ("failed", [], None, "failed"),
+            ("cancelled", [], None, "unsupported status"),
+            ("incomplete", [], "content_filter", "incomplete"),
+            ("completed", [], None, "without text"),
+            (
+                "completed",
+                [
+                    SimpleNamespace(
+                        type="message",
+                        content=[SimpleNamespace(type="refusal", refusal="no")],
+                    )
+                ],
+                None,
+                "refused",
+            ),
+        ],
+    )
+    async def test_response_complete_rejects_non_output_terminal_states(
+        self,
+        status: str,
+        output: list[SimpleNamespace],
+        incomplete_reason: str | None,
+        message: str,
+    ) -> None:
+        p = get_provider(
+            "openai",
+            api_key="test-key",
+            api_family="response",
+        )
+        response = SimpleNamespace(
+            status=status,
+            error=SimpleNamespace(code="provider_error") if status == "failed" else None,
+            incomplete_details=(
+                SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
+            ),
+            output=output,
+            usage=None,
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=response)
+            with pytest.raises(ResponseStatusError, match=message):
+                await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4")
+
+    @pytest.mark.asyncio
+    async def test_response_family_never_falls_back_to_chat_for_unimplemented_entrypoints(self):
+        p = get_provider(
+            "openai",
+            api_key="test-key",
+            api_family="response",
+        )
+        create = AsyncMock()
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = create
+            with pytest.raises(ResponseRequestError, match="tool transport"):
+                await p.complete_tool_turn(
+                    [{"role": "user", "content": "hi"}],
+                    "gpt-5.4",
+                    tools=[],
+                )
+            with pytest.raises(ResponseRequestError, match="streaming transport"):
+                _ = [
+                    token
+                    async for token in p.stream(
+                        [{"role": "user", "content": "hi"}],
+                        "gpt-5.4",
+                    )
+                ]
+
+        create.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_complete_tool_turn_sends_tools_and_normalizes_calls(self):

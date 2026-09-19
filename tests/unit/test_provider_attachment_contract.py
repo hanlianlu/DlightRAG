@@ -124,6 +124,53 @@ def _openai_complete_json() -> dict[str, Any]:
     }
 
 
+def _openai_response_json() -> dict[str, Any]:
+    return {
+        "id": "resp-1",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": 128,
+        "model": "gpt-5.4",
+        "output": [
+            {
+                "id": "msg-1",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": _MODEL_TEXT,
+                        "annotations": [],
+                        "logprobs": [],
+                    }
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "store": False,
+        "temperature": 0.2,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 0.95,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 11,
+            "input_tokens_details": {"cached_tokens": 7},
+            "output_tokens": 2,
+            "output_tokens_details": {"reasoning_tokens": 1},
+            "total_tokens": 13,
+        },
+    }
+
+
 def _openai_stream_sse() -> bytes:
     chunks = [
         {
@@ -265,6 +312,8 @@ class _HttpCapture:
         url = str(request.url)
         if self.provider == "openai" and "/chat/completions" not in url:
             raise AssertionError(f"unexpected OpenAI URL {url}")
+        if self.provider == "openai_response" and not url.endswith("/responses"):
+            raise AssertionError(f"unexpected OpenAI Responses URL {url}")
         if self.provider == "anthropic" and "/v1/messages" not in url:
             raise AssertionError(f"unexpected Anthropic URL {url}")
         if self.provider == "gemini" and "generativelanguage.googleapis.com" not in url:
@@ -280,6 +329,8 @@ class _HttpCapture:
                     content=_openai_stream_sse(),
                 )
             return httpx2.Response(200, json=_openai_complete_json())
+        if self.provider == "openai_response":
+            return httpx2.Response(200, json=_openai_response_json())
         if self.provider == "anthropic":
             if streamed:
                 return httpx2.Response(
@@ -538,6 +589,87 @@ async def test_sdk_http_keeps_an_image_bearing_tool_batch_contiguous() -> None:
         "user",
     ]
     assert _wire_images("openai", capture.body) == _expected_payloads(1)
+
+
+async def test_response_complete_uses_stateless_responses_wire_without_mutating_input() -> None:
+    capture = _HttpCapture("openai_response")
+    provider = get_provider(
+        "openai",
+        api_key="test-key",
+        api_family="response",
+        max_retries=0,
+    )
+    bind_mock_http(provider, capture.handler)
+    messages = [
+        {"role": "system", "content": "You are exact."},
+        {"role": "user", "content": [{"type": "text", "text": "look"}]},
+        {"role": "assistant", "content": "Earlier answer."},
+        {"role": "user", "content": "Return JSON."},
+    ]
+    original = json.loads(json.dumps(messages))
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+    }
+
+    try:
+        result = await provider.complete(
+            messages,
+            "gpt-5.4",
+            temperature=0.2,
+            max_tokens=128,
+            response_format=response_format,
+            model_kwargs={"top_p": 0.95},
+        )
+    finally:
+        await provider.aclose()
+
+    assert messages == original
+    assert result == _MODEL_TEXT
+    assert result.stop_reason == "stop"
+    assert result.usage_details == {
+        "input_tokens": 11,
+        "input_tokens_details.cached_tokens": 7,
+        "output_tokens": 2,
+        "output_tokens_details.reasoning_tokens": 1,
+        "total_tokens": 13,
+    }
+    assert capture.requests[-1]["url"] == "https://api.openai.com/v1/responses"
+    assert capture.body == {
+        "model": "gpt-5.4",
+        "input": [
+            {"role": "system", "content": "You are exact."},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look"}],
+            },
+            {"role": "assistant", "content": "Earlier answer."},
+            {"role": "user", "content": "Return JSON."},
+        ],
+        "background": False,
+        "store": False,
+        "truncation": "disabled",
+        "temperature": 0.2,
+        "max_output_tokens": 128,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer",
+                "schema": response_format["json_schema"]["schema"],
+                "strict": True,
+            }
+        },
+        "top_p": 0.95,
+    }
 
 
 async def test_openai_plain_text_complete_has_no_follow_up_user_turn() -> None:

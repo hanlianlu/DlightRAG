@@ -112,6 +112,37 @@ def test_openrouter_off_can_map_to_a_native_effort_value() -> None:
     assert reasoning_request_kwargs(resolved) == {"reasoning": {"effort": "none"}}
 
 
+@pytest.mark.parametrize(
+    ("format", "level", "off", "expected_effort"),
+    [
+        ("openai", "high", "none", "high"),
+        ("openrouter", "high", "disabled", "high"),
+        ("openrouter", "off", "disabled", "none"),
+        ("openrouter", "off", "none", "none"),
+        ("deepseek", "high", "disabled", "high"),
+        ("deepseek", "off", "disabled", "none"),
+    ],
+)
+def test_response_family_translates_compatible_profiles_to_reasoning_effort(
+    format: str,
+    level: str,
+    off: str,
+    expected_effort: str,
+) -> None:
+    resolved = resolve_reasoning(_profile(format=format, off=off), level)  # type: ignore[arg-type]
+
+    assert reasoning_request_kwargs(resolved, api_family="response") == {
+        "reasoning": {"effort": expected_effort}
+    }
+
+
+def test_response_family_rejects_non_response_reasoning_formats() -> None:
+    resolved = resolve_reasoning(_profile(format="anthropic"), "high")
+
+    with pytest.raises(ReasoningConfigurationError, match="Response API"):
+        reasoning_request_kwargs(resolved, api_family="response")
+
+
 def test_catalogue_rejects_an_unknown_reasoning_format() -> None:
     with pytest.raises(ValueError, match="format must be one of"):
         _profile(format="future-wire-shape")
