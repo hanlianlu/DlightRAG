@@ -19,15 +19,9 @@ from dlightrag.application.answer_runs import (
     RunResourceDescriptor,
 )
 from dlightrag.application.runs import RunView
-from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.media import thumbnail_bytes
 from dlightrag.engine.answer.client_contracts import AnswerEffort
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
-from dlightrag.engine.answer.execution.input import AnswerRunRequest
-from dlightrag.engine.answer.history import (
-    HistoryProjectionTarget,
-    IncrementalHistoryProjector,
-)
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.runtime.contracts import RunKind
@@ -52,7 +46,6 @@ from .models import (
     ConversationPageRequest,
     ConversationSummary,
     LinkedTurn,
-    RecoveryPageRequest,
     SubmissionSeed,
     WebConversationStore,
 )
@@ -90,7 +83,6 @@ _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
 _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
-_RECOVERY_BATCH_SIZE = 64
 _NEW_CONVERSATION_NAMESPACE = UUID("9c0e62a5-a12c-45b2-8aeb-474fc2237cdf")
 
 
@@ -489,17 +481,6 @@ class WebConversationService:
             effort=effort,
         )
 
-        async def resolve_history(
-            targets: Sequence[HistoryProjectionTarget],
-        ) -> PriorTurns:
-            if create_conversation:
-                return IncrementalHistoryProjector(targets=targets).finish()
-            return await self._resolve_recovery_history(
-                principal_id,
-                conversation_id,
-                targets=targets,
-            )
-
         try:
             return await self._answers.accept(
                 request=prepared.request,
@@ -513,7 +494,6 @@ class WebConversationService:
                     title_hint=_auto_title(query),
                     create_conversation=create_conversation,
                 ),
-                history_resolver=resolve_history,
             )
         except asyncio.CancelledError:
             raise
@@ -578,73 +558,6 @@ class WebConversationService:
                 forked_from_conversation_id=parent.conversation_id,
             ),
         )
-
-    async def _resolve_recovery_history(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        *,
-        targets: Sequence[HistoryProjectionTarget],
-    ) -> PriorTurns:
-        """Project durable succeeded pairs with bounded physical keyset reads."""
-        projector = IncrementalHistoryProjector(targets=targets)
-        if not projector.accepts_history:
-            return projector.finish()
-
-        before: int | None = None
-        rejected_turn_number: int | None = None
-        while True:
-            batch = await self._store_call(
-                self._store.recovery_page(
-                    principal_id,
-                    conversation_id,
-                    page=RecoveryPageRequest(
-                        direction="newest",
-                        limit=_RECOVERY_BATCH_SIZE,
-                        before_turn_number=before,
-                    ),
-                )
-            )
-            if not batch.turns:
-                break
-            for turn in batch.turns:
-                pair = _successful_pair(turn)
-                if pair is None:
-                    continue
-                if not projector.offer_newest_pair(*pair):
-                    rejected_turn_number = turn.turn_number
-                    break
-            if rejected_turn_number is not None or not batch.has_more:
-                break
-            before = batch.turns[-1].turn_number
-
-        if rejected_turn_number is None or not projector.needs_omitted_pairs:
-            return projector.finish()
-
-        after: int | None = None
-        while projector.needs_omitted_pairs:
-            batch = await self._store_call(
-                self._store.recovery_page(
-                    principal_id,
-                    conversation_id,
-                    page=RecoveryPageRequest(
-                        direction="oldest",
-                        limit=_RECOVERY_BATCH_SIZE,
-                        after_turn_number=after,
-                        upper_turn_number=rejected_turn_number + 1,
-                    ),
-                )
-            )
-            if not batch.turns:
-                break
-            for turn in batch.turns:
-                pair = _successful_pair(turn)
-                if pair is not None and not projector.offer_oldest_omitted_pair(*pair):
-                    break
-            if not batch.has_more:
-                break
-            after = batch.turns[-1].turn_number
-        return projector.finish()
 
     async def _store_call(self, operation: Awaitable[T]) -> T:
         return await operation
@@ -741,22 +654,6 @@ def _prepare_submission(
         agent_lane_id=seed.head.agent_lane_id,
     )
     return _PreparedSubmission(request=request)
-
-
-def _successful_pair(
-    turn: LinkedTurn,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """Project only complete succeeded durable turns into model history."""
-    if turn.run.status != "succeeded":
-        return None
-    request = AnswerRunRequest.from_request(turn.run.request_input())
-    return (
-        {"role": "user", "content": request.query},
-        {
-            "role": "assistant",
-            "content": str((turn.run.result or {}).get("answer") or ""),
-        },
-    )
 
 
 def _web_answer_request_fingerprint(

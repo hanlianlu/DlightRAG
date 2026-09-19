@@ -42,7 +42,6 @@ from dlightrag.application.web_conversations import (
     ConversationHead,
     ConversationHistoryPage,
     ConversationSubmissionConflict,
-    RecoveryTurnBatch,
     SubmissionSeed,
     WebConversationService,
     WebConversationUnavailableError,
@@ -443,7 +442,6 @@ async def test_a_composer_submission_records_lineage_and_keeps_its_own_parameter
         ),
         parent_run_id=RUN_ID,
     )
-    store.recovery_page.return_value = RecoveryTurnBatch((), False, 0)
     store.create_answer_turn.return_value = answer_turn_creation(conversation_id=_CID)
     answers = FakeAnswers()
     service = WebConversationService(
@@ -468,73 +466,10 @@ async def test_a_composer_submission_records_lineage_and_keeps_its_own_parameter
     assert prepared.continuation_kind == "follow_up"
     assert prepared.mode == "mix"
     assert prepared.effort == "high"
-
-
-async def test_durable_recovery_reads_more_than_100_succeeded_turns_in_bounded_pages() -> None:
-    now = datetime.datetime.now(datetime.UTC)
-    store = AsyncMock()
-    store.replay_answer_turn.return_value = None
-    store.submission_seed.return_value = SubmissionSeed(
-        head=ConversationHead(
-            principal_id="anonymous",
-            conversation_id=_CID,
-            agent_session_id=_CID,
-            agent_lane_id="main",
-            content_revision=207,
-            title="Conversation",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    durable = [
-        linked_turn(
-            answer_run(
-                status=("failed" if number in {50, 150} else "succeeded"),
-                run_id=f"019893f4-0000-7000-8000-{number:012d}",
-                request=run_request(query=f"q{number}"),
-                result=(stored_result(f"a{number}") if number not in {50, 150} else None),
-                error_kind=("failed" if number in {50, 150} else None),
-                error_message=("failed" if number in {50, 150} else None),
-            ),
-            turn_number=number,
-        )
-        for number in range(1, 208)
-    ]
-
-    async def recovery_page(_principal: str, _conversation: str, *, page):
-        selected = sorted(durable, key=lambda turn: turn.turn_number, reverse=True)
-        if page.before_turn_number is not None:
-            selected = [turn for turn in selected if turn.turn_number < page.before_turn_number]
-        fetched = selected[: page.limit + 1]
-        return RecoveryTurnBatch(
-            tuple(fetched[: page.limit]), len(fetched) > page.limit, len(fetched)
-        )
-
-    store.recovery_page.side_effect = recovery_page
-    store.create_answer_turn.return_value = None
-    answers = FakeAnswers()
-    service = WebConversationService(
-        store=store,
-        answers=answers,
-        max_attachments=6,
-        cursor_secret=b"web-answer-runs-cursor-test",
-    )
-
-    await service.start_answer(
-        None,
-        conversation_id=_CID,
-        submission_id=SUBMISSION_ID,
-        query="next",
-        workspaces=["default"],
-    )
-
-    contents = [message["content"] for message in answers.prepared[0].history]
-    assert len(contents) == 410
-    assert contents[0] == "q1"
-    assert contents[-1] == "a207"
-    assert "q50" not in contents and "q150" not in contents
-    assert store.recovery_page.await_count == 4
-    assert all(call.kwargs["page"].limit == 64 for call in store.recovery_page.await_args_list)
+    # ADR 0019: the Session branch point is the one history authority. The Web
+    # conversation row states lineage; it must not be projected as a second fold.
+    assert prepared.history == ()
+    store.recovery_page.assert_not_awaited()
 
 
 async def test_service_fork_opens_a_new_conversation_from_the_named_runs_state() -> None:
@@ -1673,7 +1608,6 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
             ),
         ),
     )
-    store.recovery_page.return_value = RecoveryTurnBatch((), False, 0)
     store.replay_answer_turn.return_value = None
     store.create_answer_turn.return_value = None
     answers = FakeAnswers(
@@ -1708,64 +1642,6 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
     (carried,) = request.history_resources
     assert (carried.source_ordinal, carried.digest) == (3, "b" * 64)
     assert carried.run_id == origin_run_id
-
-
-async def test_terminal_turns_project_history_from_the_accepted_envelope() -> None:
-    """Blocker 1 regression: the terminal transition clears prepared input,
-
-    so Web continuity must project the prior query from the durable accepted
-    envelope instead of the cleared prepared input.
-    """
-    now = datetime.datetime.now(datetime.UTC)
-    store = AsyncMock()
-    store.submission_seed.return_value = SubmissionSeed(
-        head=ConversationHead(
-            principal_id="anonymous",
-            conversation_id=_CID,
-            agent_session_id=_CID,
-            agent_lane_id="main",
-            content_revision=1,
-            title="Conversation",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    recovered_turn = linked_turn(
-        answer_run(
-            status="succeeded",
-            accepted={
-                "query": "What changed?",
-                "workspaces": ["default"],
-                "mode": "auto",
-                "attachments": [],
-            },
-            result=stored_result(),
-        )
-    )
-    store.recovery_page.return_value = RecoveryTurnBatch((recovered_turn,), False, 1)
-    store.replay_answer_turn.return_value = None
-    store.create_answer_turn.return_value = None
-    answers = FakeAnswers()
-    service = WebConversationService(
-        store=store,
-        answers=answers,
-        max_attachments=6,
-        cursor_secret=b"web-answer-runs-cursor-test",
-    )
-
-    await service.start_answer(
-        None,
-        conversation_id=_CID,
-        submission_id=SUBMISSION_ID,
-        query="And now?",
-        workspaces=["default"],
-    )
-
-    request = answers.prepared[0]
-    assert [message["content"] for message in request.history] == [
-        "What changed?",
-        "Revenue increased [1].",
-    ]
 
 
 def test_uploads_are_addressed_through_their_run() -> None:

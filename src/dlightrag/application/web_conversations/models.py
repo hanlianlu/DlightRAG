@@ -4,7 +4,7 @@
 import datetime
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
@@ -87,7 +87,6 @@ CONVERSATION_PAGE_DEFAULT_LIMIT = 50
 CONVERSATION_PAGE_MAX_LIMIT = 100
 CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT = 40
 CONVERSATION_HISTORY_PAGE_MAX_LIMIT = 100
-RECOVERY_PAGE_MAX_LIMIT = 128
 
 
 class ConversationCursorError(ValueError):
@@ -190,43 +189,6 @@ class ConversationHistoryPage:
     conversation: ConversationHead
     turns: tuple[LinkedTurn, ...]
     next_cursor: ConversationHistoryCursor | None
-    fetched_rows: int
-
-
-@dataclass(frozen=True, slots=True)
-class RecoveryPageRequest:
-    """Bounded physical turn scan used only for durable recovery projection."""
-
-    direction: Literal["newest", "oldest"]
-    limit: int
-    before_turn_number: int | None = None
-    after_turn_number: int | None = None
-    upper_turn_number: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.direction not in {"newest", "oldest"}:
-            raise ValueError("recovery direction is invalid")
-        if isinstance(self.limit, bool) or not isinstance(self.limit, int):
-            raise ValueError("recovery page limit must be an integer")
-        if not 1 <= self.limit <= RECOVERY_PAGE_MAX_LIMIT:
-            raise ValueError(f"recovery page limit must be between 1 and {RECOVERY_PAGE_MAX_LIMIT}")
-        for value in (
-            self.before_turn_number,
-            self.after_turn_number,
-            self.upper_turn_number,
-        ):
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, int) or value < 1
-            ):
-                raise ValueError("recovery turn boundaries must be positive integers")
-
-
-@dataclass(frozen=True, slots=True)
-class RecoveryTurnBatch:
-    """One bounded physical recovery read; turns follow the requested direction."""
-
-    turns: tuple[LinkedTurn, ...]
-    has_more: bool
     fetched_rows: int
 
 
@@ -374,13 +336,6 @@ class WebConversationStore(Protocol):
         *,
         attachment_limit: int,
     ) -> SubmissionSeed | None: ...
-    async def recovery_page(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        *,
-        page: RecoveryPageRequest,
-    ) -> RecoveryTurnBatch: ...
     async def find_turn_by_run(self, principal_id: str, run_id: str) -> LinkedTurn | None: ...
     async def find_answer_turn_by_submission(
         self, principal_id: str, submission_id: str
@@ -432,9 +387,6 @@ __all__ = [
     "ConversationSummary",
     "ConversationSubmissionConflict",
     "LinkedTurn",
-    "RECOVERY_PAGE_MAX_LIMIT",
-    "RecoveryPageRequest",
-    "RecoveryTurnBatch",
     "SubmissionSeed",
     "WebConversationSchemaError",
     "WebConversationStore",

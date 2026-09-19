@@ -25,7 +25,6 @@ _WEB_RECORD_NAMES = {
     "AnswerTurnCreation",
     "ConversationHead",
     "ConversationHistoryPage",
-    "RecoveryTurnBatch",
     "SubmissionSeed",
     "ConversationSubmissionConflict",
     "LinkedTurn",
@@ -117,19 +116,15 @@ def test_child_roster_page_queries_match_the_exact_roster_index_contract() -> No
     assert all("OFFSET" not in query.upper() for query in (first, after))
 
 
-def test_web_turn_pages_select_limit_plus_one_identities_before_run_joins() -> None:
+def test_web_history_pages_select_limit_plus_one_identities_before_run_joins() -> None:
     from dlightrag.adapters.postgres.web import web_conversations
 
     history = " ".join(web_conversations._GET_TURNS_PAGE.split()).upper()
-    oldest = " ".join(web_conversations._GET_RECOVERY_OLDEST.split()).upper()
     assert "WITH SELECTED_TURNS AS" in history
     assert history.index("LIMIT $4") < history.index("JOIN DLIGHTRAG_RUNS")
     assert "T.TURN_NUMBER < $3" in history
     assert "ORDER BY T.TURN_NUMBER DESC" in history
-    assert "LIMIT $5" in oldest
-    assert oldest.index("LIMIT $5") < oldest.index("JOIN DLIGHTRAG_RUNS")
-    assert "ORDER BY T.TURN_NUMBER ASC" in oldest
-    assert "OFFSET" not in history and "OFFSET" not in oldest
+    assert "OFFSET" not in history
 
 
 def test_web_turn_numbers_use_the_locked_conversation_revision_and_attachment_seed_is_safe() -> (

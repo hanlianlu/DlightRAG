@@ -48,8 +48,6 @@ from dlightrag.application.web_conversations import (
     ConversationRowPage,
     ConversationSubmissionConflict,
     LinkedTurn,
-    RecoveryPageRequest,
-    RecoveryTurnBatch,
     SubmissionSeed,
     WebConversationSchemaError,
     WebConversationUnavailableError,
@@ -401,29 +399,6 @@ JOIN dlightrag_runs AS r
   ON r.owner_id = t.principal_id
  AND r.run_id = t.answer_run_id
 ORDER BY t.turn_number DESC
-"""  # noqa: S608 - interpolates only trusted column-projection constants
-
-_GET_RECOVERY_NEWEST = _GET_TURNS_PAGE
-
-_GET_RECOVERY_OLDEST = f"""
-WITH selected_turns AS (
-    SELECT t.*
-    FROM web_conversation_turns AS t
-    WHERE t.principal_id = $1
-      AND t.conversation_id = $2::text::uuid
-      AND ($3::integer IS NULL OR t.turn_number > $3)
-      AND ($4::integer IS NULL OR t.turn_number < $4)
-    ORDER BY t.turn_number ASC
-    LIMIT $5
-)
-SELECT
-{_TURN_COLUMNS},
-{run_columns("r")}
-FROM selected_turns AS t
-JOIN dlightrag_runs AS r
-  ON r.owner_id = t.principal_id
- AND r.run_id = t.answer_run_id
-ORDER BY t.turn_number ASC
 """  # noqa: S608 - interpolates only trusted column-projection constants
 
 _GET_TIP_RUN = """
@@ -1019,50 +994,6 @@ class PGWebConversationStore(PostgresOperationRunner):
                     attachments=attachments,
                     parent_run_id=(str(tip_run_id) if tip_run_id is not None else None),
                 )
-
-        return await self._run_read(_operation)
-
-    async def recovery_page(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        *,
-        page: RecoveryPageRequest,
-    ) -> RecoveryTurnBatch:
-        """Read one bounded physical recovery page across every run status."""
-        validated = RecoveryPageRequest(
-            direction=page.direction,
-            limit=page.limit,
-            before_turn_number=page.before_turn_number,
-            after_turn_number=page.after_turn_number,
-            upper_turn_number=page.upper_turn_number,
-        )
-        await self._ensure_initialized()
-
-        async def _operation(conn: Any) -> RecoveryTurnBatch:
-            if validated.direction == "newest":
-                rows = await conn.fetch(
-                    _GET_RECOVERY_NEWEST,
-                    principal_id,
-                    conversation_id,
-                    validated.before_turn_number,
-                    validated.limit + 1,
-                )
-            else:
-                rows = await conn.fetch(
-                    _GET_RECOVERY_OLDEST,
-                    principal_id,
-                    conversation_id,
-                    validated.after_turn_number,
-                    validated.upper_turn_number,
-                    validated.limit + 1,
-                )
-            fetched_rows = len(rows)
-            return RecoveryTurnBatch(
-                turns=tuple(_linked_turn(row) for row in rows[: validated.limit]),
-                has_more=fetched_rows > validated.limit,
-                fetched_rows=fetched_rows,
-            )
 
         return await self._run_read(_operation)
 
