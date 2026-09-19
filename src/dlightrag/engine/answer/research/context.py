@@ -209,7 +209,6 @@ class ContextAssembler:
                     source="answer.evidence_images",
                     authority="visual",
                     messages=({"role": "user", "content": visual_blocks},),
-                    citable=True,
                 )
             )
         if self._tool_guidance:
@@ -252,7 +251,6 @@ class ContextAssembler:
                 source="answer.system",
                 authority="system",
                 messages=(system,),
-                compressible=False,
             )
         ]
         memory = session_notes_message(self._session_notes) if self._run_notes else ""
@@ -270,7 +268,6 @@ class ContextAssembler:
                             "content": memory,
                         },
                     ),
-                    compressible=False,
                 )
             )
         if self._history.episodic_summary:
@@ -300,7 +297,6 @@ class ContextAssembler:
                     source="answer.question",
                     authority="user",
                     messages=(self._question,),
-                    compressible=False,
                 ),
                 ContextContribution(
                     source="agent.session",

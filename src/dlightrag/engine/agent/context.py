@@ -32,9 +32,6 @@ _AUTHORITY_ORDER: dict[ContextAuthority, int] = {
     "visual": 80,
 }
 
-#: The authorities whose text or pixels a Citation may point at.
-_CITABLE_AUTHORITIES: frozenset[ContextAuthority] = frozenset({"evidence", "visual"})
-
 
 @dataclass(frozen=True, slots=True)
 class ContextContribution:
@@ -47,14 +44,10 @@ class ContextContribution:
     source: str
     authority: ContextAuthority
     messages: tuple[dict[str, Any], ...]
-    citable: bool = False
-    compressible: bool = True
 
     def __post_init__(self) -> None:
         if not self.source.strip():
             raise ValueError("context contribution source cannot be empty")
-        if self.citable and self.authority not in _CITABLE_AUTHORITIES:
-            raise ValueError("only evidence contributions, text or pixels, may be citable")
 
     @property
     def estimated_tokens(self) -> int:

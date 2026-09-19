@@ -37,13 +37,11 @@ def test_context_projector_orders_authorities_and_keeps_source_order() -> None:
                 source="system",
                 authority="system",
                 messages=({"role": "system", "content": "rules"},),
-                compressible=False,
             ),
             ContextContribution(
                 source="question",
                 authority="user",
                 messages=({"role": "user", "content": "question"},),
-                compressible=False,
             ),
         ]
     )

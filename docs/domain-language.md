@@ -270,7 +270,7 @@ The bounded model-facing projection of one selected Lane ancestry. Exactly one a
 _Avoid_: authority, checkpoint, transcript snapshot
 
 **Context Contribution**:
-A typed model-ready contribution with source, authority, citable and compressible facts. It unifies projection ordering without merging the contributor's storage ownership.
+A typed model-ready contribution with its source, authority and messages. It unifies projection ordering without merging the contributor's storage ownership.
 _Avoid_: global prompt registry, second state authority
 
 **Compaction Summary**:

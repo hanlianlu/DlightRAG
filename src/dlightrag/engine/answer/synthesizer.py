@@ -361,7 +361,6 @@ class AnswerSynthesizer:
                 source="answer.system",
                 authority="system",
                 messages=({"role": "system", "content": system_prompt},),
-                compressible=False,
             )
         ]
         if episodic_summary:
@@ -385,8 +384,6 @@ class AnswerSynthesizer:
                 source="answer.evidence" if excerpt_blocks else "answer.question",
                 authority="evidence" if excerpt_blocks else "user",
                 messages=({"role": "user", "content": content},),
-                citable=bool(excerpt_blocks),
-                compressible=False,
             )
         )
         memory_message = standing_memory_message(memory_text)
