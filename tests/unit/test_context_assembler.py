@@ -87,6 +87,85 @@ def _ledger(passages: int, *, chars: int = 2_000) -> EvidenceLedger:
     return evidence
 
 
+_PIXEL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+
+def _pixel_ledger() -> EvidenceLedger:
+    evidence = EvidenceLedger(
+        image_budget=AnswerImageBudget(
+            max_images=1,
+            max_total_bytes=24_000_000,
+            max_bytes_per_image=3_000_000,
+            max_pixels=40_000_000,
+            max_px=1536,
+            min_px=1024,
+            quality=89,
+            min_quality=79,
+        )
+    )
+    evidence.add_rows(
+        [
+            {
+                "chunk_id": "c0",
+                "reference_id": "source-uuid",
+                "full_doc_id": "doc-uuid",
+                "file_path": "plate.png",
+                "content": "a photographed plate",
+                "image_data": _PIXEL_PNG_B64,
+                "_workspace": "alpha",
+                "metadata": {
+                    "source_type": "file",
+                    "source_uri": "file:///alpha/plate.png",
+                    "source_download_locator": "file:///alpha/plate.png",
+                },
+            }
+        ]
+    )
+    return evidence
+
+
+async def test_the_run_local_visual_lane_trails_the_static_tail() -> None:
+    """ADR 0015: the one lane that re-renders per request must not precede the reuse."""
+    evidence = _pixel_ledger()
+    await evidence.aflush_images()
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="what does the plate show?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+        memory_text="Remembered about this owner (context only): prefers short answers.",
+        tool_guidance=("Read a document before viewing it.",),
+    )
+
+    messages = await assembler.control_turn(
+        evidence=evidence,
+        working=WorkingContextProjection(),
+    )
+
+    def _texts(message: dict[str, Any]) -> list[str]:
+        content = message["content"]
+        if isinstance(content, str):
+            return [content]
+        return [str(block.get("text", "")) for block in content]
+
+    tail = messages[-1]
+    assert tail["role"] == "user"
+    blocks = tail["content"]
+    assert isinstance(blocks, list)
+    assert [block["type"] for block in blocks] == ["text", "image_url"]
+    # The byte-stable tail is still in the request; it is the pixels that moved past it.
+    static_tail = [
+        index
+        for index, message in enumerate(messages)
+        if any("Read a document before viewing it." in text for text in _texts(message))
+    ]
+    assert static_tail, "the per-Run static tail must stay in the request"
+    assert max(static_tail) < len(messages) - 1
+
+
 async def test_history_contribution_preserves_roles_and_precedes_current_question() -> None:
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW),

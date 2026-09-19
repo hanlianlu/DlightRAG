@@ -15,6 +15,7 @@ type ContextAuthority = Literal[
     "evidence",
     "profile",
     "reference",
+    "visual",
 ]
 
 _AUTHORITY_ORDER: dict[ContextAuthority, int] = {
@@ -26,7 +27,13 @@ _AUTHORITY_ORDER: dict[ContextAuthority, int] = {
     "evidence": 50,
     "profile": 60,
     "reference": 70,
+    # The run-local visual lane re-renders every request, so it trails the
+    # byte-stable per-Run tail instead of preceding it (ADR 0015).
+    "visual": 80,
 }
+
+#: The authorities whose text or pixels a Citation may point at.
+_CITABLE_AUTHORITIES: frozenset[ContextAuthority] = frozenset({"evidence", "visual"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +53,8 @@ class ContextContribution:
     def __post_init__(self) -> None:
         if not self.source.strip():
             raise ValueError("context contribution source cannot be empty")
-        if self.citable and self.authority != "evidence":
-            raise ValueError("only evidence contributions may be citable")
+        if self.citable and self.authority not in _CITABLE_AUTHORITIES:
+            raise ValueError("only evidence contributions, text or pixels, may be citable")
 
     @property
     def estimated_tokens(self) -> int:

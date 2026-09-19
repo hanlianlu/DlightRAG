@@ -207,7 +207,7 @@ class ContextAssembler:
             tail.append(
                 ContextContribution(
                     source="answer.evidence_images",
-                    authority="evidence",
+                    authority="visual",
                     messages=({"role": "user", "content": visual_blocks},),
                     citable=True,
                 )
@@ -236,9 +236,10 @@ class ContextAssembler:
         # own guidance had to be rebuilt every turn and sat after the transcript, so
         # the reusable prefix ended before it; both reference harnesses send nothing
         # of the kind — Pi appends only durable messages, and DeepSeek's loop derives
-        # each request from its session log. What remains after the transcript is
-        # per-Run static (memory, tool guidance, skill context) plus the run-local
-        # visual lane, and the loop-termination guidance lives in the system prompt.
+        # each request from its session log. What remains after the transcript is the
+        # per-Run static tail (memory, tool guidance, skill context) and then the
+        # run-local visual lane, which trails it because it re-renders per request
+        # (ADR 0015); the loop-termination guidance lives in the system prompt.
         return [*head, *ContextProjector().project(tail).messages]
 
     def _head(
