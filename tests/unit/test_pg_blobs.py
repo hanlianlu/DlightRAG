@@ -5,8 +5,13 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_complete_blob
+from dlightrag.adapters.postgres.runtime.run_blob_store import (
+    BlobSizeConflict,
+    write_blob_content,
+    write_complete_blob,
+)
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
+from dlightrag.engine.runtime.blob_chunks import blob_digest
 from dlightrag.engine.runtime.records import PendingArtifact
 
 
@@ -64,6 +69,25 @@ async def test_complete_blob_uses_two_set_based_statements_for_every_chunk_count
     assert "ordinality - 1" in chunk_sql
     assert conn.calls[1][2] == ("owner-a", "d" * 64, chunks, total_bytes)
     assert all(kind != "executemany" for kind, _sql, _args in conn.calls)
+
+
+async def test_write_blob_content_binds_the_declared_digest_to_the_bytes() -> None:
+    content = b"abc"
+    conn = _RecordingConnection(len(content))
+
+    await write_blob_content(conn, owner_id="owner", digest=blob_digest(content), content=content)
+
+    assert conn.calls, "a verified blob still reaches the set-based statements"
+
+
+async def test_write_blob_content_refuses_a_digest_that_is_not_its_content_address() -> None:
+    content = b"abc"
+    conn = _RecordingConnection(len(content))
+
+    with pytest.raises(ValueError, match="declared digest"):
+        await write_blob_content(conn, owner_id="owner", digest="a" * 64, content=content)
+
+    assert conn.calls == [], "the refusal must happen before any row is written"
 
 
 async def test_run_store_acquires_blob_identities_in_digest_order(

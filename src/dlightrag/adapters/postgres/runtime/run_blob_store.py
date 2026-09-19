@@ -57,9 +57,6 @@ class PGRunBlobStore(PostgresOperationRunner):
     async def _read[T](self, operation: Callable[[Any], Awaitable[T]]) -> T:
         return await self._run(operation)
 
-    async def write_in(self, conn: Any, *, owner_id: str, digest: str, content: bytes) -> None:
-        await write_blob_content(conn, owner_id=owner_id, digest=digest, content=content)
-
     async def stream(
         self,
         *,
@@ -118,8 +115,15 @@ async def write_blob_content(
     digest: str,
     content: bytes,
 ) -> None:
-    """Persist complete contiguous content without copying every chunk in Python."""
+    """Persist complete contiguous content without copying every chunk in Python.
+
+    The caller's digest is this blob's content address, so it is bound to the bytes
+    here rather than trusted: a caller that names content it did not compute would
+    otherwise store a blob nothing can look up.
+    """
     plan = plan_blob(content)
+    if plan.digest != digest:
+        raise ValueError("blob content does not match its declared digest")
     view = memoryview(content)
     chunks = tuple(view[start:end] for start, end in plan.chunk_ranges)
     await write_complete_blob(

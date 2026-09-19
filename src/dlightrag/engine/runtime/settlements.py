@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from dlightrag.engine.runtime.blob_chunks import blob_digest
+
 
 @dataclass(frozen=True, slots=True)
 class OpaqueEvidenceWrite:
@@ -73,10 +75,12 @@ class OpaqueFetchedResourceWrite:
 
 @dataclass(frozen=True, slots=True)
 class CompleteBlobDescriptor:
-    """A fully verified blob: every chunk and the complete-content digest.
+    """A fully verified blob: every chunk, the complete-content digest, and their binding.
 
     Metadata existence means complete: one transaction writes all chunks and
-    inserts metadata last, so a partial blob is never visible.
+    inserts metadata last, so a partial blob is never visible. Construction also
+    verifies that the chunk bytes sum to ``total_bytes`` and hash to ``digest``,
+    so a descriptor cannot name content it does not carry.
     """
 
     digest: str
@@ -88,6 +92,8 @@ class CompleteBlobDescriptor:
             raise ValueError("blob digest must be a SHA-256 hex digest")
         if self.total_bytes != sum(len(chunk) for chunk in self.chunks):
             raise ValueError("blob total bytes must equal its chunk sum")
+        if blob_digest(b"".join(self.chunks)) != self.digest:
+            raise ValueError("blob chunks do not hash to their declared digest")
 
 
 @dataclass(frozen=True, slots=True)

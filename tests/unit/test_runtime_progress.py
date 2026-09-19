@@ -250,6 +250,20 @@ class TestEffectHostUpdate:
         with pytest.raises(ValueError):
             CompleteBlobDescriptor(digest="a" * 64, total_bytes=10, chunks=(b"abc",))
 
+    def test_complete_blob_requires_chunks_to_hash_to_their_digest(self) -> None:
+        from dlightrag.engine.runtime.blob_chunks import blob_digest
+
+        content = b"abc"
+        descriptor = CompleteBlobDescriptor(
+            digest=blob_digest(content),
+            total_bytes=len(content),
+            chunks=(content,),
+        )
+
+        assert descriptor.digest == blob_digest(content)
+        with pytest.raises(ValueError):
+            CompleteBlobDescriptor(digest="a" * 64, total_bytes=len(content), chunks=(content,))
+
     def test_aggregate_has_all_atomic_effect_channels(self) -> None:
         from dataclasses import fields
 
