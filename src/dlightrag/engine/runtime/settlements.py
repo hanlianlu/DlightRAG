@@ -3,9 +3,8 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any, Literal
-
-from dlightrag.engine.runtime.blob_chunks import blob_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +91,10 @@ class CompleteBlobDescriptor:
             raise ValueError("blob digest must be a SHA-256 hex digest")
         if self.total_bytes != sum(len(chunk) for chunk in self.chunks):
             raise ValueError("blob total bytes must equal its chunk sum")
-        if blob_digest(b"".join(self.chunks)) != self.digest:
+        content_hash = sha256()
+        for chunk in self.chunks:
+            content_hash.update(chunk)
+        if content_hash.hexdigest() != self.digest:
             raise ValueError("blob chunks do not hash to their declared digest")
 
 
