@@ -287,6 +287,37 @@ async def test_parse_multipart_web_answer_request_reads_ordered_attachments() ->
 
 
 @pytest.mark.asyncio
+async def test_a_multipart_submission_refuses_an_unknown_mode() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_supported_capability(),
+        )
+        return {"accepted": True}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/probe",
+            data={
+                "query": "inspect this",
+                "submission_id": str(uuid4()),
+                "mode": "turbo",
+            },
+            files=[("attachments", ("chart.png", _png_bytes(), "image/png"))],
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid mode"}
+
+
+@pytest.mark.asyncio
 async def test_research_image_ingress_does_not_require_query_model_raw_support() -> None:
     app = FastAPI()
 

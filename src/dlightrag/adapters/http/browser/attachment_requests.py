@@ -24,7 +24,7 @@ from dlightrag.engine.answer.image_capability import (
     AnswerImageCapability,
     check_answer_image_count,
 )
-from dlightrag.engine.answer.mode import AnswerMode, optional_answer_mode
+from dlightrag.engine.answer.mode import AnswerMode, canonical_answer_mode
 
 # Bound the multipart parse *before* buffering any bodies so a client cannot
 # push Starlette's default 1000 parts into memory/disk ahead of the attachment
@@ -65,7 +65,7 @@ def _optional_mode(value: Any) -> AnswerMode | None:
     if value in (None, ""):
         return None
     try:
-        return optional_answer_mode(str(value))
+        return canonical_answer_mode(str(value))
     except UnsupportedAnswerModeError as exc:
         raise HTTPException(status_code=422, detail="Invalid mode") from exc
 

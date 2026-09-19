@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Literal, cast, get_args
 from urllib.parse import urlsplit
 
 from dlightrag.engine.answer.errors import (
@@ -41,20 +41,9 @@ def canonical_answer_mode(mode: str | None) -> AnswerMode:
     """Omitted public mode is auto."""
     if mode is None or mode == "":
         return "auto"
-    if mode == "auto" or mode == "fast" or mode == "research":
-        return mode
+    if mode in ANSWER_MODES:
+        return cast(AnswerMode, mode)
     raise UnsupportedAnswerModeError(mode)
-
-
-def optional_answer_mode(mode: str | None) -> AnswerMode | None:
-    """Return the canonical public mode, or None when the caller omitted it.
-
-    Transport edges that must keep "absent" distinct from "auto" validate through
-    here rather than re-listing the vocabulary in their own parser.
-    """
-    if mode is None or mode == "":
-        return None
-    return canonical_answer_mode(mode)
 
 
 def resource_role(*, filename: str | None, mime_type: str | None) -> ResourceRole:
@@ -127,7 +116,6 @@ __all__ = [
     "ModeResource",
     "ResolvedMode",
     "canonical_answer_mode",
-    "optional_answer_mode",
     "require_supported_mode",
     "resource_role",
     "valid_modes",

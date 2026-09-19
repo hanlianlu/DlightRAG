@@ -10,6 +10,7 @@ from dlightrag.engine.answer.errors import (
 )
 from dlightrag.engine.answer.execution.input import AnswerRunRequest
 from dlightrag.engine.answer.mode import (
+    ANSWER_MODES,
     ModeCapability,
     ModeResource,
     canonical_answer_mode,
@@ -77,21 +78,13 @@ def test_web_search_does_not_remove_fast_from_a_text_only_request() -> None:
     assert valid == frozenset({"fast", "research"})
 
 
-def test_optional_mode_keeps_absent_distinct_from_auto() -> None:
-    """A transport that must preserve \"omitted\" validates through one entry point."""
-    from dlightrag.engine.answer.mode import optional_answer_mode
-
-    assert optional_answer_mode(None) is None
-    assert optional_answer_mode("") is None
-    assert optional_answer_mode("research") == "research"
-    with pytest.raises(UnsupportedAnswerModeError):
-        optional_answer_mode("turbo")
+def test_canonical_answer_mode_accepts_every_declared_public_mode() -> None:
+    assert tuple(canonical_answer_mode(mode) for mode in ANSWER_MODES) == ANSWER_MODES
 
 
 def test_the_routing_check_lists_exactly_the_public_modes() -> None:
-    """The DDL holds the one copy of the vocabulary outside Python; it is derived."""
+    """The immutable baseline snapshot must force a new migration when modes change."""
     from dlightrag.adapters.postgres.runtime.run_store import _CREATE_ROUTING
-    from dlightrag.engine.answer.mode import ANSWER_MODES
 
     clause = _CREATE_ROUTING.split("CHECK (requested_mode IN (", 1)[1].split(")", 1)[0]
     listed = {part.strip().strip("'") for part in clause.split(",")}

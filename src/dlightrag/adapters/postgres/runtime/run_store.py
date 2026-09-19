@@ -54,7 +54,6 @@ from dlightrag.engine.agent.tool_content import decode_tool_content, tool_conten
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.lineage import ADOPTABLE_LINEAGE_KINDS
-from dlightrag.engine.answer.mode import ANSWER_MODES
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.runtime.cancellation import (
     RunCancellationListener,
@@ -634,8 +633,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_artifacts (
 )
 """
 
-_CREATE_ROUTING = (
-    """
+_CREATE_ROUTING = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
     owner_id                 TEXT        NOT NULL,
     run_id                   UUID        NOT NULL,
@@ -655,7 +653,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_answer_run_routing_requested_check
-        CHECK (requested_mode IN ({answer_modes})),
+        CHECK (requested_mode IN ('auto', 'fast', 'research')),
     CONSTRAINT dlightrag_answer_run_routing_valid_check
         CHECK (COALESCE(array_length(valid_modes, 1), 0) >= 1
                AND valid_modes <@ ARRAY['fast', 'research']::text[]),
@@ -665,10 +663,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
                    AND resolved_mode = ANY (valid_modes)))
 )
 """
-    # One copy of the mode vocabulary: `canonical_answer_mode` accepts exactly
-    # ANSWER_MODES, and the routing CHECK is written from the same tuple.
-    .replace("{answer_modes}", ", ".join(f"'{mode}'" for mode in ANSWER_MODES))
-)
 
 _CREATE_CHILD_SESSIONS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
