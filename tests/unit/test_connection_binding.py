@@ -153,9 +153,9 @@ async def test_executor_resolver_claim_comes_from_run_session_not_prepared_argum
     from typing import Any, cast
     from unittest.mock import MagicMock
 
-    from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
     from dlightrag.engine.runtime.coordinator import RunSession
     from dlightrag.engine.runtime.errors import RunExecutionError
+    from tests.in_memory_session_repository import MemoryAgentSessionRepository
     from tests.unit.test_answer_executor import _executor
 
     accepted_store = _Store()

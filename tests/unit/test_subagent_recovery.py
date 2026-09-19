@@ -16,7 +16,6 @@ from dlightrag.engine.agent.session.ids import (
     OperationId,
     SessionId,
 )
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import ToolBatchItem
 from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, OperationIdempotencyConflict
 from dlightrag.engine.agent.tools import ToolResult
@@ -38,6 +37,7 @@ from dlightrag.engine.answer.tools.subagents import (
     subagent_tools,
 )
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.tool_helpers import tool_runtime
 from tests.unit.test_subagents import _child_orchestrator, _context_snapshot, _FakeSession
 

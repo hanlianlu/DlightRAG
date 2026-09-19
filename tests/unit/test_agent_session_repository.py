@@ -8,7 +8,6 @@ import pytest
 
 from dlightrag.engine.agent.session.entries import UserMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import OperationMeta, ReadyForProvider
 from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
@@ -29,6 +28,7 @@ from dlightrag.engine.agent.session.transactions import (
     SessionTransaction,
     TransactionCommit,
 )
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:

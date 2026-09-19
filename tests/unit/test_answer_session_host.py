@@ -15,7 +15,6 @@ from dlightrag.engine.agent.session.entries import (
 )
 from dlightrag.engine.agent.session.fold import host_turn_starts, project_session_messages
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import (
     CompactionSummary,
@@ -62,6 +61,7 @@ from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 async def _no_settled_result() -> None:

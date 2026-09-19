@@ -8,7 +8,6 @@ import pytest
 
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, SessionId
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
 from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
@@ -18,6 +17,7 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionLeaseLost,
 )
 from dlightrag.engine.ai.messages import ToolCall
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:

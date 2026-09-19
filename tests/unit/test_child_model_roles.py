@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.ids import OperationId, SessionId
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import model_fingerprint
@@ -45,6 +44,7 @@ from dlightrag.engine.answer.tools.subagents import (
 from dlightrag.engine.rag.retrieval import RetrievalOptions
 from dlightrag.engine.runtime.errors import IncompatibleActiveRunError
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.unit.test_answer_executor import _executor
 from tests.unit.test_answer_model_runtime import _runtime
 from tests.unit.test_subagents import _context_snapshot, _FakeSession

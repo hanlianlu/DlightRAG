@@ -18,7 +18,6 @@ from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import ContextProjectionRegister, SetRegister
 from dlightrag.engine.agent.session.transactions import (
@@ -74,6 +73,7 @@ from dlightrag.engine.runtime.records import (
     Succeeded,
     artifact_digest,
 )
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
 

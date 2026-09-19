@@ -25,7 +25,6 @@ from dlightrag.engine.agent.session.ids import (
     OperationId,
     SessionId,
 )
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.runtime import (
@@ -72,6 +71,7 @@ from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.unit.conftest import RecordingLangfuse, answer_model_profile
 
 

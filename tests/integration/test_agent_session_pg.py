@@ -39,7 +39,6 @@ from dlightrag.engine.agent.session.ids import (
     SessionId,
     StageIntentId,
 )
-from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import (
     OperationCompleted,
     OperationMeta,
@@ -95,6 +94,7 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
+from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
