@@ -18,6 +18,7 @@ from dlightrag.engine.answer.publication import (
     prepare_artifact_attachment,
     validate_publication,
 )
+from dlightrag.engine.answer.results import answer_parts_from_markdown
 
 
 def _attachment(root: Path, path: str, *, label: str = "") -> ArtifactAttachment:
@@ -313,8 +314,12 @@ def test_video_container_does_not_substitute_for_another_container(tmp_path: Pat
     assert plan.issues[0].kind == "media_mismatch"
 
 
-def test_placed_video_affordance_is_inline(tmp_path: Path) -> None:
-    """A video the answer never placed is still offered as an inline player."""
+def test_omitted_video_affordance_stays_a_card(tmp_path: Path) -> None:
+    """A video the answer never placed is offered as a card, not a player.
+
+    Inline playback is the Answer's own explicit placement, so the framework's
+    trailing affordance must not spend the reading column on a player.
+    """
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / "clip.mp4").write_bytes(_MP4_BYTES)
@@ -322,7 +327,30 @@ def test_placed_video_affordance_is_inline(tmp_path: Path) -> None:
     plan = _validate(root, answer="See the recording.", attached=("clip.mp4",))
 
     assert plan.outcome == {"status": "complete", "issues": []}
-    assert "![clip.mp4](artifact:artifact-" in plan.answer
+    assert "[clip.mp4](artifact:artifact-" in plan.answer
+    assert "![clip.mp4]" not in plan.answer
+
+
+def test_answer_placed_video_is_inline(tmp_path: Path) -> None:
+    """The Answer's own placement marker is what makes a video play in place."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "clip.mp4").write_bytes(_MP4_BYTES)
+
+    plan = _validate(root, answer="![clip](artifact:clip.mp4)", attached=("clip.mp4",))
+
+    (part,) = [
+        part
+        for part in answer_parts_from_markdown(
+            plan.answer,
+            artifacts=[item.descriptor() for item in plan.artifacts],
+            evidence_images=[],
+        )
+        if part["type"] == "artifact"
+    ]
+
+    assert part["inline"] is True
+    assert part["artifact"]["presentation"] == "video"
 
 
 def test_visual_pdf_artifact_is_published(tmp_path: Path) -> None:

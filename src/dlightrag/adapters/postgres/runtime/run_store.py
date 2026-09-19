@@ -884,7 +884,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_artifact_attachments (
     CONSTRAINT dlightrag_answer_artifact_attachments_size_check
         CHECK (size_bytes >= 0),
     CONSTRAINT dlightrag_answer_artifact_attachments_presentation_check
-        CHECK (presentation IN ('image', 'markdown', 'html', 'pdf', 'text', 'download'))
+        CHECK (presentation IN
+            ('image', 'video', 'markdown', 'html', 'pdf', 'text', 'download'))
 )
 """
 
@@ -1169,6 +1170,18 @@ RUN_MIGRATIONS = (
             "OR (kind = 'committed_spill' "
             "AND blob_digest IS NULL AND locator_digest IS NULL) "
             "OR (kind = 'published_artifact' AND blob_digest IS NOT NULL))",
+        ),
+    ),
+    Migration(
+        "artifact_attachment_video_presentation",
+        "Admit a playable video Attachment presentation",
+        (
+            "ALTER TABLE dlightrag_answer_artifact_attachments "
+            "DROP CONSTRAINT dlightrag_answer_artifact_attachments_presentation_check",
+            "ALTER TABLE dlightrag_answer_artifact_attachments "
+            "ADD CONSTRAINT dlightrag_answer_artifact_attachments_presentation_check "
+            "CHECK (presentation IN "
+            "('image', 'video', 'markdown', 'html', 'pdf', 'text', 'download'))",
         ),
     ),
 )

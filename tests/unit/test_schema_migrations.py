@@ -203,6 +203,7 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         "write_model_fork_points",
         "answer_session_notes",
         "published_artifact_resources",
+        "artifact_attachment_video_presentation",
     )
     assert tuple(migration.version for migration in RUN_MIGRATIONS) == expected_versions
     initial_migrations = RUN_MIGRATIONS[

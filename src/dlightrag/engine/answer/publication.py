@@ -755,7 +755,11 @@ def artifact_link(attachment: ArtifactAttachment) -> str:
     """Return the canonical model-facing placement syntax for one attachment."""
     label = attachment.label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     uri = quote(attachment.relative_path, safe="/")
-    prefix = "!" if attachment.presentation in {"image", "video"} else ""
+    prefix = "!" if attachment.presentation == "image" else ""
+    # A video is deliberately not prefixed here. Inline playback is the Answer's
+    # own placement; the framework's trailing affordance for a root the Answer
+    # forgot stays a card, so a player never appears in the reading column
+    # without the Model asking for one (ADR 0026).
     return f"{prefix}[{label}](artifact:{uri})"
 
 

@@ -7,8 +7,10 @@ import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
+import canvasStyles from '../styles/artifact-canvas.module.css';
 import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
+import {artifactDownloadLink} from './artifact-download.ts';
 import './active-artifact-frame.ts';
 import './answer-presentation.ts';
 
@@ -168,10 +170,10 @@ export class DlArtifactCanvas extends LightElement {
             <button class="dl-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
                     aria-pressed=${this.layout === 'fullscreen'}>${msg('Fullscreen', {id: 'artifactCanvas.layoutFullscreen'})}</button>
           </div>
-          ${artifact?.downloadUrl ? html`
-            <a class="dl-btn" href=${safeSameOriginHref(artifact.downloadUrl) || '#'} download>
-              ${msg('Download', {id: 'artifactCanvas.download'})}
-            </a>` : nothing}
+          ${artifactDownloadLink(
+            artifact?.downloadUrl,
+            msg('Download', {id: 'artifactCanvas.download'}),
+          )}
           <dl-icon-button class="panel-close" data-action="close" name="close" size="sm"
                   aria-label=${msg('Close Artifact', {id: 'artifactCanvas.close'})} @click=${() => this.close()}></dl-icon-button>
         </div>
@@ -224,7 +226,7 @@ export class DlArtifactCanvas extends LightElement {
       case 'video': {
         const source = safeSameOriginHref(artifact.dataUrl || '');
         return source
-          ? html`<video class="artifact-video" controls preload="metadata" playsinline src=${source}></video>`
+          ? html`<video class=${canvasStyles['artifact-video']} data-artifact-video controls preload="metadata" playsinline src=${source}></video>`
           : this.#downloadOnly();
       }
       case 'pdf': {
@@ -255,10 +257,10 @@ export class DlArtifactCanvas extends LightElement {
   #downloadOnly(): TemplateResult {
     return html`<div class="artifact-download-only">
       <p>${msg('No browser-safe inline preview is available for this file.', {id: 'artifactCanvas.downloadOnly'})}</p>
-      ${this.artifact?.downloadUrl ? html`
-        <a class="dl-btn" href=${safeSameOriginHref(this.artifact.downloadUrl) || '#'} download>
-          ${msg(str`Download ${this.artifact.filename}`, {id: 'artifactCanvas.downloadFile'})}
-        </a>` : nothing}
+      ${artifactDownloadLink(
+        this.artifact?.downloadUrl,
+        msg(str`Download ${this.artifact?.filename}`, {id: 'artifactCanvas.downloadFile'}),
+      )}
     </div>`;
   }
 

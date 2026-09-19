@@ -15,6 +15,7 @@ import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import answerStyles from '../styles/answer-presentation.module.css';
 import chatStyles from '../styles/chat.module.css';
 import type {ImageOpenDetail} from './image-lightbox.ts';
+import {artifactDownloadLink} from './artifact-download.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 
 export interface ArtifactOpenDetail {
@@ -162,12 +163,15 @@ export class AnswerPresentationElement extends LightElement {
       const source = safeSameOriginHref(artifact.dataUrl || '');
       if (source) {
         return html`
-          <figure class="answer-artifact-video">
-            <video controls preload="metadata" playsinline src=${source}></video>
+          <figure class=${answerStyles['answer-artifact-video']}>
+            <video data-answer-video controls preload="metadata" playsinline src=${source}></video>
             <figcaption>
               <span>${artifact.label}</span>
               <a href=${source} target="_blank" rel="noopener noreferrer">${msg('Open in a new tab', {id: 'answerPresentation.openVideo'})}</a>
-              ${artifact.downloadUrl ? html`<a href=${safeSameOriginHref(artifact.downloadUrl) || '#'} download>${msg('Download', {id: 'answerPresentation.downloadVideo'})}</a>` : nothing}
+              ${artifactDownloadLink(
+                artifact.downloadUrl,
+                msg('Download', {id: 'answerPresentation.downloadVideo'}),
+              )}
             </figcaption>
           </figure>
         `;

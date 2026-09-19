@@ -173,7 +173,15 @@ class ArtifactAttachmentUpdate:
             raise ValueError("Artifact attachment digest must be a SHA-256 hex digest")
         if self.size_bytes < 0:
             raise ValueError("Artifact attachment size cannot be negative")
-        if self.presentation not in {"image", "markdown", "html", "pdf", "text", "download"}:
+        if self.presentation not in {
+            "image",
+            "video",
+            "markdown",
+            "html",
+            "pdf",
+            "text",
+            "download",
+        }:
             raise ValueError("Artifact attachment presentation is invalid")
         if not self.session_id.strip() or not self.intent_id.strip():
             raise ValueError("Artifact attachment provenance cannot be empty")

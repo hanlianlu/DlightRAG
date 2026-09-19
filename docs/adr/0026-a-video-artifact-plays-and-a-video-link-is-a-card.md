@@ -45,8 +45,11 @@ it depends on an ingestion path this product does not have and on a scope
 
 Publication admits `.mp4`, `.m4v`, `.mov`, and `.webm`, mapping each to the
 container the extension names: `video/mp4`, `video/quicktime`, or `video/webm`.
-All four publish as `presentation: "video"`, and an attached video the answer
-never placed is offered with the inline marker, exactly like an image.
+All four publish as `presentation: "video"`. Placement stays the Answer's own
+statement, exactly as it is for images: the Model writes the reference, and a
+captionless `![…](artifact:clip.mp4)` is what makes it play in place. A video the
+Answer attaches without placing keeps the Artifact card, because the framework's
+trailing affordance is not a request to spend the reading column on a player.
 
 ### Identification is content-based and intentionally weaker than parsing
 
@@ -73,9 +76,11 @@ An inline placement (`![](artifact:clip.mp4)`) renders a native
 `<video controls preload="metadata" playsinline>` inside a figure, sized by the
 answer column with the same 70vh ceiling images already use; fullscreen belongs
 to the browser. The figure's caption always carries "open in a new tab" and
-"download", so a container this browser cannot decode still has a path. An
-unplaced video renders the Artifact card, as before. The Canvas plays the same
-URL in its own player.
+"download", so a container this browser cannot decode still has a path. A video
+the Answer never places renders the Artifact card, and the framework's trailing
+affordance for it is a plain reference rather than an inline one — deliberately
+unlike images, whose affordance is inline. The Canvas plays the same URL in its
+own player.
 
 ### A linked video becomes a card, not an embed
 
@@ -84,9 +89,11 @@ or the presence of `og:video` — becomes a card built from the page's own
 `og:title`, `og:image`, and `og:description`. This is a scope, not a site
 allowlist: YouTube (`og:video:url` to `youtube.com/embed/…`) and Bilibili
 (`og:video` to `player.bilibili.com/player.html`) declare it identically, while
-an ordinary page (`og:type: website`) stays a plain link. Bare URLs stay
-readable text unless this rule matches them; citation links and source links
-never become cards.
+an ordinary page (`og:type: website`) stays a plain link. A bare URL becomes an
+ordinary hyperlink whether or not the card rule matches it, so the two features
+compose rather than compete: every URL is readable and clickable, and only a
+verified video link is additionally presented as a card. Citation links and
+source links never become cards.
 
 Clicking a card leaves the application and plays at the source. No third-party
 `<iframe>` is introduced, and the answer-sanitizing allowlists are unchanged.
@@ -112,9 +119,11 @@ Clicking a card leaves the application and plays at the source. No third-party
 
 ## Consequences
 
-- **Not implemented yet:** bare-URL recognition and link cards (the rule above
-  is accepted; the current renderers keep `linkify` disabled and no card exists
-  yet). Until then a video link is exactly what it is today: a link.
+- **Not implemented yet:** bare-URL autolinking and link cards. Both rules above
+  are accepted, and neither is built: the answer and artifact renderers keep
+  `linkify` disabled, and no card surface exists. Until that slice lands a video
+  link is exactly what it is today — a link when the Model writes one as a
+  Markdown link, and plain text when it writes a bare URL.
 - **Weaker video validation is a recorded residual,** not an oversight; the
   escape hatch in the caption is what a truncated or undecodable file gets.
 - **A browser that cannot decode the codec** (for example HEVC where the user's

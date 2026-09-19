@@ -348,7 +348,7 @@ it('plays a published video from the range-capable Artifact URL', async () => {
   await canvas.open(artifact);
   await canvas.updateComplete;
 
-  const video = canvas.querySelector<HTMLVideoElement>('video.artifact-video');
+  const video = canvas.querySelector<HTMLVideoElement>('[data-artifact-video]');
   expect(video).not.to.equal(null);
   expect(video?.src).to.equal(
     new URL('/web/api/answer/run-1/artifacts/artifact-video', window.location.origin).href,
@@ -356,6 +356,44 @@ it('plays a published video from the range-capable Artifact URL', async () => {
   expect(video?.hasAttribute('controls')).to.equal(true);
   expect(video?.getAttribute('preload')).to.equal('metadata');
   expect(canvas.querySelector('.artifact-download-only')).to.equal(null);
+});
+
+it('keeps the video player reachable inside the modal focus trap', async () => {
+  const artifact = {...htmlArtifact(),
+    mediaType: 'video/mp4',
+    filename: 'clip.mp4',
+    presentation: 'video' as const,
+    dataUrl: '/web/api/answer/run-1/artifacts/artifact-video',
+  };
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.appendChild(canvas);
+
+  await canvas.open(artifact);
+  await canvas.updateComplete;
+
+  const layoutButtons = Array.from(canvas.querySelectorAll<HTMLButtonElement>(
+    '.artifact-canvas-layout-actions button',
+  ));
+  layoutButtons.find((button) => button.textContent?.trim() === 'Fullscreen')?.click();
+  await canvas.updateComplete;
+  expect(canvas.getAttribute('aria-modal')).to.equal('true');
+
+  // Mirrors the trap's own selector: the player is a legitimate stop, so a
+  // keyboard user can reach the native controls instead of losing them.
+  const trapped = Array.from(canvas.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), dl-icon-button:not([disabled]), a[href], iframe, video[controls], [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0);
+  const video = canvas.querySelector<HTMLVideoElement>('[data-artifact-video]');
+  expect(trapped.at(-1)).to.equal(video);
+
+  video?.focus();
+  expect(document.activeElement).to.equal(video);
+  const propagated = video?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Tab', bubbles: true, cancelable: true,
+  }));
+  // Focus stays inside the dialog: the trap consumes Tab at its last stop.
+  expect(propagated).to.equal(false);
+  expect(document.activeElement).to.equal(trapped[0]);
 });
 
 it('an unavailable Artifact renders a persistent safe issue without fetching', async () => {

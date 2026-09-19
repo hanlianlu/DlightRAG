@@ -178,7 +178,7 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
   expect(Boolean(evidence && references && (evidence.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING))).to.equal(true);
 });
 
-it('plays an inline video Artifact and keeps the card for an unplaced one', async () => {
+it('plays an inline video Artifact and keeps the card for a non-inline placement', async () => {
   const video = {
     resourceId: 'artifact-video',
     mediaType: 'video/mp4',
@@ -205,7 +205,7 @@ it('plays an inline video Artifact and keeps the card for an unplaced one', asyn
   document.body.appendChild(element);
   await element.updateComplete;
 
-  const player = element.querySelector<HTMLVideoElement>('.answer-artifact-video video');
+  const player = element.querySelector<HTMLVideoElement>('[data-answer-video]');
   expect(player?.src).to.equal(
     new URL('/web/api/answer/run-1/artifacts/artifact-video', window.location.origin).href,
   );
@@ -213,8 +213,14 @@ it('plays an inline video Artifact and keeps the card for an unplaced one', asyn
   expect(player?.getAttribute('preload')).to.equal('metadata');
   expect(element.querySelector('.answer-artifact-card')).to.equal(null);
   // The escape hatch a browser that cannot decode the container needs.
-  expect(element.querySelector('.answer-artifact-video figcaption a')?.textContent)
-    .to.contain('tab');
+  const captionLinks = Array.from(element.querySelectorAll<HTMLAnchorElement>('figcaption a'));
+  expect(captionLinks.map((link) => link.textContent?.trim()))
+    .to.deep.equal(['Open in a new tab', 'Download']);
+  expect(captionLinks[0]?.href).to.equal(player?.src);
+  expect(captionLinks[1]?.getAttribute('href')).to.equal(
+    new URL('/web/api/answer/run-1/artifacts/artifact-video?download=1', window.location.origin).href,
+  );
+  expect(captionLinks[1]?.hasAttribute('download')).to.equal(true);
 
   element.presentation = {
     ...presentation,

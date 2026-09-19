@@ -219,3 +219,31 @@
 
 
 }
+
+/* === Inline Video Artifact === */
+
+/* The player fits the answer column and may grow to most of the viewport; a
+   taller source stays bounded and is reachable through the element's own
+   fullscreen control, which the browser owns. */
+.answer-artifact-video {
+    margin: var(--space-component) 0;
+}
+
+.answer-artifact-video video {
+    background: var(--color-text-primary);
+    border-radius: var(--radius-content);
+    display: block;
+    height: auto;
+    max-height: 70vh;
+    max-width: 100%;
+}
+
+.answer-artifact-video figcaption {
+    align-items: center;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: var(--font-size-caption);
+    gap: var(--space-tight);
+    padding-top: var(--space-tight);
+}
