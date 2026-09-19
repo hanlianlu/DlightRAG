@@ -108,7 +108,11 @@ to it, and a CJK run that merely continues a segment leaves the address
 ambiguous — an ambiguous address stays text, because a wrong link is worse than
 a plain one. Autolinking applies to what the Model writes (answers and Markdown
 Artifacts); a source chunk quotes a document, so a bare address inside a
-quotation stays as the parser produced it.
+quotation stays as the parser produced it. One edge is accepted rather than
+solved: an address that continues a preceding token (`blob:https://…`,
+`see:https://…`) leaves the outer token as text and links the address it
+contains, because refusing it needs the pass that reads that context, and the
+Chinese sentence above needs the pass that does not.
 
 Clicking a card leaves the application and plays at the source. No third-party
 `<iframe>` is introduced, and the answer-sanitizing allowlists are unchanged.

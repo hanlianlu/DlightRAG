@@ -1,5 +1,7 @@
 """Tests for Markdown rendering in web UI."""
 
+import pytest
+
 
 def test_render_markdown_bold():
     from dlightrag.adapters.http.browser.markdown import render_markdown
@@ -590,49 +592,106 @@ def test_a_bare_url_in_an_answer_becomes_a_followable_link():
 
     result = render_answer_html("See https://example.com/report now", known_sources={})
 
-    assert '<a href="https://example.com/report" target="_blank"' in result
-    assert ">https://example.com/report</a>" in result
+    assert result.strip() == (
+        '<p>See <a href="https://example.com/report" target="_blank" '
+        'rel="noopener noreferrer">https://example.com/report</a> now</p>'
+    )
 
 
 def test_autolinking_leaves_a_chinese_sentence_outside_the_href():
     """linkify reads to whitespace, so a Chinese sentence would become an address."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
-    for text, href in [
-        ("参考 https://example.com/x。", "https://example.com/x"),
-        ("参考https://example.com/x，然后继续", "https://example.com/x"),
-        ("见 https://example.com/report（详见文档）", "https://example.com/report"),
+    assert render_answer_html("参考 https://example.com/x。", known_sources={}).strip() == (
+        '<p>参考 <a href="https://example.com/x" target="_blank" '
+        'rel="noopener noreferrer">https://example.com/x</a>。</p>'
+    )
+    assert render_answer_html("参考https://example.com/x，然后继续", known_sources={}).strip() == (
+        '<p>参考<a href="https://example.com/x" target="_blank" '
+        'rel="noopener noreferrer">https://example.com/x</a>，然后继续</p>'
+    )
+    assert render_answer_html(
+        "见 https://example.com/report（详见文档）", known_sources={}
+    ).strip() == (
+        '<p>见 <a href="https://example.com/report" target="_blank" '
+        'rel="noopener noreferrer">https://example.com/report</a>（详见文档）</p>'
+    )
+
+
+def test_an_address_a_chinese_letter_run_continues_is_left_as_text():
+    """The same letters end a Chinese path, so the renderer never guesses."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    for text in [
+        "见https://example.com/report即可",
+        "https://example.com/report即可?x=1",
+        "https://example.com/report입니다",
     ]:
         result = render_answer_html(text, known_sources={})
 
-        assert f'href="{href}"' in result, text
-        # The punctuation the sentence owns stays visible text, not an escape.
-        assert "%E3%80%82" not in result and "%EF%BC%8C" not in result, text
-        assert result.rstrip().endswith(("</p>",)), text
+        assert result.strip() == f"<p>{text}</p>", text
 
 
-def test_an_address_a_chinese_word_run_continues_is_left_as_text():
-    """The same characters end a Chinese path, so the renderer never guesses."""
-    from dlightrag.adapters.http.browser.presentation import render_answer_html
-
-    result = render_answer_html("见https://example.com/report即可", known_sources={})
-
-    assert "<a " not in result
-    assert "见https://example.com/report即可" in result
-
-
-def test_a_chinese_path_or_query_component_belongs_to_the_address():
+def test_a_chinese_component_belongs_to_the_address():
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     path = render_answer_html("https://example.com/wiki/中文条目", known_sources={})
     query = render_answer_html("https://example.com/a?id=中文", known_sources={})
+    halfwidth = render_answer_html("https://example.com/wiki/ﾃｽﾄ", known_sources={})
+    idn = render_answer_html("https://www.例子.com/x", known_sources={})
 
     assert 'href="https://example.com/wiki/%E4%B8%AD%E6%96%87%E6%9D%A1%E7%9B%AE"' in path
     assert 'href="https://example.com/a?id=%E4%B8%AD%E6%96%87"' in query
+    # Halfwidth Katakana is a letter a path may end with, not punctuation.
+    assert 'href="https://example.com/wiki/%EF%BE%83%EF%BD%BD%EF%BE%84"' in halfwidth
+    assert 'href="https://www.xn--fsqu00a.com/x"' in idn
+
+
+def test_autolinking_links_no_form_the_sanitizer_would_defang():
+    """An href the fragment sanitizer drops would style a dead link as a live one."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    for text in [
+        "See //example.com/x now",
+        "Mail mailto:dev@example.com now",
+        "See ftp://example.com/x now",
+    ]:
+        result = render_answer_html(text, known_sources={})
+
+        assert result.strip() == f"<p>{text}</p>", text
+
+
+def test_an_address_that_touches_a_chinese_sentence_is_still_linked():
+    """The pass that reads that context is the one the core pass cannot replace."""
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    assert render_answer_html("见https://example.com/report", known_sources={}).strip() == (
+        '<p>见<a href="https://example.com/report" target="_blank" '
+        'rel="noopener noreferrer">https://example.com/report</a></p>'
+    )
+
+
+@pytest.mark.parametrize("prefix", ["blob:", "see:"])
+def test_an_address_continuing_a_preceding_token_links_its_own_part(prefix: str):
+    """Accepted edge (ADR 0026): the outer token stays text, the address links.
+
+    Refusing an address that continues a preceding token needs to see that
+    token, which only the core pass can. The inline pass is the one the Chinese
+    sentence above needs, and it sees just the scheme it matched. Pinned here so
+    changing it is a decision rather than a drift.
+    """
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    result = render_answer_html(f"See {prefix}https://example.com/x now", known_sources={})
+
+    assert result.strip() == (
+        f'<p>See {prefix}<a href="https://example.com/x" target="_blank" '
+        'rel="noopener noreferrer">https://example.com/x</a> now</p>'
+    )
 
 
 def test_autolinking_never_guesses_a_domain_or_an_address_from_text():
-    """`report.md`, `build.sh`, and `clip.mov` end in real top-level domains."""
+    """`report.md`, `build.sh`, and `clip.mov` all end in real top-level domains."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     for text in [
@@ -645,8 +704,7 @@ def test_autolinking_never_guesses_a_domain_or_an_address_from_text():
     ]:
         result = render_answer_html(text, known_sources={})
 
-        assert "<a " not in result, text
-        assert text in result, text
+        assert result.strip() == f"<p>{text}</p>", text
 
 
 def test_autolinking_leaves_code_and_explicit_links_alone():
@@ -657,9 +715,14 @@ def test_autolinking_leaves_code_and_explicit_links_alone():
     )
     explicit = render_answer_html("[Report](https://example.com/x)", known_sources={})
 
-    assert "<code>https://example.com</code>" in code
-    assert "<pre><code>https://example.com\n</code></pre>" in code
-    assert explicit.count("<a ") == 1
+    assert code.strip() == (
+        "<p>Inline <code>https://example.com</code> and:</p>\n"
+        "<pre><code>https://example.com\n</code></pre>"
+    )
+    assert explicit.strip() == (
+        '<p><a href="https://example.com/x" target="_blank" '
+        'rel="noopener noreferrer">Report</a></p>'
+    )
 
 
 def test_a_bare_url_in_a_quoted_source_chunk_stays_text():
@@ -668,5 +731,4 @@ def test_a_bare_url_in_a_quoted_source_chunk_stays_text():
 
     result = render_source_chunk_html("See https://example.com/report now")
 
-    assert "<a " not in result
-    assert "https://example.com/report" in result
+    assert result.strip() == "<p>See https://example.com/report now</p>"

@@ -26,9 +26,29 @@ from pygments.util import ClassNotFound
 
 _FORMATTER = HtmlFormatter(nowrap=True)
 
-# CJK punctuation ends an autolinked address; CJK words may belong to its path.
-_CJK_PUNCTUATION = "[\u3000-\u303f\ufe30-\ufe4f\uff00-\uffef]"
-_CJK_WORDS = "[\u2e80-\u2eff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
+# CJK punctuation ends an autolinked address; CJK letters may belong to one of
+# its components. The fullwidth block holds both kinds, so it is split: its
+# punctuation forms U+FF01-FF0F, FF1A-FF20, FF3B-FF40, FF5B-FF65 end an address
+# while halfwidth Katakana (FF66-FF9D) and halfwidth Hangul (FFA0-FFDC) are
+# letters a path may legitimately end with.
+_CJK_PUNCTUATION = (
+    "[\u3000-\u303f\ufe30-\ufe4f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]"
+)
+_CJK_LETTERS = (
+    "[\u1100-\u11ff\u2e80-\u2eff\u3040-\u30ff\u3130-\u318f\u31f0-\u31ff"
+    "\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9d\uffa0-\uffdc]"
+)
+# Characters that open a new component of an address: a CJK run that follows one
+# is a path, query, or host label; a run that follows a letter continues a
+# segment, which is where the address's meaning becomes a guess.
+_COMPONENT_OPENERS = "/=&?#."
+# A character that would make an address a continuation of a preceding token:
+# `blob:https://…`, `data:…`, or `xhttps://…` are not addresses of their own.
+_ATTACHED_TO_PREFIX = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-:@"
+)
+# The scheme linkify matched in front of the tail it validates.
+_SCHEME_END = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*:$")
 
 # ---------------------------------------------------------------------------
 # Custom inline math rule — recognises $...$ and \(...\) as math tokens
@@ -36,82 +56,93 @@ _CJK_WORDS = "[\u2e80-\u2eff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff
 # ---------------------------------------------------------------------------
 
 
-def _trim_cjk_boundary(raw: str) -> str | None:
-    """Return one autolinked address without a sentence tail attached to it.
+def _address_start(text: str, position: int) -> int:
+    """Return where the address begins, given linkify's position of its ``//``.
 
-    linkify reads an address up to whitespace, so in a sentence written without
-    spaces it also reads whatever follows: `参考 https://example.com/report。`
-    became a link whose href carried the full stop as an escape, and
-    `见https://example.com/report即可` one that swallowed the sentence.
-
-    CJK punctuation therefore always ends the address. A CJK word run that
-    starts a path or query component (`…/wiki/中文条目`, `…?q=中文`) belongs to it,
-    while one that merely continues a segment (`…/report即可`) leaves the address
-    ambiguous — and an ambiguous address is left as text rather than guessed,
-    because a wrong link is worse than a plain one. ``None`` means "do not
-    autolink this".
+    linkify validates one schema tail starting at the ``//`` and composes the
+    address from the scheme it matched in front of it, so the scheme has to be
+    read back out of the text to see what precedes the address at all.
     """
-    punctuation = re.search(_CJK_PUNCTUATION, raw)
+    scheme = _SCHEME_END.search(text, 0, position)
+    return position - len(scheme.group(0)) if scheme else position
+
+
+def _bounded_address(text: str, position: int, length: int) -> int:
+    """Return how much of one validated http(s) tail is the address to follow.
+
+    A Chinese sentence is usually written without spaces, so this is where an
+    address stops being one:
+
+    - CJK punctuation always ends it, so `参考 https://example.com/x。` does not
+      link the sentence's own full stop.
+    - A CJK letter run that opens a component (`…/wiki/中文条目`, `…?q=中文`,
+      `www.例子.com`) belongs to the address.
+    - A CJK letter run that continues a segment (`…/report即可`, even when a query
+      follows) leaves the address ambiguous. Ambiguity returns `0`: the text
+      stays text, because a wrong link is worse than a plain one.
+    - An address that continues a preceding token (`blob:https://…`) is not an
+      address of its own.
+
+    The returned length is measured from `position`, as the schema contract
+    requires, and `0` means "do not autolink this".
+    """
+    start = _address_start(text, position)
+    if start and text[start - 1] in _ATTACHED_TO_PREFIX:
+        return 0
+    address = text[start : position + length]
+    punctuation = re.search(_CJK_PUNCTUATION, address)
     if punctuation:
-        raw = raw[: punctuation.start()]
-    words = re.search(_CJK_WORDS + "+$", raw)
-    if words and raw[words.start() - 1 : words.start()] not in {"/", "=", "&", "?"}:
-        return None
-    return raw or None
+        address = address[: punctuation.start()]
+    for run in re.finditer(_CJK_LETTERS + "+", address):
+        if run.start() and address[run.start() - 1] not in _COMPONENT_OPENERS:
+            return 0
+    return start + len(address) - position
 
 
-def _apply_cjk_boundary(match: Any) -> bool:
-    """Trim one linkify match in place; ``False`` means "leave it as text"."""
-    trimmed = _trim_cjk_boundary(match.raw)
-    if trimmed is None:
-        return False
-    cut = len(match.raw) - len(trimmed)
-    if cut:
-        # The address, its display text, and its source span are one string for
-        # every scheme this renderer enables, so all three shrink together and
-        # the characters stay in the token stream as text.
-        match.raw = match.raw[:-cut]
-        match.text = match.text[:-cut]
-        match.url = match.url[:-cut]
-        match.last_index -= cut
-    return True
+class _AddressBoundary:
+    """Bound the schema's own match at the characters a sentence owns."""
+
+    def __init__(self, length_of: Any) -> None:
+        self._length_of = length_of
+
+    def validate(self, text: str, pos: int) -> int:
+        length = self._length_of(text, pos)
+        return _bounded_address(text, pos, length) if length else 0
 
 
 def _configure_autolinking(md: MarkdownIt) -> None:
     """Turn on address autolinking for Model-written text, and bound it.
 
-    Only an address that names its own scheme qualifies. linkify's default fuzzy
-    matching also guesses from a top-level domain, and this product's own
-    vocabulary is full of words that end in a real one — `report.md`, `build.sh`,
-    `clip.mov`, `archive.zip` — each of which would become `http://report.md`.
-    Email autolinking is off as well: the fragment sanitiser admits only http,
-    https, data, and blob, so a `mailto:` href would be dropped and leave an
-    inert link behind (ADR 0026).
+    Only an address that names its own scheme qualifies. linkify's fuzzy matching
+    also guesses from a top-level domain, and this product's own vocabulary is
+    full of words that end in a real one — `report.md`, `build.sh`, `clip.mov`,
+    `archive.zip` — each of which would become `http://report.md`. Its other
+    built-in schemas are refused for the same reason they are useless here: the
+    fragment sanitiser admits only http, https, data, and blob, so a
+    `mailto:`, `ftp:`, or protocol-relative href would be stripped and leave an
+    inert link styled like a working one (ADR 0026).
 
-    markdown-it-py autolinks twice: the inline rule triggers at ``://`` and
-    advances the scan by the address it matched, while the core rule walks
-    finished text tokens and splits them at each match's index and last index.
-    Both read the same ``LinkifyIt`` instance, so one wrapper makes them agree on
-    where a sentence stops being an address.
+    The boundary is applied through linkify's own schema-validation seam, so the
+    match the library builds is the match this renderer means. markdown-it-py
+    autolinks through two passes over that one instance — an inline rule at `://`
+    and a core rule over finished text tokens — and both therefore bound an
+    address identically. They are not interchangeable: the core pass needs an
+    address to start after whitespace or punctuation, so a Chinese answer's
+    `见https://example.com/report`, where the address touches the sentence with no
+    space at all, is only reachable by the inline pass. Keeping both means the
+    inline pass cannot see what precedes the scheme it matched, which is the one
+    accepted edge: `blob:https://example.com/x` links its http(s) part
+    (ADR 0026).
     """
     linkify = md.linkify
     if linkify is None:
         raise RuntimeError("the gfm-like preset must provide a linkify instance")
     linkify.set({"fuzzy_link": False, "fuzzy_email": False})
-
-    def bounded(original: Any) -> Any:
-        def wrapped(text: str) -> Any:
-            found = original(text)
-            if not found:
-                return found
-            if isinstance(found, list):
-                return [match for match in found if _apply_cjk_boundary(match)]
-            return found if _apply_cjk_boundary(found) else None
-
-        return wrapped
-
-    for name in ("match", "match_at_start"):
-        setattr(linkify, name, bounded(getattr(linkify, name)))
+    boundary = _AddressBoundary(linkify._validate_http)  # noqa: SLF001 - the http matcher
+    linkify.add("http:", {"validate": boundary.validate})
+    linkify.add("https:", "http:")
+    for disabled in ("//", "mailto:", "ftp:"):
+        linkify.add(disabled, None)
 
 
 def _math_inline_rule(state: StateInline, silent: bool) -> bool:
