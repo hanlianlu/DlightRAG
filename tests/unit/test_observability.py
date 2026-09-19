@@ -506,7 +506,7 @@ _EXPECTED_TYPES: dict[str, set[str]] = {
     "generation": {
         "generate-agent-turn",
         "generate-completion",
-        "generate-final-answer",
+        "compact-session",
         "probe-image-capability",
     },
     "retriever": {"retrieve-context"},

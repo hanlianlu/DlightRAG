@@ -33,7 +33,7 @@ Names are an API. They are verb-first, stable, and closed: a new observation req
 | `run-retrieval` | `chain` | One claimed Retrieval Run, start to settlement | `run_id`, `workspaces` |
 | `generate-answer` | `chain` | The Run's generation phase, after mode resolution | `resolved_mode`, `history_turns`, `query_image_count`, `semantic_highlights` |
 | `generate-agent-turn` | `generation` | One model invocation in the agent loop | `model`, `provider`, `endpoint_fingerprint`, `tool_names`, `tool_choice` |
-| `generate-final-answer` | `generation` | The terminal no-tools model invocation | as above |
+| `compact-session` | `generation` | The compaction summary invocation over a rich tool transcript | as above |
 | `execute-agent-tool` | `tool` | One Tool call, including its arguments | `call_id`, `intent_id` |
 | `generate-completion` | `generation` | One non-agent provider completion (planner, highlights, probe, ingest extraction) | `provider`, `endpoint_fingerprint`, request parameters |
 | `embed-text` | `embedding` | One embedding request | `context`, `modality`, `provider`, `endpoint_fingerprint`, `request_count`, `inline_image_bytes` |

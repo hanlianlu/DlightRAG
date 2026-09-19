@@ -169,7 +169,7 @@ class ToolModel:
         reasoning: ReasoningLevel | None = None,
         model_profile: ModelProfile | None = None,
     ) -> AsyncGenerator[str]:
-        """Stream a tools-disabled final answer from a rich tool transcript.
+        """Stream the compaction summary of a rich tool transcript.
 
         Explicit ``model_kwargs`` selects one attempt. Typed ``reasoning`` is
         still resolved from the pinned profile and owns its provider fields.
@@ -206,7 +206,7 @@ class ToolModel:
         self._validate_image_inputs(messages, model_profile)
         prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
-            "generate-final-answer",
+            "compact-session",
             input={"message_count": len(messages)},
             metadata={
                 "model": self.fingerprint.model,
@@ -259,88 +259,6 @@ class ToolModel:
                     output["reasoning"] = reasoning_attempts
                 if record_text:
                     output["text"] = "".join(streamed)
-                observation.update(
-                    output=output,
-                    usage_details=usage_details or None,
-                    cost_details=cost_details or None,
-                )
-
-    async def complete_text(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        model_profile: ModelProfile | None = None,
-    ) -> str:
-        """Return a tools-disabled final answer from a rich tool transcript."""
-        return await self._scheduler.run(
-            lambda: self._complete_text(messages=messages, model_profile=model_profile)
-        )
-
-    async def _complete_text(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        model_profile: ModelProfile | None,
-    ) -> str:
-        usage_details: dict[str, int | float] = {}
-        cost_details: dict[str, int | float] = {}
-        text = ""
-        attempts = 0
-        reasoning_attempts: list[dict[str, str]] = []
-        attempt_options = self._final_attempt_options(
-            model_kwargs=None,
-            reasoning=None,
-            model_profile=model_profile,
-        )
-        self._validate_image_inputs(messages, model_profile)
-        prepared_messages = messages_for_model(messages, self.fingerprint)
-        async with self._telemetry.observe(
-            "generate-final-answer",
-            input={"message_count": len(messages)},
-            metadata={
-                "model": self.fingerprint.model,
-                "provider": self.fingerprint.provider,
-                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
-            },
-            model=self.settings.model,
-        ) as observation:
-            try:
-                for model_kwargs, resolved in attempt_options:
-                    attempts += 1
-                    if resolved is not None:
-                        reasoning_attempts.append(self._reasoning_metadata(resolved))
-                    turn = await self._provider.complete_tool_turn(
-                        prepared_messages,
-                        self.settings.model,
-                        tools=[],
-                        temperature=self.settings.temperature,
-                        model_kwargs=model_kwargs,
-                    )
-                    _accumulate_metrics(usage_details, turn.usage_details)
-                    _accumulate_metrics(cost_details, turn.cost_details)
-                    text = turn.text
-                    if text.strip():
-                        return text
-                    if attempts == 1 and len(attempt_options) > 1:
-                        logger.warning(
-                            "Agent final answer returned no text; "
-                            "retrying with ordinary model options"
-                        )
-                raise RuntimeError("Query model returned an empty final answer after retry")
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                observation.update(
-                    level="ERROR",
-                    status_message=telemetry_error_message(self._telemetry, exc),
-                )
-                raise
-            finally:
-                output: dict[str, Any] = {"text_length": len(text), "attempts": attempts}
-                if reasoning_attempts:
-                    output["reasoning"] = reasoning_attempts
-                if self._telemetry.capture_sensitive_data:
-                    output["text"] = text
                 observation.update(
                     output=output,
                     usage_details=usage_details or None,

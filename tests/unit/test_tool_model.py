@@ -12,7 +12,7 @@ import pytest
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
-from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
+from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.tool_model import ToolModel
 
@@ -394,87 +394,3 @@ async def test_tool_model_stream_abandonment_closes_provider_iterator(monkeypatc
     await cast(AsyncGenerator[str], stream).aclose()
 
     assert finalized.is_set()
-
-
-async def test_query_tool_model_completes_final_text_through_owned_provider(monkeypatch) -> None:
-    provider = AsyncMock()
-    provider.complete_tool_turn = AsyncMock(
-        return_value=AssistantTurn(text="final answer", tool_calls=(), stop_reason="stop")
-    )
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.tool_model.get_provider",
-        lambda *_args, **_kwargs: provider,
-    )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
-    messages = [{"role": "user", "content": "answer now"}]
-
-    output = await model.complete_text(messages=messages)
-
-    assert output == "final answer"
-    provider.complete_tool_turn.assert_awaited_once_with(
-        messages,
-        "query-model",
-        tools=[],
-        temperature=None,
-        model_kwargs={},
-    )
-
-
-async def test_query_tool_model_retries_empty_final_completion_with_ordinary_kwargs(
-    monkeypatch,
-) -> None:
-    first_attempt_started = asyncio.Event()
-    release_first_attempt = asyncio.Event()
-    second_attempt_started = asyncio.Event()
-    competing_started = asyncio.Event()
-
-    class Provider:
-        retry_attempts = 0
-
-        async def complete_tool_turn(self, messages, *_args, **_kwargs):
-            if messages[0]["content"] == "competing":
-                competing_started.set()
-                return AssistantTurn(text="other", tool_calls=(), stop_reason="stop")
-            self.retry_attempts += 1
-            if self.retry_attempts == 1:
-                first_attempt_started.set()
-                await release_first_attempt.wait()
-                return AssistantTurn(text="", tool_calls=(), stop_reason="stop")
-            second_attempt_started.set()
-            return AssistantTurn(text="final answer", tool_calls=(), stop_reason="stop")
-
-        async def aclose(self) -> None:
-            return None
-
-    provider = Provider()
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.tool_model.get_provider",
-        lambda *_args, **_kwargs: provider,
-    )
-    settings = _query_settings(
-        model_kwargs={"thinking": {"type": "disabled"}},
-        agentic_model_kwargs={"thinking": {"type": "enabled"}},
-    )
-    scheduler = ModelScheduler(max_concurrency=1)
-    model = ToolModel(settings, scheduler=scheduler)
-
-    async def retrying_request() -> str:
-        with model_call_scope("run-a"):
-            return await model.complete_text(messages=[{"role": "user", "content": "retry"}])
-
-    async def competing_request() -> str:
-        with model_call_scope("run-b"):
-            return await model.complete_text(messages=[{"role": "user", "content": "competing"}])
-
-    retrying = asyncio.create_task(retrying_request())
-    await first_attempt_started.wait()
-    competing = asyncio.create_task(competing_request())
-    await asyncio.sleep(0)
-    release_first_attempt.set()
-    await second_attempt_started.wait()
-    assert not competing_started.is_set()
-
-    assert await retrying == "final answer"
-    assert await competing == "other"
-
-    assert provider.retry_attempts == 2
