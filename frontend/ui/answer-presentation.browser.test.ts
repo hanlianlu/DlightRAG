@@ -178,6 +178,55 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
   expect(Boolean(evidence && references && (evidence.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING))).to.equal(true);
 });
 
+it('plays an inline video Artifact and keeps the card for an unplaced one', async () => {
+  const video = {
+    resourceId: 'artifact-video',
+    mediaType: 'video/mp4',
+    label: 'Screen recording',
+    filename: 'clip.mp4',
+    byteSize: 1444,
+    digest: 'a'.repeat(64),
+    presentation: 'video' as const,
+    status: 'available' as const,
+    uri: 'dlightrag://answer/run-1/artifacts/artifact-video',
+    width: null,
+    height: null,
+    dataUrl: '/web/api/answer/run-1/artifacts/artifact-video',
+    downloadUrl: '/web/api/answer/run-1/artifacts/artifact-video?download=1',
+    presentationUrl: null,
+    issue: null,
+  };
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  element.presentation = {
+    ...presentation,
+    parts: [{type: 'artifact', text: '', html: '', artifact: video, evidenceImage: null, inline: true}],
+    artifacts: [video],
+  };
+  document.body.appendChild(element);
+  await element.updateComplete;
+
+  const player = element.querySelector<HTMLVideoElement>('.answer-artifact-video video');
+  expect(player?.src).to.equal(
+    new URL('/web/api/answer/run-1/artifacts/artifact-video', window.location.origin).href,
+  );
+  expect(player?.hasAttribute('controls')).to.equal(true);
+  expect(player?.getAttribute('preload')).to.equal('metadata');
+  expect(element.querySelector('.answer-artifact-card')).to.equal(null);
+  // The escape hatch a browser that cannot decode the container needs.
+  expect(element.querySelector('.answer-artifact-video figcaption a')?.textContent)
+    .to.contain('tab');
+
+  element.presentation = {
+    ...presentation,
+    parts: [{type: 'artifact', text: '', html: '', artifact: video, evidenceImage: null, inline: false}],
+    artifacts: [video],
+  };
+  await element.updateComplete;
+
+  expect(element.querySelector('video')).to.equal(null);
+  expect(element.querySelector('.answer-artifact-card')).not.to.equal(null);
+});
+
 it('includes typed Answer images in previous and next gallery navigation', async () => {
   const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
   element.presentation = {

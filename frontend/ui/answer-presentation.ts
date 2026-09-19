@@ -11,7 +11,7 @@ import type {
 } from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {safeImageSrc} from '../lib/urls.ts';
+import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import answerStyles from '../styles/answer-presentation.module.css';
 import chatStyles from '../styles/chat.module.css';
 import type {ImageOpenDetail} from './image-lightbox.ts';
@@ -150,6 +150,25 @@ export class AnswerPresentationElement extends LightElement {
               <img src=${source} alt=${artifact.label} loading="lazy">
             </button>
             <figcaption>${artifact.label}</figcaption>
+          </figure>
+        `;
+      }
+    }
+    if (inline && artifact.presentation === 'video') {
+      // The browser owns decoding, so the Artifact URL is the player's source:
+      // a range-capable same-origin request streams and seeks without inlining
+      // the bytes. The caption keeps an escape hatch for a container this
+      // browser cannot decode, which leaves the element itself empty.
+      const source = safeSameOriginHref(artifact.dataUrl || '');
+      if (source) {
+        return html`
+          <figure class="answer-artifact-video">
+            <video controls preload="metadata" playsinline src=${source}></video>
+            <figcaption>
+              <span>${artifact.label}</span>
+              <a href=${source} target="_blank" rel="noopener noreferrer">${msg('Open in a new tab', {id: 'answerPresentation.openVideo'})}</a>
+              ${artifact.downloadUrl ? html`<a href=${safeSameOriginHref(artifact.downloadUrl) || '#'} download>${msg('Download', {id: 'answerPresentation.downloadVideo'})}</a>` : nothing}
+            </figcaption>
           </figure>
         `;
       }

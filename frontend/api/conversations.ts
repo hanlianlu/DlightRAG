@@ -103,7 +103,7 @@ const answerArtifact = v.pipe(
     filename: v.string(),
     byte_size: v.number(),
     digest: v.string(),
-    presentation: v.picklist(['image', 'markdown', 'html', 'pdf', 'text', 'download']),
+    presentation: v.picklist(['image', 'video', 'markdown', 'html', 'pdf', 'text', 'download']),
     status: v.picklist(['available', 'unavailable']),
     uri: v.string(),
     width: v.nullable(v.number()),

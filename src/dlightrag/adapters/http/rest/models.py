@@ -135,7 +135,7 @@ class AnswerArtifactResponse(ClientContractModel):
     filename: str
     byte_size: int
     digest: str
-    presentation: Literal["image", "markdown", "html", "pdf", "text", "download"]
+    presentation: Literal["image", "video", "markdown", "html", "pdf", "text", "download"]
     status: Literal["available", "unavailable"]
     uri: str
     width: int | None = None

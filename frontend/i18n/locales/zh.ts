@@ -538,6 +538,8 @@ export const templates: Record<
   'answerPresentation.artifactUnavailableAria': str`${0}，不可用`,
   'answerPresentation.artifactUnavailable': '该工件不可用。',
   'answerPresentation.openImage': str`打开图片：${0}`,
+  'answerPresentation.openVideo': '在新标签页打开',
+  'answerPresentation.downloadVideo': '下载',
   'answerPresentation.openArtifact': '打开工件',
   'answerPresentation.openSourceAria': str`打开来源 ${0}`,
   'answerPresentation.openSource': str`来源 ${0}`,

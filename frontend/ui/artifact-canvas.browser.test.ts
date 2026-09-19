@@ -335,6 +335,29 @@ it('isolates PDF preview in a sandboxed no-referrer iframe', async () => {
   expect(iframe?.referrerPolicy).to.equal('no-referrer');
 });
 
+it('plays a published video from the range-capable Artifact URL', async () => {
+  const artifact = {...htmlArtifact(),
+    mediaType: 'video/mp4',
+    filename: 'clip.mp4',
+    presentation: 'video' as const,
+    dataUrl: '/web/api/answer/run-1/artifacts/artifact-video',
+  };
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.appendChild(canvas);
+
+  await canvas.open(artifact);
+  await canvas.updateComplete;
+
+  const video = canvas.querySelector<HTMLVideoElement>('video.artifact-video');
+  expect(video).not.to.equal(null);
+  expect(video?.src).to.equal(
+    new URL('/web/api/answer/run-1/artifacts/artifact-video', window.location.origin).href,
+  );
+  expect(video?.hasAttribute('controls')).to.equal(true);
+  expect(video?.getAttribute('preload')).to.equal('metadata');
+  expect(canvas.querySelector('.artifact-download-only')).to.equal(null);
+});
+
 it('an unavailable Artifact renders a persistent safe issue without fetching', async () => {
   let fetched = false;
   window.fetch = async () => {

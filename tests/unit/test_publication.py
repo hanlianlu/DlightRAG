@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Artifact publication validates structured roots and relative dependency links."""
 
+import base64
 import hashlib
 from io import BytesIO
 from pathlib import Path
@@ -58,6 +59,36 @@ def _validate(
         attachments=tuple(_attachment(root, path) for path in attached),
         limits=limits,
     )
+
+
+# One real H.264/MP4 Artifact, 32x32 and 0.2s, so video publication is proved
+# against actual container bytes instead of a hand-built header. Regenerate with:
+#   ffmpeg -f lavfi -i color=c=black:size=32x32:rate=5 -t 0.2 -c:v libx264 \
+#          -pix_fmt yuv420p -crf 51 -preset ultrafast tiny.mp4
+_MP4_BYTES = base64.b64decode(
+    "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAm5tZGF0AAACUwYF//9P3EXpvebZSLeW"
+    "LNgg2SPu73gyNjQgLSBjb3JlIDE2NSByMzIyMiBiMzU2MDVhIC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENv"
+    "cHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNh"
+    "YmFjPTAgcmVmPTEgZGVibG9jaz0wOjA6MCBhbmFseXNlPTA6MCBtZT1kaWEgc3VibWU9MCBwc3k9MSBwc3lfcmQ9"
+    "MS4wMDowLjAwIG1peGVkX3JlZj0wIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MCA4eDhkY3Q9MCBj"
+    "cW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0wIHRocmVhZHM9MSBsb29r"
+    "YWhlYWRfdGhyZWFkcz0xIHNsaWNlZF90aHJlYWRzPTAgbnI9MCBkZWNpbWF0ZT0xIGludGVybGFjZWQ9MCBibHVy"
+    "YXlfY29tcGF0PTAgY29uc3RyYWluZWRfaW50cmE9MCBiZnJhbWVzPTAgd2VpZ2h0cD0wIGtleWludD0yNTAga2V5"
+    "aW50X21pbj01IHNjZW5lY3V0PTAgaW50cmFfcmVmcmVzaD0wIHJjPWNyZiBtYnRyZWU9MCBjcmY9NTEuMCBxY29t"
+    "cD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0wAIAAAAALZYiEOiYoABWT"
+    "rrwAAAMObW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAAMgAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAA"
+    "AAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAjl0cmFrAAAAXHRr"
+    "aGQAAAADAAAAAAAAAAAAAAABAAAAAAAAAMgAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA"
+    "AAAAAAAAAABAAAAAACAAAAAgAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAADIAAAAAAABAAAAAAGxbWRpYQAA"
+    "ACBtZGhkAAAAAAAAAAAAAAAAAAAoAAAACABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRl"
+    "b0hhbmRsZXIAAAABXG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1"
+    "cmwgAAAAAQAAARxzdGJsAAAAuHN0c2QAAAAAAAAAAQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAACAA"
+    "IABIAAAASAAAAAAAAAABFUxhdmM2Mi4xMS4xMDAgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAK/+EA"
+    "FmdCwAraJbARAAADAAEAAAMACg8SJqABAAVozgGXIAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAAF/wAAAA"
+    "AAAAABhzdHRzAAAAAAAAAAEAAAABAAAIAAAAABxzdHNjAAAAAAAAAAEAAAABAAAAAQAAAAEAAAAUc3RzegAAAAAA"
+    "AAJmAAAAAQAAABRzdGNvAAAAAAAAAAEAAAAwAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRp"
+    "cmFwcGwAAAAAAAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2Mi4zLjEwMA=="
+)
 
 
 def _pdf_bytes(*, visual: bool) -> bytes:
@@ -233,6 +264,65 @@ def test_malformed_pdf_artifact_is_rejected_as_media_mismatch(tmp_path: Path) ->
 
     assert plan.artifacts == ()
     assert plan.issues[0].kind == "media_mismatch"
+
+
+def test_video_artifact_is_published_for_native_playback(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "clip.mp4").write_bytes(_MP4_BYTES)
+
+    plan = _validate(root, answer="![clip](artifact:clip.mp4)", attached=("clip.mp4",))
+
+    assert plan.outcome == {"status": "complete", "issues": []}
+    (artifact,) = plan.artifacts
+    assert (artifact.media_type, artifact.presentation) == ("video/mp4", "video")
+    assert artifact.descriptor()["presentation"] == "video"
+
+
+@pytest.mark.parametrize("filename", ["clip.mp4", "clip.mov", "clip.webm"])
+def test_video_container_that_contradicts_its_extension_is_rejected(
+    tmp_path: Path, filename: str
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / filename).write_bytes(b"\x00" * 4096)
+
+    plan = _validate(
+        root,
+        answer=f"![clip](artifact:{filename})",
+        attached=(filename,),
+    )
+
+    assert plan.artifacts == ()
+    assert plan.issues[0].kind == "media_mismatch"
+
+
+def test_video_container_does_not_substitute_for_another_container(tmp_path: Path) -> None:
+    """An MP4 renamed to ``.webm`` is refused rather than handed to a player."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "clip.webm").write_bytes(_MP4_BYTES)
+
+    plan = _validate(
+        root,
+        answer="![clip](artifact:clip.webm)",
+        attached=("clip.webm",),
+    )
+
+    assert plan.artifacts == ()
+    assert plan.issues[0].kind == "media_mismatch"
+
+
+def test_placed_video_affordance_is_inline(tmp_path: Path) -> None:
+    """A video the answer never placed is still offered as an inline player."""
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "clip.mp4").write_bytes(_MP4_BYTES)
+
+    plan = _validate(root, answer="See the recording.", attached=("clip.mp4",))
+
+    assert plan.outcome == {"status": "complete", "issues": []}
+    assert "![clip.mp4](artifact:artifact-" in plan.answer
 
 
 def test_visual_pdf_artifact_is_published(tmp_path: Path) -> None:

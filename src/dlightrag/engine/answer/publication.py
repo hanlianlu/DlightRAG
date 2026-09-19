@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote, unquote
 
 import pypdfium2 as pdfium
@@ -30,7 +30,7 @@ from PIL import Image
 from dlightrag.engine.answer.resources.converters import is_convertible
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 
-PresentationCapability = Literal["image", "markdown", "html", "pdf", "text", "download"]
+PresentationCapability = Literal["image", "video", "markdown", "html", "pdf", "text", "download"]
 ArtifactIssueKind = Literal[
     "invalid_reference",
     "missing_file",
@@ -70,6 +70,13 @@ _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
     ".html": ("text/html", "html"),
     ".htm": ("text/html", "html"),
     ".pdf": ("application/pdf", "pdf"),
+    # Video is presented by a native ``<video>`` element, never by a container
+    # parser: the browser owns decoding, so the extension only has to name the
+    # container the bytes actually are (see ``_identify_media_type``).
+    ".mp4": ("video/mp4", "video"),
+    ".m4v": ("video/mp4", "video"),
+    ".mov": ("video/quicktime", "video"),
+    ".webm": ("video/webm", "video"),
     ".png": ("image/png", "image"),
     ".jpg": ("image/jpeg", "image"),
     ".jpeg": ("image/jpeg", "image"),
@@ -99,6 +106,33 @@ _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
     ".zip": ("application/zip", "download"),
 }
 _IMAGE_MEDIA = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+_VIDEO_MEDIA = frozenset({"video/mp4", "video/quicktime", "video/webm"})
+
+# Content identification for video containers. The instance carries a model, so
+# it is built once per process and only when a video Artifact is actually
+# validated.
+_MEDIA_IDENTIFIER: Any = None
+
+
+def _identify_media_type(content: bytes) -> str:
+    """Return the media type the bytes themselves look like.
+
+    Video has no standard-library container parser and this deployment ships no
+    ffmpeg, so identification is delegated to magika, which already arrives with
+    the binary converter dependency. That is a weaker guarantee than the
+    structural checks published images, Office documents, and PDFs pass: a
+    truncated container whose header is still recognizable is admitted, and a
+    viewer of bytes the browser cannot decode sees the element's own error path
+    rather than a publication issue. Recorded in
+    ``docs/adr/0026-video-artifacts-and-link-cards.md``.
+    """
+    global _MEDIA_IDENTIFIER
+    if _MEDIA_IDENTIFIER is None:
+        import magika
+
+        _MEDIA_IDENTIFIER = magika.Magika()
+    identified = _MEDIA_IDENTIFIER.identify_bytes(content).output.mime_type
+    return str(identified)
 
 
 class PublicationScanError(ValueError):
@@ -605,6 +639,9 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
                 or max(width, height) > limits.preview_image_max_edge
             ):
                 capability = "download"
+        elif media_type in _VIDEO_MEDIA:
+            if _identify_media_type(content) != media_type:
+                raise ValueError("video container does not match its extension")
         elif media_type == "image/svg+xml":
             content = _sanitize_svg(content)
         elif media_type == "application/pdf":
@@ -718,7 +755,7 @@ def artifact_link(attachment: ArtifactAttachment) -> str:
     """Return the canonical model-facing placement syntax for one attachment."""
     label = attachment.label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     uri = quote(attachment.relative_path, safe="/")
-    prefix = "!" if attachment.presentation == "image" else ""
+    prefix = "!" if attachment.presentation in {"image", "video"} else ""
     return f"{prefix}[{label}](artifact:{uri})"
 
 

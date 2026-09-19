@@ -53,7 +53,11 @@ def artifact_response(
 ) -> tuple[str, dict[str, str]]:
     """Return the safe media type and headers for inert Artifact bytes."""
     media_type = str(descriptor.get("media_type") or "application/octet-stream")
-    safe_inline = media_type.startswith("image/") or media_type == "application/pdf"
+    safe_inline = (
+        media_type.startswith("image/")
+        or media_type.startswith("video/")
+        or media_type == "application/pdf"
+    )
     effective_type = media_type if safe_inline and not download else "application/octet-stream"
     filename = str(descriptor.get("filename") or "artifact").replace('"', "_")
     disposition = "attachment" if download or not safe_inline else "inline"

@@ -221,6 +221,12 @@ export class DlArtifactCanvas extends LightElement {
       }
       case 'html':
         return this.#htmlPreview();
+      case 'video': {
+        const source = safeSameOriginHref(artifact.dataUrl || '');
+        return source
+          ? html`<video class="artifact-video" controls preload="metadata" playsinline src=${source}></video>`
+          : this.#downloadOnly();
+      }
       case 'pdf': {
         const source = safeSameOriginHref(artifact.dataUrl || '');
         return source
@@ -363,7 +369,7 @@ export class DlArtifactCanvas extends LightElement {
     }
     if (event.key === 'Tab' && this.#isModal()) {
       const focusable = Array.from(this.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), dl-icon-button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), dl-icon-button:not([disabled]), a[href], iframe, video[controls], [tabindex]:not([tabindex="-1"])',
       )).filter((element) => element.getClientRects().length > 0);
       wrapTabFocus(focusable, event);
     }

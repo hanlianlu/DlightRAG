@@ -1014,6 +1014,43 @@ async def test_svg_artifact_is_inline_only_under_an_inert_document_policy(
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+async def test_video_artifact_streams_inline_for_a_native_player(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    """A published video keeps its own media type and range so a player can seek."""
+    content = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 100
+    _publish_test_artifact(
+        run_application,
+        media_type="video/mp4",
+        presentation="video",
+        filename="clip.mp4",
+        content=content,
+    )
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
+
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+    ranged = await client.get(
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}",
+        headers={"Range": "bytes=4-11"},
+    )
+
+    assert ranged.status_code == 206
+    assert ranged.content == content[4:12]
+    assert ranged.headers["content-range"] == f"bytes 4-11/{len(content)}"
+
+    downloaded = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}?download=1")
+
+    assert downloaded.headers["content-type"].startswith("application/octet-stream")
+    assert downloaded.headers["content-disposition"].startswith("attachment")
+
+
 async def test_open_ended_range_returns_206_with_a_content_range(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:

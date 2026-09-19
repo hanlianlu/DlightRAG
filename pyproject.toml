@@ -62,6 +62,9 @@ dependencies = [
     "markitdown[docx,pdf,pptx,xlsx]>=0.1.7",
     # Qualified PDF/DOCX/XLSX text; independent assets and offline fallback retained.
     "firecrawl-anydoc==0.2.4",
+    # Content identification for published video Artifacts (ADR 0026); already
+    # present as an anydoc dependency, declared here because publication imports it.
+    "magika>=0.6.2",
     "pypdfium2>=5.13.0",
     "openpyxl>=3.1.5",
     "cryptography>=46.0.0",

@@ -335,7 +335,9 @@ Otherwise keep a function or a private template. Binding decisions:
 [ADR 0002](adr/0002-browser-wire-validation.md) (browser wire), and
 [ADR 0003](adr/0003-light-composition-shadow-primitives.md) (Light vs Shadow).
 Publication authority is recorded separately in
-[ADR 0004](adr/0004-structured-artifact-attachment-authority.md).
+[ADR 0004](adr/0004-structured-artifact-attachment-authority.md). A published
+video keeps that authority and adds a native player, and a video link becomes a
+card: [ADR 0026](adr/0026-a-video-artifact-plays-and-a-video-link-is-a-card.md).
 
 ### Web Conversation Boundary
 
