@@ -24,7 +24,10 @@ from dlightrag.engine.agent.tools.files import (
     view_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
-from dlightrag.engine.answer.errors import InvalidToolConfigurationError
+from dlightrag.engine.answer.errors import (
+    ChildToolNarrowingError,
+    InvalidToolConfigurationError,
+)
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
@@ -157,11 +160,20 @@ def compose_research_tools(
         # then returns an ordinary not-found result rather than changing the Plan.
         tools.extend(skill_tools)
     try:
-        if child and tool_names is not None:
-            withheld = sorted(set(tool_names) & CHILD_FORBIDDEN_TOOLS)
-            if withheld:
-                raise ValueError("a Child Session never holds: " + ", ".join(withheld))
         registry = ToolRegistry(tools)
+        if tool_names is not None:
+            # Caller input, so it is refused with the names it got wrong rather than
+            # falling out of the registry as an anonymous lookup miss.
+            offered = {
+                tool.name
+                for tool in registry.resolve(None, exclude=CHILD_FORBIDDEN_TOOLS if child else ())
+            }
+            withheld = sorted(set(tool_names) & CHILD_FORBIDDEN_TOOLS) if child else []
+            if withheld:
+                raise ChildToolNarrowingError(tuple(withheld), reason="a Child Session never holds")
+            unknown = sorted(set(tool_names) - offered)
+            if unknown:
+                raise ChildToolNarrowingError(tuple(unknown), reason="this Run offers no such Tool")
         selected_names = tool_names
         if (
             child

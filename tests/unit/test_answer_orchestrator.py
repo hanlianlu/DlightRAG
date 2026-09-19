@@ -434,6 +434,18 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
         assert authority not in child_names
 
 
+def test_an_explicit_tool_list_refuses_a_name_the_run_cannot_offer(tmp_path: Path) -> None:
+    """`tools` is caller input, so a refusal names what was wrong (ADR 0025)."""
+    from dlightrag.engine.answer.errors import ChildToolNarrowingError
+
+    orchestrator = _research_owner_with_subagents(tmp_path)
+
+    with pytest.raises(ChildToolNarrowingError) as unknown:
+        _child_tools(orchestrator, tools=["bash", "no_such_tool"])
+    assert unknown.value.names == ("no_such_tool",)
+    assert "no_such_tool" in str(unknown.value)
+
+
 def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Path) -> None:
     """`tools` narrows; a name the Run withholds is refused rather than granted."""
     from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
@@ -444,7 +456,9 @@ def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Pa
     assert narrowed == {"bash", "search_knowledge_base", "ask_parent"}
     assert narrowed & CHILD_FORBIDDEN_TOOLS == set()
     # Asking for one of them says so, instead of failing as an unknown tool name.
-    with pytest.raises(ValueError, match="never holds: remember"):
+    from dlightrag.engine.answer.errors import ChildToolNarrowingError
+
+    with pytest.raises(ChildToolNarrowingError, match="never holds: remember"):
         _child_tools(orchestrator, tools=["bash", "remember"])
 
 

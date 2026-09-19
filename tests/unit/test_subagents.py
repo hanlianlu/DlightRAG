@@ -1099,6 +1099,44 @@ async def test_failed_child_is_recorded_failed() -> None:
     assert finish.call_args.kwargs["status"] == "failed"
 
 
+async def test_a_child_that_names_impossible_tools_says_which() -> None:
+    """The parent model named the Tools, so the failure has to name them back."""
+    from dlightrag.engine.answer.errors import ChildToolNarrowingError
+
+    finish = AsyncMock()
+
+    async def run_child(
+        _child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        raise ChildToolNarrowingError(("no_such_tool",), reason="this Run offers no such Tool")
+
+    host = SubagentHost(
+        parent_session_id=SessionId.new(),
+        run_id=str(SessionId.new().value),
+        owner_id="owner",
+        persist=AsyncMock(),
+        load_child=AsyncMock(return_value=None),
+        finish_child=finish,
+        run_child=run_child,
+        context_snapshot=_context_snapshot(),
+        async_lifecycle=False,
+    )
+    tool = subagent_tools(host=host)[0]
+    result = await tool.execute(
+        _spawn_input("x"),
+        tool_runtime(call_id="call-narrow", tool_name="spawn_agent"),
+    )
+
+    assert result.details is not None
+    assert result.details["children"][0]["status"] == "failed"
+    assert "no_such_tool" in result.text_content
+    assert finish.call_args is not None
+    assert "no_such_tool" in finish.call_args.kwargs["summary"]
+
+
 @dataclass
 class _FakeSession:
     fencing_epoch = 1
