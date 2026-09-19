@@ -4306,9 +4306,12 @@ class TestForkPoints:
                 "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
                 "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill'))"
             )
+            versions = [migration.version for migration in RUN_MIGRATIONS]
+            unapplied = versions[versions.index("published_artifact_resources") :]
             await conn.execute(
                 "DELETE FROM dlightrag_schema_migrations"
-                " WHERE scope = 'runs' AND version = 'published_artifact_resources'"
+                " WHERE scope = 'runs' AND version = ANY($1::text[])",
+                unapplied,
             )
 
         migrated = PGRunStore(pool=pool)
