@@ -26,7 +26,7 @@ from dlightrag.engine.agent.session.transactions import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import best_effort_reasoning_profile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
@@ -207,8 +207,8 @@ def _routing_record(
     )
 
 
-def _fingerprint(role: str) -> ModelFingerprint:
-    return ModelFingerprint("openai", f"test-{role}", None)
+def _fingerprint(role: str) -> ModelInvocationFingerprint:
+    return ModelInvocationFingerprint("openai", f"test-{role}", None, "chat_completion")
 
 
 def _executor() -> AnswerExecutor:
@@ -235,7 +235,7 @@ def _executor() -> AnswerExecutor:
             ),
         ),
         telemetry=NOOP_TELEMETRY,
-        model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
+        model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         shell_confinement=ConfinementPolicy(),
     )
 
@@ -322,7 +322,7 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         resources=MagicMock(),
         settings=_executor()._settings,
         telemetry=NOOP_TELEMETRY,
-        model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
+        model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
         shell_confinement=ConfinementPolicy(),
         memory_store=MagicMock(),
@@ -418,7 +418,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         resources=MagicMock(),
         settings=_executor()._settings,
         telemetry=NOOP_TELEMETRY,
-        model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
+        model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
         shell_confinement=ConfinementPolicy(),
     )
@@ -505,8 +505,10 @@ def test_pinned_model_profile_preserves_unverified_reasoning_semantics() -> None
         ),
     )
 
-    restored = PinnedModelProfile.from_json(pinned.as_json())
+    serialized = pinned.as_json()
+    restored = PinnedModelProfile.from_json(serialized)
 
+    assert serialized["fingerprint"]["api_family"] == "chat_completion"
     assert restored == pinned
     assert restored.profile.reasoning is not None
     assert restored.profile.reasoning.best_effort is True
@@ -545,10 +547,10 @@ def test_execution_rejects_changed_context_or_model_pins() -> None:
     request.context_policy_revision = CONTEXT_POLICY_REVISION
     mismatched = _executor()
     mismatched._models.model_settings = lambda role: ModelSettings(model="test")
-    mismatched._model_fingerprint_for_role = lambda role: ModelFingerprint(
-        "other", f"test-{role}", None
+    mismatched._model_invocation_fingerprint_for_role = lambda role: ModelInvocationFingerprint(
+        "other", f"test-{role}", None, "chat_completion"
     )
-    with pytest.raises(IncompatibleActiveRunError, match="model endpoint"):
+    with pytest.raises(IncompatibleActiveRunError, match="model invocation"):
         mismatched.validate_pinned_model_profiles(request)
 
 

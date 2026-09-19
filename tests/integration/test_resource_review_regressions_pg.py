@@ -25,7 +25,7 @@ from dlightrag.engine.agent.session.fold import PriorTurns, project_session_mess
 from dlightrag.engine.agent.session.ids import LaneId
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.providers import get_provider as real_get_provider
 from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -623,8 +623,8 @@ def _fast_executor(pg, provider: _FastProjectionProvider, profile):
             ),
         ),
         telemetry=NOOP_TELEMETRY,
-        model_fingerprint_for_role=lambda role: ModelFingerprint(
-            "openai", f"projection-{role}", None
+        model_invocation_fingerprint_for_role=lambda role: ModelInvocationFingerprint(
+            "openai", f"projection-{role}", None, "chat_completion"
         ),
         execution_environment="disabled",
         shell_confinement=ConfinementPolicy(),
@@ -640,7 +640,9 @@ async def _create_fast_continuation(pg, *, old_run_id, session_id, kind, profile
         pinned_models=tuple(
             PinnedModelProfile(
                 role=role,
-                fingerprint=ModelFingerprint("openai", f"projection-{role}", None),
+                fingerprint=ModelInvocationFingerprint(
+                    "openai", f"projection-{role}", None, "chat_completion"
+                ),
                 profile=profile,
                 reasoning_settings=model_reasoning_settings(settings[role]),
             )

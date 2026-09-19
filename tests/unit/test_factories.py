@@ -26,6 +26,7 @@ from dlightrag.engine.ai.settings import (
     RerankSettings,
 )
 from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.tool_model import ToolModel
 
 
 class DemoPlan(BaseModel):
@@ -129,29 +130,61 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
     assert query.max_input_tokens is None
 
 
-def test_model_fingerprint_canonicalizes_endpoint_without_retaining_url() -> None:
-    from dlightrag.engine.ai.fingerprints import model_fingerprint
-
-    first = model_fingerprint(
-        ModelSettings(
-            provider="openai",
-            model="model-a",
-            base_url="HTTPS://API.EXAMPLE.COM:443/v1/../v1/?token=secret",
-        )
-    )
-    second = model_fingerprint(
-        ModelSettings(
-            provider="openai",
-            model="model-a",
-            base_url="https://api.example.com/v1",
-        )
+def test_api_family_separates_invocations_but_not_catalogue_endpoints() -> None:
+    from dlightrag.engine.ai.fingerprints import (
+        model_endpoint_fingerprint,
+        model_invocation_fingerprint,
     )
 
-    assert first == second
-    assert first.provider == "openai"
-    assert first.model == "model-a"
-    assert first.endpoint_fingerprint is not None
-    assert "example.com" not in first.endpoint_fingerprint
+    chat = ModelSettings(
+        provider="openai",
+        model="model-a",
+        base_url="HTTPS://API.EXAMPLE.COM:443/v1/../v1/?token=secret",
+        api_family="chat_completion",
+    )
+    response = ModelSettings(
+        provider="openai",
+        model="model-a",
+        base_url="https://api.example.com/v1",
+        api_family="response",
+    )
+
+    chat_endpoint = model_endpoint_fingerprint(chat.provider, chat.model, chat.base_url)
+    response_endpoint = model_endpoint_fingerprint(
+        response.provider,
+        response.model,
+        response.base_url,
+    )
+    chat_invocation = model_invocation_fingerprint(chat)
+    response_invocation = model_invocation_fingerprint(response)
+
+    assert chat_endpoint == response_endpoint
+    assert chat_invocation != response_invocation
+    assert chat_invocation.endpoint == chat_endpoint
+    assert response_invocation.endpoint == response_endpoint
+    assert chat_invocation.api_family == "chat_completion"
+    assert response_invocation.api_family == "response"
+    assert chat_endpoint.endpoint_fingerprint is not None
+    assert "example.com" not in chat_endpoint.endpoint_fingerprint
+
+
+def test_chat_models_pass_api_family_to_provider_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[str] = []
+
+    def provider_factory(*_args: Any, **kwargs: Any) -> object:
+        received.append(kwargs["api_family"])
+        return object()
+
+    monkeypatch.setattr("dlightrag.engine.ai.completion.get_provider", provider_factory)
+    monkeypatch.setattr("dlightrag.engine.ai.tool_model.get_provider", provider_factory)
+    settings = ModelSettings(model="model-a", api_family="response")
+
+    CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+
+    assert received == ["response", "response"]
 
 
 async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeypatch) -> None:
@@ -173,6 +206,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
 
     class Telemetry:
         observation = Observation()
+        observations: list[dict[str, Any]] = []
         capture_sensitive_data = False
 
         def trace(self, **_kwargs: Any):
@@ -181,6 +215,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
         @asynccontextmanager
         async def observe(self, name: str, **kwargs: Any):
             assert name == "generate-completion"
+            self.observations.append(kwargs)
             yield self.observation
 
     provider = Provider()
@@ -189,7 +224,12 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
         lambda *_args, **_kwargs: provider,
     )
     model = CompletionModel(
-        ModelSettings(provider="openai", model="model-a", api_key="key"),
+        ModelSettings(
+            provider="openai",
+            model="model-a",
+            api_key="key",
+            api_family="response",
+        ),
         scheduler=ModelScheduler(max_concurrency=1),
         telemetry=Telemetry(),
     )
@@ -199,6 +239,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
 
     assert result == "answer"
     assert provider.closed is True
+    assert Telemetry.observations[0]["metadata"]["api_family"] == "response"
     assert Telemetry.observation.updates == [
         {
             "output": {"text_length": 6},

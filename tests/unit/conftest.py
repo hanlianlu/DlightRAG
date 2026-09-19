@@ -19,7 +19,7 @@ from dlightrag.application import config as config_module
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.engine.ai.structured_transport import JSON_SCHEMA_TRANSPORT_CACHE
 from dlightrag.engine.answer.capabilities import AnswerCapabilities
@@ -99,7 +99,9 @@ async def prepare_test_answer_run_input(
         pinned_models=(
             PinnedModelProfile(
                 role="query",
-                fingerprint=ModelFingerprint("openai", "test-model", None),
+                fingerprint=ModelInvocationFingerprint(
+                    "openai", "test-model", None, "chat_completion"
+                ),
                 profile=answer_model_profile(),
             ),
         ),

@@ -10,7 +10,7 @@ from typing import Any
 
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
-from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.reasoning import (
     REASONING_LEVELS,
@@ -103,13 +103,14 @@ class CompletionModel:
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.settings = settings
-        self.fingerprint = model_fingerprint(settings)
+        self.fingerprint = model_invocation_fingerprint(settings)
         self._scheduler = scheduler
         self._telemetry = telemetry
         self._provider = get_provider(
             settings.provider,
             api_key=settings.api_key,
             base_url=settings.base_url,
+            api_family=settings.api_family,
             timeout=settings.timeout,
             max_retries=settings.max_retries,
         )
@@ -133,6 +134,7 @@ class CompletionModel:
         metadata: dict[str, Any] = {
             "provider": self.fingerprint.provider,
             "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+            "api_family": self.fingerprint.api_family,
         }
         metadata.update(
             {
@@ -176,7 +178,7 @@ class CompletionModel:
         if requested is not None and requested not in REASONING_LEVELS:
             raise ValueError(f"unsupported reasoning level: {requested!r}")
         resolved = resolve_reasoning(
-            (model_profile or resolve_model_profile(self.fingerprint)).reasoning,
+            (model_profile or resolve_model_profile(self.fingerprint.endpoint)).reasoning,
             requested,
         )
         if resolved is not None and resolved.requested != resolved.effective:

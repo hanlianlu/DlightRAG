@@ -35,7 +35,7 @@ from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.runs import RunService
 from dlightrag.engine.ai.capacity import ModelProfile
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import (
     CHAT_MODEL_SELECTORS,
     ChatModelSelector,
@@ -196,8 +196,13 @@ class _CapabilityView:
         return AnswerCapabilities(answer=None, vlm_status="unknown")
 
 
-def _fingerprint(role: ChatModelSelector) -> ModelFingerprint:
-    return ModelFingerprint(provider="test", model=f"model-{role}", endpoint_fingerprint=None)
+def _fingerprint(role: ChatModelSelector) -> ModelInvocationFingerprint:
+    return ModelInvocationFingerprint(
+        provider="test",
+        model=f"model-{role}",
+        endpoint_fingerprint=None,
+        api_family="chat_completion",
+    )
 
 
 class _StoreBackedApplication:
@@ -228,7 +233,7 @@ class _StoreBackedApplication:
                 ),
             ),
             resources=cast(Any, _Resources()),
-            model_fingerprint_for_role=_fingerprint,
+            model_invocation_fingerprint_for_role=_fingerprint,
             bind_research=bind_research,
             child_roster_cursor_secret=b"answer-run-api-child-roster-test",
         )

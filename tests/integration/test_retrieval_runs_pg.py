@@ -18,7 +18,7 @@ from dlightrag.application.retrieval import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.rag.retrieval import RetrievalOptions, RetrievalResult
 from dlightrag.engine.runtime.coordinator import RunCoordinator
@@ -34,7 +34,7 @@ from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgre
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 _OWNER = "retrieval-owner"
-_FINGERPRINT = ModelFingerprint("openai", "extract-model", None)
+_FINGERPRINT = ModelInvocationFingerprint("openai", "extract-model", None, "chat_completion")
 _PROFILE = ModelProfile(context_window_tokens=128_000, supports_images=True)
 
 
@@ -327,7 +327,7 @@ async def test_registered_retrieval_executor_runs_through_the_real_pg_coordinato
         telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
     coordinator = RunCoordinator(
         store=store,

@@ -1995,7 +1995,7 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
         capability_view=cast(Any, None),
         models=cast(Any, None),
         resources=cast(Any, None),
-        model_fingerprint_for_role=cast(Any, None),
+        model_invocation_fingerprint_for_role=cast(Any, None),
         child_roster_cursor_secret=b"agent-session-child-roster-test",
     )
     transcript = await service.transcript_tail(

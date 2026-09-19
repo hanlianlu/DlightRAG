@@ -10,7 +10,7 @@ import pytest
 from dlightrag._compose import _compose
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
@@ -41,7 +41,7 @@ async def test_incompatible_answer_does_not_block_startup_or_new_run(
     pins = tuple(
         PinnedModelProfile(
             role=role,
-            fingerprint=model_fingerprint(test_config.models.chat.resolve(role)),
+            fingerprint=model_invocation_fingerprint(test_config.models.chat.resolve(role)),
             profile=ModelProfile(context_window_tokens=100_000),
             reasoning_settings=model_reasoning_settings(test_config.models.chat.resolve(role)),
         )

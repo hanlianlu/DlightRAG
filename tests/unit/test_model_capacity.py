@@ -18,7 +18,10 @@ from dlightrag.engine.ai.catalog import (
     parse_catalogue_entry,
     resolve_model_profile,
 )
-from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.fingerprints import (
+    ModelEndpointFingerprint,
+    normalized_endpoint_fingerprint,
+)
 from dlightrag.engine.ai.reasoning import (
     cheapest_supported_reasoning,
     reasoning_request_kwargs,
@@ -48,7 +51,7 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
 
 
 def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() -> None:
-    fingerprint = ModelFingerprint(
+    fingerprint = ModelEndpointFingerprint(
         provider="openai",
         model="xiaomi/mimo-v2.5",
         endpoint_fingerprint=normalized_endpoint_fingerprint("https://openrouter.ai/api/v1"),
@@ -82,7 +85,7 @@ def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() ->
 
 
 def test_unknown_model_resolves_to_the_fallback_profile() -> None:
-    fingerprint = ModelFingerprint(
+    fingerprint = ModelEndpointFingerprint(
         provider="openai",
         model="private-model",
         endpoint_fingerprint="endpoint-hash",
@@ -138,7 +141,7 @@ def test_unknown_model_reasoning_uses_protocol_derived_best_effort_mapping(
     expected: dict[str, object],
 ) -> None:
     profile = resolve_model_profile(
-        ModelFingerprint(
+        ModelEndpointFingerprint(
             provider=provider,
             model="private-model",
             endpoint_fingerprint=normalized_endpoint_fingerprint(endpoint),
@@ -197,7 +200,7 @@ def test_unknown_output_profile_still_reserves_and_caps_requested_output() -> No
 def test_reasoning_profile_must_state_its_output_allowance() -> None:
     """Reasoning shares the output allowance, so an unstated cap bounds both."""
     reasoning = resolve_model_profile(
-        ModelFingerprint(
+        ModelEndpointFingerprint(
             provider="openai",
             model="private-thinking-model",
             endpoint_fingerprint=normalized_endpoint_fingerprint("https://private.example/v1"),

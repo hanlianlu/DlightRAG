@@ -9,7 +9,7 @@ from typing import Any
 
 from dlightrag.engine.ai.capacity import ModelCapabilityError, ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
-from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolChoice, ToolDefinition
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.base import CompletionProvider
@@ -38,7 +38,7 @@ class ToolModel:
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.settings = settings
-        self.fingerprint = model_fingerprint(settings)
+        self.fingerprint = model_invocation_fingerprint(settings)
         self._scheduler = scheduler
         self._telemetry = telemetry
         self._ordinary_model_kwargs = settings.model_kwargs_copy()
@@ -47,6 +47,7 @@ class ToolModel:
             settings.provider,
             api_key=settings.api_key,
             base_url=settings.base_url,
+            api_family=settings.api_family,
             timeout=settings.timeout,
             max_retries=settings.max_retries,
         )
@@ -115,6 +116,7 @@ class ToolModel:
                 "model": self.fingerprint.model,
                 "provider": self.fingerprint.provider,
                 "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+                "api_family": self.fingerprint.api_family,
                 "tool_names": [tool.name for tool in tools],
                 "tool_choice": tool_choice,
                 **self._reasoning_metadata(resolved),
@@ -212,6 +214,7 @@ class ToolModel:
                 "model": self.fingerprint.model,
                 "provider": self.fingerprint.provider,
                 "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+                "api_family": self.fingerprint.api_family,
             },
             model=self.settings.model,
         ) as observation:
@@ -307,7 +310,7 @@ class ToolModel:
         requested: ReasoningLevel | None,
         model_profile: ModelProfile | None,
     ) -> ResolvedReasoning | None:
-        profile = model_profile or resolve_model_profile(self.fingerprint)
+        profile = model_profile or resolve_model_profile(self.fingerprint.endpoint)
         resolved = resolve_reasoning(profile.reasoning, requested)
         if resolved is not None and resolved.requested != resolved.effective:
             logger.info(

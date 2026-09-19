@@ -26,7 +26,7 @@ from dlightrag.application.runs import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import ModelRole
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.rag.retrieval import (
@@ -196,7 +196,8 @@ class RetrievalService:
         store: RetrievalRunRepository | None = None,
         coordinator: RetrievalRunScheduler | None = None,
         model_profile_for_role: Callable[[ModelRole], ModelProfile] | None = None,
-        model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint] | None = None,
+        model_invocation_fingerprint_for_role: Callable[[ModelRole], ModelInvocationFingerprint]
+        | None = None,
         run_retention_seconds: int = RETRIEVAL_RUN_RETENTION_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         federated_reranker_factory: Callable[[], FederatedReranker | None] | None = None,
@@ -211,7 +212,7 @@ class RetrievalService:
         self._store = store
         self._coordinator = coordinator
         self._model_profile_for_role = model_profile_for_role
-        self._model_fingerprint_for_role = model_fingerprint_for_role
+        self._model_invocation_fingerprint_for_role = model_invocation_fingerprint_for_role
         self._run_retention_seconds = int(run_retention_seconds)
         self._clock = clock
         self._federated_reranker_factory = federated_reranker_factory
@@ -497,13 +498,16 @@ class RetrievalService:
             "query_images": [dict(image) for image in images],
         }
         fingerprint = run_request_fingerprint(normalized_request)
-        if self._model_profile_for_role is None or self._model_fingerprint_for_role is None:
+        if (
+            self._model_profile_for_role is None
+            or self._model_invocation_fingerprint_for_role is None
+        ):
             raise RunRuntimeUnavailableError("Retrieval model pinning is unavailable")
         roles: tuple[ModelRole, ...] = ("extract", "vlm") if images else ("extract",)
         pinned_models = tuple(
             PinnedRetrievalModel(
                 role=role,
-                fingerprint=self._model_fingerprint_for_role(role),
+                fingerprint=self._model_invocation_fingerprint_for_role(role),
                 profile=self._model_profile_for_role(role),
             )
             for role in roles

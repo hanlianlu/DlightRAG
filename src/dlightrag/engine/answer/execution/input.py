@@ -15,7 +15,7 @@ from typing import Any
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import (
     REASONING_LEVELS,
     ReasoningLevels,
@@ -134,7 +134,7 @@ class PinnedModelProfile:
     """One accepted run's immutable model identity and capacity facts."""
 
     role: str
-    fingerprint: ModelFingerprint
+    fingerprint: ModelInvocationFingerprint
     profile: ModelProfile
     reasoning_settings: Mapping[str, Any] | None = None
 
@@ -146,11 +146,7 @@ class PinnedModelProfile:
                 if self.reasoning_settings is not None
                 else {}
             ),
-            "fingerprint": {
-                "provider": self.fingerprint.provider,
-                "model": self.fingerprint.model,
-                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
-            },
+            "fingerprint": self.fingerprint.as_json(),
             "profile": {
                 "context_window_tokens": self.profile.context_window_tokens,
                 "max_input_tokens": self.profile.max_input_tokens,
@@ -171,22 +167,14 @@ class PinnedModelProfile:
     def from_json(cls, value: Mapping[str, Any]) -> PinnedModelProfile:
         fingerprint = value.get("fingerprint")
         profile = value.get("profile")
-        if not isinstance(fingerprint, Mapping) or not isinstance(profile, Mapping):
+        if not isinstance(profile, Mapping):
             raise ValueError("pinned model profile requires fingerprint and profile objects")
         if "reasoning" not in profile:
             raise ValueError("pinned model profile requires explicit reasoning facts")
         return cls(
             role=str(value.get("role") or ""),
             reasoning_settings=_pinned_reasoning_settings(value.get("reasoning_settings")),
-            fingerprint=ModelFingerprint(
-                provider=str(fingerprint.get("provider") or ""),
-                model=str(fingerprint.get("model") or ""),
-                endpoint_fingerprint=(
-                    str(fingerprint["endpoint_fingerprint"])
-                    if fingerprint.get("endpoint_fingerprint") is not None
-                    else None
-                ),
-            ),
+            fingerprint=ModelInvocationFingerprint.from_json(fingerprint),
             profile=ModelProfile(
                 context_window_tokens=int(profile["context_window_tokens"]),
                 max_input_tokens=_optional_int(profile.get("max_input_tokens")),
@@ -487,7 +475,9 @@ def child_model_guidance(pins: tuple[PinnedModelProfile, ...]) -> str:
 def validate_active_answer_input(
     prepared: Mapping[str, Any],
     *,
-    model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
+    model_invocation_fingerprint_for_role: Callable[
+        [ChatModelSelector], ModelInvocationFingerprint
+    ],
     model_settings_for_role: Callable[[ChatModelSelector], ModelSettings] | None = None,
 ) -> None:
     """Require one active Answer input to remain executable by this deployment."""
@@ -517,9 +507,12 @@ def validate_active_answer_input(
             "active answer runs use another model catalog revision; "
             "start a new Run with the current configuration"
         )
-    if any(pinned[role].fingerprint != model_fingerprint_for_role(role) for role in selectors):
+    if any(
+        pinned[role].fingerprint != model_invocation_fingerprint_for_role(role)
+        for role in selectors
+    ):
         raise IncompatibleActiveRunError(
-            "active answer runs target another model endpoint configuration; "
+            "active answer runs target another model invocation configuration; "
             "start a new Run with the current configuration"
         )
 

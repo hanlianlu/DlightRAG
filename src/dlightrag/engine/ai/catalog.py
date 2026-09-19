@@ -13,7 +13,10 @@ from types import MappingProxyType
 from typing import Never, cast
 
 from dlightrag.engine.ai.capacity import ModelProfile
-from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.fingerprints import (
+    ModelEndpointFingerprint,
+    normalized_endpoint_fingerprint,
+)
 from dlightrag.engine.ai.reasoning import (
     REASONING_LEVELS,
     ReasoningLevels,
@@ -53,7 +56,7 @@ class CatalogueEntry:
     model: str
     base_url: str | None
     profile: ModelProfile
-    fingerprint: ModelFingerprint
+    fingerprint: ModelEndpointFingerprint
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -70,11 +73,11 @@ class CatalogueSnapshot:
 
     revision: str
     entries: tuple[CatalogueEntry, ...]
-    profiles: Mapping[ModelFingerprint, ModelProfile]
-    startup_fingerprints: frozenset[ModelFingerprint]
-    overlay_fingerprints: frozenset[ModelFingerprint]
+    profiles: Mapping[ModelEndpointFingerprint, ModelProfile]
+    startup_fingerprints: frozenset[ModelEndpointFingerprint]
+    overlay_fingerprints: frozenset[ModelEndpointFingerprint]
 
-    def resolve(self, fingerprint: ModelFingerprint) -> ModelProfile | None:
+    def resolve(self, fingerprint: ModelEndpointFingerprint) -> ModelProfile | None:
         return self.profiles.get(fingerprint)
 
 
@@ -90,8 +93,8 @@ def _unique_entries(
     entries: Sequence[CatalogueEntry],
     *,
     source: str,
-) -> dict[ModelFingerprint, CatalogueEntry]:
-    unique: dict[ModelFingerprint, CatalogueEntry] = {}
+) -> dict[ModelEndpointFingerprint, CatalogueEntry]:
+    unique: dict[ModelEndpointFingerprint, CatalogueEntry] = {}
     for entry in entries:
         if entry.fingerprint in unique:
             raise ValueError(f"{source} contains a duplicate endpoint")
@@ -139,7 +142,7 @@ class ModelCatalogue:
     def overlay(self) -> tuple[CatalogueEntry, ...]:
         return self._overlay
 
-    def is_builtin(self, fingerprint: ModelFingerprint) -> bool:
+    def is_builtin(self, fingerprint: ModelEndpointFingerprint) -> bool:
         return fingerprint in self._builtin
 
     def preview(self, overlay: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
@@ -170,7 +173,7 @@ class ModelCatalogue:
         overrides = _unique_entries(overlay, source="runtime model catalogue overlay")
 
         effective: list[CatalogueEntry] = []
-        baseline_fingerprints: set[ModelFingerprint] = set()
+        baseline_fingerprints: set[ModelEndpointFingerprint] = set()
         for builtin in self._builtin_entries:
             baseline_fingerprints.add(builtin.fingerprint)
             configured = startup.get(builtin.fingerprint, builtin)
@@ -418,7 +421,7 @@ def parse_catalogue_entry(value: object, *, path: str = "entry") -> CatalogueEnt
             raise RuntimeError(f"{path}.base_url must be null or a valid HTTP(S) URL")
         canonical_base_url = cast(str, base_url)
     profile = _validated_profile(item["profile"], path=f"{path}.profile")
-    fingerprint = ModelFingerprint(
+    fingerprint = ModelEndpointFingerprint(
         provider=provider,
         model=model,
         endpoint_fingerprint=endpoint_fingerprint,
@@ -441,7 +444,7 @@ def parse_catalogue_overlay(
     if type(value) is not list:
         raise RuntimeError(f"{source} must be an array")
     entries: list[CatalogueEntry] = []
-    seen: dict[ModelFingerprint, int] = {}
+    seen: dict[ModelEndpointFingerprint, int] = {}
     for index, raw in enumerate(cast(list[object], value)):
         entry = parse_catalogue_entry(raw, path=f"{path}[{index}]")
         if entry.fingerprint in seen:
@@ -484,7 +487,7 @@ def _parse_catalog(text: str) -> tuple[str, tuple[CatalogueEntry, ...]]:
     models = cast(list[object], models_value)
 
     entries: list[CatalogueEntry] = []
-    fingerprint_indices: dict[ModelFingerprint, int] = {}
+    fingerprint_indices: dict[ModelEndpointFingerprint, int] = {}
     for index, value in enumerate(models):
         entry = parse_catalogue_entry(value, path=f"models[{index}]")
         if entry.fingerprint in fingerprint_indices:
@@ -529,7 +532,7 @@ _DEEPSEEK_ENDPOINTS = frozenset(
 )
 
 
-def _fallback_reasoning_format(fingerprint: ModelFingerprint) -> str:
+def _fallback_reasoning_format(fingerprint: ModelEndpointFingerprint) -> str:
     if fingerprint.provider == "anthropic":
         return "anthropic"
     if fingerprint.provider == "gemini":
@@ -541,7 +544,7 @@ def _fallback_reasoning_format(fingerprint: ModelFingerprint) -> str:
     return "openai"
 
 
-def fallback_model_profile(fingerprint: ModelFingerprint) -> ModelProfile:
+def fallback_model_profile(fingerprint: ModelEndpointFingerprint) -> ModelProfile:
     """Attach protocol-derived, unverified reasoning controls to fallback capacity."""
     return replace(
         FALLBACK_MODEL_PROFILE,
@@ -553,7 +556,7 @@ def current_model_catalog_revision() -> str:
     return MODEL_CATALOGUE.revision
 
 
-def resolve_model_profile(fingerprint: ModelFingerprint) -> ModelProfile:
+def resolve_model_profile(fingerprint: ModelEndpointFingerprint) -> ModelProfile:
     """Resolve runtime overlay, built-in catalogue, then permissive fallback."""
     profile = MODEL_CATALOGUE.snapshot.resolve(fingerprint)
     if profile is not None:

@@ -25,7 +25,7 @@ from dlightrag.engine.agent.tool_content import (
 )
 from dlightrag.engine.agent.tools.files import PreparedImageAttachment, view_tool
 from dlightrag.engine.ai.completion import CompletionModel
-from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.media import decode_image_base64
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, ToolDefinition
 from dlightrag.engine.ai.providers import get_provider
@@ -636,7 +636,7 @@ async def test_completion_model_strips_cross_model_anthropic_thinking() -> None:
                 ]
             },
         ),
-        model_fingerprint(source),
+        model_invocation_fingerprint(source),
     )
     try:
         await model(
@@ -743,7 +743,7 @@ async def test_completion_model_strips_cross_model_gemini_signature() -> None:
             ),
             stop_reason="tool_use",
         ),
-        model_fingerprint(source),
+        model_invocation_fingerprint(source),
     )
     try:
         stream = await model(

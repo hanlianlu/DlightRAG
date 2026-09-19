@@ -43,7 +43,7 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_tokens
@@ -684,7 +684,9 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         prepared.tools,
         model_role="query",
         context_policy_revision="context-v1",
-        model_identity=asdict(ModelFingerprint("openai", "query", None)),
+        model_identity=asdict(
+            ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+        ),
         model_profile=asdict(profile),
     )
     session_id = SessionId.new()
@@ -896,7 +898,9 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
         prepared.tools,
         model_role="query",
         context_policy_revision="context-v1",
-        model_identity=asdict(ModelFingerprint("openai", "query", None)),
+        model_identity=asdict(
+            ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+        ),
         model_profile=asdict(profile),
     )
     session_id = SessionId.new()
@@ -1016,7 +1020,9 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
             prepared.tools,
             model_role="query",
             context_policy_revision="context-v1",
-            model_identity=asdict(ModelFingerprint("openai", "query", None)),
+            model_identity=asdict(
+                ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+            ),
             model_profile=asdict(profile),
         ),
         compaction_attempt_limit=3,
@@ -1193,7 +1199,9 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
         prepared.tools,
         model_role="query",
         context_policy_revision="context-v1",
-        model_identity=asdict(ModelFingerprint("openai", "query", None)),
+        model_identity=asdict(
+            ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+        ),
         model_profile=asdict(profile),
     )
     session_id = SessionId.new()

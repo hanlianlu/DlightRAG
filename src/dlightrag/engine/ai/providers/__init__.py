@@ -4,6 +4,7 @@
 import importlib
 from typing import Any, cast
 
+from dlightrag.engine.ai.contracts import ApiFamily
 from dlightrag.engine.ai.providers.base import CompletionProvider
 
 _PROVIDER_CLASSES: dict[str, str] = {
@@ -28,12 +29,21 @@ def get_provider(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
+    api_family: ApiFamily = "chat_completion",
     timeout: float = 120.0,
     max_retries: int = 3,
 ) -> CompletionProvider:
     """Lazy-load and instantiate a provider by string name."""
+    if api_family == "response" and provider != "openai":
+        raise ValueError("response API family requires the openai provider")
     cls = cast(Any, _provider_class(provider))
-    return cls(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries)
+    return cls(
+        api_key=api_key,
+        base_url=base_url,
+        api_family=api_family,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
 
 
 __all__ = ["get_provider"]

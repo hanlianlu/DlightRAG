@@ -1,11 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Opaque provider replay is gated by the exact source model fingerprint."""
 
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 
-_SOURCE = ModelFingerprint("openai", "model-a", "endpoint-a")
+_SOURCE = ModelInvocationFingerprint("openai", "model-a", "endpoint-a", "chat_completion")
 
 
 def _turn() -> AssistantTurn:
@@ -54,7 +54,7 @@ def test_same_fingerprint_replays_opaque_state_and_tool_signature() -> None:
 
 def test_cross_model_drops_opaque_reasoning_and_tool_signatures_but_keeps_plain_text() -> None:
     bound = bind_provider_replay(_turn(), _SOURCE)
-    target = ModelFingerprint("openai", "model-b", "endpoint-a")
+    target = ModelInvocationFingerprint("openai", "model-b", "endpoint-a", "chat_completion")
 
     prepared = messages_for_model([_message(bound)], target)[0]
 
@@ -65,7 +65,22 @@ def test_cross_model_drops_opaque_reasoning_and_tool_signatures_but_keeps_plain_
 
 def test_same_model_name_at_a_different_endpoint_is_not_the_same_replay_identity() -> None:
     bound = bind_provider_replay(_turn(), _SOURCE)
-    target = ModelFingerprint("openai", "model-a", "endpoint-b")
+    target = ModelInvocationFingerprint("openai", "model-a", "endpoint-b", "chat_completion")
+
+    prepared = messages_for_model([_message(bound)], target)[0]
+
+    assert "provider_state" not in prepared
+    assert "thought_signature" not in prepared["tool_calls"][0]
+
+
+def test_same_endpoint_with_a_different_api_family_is_not_the_same_replay_identity() -> None:
+    bound = bind_provider_replay(_turn(), _SOURCE)
+    target = ModelInvocationFingerprint(
+        _SOURCE.provider,
+        _SOURCE.model,
+        _SOURCE.endpoint_fingerprint,
+        "response",
+    )
 
     prepared = messages_for_model([_message(bound)], target)[0]
 

@@ -78,6 +78,7 @@ def test_model_defaults_and_case_folding() -> None:
     assert settings.temperature is None
     assert settings.timeout == 240.0
     assert settings.max_retries == 3
+    assert settings.api_family == "chat_completion"
     assert settings.structured_output == "auto"
 
 
@@ -89,12 +90,18 @@ def test_model_defaults_and_case_folding() -> None:
         {"model": "x", "max_retries": -1},
         {"model": "x", "structured_output": "json_yaml"},
         {"provider": "anthropic", "model": "x", "structured_output": "json_object"},
+        {"provider": "anthropic", "model": "x", "api_family": "response"},
+        {"model": "x", "api_family": "responses"},
         {"provider": "invalid", "model": "x"},
     ],
 )
 def test_invalid_model_settings_are_rejected(values: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         ModelSettings(**values)  # type: ignore[arg-type]
+
+
+def test_openai_model_accepts_response_api_family() -> None:
+    assert ModelSettings(model="x", api_family="response").api_family == "response"
 
 
 def test_startup_catalogue_requires_complete_profile_facts() -> None:

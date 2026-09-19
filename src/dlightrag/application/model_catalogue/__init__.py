@@ -19,7 +19,7 @@ from dlightrag.engine.ai.catalog import (
     parse_catalogue_entry,
     parse_catalogue_overlay,
 )
-from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint, model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import ReasoningConfigurationError, resolve_reasoning
 from dlightrag.engine.ai.settings import ModelSettings
 
@@ -248,7 +248,11 @@ class ModelCatalogueAdmin:
 
     def _validate_configured_models(self, snapshot: CatalogueSnapshot) -> None:
         for settings in self._configured_models():
-            fingerprint = model_fingerprint(settings)
+            fingerprint = model_endpoint_fingerprint(
+                settings.provider,
+                settings.model,
+                settings.base_url,
+            )
             profile = snapshot.resolve(fingerprint) or fallback_model_profile(fingerprint)
             try:
                 resolve_reasoning(profile.reasoning, settings.reasoning)

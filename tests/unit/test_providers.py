@@ -55,6 +55,13 @@ class TestProviderRegistry:
         with pytest.raises(ValueError, match="openai"):
             get_provider("bad")
 
+    def test_response_family_is_bound_only_to_the_openai_provider(self):
+        provider = get_provider("openai", api_key="test-key", api_family="response")
+
+        assert cast(Any, provider)._api_family == "response"
+        with pytest.raises(ValueError, match="requires the openai provider"):
+            get_provider("anthropic", api_key="test-key", api_family="response")
+
 
 class TestAnthropicProvider:
     @pytest.mark.asyncio

@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 from dlightrag.engine.ai.capacity import ModelProfile
-from dlightrag.engine.ai.contracts import ChatProvider, InputModality
+from dlightrag.engine.ai.contracts import ApiFamily, ChatProvider, InputModality
 from dlightrag.engine.ai.reasoning import (
     ReasoningLevel,
     ReasoningLevels,
@@ -81,6 +81,7 @@ class ModelSettings(FrozenSettings):
     model: str
     api_key: str | None = None
     base_url: str | None = None
+    api_family: ApiFamily = "chat_completion"
     structured_output: Literal["auto", "json_schema", "json_object"] = "auto"
     temperature: float | None = Field(default=None, ge=0)
     timeout: float = Field(default=240.0, gt=0)
@@ -102,6 +103,8 @@ class ModelSettings(FrozenSettings):
 
     @model_validator(mode="after")
     def _validate_model_options(self) -> Self:
+        if self.api_family == "response" and self.provider != "openai":
+            raise ValueError("response API family requires the openai provider")
         if self.provider == "anthropic" and self.structured_output == "json_object":
             raise ValueError("Anthropic native structured output requires json_schema")
         if self.reasoning is not None:

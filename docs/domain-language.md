@@ -405,6 +405,13 @@ _Avoid_: scratchpad, agent journal, second transcript, Memory Record, Artifact, 
 
 ## Configuration And Deployment
 
+**API Family**:
+The per-model provider wire selected for one invocation: `chat_completion` or
+`response`. It neither selects the provider or model nor grants a provider's
+remote state authority over the Agent Session, and it states no retention
+policy.
+_Avoid_: Provider, Model Profile, Responses dialect, ZDR mode
+
 **Application Configuration**:
 The non-secret operator choices that govern DlightRAG product behavior and integrations independently of how a process is packaged or scheduled.
 _Avoid_: credentials, container topology, duplicated environment override

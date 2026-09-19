@@ -12,7 +12,10 @@ import pytest
 from dlightrag.engine.ai import catalog
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import CatalogueEntry
-from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.fingerprints import (
+    ModelEndpointFingerprint,
+    normalized_endpoint_fingerprint,
+)
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 
 _OPENAI_LEVELS = {
@@ -733,7 +736,7 @@ def test_catalog_accepts_complete_profiles_with_null_and_valid_http_endpoints(
 
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", revision)
     assert isinstance(parsed, tuple)
-    assert parsed[0].fingerprint == ModelFingerprint(
+    assert parsed[0].fingerprint == ModelEndpointFingerprint(
         provider="openai", model="default-endpoint", endpoint_fingerprint=None
     )
     assert parsed[0].profile == ModelProfile(
@@ -753,7 +756,7 @@ def test_catalog_accepts_complete_profiles_with_null_and_valid_http_endpoints(
             ),
         ),
     )
-    assert parsed[1].fingerprint == ModelFingerprint(
+    assert parsed[1].fingerprint == ModelEndpointFingerprint(
         provider="openai",
         model="routed-endpoint",
         endpoint_fingerprint=normalized_endpoint_fingerprint("http://api.example.test:8080/v1"),

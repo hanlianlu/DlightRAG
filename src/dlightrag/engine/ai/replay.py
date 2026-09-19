@@ -7,16 +7,16 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
 
 _ENVELOPE_KEY = "_dlightrag_replay"
-_ENVELOPE_VERSION = 1
+_ENVELOPE_VERSION = 2
 
 
 def bind_provider_replay(
     turn: AssistantTurn,
-    fingerprint: ModelFingerprint,
+    fingerprint: ModelInvocationFingerprint,
 ) -> AssistantTurn:
     """Bind opaque response state and Tool signatures to their source model."""
     has_tool_signature = any(call.thought_signature is not None for call in turn.tool_calls)
@@ -30,6 +30,7 @@ def bind_provider_replay(
                 "provider": fingerprint.provider,
                 "model": fingerprint.model,
                 "endpoint_fingerprint": fingerprint.endpoint_fingerprint,
+                "api_family": fingerprint.api_family,
             },
             "payload": turn.provider_state,
         },
@@ -38,7 +39,7 @@ def bind_provider_replay(
 
 def messages_for_model(
     messages: list[dict[str, Any]],
-    fingerprint: ModelFingerprint,
+    fingerprint: ModelInvocationFingerprint,
 ) -> list[dict[str, Any]]:
     """Unwrap same-model provider state and strip every cross-model opaque value.
 
@@ -52,8 +53,8 @@ def messages_for_model(
             continue
         message = dict(source)
         state = message.pop("provider_state", None)
-        same_model = _is_same_model_state(state, fingerprint)
-        if same_model and isinstance(state, Mapping):
+        same_invocation = _is_same_invocation_state(state, fingerprint)
+        if same_invocation and isinstance(state, Mapping):
             payload = state.get("payload")
             if payload is not None:
                 message["provider_state"] = payload
@@ -68,7 +69,10 @@ def messages_for_model(
     return prepared
 
 
-def _is_same_model_state(state: object, fingerprint: ModelFingerprint) -> bool:
+def _is_same_invocation_state(
+    state: object,
+    fingerprint: ModelInvocationFingerprint,
+) -> bool:
     if not isinstance(state, Mapping):
         return False
     identity = state.get(_ENVELOPE_KEY)
@@ -78,6 +82,7 @@ def _is_same_model_state(state: object, fingerprint: ModelFingerprint) -> bool:
         identity.get("provider") == fingerprint.provider
         and identity.get("model") == fingerprint.model
         and identity.get("endpoint_fingerprint") == fingerprint.endpoint_fingerprint
+        and identity.get("api_family") == fingerprint.api_family
     )
 
 

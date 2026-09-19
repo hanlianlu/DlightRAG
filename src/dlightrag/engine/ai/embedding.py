@@ -22,7 +22,10 @@ from dlightrag.engine.ai.embedding_inputs import (
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
+from dlightrag.engine.ai.fingerprints import (
+    ModelEndpointFingerprint,
+    model_endpoint_fingerprint,
+)
 from dlightrag.engine.ai.media import bounded_embedding_image_data_uri
 from dlightrag.engine.ai.providers.embed_base import (
     EmbeddingContext,
@@ -86,7 +89,7 @@ class MultimodalEmbedder:
         provider: EmbedProvider,
         input_modality: InputModality = "auto",
         timeout: float = 120.0,
-        fingerprint: ModelFingerprint,
+        fingerprint: ModelEndpointFingerprint,
         scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:

@@ -27,7 +27,10 @@ from dlightrag.application.web_conversations import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_fingerprint
+from dlightrag.engine.ai.fingerprints import (
+    ModelInvocationFingerprint,
+    model_invocation_fingerprint,
+)
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.engine.answer.execution.input import (
@@ -303,8 +306,8 @@ class _Parts:
         *,
         web_enabled: bool = True,
     ) -> Application:
-        def current_fingerprint(role: str) -> ModelFingerprint:
-            return model_fingerprint(model_settings_for_role(config, cast(Any, role)))
+        def current_fingerprint(role: str) -> ModelInvocationFingerprint:
+            return model_invocation_fingerprint(model_settings_for_role(config, cast(Any, role)))
 
         async def validate_active_runs() -> None:
             # Deliberately strict injected validator: Application propagates its failures.
@@ -317,13 +320,13 @@ class _Parts:
                 if kind == "answer":
                     validate_active_answer_input(
                         prepared,
-                        model_fingerprint_for_role=cast(Any, current_fingerprint),
+                        model_invocation_fingerprint_for_role=cast(Any, current_fingerprint),
                         model_settings_for_role=config.models.chat.resolve,
                     )
                 elif kind == "retrieval":
                     validate_active_retrieval_input(
                         prepared,
-                        model_fingerprint_for_role=current_fingerprint,
+                        model_invocation_fingerprint_for_role=current_fingerprint,
                     )
                 else:
                     raise IncompatibleActiveRunError("incompatible durable input schema")
@@ -368,7 +371,7 @@ def _requirement(
         "pinned_models": [
             PinnedModelProfile(
                 role=role,
-                fingerprint=model_fingerprint(config.models.chat.resolve(role)),
+                fingerprint=model_invocation_fingerprint(config.models.chat.resolve(role)),
                 profile=ModelProfile(context_window_tokens=200_000, max_output_tokens=32_000),
                 reasoning_settings=model_reasoning_settings(config.models.chat.resolve(role)),
             ).as_json()
@@ -400,7 +403,7 @@ def _retrieval_requirement(
         "pinned_models": [
             PinnedRetrievalModel(
                 role=role,
-                fingerprint=model_fingerprint(model_settings_for_role(config, role)),
+                fingerprint=model_invocation_fingerprint(model_settings_for_role(config, role)),
                 profile=ModelProfile(context_window_tokens=200_000),
             ).as_json()
             for role in roles
@@ -698,7 +701,7 @@ async def test_an_active_retrieval_on_another_model_endpoint_fails_startup(
     parts = _Parts()
     parts.run_store.requirements = (requirement,)
 
-    with pytest.raises(IncompatibleActiveRunError, match="another model endpoint"):
+    with pytest.raises(IncompatibleActiveRunError, match="another model invocation"):
         await parts.application(test_config).astart()
 
 
@@ -713,7 +716,7 @@ async def test_an_injected_answer_endpoint_validation_failure_closes_startup(
     parts = _Parts()
     parts.run_store.requirements = (requirement,)
 
-    with pytest.raises(IncompatibleActiveRunError, match="another model endpoint"):
+    with pytest.raises(IncompatibleActiveRunError, match="another model invocation"):
         await parts.application(test_config).astart()
 
 

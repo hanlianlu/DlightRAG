@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from typing import Any
 
+from dlightrag.engine.ai.contracts import ApiFamily
 from dlightrag.engine.ai.messages import (
     AssistantTurn,
     ToolCallingUnavailableError,
@@ -364,11 +365,13 @@ class CompletionProvider(ABC):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
+        api_family: ApiFamily = "chat_completion",
         timeout: float = 120.0,
         max_retries: int = 3,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
+        self._api_family = api_family
         self._timeout = timeout
         self._max_retries = max_retries
         self.last_reasoning: str = ""

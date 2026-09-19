@@ -17,7 +17,7 @@ from PIL import Image
 from dlightrag.engine.ai.contracts import InputModality, ResolvedInputModality
 from dlightrag.engine.ai.embedding import MultimodalEmbedder as _MultimodalEmbedder
 from dlightrag.engine.ai.embedding import resolve_embedding_input_modality
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelEndpointFingerprint
 from dlightrag.engine.ai.media import decode_image_base64
 from dlightrag.engine.ai.providers.embed_base import EmbedProvider, OutputDimensionPolicy
 from dlightrag.engine.ai.providers.embed_providers import (
@@ -32,7 +32,7 @@ from dlightrag.engine.ai.providers.embed_providers import (
 )
 from dlightrag.engine.ai.scheduler import ModelScheduler
 
-_TEST_FINGERPRINT = ModelFingerprint(
+_TEST_FINGERPRINT = ModelEndpointFingerprint(
     provider="test",
     model="test-model",
     endpoint_fingerprint=None,
@@ -150,7 +150,7 @@ async def test_embedding_fingerprint_includes_endpoint_identity() -> None:
         api_key="key",
         dim=3,
         provider=OpenAICompatibleEmbedProvider(),
-        fingerprint=ModelFingerprint(
+        fingerprint=ModelEndpointFingerprint(
             provider="test",
             model="test-model",
             endpoint_fingerprint="endpoint-hash",

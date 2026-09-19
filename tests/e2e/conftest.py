@@ -70,7 +70,7 @@ from dlightrag.application.web_conversations import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.engine.ai.settings import (
     MODEL_ROLE_NAMES,
@@ -134,7 +134,9 @@ def _run_request(
         pinned_models=tuple(
             PinnedModelProfile(
                 role=role,
-                fingerprint=ModelFingerprint("openai", f"e2e-{role}", None),
+                fingerprint=ModelInvocationFingerprint(
+                    "openai", f"e2e-{role}", None, "chat_completion"
+                ),
                 profile=_E2E_PROFILE,
             )
             for role in MODEL_ROLE_NAMES

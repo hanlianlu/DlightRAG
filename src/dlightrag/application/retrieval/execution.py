@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import REASONING_LEVELS, ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.telemetry import Observation, Telemetry
 from dlightrag.engine.dependencies import (
@@ -53,18 +53,14 @@ class PinnedRetrievalModel:
     """One model identity and capacity snapshot required to recover Retrieval."""
 
     role: str
-    fingerprint: ModelFingerprint
+    fingerprint: ModelInvocationFingerprint
     profile: ModelProfile
 
     def as_json(self) -> dict[str, Any]:
         reasoning = self.profile.reasoning
         return {
             "role": self.role,
-            "fingerprint": {
-                "provider": self.fingerprint.provider,
-                "model": self.fingerprint.model,
-                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
-            },
+            "fingerprint": self.fingerprint.as_json(),
             "profile": {
                 "context_window_tokens": self.profile.context_window_tokens,
                 "max_input_tokens": self.profile.max_input_tokens,
@@ -85,25 +81,13 @@ class PinnedRetrievalModel:
         role = str(value.get("role") or "")
         if not isinstance(fingerprint, Mapping) or not isinstance(profile, Mapping):
             raise ValueError("pinned retrieval model requires fingerprint and profile objects")
-        if (
-            not role
-            or not str(fingerprint.get("provider") or "")
-            or not str(fingerprint.get("model") or "")
-        ):
+        if not role:
             raise ValueError("pinned retrieval model requires role, provider, and model")
         if "reasoning" not in profile:
             raise ValueError("pinned retrieval model requires explicit reasoning facts")
         return cls(
             role=role,
-            fingerprint=ModelFingerprint(
-                provider=str(fingerprint.get("provider") or ""),
-                model=str(fingerprint.get("model") or ""),
-                endpoint_fingerprint=(
-                    str(fingerprint["endpoint_fingerprint"])
-                    if fingerprint.get("endpoint_fingerprint") is not None
-                    else None
-                ),
-            ),
+            fingerprint=ModelInvocationFingerprint.from_json(fingerprint),
             profile=ModelProfile(
                 context_window_tokens=int(profile["context_window_tokens"]),
                 max_input_tokens=_optional_int(profile.get("max_input_tokens")),
@@ -210,7 +194,7 @@ class RetrievalRunInput:
 def validate_active_retrieval_input(
     prepared: Mapping[str, Any],
     *,
-    model_fingerprint_for_role: Callable[[str], ModelFingerprint],
+    model_invocation_fingerprint_for_role: Callable[[str], ModelInvocationFingerprint],
 ) -> None:
     """Require one active Retrieval input to remain executable by this deployment."""
     try:
@@ -239,9 +223,12 @@ def validate_active_retrieval_input(
             "active retrieval runs use another model catalog revision; "
             "drain or owner-cancel them before deployment"
         )
-    if any(pinned[role].fingerprint != model_fingerprint_for_role(role) for role in expected_roles):
+    if any(
+        pinned[role].fingerprint != model_invocation_fingerprint_for_role(role)
+        for role in expected_roles
+    ):
         raise IncompatibleActiveRunError(
-            "active retrieval runs target another model endpoint configuration; "
+            "active retrieval runs target another model invocation configuration; "
             "drain or owner-cancel them before deployment"
         )
 
@@ -276,7 +263,7 @@ class RetrievalExecutor:
         operation: RetrievalOperation,
         telemetry: Telemetry,
         timeout_seconds: float,
-        model_fingerprint_for_role: Callable[[str], ModelFingerprint],
+        model_invocation_fingerprint_for_role: Callable[[str], ModelInvocationFingerprint],
         now: Callable[[], datetime.datetime] | None = None,
         on_dependency_unavailable: DependencyStateCallback | None = None,
         on_dependency_recovered: DependencyStateCallback | None = None,
@@ -284,7 +271,7 @@ class RetrievalExecutor:
         self._operation = operation
         self._telemetry = telemetry
         self._timeout_seconds = float(timeout_seconds)
-        self._model_fingerprint_for_role = model_fingerprint_for_role
+        self._model_invocation_fingerprint_for_role = model_invocation_fingerprint_for_role
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
@@ -293,7 +280,7 @@ class RetrievalExecutor:
         """Validate active durable Retrieval input using this executor's model bindings."""
         validate_active_retrieval_input(
             prepared,
-            model_fingerprint_for_role=self._model_fingerprint_for_role,
+            model_invocation_fingerprint_for_role=self._model_invocation_fingerprint_for_role,
         )
 
     async def execute(self, session: RunSession) -> Succeeded | Failed | Deferred:
@@ -405,7 +392,7 @@ class RetrievalExecutor:
     def _require_compatible_models(self, run_input: RetrievalRunInput) -> None:
         for model in run_input.pinned_models:
             try:
-                current = self._model_fingerprint_for_role(model.role)
+                current = self._model_invocation_fingerprint_for_role(model.role)
             except Exception as exc:
                 raise RunExecutionError(
                     _RETRIEVAL_MODEL_CHANGED_KIND,

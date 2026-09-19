@@ -30,7 +30,7 @@ from dlightrag.application.runs import (
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
@@ -593,8 +593,13 @@ class _CapabilityView:
         return self._snapshot
 
 
-def _fingerprint(role: ChatModelSelector) -> ModelFingerprint:
-    return ModelFingerprint(provider="test", model=f"model-{role}", endpoint_fingerprint=None)
+def _fingerprint(role: ChatModelSelector) -> ModelInvocationFingerprint:
+    return ModelInvocationFingerprint(
+        provider="test",
+        model=f"model-{role}",
+        endpoint_fingerprint=None,
+        api_family="chat_completion",
+    )
 
 
 def _service(
@@ -623,7 +628,7 @@ def _service(
             model_settings=MagicMock(return_value=ModelSettings(model="test")),
         ),
         resources=resources or _Resources(),
-        model_fingerprint_for_role=_fingerprint,
+        model_invocation_fingerprint_for_role=_fingerprint,
         memory_capability=memory_capability,
         bind_research=bind_research,
         child_roster_cursor_secret=b"answer-service-child-roster-test",
@@ -1087,6 +1092,9 @@ async def test_accepted_run_stores_input_artifacts_and_wakes_the_coordinator() -
     assert accepted["routing"] is not None
     assert accepted["routing"].requested_mode == "auto"
     assert "research" in accepted["routing"].valid_modes
+    assert {
+        fingerprint["api_family"] for fingerprint in accepted["routing"].model_fingerprints.values()
+    } == {"chat_completion"}
     assert [
         (reference.reference_kind, reference.ordinal, reference.filename)
         for reference in accepted["references"]

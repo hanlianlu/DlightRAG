@@ -14,7 +14,7 @@ wording — the endpoint declaring the type unavailable — is remembered; a
 malformed-schema complaint must not silently become a permanent downgrade.
 """
 
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 
 #: Any structured-output transport token; one must appear for either gate.
 _SCHEMA_TOKENS = ("response_format", "json_schema", "schema")
@@ -57,20 +57,16 @@ class JsonSchemaTransportCache:
     """Negative cache of model fingerprints that rejected the json_schema type."""
 
     def __init__(self) -> None:
-        self._rejected: set[tuple[str, str, str | None]] = set()
+        self._rejected: set[ModelInvocationFingerprint] = set()
 
-    def rejected(self, fingerprint: ModelFingerprint) -> bool:
-        return self._key(fingerprint) in self._rejected
+    def rejected(self, fingerprint: ModelInvocationFingerprint) -> bool:
+        return fingerprint in self._rejected
 
-    def remember_rejected(self, fingerprint: ModelFingerprint) -> None:
-        self._rejected.add(self._key(fingerprint))
+    def remember_rejected(self, fingerprint: ModelInvocationFingerprint) -> None:
+        self._rejected.add(fingerprint)
 
     def clear(self) -> None:
         self._rejected.clear()
-
-    @staticmethod
-    def _key(fingerprint: ModelFingerprint) -> tuple[str, str, str | None]:
-        return (fingerprint.provider, fingerprint.model, fingerprint.endpoint_fingerprint)
 
 
 #: One process shares the transport lesson across every CompletionModel.

@@ -28,7 +28,7 @@ from dlightrag.engine.ai.capacity import (
     ModelProfile,
 )
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
@@ -754,7 +754,9 @@ class AnswerService:
         capability_view: _AnswerCapabilityReader,
         models: _QueryImageRuntime,
         resources: _AnswerResourcePreparer,
-        model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
+        model_invocation_fingerprint_for_role: Callable[
+            [ChatModelSelector], ModelInvocationFingerprint
+        ],
         child_roster_cursor_secret: bytes,
         research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
         bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
@@ -769,7 +771,7 @@ class AnswerService:
         self._capability_view = capability_view
         self._models = models
         self._resources = resources
-        self._model_fingerprint_for_role = model_fingerprint_for_role
+        self._model_invocation_fingerprint_for_role = model_invocation_fingerprint_for_role
         self._research_tool_supplements = research_tool_supplements or (lambda: ())
         self._bind_research = bind_research
         self._memory_capability = memory_capability
@@ -958,11 +960,7 @@ class AnswerService:
                                 valid_modes=tuple(sorted(effective_modes)),
                                 context_policy_revision=CONTEXT_POLICY_REVISION,
                                 model_fingerprints={
-                                    item.role: {
-                                        "provider": item.fingerprint.provider,
-                                        "model": item.fingerprint.model,
-                                        "endpoint_fingerprint": item.fingerprint.endpoint_fingerprint,
-                                    }
+                                    item.role: item.fingerprint.as_json()
                                     for item in run_input.pinned_models
                                 },
                                 agent_session_id=run_input.agent_session_id,
@@ -2062,7 +2060,7 @@ class AnswerService:
                         tools,
                         model_role="query",
                         context_policy_revision=CONTEXT_POLICY_REVISION,
-                        model_identity=asdict(self._model_fingerprint_for_role("query")),
+                        model_identity=asdict(self._model_invocation_fingerprint_for_role("query")),
                         model_profile=asdict(models.query),
                     )
                     measure = research_history_input_measure(
@@ -2145,7 +2143,7 @@ class AnswerService:
         return tuple(
             PinnedModelProfile(
                 role=role,
-                fingerprint=self._model_fingerprint_for_role(role),
+                fingerprint=self._model_invocation_fingerprint_for_role(role),
                 profile=profiles[role],
                 reasoning_settings=model_reasoning_settings(self._models.model_settings(role)),
             )

@@ -89,13 +89,14 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
     class Telemetry:
         capture_sensitive_data = False
         observation = Observation()
+        observations: list[tuple[str, dict[str, Any]]] = []
 
         def trace(self, **_kwargs: Any):
             return nullcontext()
 
         @asynccontextmanager
-        async def observe(self, name: str, **_kwargs: object):
-            del name
+        async def observe(self, name: str, **kwargs: Any):
+            self.observations.append((name, kwargs))
             yield self.observation
 
     provider = AsyncMock()
@@ -114,6 +115,8 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
         await model(messages=[{"role": "user", "content": "secret"}], tools=[])
 
     assert Telemetry.observation.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
+    assert Telemetry.observations[0][0] == "generate-agent-turn"
+    assert Telemetry.observations[0][1]["metadata"]["api_family"] == "chat_completion"
 
 
 def _query_settings(
@@ -157,6 +160,7 @@ async def test_tool_model_passes_provider_settings_and_agentic_options(monkeypat
 
     assert seen["provider"] == "openai"
     assert seen["api_key"] == "default-key"
+    assert seen["api_family"] == "chat_completion"
     await_args = provider.complete_tool_turn.await_args
     assert await_args is not None
     assert await_args.kwargs["model_kwargs"] == {"thinking": {"type": "enabled"}}

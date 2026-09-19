@@ -22,7 +22,7 @@ from dlightrag.application.retrieval import (
 from dlightrag.application.runs import IdempotencyKeyConflict
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry
 from dlightrag.engine.dependencies import ProviderUnavailableError
 from dlightrag.engine.rag.retrieval import RetrievalResult
@@ -41,7 +41,12 @@ from dlightrag.engine.runtime.records import (
 )
 
 _OWNER = "owner-1"
-_FINGERPRINT = ModelFingerprint(provider="openai", model="query-model", endpoint_fingerprint=None)
+_FINGERPRINT = ModelInvocationFingerprint(
+    provider="openai",
+    model="query-model",
+    endpoint_fingerprint=None,
+    api_family="chat_completion",
+)
 _PROFILE = ModelProfile(context_window_tokens=128_000, supports_images=True)
 _NOW = datetime.datetime(2026, 8, 14, tzinfo=datetime.UTC)
 
@@ -187,7 +192,7 @@ def _service(*, store: Any | None = None, coordinator: Any | None = None) -> Ret
         store=store,
         coordinator=coordinator,
         model_profile_for_role=lambda _role: _PROFILE,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
 
 
@@ -222,6 +227,9 @@ async def test_create_pins_normalized_recovery_input_and_seven_day_retention() -
     assert envelope.payload["model_catalog_revision"] == current_model_catalog_revision()
     assert "capability_facts" not in envelope.payload
     assert {item["role"] for item in envelope.payload["pinned_models"]} == {"extract", "vlm"}
+    assert {item["fingerprint"]["api_family"] for item in envelope.payload["pinned_models"]} == {
+        "chat_completion"
+    }
     assert envelope.accepted_input["query_image_count"] == 1
     assert len(envelope.accepted_input["query_image_digests"][0]) == 64
     assert "query_images" not in envelope.accepted_input
@@ -351,7 +359,7 @@ async def test_executor_uses_two_phases_and_stores_no_projection_or_image_bytes(
         telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
 
     outcome = await executor.execute(session)  # type: ignore[arg-type]
@@ -377,7 +385,7 @@ async def test_executor_rejects_model_catalog_drift_before_operation() -> None:
         telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
 
     with pytest.raises(RunExecutionError) as raised:
@@ -403,7 +411,7 @@ async def test_executor_timeout_is_a_terminal_public_failure() -> None:
             ),
         ),
         timeout_seconds=0.001,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
 
     with pytest.raises(RunExecutionError) as raised:
@@ -422,7 +430,7 @@ async def test_executor_defers_provider_unavailability_with_bounded_backoff() ->
         telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
         now=lambda: _NOW,
     )
 
@@ -445,7 +453,7 @@ async def test_executor_keeps_unknown_failure_terminal() -> None:
         telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
 
     outcome = await executor.execute(_Session(_prepared()))  # type: ignore[arg-type]
@@ -466,7 +474,7 @@ async def test_executor_defers_corpus_unavailability_with_bounded_backoff() -> N
         telemetry=NOOP_TELEMETRY,
         operation=cast(Any, operation),
         timeout_seconds=30,
-        model_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
         now=lambda: _NOW,
     )
 

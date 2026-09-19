@@ -80,7 +80,7 @@ from dlightrag.engine.agent.tools import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.reasoning import (
     ReasoningConfigurationError,
     ReasoningLevel,
@@ -808,7 +808,9 @@ class AnswerExecutor:
         resources: AnswerResourceResolver,
         settings: AnswerExecutorSettings,
         telemetry: Telemetry,
-        model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
+        model_invocation_fingerprint_for_role: Callable[
+            [ChatModelSelector], ModelInvocationFingerprint
+        ],
         execution_environment: ExecutionMode = "trust",
         shell_confinement: ConfinementPolicy,
         workspace_root: str | None = None,
@@ -839,7 +841,7 @@ class AnswerExecutor:
         self._resources = resources
         self._settings = settings
         self._telemetry = telemetry
-        self._model_fingerprint_for_role = model_fingerprint_for_role
+        self._model_invocation_fingerprint_for_role = model_invocation_fingerprint_for_role
         self._execution_environment: ExecutionMode = execution_environment
         self._workspace_root_setting = workspace_root
         self._session_notes_limits = session_notes_limits or DEFAULT_SESSION_NOTES_LIMITS
@@ -874,7 +876,7 @@ class AnswerExecutor:
         """Validate active durable Answer input using the executor's model bindings."""
         validate_active_answer_input(
             prepared,
-            model_fingerprint_for_role=self._model_fingerprint_for_role,
+            model_invocation_fingerprint_for_role=self._model_invocation_fingerprint_for_role,
             model_settings_for_role=self._models.model_settings,
         )
 
@@ -2948,10 +2950,11 @@ class AnswerExecutor:
         if request.model_catalog_revision != current_model_catalog_revision():
             raise IncompatibleActiveRunError("answer run uses another model catalog revision")
         if any(
-            pinned[role].fingerprint != self._model_fingerprint_for_role(role) for role in selectors
+            pinned[role].fingerprint != self._model_invocation_fingerprint_for_role(role)
+            for role in selectors
         ):
             raise IncompatibleActiveRunError(
-                "answer run targets another model endpoint configuration"
+                "answer run targets another model invocation configuration"
             )
         return {role: pinned[role].profile for role in selectors}
 

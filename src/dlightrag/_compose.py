@@ -142,7 +142,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         catalogue_overlay_revision,
         parse_catalogue_overlay,
     )
-    from dlightrag.engine.ai.fingerprints import model_fingerprint
+    from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
     from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
@@ -321,7 +321,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         settings=retrieval_settings(config),
         telemetry=telemetry,
         model_profile_for_role=lambda role: capabilities.model_profile(role),
-        model_fingerprint_for_role=lambda role: model_fingerprint(
+        model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
             model_settings_for_role(config, role)
         ),
         federated_reranker_factory=federated_reranker_factory,
@@ -389,7 +389,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         resources=resources,
         settings=answer_executor_settings(config),
         telemetry=telemetry,
-        model_fingerprint_for_role=lambda role: model_fingerprint(
+        model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
             model_settings_for_role(config, role)
         ),
         execution_environment=config.answer.agent.execution_environment,
@@ -413,17 +413,17 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     model_roles: dict[str, ModelRole] = {name: name for name in MODEL_ROLE_NAMES}
 
-    def retrieval_model_fingerprint(role: str):
+    def retrieval_model_invocation_fingerprint(role: str):
         selected_role = model_roles.get(role)
         if selected_role is None:
             raise ValueError(f"unknown pinned Retrieval model role: {role}")
-        return model_fingerprint(model_settings_for_role(config, selected_role))
+        return model_invocation_fingerprint(model_settings_for_role(config, selected_role))
 
     retrieval_executor = RetrievalExecutor(
         operation=retrieval,
         telemetry=telemetry,
         timeout_seconds=config.corpus.retrieval.timeout,
-        model_fingerprint_for_role=retrieval_model_fingerprint,
+        model_invocation_fingerprint_for_role=retrieval_model_invocation_fingerprint,
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
     )
@@ -505,7 +505,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         capability_view=AnswerCapabilityView(capabilities),
         models=models,
         resources=resources,
-        model_fingerprint_for_role=lambda role: model_fingerprint(
+        model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
             model_settings_for_role(config, role)
         ),
         research_tool_supplements=answer_executor.acceptance_research_tools,

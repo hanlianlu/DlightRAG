@@ -13,7 +13,7 @@ from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.ids import OperationId, SessionId
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.reasoning import (
     ReasoningLevel,
@@ -84,7 +84,7 @@ def _pins(roles):
     return tuple(
         PinnedModelProfile(
             role=role,
-            fingerprint=model_fingerprint(roles.resolve(role)),
+            fingerprint=model_invocation_fingerprint(roles.resolve(role)),
             profile=ModelProfile(
                 context_window_tokens=100_000,
                 max_output_tokens=64_000,
@@ -155,7 +155,9 @@ async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = 
     runtime._settings = replace(runtime._settings, model_roles=roles)
     executor = _executor()
     executor._models = runtime
-    executor._model_fingerprint_for_role = lambda role: model_fingerprint(roles.resolve(role))
+    executor._model_invocation_fingerprint_for_role = lambda role: model_invocation_fingerprint(
+        roles.resolve(role)
+    )
     cast(Any, executor._capabilities).request_model_context.return_value = models
     executor._resources.resolve = AsyncMock(
         return_value=SimpleNamespace(
@@ -283,7 +285,9 @@ def test_parent_recovery_fails_closed_on_default_or_reasoning_drift(drift):
     executor = _executor()
     roles = _roles()
     pins = _pins(roles)
-    executor._model_fingerprint_for_role = lambda role: model_fingerprint(roles.resolve(role))
+    executor._model_invocation_fingerprint_for_role = lambda role: model_invocation_fingerprint(
+        roles.resolve(role)
+    )
     executor._models.model_settings = roles.resolve
     request = SimpleNamespace(
         pinned_models=pins,
@@ -294,10 +298,10 @@ def test_parent_recovery_fails_closed_on_default_or_reasoning_drift(drift):
         executor.validate_pinned_model_profiles(cast(Any, request))["default"] == pins[-1].profile
     )
     if drift == "default_identity":
-        executor._model_fingerprint_for_role = lambda role: (
-            model_fingerprint(ModelSettings(model="changed"))
+        executor._model_invocation_fingerprint_for_role = lambda role: (
+            model_invocation_fingerprint(ModelSettings(model="changed"))
             if role == "default"
-            else model_fingerprint(roles.resolve(role))
+            else model_invocation_fingerprint(roles.resolve(role))
         )
     elif drift == "default_reasoning":
         executor._models.model_settings = lambda role: (
@@ -372,7 +376,9 @@ async def test_acceptance_and_execution_share_pinned_five_model_spawn_guidance(m
     pins = _pins(roles)
     service = _service()
     service._models.model_settings = roles.resolve
-    service._model_fingerprint_for_role = lambda role: model_fingerprint(roles.resolve(role))
+    service._model_invocation_fingerprint_for_role = lambda role: model_invocation_fingerprint(
+        roles.resolve(role)
+    )
     cast(Any, service._capabilities).current_profiles = lambda: {
         pin.role: pin.profile for pin in pins
     }

@@ -13,7 +13,7 @@ from dlightrag.application.corpus_admin import CorpusAdminSettings
 from dlightrag.application.retrieval import RetrievalSettings
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
-from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import resolve_reasoning
 from dlightrag.engine.ai.settings import ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import (
@@ -209,7 +209,9 @@ def model_profile_for_settings(
 ) -> ModelProfile:
     """Resolve endpoint facts and validate its configured semantic reasoning."""
     del config
-    profile = resolve_model_profile(model_fingerprint(settings))
+    profile = resolve_model_profile(
+        model_endpoint_fingerprint(settings.provider, settings.model, settings.base_url)
+    )
     resolve_reasoning(profile.reasoning, settings.reasoning)
     resolve_reasoning(profile.reasoning, settings.effective_agentic_reasoning)
     return profile

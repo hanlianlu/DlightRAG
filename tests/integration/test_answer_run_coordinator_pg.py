@@ -54,7 +54,7 @@ from dlightrag.engine.agent.session.transactions import (
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
@@ -119,7 +119,9 @@ def _answer_run_input() -> AnswerRunInput:
         pinned_models=tuple(
             PinnedModelProfile(
                 role=role,
-                fingerprint=ModelFingerprint("openai", f"test-{role}-model", None),
+                fingerprint=ModelInvocationFingerprint(
+                    "openai", f"test-{role}-model", None, "chat_completion"
+                ),
                 profile=ModelProfile(context_window_tokens=1_000_000),
                 reasoning_settings=model_reasoning_settings(config.models.chat.resolve(role)),
             )
@@ -2391,8 +2393,8 @@ def _answer_runtime(
         ),
         settings=answer_executor_settings(config),
         telemetry=NOOP_TELEMETRY,
-        model_fingerprint_for_role=lambda role: ModelFingerprint(
-            "openai", f"test-{role}-model", None
+        model_invocation_fingerprint_for_role=lambda role: ModelInvocationFingerprint(
+            "openai", f"test-{role}-model", None, "chat_completion"
         ),
         execution_environment=config.answer.agent.execution_environment,
         shell_confinement=ConfinementPolicy(),

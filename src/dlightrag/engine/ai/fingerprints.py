@@ -1,21 +1,72 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Non-recoverable identities for resolved AI model endpoints."""
+"""Non-recoverable identities for AI endpoints and model invocations."""
 
 import hashlib
 import posixpath
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
+from dlightrag.engine.ai.contracts import ApiFamily
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelSettings
 
 
 @dataclass(frozen=True, slots=True)
-class ModelFingerprint:
-    """Safe model identity suitable for logs, traces, and persisted facts."""
+class ModelEndpointFingerprint:
+    """Safe endpoint identity used to resolve provider-independent model facts."""
 
     provider: str
     model: str
     endpoint_fingerprint: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInvocationFingerprint:
+    """Exact chat-model wire identity used by replay and capability caches."""
+
+    provider: str
+    model: str
+    endpoint_fingerprint: str | None
+    api_family: ApiFamily
+
+    @property
+    def endpoint(self) -> ModelEndpointFingerprint:
+        """Project the invocation down to catalogue endpoint identity."""
+        return ModelEndpointFingerprint(
+            provider=self.provider,
+            model=self.model,
+            endpoint_fingerprint=self.endpoint_fingerprint,
+        )
+
+    def as_json(self) -> dict[str, object]:
+        """Encode the complete invocation identity for durable state or telemetry."""
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "endpoint_fingerprint": self.endpoint_fingerprint,
+            "api_family": self.api_family,
+        }
+
+    @classmethod
+    def from_json(cls, value: object) -> ModelInvocationFingerprint:
+        """Decode a complete invocation identity without legacy family defaults."""
+        if not isinstance(value, Mapping):
+            raise ValueError("model invocation fingerprint must be an object")
+        provider = str(value.get("provider") or "")
+        model = str(value.get("model") or "")
+        api_family = value.get("api_family")
+        if not provider or not model:
+            raise ValueError("model invocation fingerprint requires provider and model")
+        if api_family not in {"chat_completion", "response"}:
+            raise ValueError("model invocation fingerprint requires an explicit API family")
+        endpoint = value.get("endpoint_fingerprint")
+        return cls(
+            provider=provider,
+            model=model,
+            endpoint_fingerprint=str(endpoint) if endpoint is not None else None,
+            api_family=cast(ApiFamily, api_family),
+        )
 
 
 def normalized_endpoint_fingerprint(value: object) -> str | None:
@@ -45,23 +96,40 @@ def normalized_endpoint_fingerprint(value: object) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def model_endpoint_fingerprint(provider: str, model: str, base_url: str | None) -> ModelFingerprint:
+def model_endpoint_fingerprint(
+    provider: str,
+    model: str,
+    base_url: str | None,
+) -> ModelEndpointFingerprint:
     """Build one safe identity from canonical endpoint facts."""
-    return ModelFingerprint(
+    return ModelEndpointFingerprint(
         provider=provider,
         model=model,
         endpoint_fingerprint=normalized_endpoint_fingerprint(base_url),
     )
 
 
-def model_fingerprint(settings: ModelSettings | EmbeddingSettings) -> ModelFingerprint:
-    """Project resolved settings into a safe provider/model identity."""
+def model_invocation_fingerprint(settings: ModelSettings) -> ModelInvocationFingerprint:
+    """Project resolved chat settings into their exact provider wire identity."""
+    endpoint = model_endpoint_fingerprint(settings.provider, settings.model, settings.base_url)
+    return ModelInvocationFingerprint(
+        provider=endpoint.provider,
+        model=endpoint.model,
+        endpoint_fingerprint=endpoint.endpoint_fingerprint,
+        api_family=settings.api_family,
+    )
+
+
+def embedding_endpoint_fingerprint(settings: EmbeddingSettings) -> ModelEndpointFingerprint:
+    """Project embedding settings into their endpoint identity."""
     return model_endpoint_fingerprint(settings.provider, settings.model, settings.base_url)
 
 
 __all__ = [
-    "ModelFingerprint",
+    "ModelEndpointFingerprint",
+    "ModelInvocationFingerprint",
+    "embedding_endpoint_fingerprint",
     "model_endpoint_fingerprint",
-    "model_fingerprint",
+    "model_invocation_fingerprint",
     "normalized_endpoint_fingerprint",
 ]
