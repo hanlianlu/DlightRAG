@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 from urllib.parse import urlsplit
 
 from dlightrag.engine.answer.errors import (
@@ -13,6 +13,8 @@ from dlightrag.engine.answer.errors import (
 )
 
 AnswerMode = Literal["auto", "fast", "research"]
+#: Every public mode this build accepts, derived from the type so the two cannot drift.
+ANSWER_MODES: tuple[str, ...] = get_args(AnswerMode)
 ResolvedMode = Literal["fast", "research"]
 ResourceRole = Literal["image", "document", "other"]
 
@@ -42,6 +44,17 @@ def canonical_answer_mode(mode: str | None) -> AnswerMode:
     if mode == "auto" or mode == "fast" or mode == "research":
         return mode
     raise UnsupportedAnswerModeError(mode)
+
+
+def optional_answer_mode(mode: str | None) -> AnswerMode | None:
+    """Return the canonical public mode, or None when the caller omitted it.
+
+    Transport edges that must keep "absent" distinct from "auto" validate through
+    here rather than re-listing the vocabulary in their own parser.
+    """
+    if mode is None or mode == "":
+        return None
+    return canonical_answer_mode(mode)
 
 
 def resource_role(*, filename: str | None, mime_type: str | None) -> ResourceRole:
@@ -108,11 +121,13 @@ def _research_can_represent(
 
 
 __all__ = [
+    "ANSWER_MODES",
     "AnswerMode",
     "ModeCapability",
     "ModeResource",
     "ResolvedMode",
     "canonical_answer_mode",
+    "optional_answer_mode",
     "require_supported_mode",
     "resource_role",
     "valid_modes",

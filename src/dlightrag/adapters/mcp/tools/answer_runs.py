@@ -43,6 +43,7 @@ from dlightrag.application.runs import (
     RunView,
 )
 from dlightrag.engine.answer.client_contracts import conversation_history_as_dicts
+from dlightrag.engine.answer.mode import AnswerMode
 from dlightrag.engine.answer.resources.links import answer_link_resources
 from dlightrag.engine.answer.results import project_answer_result
 
@@ -92,7 +93,7 @@ async def answer_tool(
     ] = False,
     history: HistoryParam = None,
     mode: Annotated[
-        Literal["auto", "fast", "research"] | None,
+        AnswerMode | None,
         Field(default=None, description="Answer mode. Omit for auto."),
     ] = None,
     effort: Annotated[

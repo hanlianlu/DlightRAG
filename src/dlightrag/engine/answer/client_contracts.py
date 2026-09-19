@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.answer.mode import AnswerMode
 from dlightrag.engine.answer.resources.images import MAX_QUERY_IMAGES
 
 #: The agent efforts a caller may choose, ordered from least to most.
@@ -159,7 +160,7 @@ class AnswerRequestContract(QueryRequestContract):
     attachments: list[AnswerAttachmentLink] | None = None
     semantic_highlights: bool = False
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
-    mode: Literal["auto", "fast", "research"] | None = None
+    mode: AnswerMode | None = None
     effort: AnswerEffort | None = None
 
 
