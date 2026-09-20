@@ -153,7 +153,16 @@ export class AnswerPresentationElement extends LightElement {
       return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidenceImage)}</div>`;
     }
     if (part.type === 'artifact' && part.artifact) return this.#artifact(part.artifact, part.inline);
-    if (part.type === 'link_card' && part.card) return this.#videoLink(part.card.url, this.#linkCard(part.card));
+    if (part.type === 'link_card' && part.card) {
+      const video = this.presentation?.videoLinks?.some(
+        (item) => safeExternalHttpHref(item.url) === safeExternalHttpHref(part.card!.url),
+      );
+      return this.#videoLink(
+        part.card.url,
+        video ? this.#videoCardLabel(part.card) : this.#linkCard(part.card),
+        video ? part.card.image || '' : '',
+      );
+    }
     return nothing;
   }
 
@@ -185,20 +194,30 @@ export class AnswerPresentationElement extends LightElement {
         occurrence.slot.dataset.answerTyped = '';
         anchor.replaceWith(occurrence.slot);
       }
-      render(this.#videoLink(href, card ? this.#linkCard(card) : anchor), occurrence.slot);
+      const preview = card
+        ? (video ? this.#videoCardLabel(card) : this.#linkCard(card))
+        : anchor;
+      render(this.#videoLink(href, preview, video ? card?.image || '' : ''), occurrence.slot);
     }
   }
 
-  #videoLink(url: string, preview: TemplateResult | HTMLAnchorElement): TemplateResult {
+  #videoLink(url: string, preview: TemplateResult | HTMLAnchorElement, cover = ''): TemplateResult {
     const link = this.presentation?.videoLinks?.find((item) => safeExternalHttpHref(item.url) === safeExternalHttpHref(url));
     return link
-      ? html`<dl-video-playback .link=${link} .preview=${preview}></dl-video-playback>`
+      ? html`<dl-video-playback .link=${link} .preview=${preview} .cover=${cover}></dl-video-playback>`
       : html`${preview}`;
   }
 
+  #videoCardLabel(card: import('../api/conversations.ts').LinkCard): TemplateResult {
+    return html`
+      <strong>${card.title}</strong>
+      ${card.description ? html`<span>${card.description}</span>` : nothing}
+    `;
+  }
+
   #linkCard(card: import('../api/conversations.ts').LinkCard): TemplateResult {
-    // The preview remains a link out. A separately granted playback affordance
-    // can wrap it; OG metadata alone never authorizes an iframe (ADR 0028).
+    // Non-video cards remain a link out. Playback candidates own a separate
+    // native Play control; OG metadata alone never authorizes an iframe (ADR 0028).
     const cover = safeExternalHttpHref(card.image || '');
     return html`
       <a class=${answerStyles['answer-link-card']} data-answer-link-card

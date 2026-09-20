@@ -151,7 +151,8 @@ it('keeps published citation occurrences and code out of playback while upgradin
   }));
   const element = await mount();
   expect(element.querySelectorAll('[data-video-play]').length).to.equal(1);
-  expect(element.querySelectorAll('[data-answer-link-card]').length).to.equal(1);
+  expect(element.querySelectorAll('[data-video-card]').length).to.equal(1);
+  expect(element.querySelector('[data-video-open]')?.closest('[data-video-card]')).not.to.equal(null);
   expect(element.querySelector('.answer-citation-link')?.textContent).to.equal('9');
   expect(element.querySelector('.answer-citation-link')?.closest('dl-video-playback')).to.equal(null);
   expect(element.querySelector('.citation-badge')?.closest('dl-video-playback')).to.equal(null);
@@ -167,10 +168,13 @@ it('restores the original preview card and cover when B takes over', async () =>
   const b = await mount();
   a.querySelector<HTMLButtonElement>('[data-video-play]')!.click();
   const frameA = await until('iframe', a);
-  expect(a.querySelector('[data-answer-link-card]')).to.equal(null);
+  expect(a.querySelector('strong')?.textContent).to.equal('Film');
+  expect(a.querySelector('[data-video-media]')?.contains(frameA)).to.equal(true);
+  expect(a.querySelector('[data-video-media] img')).to.equal(null);
+  expect(a.querySelector('[data-video-open]')?.getAttribute('href')).to.equal(url);
   b.querySelector<HTMLButtonElement>('[data-video-play]')!.click();
   expect(frameA.isConnected).to.equal(false);
-  await until('[data-answer-link-card]', a);
+  await until('[data-video-media] img', a);
   await until('iframe', b);
   expect(a.querySelector('img')?.getAttribute('src')).to.equal(cover);
   expect(a.querySelector('strong')?.textContent).to.equal('Film');
@@ -274,4 +278,81 @@ it('rejects an unsafe wire destination and leaves the source link and retry avai
   expect(element.querySelector('iframe')).to.equal(null);
   expect(element.querySelector('a')?.href).to.equal(url);
   expect(element.querySelector('[data-video-play]')).not.to.equal(null);
+});
+
+function press(control: HTMLElement, key: string): void {
+  control.focus();
+  control.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true}));
+}
+
+it('activates playback from the card cover in place without Try playback copy', async () => {
+  const cover = 'https://images.example/film.jpg';
+  window.fetch = async (input) => String(input) === '/fixture'
+    ? new Response(JSON.stringify({
+      ...wire,
+      link_cards: [{url, title: 'Film', description: 'About film', site: 'YouTube', image: cover}],
+    }))
+    : result();
+  const element = await mount();
+  expect(element.textContent).to.not.include('Try playback here');
+  expect(element.querySelector('[data-video-play]')?.textContent).to.not.include('Try playback here');
+  const media = element.querySelector('[data-video-media]') as HTMLElement | null;
+  expect(media).not.to.equal(null);
+  const preview = media!.querySelector('img');
+  expect(preview?.getAttribute('src')).to.equal(cover);
+  const play = media!.querySelector<HTMLButtonElement>('button[data-video-play]');
+  expect(play).not.to.equal(null);
+  expect(play!.type).to.equal('button');
+  expect(play!.querySelector('a, button')).to.equal(null);
+  expect(play!.getAttribute('aria-label')?.startsWith('Play')).to.equal(true);
+  expect(media!.closest('[data-video-card]')).not.to.equal(null);
+  const title = element.querySelector('strong');
+  expect(title?.textContent).to.equal('Film');
+  preview!.click();
+  const frame = await until('iframe', element) as HTMLIFrameElement;
+  expect(media!.contains(frame)).to.equal(true);
+  expect(title?.isConnected).to.equal(true);
+  expect(title?.textContent).to.equal('Film');
+  expect(element.querySelector('[data-video-open]')?.getAttribute('href')).to.equal(url);
+  expect(element.querySelector('iframe')?.closest('[data-video-media]')).to.equal(media);
+});
+
+it('gives metadata-free links a modest card, a native Play button, and a source link that does not play', async () => {
+  const calls: string[] = [];
+  window.fetch = async (input) => {
+    calls.push(String(input));
+    return String(input) === '/fixture' ? new Response(JSON.stringify(wire)) : result();
+  };
+  const element = await mount();
+  expect(element.textContent).to.not.include('Try playback here');
+  expect(element.querySelector('dl-video-playback img')).to.equal(null);
+  expect(element.querySelector('[data-video-card] [data-video-media] [data-video-preview]')).not.to.equal(null);
+  expect(element.textContent).to.include('Watch this');
+  expect(element.textContent).to.include('YouTube');
+  const play = element.querySelector<HTMLButtonElement>('[data-video-card] [data-video-media] button[data-video-play]');
+  expect(play).not.to.equal(null);
+  expect(play!.type).to.equal('button');
+  expect(play!.querySelector('a, button')).to.equal(null);
+  play!.focus();
+  expect(element.ownerDocument.activeElement).to.equal(play);
+  const beforeKeys = calls.length;
+  press(play!, 'Enter');
+  press(play!, ' ');
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  expect(element.querySelector('iframe')).to.equal(null);
+  expect(play!.isConnected).to.equal(true);
+  expect(calls.length).to.equal(beforeKeys);
+  play!.click();
+  const frame = await until('iframe', element);
+  expect(element.querySelector('[data-video-card] [data-video-media]')?.contains(frame)).to.equal(true);
+  element.querySelector<HTMLButtonElement>('[data-video-stop]')!.click();
+  await until('[data-video-card] [data-video-media] button[data-video-play]', element);
+  const open = element.querySelector<HTMLAnchorElement>('[data-video-open]')!;
+  expect(open.href).to.equal(url);
+  expect(element.querySelector('[data-video-card] button[data-video-play]')!.contains(open)).to.equal(false);
+  const beforeOpen = calls.length;
+  open.click();
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  expect(element.querySelector('iframe')).to.equal(null);
+  expect(calls.length).to.equal(beforeOpen);
 });

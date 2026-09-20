@@ -17,6 +17,7 @@
   "open-external": {"source": "lucide", "name": "external-link"},
   "panel-collapse": {"source": "lucide", "name": "panel-left-close"},
   "panel-expand": {"source": "lucide", "name": "panel-left-open"},
+  "play": {"source": "lucide", "name": "play"},
   "previous": {"source": "lucide", "name": "chevron-left"},
   "send": {"source": "lucide", "name": "send"},
   "settings": {"source": "lucide", "name": "settings"},

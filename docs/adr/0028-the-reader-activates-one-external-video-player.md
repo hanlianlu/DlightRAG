@@ -12,7 +12,8 @@ remain in force.
 Accepted and implemented after the user confirmed the product boundaries and
 authorized implementation. Standards and Spec reviews passed. Local `make ci`
 (4829 unit tests, 5 skipped), integration (554 passed, 1 skipped) and browser e2e
-(92 passed) passed on 2026-09-20. These are local results, not a remote-CI claim.
+(94 passed, including native keyboard activation and in-card media geometry)
+passed on 2026-09-20. These are local results, not a remote-CI claim.
 
 Read-only real oEmbed requests also resolved official descriptors for Dailymotion,
 TED and Wistia through the same generic path. The wheel includes the pinned data
@@ -49,9 +50,13 @@ is claimed.
   JSON-capable endpoints are used; XML-only/discovery-only/dynamic endpoints are
   not guessed. Acquisition uses the existing bounded, anonymous public HTTP path.
 - A registry match is a playback *candidate*, not proof of video: the remote type
-  is deliberately unknown until activation. The affordance says “Try playback”.
-  Non-video responses, SDK/script-only players and ambiguous multiple iframes
-  retain the original link instead of introducing another kind of embed.
+  is deliberately unknown until activation. The card offers an accessible Play
+  control on the preview; it does not advertise technical resolution. Activating
+  the card replaces the media area in place with the official player. A small
+  external-open control remains available in preview, loading, player, and error
+  states. Metadata-free candidates still receive a modest video card. Non-video
+  responses, SDK/script-only players and ambiguous multiple iframes retain the
+  original link instead of introducing another kind of embed.
 - The registry's publisher and endpoint domain families bound permissible frame
   destinations (the recorded host with a leading `www.` removed, and subdomains).
   Small official mappings and reviewed `additional_player_domains` entries add

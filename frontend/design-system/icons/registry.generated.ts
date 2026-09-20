@@ -471,6 +471,24 @@ export const ICON_REGISTRY = {
       ]
     ]
   },
+  "play": {
+    source: "lucide",
+    sourceName: "play",
+    viewBox: "0 0 24 24",
+    opticalScale: 1,
+    opticalX: 0,
+    opticalY: 0,
+    fill: "none",
+    stroke: "currentColor",
+    nodes: [
+      [
+        "path",
+        {
+          "d": "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"
+        }
+      ]
+    ]
+  },
   "previous": {
     source: "lucide",
     sourceName: "chevron-left",

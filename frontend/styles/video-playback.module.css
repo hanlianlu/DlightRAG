@@ -1,25 +1,121 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
 @layer features {
-  .playback {
+  .card {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
     display: block;
     margin-block: var(--space-inline);
     max-width: 44rem;
+    overflow: hidden;
   }
 
-  .player {
+  .media {
     aspect-ratio: 16 / 9;
-    border: 0;
+    background: var(--color-bg-elevated);
     display: block;
     min-height: 200px;
+    overflow: hidden;
+    position: relative;
     width: 100%;
   }
 
-  .actions {
+  .play,
+  .player,
+  .cover,
+  .neutral {
+    display: block;
+    height: 100%;
+    width: 100%;
+  }
+
+  .play {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    position: relative;
+  }
+
+  .play:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: -2px;
+  }
+
+  .cover {
+    object-fit: cover;
+  }
+
+  .neutral {
+    background: var(--color-bg-elevated);
+  }
+
+  .icon {
+    background: var(--color-scrim-strong);
+    border-radius: var(--radius-circle);
+    color: var(--color-image-caption);
+    left: 50%;
+    padding: var(--space-tight);
+    pointer-events: none;
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  .player {
+    border: 0;
+  }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    padding: var(--space-component);
+  }
+
+  .label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+  }
+
+  .label > span {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+  }
+
+  .label a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .footer {
     align-items: center;
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-inline);
-    margin-block-start: var(--space-inline);
+  }
+
+  .provider {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+  }
+
+  .source {
+    align-items: center;
+    border-radius: var(--radius-control);
+    color: var(--color-text-muted);
+    display: inline-flex;
+    justify-content: center;
+    min-height: var(--size-button);
+    min-width: var(--size-button);
+    text-decoration: none;
+  }
+
+  .source:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
   }
 }
