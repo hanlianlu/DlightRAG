@@ -8,9 +8,14 @@ Responses implementation.
 
 ## Status
 
-Accepted; implementation pending. The implementation must land in the slices and
-pass the stop conditions recorded under [Consequences](#consequences) before any
-configured endpoint moves from `chat_completion` to `response`.
+Accepted; the common transport, identity, replay, streaming, image, and recovery
+contracts are implemented. Official OpenAI remains experimental and mock-tested,
+not live-qualified. Direct DeepSeek and OpenRouter live canaries have run, but
+rollout remains on hold: the [qualification record](../response-api-qualification.md)
+retains unresolved Tool-image and Tool-selection variability rather than treating
+a later passing sample as clearance. No configured endpoint has moved from
+`chat_completion` to `response`; the stop conditions under
+[Consequences](#consequences) still apply.
 
 This decision extends the [API Family](../domain-language.md#configuration-and-deployment)
 term. It does not revise [ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md):

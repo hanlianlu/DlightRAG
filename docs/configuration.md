@@ -260,7 +260,7 @@ before changing an existing workspace's vector space.
 
 | `provider` | Transport | Typical endpoints |
 |---|---|---|
-| `openai` | Chat Completions | OpenAI, DeepSeek, OpenRouter, Azure OpenAI, vLLM, Ollama, other compatible APIs |
+| `openai` | Chat Completions by default; opt-in Responses | OpenAI, DeepSeek, OpenRouter, Azure OpenAI, vLLM, Ollama, other compatible APIs |
 | `anthropic` | Anthropic native SDK | Claude |
 | `gemini` | Google GenAI SDK | Gemini |
 
@@ -295,6 +295,7 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 | `model` | required | Exact model/deployment ID |
 | `api_key` | unset | Endpoint credential |
 | `base_url` | provider default | Optional API root |
+| `api_family` | `chat_completion` | `chat_completion` or `response`; `response` requires `provider: openai` |
 | `structured_output` | `auto` | `auto`, `json_schema`, or `json_object` |
 | `temperature` | unset | Nonnegative provider temperature |
 | `timeout` | `240` | Request timeout seconds |
@@ -306,6 +307,66 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 
 `models.max_concurrency` defaults to `16` and limits process-wide AI-provider
 requests.
+
+### API Family
+
+API Family selects the wire, not the vendor or model capacity. Set it on a
+complete model configuration; there is no `openai_responses` provider, endpoint
+probing, or automatic fallback to Chat after a Response failure. The catalogue
+still resolves the same provider/model/endpoint profile for both families.
+Pinned Runs, opaque replay, telemetry, and structured-output rejection caches
+also include API Family in their invocation identity.
+
+These are opt-in examples, **not rollout recommendations**:
+
+```yaml
+models:
+  chat:
+    default:
+      provider: openai
+      model: z-ai/glm-5.3-flash
+      base_url: https://openrouter.ai/api/v1
+      api_family: response
+      structured_output: json_object
+    roles:
+      query:
+        provider: openai
+        model: deepseek-flash
+        base_url: https://api.deepseek.com
+        api_family: response
+        structured_output: json_object
+```
+
+Supply credentials through the corresponding
+`DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY` and
+`DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY` secrets. The SDK appends `/responses`:
+Direct DeepSeek uses `https://api.deepseek.com/responses`, and OpenRouter uses
+`https://openrouter.ai/api/v1/responses`. A custom compatible root uses the same
+projection; an unsupported capability fails explicitly, not by removing a Tool,
+image, or requested reasoning level. Existing typed `reasoning` settings own the
+family-specific translation; do not duplicate them in raw kwargs.
+
+Response supports all five existing provider entrypoints, text/structured output,
+local function Tools, typed streaming, and user and Tool-result images. A Tool
+image stays inside its own `function_call_output`; Chat keeps its existing
+post-batch user-image projection. Every Response request sends full locally
+selected context, `store=false`, `background=false`, and `truncation=disabled`.
+Raw `model_kwargs` cannot override input, tools, stream, storage, truncation, or
+remote-state ownership. There is no `previous_response_id`, Conversation,
+background job, hosted tool, or provider-side compaction path.
+
+`store=false` minimizes remote response state; **it does not establish Zero Data
+Retention**. Provider logs, context caches, agreements, and OpenRouter routing
+policies remain deployment facts. There is no `zdr` setting in this feature.
+
+Official OpenAI (`base_url: https://api.openai.com/v1` plus an official API key)
+is **experimental and mock-contract tested, not live-qualified**. It is never
+selected as a new default. DeepSeek and OpenRouter have separate live evidence;
+passing one does not qualify the other. The current [qualification record](response-api-qualification.md)
+holds rollout because repeated canaries exposed unresolved output variability.
+The shipped configuration remains `chat_completion`; Query, ordinary roles,
+VLM, and reranking must be evaluated separately before any operator rollout.
+See [ADR 0027](adr/0027-api-family-selects-the-provider-wire.md).
 
 ### Model Catalogue And Reasoning
 
@@ -379,11 +440,13 @@ three chat protocols (`openai`, `anthropic`, `gemini`) serve one, so `auto` and
 
 A compatible endpoint that rejects the `json_schema` transport type is learned
 once per process: the request retries with `json_object`, and later requests to
-that same provider/model/endpoint fingerprint skip the rejected attempt instead
+that same provider/model/endpoint/API-Family invocation skip the rejected attempt instead
 of paying the same 400 again, for both complete and streaming calls. Only an
 explicit "type unavailable" rejection is remembered; a schema-validation
 complaint retries once without becoming a permanent verdict. Restarting the
-process probes the endpoint again.
+process probes the endpoint again. Chat writes the contract under `response_format`;
+Response writes it under `text.format`. Changing API Family does not inherit the
+other family's rejection verdict.
 
 ```yaml
 models:

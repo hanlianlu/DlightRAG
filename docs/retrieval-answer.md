@@ -305,6 +305,11 @@ Each call uses an immutable model profile pinned by normalized provider, model,
 and endpoint. It supplies context, input, output, image, and reasoning facts.
 Uncatalogued endpoints first receive the best-effort fallback profile; acceptance
 fails only if the resolved profile still cannot provide usable capacity.
+API Family (`chat_completion` or `response`) is an invocation choice, not another
+capacity profile. It pins the wire and opaque replay without changing the local
+Context Projection. A Response continuation carries complete locally selected
+history rather than a provider response ID; native reasoning/call exchanges stay
+whole across compaction. See [API Family configuration](configuration.md#api-family).
 
 The Context Policy independently reserves output, dynamic context, safety,
 retained tail, episodic continuation, and minimum input. Each Tool result is fitted
@@ -322,7 +327,10 @@ answer's own request states it
 ([ADR 0014](adr/0015-prompt-prefix-stability-and-cache-anchored-accounting.md)).
 The compaction trigger is measured from the character estimator corrected against
 the prompt size the provider itself billed for the previous request, and each
-turn's billed prompt and cache hits are aggregated in the Run trace.
+turn's billed prompt and cache hits are aggregated in the Run trace. Response
+`input_tokens` and `input_tokens_details.cached_tokens` feed these same accounting
+owners; selecting Response does not introduce a second estimator or permission
+to silently truncate the provider request.
 
 A compaction the projection cannot advance is declined rather than failed. Once a
 retained tail is a whole oversized exchange, the uncovered prefix holds no complete

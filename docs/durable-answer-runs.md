@@ -371,6 +371,21 @@ Assistant settlement records the complete response and ordered Tool Batch Plan.
 Tool clearance, effect settlement, ToolResult placement, Host deltas, and
 progress then commit under the lease/epoch predicate.
 
+The pinned model invocation includes API Family. Response-native items belong to
+one complete Assistant Entry and replay only under the same provider, model,
+endpoint, and family. Finalized reasoning (including opaque ciphertext), assistant
+phases, and function calls replace the synthesized assistant output once; stream
+fragments never become a Tool intent. Cross-invocation continuation strips opaque
+state and reconstructs canonical text and calls. Malformed same-invocation replay
+fails explicitly.
+
+Response recovery and Fork rebuild the full request from the selected local
+Context Projection, never a remote response or Conversation ID. Compaction retains
+or removes whole assistant/Tool exchanges. Settled effects are not re-executed;
+model calls, including compaction calls interrupted before settlement, remain
+at-least-once. API Family does not introduce exactly-once provider execution or a
+second transcript. See [ADR 0027](adr/0027-api-family-selects-the-provider-wire.md).
+
 A committed compaction carries three kinds of continuation identity into the
 summary it stores: the Evidence ledger's citation handles, the run's newest
 committed spills, and the Session notes the Run's own Workspace Inventory observes
