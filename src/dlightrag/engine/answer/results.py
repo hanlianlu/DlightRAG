@@ -19,12 +19,7 @@ from dlightrag.engine.answer.citations.sources import (
     project_source_payloads,
 )
 from dlightrag.engine.answer.citations.utils import context_chunk_key
-from dlightrag.engine.answer.links.cards import (
-    address_spans,
-    card_key,
-    code_spans,
-    project_link_cards,
-)
+from dlightrag.engine.answer.links.cards import project_link_cards, written_addresses
 from dlightrag.engine.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
@@ -32,11 +27,6 @@ IMAGE_URL_PREFIX = "/images"
 _ARTIFACT_PART = re.compile(
     r"(?P<image>!)?\[(?P<label>[^\]]*)\]\(\s*<?artifact:(?P<resource>[^\s)>]+)>?(?:\s+[^)]*)?\)",
     re.IGNORECASE,
-)
-# One Markdown link the Model wrote. A card replaces the whole link, while a bare
-# address is replaced by its own span from the address recognition cards share.
-_MARKDOWN_LINK = re.compile(
-    r"\[[^\]]*\]\(\s*<?(?P<url>https?://[^\s>)]+)>?(?:\s+[\"'][^\"']*[\"'])?\s*\)"
 )
 _EVIDENCE_PART = re.compile(
     r"!\[(?P<label>[^\]]*)\]\(\s*<?evidence:(?P<resource>[^\s)>]+)>?(?:\s+[^)]*)?\)",
@@ -265,35 +255,18 @@ def project_answer_result(
 def _card_matches(
     answer: str,
     cards_by_url: Mapping[str, Mapping[str, Any]],
-) -> tuple[list[tuple[int, int, str, Any]], dict[tuple[int, int], str]]:
-    """Return the card spans one answer occupies, Markdown form first.
+) -> list[tuple[int, int, str, Any]]:
+    """Return the text spans one answer's cards replace, in order.
 
-    Each span carries the address key it was matched by, because the span of a
-    written address stops before the punctuation a sentence owns while the key is
-    what the card was stored under.
+    The spans come from the same recognizer the card read used, so a card covers
+    the whole Markdown link it belongs to and the punctuation a sentence owns is
+    left where the sentence put it.
     """
-    matches: list[tuple[int, int, str, Any]] = []
-    keys: dict[tuple[int, int], str] = {}
-    quoted = code_spans(answer)
-    linked: list[tuple[int, int]] = []
-    for match in _MARKDOWN_LINK.finditer(answer):
-        if any(start <= match.start() < end for start, end in quoted):
-            continue
-        key = card_key(match.group("url"))
-        if key in cards_by_url:
-            span = (match.start(), match.end())
-            matches.append((span[0], span[1], "link_card", match))
-            keys[span] = key
-            linked.append(span)
-    for start, end, key in address_spans(answer):
-        if any(linked_start <= start < linked_end for linked_start, linked_end in linked):
-            continue
-        if key in cards_by_url:
-            # A written address has no Markdown match of its own: its span and key
-            # are all the part needs.
-            matches.append((start, end, "link_card", None))
-            keys[(start, end)] = key
-    return matches, keys
+    return [
+        (address.start, address.end, "link_card", cards_by_url[address.key])
+        for address in written_addresses(answer)
+        if address.key in cards_by_url
+    ]
 
 
 def answer_parts_from_markdown(
@@ -323,8 +296,7 @@ def answer_parts_from_markdown(
         (match.start(), match.end(), "evidence_image", match)
         for match in _EVIDENCE_PART.finditer(answer)
     )
-    card_matches, card_keys = _card_matches(answer, cards_by_url)
-    matches.extend(card_matches)
+    matches.extend(_card_matches(answer, cards_by_url))
     matches.sort(key=lambda value: value[0])
     result: list[dict[str, Any]] = []
     cursor = 0
@@ -334,7 +306,7 @@ def answer_parts_from_markdown(
         if start > cursor:
             result.append({"type": "markdown", "text": answer[cursor:start]})
         if kind == "link_card":
-            result.append({"type": "link_card", "card": cards_by_url[card_keys[(start, end)]]})
+            result.append({"type": "link_card", "card": match})
             cursor = end
             continue
         resource = str(match.group("resource"))

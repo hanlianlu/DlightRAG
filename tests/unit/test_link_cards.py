@@ -11,12 +11,12 @@ import pytest
 from dlightrag.engine.answer.links.cards import (
     MAX_CARDS,
     LinkCard,
-    address_spans,
     addresses_in,
     card_key,
     code_spans,
     collect_link_cards,
     project_link_cards,
+    written_addresses,
 )
 
 
@@ -295,17 +295,17 @@ async def test_a_read_is_anonymous_and_bounded_by_its_deadline() -> None:
     assert elapsed < 1.0, f"the deadline must bound the whole read, took {elapsed}"
 
 
-def test_address_spans_keep_the_punctuation_a_sentence_owns() -> None:
-    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
-
+def test_written_addresses_keep_the_punctuation_a_sentence_owns() -> None:
     answer = "See https://example.com/clip. And https://example.com/x。"
-    spans = address_spans(answer)
+    written = written_addresses(answer)
 
-    assert [key for _, _, key in spans] == ["https://example.com/clip", "https://example.com/x"]
-    assert answer[spans[0][1]] == ".", "the period stays outside the address"
-    assert answer[spans[1][1]] == "。"
+    assert [address.key for address in written] == [
+        "https://example.com/clip",
+        "https://example.com/x",
+    ]
+    assert answer[written[0].end] == ".", "the period stays outside the address"
+    assert answer[written[1].end] == "。"
     assert card_key("https://example.com/clip.") == "https://example.com/clip"
-    assert render_source_chunk_html(answer)
 
 
 def test_addresses_quoted_as_code_are_not_written_addresses() -> None:
@@ -386,3 +386,94 @@ def test_a_markdown_link_inside_code_is_not_carded() -> None:
     parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
 
     assert [part["type"] for part in parts] == ["markdown"]
+
+
+def test_a_card_covers_the_whole_markdown_link_it_describes() -> None:
+    """A card replaces the link, not just the destination inside it."""
+    from dlightrag.engine.answer.results import answer_parts_from_markdown
+
+    card = {
+        "url": "https://example.com/a,b",
+        "title": "Clip",
+        "description": "",
+        "site": "",
+    }
+    answer = "Watch [the film](https://example.com/a,b) now."
+
+    parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
+
+    assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
+    assert parts[0]["text"] == "Watch "
+    assert parts[2]["text"] == " now."
+    assert "[" not in "".join(str(part.get("text") or "") for part in parts)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "    https://example.com/clip\n",
+        "```\nhttps://example.com/clip\n",
+        "``https://example.com/clip``\n",
+        "~~~\nhttps://example.com/clip\n~~~\n",
+    ],
+    ids=["indented", "unterminated-fence", "double-backtick", "tilde-fence"],
+)
+async def test_a_quoted_address_is_not_written_nor_replaced(answer: str) -> None:
+    from dlightrag.engine.answer.results import answer_parts_from_markdown
+
+    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
+    fetcher = _Fetcher({"https://example.com/clip": _video_page()})
+
+    assert await collect_link_cards(answer, fetch=fetcher) == ()
+    assert fetcher.calls == []
+    parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
+    assert [part["type"] for part in parts] == ["markdown"]
+
+
+async def test_a_long_declared_title_still_produces_a_card() -> None:
+    """A page's own title is truncated for the card, never dropped with the page."""
+    page = _video_page(**{"og:title": "T" * 1200})
+    fetcher = _Fetcher({"https://example.com/clip": page})
+
+    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+
+    assert len(cards) == 1
+    assert cards[0].title == "T" * 200
+
+
+async def test_an_unterminated_comment_hides_everything_after_it() -> None:
+    page = _Page(
+        content=(
+            b'<html><head><!-- <meta property="og:type" content="video.other">'
+            b'<meta property="og:title" content="Clip"></head></html>'
+        )
+    )
+    fetcher = _Fetcher({"https://example.com/clip": page})
+
+    assert await collect_link_cards("https://example.com/clip", fetch=fetcher) == ()
+
+
+async def test_a_comment_inside_an_attribute_invents_no_declaration() -> None:
+    page = _Page(
+        content=(
+            b'<html><head><meta property="og:<!-- -->type" content="video.other">'
+            b'<meta property="og:title" content="Clip"></head></html>'
+        )
+    )
+    fetcher = _Fetcher({"https://example.com/clip": page})
+
+    assert await collect_link_cards("https://example.com/clip", fetch=fetcher) == ()
+
+
+async def test_a_page_of_comment_openers_parses_within_its_budget() -> None:
+    """The parse is linear: a page cannot buy parsing time with comment openers."""
+    import time
+
+    page = _Page(content=b"<html><head>" + b"<!--" * 65536 + b"</head></html>")
+    fetcher = _Fetcher({"https://example.com/clip": page})
+    started = time.monotonic()
+
+    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+
+    assert cards == ()
+    assert time.monotonic() - started < 2.0

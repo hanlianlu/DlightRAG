@@ -41,13 +41,18 @@ _MAX_DESCRIPTION = 400
 # One address as it appears in answer Markdown. Sentence punctuation a reader owns
 # is not part of it, and neither is a trailing dot.
 _ADDRESS = re.compile(r"https?://[^\s<>\"'`\u3000-\u303f\uff00-\uffef)\]},;]+")
-# Fenced blocks and inline code, where an address is quoted rather than written.
-_CODE = re.compile(r"```.*?```|~~~.*?~~~|`[^`\n]*`", re.DOTALL)
-_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-# A meta tag, and the attributes inside it, are bounded before any pattern sees
-# them: an unclosed tag in a large page would otherwise be scanned per start.
-_META_TAG = re.compile(r"<meta\b[^>]{0,1024}>", re.IGNORECASE)
+# One Markdown link, whose destination is the address the card describes.
+_MARKDOWN_LINK = re.compile(
+    r"\[[^\]]*\]\(\s*<?(?P<url>https?://[^\s>)]+)>?(?:\s+[\"'][^\"\']*[\"\'])?\s*\)"
+)
+# A meta tag's attributes are read from a bounded window, and only the first few
+# declarations are read at all: a page cannot make parsing cost more than that.
+_MAX_META_TAGS = 64
+_MAX_META_WINDOW = 8192
 _ATTRIBUTE = re.compile(r"(?P<name>[a-zA-Z:_-]+)\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s\"'>]+)")
+_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})", re.MULTILINE)
+_INDENTED_CODE = re.compile(r"^(?: {4}|\t)\S", re.MULTILINE)
+_INLINE_CODE = re.compile(r"(?P<ticks>`+)(?:(?!(?P=ticks)).)*(?P=ticks)", re.DOTALL)
 # The Open Graph video types. `video.other` is the one YouTube and Bilibili use.
 _VIDEO_TYPES = frozenset({"video.movie", "video.episode", "video.tv_show", "video.other"})
 _HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
@@ -74,8 +79,32 @@ class LinkCard:
 
 
 def code_spans(answer: str) -> list[tuple[int, int]]:
-    """Return the answer spans that quote code rather than write an address."""
-    return [match.span() for match in _CODE.finditer(answer)]
+    """Return the answer spans that quote code rather than write an address.
+
+    Over-inclusion is the safe direction: a span wrongly treated as code costs a
+    card, while a span wrongly treated as prose would rewrite quoted text.
+    """
+    spans: list[tuple[int, int]] = []
+    lines = answer.splitlines(keepends=True)
+    position = 0
+    fence: tuple[str, int] | None = None
+    for line in lines:
+        end = position + len(line)
+        marker = _FENCE.match(line)
+        if fence is None and marker is not None:
+            fence = (marker.group("fence")[0], len(marker.group("fence")))
+            spans.append((position, end))
+        elif fence is not None:
+            spans.append((position, end))
+            if marker is not None and marker.group("fence")[0] == fence[0]:
+                fence = None
+        elif _INDENTED_CODE.match(line):
+            spans.append((position, end))
+        position = end
+    for match in _INLINE_CODE.finditer(answer):
+        if not any(start <= match.start() < end for start, end in spans):
+            spans.append(match.span())
+    return spans
 
 
 def card_key(url: str) -> str:
@@ -83,29 +112,54 @@ def card_key(url: str) -> str:
     return url.rstrip(".")
 
 
-def address_spans(answer: str) -> list[tuple[int, int, str]]:
-    """Return one span per written address, in order, as ``(start, end, key)``.
+@dataclass(frozen=True, slots=True)
+class WrittenAddress:
+    """One address an answer wrote, and the text a card would replace for it.
 
-    Both the card read and the Answer's parts replace addresses by these spans, so
-    they cannot disagree about where an address ends or drop the punctuation a
-    sentence owns. Addresses inside code are quoted, not written.
+    ``start``/``end`` cover the whole Markdown link when the address is that
+    link's destination, and just the address when it was written as text, so a
+    card never leaves a link's brackets behind.
+    """
+
+    key: str
+    start: int
+    end: int
+
+
+def written_addresses(answer: str) -> list[WrittenAddress]:
+    """Return every address the answer actually wrote, in order.
+
+    One recognizer serves both the card read and the Answer's parts: they cannot
+    disagree about where an address ends, which link it belongs to, or whether it
+    was quoted as code.
     """
     quoted = code_spans(answer)
-    spans: list[tuple[int, int, str]] = []
-    for match in _ADDRESS.finditer(answer):
-        if any(start <= match.start() < end for start, end in quoted):
+    excluded = list(quoted)
+    written: list[WrittenAddress] = []
+    for match in _MARKDOWN_LINK.finditer(answer):
+        if _in_spans(match.start(), excluded):
             continue
-        text = match.group(0)
-        key = card_key(text)
-        spans.append((match.start(), match.start() + len(key), key))
-    return spans
+        destination = match.group("url").strip()
+        excluded.append(match.span())
+        written.append(WrittenAddress(card_key(destination), match.start(), match.end()))
+    for match in _ADDRESS.finditer(answer):
+        if _in_spans(match.start(), excluded):
+            continue
+        key = card_key(match.group(0))
+        written.append(WrittenAddress(key, match.start(), match.start() + len(key)))
+    written.sort(key=lambda address: address.start)
+    return written
+
+
+def _in_spans(position: int, spans: Sequence[tuple[int, int]]) -> bool:
+    return any(start <= position < end for start, end in spans)
 
 
 def addresses_in(answer: str) -> list[str]:
     """Return the distinct public addresses one answer writes, in order."""
     seen: dict[str, None] = {}
-    for _, _, key in address_spans(answer):
-        seen.setdefault(key, None)
+    for address in written_addresses(answer):
+        seen.setdefault(address.key, None)
     return list(seen)
 
 
@@ -117,14 +171,36 @@ def _attributes(tag: str) -> dict[str, str]:
 
 
 def _metadata(page: str) -> dict[str, str]:
-    """Return the page's own Open Graph metadata, first declaration wins."""
+    """Return the page's own Open Graph metadata, first declaration wins.
+
+    The scan is one left-to-right walk with an explicit budget: a comment is
+    skipped in one step wherever it appears outside a tag, so a page of comment
+    openers cannot make parsing quadratic, and a tag's attributes are read from a
+    bounded window so an unclosed tag cannot either.
+    """
     values: dict[str, str] = {}
-    for tag in _META_TAG.finditer(_COMMENT.sub("", page)):
-        attributes = _attributes(tag.group(0))
-        key = (attributes.get("property") or attributes.get("name") or "").lower()
-        content = attributes.get("content")
-        if key.startswith("og:") and content and key not in values:
-            values[key] = content
+    position = 0
+    read = 0
+    while read < _MAX_META_TAGS:
+        start = page.find("<", position)
+        if start == -1:
+            break
+        if page.startswith("<!--", start):
+            end = page.find("-->", start + 4)
+            position = len(page) if end == -1 else end + 3
+            continue
+        end = page.find(">", start + 1)
+        if end == -1:
+            break
+        if page[start : start + 5].lower() == "<meta":
+            read += 1
+            window = page[start : min(end + 1, start + _MAX_META_WINDOW)]
+            attributes = _attributes(window)
+            key = (attributes.get("property") or attributes.get("name") or "").lower()
+            content = attributes.get("content")
+            if key.startswith("og:") and content and key not in values:
+                values[key] = content
+        position = end + 1
     return values
 
 
@@ -251,10 +327,11 @@ def project_link_cards(cards: Sequence[Any]) -> list[dict[str, str | None]]:
 __all__ = [
     "MAX_CARDS",
     "LinkCard",
-    "address_spans",
+    "WrittenAddress",
     "addresses_in",
     "card_key",
     "code_spans",
     "collect_link_cards",
     "project_link_cards",
+    "written_addresses",
 ]
