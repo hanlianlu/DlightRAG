@@ -586,3 +586,19 @@ def test_code_quoting_agrees_with_what_the_renderer_shows(answer: str, expected:
         assert "<a " in rendered
     else:
         assert "<a " not in rendered
+
+
+def test_an_ambiguous_inline_location_is_refused_rather_than_guessed() -> None:
+    """A link title can hold the same delimited content as a code span.
+
+    The parser reported exactly one code span, but the same content occurs twice
+    in the paragraph, so locating it is a guess. The guess is refused: the
+    renderer links this address, and this module declines to card it, because a
+    card that rewrites quoted text is worse than a card not offered.
+    """
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    answer = '[x](https://example.com/a "`https://example.com/clip`") `https://example.com/clip`'
+
+    assert addresses_in(answer) == []
+    assert "https://example.com/clip" in render_answer_html(answer, known_sources={})

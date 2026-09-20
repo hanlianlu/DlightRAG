@@ -119,13 +119,18 @@ def _locate_code_span(
 
     The structure is the parser's: it decided there is a ``code_inline`` child with
     this content and this markup. All that is left is to find where that span sits
-    in the source, and the content makes the search unambiguous — a stray backtick
-    in a link title cannot match it.
+    in the source. When the same delimited content appears more than once in the
+    region — a link title can hold one — the location is a guess, and a guess is
+    refused: ``None`` makes the caller exclude the region instead of protecting
+    the wrong characters.
     """
     for candidate in (markup + content + markup, markup + " " + content + " " + markup):
         found = answer.find(candidate, start, end)
-        if found != -1:
-            return (found, found + len(candidate))
+        if found == -1:
+            continue
+        if answer.find(candidate, found + 1, end) != -1:
+            return None
+        return (found, found + len(candidate))
     return None
 
 
