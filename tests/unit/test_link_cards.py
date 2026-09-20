@@ -88,7 +88,7 @@ async def test_a_declared_video_becomes_a_card() -> None:
             image="https://cdn.example.com/cover.jpg",
         ),
     )
-    assert fetcher.calls == [("https://example.com/watch", 256 * 1024, 4.0)]
+    assert fetcher.calls == [("https://example.com/watch", 2 * 1024 * 1024, 4.0)]
 
 
 async def test_a_page_that_declares_a_player_needs_its_own_title() -> None:

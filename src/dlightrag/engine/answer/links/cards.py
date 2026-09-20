@@ -25,12 +25,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.engine.answer.markdown import link_targets
-from dlightrag.engine.public_http import fetch_public_http, validate_public_web_url
+from dlightrag.engine.public_http import fetch_public_http_prefix, validate_public_web_url
 
 #: How many pages one answer may ask about. The reader gets a card or two, and an
 #: answer with a dozen links does not become a dozen outbound reads.
 MAX_CARDS = 3
-_MAX_PAGE_BYTES = 256 * 1024
+# Real video pages put OG metadata after large inline scripts/styles (the
+# observed YouTube head placed it near 700 KiB). Read only a bounded prefix;
+# the remaining body is irrelevant and must not invalidate declarations.
+_MAX_METADATA_PREFIX_BYTES = 2 * 1024 * 1024
 #: One page gets a short deadline, and the reads run together, so an answer with
 #: three links costs about one deadline rather than three. The deadline covers
 #: admission and reading, not reading alone: the shared slot a fetch waits for is
@@ -167,14 +170,14 @@ async def _read_page(
 ) -> Any:
     """Read one page within the whole deadline, admission included.
 
-    ``fetch_public_http`` applies its own timeout after taking a shared network
+    ``fetch_public_http_prefix`` applies its timeout after taking a shared network
     slot, so the deadline is applied here as well: an answer waits for a card for
     the deadline, not for the queue that serves it.
     """
     async with asyncio.timeout(deadline):
         return await fetch(
             address,
-            max_bytes=_MAX_PAGE_BYTES,
+            max_bytes=_MAX_METADATA_PREFIX_BYTES,
             timeout=deadline,
             agent_url=True,
         )
@@ -183,7 +186,7 @@ async def _read_page(
 async def collect_link_cards(
     answer: str,
     *,
-    fetch: Callable[..., Awaitable[Any]] = fetch_public_http,
+    fetch: Callable[..., Awaitable[Any]] = fetch_public_http_prefix,
     limit: int = MAX_CARDS,
     deadline: float = _PAGE_TIMEOUT_SECONDS,
 ) -> tuple[LinkCard, ...]:

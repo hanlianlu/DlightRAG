@@ -160,12 +160,13 @@ export class AnswerPresentationElement extends LightElement {
     // Only actual anchors survived Markdown parsing and both sanitizers. Match
     // metadata to each such occurrence, never to source text or a URL elsewhere
     // in the answer. Code, titles, math and image alt text cannot authorize one.
-    const sources = new Set(presentation.sources.map((source) => safeExternalHttpHref(source.sourceUrl || '')));
     const cards = new Map((presentation.linkCards ?? []).map((card) => [safeExternalHttpHref(card.url), card]));
     for (const occurrence of mounted.links) {
       const {anchor} = occurrence;
       const href = safeExternalHttpHref(anchor.getAttribute('href') || '');
-      const card = href && !sources.has(href) && !anchor.closest('code, pre, .citation-badge')
+      // Citation controls keep their role. A recommendation anchor in the body
+      // is still a recommendation when the same URL also appears in References.
+      const card = href && !anchor.closest('code, pre, .citation-badge')
         ? cards.get(href) : undefined;
       if (!card) {
         if (occurrence.slot) {

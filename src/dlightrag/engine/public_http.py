@@ -77,6 +77,16 @@ class PublicHttpFetch:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicHttpPrefix:
+    """At most the requested prefix, never a promise of a complete document."""
+
+    content: bytes
+    final_url: str
+    media_type: str | None
+    status_code: int
+
+
+@dataclass(frozen=True, slots=True)
 class PublicHttpDownload:
     """Metadata for one complete bounded response streamed to disk."""
 
@@ -122,6 +132,55 @@ async def fetch_public_http(
             consume=consume,
         )
     return PublicHttpFetch(
+        content=content,
+        final_url=normalize_public_http_url_identity(target.url),
+        media_type=_media_type(response),
+        status_code=int(response.status_code),
+    )
+
+
+async def fetch_public_http_prefix(
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float = 120.0,
+    presentation: PublicHttpPresentation | None = None,
+    client: Any | None = None,
+    agent_url: bool = False,
+) -> PublicHttpPrefix:
+    """Read a bounded prefix and close the stream without draining the body.
+
+    Metadata readers do not need a complete page: a large body must not discard
+    declarations already within the prefix. Complete-document consumers still
+    use ``fetch_public_http`` and retain its oversize rejection. Both entries use
+    the same redirect validation, public DNS pinning and anonymous transport.
+    """
+    limit = max(1, int(max_bytes))
+
+    async def consume(response: Any) -> bytes:
+        chunks: list[bytes] = []
+        remaining = limit
+        async for chunk in response.aiter_bytes(chunk_size=min(limit, 64 * 1024)):
+            if not chunk:
+                continue
+            piece = chunk[:remaining]
+            chunks.append(piece)
+            remaining -= len(piece)
+            if not remaining:
+                break
+        return b"".join(chunks)
+
+    async with public_network_admission(), asyncio.timeout(timeout):
+        content, target, response = await _follow_and_consume(
+            url,
+            timeout=timeout,
+            presentation=presentation or PublicHttpPresentation(),
+            allow_private_hosts=frozenset(),
+            client=client,
+            agent_url=agent_url,
+            consume=consume,
+        )
+    return PublicHttpPrefix(
         content=content,
         final_url=normalize_public_http_url_identity(target.url),
         media_type=_media_type(response),
@@ -316,10 +375,12 @@ __all__ = [
     "PublicHttpDownload",
     "PublicHttpFetch",
     "PublicHttpPresentation",
+    "PublicHttpPrefix",
     "PublicHttpPolicyError",
     "avalidate_public_http_url",
     "download_public_http",
     "fetch_public_http",
+    "fetch_public_http_prefix",
     "normalize_public_http_url_identity",
     "public_network_admission",
     "validate_agent_public_url",

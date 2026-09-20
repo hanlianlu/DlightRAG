@@ -93,7 +93,9 @@ an ordinary page (`og:type: website`) stays a plain link. A bare address the Mod
 writes becomes an ordinary hyperlink whether or not the card rule matches it, so
 the two features compose rather than compete: every address is readable and
 clickable, and only a verified video link is additionally presented as a card.
-Citation links and source links never become cards.
+Citation controls and links inside source excerpts never become cards. A prose
+recommendation may become a card even when the same URL also appears in References:
+being evidence does not stop a video from also being the answer's deliverable.
 
 Autolinking is deliberately narrower than GFM. It admits an address that names
 its own scheme and refuses to guess one from a top-level domain, because this
@@ -121,13 +123,15 @@ browser reads that image from the platform's CDN, exactly as it already reads a
 remote image an answer writes.
 
 Reading the pages happens during the Answer's own settlement, under bounds: at
-most three addresses an answer writes are read, each with a four-second deadline
-and a 256 KiB ceiling, and they are read together so an answer with three links
-costs about one deadline rather than three. An address that is unreachable, too
-slow, declares nothing, or answers with anything but HTML stays the plain link
-the Model wrote — a card is never a reason to fail an answer. A cited source is
-this Answer's authority rather than someone else's page, so it never becomes a
-card.
+most three distinct addresses an answer writes are read, each with a four-second
+deadline and a 2 MiB decoded-prefix ceiling. They are read together so an answer
+with three links costs about one deadline rather than three. Reaching the byte
+ceiling closes the response stream and keeps the prefix; an irrelevant large body
+cannot invalidate metadata already read. Complete-document fetch and download
+retain their separate oversize-rejection contracts. An address that is unreachable,
+too slow, declares nothing within the prefix, or answers with anything but HTML
+stays the plain link the Model wrote — a card is never a reason to fail an answer.
+This does not bypass a platform's refusal: an HTTP 412 remains an ordinary link.
 
 ## Considered options
 
@@ -165,8 +169,9 @@ card.
   carries card metadata separately. After both existing sanitizers, the browser
   upgrades each matching anchor with a Lit-rendered card. A URL elsewhere cannot
   authorize rewriting code or title text: only that DOM anchor is replaced.
-  Repeated links share one page read but can each display a card. Source links
-  remain ordinary links; source chunks never run this upgrade. Older explicit
+  Repeated links share one page read but can each display a card. Citation controls
+  retain their source-opening action; source chunks never run this upgrade. A
+  matching source URL does not exclude a prose recommendation. Older explicit
   `link_card` parts remain readable, and metadata-free answers remain plain links.
 - **Typed resources do not split the grammar.** The browser parses the complete
   answer once, placing Artifact and Evidence Image tokens through server-created
@@ -182,6 +187,15 @@ card.
   URL-set authorization and unique-occurrence workaround are now removed. Shared
   fixtures exercise the settlement read, sanitized browser wire and real DOM,
   including the counterexample with a genuine occurrence of the same URL added.
+- **Real video pages, not just small metadata fixtures, determine the read shape.**
+  The first real YouTube recommendation exposed two defects: its 1.22 MB page had
+  OG metadata near byte 697,000, so a complete-body 256 KiB fetch always failed;
+  and excluding every source URL hid the recommendation even with metadata.
+  A 2 MiB prefix read and occurrence-role exclusion replace those rules. Verification
+  includes streamed over-limit bodies with late metadata, unchanged SSRF/anonymous
+  safeguards, and replaying the actual answer with live metadata through the browser.
+  Cards are collected at settlement: existing answers with empty stored metadata
+  are not silently rewritten or re-fetched when history is viewed.
 - **Weaker video validation is a recorded residual,** not an oversight; the
   escape hatch in the caption is what a truncated or undecodable file gets.
 - **A browser that cannot decode the codec** (for example HEVC where the user's

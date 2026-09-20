@@ -138,13 +138,18 @@ it('isolates typed thumbnails and cards from prose image and link styles', async
   }
 });
 
-it('leaves source links and citation controls alone', async () => {
+it('cards a prose recommendation even when its URL is a source, without changing citation controls', async () => {
   const value = presentation('Source', '<p><a href="https://example.com/x">source</a> <cite class="citation-badge" data-ref="1">1</cite></p>');
   value.sources = [{id: '1', title: 'Source', sourceUrl: 'https://example.com/x', downloadUrl: null, chunks: []}];
   const element = await mount(value);
-  expect(element.querySelector('[data-answer-link-card]')).to.equal(null);
-  expect(element.querySelector('a')?.textContent).to.equal('source');
+  expect(element.querySelectorAll('[data-answer-link-card]').length).to.equal(1);
   expect(element.querySelector('.citation-badge')?.textContent).to.equal('1');
+  expect(element.querySelector('.answer-references [data-answer-link-card]')).to.equal(null);
+  expect(element.querySelector('[data-answer-ref]')?.textContent).to.contain('Source');
+  let opened = '';
+  element.addEventListener('dl-answer-source-open', (event) => { opened = (event as CustomEvent).detail.referenceId; });
+  element.querySelector<HTMLElement>('.citation-badge')?.click();
+  expect(opened).to.equal('1');
 });
 
 it('rebuilds from sanitized HTML without duplicate cards on updates', async () => {
