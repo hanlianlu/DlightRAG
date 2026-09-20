@@ -9,7 +9,10 @@ deliberately does not mean: no ingestion, no embed, no loosened sanitizer.
 
 Accepted and implemented: publication, delivery, both Answer surfaces, address
 auto-detection, and video link cards. See [Consequences](#consequences) for the
-bounds and the accepted residuals.
+bounds and the accepted residuals. [ADR 0028](0028-the-reader-activates-one-external-video-player.md)
+supersedes only the no-external-embed decision below: readers may explicitly
+activate a separately controlled official player. OG card acquisition, stored
+Answer immutability and arbitrary-HTML restrictions remain unchanged.
 
 ## Context
 

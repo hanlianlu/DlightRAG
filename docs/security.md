@@ -391,6 +391,33 @@ This isolates DlightRAG cookies, storage, and authenticated DOM. It provides no
 CPU/memory quota, executes no server code, and is not an absolute browser-egress
 guarantee. Chromium is the active-preview security regression baseline.
 
+## Reader-Activated External Video
+
+A recognized prose link may offer a separate official player (ADR 0028), even
+without a preview card. Recognition is local; only the reader's Play action
+invokes the authenticated, CSRF-protected resolver. Anonymous oEmbed acquisition
+reuses public-HTTP DNS pinning and redirect validation, with a 4-second
+admission-inclusive deadline and 64 KiB response cap. Provider HTML never enters
+the document: the pinned MIT oembed.com registry supplies publisher endpoints
+and permitted domain families. A standard video response with one permitted
+HTTPS iframe supplies the player URL and geometry. Small official mappings can
+survive missing metadata; they are not the supported-provider list. The browser
+checks the response against permissions already projected with the selected
+link and refuses the application's own hostname. A registry candidate can still
+return non-video or SDK-only content, which stays a link. No paid service or
+provider SDK is used.
+
+The resulting cross-origin iframe grants scripts, its own origin, presentation,
+autoplay, encrypted media, fullscreen and picture-in-picture—not top navigation,
+forms or popups. It sends at most the application's origin as cross-origin
+referrer. The provider can observe the reader's IP/browser and its own cookies
+subject to browser rules; existing cover images also contact their host before
+Play. Selecting another video, removing the Answer or closing its Canvas destroys
+the player. Player redirects/subresources are controlled by the provider and
+browser, not the backend's DNS-pinned transport; this is not absolute browser
+egress confinement. This capability does not relax Markdown sanitization or the HTML
+Artifact boundary above, fetch a video into a Run, or rewrite stored Answers.
+
 ## Deployment Posture
 
 | Deployment | Recommended posture |

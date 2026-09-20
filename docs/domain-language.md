@@ -331,6 +331,10 @@ _Avoid_: Answer, parallel Answer, routine Research by-product, Spill, Blob when 
 The Web Feature that opens any presentable Published Artifact and owns loading, safe renderer selection, side/wide/fullscreen layout, focus restoration, and preview teardown.
 _Avoid_: Report Pane, universal Panel abstraction, same-DOM active HTML
 
+**External Video Playback**:
+A reader-activated viewing of a linked video's official player within the Answer surface. It is independent of the link's preview metadata, does not publish or ingest the remote video, and gives way when the reader selects another external video on the page.
+_Avoid_: Published Artifact, video Evidence, Active HTML Preview, video ingestion
+
 **Active HTML Preview**:
 An explicit opt-in rendering mode for a self-contained HTML Artifact inside an opaque-origin, script-enabled sandboxed iframe. It is isolated from DlightRAG credentials and DOM; its CSP blocks normal external loads, but it is not a server execution sandbox or an absolute network-egress guarantee.
 _Avoid_: trusted content, same-origin iframe, Sandbox service, zero-egress claim

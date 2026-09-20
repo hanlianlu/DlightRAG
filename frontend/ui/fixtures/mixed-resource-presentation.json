@@ -36,6 +36,7 @@
     ]
   },
   "wire": {
+    "video_links": [],
     "answer_text": "`before [quoted](artifact:clip.mp4) https://example.com/x after`\n\n[Open](artifact:clip.mp4) and https://example.com/x.\n\n![Play](artifact:clip.mp4)\n\n- ![Evidence](evidence:shot)\n\n> `\n> https://example.com/x\n> ` [ordinary](https://example.com/y \"`https://example.com/x`\")",
     "parts": [
       {

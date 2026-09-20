@@ -17,6 +17,7 @@ from dlightrag.adapters.http.browser.markdown import (
 )
 from dlightrag.adapters.http.browser.run_resources import rewrite_image_sources
 from dlightrag.adapters.http.browser.safe_html import sanitize_html_fragment
+from dlightrag.adapters.http.browser.video_playback import VideoPlaybackLink, video_playback_link
 from dlightrag.application.corpus_admin import validate_public_web_url
 from dlightrag.engine.answer.citations.contracts import (
     CITATION_PATTERN,
@@ -123,8 +124,8 @@ class PresentationArtifactOutcome(ClientContractModel):
 class PresentationLinkCard(ClientContractModel):
     """One link the page itself declared to be a video (ADR 0026).
 
-    The card is a link out: the browser reads the page's own cover image and
-    follows the reader's click, and no embed or iframe is introduced.
+    The preview is a link out. A separate video_links descriptor may offer
+    reader-activated playback (ADR 0028); OG metadata never grants that authority.
     """
 
     url: str
@@ -163,6 +164,7 @@ class PresentationSource(ClientContractModel):
 
 
 class AnswerPresentation(ClientContractModel):
+    video_links: list[VideoPlaybackLink] = Field(default_factory=list)
     answer_text: str
     parts: list[PresentationPart]
     sources: list[PresentationSource]
@@ -222,6 +224,7 @@ def render_answer_html(
     *,
     known_sources: Mapping[str, str],
     place_resource: Callable[[str, str, bool], str | None] | None = None,
+    citation_links: Mapping[str, str] | None = None,
 ) -> str:
     """Render one Markdown segment with semantic citation controls.
 
@@ -230,7 +233,7 @@ def render_answer_html(
     the click cannot open. A badge carries its source title as a tooltip, which is
     the only source name a private corpus document has in the interface.
     """
-    html = render_markdown(answer, place_resource=place_resource)
+    html = render_markdown(answer, place_resource=place_resource, citation_links=citation_links)
     html, protected = _protect_code_blocks(html)
     html = _protect_links(html, protected)
 
@@ -318,11 +321,17 @@ def build_answer_presentation(
     # and the ref set its citation badges may point at.
     presentation_sources = [_presentation_source(source) for source in sources]
     known_sources = {source.id: source.title for source in presentation_sources}
+    citation_links = {
+        source.id: source.source_url for source in presentation_sources if source.source_url
+    }
     artifacts_by_id = {str(item.get("resource_id") or ""): item for item in artifact_values}
     images_by_id = {str(item.get("id") or ""): item for item in image_values}
     placements: list[PresentationPart] = []
+    video_links: dict[str, VideoPlaybackLink] = {}
 
     def place_resource(href: str, label: str, image: bool) -> str | None:
+        if not image and (video := video_playback_link(href)) is not None:
+            video_links[video.url] = video
         scheme, _, resource = href.partition(":")
         slot = len(placements)
         if scheme.lower() == "artifact" and resource in artifacts_by_id:
@@ -356,7 +365,10 @@ def build_answer_presentation(
     # Parse the whole answer exactly once. Splitting around resource-looking
     # source text first could turn code or a title into a new link on reparse.
     rendered = render_answer_html(
-        answer, known_sources=known_sources, place_resource=place_resource
+        answer,
+        known_sources=known_sources,
+        place_resource=place_resource,
+        citation_links=citation_links,
     )
     parts = [
         PresentationPart(
@@ -372,6 +384,7 @@ def build_answer_presentation(
         if part.type == "evidence_image" and part.evidence_image is not None
     }
     return AnswerPresentation(
+        video_links=list(video_links.values()),
         answer_text=answer,
         parts=parts,
         sources=presentation_sources,

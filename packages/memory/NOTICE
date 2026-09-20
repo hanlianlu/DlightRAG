@@ -5,6 +5,8 @@ This product includes software developed by Hanlian Lyu.
 
 This project builds on the following open-source projects:
 - LightRAG (https://github.com/HKUDS/LightRAG) - MIT License
+- oEmbed provider registry (https://github.com/iamcal/oembed) - MIT License;
+  pinned publisher data; its full notice accompanies oembed-providers.json.
 - Lucide Icons (https://lucide.dev) - ISC License (selected geometry generated from pinned lucide-static 1.37.0 into the semantic Vite/Lit icon registry)
 - MinerU (https://github.com/opendatalab/MinerU) -
   MinerU Open Source License (Apache License 2.0 with additional terms);

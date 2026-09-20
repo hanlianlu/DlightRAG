@@ -14,9 +14,10 @@ Two renderers are provided:
 
 import html as _html
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from markdown_it import MarkdownIt
+from markdown_it.common.normalize_url import normalizeLink
 from markdown_it.token import Token
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
@@ -121,7 +122,11 @@ _md_chunk.add_render_rule("math_inline", _render_math_inline)
 # ---------------------------------------------------------------------------
 
 
-def _place_resources(blocks: list[Token], place: Callable[[str, str, bool], str | None]) -> None:
+def _place_resources(
+    blocks: list[Token],
+    place: Callable[[str, str, bool], str | None] | None,
+    citation_links: Mapping[str, str],
+) -> None:
     """Replace actual resource tokens, without reparsing any source fragment.
 
     Only the browser's trusted placement callback supplies markup here; model
@@ -137,7 +142,7 @@ def _place_resources(blocks: list[Token], place: Callable[[str, str, bool], str 
             token = children[i]
             end = i + 1
             replacement = None
-            if token.type == "image":
+            if token.type == "image" and place is not None:
                 replacement = place(str(token.attrGet("src") or ""), token.content, True)
             elif token.type == "link_open":
                 # Markdown forbids nested links. The matching close belongs to
@@ -145,8 +150,21 @@ def _place_resources(blocks: list[Token], place: Callable[[str, str, bool], str 
                 while end < len(children) and children[end].type != "link_close":
                     end += 1
                 if end < len(children):
-                    label = "".join(child.content for child in children[i + 1 : end])
-                    replacement = place(str(token.attrGet("href") or ""), label, False)
+                    label_tokens = children[i + 1 : end]
+                    label = "".join(child.content for child in label_tokens)
+                    href = str(token.attrGet("href") or "")
+                    # A projected citation is a plain numeric label plus its
+                    # admitted source destination. Mark the original token;
+                    # never flatten rich labels or reconstruct their markup.
+                    citation = (
+                        re.fullmatch(r"([0-9]+)(?:-[0-9]+)?", label)
+                        if len(label_tokens) == 1 and label_tokens[0].type == "text"
+                        else None
+                    )
+                    if citation and citation_links.get(citation.group(1)) == href:
+                        token.attrJoin("class", "answer-citation-link")
+                    elif place is not None:
+                        replacement = place(href, label, False)
                     end += 1
             if replacement is not None:
                 slot = Token("html_inline", "", 0)
@@ -165,7 +183,10 @@ def _place_resources(blocks: list[Token], place: Callable[[str, str, bool], str 
 
 
 def render_markdown(
-    text: str, *, place_resource: Callable[[str, str, bool], str | None] | None = None
+    text: str,
+    *,
+    place_resource: Callable[[str, str, bool], str | None] | None = None,
+    citation_links: Mapping[str, str] | None = None,
 ) -> str:
     r"""Convert Markdown text to HTML with syntax-highlighted code blocks.
 
@@ -173,11 +194,15 @@ def render_markdown(
     (``$$...$$``, ``\[...\]``) are passed through verbatim for
     client-side MathJax rendering.
     """
-    if place_resource is None:
+    if place_resource is None and not citation_links:
         return _md.render(text)
     env: dict = {}
     tokens = _md.parse(text, env)
-    _place_resources(tokens, place_resource)
+    _place_resources(
+        tokens,
+        place_resource,
+        {ref: normalizeLink(url) for ref, url in (citation_links or {}).items()},
+    )
     return _md.renderer.render(tokens, _md.options, env)
 
 

@@ -17,6 +17,7 @@ import chatStyles from '../styles/chat.module.css';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import {artifactDownloadLink} from './artifact-download.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
+import './video-playback.ts';
 
 export interface ArtifactOpenDetail {
   artifact: AnswerArtifact;
@@ -152,7 +153,7 @@ export class AnswerPresentationElement extends LightElement {
       return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidenceImage)}</div>`;
     }
     if (part.type === 'artifact' && part.artifact) return this.#artifact(part.artifact, part.inline);
-    if (part.type === 'link_card' && part.card) return this.#linkCard(part.card);
+    if (part.type === 'link_card' && part.card) return this.#videoLink(part.card.url, this.#linkCard(part.card));
     return nothing;
   }
 
@@ -166,9 +167,10 @@ export class AnswerPresentationElement extends LightElement {
       const href = safeExternalHttpHref(anchor.getAttribute('href') || '');
       // Citation controls keep their role. A recommendation anchor in the body
       // is still a recommendation when the same URL also appears in References.
-      const card = href && !anchor.closest('code, pre, .citation-badge')
-        ? cards.get(href) : undefined;
-      if (!card) {
+      const eligible = href && !anchor.closest('code, pre, .citation-badge, .answer-citation-link');
+      const card = eligible ? cards.get(href) : undefined;
+      const video = eligible && presentation.videoLinks?.some((link) => safeExternalHttpHref(link.url) === href);
+      if (!card && !video) {
         if (occurrence.slot) {
           render(nothing, occurrence.slot);
           occurrence.slot.replaceWith(anchor);
@@ -183,13 +185,20 @@ export class AnswerPresentationElement extends LightElement {
         occurrence.slot.dataset.answerTyped = '';
         anchor.replaceWith(occurrence.slot);
       }
-      render(this.#linkCard(card), occurrence.slot);
+      render(this.#videoLink(href, card ? this.#linkCard(card) : anchor), occurrence.slot);
     }
   }
 
+  #videoLink(url: string, preview: TemplateResult | HTMLAnchorElement): TemplateResult {
+    const link = this.presentation?.videoLinks?.find((item) => safeExternalHttpHref(item.url) === safeExternalHttpHref(url));
+    return link
+      ? html`<dl-video-playback .link=${link} .preview=${preview}></dl-video-playback>`
+      : html`${preview}`;
+  }
+
   #linkCard(card: import('../api/conversations.ts').LinkCard): TemplateResult {
-    // The card is a link out. The page's own cover image is the only subresource
-    // it adds, and the platform is never embedded (ADR 0026).
+    // The preview remains a link out. A separately granted playback affordance
+    // can wrap it; OG metadata alone never authorizes an iframe (ADR 0028).
     const cover = safeExternalHttpHref(card.image || '');
     return html`
       <a class=${answerStyles['answer-link-card']} data-answer-link-card

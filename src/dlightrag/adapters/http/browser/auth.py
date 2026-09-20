@@ -248,7 +248,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         cfg = self._config_getter()
         if cfg.access.auth_mode == "none":
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
-            if path.startswith("/web/api/connections/mcp"):
+            if path.startswith("/web/api/connections/mcp") or path == "/web/api/video-playback":
                 if _reject_web_mutation(request):
                     return PlainTextResponse("Cross-origin request rejected", status_code=403)
                 return await self._finish_web_response(request, call_next)

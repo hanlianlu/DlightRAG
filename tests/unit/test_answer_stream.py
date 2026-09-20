@@ -214,6 +214,7 @@ def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() 
         "sources",
         "evidence_images",
         "link_cards",
+        "video_links",
         "artifacts",
         "artifact_outcome",
     }

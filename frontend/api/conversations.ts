@@ -3,6 +3,7 @@
 import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
 import {parseWire} from './wire.ts';
+import {videoPlaybackLink} from './video-playback.ts';
 
 const conversationSummary = v.pipe(
   v.object({
@@ -137,7 +138,7 @@ const answerArtifact = v.pipe(
 );
 export type AnswerArtifact = v.InferOutput<typeof answerArtifact>;
 
-/** One link a page declared to be a video (ADR 0026); a link out, never an embed. */
+/** Page-declared video metadata (ADR 0026); playback permission is separate (ADR 0028). */
 const linkCard = v.pipe(
   v.object({
     url: v.string(),
@@ -215,12 +216,14 @@ const answerPresentation = v.pipe(
     parts: v.array(presentationPart),
     sources: v.array(presentationSource),
     link_cards: v.optional(v.array(linkCard), []),
+    video_links: v.optional(v.array(videoPlaybackLink), []),
     evidence_images: v.array(presentationImage),
     artifacts: v.array(answerArtifact),
     artifact_outcome: artifactOutcome,
   }),
   v.transform((w) => ({
     answerText: w.answer_text,
+    ...(w.video_links.length ? {videoLinks: w.video_links} : {}),
     parts: w.parts,
     sources: w.sources,
     linkCards: w.link_cards,
