@@ -176,6 +176,82 @@ def _openai_response_json() -> dict[str, Any]:
     }
 
 
+def _openai_response_stream_sse() -> bytes:
+    response = _openai_response_json()
+    message = response["output"][0]
+    call = {
+        "id": "fc-item-1",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": "call-1",
+        "name": "view",
+        "arguments": '{"locator":"1"}',
+    }
+    response["output"] = [message, call]
+    events = [
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "o",
+            "logprobs": [],
+        },
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 2,
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "k",
+            "logprobs": [],
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 3,
+            "output_index": 0,
+            "item": message,
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 4,
+            "item_id": "fc-item-1",
+            "output_index": 1,
+            "delta": '{"locator":',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 5,
+            "item_id": "fc-item-1",
+            "output_index": 1,
+            "delta": '"1"}',
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 6,
+            "item_id": "fc-item-1",
+            "output_index": 1,
+            "name": "view",
+            "arguments": '{"locator":"1"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 7,
+            "output_index": 1,
+            "item": call,
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": response,
+        },
+    ]
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
+    ).encode()
+
+
 def _openai_stream_sse() -> bytes:
     chunks = [
         {
@@ -341,6 +417,12 @@ class _HttpCapture:
                 )
             return httpx2.Response(200, json=_openai_complete_json())
         if self.provider == "openai_response":
+            if streamed:
+                return httpx2.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_openai_response_stream_sse(),
+                )
             payload = self.response_jsons.pop(0) if self.response_jsons else _openai_response_json()
             return httpx2.Response(200, json=payload)
         if self.provider == "anthropic":
@@ -750,6 +832,58 @@ async def test_response_tool_loop_replays_finalized_native_items_and_exact_call_
     ]
     assert sum(item.get("id") == "fc-item-1" for item in second_input) == 1
     assert sum(item.get("call_id") == "call-1" for item in second_input) == 2
+
+
+async def test_response_stream_uses_sdk_events_and_preserves_finalized_tool_items() -> None:
+    capture = _HttpCapture("openai_response")
+    provider = get_provider(
+        "openai",
+        api_key="test-key",
+        api_family="response",
+        max_retries=0,
+    )
+    bind_mock_http(provider, capture.handler)
+    emitted: list[str] = []
+
+    async def emit_text(text: str) -> None:
+        emitted.append(text)
+
+    try:
+        turn = await provider.complete_tool_turn_streaming(
+            [{"role": "user", "content": "look"}],
+            "gpt-5.4",
+            tools=[_VIEW_TOOL],
+            emit_text=emit_text,
+        )
+    finally:
+        await provider.aclose()
+
+    assert emitted == ["o", "k"]
+    assert turn.text == _MODEL_TEXT
+    assert turn.tool_calls == (ToolCall(id="call-1", name="view", arguments={"locator": "1"}),)
+    assert turn.stop_reason == "tool_use"
+    assert turn.usage_details == {
+        "input_tokens": 11,
+        "input_tokens_details.cached_tokens": 7,
+        "output_tokens": 2,
+        "output_tokens_details.reasoning_tokens": 1,
+        "total_tokens": 13,
+    }
+    assert turn.provider_state is not None
+    items = turn.provider_state["response_replay"]["items"]
+    assert [item["id"] for item in items] == ["msg-1", "fc-item-1"]
+    assert items[1]["arguments"] == '{"locator":"1"}'
+    assert capture.requests[-1]["url"] == "https://api.openai.com/v1/responses"
+    assert capture.body["stream"] is True
+    assert capture.body["tools"] == [
+        {
+            "type": "function",
+            "name": "view",
+            "description": "view a page",
+            "parameters": _VIEW_TOOL.parameters,
+            "strict": False,
+        }
+    ]
 
 
 async def test_response_complete_uses_stateless_responses_wire_without_mutating_input() -> None:

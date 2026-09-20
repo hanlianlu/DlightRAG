@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for provider ABC, registry, and concrete implementations."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,7 +28,6 @@ from dlightrag.engine.ai.providers.openai_compatible import (
     _openai_tool_messages,
 )
 from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
-from dlightrag.engine.ai.response_policy import ResponseRequestError
 
 
 def _openai_error_response(status_code: int) -> httpx2.Response:
@@ -565,6 +566,48 @@ class TestAnthropicProvider:
         assert await_args.kwargs["messages"][1]["content"][0]["type"] == "tool_result"
 
 
+def _response_event(event_type: str, **values: Any) -> SimpleNamespace:
+    return SimpleNamespace(type=event_type, **values)
+
+
+class _ResponseEventStream(AsyncIterator[Any]):
+    def __init__(self, events: list[SimpleNamespace]) -> None:
+        self._events = iter(events)
+        self.closed = False
+
+    def __aiter__(self) -> _ResponseEventStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            return next(self._events)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _BlockingResponseEventStream(AsyncIterator[Any]):
+    def __init__(self) -> None:
+        self._emitted = False
+        self._blocked = asyncio.Event()
+        self.closed = False
+
+    def __aiter__(self) -> _BlockingResponseEventStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        if not self._emitted:
+            self._emitted = True
+            return _response_event("response.output_text.delta", delta="partial")
+        await self._blocked.wait()
+        raise StopAsyncIteration
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class TestOpenAICompatibleProvider:
     async def test_complete_returns_content(self):
         p = get_provider("openai", api_key="test-key")
@@ -788,32 +831,304 @@ class TestOpenAICompatibleProvider:
         assert turn.provider_state is None
 
     @pytest.mark.asyncio
-    async def test_response_family_never_falls_back_to_chat_for_unimplemented_entrypoints(self):
-        p = get_provider(
-            "openai",
-            api_key="test-key",
-            api_family="response",
+    async def test_response_streaming_tool_turn_reconciles_final_items_without_duplication(self):
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        message = SimpleNamespace(
+            id="msg-1",
+            type="message",
+            status="completed",
+            role="assistant",
+            content=[SimpleNamespace(type="output_text", text="Checking.")],
         )
-        create = AsyncMock()
+        call = SimpleNamespace(
+            id="fc-item-1",
+            type="function_call",
+            status="completed",
+            call_id="call-1",
+            name="lookup",
+            arguments='{"value":"one"}',
+        )
+        response = SimpleNamespace(
+            status="completed",
+            output=[message, call],
+            usage=SimpleNamespace(input_tokens=4, output_tokens=3),
+        )
+        stream = _ResponseEventStream(
+            [
+                _response_event("response.output_text.delta", delta=""),
+                _response_event("response.output_text.delta", delta="Check"),
+                _response_event("response.output_text.delta", delta="ing."),
+                _response_event("response.output_item.done", output_index=0, item=message),
+                _response_event(
+                    "response.function_call_arguments.delta",
+                    output_index=1,
+                    item_id="fc-item-1",
+                    delta='{"value":',
+                ),
+                _response_event(
+                    "response.function_call_arguments.delta",
+                    output_index=1,
+                    item_id="fc-item-1",
+                    delta='"one"}',
+                ),
+                _response_event(
+                    "response.function_call_arguments.done",
+                    output_index=1,
+                    item_id="fc-item-1",
+                    name="lookup",
+                    arguments='{"value":"one"}',
+                ),
+                _response_event("response.output_item.done", output_index=1, item=call),
+                _response_event("response.completed", response=response),
+            ]
+        )
+        emitted: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted.append(text)
+
         with patch.object(p, "_get_client") as mock_client:
-            mock_client.return_value.chat.completions.create = create
-            with pytest.raises(ResponseRequestError, match="streaming tool transport"):
-                await p.complete_tool_turn_streaming(
+            create = AsyncMock(return_value=stream)
+            mock_client.return_value.responses.create = create
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "hi"}],
+                "gpt-5.4",
+                tools=[],
+                emit_text=emit_text,
+            )
+
+        assert emitted == ["", "Check", "ing."]
+        assert turn.text == "Checking."
+        assert turn.tool_calls[0].arguments == {"value": "one"}
+        assert turn.usage_details == {"input_tokens": 4, "output_tokens": 3}
+        assert turn.provider_state is not None
+        replay = turn.provider_state["response_replay"]
+        assert replay["items"][1]["arguments"] == '{"value":"one"}'
+        assert stream.closed is True
+        assert create.await_args is not None
+        assert create.await_args.kwargs["stream"] is True
+        mock_client.return_value.chat.completions.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("entrypoint", ["stream", "stream_tool_text"])
+    async def test_response_text_stream_entrypoints_share_terminal_usage(
+        self, entrypoint: str
+    ) -> None:
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        message = SimpleNamespace(
+            id="msg-1",
+            type="message",
+            status="completed",
+            role="assistant",
+            content=[SimpleNamespace(type="output_text", text="hello")],
+        )
+        response = SimpleNamespace(
+            status="completed",
+            output=[message],
+            usage=SimpleNamespace(input_tokens=4, output_tokens=1),
+        )
+        stream = _ResponseEventStream(
+            [
+                _response_event("response.output_text.delta", delta="hel"),
+                _response_event("response.output_text.delta", delta="lo"),
+                _response_event("response.output_item.done", output_index=0, item=message),
+                _response_event("response.completed", response=response),
+            ]
+        )
+        holder: dict[str, Any] = {}
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
+            method = getattr(p, entrypoint)
+            tokens = [
+                token
+                async for token in method(
+                    [{"role": "user", "content": "hi"}],
+                    "gpt-5.4",
+                    usage_holder=holder,
+                )
+            ]
+
+        assert tokens == ["hel", "lo"]
+        assert holder == {"usage_details": {"input_tokens": 4, "output_tokens": 1}}
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    async def test_response_incomplete_stream_never_exposes_partial_call(self):
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        partial_call = SimpleNamespace(
+            id="fc-item-1",
+            type="function_call",
+            status="incomplete",
+            call_id="call-1",
+            name="lookup",
+            arguments='{"value":"par',
+        )
+        response = SimpleNamespace(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output=[partial_call],
+            usage=None,
+        )
+        stream = _ResponseEventStream(
+            [
+                _response_event(
+                    "response.function_call_arguments.delta",
+                    output_index=0,
+                    item_id="fc-item-1",
+                    delta='{"value":"par',
+                ),
+                _response_event("response.output_item.done", output_index=0, item=partial_call),
+                _response_event("response.incomplete", response=response),
+            ]
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "hi"}],
+                "gpt-5.4",
+                tools=[],
+                emit_text=AsyncMock(),
+            )
+
+        assert turn.stop_reason == "length"
+        assert turn.tool_calls == ()
+        assert turn.provider_state is None
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("events", "message"),
+        [
+            ([_response_event("error", code="bad", message="provider broke")], "provider broke"),
+            ([], "terminal"),
+            (
+                [
+                    _response_event(
+                        "response.failed",
+                        response=SimpleNamespace(
+                            status="failed",
+                            error=SimpleNamespace(code="provider_error"),
+                            output=[],
+                            usage=None,
+                        ),
+                    )
+                ],
+                "failed",
+            ),
+            (
+                [
+                    _response_event(
+                        "response.incomplete",
+                        response=SimpleNamespace(
+                            status="incomplete",
+                            incomplete_details=SimpleNamespace(reason="content_filter"),
+                            output=[],
+                            usage=None,
+                        ),
+                    )
+                ],
+                "incomplete",
+            ),
+            (
+                [
+                    _response_event(
+                        "response.cancelled",
+                        response=SimpleNamespace(
+                            status="cancelled",
+                            output=[],
+                            usage=None,
+                        ),
+                    )
+                ],
+                "cancelled",
+            ),
+            (
+                [
+                    _response_event(
+                        "response.output_item.done",
+                        output_index=0,
+                        item=SimpleNamespace(
+                            id="msg-1",
+                            type="message",
+                            status="completed",
+                            role="assistant",
+                            content=[SimpleNamespace(type="refusal", refusal="no")],
+                        ),
+                    ),
+                    _response_event(
+                        "response.completed",
+                        response=SimpleNamespace(
+                            status="completed",
+                            output=[
+                                SimpleNamespace(
+                                    id="msg-1",
+                                    type="message",
+                                    status="completed",
+                                    role="assistant",
+                                    content=[SimpleNamespace(type="refusal", refusal="no")],
+                                )
+                            ],
+                            usage=None,
+                        ),
+                    ),
+                ],
+                "refused",
+            ),
+        ],
+    )
+    async def test_response_stream_rejects_error_failed_or_missing_terminal(
+        self, events: list[SimpleNamespace], message: str
+    ) -> None:
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        stream = _ResponseEventStream(events)
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
+            with pytest.raises(ResponseStatusError, match=message):
+                _ = [
+                    token
+                    async for token in p.stream([{"role": "user", "content": "hi"}], "gpt-5.4")
+                ]
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("entrypoint", ["stream", "stream_tool_text"])
+    async def test_response_text_stream_close_closes_the_http_stream(self, entrypoint: str) -> None:
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        stream = _BlockingResponseEventStream()
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
+            method = getattr(p, entrypoint)
+            tokens = method([{"role": "user", "content": "hi"}], "gpt-5.4")
+            assert await anext(tokens) == "partial"
+            await tokens.aclose()
+
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    async def test_response_stream_cancellation_closes_the_http_stream(self):
+        p = get_provider("openai", api_key="test-key", api_family="response")
+        stream = _BlockingResponseEventStream()
+        emitted = asyncio.Event()
+
+        async def emit_text(_text: str) -> None:
+            emitted.set()
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
+            task = asyncio.create_task(
+                p.complete_tool_turn_streaming(
                     [{"role": "user", "content": "hi"}],
                     "gpt-5.4",
                     tools=[],
-                    emit_text=AsyncMock(),
+                    emit_text=emit_text,
                 )
-            with pytest.raises(ResponseRequestError, match="streaming transport"):
-                _ = [
-                    token
-                    async for token in p.stream(
-                        [{"role": "user", "content": "hi"}],
-                        "gpt-5.4",
-                    )
-                ]
+            )
+            await asyncio.wait_for(emitted.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
-        create.assert_not_awaited()
+        assert stream.closed is True
 
     @pytest.mark.asyncio
     async def test_complete_tool_turn_sends_tools_and_normalizes_calls(self):

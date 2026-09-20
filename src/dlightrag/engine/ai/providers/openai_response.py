@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from contextlib import aclosing
 from typing import Any
 
 from dlightrag.engine.ai.messages import (
@@ -13,7 +15,12 @@ from dlightrag.engine.ai.messages import (
     ToolChoice,
     ToolDefinition,
 )
-from dlightrag.engine.ai.providers.base import CompletionOutput, usage_mapping, usage_to_dict
+from dlightrag.engine.ai.providers.base import (
+    CompletionOutput,
+    capture_stream_usage,
+    usage_mapping,
+    usage_to_dict,
+)
 from dlightrag.engine.ai.response_policy import (
     ResponseRequestError,
     validate_response_extensions,
@@ -463,6 +470,209 @@ def _call_kwargs(
     return call_kwargs
 
 
+class _ResponseStreamAccumulator:
+    """One request's typed Response event state, finalized only by one terminal."""
+
+    _IGNORED_EVENTS = frozenset(
+        {
+            "response.queued",
+            "response.created",
+            "response.in_progress",
+            "response.content_part.added",
+            "response.content_part.done",
+            "response.output_text.done",
+            "response.output_text.annotation.added",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_text.delta",
+            "response.reasoning_text.done",
+            "response.refusal.delta",
+            "response.refusal.done",
+        }
+    )
+
+    def __init__(self) -> None:
+        self._text_deltas: list[str] = []
+        self._argument_deltas: dict[int, list[str]] = {}
+        self._argument_item_ids: dict[int, str] = {}
+        self._final_arguments: dict[int, str] = {}
+        self._added_items: dict[int, tuple[object, object]] = {}
+        self._done_items: dict[int, dict[str, Any]] = {}
+        self._incomplete_done_items: set[int] = set()
+        self._terminal: Any | None = None
+        self._validated = False
+
+    @staticmethod
+    def _output_index(event: Any) -> int:
+        index = getattr(event, "output_index", None)
+        if not isinstance(index, int) or index < 0:
+            raise ResponseStatusError("Response stream event has an invalid output index")
+        return index
+
+    def _assert_open(self) -> None:
+        if self._terminal is not None:
+            raise ResponseStatusError("Response stream continued after its terminal event")
+
+    def _record_argument_identity(self, index: int, event: Any) -> None:
+        item_id = getattr(event, "item_id", None)
+        if not isinstance(item_id, str) or not item_id:
+            raise ResponseStatusError("Response function arguments require an item id")
+        prior = self._argument_item_ids.setdefault(index, item_id)
+        if prior != item_id:
+            raise ResponseStatusError("Response function argument item identity changed")
+
+    def _accept_output_item(self, event: Any, *, done: bool) -> None:
+        index = self._output_index(event)
+        raw_item = getattr(event, "item", None)
+        item = _plain_json(raw_item)
+        if not isinstance(item, dict):
+            raise ResponseStatusError("Response stream output item is malformed")
+        item_id = item.get("id")
+        item_type = item.get("type")
+        if done:
+            if index in self._done_items or index in self._incomplete_done_items:
+                raise ResponseStatusError("Response stream finalized an output item twice")
+            added = self._added_items.get(index)
+            if added is not None and added != (item_id, item_type):
+                raise ResponseStatusError("Response stream output item identity changed")
+            if item.get("status") == "incomplete":
+                # `done` closes this item's event lifecycle; it does not make a
+                # token-truncated item safe for replay or Tool execution.
+                self._incomplete_done_items.add(index)
+                return
+            _validate_finalized_item(item)
+            if item_type == "function_call":
+                encoded = item.get("arguments")
+                deltas = self._argument_deltas.get(index)
+                if deltas is not None and "".join(deltas) != encoded:
+                    raise ResponseStatusError(
+                        "Response function arguments differ from their streamed deltas"
+                    )
+                final_arguments = self._final_arguments.get(index)
+                if final_arguments is not None and final_arguments != encoded:
+                    raise ResponseStatusError(
+                        "Response function arguments differ from their done event"
+                    )
+            self._done_items[index] = item
+            return
+        if index in self._added_items:
+            raise ResponseStatusError("Response stream added an output item twice")
+        self._added_items[index] = (item_id, item_type)
+
+    def accept(self, event: Any) -> str | None:
+        """Consume one SDK event and return its sole public text delta, if any."""
+        self._assert_open()
+        event_type = getattr(event, "type", None)
+        if event_type == "error":
+            message = getattr(event, "message", None) or "Responses stream error"
+            code = getattr(event, "code", None)
+            suffix = f" ({code})" if code else ""
+            raise ResponseStatusError(f"{message}{suffix}")
+        if event_type in {
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+            "response.cancelled",
+        }:
+            response = getattr(event, "response", None)
+            if response is None:
+                raise ResponseStatusError("Response terminal event omitted its response")
+            expected = event_type.removeprefix("response.")
+            if getattr(response, "status", None) != expected:
+                raise ResponseStatusError("Response terminal event and status disagree")
+            self._terminal = response
+            return None
+        if event_type == "response.output_text.delta":
+            delta = getattr(event, "delta", None)
+            if not isinstance(delta, str):
+                raise ResponseStatusError("Response output text delta is malformed")
+            self._text_deltas.append(delta)
+            return delta
+        if event_type == "response.function_call_arguments.delta":
+            index = self._output_index(event)
+            self._record_argument_identity(index, event)
+            delta = getattr(event, "delta", None)
+            if not isinstance(delta, str):
+                raise ResponseStatusError("Response function argument delta is malformed")
+            self._argument_deltas.setdefault(index, []).append(delta)
+            return None
+        if event_type == "response.function_call_arguments.done":
+            index = self._output_index(event)
+            self._record_argument_identity(index, event)
+            arguments = getattr(event, "arguments", None)
+            if not isinstance(arguments, str):
+                raise ResponseStatusError("Response function argument completion is malformed")
+            if index in self._final_arguments:
+                raise ResponseStatusError("Response function arguments completed twice")
+            deltas = self._argument_deltas.get(index)
+            if deltas is not None and "".join(deltas) != arguments:
+                raise ResponseStatusError(
+                    "Response function arguments differ from their streamed deltas"
+                )
+            self._final_arguments[index] = arguments
+            return None
+        if event_type == "response.output_item.added":
+            self._accept_output_item(event, done=False)
+            return None
+        if event_type == "response.output_item.done":
+            self._accept_output_item(event, done=True)
+            return None
+        if event_type in self._IGNORED_EVENTS:
+            return None
+        raise ResponseStatusError(f"unsupported Response stream event {event_type!r}")
+
+    def response(self) -> Any:
+        """Return the one validated terminal Response, never partial event state."""
+        if self._terminal is None:
+            raise ResponseStatusError("Response stream ended without a terminal event")
+        if self._validated:
+            return self._terminal
+        status = _terminal_status(self._terminal)
+        text, _reasoning, _calls, _refusals = _response_parts(self._terminal)
+        if "".join(self._text_deltas) != text:
+            raise ResponseStatusError("Response final text differs from its streamed deltas")
+        if status == "completed":
+            finalized = _finalized_output_items(self._terminal)
+            if sorted(self._done_items) != list(range(len(finalized))):
+                raise ResponseStatusError(
+                    "Response stream ended before every output item finalized"
+                )
+            for index, item in enumerate(finalized):
+                if self._done_items[index] != item:
+                    raise ResponseStatusError(
+                        "Response terminal output differs from its finalized stream item"
+                    )
+        self._validated = True
+        return self._terminal
+
+
+async def _close_response_stream(stream: Any) -> None:
+    close = getattr(stream, "close", None)
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _response_events(
+    client: Any,
+    call_kwargs: dict[str, Any],
+    accumulator: _ResponseStreamAccumulator,
+) -> AsyncGenerator[str]:
+    stream = await client.responses.create(**call_kwargs, stream=True)
+    try:
+        async for event in stream:
+            delta = accumulator.accept(event)
+            if delta is not None:
+                yield delta
+        accumulator.response()
+    finally:
+        await _close_response_stream(stream)
+
+
 async def complete_response(
     client: Any,
     messages: list[dict[str, Any]],
@@ -514,10 +724,79 @@ async def complete_response_tool_turn(
     return _assistant_turn(response)
 
 
+async def complete_response_tool_turn_streaming(
+    client: Any,
+    messages: list[dict[str, Any]],
+    model: str,
+    *,
+    tools: list[ToolDefinition],
+    emit_text: Callable[[str], Awaitable[None]],
+    tool_choice: ToolChoice,
+    temperature: float | None,
+    max_tokens: int | None,
+    model_kwargs: dict[str, Any] | None,
+) -> AssistantTurn:
+    """Stream one tool turn while retaining only terminal finalized replay."""
+    call_kwargs = _call_kwargs(
+        messages,
+        model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format=None,
+        model_kwargs=model_kwargs,
+    )
+    if tools:
+        call_kwargs["tools"] = _response_tools(tools)
+        call_kwargs["tool_choice"] = tool_choice
+        call_kwargs["parallel_tool_calls"] = True
+    accumulator = _ResponseStreamAccumulator()
+    events = _response_events(client, call_kwargs, accumulator)
+    async with aclosing(events):
+        async for delta in events:
+            await emit_text(delta)
+    return _assistant_turn(accumulator.response())
+
+
+async def stream_response_text(
+    client: Any,
+    messages: list[dict[str, Any]],
+    model: str,
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    response_format: dict[str, Any] | None,
+    model_kwargs: dict[str, Any] | None,
+    usage_holder: dict[str, Any] | None,
+    set_reasoning: Callable[[str], None],
+) -> AsyncGenerator[str]:
+    """Stream terminal-validated Response text through the provider contract."""
+    call_kwargs = _call_kwargs(
+        messages,
+        model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format=response_format,
+        model_kwargs=model_kwargs,
+    )
+    accumulator = _ResponseStreamAccumulator()
+    events = _response_events(client, call_kwargs, accumulator)
+    async with aclosing(events):
+        async for delta in events:
+            yield delta
+    response = accumulator.response()
+    _completion_output(response)
+    _text, reasoning, _calls, _refusals = _response_parts(response)
+    set_reasoning(reasoning)
+    usage = getattr(response, "usage", None)
+    capture_stream_usage(usage_holder, usage, cost_fn=_cost_details)
+
+
 __all__ = [
     "ResponseStatusError",
     "complete_response",
     "complete_response_tool_turn",
+    "complete_response_tool_turn_streaming",
     "response_input",
     "response_text_config",
+    "stream_response_text",
 ]

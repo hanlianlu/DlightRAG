@@ -4,6 +4,7 @@
 import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 from typing import Any
 
 from openai import APIStatusError, AsyncOpenAI
@@ -25,8 +26,9 @@ from dlightrag.engine.ai.providers.base import (
 from dlightrag.engine.ai.providers.openai_response import (
     complete_response,
     complete_response_tool_turn,
+    complete_response_tool_turn_streaming,
+    stream_response_text,
 )
-from dlightrag.engine.ai.response_policy import ResponseRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +321,17 @@ class OpenAICompatibleProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
     ) -> AssistantTurn:
         if self._api_family == "response":
-            raise ResponseRequestError("Response streaming tool transport is not implemented")
+            return await complete_response_tool_turn_streaming(
+                self._get_client(),
+                messages,
+                model,
+                tools=tools,
+                emit_text=emit_text,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model_kwargs=model_kwargs,
+            )
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": _openai_tool_messages(messages),
@@ -418,15 +430,17 @@ class OpenAICompatibleProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[override]
-        async for token in self.stream(
+        stream = self.stream(
             messages,
             model,
             temperature=temperature,
             max_tokens=max_tokens,
             model_kwargs=model_kwargs,
             usage_holder=usage_holder,
-        ):
-            yield token
+        )
+        async with aclosing(stream):
+            async for token in stream:
+                yield token
 
     async def _open_stream(self, call_kwargs: dict[str, Any]) -> Any:
         """Open a streaming completion, requesting token usage when supported.
@@ -459,7 +473,21 @@ class OpenAICompatibleProvider(CompletionProvider):
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore
         if self._api_family == "response":
-            raise ResponseRequestError("Response streaming transport is not implemented")
+            stream = stream_response_text(
+                self._get_client(),
+                messages,
+                model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                model_kwargs=model_kwargs,
+                usage_holder=usage_holder,
+                set_reasoning=lambda value: setattr(self, "last_reasoning", value),
+            )
+            async with aclosing(stream):
+                async for token in stream:
+                    yield token
+            return
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": _openai_tool_messages(messages),
