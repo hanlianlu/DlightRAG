@@ -24,6 +24,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from markdown_it import MarkdownIt
+
 from dlightrag.engine.public_http import fetch_public_http, validate_public_web_url
 
 #: How many pages one answer may ask about. The reader gets a card or two, and an
@@ -51,6 +53,11 @@ _MAX_META_TAGS = 64
 _MAX_META_WINDOW = 8192
 # Every part of an attribute is length-bounded, so a page cannot make attribute
 # matching scan quadratically by never writing the `=` it looks for.
+_ATTRIBUTE = re.compile(
+    r"(?P<name>[a-zA-Z:_-]{1,64})\s*=\s*"
+    r"(?P<value>\"[^\"]{0,4096}\"|'[^']{0,4096}'|[^\s\"'>]{1,4096})"
+)
+_BLOCK_PARSER = MarkdownIt("commonmark")
 _ATTRIBUTE = re.compile(
     r"(?P<name>[a-zA-Z:_-]{1,64})\s*=\s*"
     r"(?P<value>\"[^\"]{0,4096}\"|'[^']{0,4096}'|[^\s\"'>]{1,4096})"
@@ -83,41 +90,79 @@ class LinkCard:
         }
 
 
+def _block_code_spans(answer: str) -> list[tuple[int, int]]:
+    """Return the spans the renderer itself calls block code.
+
+    Fences, indented blocks, headings that end a paragraph, fence lengths: the
+    same parser the Answer is rendered with decides all of it, so this module
+    never has to guess at Markdown's block rules.
+    """
+    lines = answer.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    spans: list[tuple[int, int]] = []
+    for token in _BLOCK_PARSER.parse(answer):
+        if token.type in {"fence", "code_block"} and token.map:
+            start, end = token.map
+            spans.append((offsets[start], offsets[min(end, len(lines))]))
+    return spans
+
+
+def _inline_code_spans(answer: str, segments: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Return inline code spans inside prose, closed only by a run of equal length."""
+    spans: list[tuple[int, int]] = []
+    for start, end in segments:
+        position = start
+        while position < end:
+            opening = answer.find("`", position, end)
+            if opening == -1:
+                break
+            length = _run_length(answer, opening, end)
+            closing = _matching_run(answer, opening + length, end, length)
+            if closing == -1:
+                position = opening + length
+                continue
+            spans.append((opening, closing + length))
+            position = closing + length
+    return spans
+
+
+def _run_length(answer: str, position: int, end: int) -> int:
+    length = 0
+    while position + length < end and answer[position + length] == "`":
+        length += 1
+    return length
+
+
+def _matching_run(answer: str, position: int, end: int, length: int) -> int:
+    """Return the start of the next backtick run of exactly ``length``, or ``-1``."""
+    scan = position
+    while scan < end:
+        found = answer.find("`", scan, end)
+        if found == -1:
+            return -1
+        run = _run_length(answer, found, end)
+        if run == length:
+            return found
+        scan = found + run
+    return -1
+
+
 def code_spans(answer: str) -> list[tuple[int, int]]:
     """Return the answer spans that quote code rather than write an address.
 
-    Over-inclusion is the safe direction: a span wrongly treated as code costs a
-    card, while a span wrongly treated as prose would rewrite quoted text.
+    Block code is the renderer's own classification, and inline runs are
+    recognized inside the prose only, so a quoting character can never pair
+    across a code block.
     """
-    spans: list[tuple[int, int]] = []
-    lines = answer.splitlines(keepends=True)
-    position = 0
-    fence: tuple[str, int] | None = None
-    for line in lines:
-        end = position + len(line)
-        marker = _FENCE.match(line)
-        if fence is None and marker is not None:
-            fence = (marker.group("fence")[0], len(marker.group("fence")))
-            spans.append((position, end))
-        elif fence is not None:
-            spans.append((position, end))
-            if marker is not None and marker.group("fence")[0] == fence[0]:
-                fence = None
-        elif _INDENTED_CODE.match(line):
-            spans.append((position, end))
-        position = end
-    for start, end in _prose_segments(len(answer), spans):
-        for match in _INLINE_CODE.finditer(answer, start, end):
-            spans.append(match.span())
+    spans = _block_code_spans(answer)
+    spans.extend(_inline_code_spans(answer, _prose_segments(len(answer), spans)))
     return spans
 
 
 def _prose_segments(length: int, blocks: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Return the stretches of an answer that are not inside a code block.
-
-    Inline code is recognized only here, so a backtick before a fence can never
-    pair with one after it and swallow the prose between them.
-    """
+    """Return the stretches of an answer that are not inside a block of code."""
     segments: list[tuple[int, int]] = []
     position = 0
     for start, end in sorted(blocks):

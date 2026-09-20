@@ -547,3 +547,42 @@ def test_a_link_may_still_quote_code_in_its_label() -> None:
     answer = "See [run `curl` first](https://example.com/clip) now."
 
     assert addresses_in(answer) == ["https://example.com/clip"]
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        # A multi-line inline span: the indented line is a paragraph continuation,
+        # so the address is inside the span rather than in a block.
+        ("Say `\n    x\nhttps://example.com/clip`\n", []),
+        # A fence, then a genuine inline span on the last line.
+        ("~~~\n`\n~~~\n`https://example.com/clip`\n", []),
+        # An indented line inside a paragraph is prose, which is what is rendered.
+        ("Some text\n    https://example.com/clip\n", ["https://example.com/clip"]),
+        # An indented block after a blank line is code.
+        ("\n    https://example.com/clip\n", []),
+        # A stray backtick before a fence cannot pair with one after it.
+        (
+            "see `x` before\n```\ncode\n```\nhttps://example.com/clip`\n",
+            ["https://example.com/clip"],
+        ),
+    ],
+    ids=[
+        "multiline-inline",
+        "fence-then-inline",
+        "indented-continuation",
+        "indented-block",
+        "stray-backtick",
+    ],
+)
+def test_code_quoting_agrees_with_what_the_renderer_shows(answer: str, expected: list[str]) -> None:
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    rendered = render_answer_html(answer, known_sources={})
+
+    assert addresses_in(answer) == expected
+    # The renderer links exactly the addresses this module calls written.
+    if expected:
+        assert "<a " in rendered
+    else:
+        assert "<a " not in rendered
