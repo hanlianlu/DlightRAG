@@ -6,17 +6,25 @@ contract; [Configuration](configuration.md#api-family) owns the opt-in settings.
 
 ## Decision
 
-**The common transport is implemented; rollout is not cleared.** Keep the
-configured roles on `chat_completion`. Neither a healthy process nor a passing
-mock qualifies a live endpoint, and a passing retry does not erase a failed
-canary. No family, capability, reasoning, or privacy fallback was introduced.
+**The common transport is implemented and the planned bounded live protocol
+checks have run for the two named endpoint/model pairs.** The observed color
+errors and zero-call answer are model/workload-quality observations, not evidence
+of a Responses protocol defect or grounds to block protocol acceptance or rollout.
+The earlier rollout hold on that basis is withdrawn; this is a correction to the
+interpretation, not a new test result or deletion of failed task assertions.
+
+Neither a healthy process nor a passing mock qualifies a live endpoint. The live
+evidence below remains bounded to the tested models and requests, not a guarantee
+of model accuracy. Configuration remains `chat_completion` until an operator
+chooses a per-role rollout. No family, capability, reasoning, or privacy fallback
+was introduced.
 
 | Scope | Evidence / disposition |
 |---|---|
 | Common Response transport, five entrypoints, Tool/image ownership, invocation identity | Implemented and covered by SDK-backed HTTP/SSE contracts |
 | Recovery, Fork, whole-exchange compaction, provider-anchored accounting | Product-seam regression tests; no new Session or compaction authority |
-| Direct DeepSeek `deepseek-flash` | Live text, JSON Object, stream, reasoning replay, two-call loop, user image and stream close passed; Tool-image answer varied across repeated samples. **Rollout held** |
-| OpenRouter `z-ai/glm-5.3-flash` | Independently exercised; a full reasoning/two-call loop passed, but another returned text without the requested calls. **Rollout held** |
+| Direct DeepSeek `deepseek-flash` | Live text, JSON Object, stream, reasoning replay, two-call loop, user image and stream close passed; Tool-image answer varied across repeated samples, including Chat controls. **Model-quality observation, not a protocol blocker** |
+| OpenRouter `z-ai/glm-5.3-flash` | Independently exercised; a full reasoning/two-call loop passed, but another returned text without the requested calls under `tool_choice=auto`. **Model behavior, not a protocol blocker** |
 | Official OpenAI | Experimental, installed-SDK mock HTTP/SSE tested; **no official live API key, not live-qualified** |
 | ZDR | Not established by any of these tests; `store=false` is remote-state minimization only |
 
@@ -73,7 +81,7 @@ that made **no** Tool call, then made two distinct calls, consumed two local
 results, and returned the correct sum. The final Response input had two native
 reasoning items and two `function_call_output` items, with no response ID.
 
-The repeated Tool-image case is still a falsifier: **two passes and two failures**
+The repeated Tool-image task had **two passes and two failures**
 across the initial matrix, two targeted checks, and corrected matrix. In the
 instrumented failure the endpoint returned HTTP 200, a completed `stop` turn,
 zero further calls, and an incorrect color answer. It was not a token-limit
@@ -89,10 +97,11 @@ families, Tool output scored 1/3 on Chat and 2/3 on Response. All were HTTP 200
 completed turns. The failure is therefore **not isolated to the new Response
 wire**, and a Chat fallback would not cure this workload. The 14-attempt probe
 is recorded in local `response-image-matrix.py` / `response-image-matrix.jsonl`.
-It does **not** establish whether model variability or provider-side normalization
-caused the failure. The adapter remains unchanged
-until a protocol defect has a falsifying contract test. Do not describe this
-endpoint's whole multimodal Tool workload as qualified yet.
+This is an answer-quality observation, not a demonstrated Responses-specific
+transport defect. The exact cause was not isolated; a task assertion alone does
+not establish a protocol violation. The adapter therefore remains unchanged,
+and these color errors do not block protocol acceptance or rollout. They still
+limit any claim about this model's image-answer accuracy.
 
 ### OpenRouter
 
@@ -101,8 +110,14 @@ the predecessor's native reasoning and returned the correct sum after two calls.
 In the later full matrix, the second request instead returned a completed text
 turn with **zero calls** (HTTP 200, 430 input / 56 output tokens). `tool_choice=auto`
 does not guarantee that a model follows an instruction to call tools. No local
-effect executed in that failed case. This is a workload-quality failure, not
-evidence that the SDK lost a call; its cause remains unresolved.
+effect executed in that failed task. Returning text without a call is permitted
+by `tool_choice=auto`: the task instruction was not followed, but the protocol
+contract was not violated. There is no evidence that the SDK lost a call, and
+this observation does not block protocol acceptance or rollout.
+
+The remote model only selects which local function to request. The canary's
+`read_alpha`, `read_beta`, and `read_image` functions execute locally; no hosted
+provider tools or remote MCP tools were enabled.
 
 User-image and Tool-image tasks passed in both families. OpenRouter owns upstream
 selection and normalization; no upstream pinning or routing-policy change was
@@ -121,7 +136,8 @@ emit an empty initial chunk. The corrected harness instead requires and verifies
 native predecessor replay, and closes after the first nonempty text delta. The
 initial user-image prompt named the expected color; its later **unhinted** checks
 are the image evidence. These corrections did not change provider code and do
-not erase the genuine Tool-image or Tool-selection failures above.
+not erase the failed task assertions above. Those assertions measure answer
+quality and instruction following, not protocol conformance.
 
 ### Cost, latency and input comparison
 
@@ -171,10 +187,14 @@ replay state. No production transport change was needed for this coverage.
 Official OpenAI live qualification remains deferred until an operator supplies an
 official key; Codex login and OpenRouter-hosted models are not substitutes.
 
-## Remaining gate
+## Rollout and remaining limits
 
-Resolve and requalify the unstable live workloads before reviewing any Query
-rollout; ordinary roles, VLM and reranking follow independently. This is a held
-qualification, not permission to drop image ownership, force remote state, relax
-Tool validation, or change the Session/compaction design. Implementation/CI
-completion and this live rollout gate must be reported separately.
+The model-quality observations above are not additional ADR 0027 completion or
+rollout gates. Any operator rollout remains explicit and per role: Query first,
+then ordinary roles, VLM and reranking independently. This documentation correction
+does not switch a configured endpoint or relax image ownership, local Tool
+validation, or Session/compaction authority.
+
+Official OpenAI live qualification remains deferred for lack of an official API
+key. No ZDR, untested endpoint/model, cross-route stability, or general model
+quality guarantee is inferred from these bounded checks.

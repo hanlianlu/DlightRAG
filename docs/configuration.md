@@ -362,10 +362,12 @@ policies remain deployment facts. There is no `zdr` setting in this feature.
 Official OpenAI (`base_url: https://api.openai.com/v1` plus an official API key)
 is **experimental and mock-contract tested, not live-qualified**. It is never
 selected as a new default. DeepSeek and OpenRouter have separate live evidence;
-passing one does not qualify the other. The current [qualification record](response-api-qualification.md)
-holds rollout because repeated canaries exposed unresolved output variability.
-The shipped configuration remains `chat_completion`; Query, ordinary roles,
-VLM, and reranking must be evaluated separately before any operator rollout.
+passing one does not qualify the other. The [qualification record](response-api-qualification.md)
+retains image-answer and `tool_choice=auto` observations as model-quality limits,
+not protocol acceptance or rollout blockers. `auto` lets the model return text
+without requesting a local function; it does not enable hosted provider tools.
+The shipped configuration remains `chat_completion`; any operator rollout is
+explicit and per role, starting with Query, then ordinary roles, VLM and reranking.
 See [ADR 0027](adr/0027-api-family-selects-the-provider-wire.md).
 
 ### Model Catalogue And Reasoning
