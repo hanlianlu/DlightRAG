@@ -62,7 +62,7 @@ const presentation: AnswerPresentation = {
     inline: false,
   }],
   sources: [],
-  evidenceImages: [],
+  evidenceImages: [], linkCards: [],
   artifacts: [],
   artifactOutcome: {status: 'complete', issues: []},
 };

@@ -1,0 +1,127 @@
+[
+  {
+    "name": "counterfeit-title",
+    "markdown": "> `\n> https://example.com/x\n> ` [a](https://example.com/y \"`https://example.com/x`\")",
+    "hrefs": [
+      "https://example.com/y"
+    ],
+    "html": "<blockquote>\n<p><code>https://example.com/x</code> <a href=\"https://example.com/y\" title=\"`https://example.com/x`\" target=\"_blank\" rel=\"noopener noreferrer\">a</a></p>\n</blockquote>\n"
+  },
+  {
+    "name": "counterfeit-plus-real",
+    "markdown": "> `\n> https://example.com/x\n> ` [a](https://example.com/y \"`https://example.com/x`\")\n\nhttps://example.com/x",
+    "hrefs": [
+      "https://example.com/y",
+      "https://example.com/x"
+    ],
+    "html": "<blockquote>\n<p><code>https://example.com/x</code> <a href=\"https://example.com/y\" title=\"`https://example.com/x`\" target=\"_blank\" rel=\"noopener noreferrer\">a</a></p>\n</blockquote>\n<p><a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x</a></p>\n"
+  },
+  {
+    "name": "two-quoted-plus-real",
+    "markdown": "> `\n> https://example.com/x\n> ` `https://example.com/x`\n\nhttps://example.com/x",
+    "hrefs": [
+      "https://example.com/x"
+    ],
+    "html": "<blockquote>\n<p><code>https://example.com/x</code> <code>https://example.com/x</code></p>\n</blockquote>\n<p><a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x</a></p>\n"
+  },
+  {
+    "name": "two-quoted",
+    "markdown": "> `\n> https://example.com/x\n> ` `https://example.com/x`",
+    "hrefs": [],
+    "html": "<blockquote>\n<p><code>https://example.com/x</code> <code>https://example.com/x</code></p>\n</blockquote>\n"
+  },
+  {
+    "name": "code-plus-two-real",
+    "markdown": "`https://example.com/x` and https://example.com/x and [film](https://example.com/x)",
+    "hrefs": [
+      "https://example.com/x",
+      "https://example.com/x"
+    ],
+    "html": "<p><code>https://example.com/x</code> and <a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x</a> and <a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">film</a></p>\n"
+  },
+  {
+    "name": "list",
+    "markdown": "- `https://example.com/x`\n- [film](https://example.com/x)",
+    "hrefs": [
+      "https://example.com/x"
+    ],
+    "html": "<ul>\n<li><code>https://example.com/x</code></li>\n<li><a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">film</a></li>\n</ul>\n"
+  },
+  {
+    "name": "reference",
+    "markdown": "[film][r] and `https://example.com/x`\n\n[r]: https://example.com/x \"`https://example.com/y`\"",
+    "hrefs": [
+      "https://example.com/x"
+    ],
+    "html": "<p><a href=\"https://example.com/x\" title=\"`https://example.com/y`\" target=\"_blank\" rel=\"noopener noreferrer\">film</a> and <code>https://example.com/x</code></p>\n"
+  },
+  {
+    "name": "unused-reference",
+    "markdown": "[unused]: https://example.com/x",
+    "hrefs": [],
+    "html": ""
+  },
+  {
+    "name": "math",
+    "markdown": "$https://example.com/x$ and \\(https://example.com/x\\) and https://example.com/y",
+    "hrefs": [
+      "https://example.com/y"
+    ],
+    "html": "<p>$https://example.com/x$ and \\(https://example.com/x\\) and <a href=\"https://example.com/y\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/y</a></p>\n"
+  },
+  {
+    "name": "image",
+    "markdown": "![https://example.com/x](https://example.com/y)",
+    "hrefs": [],
+    "html": "<p><img src=\"https://example.com/y\" alt=\"https://example.com/x\"></p>\n"
+  },
+  {
+    "name": "escaped",
+    "markdown": "\\`https://example.com/x\\`",
+    "hrefs": [
+      "https://example.com/x%5C%60"
+    ],
+    "html": "<p>`<a href=\"https://example.com/x%5C%60\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x\\`</a></p>\n"
+  },
+  {
+    "name": "table",
+    "markdown": "| Link | Code |\n| --- | --- |\n| [film](https://example.com/x) | `https://example.com/x` |",
+    "hrefs": [
+      "https://example.com/x"
+    ],
+    "html": "<table>\n<thead>\n<tr>\n<th>Link</th>\n<th>Code</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">film</a></td>\n<td><code>https://example.com/x</code></td>\n</tr>\n</tbody>\n</table>\n"
+  },
+  {
+    "name": "punctuation",
+    "markdown": "看 https://example.com/x。 Next https://example.com/y.",
+    "hrefs": [
+      "https://example.com/x",
+      "https://example.com/y"
+    ],
+    "html": "<p>看 <a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x</a>。 Next <a href=\"https://example.com/y\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/y</a>.</p>\n"
+  },
+  {
+    "name": "explicit-dot",
+    "markdown": "[film](https://example.com/x.)",
+    "hrefs": [
+      "https://example.com/x."
+    ],
+    "html": "<p><a href=\"https://example.com/x.\" target=\"_blank\" rel=\"noopener noreferrer\">film</a></p>\n"
+  },
+  {
+    "name": "emphasis",
+    "markdown": "**Watch [film](https://example.com/x) now.**",
+    "hrefs": [
+      "https://example.com/x"
+    ],
+    "html": "<p><strong>Watch <a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">film</a> now.</strong></p>\n"
+  },
+  {
+    "name": "line-endings",
+    "markdown": "> `\r\n> https://example.com/x\r\n> ` [a](https://example.com/y \"`https://example.com/x`\")",
+    "hrefs": [
+      "https://example.com/y"
+    ],
+    "html": "<blockquote>\n<p><code>https://example.com/x</code> <a href=\"https://example.com/y\" title=\"`https://example.com/x`\" target=\"_blank\" rel=\"noopener noreferrer\">a</a></p>\n</blockquote>\n"
+  }
+]

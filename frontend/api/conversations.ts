@@ -158,6 +158,7 @@ const presentationPart = v.pipe(
     evidence_image: v.nullable(presentationImage),
     card: v.nullable(linkCard),
     inline: v.boolean(),
+    slot: v.optional(v.nullable(v.pipe(v.number(), v.integer(), v.minValue(0)))),
   }),
   v.transform((w) => ({
     type: w.type,
@@ -167,6 +168,7 @@ const presentationPart = v.pipe(
     evidenceImage: w.evidence_image,
     card: w.card,
     inline: w.inline,
+    ...(w.slot == null ? {} : {slot: w.slot}),
   })),
 );
 export type PresentationPart = v.InferOutput<typeof presentationPart>;
@@ -212,6 +214,7 @@ const answerPresentation = v.pipe(
     answer_text: v.string(),
     parts: v.array(presentationPart),
     sources: v.array(presentationSource),
+    link_cards: v.optional(v.array(linkCard), []),
     evidence_images: v.array(presentationImage),
     artifacts: v.array(answerArtifact),
     artifact_outcome: artifactOutcome,
@@ -220,6 +223,7 @@ const answerPresentation = v.pipe(
     answerText: w.answer_text,
     parts: w.parts,
     sources: w.sources,
+    linkCards: w.link_cards,
     evidenceImages: w.evidence_images,
     artifacts: w.artifacts,
     artifactOutcome: w.artifact_outcome,

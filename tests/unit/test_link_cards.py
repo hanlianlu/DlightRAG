@@ -11,13 +11,10 @@ import pytest
 from dlightrag.engine.answer.links.cards import (
     MAX_CARDS,
     LinkCard,
-    addresses_in,
-    card_key,
-    code_spans,
     collect_link_cards,
     project_link_cards,
-    written_addresses,
 )
+from dlightrag.engine.answer.markdown import link_targets
 
 
 @dataclass
@@ -73,7 +70,7 @@ class _Fetcher:
 def test_addresses_are_distinct_ordered_and_without_sentence_punctuation() -> None:
     answer = "见 https://example.com/a。 还有 https://example.com/b, https://example.com/a"
 
-    assert addresses_in(answer) == ["https://example.com/a", "https://example.com/b"]
+    assert link_targets(answer) == ["https://example.com/a", "https://example.com/b"]
 
 
 async def test_a_declared_video_becomes_a_card() -> None:
@@ -196,79 +193,6 @@ async def test_only_a_video_declaration_is_honoured(declared: str, expected: boo
     assert bool(cards) is expected
 
 
-def test_a_markdown_link_a_card_covers_becomes_one_part() -> None:
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {
-        "url": "https://www.youtube.com/watch?v=abc",
-        "title": "Big Buck Bunny",
-        "description": "",
-        "site": "YouTube",
-        "image": None,
-    }
-
-    parts = answer_parts_from_markdown(
-        "Before [the film](https://www.youtube.com/watch?v=abc) after.",
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[card],
-        linked_addresses=frozenset({card["url"]}),
-    )
-
-    assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
-    assert parts[1]["card"] == card
-    assert parts[0]["text"] == "Before "
-    assert parts[2]["text"] == " after."
-
-
-def test_a_bare_address_a_card_covers_becomes_one_part() -> None:
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
-
-    parts = answer_parts_from_markdown(
-        "See https://example.com/clip for it.",
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[card],
-        linked_addresses=frozenset({card["url"]}),
-    )
-
-    assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
-    assert parts[1]["card"] == card
-
-
-def test_a_cited_source_never_becomes_a_card() -> None:
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {"url": "https://example.com/source", "title": "Clip", "description": "", "site": ""}
-
-    parts = answer_parts_from_markdown(
-        "Fact [1](https://example.com/source).",
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[card],
-        linked_addresses=frozenset({card["url"]}),
-        citation_urls=frozenset({"https://example.com/source"}),
-    )
-
-    assert [part["type"] for part in parts] == ["markdown"]
-
-
-def test_an_address_without_a_card_stays_markdown() -> None:
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    parts = answer_parts_from_markdown(
-        "See https://example.com/plain now.",
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[{"url": "https://example.com/other", "title": "Other"}],
-        linked_addresses=frozenset({"https://example.com/other"}),
-    )
-
-    assert [part["type"] for part in parts] == ["markdown"]
-
-
 async def test_a_read_is_anonymous_and_bounded_by_its_deadline() -> None:
     """The deadline covers waiting for the shared network slot, not only reading."""
     import asyncio
@@ -299,28 +223,10 @@ async def test_a_read_is_anonymous_and_bounded_by_its_deadline() -> None:
     assert elapsed < 1.0, f"the deadline must bound the whole read, took {elapsed}"
 
 
-def test_written_addresses_keep_the_punctuation_a_sentence_owns() -> None:
-    answer = "See https://example.com/clip. And https://example.com/x。"
-    written = written_addresses(answer)
-
-    assert [address.key for address in written] == [
-        "https://example.com/clip",
-        "https://example.com/x",
-    ]
-    assert answer[written[0].end] == ".", "the period stays outside the address"
-    assert answer[written[1].end] == "。"
-    assert card_key("https://example.com/clip.") == "https://example.com/clip"
-    # The renderer agrees: the addresses it links are the ones recognized here.
-    from dlightrag.adapters.http.browser.presentation import render_answer_html
-
-    assert render_answer_html(answer, known_sources={}).count("<a ") == 2
-
-
 def test_addresses_quoted_as_code_are_not_written_addresses() -> None:
     answer = "Run `curl https://example.com/a` and:\n\n```\nhttps://example.com/b\n```\n"
 
-    assert addresses_in(answer) == []
-    assert code_spans(answer)
+    assert link_targets(answer) == []
 
 
 async def test_a_quoted_address_is_never_read() -> None:
@@ -365,73 +271,6 @@ async def test_a_non_html_answer_with_html_words_is_not_a_page() -> None:
     assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
 
 
-def test_a_sentence_period_does_not_break_the_card_and_is_not_swallowed() -> None:
-    """The card key drops the period; the span must too, and the period stays text."""
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
-
-    for answer, tail in [
-        ("See https://example.com/clip.", "."),
-        ("See https://example.com/clip, and more.", ", and more."),
-        ("看 https://example.com/clip。", "。"),
-    ]:
-        parts = answer_parts_from_markdown(
-            answer,
-            artifacts=[],
-            evidence_images=[],
-            link_cards=[card],
-            linked_addresses=frozenset({card["url"]}),
-        )
-
-        assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"], answer
-        assert parts[1]["card"] == card, answer
-        assert parts[2]["text"] == tail, answer
-
-
-def test_a_markdown_link_inside_code_is_not_carded() -> None:
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
-    answer = "```\n[clip](https://example.com/clip)\n```\n"
-
-    parts = answer_parts_from_markdown(
-        answer,
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[card],
-        linked_addresses=frozenset({card["url"]}),
-    )
-
-    assert [part["type"] for part in parts] == ["markdown"]
-
-
-def test_a_card_covers_the_whole_markdown_link_it_describes() -> None:
-    """A card replaces the link, not just the destination inside it."""
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {
-        "url": "https://example.com/a,b",
-        "title": "Clip",
-        "description": "",
-        "site": "",
-    }
-    answer = "Watch [the film](https://example.com/a,b) now."
-
-    parts = answer_parts_from_markdown(
-        answer,
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[card],
-        linked_addresses=frozenset({card["url"]}),
-    )
-
-    assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
-    assert parts[0]["text"] == "Watch "
-    assert parts[2]["text"] == " now."
-    assert "[" not in "".join(str(part.get("text") or "") for part in parts)
-
-
 @pytest.mark.parametrize(
     "answer",
     [
@@ -443,21 +282,10 @@ def test_a_card_covers_the_whole_markdown_link_it_describes() -> None:
     ids=["indented", "unterminated-fence", "double-backtick", "tilde-fence"],
 )
 async def test_a_quoted_address_is_not_written_nor_replaced(answer: str) -> None:
-    from dlightrag.engine.answer.results import answer_parts_from_markdown
-
-    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
     fetcher = _Fetcher({"https://example.com/clip": _video_page()})
 
     assert await collect_link_cards(answer, fetch=fetcher) == ()
     assert fetcher.calls == []
-    parts = answer_parts_from_markdown(
-        answer,
-        artifacts=[],
-        evidence_images=[],
-        link_cards=[card],
-        linked_addresses=frozenset({card["url"]}),
-    )
-    assert [part["type"] for part in parts] == ["markdown"]
 
 
 async def test_a_long_declared_title_still_produces_a_card() -> None:
@@ -554,9 +382,8 @@ def test_a_stray_backtick_before_a_fence_does_not_hide_the_prose_after_it() -> N
     """Inline code is recognized inside prose only, so a run cannot cross a fence."""
     answer = "see `x` before\n```\ncode\n```\nhttps://example.com/clip`\n"
 
-    assert addresses_in(answer) == ["https://example.com/clip"]
-    assert code_spans(answer)
-    assert addresses_in("```\ncode\n```\nhttps://example.com/clip\n") == [
+    assert link_targets(answer) == ["https://example.com/clip%60"]
+    assert link_targets("```\ncode\n```\nhttps://example.com/clip\n") == [
         "https://example.com/clip"
     ]
 
@@ -565,14 +392,13 @@ def test_a_link_whose_destination_is_quoted_code_is_not_written() -> None:
     """A fenced block can contain text that merely looks like a Markdown link."""
     answer = "Read [label\n~~~\n](https://example.com/clip)\n~~~\n"
 
-    assert addresses_in(answer) == []
-    assert code_spans(answer)
+    assert link_targets(answer) == []
 
 
 def test_a_link_may_still_quote_code_in_its_label() -> None:
     answer = "See [run `curl` first](https://example.com/clip) now."
 
-    assert addresses_in(answer) == ["https://example.com/clip"]
+    assert link_targets(answer) == ["https://example.com/clip"]
 
 
 @pytest.mark.parametrize(
@@ -590,7 +416,7 @@ def test_a_link_may_still_quote_code_in_its_label() -> None:
         # A stray backtick before a fence cannot pair with one after it.
         (
             "see `x` before\n```\ncode\n```\nhttps://example.com/clip`\n",
-            ["https://example.com/clip"],
+            ["https://example.com/clip%60"],
         ),
     ],
     ids=[
@@ -606,7 +432,7 @@ def test_code_quoting_agrees_with_what_the_renderer_shows(answer: str, expected:
 
     rendered = render_answer_html(answer, known_sources={})
 
-    assert addresses_in(answer) == expected
+    assert link_targets(answer) == expected
     # The renderer links exactly the addresses this module calls written.
     if expected:
         assert "<a " in rendered
@@ -614,106 +440,37 @@ def test_code_quoting_agrees_with_what_the_renderer_shows(answer: str, expected:
         assert "<a " not in rendered
 
 
-def test_an_ambiguous_inline_location_is_refused_rather_than_guessed() -> None:
-    """A link title can hold the same delimited content as a code span.
-
-    The parser reported exactly one code span, but the same content occurs twice
-    in the paragraph, so locating it is a guess. The guess is refused: the
-    renderer links this address, and this module declines to card it, because a
-    card that rewrites quoted text is worse than a card not offered.
-    """
+def test_a_title_duplicate_cannot_hide_a_real_link() -> None:
+    """Only the link destination is read; title text and code are not links."""
     from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     answer = '[x](https://example.com/a "`https://example.com/clip`") `https://example.com/clip`'
 
-    assert addresses_in(answer) == []
+    assert link_targets(answer) == ["https://example.com/a"]
     assert "https://example.com/clip" in render_answer_html(answer, known_sources={})
 
 
-def test_two_span_forms_of_the_same_address_are_refused_together() -> None:
-    """A padded and an unpadded span hold the same token, so neither location is unique.
-
-    Markdown strips one space of padding, which makes `` `url` `` and `` ` url ` ``
-    the same content: locating that content selects neither, and the paragraph is
-    left alone rather than half-protected.
-    """
+def test_padded_and_unpadded_code_are_neither_link_targets() -> None:
+    """Code tokens are excluded without trying to distinguish normalized content."""
     answer = "` https://example.com/clip ` `https://example.com/clip`"
 
-    assert addresses_in(answer) == []
+    assert link_targets(answer) == []
     # A single padded span is still code, and still excluded.
-    assert addresses_in("A ` https://example.com/clip ` paragraph.") == []
+    assert link_targets("A ` https://example.com/clip ` paragraph.") == []
 
 
-def test_a_newline_joined_span_is_located_by_its_normalized_content() -> None:
-    """Inside a code span a line ending is a space, so the parser reports the address.
-
-    The first span contains newlines around the address and the second is the plain
-    one; both report the same content. They are found by pairing backtick runs and
-    checking the pair produces that content, in order, so the first address is
-    protected rather than mistaken for the second.
-    """
+def test_multiline_and_single_line_code_emit_no_links() -> None:
+    """Equivalent code content needs no source-location reconstruction."""
     answer = "`\nhttps://example.com/clip\n` `https://example.com/clip`"
 
-    assert addresses_in(answer) == []
+    assert link_targets(answer) == []
     # Addresses between two spans are still written, so protection is neither lost
     # nor spread wider than the spans themselves.
-    assert addresses_in("`x` https://example.com/clip `y`") == ["https://example.com/clip"]
+    assert link_targets("`x` https://example.com/clip `y`") == ["https://example.com/clip"]
 
 
-def test_the_renderer_decides_what_is_an_address_not_this_module() -> None:
-    """A card replaces only text the same pipeline turned into a link.
-
-    This is the structural half of the promise: quoted code cannot be rewritten
-    even when an address inside it is located, because the renderer never linked it
-    and so the surface never offers it.
-    """
-    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
-
-    card = {
-        "url": "https://example.com/clip",
-        "title": "Clip",
-        "description": "",
-        "site": "",
-        "image": None,
-    }
-
-    def kinds(answer: str) -> list[str]:
-        return [
-            part.type
-            for part in build_answer_presentation(
-                answer=answer, sources=[], evidence_images=[], link_cards=[card]
-            ).parts
-        ]
-
-    assert kinds("See https://example.com/clip now.") == ["markdown", "link_card", "markdown"]
-    # The renderer links the loose address and not the quoted one, and the quoted
-    # occurrence is never the one replaced.
-    assert kinds("`https://example.com/clip` and https://example.com/clip") == [
-        "markdown",
-        "link_card",
-    ]
-    # An untrusted region is treated as code, so the quoted occurrences are neither
-    # replaced nor read, while the loose occurrence below still gets its card.
-    assert kinds(
-        "> `\n> https://example.com/clip\n> ` `https://example.com/clip`\n\n"
-        "https://example.com/clip"
-    ) == ["markdown", "link_card"]
-
-    for quoted in [
-        "> `\n> https://example.com/clip\n> ` `https://example.com/clip`",
-        "Say `https://example.com/clip`",
-        "    https://example.com/clip\n",
-        '[x](https://example.com/a "`https://example.com/clip`") `https://example.com/clip`',
-    ]:
-        assert kinds(quoted) == ["markdown"], quoted
-
-
-async def test_an_address_written_more_than_once_is_not_read() -> None:
-    """No surface exists yet to say which occurrence the renderer would link.
-
-    The read happens during settlement, so an address whose occurrences cannot be
-    told apart is left alone rather than fetched on a guess.
-    """
+async def test_repeated_quoted_addresses_are_not_read() -> None:
+    """Code occurrences do not emit link tokens, regardless of normalization."""
     fetcher = _Fetcher({"https://example.com/clip": _video_page()})
     answer = "> `\n> https://example.com/clip\n> ` `https://example.com/clip`"
 

@@ -1,0 +1,157 @@
+{
+  "input": {
+    "answer": "`before [quoted](artifact:clip.mp4) https://example.com/x after`\n\n[Open](artifact:clip.mp4) and https://example.com/x.\n\n![Play](artifact:clip.mp4)\n\n- ![Evidence](evidence:shot)\n\n> `\n> https://example.com/x\n> ` [ordinary](https://example.com/y \"`https://example.com/x`\")",
+    "sources": [],
+    "evidence_images": [
+      {
+        "id": "shot",
+        "url": "/images/shot.png",
+        "thumbnail_url": "/images/shot.png",
+        "label": "Shot"
+      }
+    ],
+    "artifacts": [
+      {
+        "resource_id": "clip.mp4",
+        "media_type": "video/mp4",
+        "label": "Clip",
+        "filename": "clip.mp4",
+        "byte_size": 100,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "presentation": "video",
+        "status": "available",
+        "uri": "dlightrag://answer/run-1/artifacts/clip.mp4",
+        "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
+        "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1"
+      }
+    ],
+    "link_cards": [
+      {
+        "url": "https://example.com/x",
+        "title": "Film",
+        "description": "",
+        "site": "Example",
+        "image": null
+      }
+    ]
+  },
+  "wire": {
+    "answer_text": "`before [quoted](artifact:clip.mp4) https://example.com/x after`\n\n[Open](artifact:clip.mp4) and https://example.com/x.\n\n![Play](artifact:clip.mp4)\n\n- ![Evidence](evidence:shot)\n\n> `\n> https://example.com/x\n> ` [ordinary](https://example.com/y \"`https://example.com/x`\")",
+    "parts": [
+      {
+        "type": "markdown",
+        "text": "`before [quoted](artifact:clip.mp4) https://example.com/x after`\n\n[Open](artifact:clip.mp4) and https://example.com/x.\n\n![Play](artifact:clip.mp4)\n\n- ![Evidence](evidence:shot)\n\n> `\n> https://example.com/x\n> ` [ordinary](https://example.com/y \"`https://example.com/x`\")",
+        "html": "<p><code>before [quoted](artifact:clip.mp4) https://example.com/x after</code></p>\n<p><span class=\"answer-resource-slot-0\"></span> and <a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x</a>.</p>\n<p><span class=\"answer-resource-slot-1\"></span></p>\n<ul>\n<li><span class=\"answer-resource-slot-2\"></span></li>\n</ul>\n<blockquote>\n<p><code>https://example.com/x</code> <a href=\"https://example.com/y\" title=\"`https://example.com/x`\" target=\"_blank\" rel=\"noopener noreferrer\">ordinary</a></p>\n</blockquote>\n",
+        "artifact": null,
+        "evidence_image": null,
+        "card": null,
+        "inline": false,
+        "slot": null
+      },
+      {
+        "type": "artifact",
+        "text": "",
+        "html": "",
+        "artifact": {
+          "resource_id": "clip.mp4",
+          "media_type": "video/mp4",
+          "label": "Open",
+          "filename": "clip.mp4",
+          "byte_size": 100,
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "presentation": "video",
+          "status": "available",
+          "uri": "dlightrag://answer/run-1/artifacts/clip.mp4",
+          "width": null,
+          "height": null,
+          "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
+          "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1",
+          "presentation_url": null,
+          "issue": null
+        },
+        "evidence_image": null,
+        "card": null,
+        "inline": false,
+        "slot": 0
+      },
+      {
+        "type": "artifact",
+        "text": "",
+        "html": "",
+        "artifact": {
+          "resource_id": "clip.mp4",
+          "media_type": "video/mp4",
+          "label": "Play",
+          "filename": "clip.mp4",
+          "byte_size": 100,
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "presentation": "video",
+          "status": "available",
+          "uri": "dlightrag://answer/run-1/artifacts/clip.mp4",
+          "width": null,
+          "height": null,
+          "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
+          "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1",
+          "presentation_url": null,
+          "issue": null
+        },
+        "evidence_image": null,
+        "card": null,
+        "inline": true,
+        "slot": 1
+      },
+      {
+        "type": "evidence_image",
+        "text": "",
+        "html": "",
+        "artifact": null,
+        "evidence_image": {
+          "id": "shot",
+          "chunk_id": "",
+          "source_ref": "",
+          "url": "/images/shot.png",
+          "thumbnail_url": "/images/shot.png",
+          "label": "Evidence",
+          "answer_image_sent": true
+        },
+        "card": null,
+        "inline": true,
+        "slot": 2
+      }
+    ],
+    "sources": [],
+    "evidence_images": [],
+    "link_cards": [
+      {
+        "url": "https://example.com/x",
+        "title": "Film",
+        "description": "",
+        "site": "Example",
+        "image": null
+      }
+    ],
+    "artifacts": [
+      {
+        "resource_id": "clip.mp4",
+        "media_type": "video/mp4",
+        "label": "Clip",
+        "filename": "clip.mp4",
+        "byte_size": 100,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "presentation": "video",
+        "status": "available",
+        "uri": "dlightrag://answer/run-1/artifacts/clip.mp4",
+        "width": null,
+        "height": null,
+        "data_url": "/web/api/answer/run-1/artifacts/clip.mp4",
+        "download_url": "/web/api/answer/run-1/artifacts/clip.mp4?download=1",
+        "presentation_url": null,
+        "issue": null
+      }
+    ],
+    "artifact_outcome": {
+      "status": "complete",
+      "issues": []
+    }
+  }
+}

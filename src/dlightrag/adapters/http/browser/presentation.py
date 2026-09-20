@@ -3,7 +3,7 @@
 
 import html as html_module
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 import nh3
@@ -24,8 +24,6 @@ from dlightrag.engine.answer.citations.contracts import (
     SourceReferencePayload,
 )
 from dlightrag.engine.answer.client_contracts import ClientContractModel
-from dlightrag.engine.answer.links.cards import card_key
-from dlightrag.engine.answer.results import answer_parts_from_markdown
 
 _CHUNK_ALLOWED_TAGS = {
     "table",
@@ -144,6 +142,8 @@ class PresentationPart(ClientContractModel):
     evidence_image: PresentationImage | None = None
     card: PresentationLinkCard | None = None
     inline: bool = False
+    # Server-created placeholder in the full Markdown HTML, not a source offset.
+    slot: int | None = Field(default=None, ge=0)
 
 
 class PresentationSourceChunk(ClientContractModel):
@@ -207,31 +207,6 @@ def _restore_code_blocks(html: str, protected: list[str]) -> str:
     return html
 
 
-_ANCHOR_HREF = re.compile(r"<a\b[^>]*\bhref=\"([^\"]+)\"", re.IGNORECASE)
-
-
-def _linked_addresses(
-    answer: str,
-    *,
-    known_sources: Mapping[str, str],
-    image_rewrites: Mapping[str, str],
-) -> frozenset[str]:
-    """Return the addresses the renderer turned into links in this answer.
-
-    This is the same renderer the parts are built from, so the two cannot disagree
-    about which text is an address: whatever it left as text — quoted code, an
-    artifact reference, a citation — is simply absent here.
-    """
-    html = rewrite_image_sources(
-        render_answer_html(answer, known_sources=known_sources), image_rewrites
-    )
-    return frozenset(
-        card_key(html_module.unescape(href))
-        for href in _ANCHOR_HREF.findall(html)
-        if href.startswith(("http://", "https://"))
-    )
-
-
 def _reference_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
     ref = str(ref_id)
     return ref if chunk_idx is None or chunk_idx == "" else f"{ref}-{chunk_idx}"
@@ -242,7 +217,12 @@ def _reference_aria_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
     return f"Source {ref}" if chunk_idx in {None, ""} else f"Source {ref}, chunk {chunk_idx}"
 
 
-def render_answer_html(answer: str, *, known_sources: Mapping[str, str]) -> str:
+def render_answer_html(
+    answer: str,
+    *,
+    known_sources: Mapping[str, str],
+    place_resource: Callable[[str, str, bool], str | None] | None = None,
+) -> str:
     """Render one Markdown segment with semantic citation controls.
 
     ``known_sources`` maps each source id this surface publishes to its title. A
@@ -250,7 +230,7 @@ def render_answer_html(answer: str, *, known_sources: Mapping[str, str]) -> str:
     the click cannot open. A badge carries its source title as a tooltip, which is
     the only source name a private corpus document has in the interface.
     """
-    html = render_markdown(answer)
+    html = render_markdown(answer, place_resource=place_resource)
     html, protected = _protect_code_blocks(html)
     html = _protect_links(html, protected)
 
@@ -338,46 +318,53 @@ def build_answer_presentation(
     # and the ref set its citation badges may point at.
     presentation_sources = [_presentation_source(source) for source in sources]
     known_sources = {source.id: source.title for source in presentation_sources}
-    raw_parts = answer_parts_from_markdown(
-        answer,
-        artifacts=artifact_values,
-        evidence_images=image_values,
-        link_cards=card_values,
-        # A cited source is this Answer's authority, not a page to card-ify.
-        citation_urls=frozenset(
-            source.source_url for source in presentation_sources if source.source_url
-        ),
-        # The renderer decides what is an address: a card replaces only text this
-        # same pipeline turned into a link, so quoted code is never rewritten even
-        # when an address inside it could be located.
-        linked_addresses=_linked_addresses(
-            answer, known_sources=known_sources, image_rewrites=image_rewrites or {}
-        ),
+    artifacts_by_id = {str(item.get("resource_id") or ""): item for item in artifact_values}
+    images_by_id = {str(item.get("id") or ""): item for item in image_values}
+    placements: list[PresentationPart] = []
+
+    def place_resource(href: str, label: str, image: bool) -> str | None:
+        scheme, _, resource = href.partition(":")
+        slot = len(placements)
+        if scheme.lower() == "artifact" and resource in artifacts_by_id:
+            item = artifacts_by_id[resource]
+            placements.append(
+                PresentationPart(
+                    type="artifact",
+                    artifact=PresentationArtifact.model_validate(
+                        {**item, "label": label or item.get("label")}
+                    ),
+                    inline=image,
+                    slot=slot,
+                )
+            )
+        elif scheme.lower() == "evidence" and image and resource in images_by_id:
+            item = images_by_id[resource]
+            placements.append(
+                PresentationPart(
+                    type="evidence_image",
+                    evidence_image=PresentationImage.model_validate(
+                        {**item, "label": label or item.get("label")}
+                    ),
+                    inline=True,
+                    slot=slot,
+                )
+            )
+        else:
+            return None
+        return f'<span class="answer-resource-slot-{slot}"></span>'
+
+    # Parse the whole answer exactly once. Splitting around resource-looking
+    # source text first could turn code or a title into a new link on reparse.
+    rendered = render_answer_html(
+        answer, known_sources=known_sources, place_resource=place_resource
     )
     parts = [
         PresentationPart(
-            type=part["type"],
-            text=str(part.get("text") or ""),
-            html=rewrite_image_sources(
-                render_answer_html(str(part.get("text") or ""), known_sources=known_sources),
-                image_rewrites or {},
-            )
-            if part["type"] == "markdown"
-            else "",
-            artifact=(
-                PresentationArtifact.model_validate(part["artifact"])
-                if part.get("artifact")
-                else None
-            ),
-            evidence_image=(
-                PresentationImage.model_validate(part["evidence_image"])
-                if part.get("evidence_image")
-                else None
-            ),
-            card=(PresentationLinkCard.model_validate(part["card"]) if part.get("card") else None),
-            inline=bool(part.get("inline")),
-        )
-        for part in raw_parts
+            type="markdown",
+            text=answer,
+            html=rewrite_image_sources(rendered, image_rewrites or {}),
+        ),
+        *placements,
     ]
     inline_evidence = {
         part.evidence_image.id

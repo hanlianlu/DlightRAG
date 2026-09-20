@@ -711,12 +711,10 @@ def test_both_autolinking_passes_bound_an_address_identically():
     Trimming belongs to the shared boundary, so one address cannot span two
     different character ranges depending on which pass found it.
     """
-    from dlightrag.adapters.http.browser.markdown import _bounded_address
+    from dlightrag.engine.answer.markdown import link_targets
 
-    text = "https://example.com/x*。"
-    position = text.index("//")
-
-    assert _bounded_address(text, position, len(text) - position) == len("//example.com/x")
+    for text in ("https://example.com/x*。", "见https://example.com/x*。"):
+        assert link_targets(text) == ["https://example.com/x"]
 
 
 def test_autolinking_never_guesses_a_domain_or_an_address_from_text():

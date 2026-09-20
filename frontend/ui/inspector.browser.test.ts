@@ -42,7 +42,7 @@ const presentation: AnswerPresentation = {
       chunks: [],
     },
   ],
-  evidenceImages: [],
+  evidenceImages: [], linkCards: [],
   artifacts: [],
   artifactOutcome: {status: 'complete', issues: []},
 };

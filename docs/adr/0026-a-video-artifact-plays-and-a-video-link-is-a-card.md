@@ -156,27 +156,32 @@ card.
   its quotation as written. A link whose page declares a video becomes a card, and
   the card reads the page over the same anonymous, SSRF-guarded public fetch an
   Agent URL read uses — an address carrying a signed query is not read at all.
-- **Nothing here re-derives Markdown.** A card is offered only for an address
-  written as prose, and the exclusions are the renderer's answers rather than this
-  module's opinions: block code is whatever its parser calls a fence or a code
-  block, inline code is located from the spans its parser reports, and — decisively
-  — a surface that can ask the renderer places a card only for an address the
-  renderer itself left as a link. A surface that cannot ask places no cards at all.
-  Inside that gate the answer must also write the address exactly once and the span
-  must be located uniquely in a trusted region; a region whose spans cannot all be
-  accounted for is treated as code, unread as well as unreplaced. Three review
-  rounds' worth of shapes are tests, and the error direction of every gate is the
-  same: a card not offered, never quoted text rewritten.
-- **Read-side residual.** Replacement cannot touch quoted text because it asks the
-  renderer. The read cannot ask — it runs during settlement, before any surface
-  exists — so it is gated by source analysis alone, and a nested quote can make that
-  analysis trust a counterfeit span:
-  `> \`\n> https://example.com/x\n> \` [a](https://example.com/y "\`https://example.com/x\`")`
-  is read for both addresses. The effect is bounded and invisible: one anonymous
-  request per address with a four-second deadline and a 256 KiB ceiling, and no card,
-  because the renderer never linked the quoted one. Closing it structurally means
-  moving the autolink configuration into the engine so the read can ask the same
-  renderer; that is a recorded option, not a defect in what a reader sees.
+- **One grammar, not reconstructed source positions.** Settlement takes distinct
+  HTTP(S) destinations directly from the shared answer parser's `link_open`
+  tokens. The browser attaches rendering rules to that same grammar, including
+  autolinking and math. Code, link titles, image alt text and unused reference
+  definitions produce no link occurrences, so they trigger no page reads.
+- **Cards upgrade actual links.** The wire keeps canonical Markdown intact and
+  carries card metadata separately. After both existing sanitizers, the browser
+  upgrades each matching anchor with a Lit-rendered card. A URL elsewhere cannot
+  authorize rewriting code or title text: only that DOM anchor is replaced.
+  Repeated links share one page read but can each display a card. Source links
+  remain ordinary links; source chunks never run this upgrade. Older explicit
+  `link_card` parts remain readable, and metadata-free answers remain plain links.
+- **Typed resources do not split the grammar.** The browser parses the complete
+  answer once, placing Artifact and Evidence Image tokens through server-created
+  span placeholders. Typed parts carry a nonnegative `slot` identity; Lit mounts
+  them at those placeholders, leaving surrounding lists, tables and paragraphs
+  intact. This also prevents a resource-looking string inside code from splitting
+  the source into fragments that would create false links when reparsed. No new
+  sanitizer permissions are needed: span and class are already admitted.
+- **The previous read-side residual was a defect, not an accepted exception.**
+  The counterexample was a blockquoted code span followed by a link whose title
+  repeated the same backticks and URL. Reverse-locating normalized code content
+  mistook the title for the code span and fetched the quoted URL. The locator,
+  URL-set authorization and unique-occurrence workaround are now removed. Shared
+  fixtures exercise the settlement read, sanitized browser wire and real DOM,
+  including the counterexample with a genuine occurrence of the same URL added.
 - **Weaker video validation is a recorded residual,** not an oversight; the
   escape hatch in the caption is what a truncated or undecodable file gets.
 - **A browser that cannot decode the codec** (for example HEVC where the user's

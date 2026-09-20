@@ -2,8 +2,9 @@
 
 import DOMPurify, {type Config} from 'dompurify';
 
-// Attributes shared by both profiles. Only citation identities cross from
-// sanitized answer HTML; image and Artifact intent is rendered by Lit.
+// Attributes shared by both profiles. Citation identities use data attributes;
+// server-created resource slots use ordinary span classes. Image and Artifact
+// intent is rendered by Lit, never admitted as active model-authored HTML.
 const BASE_ADD_ATTR = [
   'aria-label',
   'data-chunk',

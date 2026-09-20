@@ -601,19 +601,21 @@
   margin: 0.5em 0;
 }
 
-.aiMessageContent img {
+/* Lit-owned resources and link cards have their own media/link styles. Their
+   roots are marked after sanitization, not by model-authored HTML. */
+.aiMessageContent img:not(:where([data-answer-typed] *)) {
   max-width: 100%;
   height: auto;
   border-radius: var(--radius-content);
   margin: 0.5em 0;
 }
 
-.aiMessageContent a {
+.aiMessageContent a:not(:where([data-answer-typed] *)) {
   color: var(--color-accent-action);
   text-decoration: none;
 }
 
-.aiMessageContent a:hover {
+.aiMessageContent a:not(:where([data-answer-typed] *)):hover {
   text-decoration: underline;
 }
 

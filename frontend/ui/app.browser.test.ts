@@ -343,7 +343,7 @@ it('closes conversation-scoped Inspector content on a typed route reset', async 
 
   const inspector = app.querySelector('dl-inspector')!;
   await inspector.openSources({
-    answerText: '', parts: [], sources: [], evidenceImages: [], artifacts: [],
+    answerText: '', parts: [], sources: [], evidenceImages: [], linkCards: [], artifacts: [],
     artifactOutcome: {status: 'complete', issues: []},
   });
   app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent(
@@ -379,7 +379,7 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
       type: 'markdown', text: 'Stored answer.', html: '<p>Stored answer.</p>',
       artifact: null, evidenceImage: null, card: null, inline: false,
     }],
-    sources: [], evidenceImages: [], artifacts: [],
+    sources: [], evidenceImages: [], linkCards: [], artifacts: [],
     artifactOutcome: {status: 'complete', issues: []},
   };
   chat.view = {
@@ -429,7 +429,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
     sources: [{
       id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
     }],
-    evidenceImages: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
+    evidenceImages: [], linkCards: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
   };;
   window.fetch = async (input) => String(input).includes('/presentation')
     ? response(presentationWire)
@@ -502,7 +502,7 @@ it('preserves a wide desktop Canvas when Sources opens and restores its citation
     sources: [{
       id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
     }],
-    evidenceImages: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
+    evidenceImages: [], linkCards: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
   };;
   window.fetch = async (input) => String(input).includes('/presentation')
     ? response(presentationWire)
@@ -596,7 +596,7 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   const inspectorReturn = app.querySelector<HTMLButtonElement>('#theme-trigger')!;
   const inspector = app.querySelector('dl-inspector')!;
   await inspector.openSources({
-    answerText: '', parts: [], sources: [], evidenceImages: [], artifacts: [],
+    answerText: '', parts: [], sources: [], evidenceImages: [], linkCards: [], artifacts: [],
     artifactOutcome: {status: 'complete', issues: []},
   }, undefined, undefined, inspectorReturn);
   app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {

@@ -70,7 +70,7 @@ it('chat message list has no new serious axe violations', async () => {
         inline: false,
       }],
       sources: [],
-      evidenceImages: [],
+      evidenceImages: [], linkCards: [],
       artifacts: [],
       artifactOutcome: {status: 'complete', issues: []},
     },

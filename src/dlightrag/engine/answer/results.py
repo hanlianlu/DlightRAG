@@ -19,7 +19,7 @@ from dlightrag.engine.answer.citations.sources import (
     project_source_payloads,
 )
 from dlightrag.engine.answer.citations.utils import context_chunk_key
-from dlightrag.engine.answer.links.cards import project_link_cards, written_addresses
+from dlightrag.engine.answer.links.cards import project_link_cards
 from dlightrag.engine.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
@@ -220,9 +220,6 @@ def project_answer_result(
     ]
     outcome = _public_outcome(stored.get("artifact_outcome"))
     link_cards = project_link_cards(stored.get("link_cards") or ())
-    citation_urls = frozenset(
-        str(source.source_uri or "") for source in sources if source.source_uri
-    )
     return {
         "answer": answer,
         "link_cards": link_cards,
@@ -230,11 +227,6 @@ def project_answer_result(
             answer,
             artifacts=artifacts,
             evidence_images=images,
-            link_cards=link_cards,
-            citation_urls=citation_urls,
-            # This projection cannot ask the renderer, so it places no cards; the
-            # addresses travel in ``link_cards`` for a client that can.
-            linked_addresses=frozenset(),
         ),
         "contexts": project_contexts_for_client(
             dict(stored.get("contexts") or {}),
@@ -255,65 +247,19 @@ def project_answer_result(
     }
 
 
-def _card_matches(
-    answer: str,
-    cards_by_url: Mapping[str, Mapping[str, Any]],
-) -> list[tuple[int, int, str, Any]]:
-    """Return the text spans one answer's cards replace, in order.
-
-    The spans come from the same recognizer the card read used, so a card covers
-    the whole Markdown link it belongs to and the punctuation a sentence owns is
-    left where the sentence put it. An answer with no cards costs nothing here: the
-    presentation is rebuilt for every streamed event, and recognizing addresses
-    only to discard them is work the reader waits for.
-    """
-    if not cards_by_url:
-        return []
-    written = written_addresses(answer)
-    occurrences: dict[str, int] = {}
-    for address in written:
-        occurrences[address.key] = occurrences.get(address.key, 0) + 1
-    return [
-        (address.start, address.end, "link_card", cards_by_url[address.key])
-        for address in written
-        if address.key in cards_by_url and occurrences[address.key] == 1
-    ]
-
-
 def answer_parts_from_markdown(
     answer: str,
     *,
     artifacts: Sequence[Mapping[str, Any]],
     evidence_images: Sequence[Mapping[str, Any]],
-    link_cards: Sequence[Mapping[str, Any]] = (),
-    citation_urls: frozenset[str] = frozenset(),
-    linked_addresses: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Derive ordered semantic parts from canonical Markdown and stable ids.
+    """Place typed resources without slicing Markdown around external links.
 
-    ``citation_urls`` are the addresses this Answer cites as sources. A card is a
-    link out to someone else's page, so a cited source never becomes one.
-
-    ``linked_addresses`` is the addresses the renderer itself turned into links.
-    A surface that can ask the renderer passes them, and a card is then placed only
-    for an address that surface actually linked — the renderer, not this module, is
-    the authority on what counts as an address rather than quoted text. A surface
-    that cannot ask passes none, and places no cards.
-
-    A card also requires the answer to write that address exactly once. Two
-    occurrences mean the renderer linked one of them and this module cannot tell
-    which, so neither is replaced: a card not offered, never the wrong text.
+    Link cards travel as metadata. A renderer upgrades actual link occurrences;
+    no source offset or URL-key gate can authorize rewriting quoted text.
     """
     artifacts_by_id = {str(item.get("resource_id") or ""): dict(item) for item in artifacts}
     images_by_id = {str(item.get("id") or ""): dict(item) for item in evidence_images}
-    cards_by_url = {
-        str(card.get("url") or ""): dict(card)
-        for card in link_cards
-        if str(card.get("url") or "")
-        and str(card.get("url")) not in citation_urls
-        and linked_addresses is not None
-        and str(card.get("url")) in linked_addresses
-    }
     matches: list[tuple[int, int, str, Any]] = [
         (match.start(), match.end(), "artifact", match) for match in _ARTIFACT_PART.finditer(answer)
     ]
@@ -321,7 +267,6 @@ def answer_parts_from_markdown(
         (match.start(), match.end(), "evidence_image", match)
         for match in _EVIDENCE_PART.finditer(answer)
     )
-    matches.extend(_card_matches(answer, cards_by_url))
     matches.sort(key=lambda value: value[0])
     result: list[dict[str, Any]] = []
     cursor = 0
@@ -330,10 +275,6 @@ def answer_parts_from_markdown(
             continue
         if start > cursor:
             result.append({"type": "markdown", "text": answer[cursor:start]})
-        if kind == "link_card":
-            result.append({"type": "link_card", "card": match})
-            cursor = end
-            continue
         resource = str(match.group("resource"))
         label = str(match.group("label") or "")
         if kind == "artifact":

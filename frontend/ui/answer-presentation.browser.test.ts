@@ -37,7 +37,7 @@ const presentation: AnswerPresentation = {
       ],
     },
   ],
-  evidenceImages: [],
+  evidenceImages: [], linkCards: [],
   artifacts: [],
   artifactOutcome: {status: 'complete', issues: []},
 };

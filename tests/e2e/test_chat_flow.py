@@ -77,19 +77,11 @@ def test_chat_answer_shows_text(page):
     page.locator(".composer-input").fill("test")
     page.click(".composer-send")
 
-    # Wait for the text this test asserts on, not merely for a non-empty streaming
-    # tail: the fake provider streams in two tokens, so a length check can win the
-    # race against the first token that carries the asserted phrase.
-    page.wait_for_function(
-        """
-        () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
-          .some((message) => message.textContent.includes('DlightRAG'))
-        """,
-        timeout=15000,
-    )
-
+    # Assert on the same live locator throughout settlement. Waiting for any
+    # streaming node and then synchronously reading the first can hit the empty
+    # replacement host between Lit's render and its rich-content mount.
     ai_block = page.locator('[class*="aiMessageContent"]').first
-    assert "DlightRAG" in ai_block.text_content()
+    expect(ai_block).to_contain_text("DlightRAG", timeout=15000)
 
 
 @pytest.mark.e2e

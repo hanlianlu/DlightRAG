@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
-import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
+import {html, nothing, type PropertyValues, render, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {
   AnswerArtifact,
@@ -30,6 +30,11 @@ export interface AnswerSourceOpenDetail {
   returnFocus: HTMLElement;
 }
 
+interface MountedRichPart {
+  html: string;
+  links: {anchor: HTMLAnchorElement; slot: HTMLSpanElement | null}[];
+}
+
 /** Canonical Answer body, placed Artifacts, Evidence Images, and References. */
 export class AnswerPresentationElement extends LightElement {
   static properties = {
@@ -39,6 +44,8 @@ export class AnswerPresentationElement extends LightElement {
 
   declare presentation: AnswerPresentation | null;
   declare referencesExpanded: boolean;
+
+  #mountedRichParts = new WeakMap<HTMLElement, MountedRichPart>();
 
   constructor() {
     super();
@@ -58,7 +65,25 @@ export class AnswerPresentationElement extends LightElement {
       const index = Number(host.dataset.answerPart);
       const part = presentation.parts[index];
       if (part?.type !== 'markdown') return;
-      mountRichHtml(host, part.html);
+      let mounted = this.#mountedRichParts.get(host);
+      if (!mounted || mounted.html !== part.html) {
+        mountRichHtml(host, part.html);
+        mounted = {
+          html: part.html,
+          links: [...host.querySelectorAll<HTMLAnchorElement>('a[href]')]
+            .map((anchor) => ({anchor, slot: null})),
+        };
+        this.#mountedRichParts.set(host, mounted);
+      }
+      this.#upgradeLinkCards(mounted, presentation);
+      for (const [partIndex, placed] of presentation.parts.entries()) {
+        if (placed.slot == null) continue;
+        const slot = host.querySelector<HTMLElement>(`.answer-resource-slot-${placed.slot}`);
+        if (slot) {
+          slot.dataset.answerTyped = '';
+          render(this.#part(placed, partIndex), slot);
+        }
+      }
       typesetRichContent(host);
     });
   }
@@ -73,7 +98,7 @@ export class AnswerPresentationElement extends LightElement {
         </div>
       `}
       <div class="answer-parts" @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-        ${presentation.parts.map((part, index) => this.#part(part, index))}
+        ${presentation.parts.map((part, index) => part.slot == null ? this.#part(part, index) : nothing)}
       </div>
       ${presentation.evidenceImages.length > 0 ? html`
         <section class="answer-evidence" aria-label=${msg('Visual Evidence', {id: 'answerPresentation.visualEvidenceAria'})}
@@ -129,6 +154,36 @@ export class AnswerPresentationElement extends LightElement {
     if (part.type === 'artifact' && part.artifact) return this.#artifact(part.artifact, part.inline);
     if (part.type === 'link_card' && part.card) return this.#linkCard(part.card);
     return nothing;
+  }
+
+  #upgradeLinkCards(mounted: MountedRichPart, presentation: AnswerPresentation): void {
+    // Only actual anchors survived Markdown parsing and both sanitizers. Match
+    // metadata to each such occurrence, never to source text or a URL elsewhere
+    // in the answer. Code, titles, math and image alt text cannot authorize one.
+    const sources = new Set(presentation.sources.map((source) => safeExternalHttpHref(source.sourceUrl || '')));
+    const cards = new Map((presentation.linkCards ?? []).map((card) => [safeExternalHttpHref(card.url), card]));
+    for (const occurrence of mounted.links) {
+      const {anchor} = occurrence;
+      const href = safeExternalHttpHref(anchor.getAttribute('href') || '');
+      const card = href && !sources.has(href) && !anchor.closest('code, pre, .citation-badge')
+        ? cards.get(href) : undefined;
+      if (!card) {
+        if (occurrence.slot) {
+          render(nothing, occurrence.slot);
+          occurrence.slot.replaceWith(anchor);
+          occurrence.slot = null;
+        }
+        continue;
+      }
+      // Keep the original anchor and the Lit root for this occurrence. Metadata
+      // or References updates must not remount the surrounding typed resources.
+      if (!occurrence.slot) {
+        occurrence.slot = document.createElement('span');
+        occurrence.slot.dataset.answerTyped = '';
+        anchor.replaceWith(occurrence.slot);
+      }
+      render(this.#linkCard(card), occurrence.slot);
+    }
   }
 
   #linkCard(card: import('../api/conversations.ts').LinkCard): TemplateResult {
