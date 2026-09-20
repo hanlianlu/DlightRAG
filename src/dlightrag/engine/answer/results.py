@@ -269,10 +269,14 @@ def _card_matches(
     """
     if not cards_by_url:
         return []
+    written = written_addresses(answer)
+    occurrences: dict[str, int] = {}
+    for address in written:
+        occurrences[address.key] = occurrences.get(address.key, 0) + 1
     return [
         (address.start, address.end, "link_card", cards_by_url[address.key])
-        for address in written_addresses(answer)
-        if address.key in cards_by_url
+        for address in written
+        if address.key in cards_by_url and occurrences[address.key] == 1
     ]
 
 
@@ -295,6 +299,10 @@ def answer_parts_from_markdown(
     for an address that surface actually linked — the renderer, not this module, is
     the authority on what counts as an address rather than quoted text. A surface
     that cannot ask passes none, and places no cards.
+
+    A card also requires the answer to write that address exactly once. Two
+    occurrences mean the renderer linked one of them and this module cannot tell
+    which, so neither is replaced: a card not offered, never the wrong text.
     """
     artifacts_by_id = {str(item.get("resource_id") or ""): dict(item) for item in artifacts}
     images_by_id = {str(item.get("id") or ""): dict(item) for item in evidence_images}

@@ -694,6 +694,9 @@ def test_the_renderer_decides_what_is_an_address_not_this_module() -> None:
     ]
     for quoted in [
         "> `\n> https://example.com/clip\n> ` `https://example.com/clip`",
+        # Two written occurrences: the renderer linked one of them and this module
+        # cannot tell which, so neither is replaced.
+        "> `\n> https://example.com/clip\n> ` `https://example.com/clip`\n\nhttps://example.com/clip",
         "Say `https://example.com/clip`",
         "    https://example.com/clip\n",
         '[x](https://example.com/a "`https://example.com/clip`") `https://example.com/clip`',
