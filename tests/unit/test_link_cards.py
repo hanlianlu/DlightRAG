@@ -692,13 +692,35 @@ def test_the_renderer_decides_what_is_an_address_not_this_module() -> None:
         "markdown",
         "link_card",
     ]
+    # An untrusted region is treated as code, so the quoted occurrences are neither
+    # replaced nor read, while the loose occurrence below still gets its card.
+    assert kinds(
+        "> `\n> https://example.com/clip\n> ` `https://example.com/clip`\n\n"
+        "https://example.com/clip"
+    ) == ["markdown", "link_card"]
+
     for quoted in [
         "> `\n> https://example.com/clip\n> ` `https://example.com/clip`",
-        # Two written occurrences: the renderer linked one of them and this module
-        # cannot tell which, so neither is replaced.
-        "> `\n> https://example.com/clip\n> ` `https://example.com/clip`\n\nhttps://example.com/clip",
         "Say `https://example.com/clip`",
         "    https://example.com/clip\n",
         '[x](https://example.com/a "`https://example.com/clip`") `https://example.com/clip`',
     ]:
         assert kinds(quoted) == ["markdown"], quoted
+
+
+async def test_an_address_written_more_than_once_is_not_read() -> None:
+    """No surface exists yet to say which occurrence the renderer would link.
+
+    The read happens during settlement, so an address whose occurrences cannot be
+    told apart is left alone rather than fetched on a guess.
+    """
+    fetcher = _Fetcher({"https://example.com/clip": _video_page()})
+    answer = "> `\n> https://example.com/clip\n> ` `https://example.com/clip`"
+
+    assert await collect_link_cards(answer, fetch=fetcher) == ()
+    assert fetcher.calls == []
+
+    # Written once, so it is read.
+    fetcher.calls.clear()
+    assert await collect_link_cards("See https://example.com/clip", fetch=fetcher)
+    assert len(fetcher.calls) == 1

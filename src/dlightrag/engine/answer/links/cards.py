@@ -176,22 +176,26 @@ def _inline_code_spans(answer: str, offsets: Sequence[int]) -> list[tuple[int, i
     for token in _BLOCK_PARSER.parse(answer):
         if token.type != "inline" or not token.map:
             continue
+        region_start = offsets[token.map[0]]
         region_end = offsets[min(token.map[1], len(offsets) - 1)]
-        cursor = offsets[token.map[0]]
+        cursor = region_start
+        located_spans: list[tuple[int, int]] = []
         for child in token.children or ():
             if child.type != "code_inline":
                 continue
             located = _locate_code_span(
                 answer, cursor, region_end, child.markup or "`", child.content
             )
-            if located is None:
-                # Unlocatable means the span cannot be excluded precisely, so the
-                # rest of this region is: a card is not offered, quoted text is
-                # left alone.
-                spans.append((cursor, region_end))
+            # A span that cannot be located, or one that would sit before the
+            # previous one, means this region's spans are not accounted for. Which
+            # text is code cannot then be trusted, so the whole region is treated as
+            # code: no address inside it is read or replaced.
+            if located is None or located[0] < cursor:
+                located_spans = [(region_start, region_end)]
                 break
-            spans.append(located)
+            located_spans.append(located)
             cursor = located[1]
+        spans.extend(located_spans)
     return spans
 
 
@@ -405,8 +409,19 @@ async def collect_link_cards(
     slowly, declares nothing, or answers with something that is not HTML stays an
     ordinary link in the Answer. An address that names credentials in its query is
     not read at all — the read is anonymous, as every Agent URL read is.
+
+    An address the answer writes more than once is not read either: this runs before
+    any surface exists to ask the renderer which occurrence it would link, so an
+    address whose occurrences cannot be told apart is left alone rather than
+    fetched on a guess.
     """
-    addresses = addresses_in(answer)[: max(0, limit)]
+    written = written_addresses(answer)
+    occurrences: dict[str, int] = {}
+    for address in written:
+        occurrences[address.key] = occurrences.get(address.key, 0) + 1
+    addresses = [address.key for address in written if occurrences[address.key] == 1][
+        : max(0, limit)
+    ]
     if not addresses:
         return ()
     pages = await asyncio.gather(
