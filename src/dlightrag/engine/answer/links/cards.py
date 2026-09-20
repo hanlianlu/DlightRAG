@@ -90,6 +90,22 @@ class LinkCard:
         }
 
 
+def _line_spans(answer: str, kinds: frozenset[str]) -> list[tuple[int, int]]:
+    """Return the character spans of the blocks the parser reports as ``kinds``."""
+    # Line numbers are the parser's: it counts newlines, while `splitlines` would
+    # also break on U+2028 and U+2029 and shift every span after them.
+    lines = answer.split("\n")
+    offsets = [0]
+    for index, line in enumerate(lines):
+        offsets.append(offsets[-1] + len(line) + (1 if index < len(lines) - 1 else 0))
+    spans: list[tuple[int, int]] = []
+    for token in _BLOCK_PARSER.parse(answer):
+        if token.type in kinds and token.map:
+            start, end = token.map
+            spans.append((offsets[start], offsets[min(end, len(offsets) - 1)]))
+    return spans
+
+
 def _block_code_spans(answer: str) -> list[tuple[int, int]]:
     """Return the spans the renderer itself calls block code.
 
@@ -97,16 +113,16 @@ def _block_code_spans(answer: str) -> list[tuple[int, int]]:
     same parser the Answer is rendered with decides all of it, so this module
     never has to guess at Markdown's block rules.
     """
-    lines = answer.splitlines(keepends=True)
-    offsets = [0]
-    for line in lines:
-        offsets.append(offsets[-1] + len(line))
-    spans: list[tuple[int, int]] = []
-    for token in _BLOCK_PARSER.parse(answer):
-        if token.type in {"fence", "code_block"} and token.map:
-            start, end = token.map
-            spans.append((offsets[start], offsets[min(end, len(lines))]))
-    return spans
+    return _line_spans(answer, frozenset({"fence", "code_block"}))
+
+
+def _inline_regions(answer: str) -> list[tuple[int, int]]:
+    """Return the parser's own inline contexts: one paragraph, heading, or cell.
+
+    Inline code lives inside exactly one of these, so recognizing spans within
+    them cannot pair a backtick in one paragraph with a backtick in the next.
+    """
+    return _line_spans(answer, frozenset({"inline"}))
 
 
 def _inline_code_spans(answer: str, segments: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -119,6 +135,9 @@ def _inline_code_spans(answer: str, segments: Sequence[tuple[int, int]]) -> list
             if opening == -1:
                 break
             length = _run_length(answer, opening, end)
+            if _is_escaped(answer, opening):
+                position = opening + length
+                continue
             closing = _matching_run(answer, opening + length, end, length)
             if closing == -1:
                 position = opening + length
@@ -133,6 +152,16 @@ def _run_length(answer: str, position: int, end: int) -> int:
     while position + length < end and answer[position + length] == "`":
         length += 1
     return length
+
+
+def _is_escaped(answer: str, position: int) -> bool:
+    """Whether a backslash escapes the character at ``position``."""
+    backslashes = 0
+    scan = position - 1
+    while scan >= 0 and answer[scan] == "\\":
+        backslashes += 1
+        scan -= 1
+    return backslashes % 2 == 1
 
 
 def _matching_run(answer: str, position: int, end: int, length: int) -> int:
@@ -156,9 +185,25 @@ def code_spans(answer: str) -> list[tuple[int, int]]:
     recognized inside the prose only, so a quoting character can never pair
     across a code block.
     """
-    spans = _block_code_spans(answer)
-    spans.extend(_inline_code_spans(answer, _prose_segments(len(answer), spans)))
-    return spans
+    blocks = _block_code_spans(answer)
+    prose = [
+        segment
+        for region in _inline_regions(answer)
+        for segment in _overlap_of(region, _prose_segments(len(answer), blocks))
+    ]
+    return blocks + _inline_code_spans(answer, prose)
+
+
+def _overlap_of(
+    region: tuple[int, int], segments: Sequence[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Return the parts of ``segments`` that fall inside ``region``."""
+    start, end = region
+    return [
+        (max(start, segment_start), min(end, segment_end))
+        for segment_start, segment_end in segments
+        if segment_start < end and start < segment_end
+    ]
 
 
 def _prose_segments(length: int, blocks: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
