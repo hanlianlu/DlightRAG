@@ -306,6 +306,10 @@ def test_written_addresses_keep_the_punctuation_a_sentence_owns() -> None:
     assert answer[written[0].end] == ".", "the period stays outside the address"
     assert answer[written[1].end] == "。"
     assert card_key("https://example.com/clip.") == "https://example.com/clip"
+    # The renderer agrees: the addresses it links are the ones recognized here.
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
+
+    assert render_answer_html(answer, known_sources={}).count("<a ") == 2
 
 
 def test_addresses_quoted_as_code_are_not_written_addresses() -> None:
@@ -477,3 +481,69 @@ async def test_a_page_of_comment_openers_parses_within_its_budget() -> None:
 
     assert cards == ()
     assert time.monotonic() - started < 2.0
+
+
+async def test_a_page_of_long_attributes_parses_within_its_budget() -> None:
+    """Attributes are length-bounded: no `=` anywhere cannot cost a quadratic scan."""
+    import time
+
+    page = _Page(content=b"<html><head>" + (b"<meta " + b"a" * 8185 + b">") * 32)
+    fetcher = _Fetcher({"https://example.com/clip": page})
+    started = time.monotonic()
+
+    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+
+    assert cards == ()
+    assert time.monotonic() - started < 1.0
+
+
+async def test_a_longer_element_name_is_not_a_meta_tag() -> None:
+    """An XML or RDF metadata element is not an HTML meta declaration."""
+    page = _Page(
+        content=(
+            b'<html><head><metadata property="og:type" content="video.other">'
+            b'<metadata property="og:title" content="Clip"></head></html>'
+        )
+    )
+    fetcher = _Fetcher({"https://example.com/clip": page})
+
+    assert await collect_link_cards("https://example.com/clip", fetch=fetcher) == ()
+
+    declared = _Fetcher(
+        {
+            "https://example.com/clip": _Page(
+                content=(
+                    b'<html><head><meta property="og:type" content="video.other">'
+                    b'<meta property="og:title" content="Clip"></head></html>'
+                )
+            )
+        }
+    )
+    assert [
+        card.title for card in await collect_link_cards("https://example.com/clip", fetch=declared)
+    ] == ["Clip"]
+
+
+def test_a_stray_backtick_before_a_fence_does_not_hide_the_prose_after_it() -> None:
+    """Inline code is recognized inside prose only, so a run cannot cross a fence."""
+    answer = "see `x` before\n```\ncode\n```\nhttps://example.com/clip`\n"
+
+    assert addresses_in(answer) == ["https://example.com/clip"]
+    assert code_spans(answer)
+    assert addresses_in("```\ncode\n```\nhttps://example.com/clip\n") == [
+        "https://example.com/clip"
+    ]
+
+
+def test_a_link_whose_destination_is_quoted_code_is_not_written() -> None:
+    """A fenced block can contain text that merely looks like a Markdown link."""
+    answer = "Read [label\n~~~\n](https://example.com/clip)\n~~~\n"
+
+    assert addresses_in(answer) == []
+    assert code_spans(answer)
+
+
+def test_a_link_may_still_quote_code_in_its_label() -> None:
+    answer = "See [run `curl` first](https://example.com/clip) now."
+
+    assert addresses_in(answer) == ["https://example.com/clip"]

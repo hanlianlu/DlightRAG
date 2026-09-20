@@ -49,7 +49,12 @@ _MARKDOWN_LINK = re.compile(
 # declarations are read at all: a page cannot make parsing cost more than that.
 _MAX_META_TAGS = 64
 _MAX_META_WINDOW = 8192
-_ATTRIBUTE = re.compile(r"(?P<name>[a-zA-Z:_-]+)\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s\"'>]+)")
+# Every part of an attribute is length-bounded, so a page cannot make attribute
+# matching scan quadratically by never writing the `=` it looks for.
+_ATTRIBUTE = re.compile(
+    r"(?P<name>[a-zA-Z:_-]{1,64})\s*=\s*"
+    r"(?P<value>\"[^\"]{0,4096}\"|'[^']{0,4096}'|[^\s\"'>]{1,4096})"
+)
 _FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})", re.MULTILINE)
 _INDENTED_CODE = re.compile(r"^(?: {4}|\t)\S", re.MULTILINE)
 _INLINE_CODE = re.compile(r"(?P<ticks>`+)(?:(?!(?P=ticks)).)*(?P=ticks)", re.DOTALL)
@@ -101,10 +106,27 @@ def code_spans(answer: str) -> list[tuple[int, int]]:
         elif _INDENTED_CODE.match(line):
             spans.append((position, end))
         position = end
-    for match in _INLINE_CODE.finditer(answer):
-        if not any(start <= match.start() < end for start, end in spans):
+    for start, end in _prose_segments(len(answer), spans):
+        for match in _INLINE_CODE.finditer(answer, start, end):
             spans.append(match.span())
     return spans
+
+
+def _prose_segments(length: int, blocks: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Return the stretches of an answer that are not inside a code block.
+
+    Inline code is recognized only here, so a backtick before a fence can never
+    pair with one after it and swallow the prose between them.
+    """
+    segments: list[tuple[int, int]] = []
+    position = 0
+    for start, end in sorted(blocks):
+        if start > position:
+            segments.append((position, start))
+        position = max(position, end)
+    if position < length:
+        segments.append((position, length))
+    return segments
 
 
 def card_key(url: str) -> str:
@@ -137,11 +159,15 @@ def written_addresses(answer: str) -> list[WrittenAddress]:
     excluded = list(quoted)
     written: list[WrittenAddress] = []
     for match in _MARKDOWN_LINK.finditer(answer):
-        if _in_spans(match.start(), excluded):
+        # The destination is what has to be written text: a link whose label holds
+        # code is still a link, while one whose destination lies inside a fence is
+        # quoted text that merely looks like a link.
+        if _in_spans(match.start(), excluded) or _overlaps(match.span("url"), excluded):
             continue
-        destination = match.group("url").strip()
         excluded.append(match.span())
-        written.append(WrittenAddress(card_key(destination), match.start(), match.end()))
+        written.append(
+            WrittenAddress(card_key(match.group("url").strip()), match.start(), match.end())
+        )
     for match in _ADDRESS.finditer(answer):
         if _in_spans(match.start(), excluded):
             continue
@@ -155,6 +181,11 @@ def _in_spans(position: int, spans: Sequence[tuple[int, int]]) -> bool:
     return any(start <= position < end for start, end in spans)
 
 
+def _overlaps(span: tuple[int, int], spans: Sequence[tuple[int, int]]) -> bool:
+    start, end = span
+    return any(start < other_end and other_start < end for other_start, other_end in spans)
+
+
 def addresses_in(answer: str) -> list[str]:
     """Return the distinct public addresses one answer writes, in order."""
     seen: dict[str, None] = {}
@@ -164,10 +195,20 @@ def addresses_in(answer: str) -> list[str]:
 
 
 def _attributes(tag: str) -> dict[str, str]:
+    if "=" not in tag:
+        return {}
     return {
         match.group("name").lower(): _html.unescape(match.group("value").strip("\"'"))
         for match in _ATTRIBUTE.finditer(tag)
     }
+
+
+def _is_meta_tag(page: str, start: int) -> bool:
+    """Whether the tag at ``start`` is a meta element rather than a longer name."""
+    if page[start : start + 5].lower() != "<meta":
+        return False
+    after = page[start + 5 : start + 6]
+    return not after or not (after.isalnum() or after in "_-:")
 
 
 def _metadata(page: str) -> dict[str, str]:
@@ -192,7 +233,7 @@ def _metadata(page: str) -> dict[str, str]:
         end = page.find(">", start + 1)
         if end == -1:
             break
-        if page[start : start + 5].lower() == "<meta":
+        if _is_meta_tag(page, start):
             read += 1
             window = page[start : min(end + 1, start + _MAX_META_WINDOW)]
             attributes = _attributes(window)
