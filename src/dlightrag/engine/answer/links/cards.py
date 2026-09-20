@@ -112,29 +112,58 @@ def _block_code_spans(answer: str, offsets: Sequence[int]) -> list[tuple[int, in
     return _line_spans(answer, offsets, frozenset({"fence", "code_block"}))
 
 
+def _normalized_span(interior: str) -> str:
+    """Return a code span interior as the parser reports it.
+
+    Line endings become spaces, and one space is stripped from each end when both
+    ends have one and the content is not all spaces.
+    """
+    normalized = _LINE_BREAK.sub(" ", interior)
+    if len(normalized) >= 2 and normalized.startswith(" ") and normalized.endswith(" "):
+        if normalized.strip():
+            normalized = normalized[1:-1]
+    return normalized
+
+
 def _locate_code_span(
     answer: str, start: int, end: int, markup: str, content: str
 ) -> tuple[int, int] | None:
-    """Locate one inline code span the parser already recognized.
+    """Locate one inline code span the parser already recognized, in order.
 
     The structure is the parser's: it decided there is a ``code_inline`` child with
-    this content and this markup. All that is left is to find where that span sits
-    in the source, and the answer has to be unique. A link title can hold the same
-    delimited content, and Markdown strips one space of padding from a code span, so
-    the same token matches both `` `url` `` and `` ` url ` ``. Every candidate is
-    gathered and only a single one is used: anything else returns ``None``, and the
-    caller excludes the region rather than protect the wrong characters.
+    this content and this markup. Two rules locate it, and both are needed: a pair
+    of backtick runs counts only when its interior normalizes to exactly that
+    content, and that pair has to be the only one in the region. Verification
+    handles newlines and padding inside a genuine span; uniqueness handles the
+    duplicate a link title can hold. Anything else excludes the region rather than
+    protecting the wrong characters.
     """
+    length = len(markup)
     candidates: list[tuple[int, int]] = []
-    for form in (content, f" {content} "):
-        needle = markup + form + markup
-        found = answer.find(needle, start, end)
-        while found != -1:
-            candidates.append((found, found + len(needle)))
-            found = answer.find(needle, found + 1, end)
-    if len(candidates) != 1:
-        return None
-    return candidates[0]
+    scan = start
+    while scan < end:
+        opening = answer.find("`", scan, end)
+        if opening == -1:
+            break
+        if answer[opening : opening + length] != markup:
+            scan = opening + 1
+            continue
+        closing = opening + length
+        while closing < end:
+            found = answer.find("`", closing, end)
+            if found == -1:
+                break
+            run = 0
+            while found + run < end and answer[found + run] == "`":
+                run += 1
+            if run == length:
+                interior = answer[opening + length : found]
+                if _normalized_span(interior) == content:
+                    candidates.append((opening, found + length))
+                break
+            closing = found + run
+        scan = opening + length
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _inline_code_spans(answer: str, offsets: Sequence[int]) -> list[tuple[int, int]]:

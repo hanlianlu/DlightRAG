@@ -616,3 +616,19 @@ def test_two_span_forms_of_the_same_address_are_refused_together() -> None:
     assert addresses_in(answer) == []
     # A single padded span is still code, and still excluded.
     assert addresses_in("A ` https://example.com/clip ` paragraph.") == []
+
+
+def test_a_newline_joined_span_is_located_by_its_normalized_content() -> None:
+    """Inside a code span a line ending is a space, so the parser reports the address.
+
+    The first span contains newlines around the address and the second is the plain
+    one; both report the same content. They are found by pairing backtick runs and
+    checking the pair produces that content, in order, so the first address is
+    protected rather than mistaken for the second.
+    """
+    answer = "`\nhttps://example.com/clip\n` `https://example.com/clip`"
+
+    assert addresses_in(answer) == []
+    # Addresses between two spans are still written, so protection is neither lost
+    # nor spread wider than the spans themselves.
+    assert addresses_in("`x` https://example.com/clip `y`") == ["https://example.com/clip"]
