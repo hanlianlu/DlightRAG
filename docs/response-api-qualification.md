@@ -15,9 +15,11 @@ interpretation, not a new test result or deletion of failed task assertions.
 
 Neither a healthy process nor a passing mock qualifies a live endpoint. The live
 evidence below remains bounded to the tested models and requests, not a guarantee
-of model accuracy. Configuration remains `chat_completion` until an operator
-chooses a per-role rollout. No family, capability, reasoning, or privacy fallback
-was introduced.
+of model accuracy. Following the operator's explicit rollout request, `config.yaml`
+selects `response` for default (OpenRouter `z-ai/glm-5.3-flash`) and Query (direct
+`deepseek-flash`). Extract, Keyword and VLM remain on Chat; Voyage reranking is
+unchanged. This is explicit selection, not a family, capability, reasoning, or
+privacy fallback.
 
 | Scope | Evidence / disposition |
 |---|---|
@@ -190,10 +192,9 @@ official key; Codex login and OpenRouter-hosted models are not substitutes.
 ## Rollout and remaining limits
 
 The model-quality observations above are not additional ADR 0027 completion or
-rollout gates. Any operator rollout remains explicit and per role: Query first,
-then ordinary roles, VLM and reranking independently. This documentation correction
-does not switch a configured endpoint or relax image ownership, local Tool
-validation, or Session/compaction authority.
+rollout gates. The operator has now selected Response for default and Query;
+other roles remain independent opt-ins. This selection does not relax image
+ownership, local Tool validation, or Session/compaction authority.
 
 Official OpenAI live qualification remains deferred for lack of an official API
 key. No ZDR, untested endpoint/model, cross-route stability, or general model

@@ -15,10 +15,11 @@ have run for the endpoint/model pairs named in the
 [qualification record](../response-api-qualification.md). Image-answer errors
 (also observed on Chat) and a zero-call answer under `tool_choice=auto` are
 model-quality observations, not demonstrated protocol defects or rollout
-blockers. The earlier hold based on those observations is withdrawn. No
-configured endpoint has moved from `chat_completion` to `response`; explicit
-per-role rollout and the stop conditions under [Consequences](#consequences)
-still apply.
+blockers. The earlier hold based on those observations is withdrawn. The operator
+has selected `response` for the OpenRouter default and direct DeepSeek Query role
+in `config.yaml`; Extract, Keyword and VLM stay on Chat, and reranking stays on
+Voyage. Further per-role rollout and the stop conditions under
+[Consequences](#consequences) still apply.
 
 This decision extends the [API Family](../domain-language.md#configuration-and-deployment)
 term. It does not revise [ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md):

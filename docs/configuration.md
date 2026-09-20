@@ -366,8 +366,10 @@ passing one does not qualify the other. The [qualification record](response-api-
 retains image-answer and `tool_choice=auto` observations as model-quality limits,
 not protocol acceptance or rollout blockers. `auto` lets the model return text
 without requesting a local function; it does not enable hosted provider tools.
-The shipped configuration remains `chat_completion`; any operator rollout is
-explicit and per role, starting with Query, then ordinary roles, VLM and reranking.
+The shipped `config.yaml` explicitly selects `response` for the OpenRouter
+default and direct DeepSeek Query role. Extract, Keyword and VLM retain their
+complete Chat overrides; reranking remains Voyage. Omission of `api_family`
+still means `chat_completion`. Further rollout is explicit and per role.
 See [ADR 0027](adr/0027-api-family-selects-the-provider-wire.md).
 
 ### Model Catalogue And Reasoning
