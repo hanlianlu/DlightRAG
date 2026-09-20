@@ -8,18 +8,9 @@ Responses implementation.
 
 ## Status
 
-Accepted; the common transport, identity, replay, streaming, image, and recovery
-contracts are implemented. Official OpenAI remains experimental and mock-tested,
-not live-qualified. Direct DeepSeek and OpenRouter bounded live protocol checks
-have run for the endpoint/model pairs named in the
-[qualification record](../response-api-qualification.md). Image-answer errors
-(also observed on Chat) and a zero-call answer under `tool_choice=auto` are
-model-quality observations, not demonstrated protocol defects or rollout
-blockers. The earlier hold based on those observations is withdrawn. The operator
-has selected `response` for the OpenRouter default and direct DeepSeek Query role
-in `config.yaml`; Extract, Keyword and VLM stay on Chat, and reranking stays on
-Voyage. Further per-role rollout and the stop conditions under
-[Consequences](#consequences) still apply.
+Accepted and implemented. See the [qualification record](../response-api-qualification.md)
+for verification and remaining limits, and [Configuration](../configuration.md#api-family)
+for current role selection.
 
 This decision extends the [API Family](../domain-language.md#configuration-and-deployment)
 term. It does not revise [ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md):
@@ -31,12 +22,11 @@ change context composition.
 
 ## Context
 
-`provider=openai` currently means an OpenAI-compatible provider whose five model
-entrypoints call `client.chat.completions`. It covers direct DeepSeek, OpenRouter,
-OpenAI, and arbitrary compatible base URLs. OpenAI recommends its Responses API
-for new agentic work; OpenRouter offers a stateless Responses endpoint; and, as
-of 2026-10-20, DeepSeek documents native Responses support for its current Flash
-model at `POST /responses`.
+Before this decision, all five `provider=openai` model entrypoints called
+`client.chat.completions`, covering direct DeepSeek, OpenRouter, OpenAI and
+arbitrary compatible base URLs. OpenAI recommends its Responses API for new
+agentic work; OpenRouter offers a stateless Responses endpoint; and DeepSeek
+documents native Responses support for its Flash model at `POST /responses`.
 
 The useful difference is structural. Chat Completions puts visible text, tool
 calls, and provider-specific reasoning fields into one assistant message.

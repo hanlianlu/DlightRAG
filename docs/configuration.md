@@ -260,7 +260,7 @@ before changing an existing workspace's vector space.
 
 | `provider` | Transport | Typical endpoints |
 |---|---|---|
-| `openai` | Chat Completions by default; opt-in Responses | OpenAI, DeepSeek, OpenRouter, Azure OpenAI, vLLM, Ollama, other compatible APIs |
+| `openai` | Chat Completions or Responses, selected per model | OpenAI, DeepSeek, OpenRouter, Azure OpenAI, vLLM, Ollama, other compatible APIs |
 | `anthropic` | Anthropic native SDK | Claude |
 | `gemini` | Google GenAI SDK | Gemini |
 
@@ -310,14 +310,10 @@ requests.
 
 ### API Family
 
-API Family selects the wire, not the vendor or model capacity. Set it on a
-complete model configuration; there is no `openai_responses` provider, endpoint
-probing, or automatic fallback to Chat after a Response failure. The catalogue
-still resolves the same provider/model/endpoint profile for both families.
-Pinned Runs, opaque replay, telemetry, and structured-output rejection caches
-also include API Family in their invocation identity.
-
-These are opt-in examples, **not rollout recommendations**:
+Omitting `api_family` means **`chat_completion`**. The shipped `config.yaml`
+explicitly selects **`response` for default and Query**; Extract, Keyword and VLM
+retain complete Chat overrides, and reranking remains Voyage. The relevant
+endpoint/transport settings are below; other model options are omitted:
 
 ```yaml
 models:
@@ -327,7 +323,7 @@ models:
       model: z-ai/glm-5.3-flash
       base_url: https://openrouter.ai/api/v1
       api_family: response
-      structured_output: json_object
+      structured_output: auto
     roles:
       query:
         provider: openai
@@ -346,31 +342,27 @@ projection; an unsupported capability fails explicitly, not by removing a Tool,
 image, or requested reasoning level. Existing typed `reasoning` settings own the
 family-specific translation; do not duplicate them in raw kwargs.
 
-Response supports all five existing provider entrypoints, text/structured output,
-local function Tools, typed streaming, and user and Tool-result images. A Tool
-image stays inside its own `function_call_output`; Chat keeps its existing
-post-batch user-image projection. Every Response request sends full locally
-selected context, `store=false`, `background=false`, and `truncation=disabled`.
-Raw `model_kwargs` cannot override input, tools, stream, storage, truncation, or
-remote-state ownership. There is no `previous_response_id`, Conversation,
-background job, hosted tool, or provider-side compaction path.
+API Family selects the wire, not a new provider or capacity profile. There is no
+`openai_responses` provider, endpoint probing, or automatic family fallback.
+Response supports the same five entrypoints, structured output, streaming, local
+function Tools and user/Tool-result images. `tool_choice=auto` lets the model
+answer without a call; requested Tools are still authorized and executed locally.
+
+Every Response request sends full local context, `store=false`, `background=false`
+and `truncation=disabled`. Raw `model_kwargs` cannot override input, tools, stream,
+storage, truncation or remote-state ownership. Remote conversation continuation,
+background jobs, hosted tools and provider-side compaction are excluded. See
+[Agent Session Recovery](durable-answer-runs.md#agent-session-recovery) for replay.
 
 `store=false` minimizes remote response state; **it does not establish Zero Data
 Retention**. Provider logs, context caches, agreements, and OpenRouter routing
 policies remain deployment facts. There is no `zdr` setting in this feature.
 
 Official OpenAI (`base_url: https://api.openai.com/v1` plus an official API key)
-is **experimental and mock-contract tested, not live-qualified**. It is never
-selected as a new default. DeepSeek and OpenRouter have separate live evidence;
-passing one does not qualify the other. The [qualification record](response-api-qualification.md)
-retains image-answer and `tool_choice=auto` observations as model-quality limits,
-not protocol acceptance or rollout blockers. `auto` lets the model return text
-without requesting a local function; it does not enable hosted provider tools.
-The shipped `config.yaml` explicitly selects `response` for the OpenRouter
-default and direct DeepSeek Query role. Extract, Keyword and VLM retain their
-complete Chat overrides; reranking remains Voyage. Omission of `api_family`
-still means `chat_completion`. Further rollout is explicit and per role.
-See [ADR 0027](adr/0027-api-family-selects-the-provider-wire.md).
+is **experimental and mock-contract tested, not live-qualified**. Endpoint/model
+verification and quality limits are in the [qualification record](response-api-qualification.md);
+[ADR 0027](adr/0027-api-family-selects-the-provider-wire.md) records the decision.
+Further role changes are explicit, not automatic.
 
 ### Model Catalogue And Reasoning
 

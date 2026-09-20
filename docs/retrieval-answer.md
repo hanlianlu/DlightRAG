@@ -305,11 +305,9 @@ Each call uses an immutable model profile pinned by normalized provider, model,
 and endpoint. It supplies context, input, output, image, and reasoning facts.
 Uncatalogued endpoints first receive the best-effort fallback profile; acceptance
 fails only if the resolved profile still cannot provide usable capacity.
-API Family (`chat_completion` or `response`) is an invocation choice, not another
-capacity profile. It pins the wire and opaque replay without changing the local
-Context Projection. A Response continuation carries complete locally selected
-history rather than a provider response ID; native reasoning/call exchanges stay
-whole across compaction. See [API Family configuration](configuration.md#api-family).
+[API Family](configuration.md#api-family) selects the wire without changing this
+capacity profile or the Context Policy. Replay and history boundaries are owned
+by [Agent Session Recovery](durable-answer-runs.md#agent-session-recovery).
 
 The Context Policy independently reserves output, dynamic context, safety,
 retained tail, episodic continuation, and minimum input. Each Tool result is fitted
