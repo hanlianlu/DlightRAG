@@ -279,6 +279,37 @@ async def test_tool_settlement_publishes_call_identity_and_measured_elapsed() ->
 
 
 @pytest.mark.asyncio
+async def test_duplicate_provider_call_ids_fail_before_any_tool_executes() -> None:
+    tool = _agent_tool()
+    effects = _Effects(
+        [
+            _assistant(
+                ToolCall("duplicate", "lookup", {"value": "one"}),
+                ToolCall("duplicate", "lookup", {"value": "two"}),
+            )
+        ]
+    )
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="duplicate-calls",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationFailed)
+    assert final.state.kind == "provider_invalid"
+    assert effects.executed_sources == []
+    snapshot = await store.load(session_id)
+    assert not any(isinstance(entry, ToolResultMessageEntry) for entry in snapshot.entries)
+
+
+@pytest.mark.asyncio
 async def test_live_runtime_commits_exact_request_ordered_batch_host_delta_and_terminal() -> None:
     tool = _agent_tool()
     effects = _Effects(

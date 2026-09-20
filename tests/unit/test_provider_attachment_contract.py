@@ -27,7 +27,12 @@ from dlightrag.engine.agent.tools.files import PreparedImageAttachment, view_too
 from dlightrag.engine.ai.completion import CompletionModel
 from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.media import decode_image_base64
-from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, ToolDefinition
+from dlightrag.engine.ai.messages import (
+    AssistantTurn,
+    ToolCall,
+    ToolDefinition,
+    tool_call_message,
+)
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.anthropic_native import AnthropicProvider
 from dlightrag.engine.ai.providers.gemini_native import GeminiProvider
@@ -304,9 +309,15 @@ def _gemini_stream_sse() -> bytes:
 
 
 class _HttpCapture:
-    def __init__(self, provider: str) -> None:
+    def __init__(
+        self,
+        provider: str,
+        *,
+        response_jsons: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.provider = provider
         self.requests: list[dict[str, Any]] = []
+        self.response_jsons = list(response_jsons or [])
 
     def handler(self, request: httpx2.Request) -> httpx2.Response:
         url = str(request.url)
@@ -330,7 +341,8 @@ class _HttpCapture:
                 )
             return httpx2.Response(200, json=_openai_complete_json())
         if self.provider == "openai_response":
-            return httpx2.Response(200, json=_openai_response_json())
+            payload = self.response_jsons.pop(0) if self.response_jsons else _openai_response_json()
+            return httpx2.Response(200, json=payload)
         if self.provider == "anthropic":
             if streamed:
                 return httpx2.Response(
@@ -589,6 +601,155 @@ async def test_sdk_http_keeps_an_image_bearing_tool_batch_contiguous() -> None:
         "user",
     ]
     assert _wire_images("openai", capture.body) == _expected_payloads(1)
+
+
+async def test_response_tool_loop_replays_finalized_native_items_and_exact_call_ids() -> None:
+    first = _openai_response_json()
+    first_output = [
+        {
+            "id": "rs-1",
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": "Need two lookups."}],
+            "content": [],
+            "encrypted_content": "opaque-ciphertext",
+        },
+        {
+            "id": "msg-1",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "I will check.",
+                    "annotations": [],
+                    "logprobs": [],
+                }
+            ],
+        },
+        {
+            "id": "fc-item-1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call-1",
+            "name": "lookup",
+            "arguments": '{"value":"one"}',
+        },
+        {
+            "id": "fc-item-2",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call-2",
+            "name": "lookup",
+            "arguments": '{"value":"two"}',
+        },
+    ]
+    first["output"] = first_output
+    capture = _HttpCapture(
+        "openai_response",
+        response_jsons=[first, _openai_response_json()],
+    )
+    model = ToolModel(
+        ModelSettings(
+            provider="openai",
+            model="gpt-5.4",
+            api_family="response",
+            api_key="test-key",
+            max_retries=0,
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    provider = model._provider
+    bind_mock_http(provider, capture.handler)
+    lookup = ToolDefinition(
+        name="lookup",
+        description="Look up one value.",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+    user = {"role": "user", "content": "Look up two values."}
+
+    try:
+        first_turn = await model(messages=[user], tools=[lookup])
+        assistant = {
+            "role": "assistant",
+            "content": first_turn.text,
+            "tool_calls": [tool_call_message(call) for call in first_turn.tool_calls],
+            "provider_state": first_turn.provider_state,
+        }
+        second_turn = await model(
+            messages=[
+                user,
+                assistant,
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "name": "lookup",
+                    "content": "result one",
+                    "is_error": False,
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-2",
+                    "name": "lookup",
+                    "content": "result two",
+                    "is_error": False,
+                },
+            ],
+            tools=[lookup],
+        )
+    finally:
+        await model.aclose()
+
+    assert first_turn.text == "I will check."
+    assert first_turn.reasoning == "Need two lookups."
+    assert "opaque-ciphertext" not in first_turn.reasoning
+    assert [call.id for call in first_turn.tool_calls] == ["call-1", "call-2"]
+    assert [call.name for call in first_turn.tool_calls] == ["lookup", "lookup"]
+    assert first_turn.stop_reason == "tool_use"
+    assert first_turn.provider_state is not None
+    assert first_turn.provider_state["payload"] == {
+        "response_replay": {"v": 1, "items": first_output}
+    }
+    assert second_turn.text == _MODEL_TEXT
+    assert second_turn.stop_reason == "stop"
+
+    first_body = capture.requests[0]["body"]
+    assert first_body["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Look up one value.",
+            "parameters": lookup.parameters,
+            "strict": False,
+        }
+    ]
+    assert first_body["tool_choice"] == "auto"
+    assert first_body["parallel_tool_calls"] is True
+    assert "messages" not in first_body
+
+    second_input = capture.requests[1]["body"]["input"]
+    assert second_input == [
+        user,
+        *first_output,
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "result one",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-2",
+            "output": "result two",
+        },
+    ]
+    assert sum(item.get("id") == "fc-item-1" for item in second_input) == 1
+    assert sum(item.get("call_id") == "call-1" for item in second_input) == 2
 
 
 async def test_response_complete_uses_stateless_responses_wire_without_mutating_input() -> None:

@@ -22,7 +22,10 @@ from dlightrag.engine.ai.providers.base import (
     usage_mapping,
     usage_to_dict,
 )
-from dlightrag.engine.ai.providers.openai_response import complete_response
+from dlightrag.engine.ai.providers.openai_response import (
+    complete_response,
+    complete_response_tool_turn,
+)
 from dlightrag.engine.ai.response_policy import ResponseRequestError
 
 logger = logging.getLogger(__name__)
@@ -257,7 +260,16 @@ class OpenAICompatibleProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
     ) -> AssistantTurn:
         if self._api_family == "response":
-            raise ResponseRequestError("Response tool transport is not implemented")
+            return await complete_response_tool_turn(
+                self._get_client(),
+                messages,
+                model,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                model_kwargs=model_kwargs,
+            )
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": _openai_tool_messages(messages),

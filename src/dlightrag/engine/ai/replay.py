@@ -14,6 +14,10 @@ _ENVELOPE_KEY = "_dlightrag_replay"
 _ENVELOPE_VERSION = 2
 
 
+class ProviderReplayError(ValueError):
+    """Opaque replay claims the current invocation but violates its envelope contract."""
+
+
 def bind_provider_replay(
     turn: AssistantTurn,
     fingerprint: ModelInvocationFingerprint,
@@ -76,14 +80,17 @@ def _is_same_invocation_state(
     if not isinstance(state, Mapping):
         return False
     identity = state.get(_ENVELOPE_KEY)
-    if not isinstance(identity, Mapping) or identity.get("v") != _ENVELOPE_VERSION:
+    if not isinstance(identity, Mapping):
         return False
-    return (
+    same_invocation = (
         identity.get("provider") == fingerprint.provider
         and identity.get("model") == fingerprint.model
         and identity.get("endpoint_fingerprint") == fingerprint.endpoint_fingerprint
         and identity.get("api_family") == fingerprint.api_family
     )
+    if same_invocation and identity.get("v") != _ENVELOPE_VERSION:
+        raise ProviderReplayError("provider replay envelope version is unsupported")
+    return same_invocation
 
 
-__all__ = ["bind_provider_replay", "messages_for_model"]
+__all__ = ["ProviderReplayError", "bind_provider_replay", "messages_for_model"]

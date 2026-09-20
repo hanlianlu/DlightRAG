@@ -719,6 +719,75 @@ class TestOpenAICompatibleProvider:
                 await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4")
 
     @pytest.mark.asyncio
+    async def test_response_tool_turn_preserves_invalid_arguments_for_local_rejection(self):
+        p = get_provider(
+            "openai",
+            api_key="test-key",
+            api_family="response",
+        )
+        response = SimpleNamespace(
+            status="completed",
+            output=[
+                SimpleNamespace(
+                    id="fc-item",
+                    type="function_call",
+                    status="completed",
+                    call_id="call-1",
+                    name="lookup",
+                    arguments='{"value":',
+                )
+            ],
+            usage=None,
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=response)
+            turn = await p.complete_tool_turn(
+                [{"role": "user", "content": "hi"}],
+                "gpt-5.4",
+                tools=[],
+            )
+
+        assert turn.stop_reason == "tool_use"
+        assert turn.tool_calls[0].id == "call-1"
+        assert turn.tool_calls[0].id != "fc-item"
+        assert turn.tool_calls[0].arguments == {}
+        assert turn.tool_calls[0].argument_error is not None
+
+    @pytest.mark.asyncio
+    async def test_response_incomplete_never_exposes_calls_for_execution(self):
+        p = get_provider(
+            "openai",
+            api_key="test-key",
+            api_family="response",
+        )
+        response = SimpleNamespace(
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output=[
+                SimpleNamespace(
+                    id="fc-item",
+                    type="function_call",
+                    status="incomplete",
+                    call_id="call-1",
+                    name="lookup",
+                    arguments='{"value":"partial',
+                )
+            ],
+            usage=None,
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.responses.create = AsyncMock(return_value=response)
+            turn = await p.complete_tool_turn(
+                [{"role": "user", "content": "hi"}],
+                "gpt-5.4",
+                tools=[],
+            )
+
+        assert turn.stop_reason == "length"
+        assert turn.tool_calls == ()
+        assert turn.provider_state is None
+
+    @pytest.mark.asyncio
     async def test_response_family_never_falls_back_to_chat_for_unimplemented_entrypoints(self):
         p = get_provider(
             "openai",
@@ -728,11 +797,12 @@ class TestOpenAICompatibleProvider:
         create = AsyncMock()
         with patch.object(p, "_get_client") as mock_client:
             mock_client.return_value.chat.completions.create = create
-            with pytest.raises(ResponseRequestError, match="tool transport"):
-                await p.complete_tool_turn(
+            with pytest.raises(ResponseRequestError, match="streaming tool transport"):
+                await p.complete_tool_turn_streaming(
                     [{"role": "user", "content": "hi"}],
                     "gpt-5.4",
                     tools=[],
+                    emit_text=AsyncMock(),
                 )
             with pytest.raises(ResponseRequestError, match="streaming transport"):
                 _ = [
