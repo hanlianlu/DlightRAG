@@ -232,6 +232,9 @@ def project_answer_result(
             evidence_images=images,
             link_cards=link_cards,
             citation_urls=citation_urls,
+            # This projection cannot ask the renderer, so it places no cards; the
+            # addresses travel in ``link_cards`` for a client that can.
+            linked_addresses=frozenset(),
         ),
         "contexts": project_contexts_for_client(
             dict(stored.get("contexts") or {}),
@@ -280,18 +283,28 @@ def answer_parts_from_markdown(
     evidence_images: Sequence[Mapping[str, Any]],
     link_cards: Sequence[Mapping[str, Any]] = (),
     citation_urls: frozenset[str] = frozenset(),
+    linked_addresses: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Derive ordered semantic parts from canonical Markdown and stable ids.
 
     ``citation_urls`` are the addresses this Answer cites as sources. A card is a
     link out to someone else's page, so a cited source never becomes one.
+
+    ``linked_addresses`` is the addresses the renderer itself turned into links.
+    A surface that can ask the renderer passes them, and a card is then placed only
+    for an address that surface actually linked — the renderer, not this module, is
+    the authority on what counts as an address rather than quoted text. A surface
+    that cannot ask passes none, and places no cards.
     """
     artifacts_by_id = {str(item.get("resource_id") or ""): dict(item) for item in artifacts}
     images_by_id = {str(item.get("id") or ""): dict(item) for item in evidence_images}
     cards_by_url = {
         str(card.get("url") or ""): dict(card)
         for card in link_cards
-        if str(card.get("url") or "") and str(card.get("url")) not in citation_urls
+        if str(card.get("url") or "")
+        and str(card.get("url")) not in citation_urls
+        and linked_addresses is not None
+        and str(card.get("url")) in linked_addresses
     }
     matches: list[tuple[int, int, str, Any]] = [
         (match.start(), match.end(), "artifact", match) for match in _ARTIFACT_PART.finditer(answer)

@@ -24,6 +24,7 @@ from dlightrag.engine.answer.citations.contracts import (
     SourceReferencePayload,
 )
 from dlightrag.engine.answer.client_contracts import ClientContractModel
+from dlightrag.engine.answer.links.cards import card_key
 from dlightrag.engine.answer.results import answer_parts_from_markdown
 
 _CHUNK_ALLOWED_TAGS = {
@@ -206,6 +207,31 @@ def _restore_code_blocks(html: str, protected: list[str]) -> str:
     return html
 
 
+_ANCHOR_HREF = re.compile(r"<a\b[^>]*\bhref=\"([^\"]+)\"", re.IGNORECASE)
+
+
+def _linked_addresses(
+    answer: str,
+    *,
+    known_sources: Mapping[str, str],
+    image_rewrites: Mapping[str, str],
+) -> frozenset[str]:
+    """Return the addresses the renderer turned into links in this answer.
+
+    This is the same renderer the parts are built from, so the two cannot disagree
+    about which text is an address: whatever it left as text — quoted code, an
+    artifact reference, a citation — is simply absent here.
+    """
+    html = rewrite_image_sources(
+        render_answer_html(answer, known_sources=known_sources), image_rewrites
+    )
+    return frozenset(
+        card_key(html_module.unescape(href))
+        for href in _ANCHOR_HREF.findall(html)
+        if href.startswith(("http://", "https://"))
+    )
+
+
 def _reference_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
     ref = str(ref_id)
     return ref if chunk_idx is None or chunk_idx == "" else f"{ref}-{chunk_idx}"
@@ -320,6 +346,12 @@ def build_answer_presentation(
         # A cited source is this Answer's authority, not a page to card-ify.
         citation_urls=frozenset(
             source.source_url for source in presentation_sources if source.source_url
+        ),
+        # The renderer decides what is an address: a card replaces only text this
+        # same pipeline turned into a link, so quoted code is never rewritten even
+        # when an address inside it could be located.
+        linked_addresses=_linked_addresses(
+            answer, known_sources=known_sources, image_rewrites=image_rewrites or {}
         ),
     )
     parts = [

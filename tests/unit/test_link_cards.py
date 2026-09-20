@@ -212,6 +212,7 @@ def test_a_markdown_link_a_card_covers_becomes_one_part() -> None:
         artifacts=[],
         evidence_images=[],
         link_cards=[card],
+        linked_addresses=frozenset({card["url"]}),
     )
 
     assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
@@ -230,6 +231,7 @@ def test_a_bare_address_a_card_covers_becomes_one_part() -> None:
         artifacts=[],
         evidence_images=[],
         link_cards=[card],
+        linked_addresses=frozenset({card["url"]}),
     )
 
     assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
@@ -246,6 +248,7 @@ def test_a_cited_source_never_becomes_a_card() -> None:
         artifacts=[],
         evidence_images=[],
         link_cards=[card],
+        linked_addresses=frozenset({card["url"]}),
         citation_urls=frozenset({"https://example.com/source"}),
     )
 
@@ -260,6 +263,7 @@ def test_an_address_without_a_card_stays_markdown() -> None:
         artifacts=[],
         evidence_images=[],
         link_cards=[{"url": "https://example.com/other", "title": "Other"}],
+        linked_addresses=frozenset({"https://example.com/other"}),
     )
 
     assert [part["type"] for part in parts] == ["markdown"]
@@ -373,7 +377,11 @@ def test_a_sentence_period_does_not_break_the_card_and_is_not_swallowed() -> Non
         ("看 https://example.com/clip。", "。"),
     ]:
         parts = answer_parts_from_markdown(
-            answer, artifacts=[], evidence_images=[], link_cards=[card]
+            answer,
+            artifacts=[],
+            evidence_images=[],
+            link_cards=[card],
+            linked_addresses=frozenset({card["url"]}),
         )
 
         assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"], answer
@@ -387,7 +395,13 @@ def test_a_markdown_link_inside_code_is_not_carded() -> None:
     card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
     answer = "```\n[clip](https://example.com/clip)\n```\n"
 
-    parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
+    parts = answer_parts_from_markdown(
+        answer,
+        artifacts=[],
+        evidence_images=[],
+        link_cards=[card],
+        linked_addresses=frozenset({card["url"]}),
+    )
 
     assert [part["type"] for part in parts] == ["markdown"]
 
@@ -404,7 +418,13 @@ def test_a_card_covers_the_whole_markdown_link_it_describes() -> None:
     }
     answer = "Watch [the film](https://example.com/a,b) now."
 
-    parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
+    parts = answer_parts_from_markdown(
+        answer,
+        artifacts=[],
+        evidence_images=[],
+        link_cards=[card],
+        linked_addresses=frozenset({card["url"]}),
+    )
 
     assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"]
     assert parts[0]["text"] == "Watch "
@@ -430,7 +450,13 @@ async def test_a_quoted_address_is_not_written_nor_replaced(answer: str) -> None
 
     assert await collect_link_cards(answer, fetch=fetcher) == ()
     assert fetcher.calls == []
-    parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
+    parts = answer_parts_from_markdown(
+        answer,
+        artifacts=[],
+        evidence_images=[],
+        link_cards=[card],
+        linked_addresses=frozenset({card["url"]}),
+    )
     assert [part["type"] for part in parts] == ["markdown"]
 
 
@@ -632,3 +658,44 @@ def test_a_newline_joined_span_is_located_by_its_normalized_content() -> None:
     # Addresses between two spans are still written, so protection is neither lost
     # nor spread wider than the spans themselves.
     assert addresses_in("`x` https://example.com/clip `y`") == ["https://example.com/clip"]
+
+
+def test_the_renderer_decides_what_is_an_address_not_this_module() -> None:
+    """A card replaces only text the same pipeline turned into a link.
+
+    This is the structural half of the promise: quoted code cannot be rewritten
+    even when an address inside it is located, because the renderer never linked it
+    and so the surface never offers it.
+    """
+    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
+
+    card = {
+        "url": "https://example.com/clip",
+        "title": "Clip",
+        "description": "",
+        "site": "",
+        "image": None,
+    }
+
+    def kinds(answer: str) -> list[str]:
+        return [
+            part.type
+            for part in build_answer_presentation(
+                answer=answer, sources=[], evidence_images=[], link_cards=[card]
+            ).parts
+        ]
+
+    assert kinds("See https://example.com/clip now.") == ["markdown", "link_card", "markdown"]
+    # The renderer links the loose address and not the quoted one, and the quoted
+    # occurrence is never the one replaced.
+    assert kinds("`https://example.com/clip` and https://example.com/clip") == [
+        "markdown",
+        "link_card",
+    ]
+    for quoted in [
+        "> `\n> https://example.com/clip\n> ` `https://example.com/clip`",
+        "Say `https://example.com/clip`",
+        "    https://example.com/clip\n",
+        '[x](https://example.com/a "`https://example.com/clip`") `https://example.com/clip`',
+    ]:
+        assert kinds(quoted) == ["markdown"], quoted
