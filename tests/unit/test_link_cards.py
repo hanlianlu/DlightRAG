@@ -602,3 +602,17 @@ def test_an_ambiguous_inline_location_is_refused_rather_than_guessed() -> None:
 
     assert addresses_in(answer) == []
     assert "https://example.com/clip" in render_answer_html(answer, known_sources={})
+
+
+def test_two_span_forms_of_the_same_address_are_refused_together() -> None:
+    """A padded and an unpadded span hold the same token, so neither location is unique.
+
+    Markdown strips one space of padding, which makes `` `url` `` and `` ` url ` ``
+    the same content: locating that content selects neither, and the paragraph is
+    left alone rather than half-protected.
+    """
+    answer = "` https://example.com/clip ` `https://example.com/clip`"
+
+    assert addresses_in(answer) == []
+    # A single padded span is still code, and still excluded.
+    assert addresses_in("A ` https://example.com/clip ` paragraph.") == []

@@ -119,19 +119,22 @@ def _locate_code_span(
 
     The structure is the parser's: it decided there is a ``code_inline`` child with
     this content and this markup. All that is left is to find where that span sits
-    in the source. When the same delimited content appears more than once in the
-    region — a link title can hold one — the location is a guess, and a guess is
-    refused: ``None`` makes the caller exclude the region instead of protecting
-    the wrong characters.
+    in the source, and the answer has to be unique. A link title can hold the same
+    delimited content, and Markdown strips one space of padding from a code span, so
+    the same token matches both `` `url` `` and `` ` url ` ``. Every candidate is
+    gathered and only a single one is used: anything else returns ``None``, and the
+    caller excludes the region rather than protect the wrong characters.
     """
-    for candidate in (markup + content + markup, markup + " " + content + " " + markup):
-        found = answer.find(candidate, start, end)
-        if found == -1:
-            continue
-        if answer.find(candidate, found + 1, end) != -1:
-            return None
-        return (found, found + len(candidate))
-    return None
+    candidates: list[tuple[int, int]] = []
+    for form in (content, f" {content} "):
+        needle = markup + form + markup
+        found = answer.find(needle, start, end)
+        while found != -1:
+            candidates.append((found, found + len(needle)))
+            found = answer.find(needle, found + 1, end)
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
 
 
 def _inline_code_spans(answer: str, offsets: Sequence[int]) -> list[tuple[int, int]]:
