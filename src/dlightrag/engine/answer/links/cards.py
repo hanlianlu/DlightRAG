@@ -70,6 +70,11 @@ _VIDEO_TYPES = frozenset({"video.movie", "video.episode", "video.tv_show", "vide
 _HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 
 
+# The parser normalizes every line break to one newline, so offsets count them
+# the same way rather than assuming LF.
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
 @dataclass(frozen=True, slots=True)
 class LinkCard:
     """One link a page declared to be a video, described by that page."""
@@ -90,133 +95,93 @@ class LinkCard:
         }
 
 
-def _line_spans(answer: str, kinds: frozenset[str]) -> list[tuple[int, int]]:
+def _line_spans(
+    answer: str, offsets: Sequence[int], kinds: frozenset[str]
+) -> list[tuple[int, int]]:
     """Return the character spans of the blocks the parser reports as ``kinds``."""
-    # Line numbers are the parser's: it counts newlines, while `splitlines` would
-    # also break on U+2028 and U+2029 and shift every span after them.
-    lines = answer.split("\n")
-    offsets = [0]
-    for index, line in enumerate(lines):
-        offsets.append(offsets[-1] + len(line) + (1 if index < len(lines) - 1 else 0))
     spans: list[tuple[int, int]] = []
     for token in _BLOCK_PARSER.parse(answer):
         if token.type in kinds and token.map:
             start, end = token.map
             spans.append((offsets[start], offsets[min(end, len(offsets) - 1)]))
-    return spans
+    return [span for span in spans if span[0] < span[1]]
 
 
-def _block_code_spans(answer: str) -> list[tuple[int, int]]:
-    """Return the spans the renderer itself calls block code.
+def _block_code_spans(answer: str, offsets: Sequence[int]) -> list[tuple[int, int]]:
+    """Return the spans the renderer itself calls block code."""
+    return _line_spans(answer, offsets, frozenset({"fence", "code_block"}))
 
-    Fences, indented blocks, headings that end a paragraph, fence lengths: the
-    same parser the Answer is rendered with decides all of it, so this module
-    never has to guess at Markdown's block rules.
+
+def _locate_code_span(
+    answer: str, start: int, end: int, markup: str, content: str
+) -> tuple[int, int] | None:
+    """Locate one inline code span the parser already recognized.
+
+    The structure is the parser's: it decided there is a ``code_inline`` child with
+    this content and this markup. All that is left is to find where that span sits
+    in the source, and the content makes the search unambiguous — a stray backtick
+    in a link title cannot match it.
     """
-    return _line_spans(answer, frozenset({"fence", "code_block"}))
+    for candidate in (markup + content + markup, markup + " " + content + " " + markup):
+        found = answer.find(candidate, start, end)
+        if found != -1:
+            return (found, found + len(candidate))
+    return None
 
 
-def _inline_regions(answer: str) -> list[tuple[int, int]]:
-    """Return the parser's own inline contexts: one paragraph, heading, or cell.
+def _inline_code_spans(answer: str, offsets: Sequence[int]) -> list[tuple[int, int]]:
+    """Return every inline code span, located from the parser's own token stream.
 
-    Inline code lives inside exactly one of these, so recognizing spans within
-    them cannot pair a backtick in one paragraph with a backtick in the next.
+    This module never decides which backticks pair: the parser owns the pairing,
+    and escapes, link titles, and paragraph boundaries are its decisions too.
     """
-    return _line_spans(answer, frozenset({"inline"}))
-
-
-def _inline_code_spans(answer: str, segments: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Return inline code spans inside prose, closed only by a run of equal length."""
     spans: list[tuple[int, int]] = []
-    for start, end in segments:
-        position = start
-        while position < end:
-            opening = answer.find("`", position, end)
-            if opening == -1:
+    for token in _BLOCK_PARSER.parse(answer):
+        if token.type != "inline" or not token.map:
+            continue
+        region_end = offsets[min(token.map[1], len(offsets) - 1)]
+        cursor = offsets[token.map[0]]
+        for child in token.children or ():
+            if child.type != "code_inline":
+                continue
+            located = _locate_code_span(
+                answer, cursor, region_end, child.markup or "`", child.content
+            )
+            if located is None:
+                # Unlocatable means the span cannot be excluded precisely, so the
+                # rest of this region is: a card is not offered, quoted text is
+                # left alone.
+                spans.append((cursor, region_end))
                 break
-            length = _run_length(answer, opening, end)
-            if _is_escaped(answer, opening):
-                position = opening + length
-                continue
-            closing = _matching_run(answer, opening + length, end, length)
-            if closing == -1:
-                position = opening + length
-                continue
-            spans.append((opening, closing + length))
-            position = closing + length
+            spans.append(located)
+            cursor = located[1]
     return spans
 
 
-def _run_length(answer: str, position: int, end: int) -> int:
-    length = 0
-    while position + length < end and answer[position + length] == "`":
-        length += 1
-    return length
+def _line_offsets(answer: str) -> list[int]:
+    """Return the offset each of the parser's lines starts at.
 
-
-def _is_escaped(answer: str, position: int) -> bool:
-    """Whether a backslash escapes the character at ``position``."""
-    backslashes = 0
-    scan = position - 1
-    while scan >= 0 and answer[scan] == "\\":
-        backslashes += 1
-        scan -= 1
-    return backslashes % 2 == 1
-
-
-def _matching_run(answer: str, position: int, end: int, length: int) -> int:
-    """Return the start of the next backtick run of exactly ``length``, or ``-1``."""
-    scan = position
-    while scan < end:
-        found = answer.find("`", scan, end)
-        if found == -1:
-            return -1
-        run = _run_length(answer, found, end)
-        if run == length:
-            return found
-        scan = found + run
-    return -1
+    Line numbers are the parser's, so every line-break form counts as one break
+    and Python's wider `splitlines` rules never enter the arithmetic.
+    """
+    offsets = [0]
+    for line_break in _LINE_BREAK.finditer(answer):
+        offsets.append(line_break.end())
+    if offsets[-1] != len(answer):
+        offsets.append(len(answer))
+    return offsets
 
 
 def code_spans(answer: str) -> list[tuple[int, int]]:
     """Return the answer spans that quote code rather than write an address.
 
-    Block code is the renderer's own classification, and inline runs are
-    recognized inside the prose only, so a quoting character can never pair
-    across a code block.
+    Both halves are the renderer's own classification: block code comes from its
+    block tokens, inline code from its inline children, located in the source. No
+    Markdown rule about pairing, escaping, or paragraph boundaries is re-derived
+    here.
     """
-    blocks = _block_code_spans(answer)
-    prose = [
-        segment
-        for region in _inline_regions(answer)
-        for segment in _overlap_of(region, _prose_segments(len(answer), blocks))
-    ]
-    return blocks + _inline_code_spans(answer, prose)
-
-
-def _overlap_of(
-    region: tuple[int, int], segments: Sequence[tuple[int, int]]
-) -> list[tuple[int, int]]:
-    """Return the parts of ``segments`` that fall inside ``region``."""
-    start, end = region
-    return [
-        (max(start, segment_start), min(end, segment_end))
-        for segment_start, segment_end in segments
-        if segment_start < end and start < segment_end
-    ]
-
-
-def _prose_segments(length: int, blocks: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Return the stretches of an answer that are not inside a block of code."""
-    segments: list[tuple[int, int]] = []
-    position = 0
-    for start, end in sorted(blocks):
-        if start > position:
-            segments.append((position, start))
-        position = max(position, end)
-    if position < length:
-        segments.append((position, length))
-    return segments
+    offsets = _line_offsets(answer)
+    return _block_code_spans(answer, offsets) + _inline_code_spans(answer, offsets)
 
 
 def card_key(url: str) -> str:

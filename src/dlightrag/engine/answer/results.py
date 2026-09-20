@@ -260,8 +260,12 @@ def _card_matches(
 
     The spans come from the same recognizer the card read used, so a card covers
     the whole Markdown link it belongs to and the punctuation a sentence owns is
-    left where the sentence put it.
+    left where the sentence put it. An answer with no cards costs nothing here: the
+    presentation is rebuilt for every streamed event, and recognizing addresses
+    only to discard them is work the reader waits for.
     """
+    if not cards_by_url:
+        return []
     return [
         (address.start, address.end, "link_card", cards_by_url[address.key])
         for address in written_addresses(answer)
