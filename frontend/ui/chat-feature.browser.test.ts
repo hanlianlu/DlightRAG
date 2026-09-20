@@ -58,6 +58,7 @@ const presentation: AnswerPresentation = {
     html: '<p>A stored answer.</p>',
     artifact: null,
     evidenceImage: null,
+      card: null,
     inline: false,
   }],
   sources: [],
@@ -186,6 +187,7 @@ function presentationWire(presentation: AnswerPresentation): Record<string, unkn
       html: part.html,
       artifact: part.artifact === null ? null : artifactWire(part.artifact),
       evidence_image: part.evidenceImage === null ? null : presentationImageWire(part.evidenceImage),
+      card: part.card,
       inline: part.inline,
     })),
     sources: presentation.sources.map((source) => ({

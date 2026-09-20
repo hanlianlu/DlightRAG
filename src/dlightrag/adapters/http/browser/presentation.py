@@ -121,12 +121,27 @@ class PresentationArtifactOutcome(ClientContractModel):
     issues: list[PresentationArtifactIssue] = Field(default_factory=list)
 
 
+class PresentationLinkCard(ClientContractModel):
+    """One link the page itself declared to be a video (ADR 0026).
+
+    The card is a link out: the browser reads the page's own cover image and
+    follows the reader's click, and no embed or iframe is introduced.
+    """
+
+    url: str
+    title: str = ""
+    description: str = ""
+    site: str = ""
+    image: str | None = None
+
+
 class PresentationPart(ClientContractModel):
-    type: Literal["markdown", "artifact", "evidence_image"]
+    type: Literal["markdown", "artifact", "evidence_image", "link_card"]
     text: str = ""
     html: str = ""
     artifact: PresentationArtifact | None = None
     evidence_image: PresentationImage | None = None
+    card: PresentationLinkCard | None = None
     inline: bool = False
 
 
@@ -151,6 +166,7 @@ class AnswerPresentation(ClientContractModel):
     parts: list[PresentationPart]
     sources: list[PresentationSource]
     evidence_images: list[PresentationImage]
+    link_cards: list[PresentationLinkCard] = Field(default_factory=list)
     artifacts: list[PresentationArtifact]
     artifact_outcome: PresentationArtifactOutcome
 
@@ -286,10 +302,12 @@ def build_answer_presentation(
     artifacts: list[dict[str, Any]] | None = None,
     artifact_outcome: dict[str, Any] | None = None,
     image_rewrites: Mapping[str, str] | None = None,
+    link_cards: list[dict[str, Any]] | None = None,
 ) -> AnswerPresentation:
     """Build the bounded Web projection used identically by SSE and history."""
     artifact_values = artifacts or []
     image_values = evidence_images
+    card_values = link_cards or []
     # Validate the sources once: they are both the payload this surface publishes
     # and the ref set its citation badges may point at.
     presentation_sources = [_presentation_source(source) for source in sources]
@@ -298,6 +316,11 @@ def build_answer_presentation(
         answer,
         artifacts=artifact_values,
         evidence_images=image_values,
+        link_cards=card_values,
+        # A cited source is this Answer's authority, not a page to card-ify.
+        citation_urls=frozenset(
+            source.source_url for source in presentation_sources if source.source_url
+        ),
     )
     parts = [
         PresentationPart(
@@ -319,6 +342,7 @@ def build_answer_presentation(
                 if part.get("evidence_image")
                 else None
             ),
+            card=(PresentationLinkCard.model_validate(part["card"]) if part.get("card") else None),
             inline=bool(part.get("inline")),
         )
         for part in raw_parts
@@ -337,6 +361,7 @@ def build_answer_presentation(
             for image in image_values
             if str(image.get("id") or "") not in inline_evidence
         ],
+        link_cards=[PresentationLinkCard.model_validate(card) for card in card_values],
         artifacts=[PresentationArtifact.model_validate(item) for item in artifact_values],
         artifact_outcome=PresentationArtifactOutcome.model_validate(
             artifact_outcome or {"status": "complete", "issues": []}
@@ -350,6 +375,7 @@ __all__ = [
     "PresentationArtifactIssue",
     "PresentationArtifactOutcome",
     "PresentationImage",
+    "PresentationLinkCard",
     "PresentationPart",
     "PresentationSource",
     "PresentationSourceChunk",

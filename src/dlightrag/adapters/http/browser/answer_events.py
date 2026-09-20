@@ -68,6 +68,7 @@ def render_done_event(
             answer=answer,
             sources=projected["sources"],
             evidence_images=projected["evidence_images"],
+            link_cards=projected.get("link_cards") or [],
             artifacts=projected["artifacts"],
             artifact_outcome=projected["artifact_outcome"],
             image_rewrites=image_rewrites,

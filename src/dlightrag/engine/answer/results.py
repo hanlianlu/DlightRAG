@@ -19,6 +19,7 @@ from dlightrag.engine.answer.citations.sources import (
     project_source_payloads,
 )
 from dlightrag.engine.answer.citations.utils import context_chunk_key
+from dlightrag.engine.answer.links.cards import project_link_cards
 from dlightrag.engine.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
@@ -27,6 +28,13 @@ _ARTIFACT_PART = re.compile(
     r"(?P<image>!)?\[(?P<label>[^\]]*)\]\(\s*<?artifact:(?P<resource>[^\s)>]+)>?(?:\s+[^)]*)?\)",
     re.IGNORECASE,
 )
+# One link the Model wrote, in either Markdown form, and one bare address it
+# wrote as text. A card replaces the whole Markdown link; a bare address is
+# replaced by itself.
+_MARKDOWN_LINK = re.compile(
+    r"\[[^\]]*\]\(\s*<?(?P<url>https?://[^\s>)]+)>?(?:\s+[\"'][^\"']*[\"'])?\s*\)"
+)
+_BARE_URL = re.compile(r"(?<![\w/])(?P<url>https?://[^\s<>\"']+)")
 _EVIDENCE_PART = re.compile(
     r"!\[(?P<label>[^\]]*)\]\(\s*<?evidence:(?P<resource>[^\s)>]+)>?(?:\s+[^)]*)?\)",
     re.IGNORECASE,
@@ -90,10 +98,11 @@ class EvidenceImage:
 
 @dataclass(frozen=True, slots=True)
 class AnswerPart:
-    type: Literal["markdown", "artifact", "evidence_image"]
+    type: Literal["markdown", "artifact", "evidence_image", "link_card"]
     text: str = ""
     artifact: AnswerArtifact | None = None
     evidence_image: EvidenceImage | None = None
+    card: dict[str, Any] | None = None
     inline: bool = False
 
 
@@ -126,6 +135,7 @@ def store_answer_result(
     artifacts: Sequence[Mapping[str, Any]] = (),
     artifact_outcome: Mapping[str, Any] | None = None,
     artifact_sources: Mapping[str, Sequence[SourceReference]] | None = None,
+    link_cards: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Store one canonical Markdown Answer and transport-neutral identities."""
     workspaces = _image_workspaces(sources)
@@ -148,6 +158,7 @@ def store_answer_result(
             for resource_id, source_values in (artifact_sources or {}).items()
             if source_values
         },
+        "link_cards": [dict(card) for card in link_cards],
     }
 
 
@@ -215,9 +226,20 @@ def project_answer_result(
         if isinstance(item, Mapping)
     ]
     outcome = _public_outcome(stored.get("artifact_outcome"))
+    link_cards = project_link_cards(stored.get("link_cards") or ())
+    citation_urls = frozenset(
+        str(source.source_uri or "") for source in sources if source.source_uri
+    )
     return {
         "answer": answer,
-        "parts": answer_parts_from_markdown(answer, artifacts=artifacts, evidence_images=images),
+        "link_cards": link_cards,
+        "parts": answer_parts_from_markdown(
+            answer,
+            artifacts=artifacts,
+            evidence_images=images,
+            link_cards=link_cards,
+            citation_urls=citation_urls,
+        ),
         "contexts": project_contexts_for_client(
             dict(stored.get("contexts") or {}),
             image_url_prefix=image_url_prefix,
@@ -237,15 +259,45 @@ def project_answer_result(
     }
 
 
+def _card_matches(
+    answer: str,
+    cards_by_url: Mapping[str, Mapping[str, Any]],
+) -> list[tuple[int, int, str, re.Match[str]]]:
+    """Return the spans one answer's card links occupy, Markdown form first."""
+    matches: list[tuple[int, int, str, re.Match[str]]] = []
+    linked: list[tuple[int, int]] = []
+    for match in _MARKDOWN_LINK.finditer(answer):
+        if match.group("url").rstrip(".") in cards_by_url:
+            matches.append((match.start(), match.end(), "link_card", match))
+            linked.append(match.span())
+    for match in _BARE_URL.finditer(answer):
+        if any(start <= match.start() < end for start, end in linked):
+            continue
+        if match.group("url").rstrip(".") in cards_by_url:
+            matches.append((match.start(), match.end(), "link_card", match))
+    return matches
+
+
 def answer_parts_from_markdown(
     answer: str,
     *,
     artifacts: Sequence[Mapping[str, Any]],
     evidence_images: Sequence[Mapping[str, Any]],
+    link_cards: Sequence[Mapping[str, Any]] = (),
+    citation_urls: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Derive ordered semantic parts from canonical Markdown and stable ids."""
+    """Derive ordered semantic parts from canonical Markdown and stable ids.
+
+    ``citation_urls`` are the addresses this Answer cites as sources. A card is a
+    link out to someone else's page, so a cited source never becomes one.
+    """
     artifacts_by_id = {str(item.get("resource_id") or ""): dict(item) for item in artifacts}
     images_by_id = {str(item.get("id") or ""): dict(item) for item in evidence_images}
+    cards_by_url = {
+        str(card.get("url") or ""): dict(card)
+        for card in link_cards
+        if str(card.get("url") or "") and str(card.get("url")) not in citation_urls
+    }
     matches: list[tuple[int, int, str, re.Match[str]]] = [
         (match.start(), match.end(), "artifact", match) for match in _ARTIFACT_PART.finditer(answer)
     ]
@@ -253,6 +305,7 @@ def answer_parts_from_markdown(
         (match.start(), match.end(), "evidence_image", match)
         for match in _EVIDENCE_PART.finditer(answer)
     )
+    matches.extend(_card_matches(answer, cards_by_url))
     matches.sort(key=lambda value: value[0])
     result: list[dict[str, Any]] = []
     cursor = 0
@@ -261,6 +314,10 @@ def answer_parts_from_markdown(
             continue
         if start > cursor:
             result.append({"type": "markdown", "text": answer[cursor:start]})
+        if kind == "link_card":
+            result.append({"type": "link_card", "card": cards_by_url[str(match.group("url"))]})
+            cursor = end
+            continue
         resource = str(match.group("resource"))
         label = str(match.group("label") or "")
         if kind == "artifact":
@@ -496,6 +553,7 @@ def _part_models(values: Sequence[Mapping[str, Any]]) -> list[AnswerPart]:
                     if isinstance(value.get("evidence_image"), Mapping)
                     else None
                 ),
+                card=(dict(value["card"]) if isinstance(value.get("card"), Mapping) else None),
                 inline=bool(value.get("inline")),
             )
         )

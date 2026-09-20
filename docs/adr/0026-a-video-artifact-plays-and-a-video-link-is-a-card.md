@@ -7,9 +7,9 @@ deliberately does not mean: no ingestion, no embed, no loosened sanitizer.
 
 ## Status
 
-Accepted. Publication, delivery, the two Answer surfaces, and address
-auto-detection are implemented; link cards are accepted here and not yet
-implemented (see [Consequences](#consequences)).
+Accepted and implemented: publication, delivery, both Answer surfaces, address
+auto-detection, and video link cards. See [Consequences](#consequences) for the
+bounds and the accepted residuals.
 
 ## Context
 
@@ -115,7 +115,19 @@ contains, because refusing it needs the pass that reads that context, and the
 Chinese sentence above needs the pass that does not.
 
 Clicking a card leaves the application and plays at the source. No third-party
-`<iframe>` is introduced, and the answer-sanitizing allowlists are unchanged.
+`<iframe>` is introduced, and the answer-sanitizing allowlists are unchanged. The
+card carries the page's own cover image, title, description, and site name; the
+browser reads that image from the platform's CDN, exactly as it already reads a
+remote image an answer writes.
+
+Reading the pages happens during the Answer's own settlement, under bounds: at
+most three addresses an answer writes are read, each with a four-second deadline
+and a 256 KiB ceiling, and they are read together so an answer with three links
+costs about one deadline rather than three. An address that is unreachable, too
+slow, declares nothing, or answers with anything but HTML stays the plain link
+the Model wrote — a card is never a reason to fail an answer. A cited source is
+this Answer's authority rather than someone else's page, so it never becomes a
+card.
 
 ## Considered options
 

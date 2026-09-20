@@ -11,7 +11,7 @@ import type {
 } from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
+import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import answerStyles from '../styles/answer-presentation.module.css';
 import chatStyles from '../styles/chat.module.css';
 import type {ImageOpenDetail} from './image-lightbox.ts';
@@ -127,7 +127,27 @@ export class AnswerPresentationElement extends LightElement {
       return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidenceImage)}</div>`;
     }
     if (part.type === 'artifact' && part.artifact) return this.#artifact(part.artifact, part.inline);
+    if (part.type === 'link_card' && part.card) return this.#linkCard(part.card);
     return nothing;
+  }
+
+  #linkCard(card: import('../api/conversations.ts').LinkCard): TemplateResult {
+    // The card is a link out. The page's own cover image is the only subresource
+    // it adds, and the platform is never embedded (ADR 0026).
+    const cover = safeExternalHttpHref(card.image || '');
+    return html`
+      <a class=${answerStyles['answer-link-card']} data-answer-link-card
+         href=${safeExternalHttpHref(card.url) || '#'}
+         target="_blank" rel="noopener noreferrer"
+         aria-label=${msg(str`Open ${card.title}`, {id: 'answerPresentation.openLinkCard'})}>
+        ${cover ? html`<img class=${answerStyles['answer-link-card-cover']} src=${cover} alt="" loading="lazy">` : nothing}
+        <span class=${answerStyles['answer-link-card-body']}>
+          <strong class=${answerStyles['answer-link-card-title']}>${card.title}</strong>
+          ${card.description ? html`<span class=${answerStyles['answer-link-card-description']}>${card.description}</span>` : nothing}
+          <span class=${answerStyles['answer-link-card-site']}>${card.site}</span>
+        </span>
+      </a>
+    `;
   }
 
   #artifact(artifact: AnswerArtifact, inline: boolean): TemplateResult {

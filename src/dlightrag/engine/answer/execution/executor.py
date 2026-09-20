@@ -146,6 +146,7 @@ from dlightrag.engine.answer.image_capability import (
     check_answer_image_count,
 )
 from dlightrag.engine.answer.images import AnswerImageBudget
+from dlightrag.engine.answer.links.cards import collect_link_cards
 from dlightrag.engine.answer.media import evidence_images_from_sources
 from dlightrag.engine.answer.memory import (
     memory_owner_allowed,
@@ -2417,6 +2418,9 @@ class AnswerExecutor:
                 session.pending_publications = publications if fast_boundaries is None else []
                 stored = store_answer_result(
                     answer=finalized.answer,
+                    link_cards=[
+                        card.as_dict() for card in await collect_link_cards(finalized.answer)
+                    ],
                     contexts=project_contexts_for_client(contexts),
                     sources=finalized.sources,
                     evidence_images=images,

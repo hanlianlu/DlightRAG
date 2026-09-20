@@ -539,6 +539,7 @@ export const templates: Record<
   'answerPresentation.artifactUnavailable': '该工件不可用。',
   'answerPresentation.openImage': str`打开图片：${0}`,
   'answerPresentation.openVideo': '在新标签页打开',
+  'answerPresentation.openLinkCard': str`打开 ${0}`,
   'answerPresentation.downloadVideo': '下载',
   'answerPresentation.openArtifact': '打开工件',
   'answerPresentation.openSourceAria': str`打开来源 ${0}`,

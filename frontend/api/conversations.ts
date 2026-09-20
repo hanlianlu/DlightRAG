@@ -137,13 +137,26 @@ const answerArtifact = v.pipe(
 );
 export type AnswerArtifact = v.InferOutput<typeof answerArtifact>;
 
+/** One link a page declared to be a video (ADR 0026); a link out, never an embed. */
+const linkCard = v.pipe(
+  v.object({
+    url: v.string(),
+    title: v.string(),
+    description: v.string(),
+    site: v.string(),
+    image: v.nullable(v.string()),
+  }),
+);
+export type LinkCard = v.InferOutput<typeof linkCard>;
+
 const presentationPart = v.pipe(
   v.object({
-    type: v.picklist(['markdown', 'artifact', 'evidence_image']),
+    type: v.picklist(['markdown', 'artifact', 'evidence_image', 'link_card']),
     text: v.string(),
     html: v.string(),
     artifact: v.nullable(answerArtifact),
     evidence_image: v.nullable(presentationImage),
+    card: v.nullable(linkCard),
     inline: v.boolean(),
   }),
   v.transform((w) => ({
@@ -152,6 +165,7 @@ const presentationPart = v.pipe(
     html: w.html,
     artifact: w.artifact,
     evidenceImage: w.evidence_image,
+    card: w.card,
     inline: w.inline,
   })),
 );

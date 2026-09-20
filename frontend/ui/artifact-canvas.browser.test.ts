@@ -71,7 +71,7 @@ function markdownPresentation(text: string): Record<string, unknown> {
     answer_text: text,
     parts: [{
       type: 'markdown', text, html: `<p>${text}</p>`, artifact: null,
-      evidence_image: null, inline: false,
+      evidence_image: null, card: null, inline: false,
     }],
     sources: [],
     evidence_images: [],

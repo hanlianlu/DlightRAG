@@ -606,6 +606,7 @@ async def answer_artifact_presentation(
         answer=markdown,
         sources=sources,
         evidence_images=[],
+        link_cards=projected.get("link_cards") or [],
         artifacts=projected["artifacts"],
         artifact_outcome=projected["artifact_outcome"],
     )

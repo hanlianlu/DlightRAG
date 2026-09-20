@@ -156,11 +156,22 @@ class EvidenceImageResponse(ClientContractModel):
     answer_image_sent: bool = True
 
 
+class LinkCardResponse(ClientContractModel):
+    """One link the page itself declared to be a video (ADR 0026)."""
+
+    url: str
+    title: str = ""
+    description: str = ""
+    site: str = ""
+    image: str | None = None
+
+
 class AnswerPartResponse(ClientContractModel):
-    type: Literal["markdown", "artifact", "evidence_image"]
+    type: Literal["markdown", "artifact", "evidence_image", "link_card"]
     text: str = ""
     artifact: AnswerArtifactResponse | None = None
     evidence_image: EvidenceImageResponse | None = None
+    card: LinkCardResponse | None = None
     inline: bool = False
 
 
@@ -169,6 +180,7 @@ class AnswerResponse(RetrievalResponse):
     parts: list[AnswerPartResponse] = Field(default_factory=list)
     references: list[ReferenceSummary] = Field(default_factory=list)
     evidence_images: list[EvidenceImageResponse] = Field(default_factory=list)
+    link_cards: list[LinkCardResponse] = Field(default_factory=list)
     artifacts: list[AnswerArtifactResponse] = Field(default_factory=list)
     artifact_outcome: ArtifactOutcomeResponse = Field(default_factory=ArtifactOutcomeResponse)
     usage: dict[str, Any] = Field(default_factory=dict)

@@ -247,3 +247,49 @@
     gap: var(--space-tight);
     padding-top: var(--space-tight);
 }
+
+/* === Video Link Card === */
+
+/* A card is a link out: the page's own cover above its own title and
+   description, and the platform is never embedded. */
+.answer-link-card {
+    align-items: stretch;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    color: var(--color-text-primary);
+    display: flex;
+    gap: var(--space-component);
+    margin: var(--space-component) 0;
+    overflow: hidden;
+    text-decoration: none;
+}
+
+.answer-link-card:hover {
+    border-color: var(--color-accent-border);
+}
+
+.answer-link-card-cover {
+    background: var(--color-bg-elevated);
+    flex: 0 0 auto;
+    height: auto;
+    max-height: 140px;
+    max-width: 220px;
+    object-fit: cover;
+}
+
+.answer-link-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-tight);
+    padding: var(--space-component) var(--space-component) var(--space-component) 0;
+}
+
+.answer-link-card-title {
+    font-size: var(--font-size-body);
+}
+
+.answer-link-card-description,
+.answer-link-card-site {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+}

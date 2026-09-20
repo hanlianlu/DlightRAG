@@ -17,6 +17,7 @@ const presentation: AnswerPresentation = {
     html: '<p>Safe <cite class="citation-badge" data-ref="1">1</cite></p><script>x()</script>',
     artifact: null,
     evidenceImage: null,
+      card: null,
     inline: false,
   }],
   sources: [
@@ -141,7 +142,7 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
     ...presentation,
     parts: [
       presentation.parts[0],
-      {type: 'artifact', text: '', html: '', artifact, evidenceImage: null, inline: false},
+      {type: 'artifact', text: '', html: '', artifact, evidenceImage: null, card: null, inline: false},
     ],
     artifacts: [artifact],
     evidenceImages: [{
@@ -199,7 +200,7 @@ it('plays an inline video Artifact and keeps the card for a non-inline placement
   const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
   element.presentation = {
     ...presentation,
-    parts: [{type: 'artifact', text: '', html: '', artifact: video, evidenceImage: null, inline: true}],
+    parts: [{type: 'artifact', text: '', html: '', artifact: video, evidenceImage: null, card: null, inline: true}],
     artifacts: [video],
   };
   document.body.appendChild(element);
@@ -224,13 +225,41 @@ it('plays an inline video Artifact and keeps the card for a non-inline placement
 
   element.presentation = {
     ...presentation,
-    parts: [{type: 'artifact', text: '', html: '', artifact: video, evidenceImage: null, inline: false}],
+    parts: [{type: 'artifact', text: '', html: '', artifact: video, evidenceImage: null, card: null, inline: false}],
     artifacts: [video],
   };
   await element.updateComplete;
 
   expect(element.querySelector('video')).to.equal(null);
   expect(element.querySelector('.answer-artifact-card')).not.to.equal(null);
+});
+
+it('renders a declared video link as a card that leaves for its source', async () => {
+  const card = {
+    url: 'https://www.youtube.com/watch?v=abc123',
+    title: 'Big Buck Bunny',
+    description: 'A short film.',
+    site: 'YouTube',
+    image: 'https://i.ytimg.com/vi/abc123/hqdefault.jpg',
+  };
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  element.presentation = {
+    ...presentation,
+    parts: [{type: 'link_card', text: '', html: '', artifact: null, evidenceImage: null, card, inline: false}],
+  };
+  document.body.appendChild(element);
+  await element.updateComplete;
+
+  const anchor = element.querySelector<HTMLAnchorElement>('[data-answer-link-card]');
+  expect(anchor?.getAttribute('href')).to.equal(card.url);
+  expect(anchor?.getAttribute('target')).to.equal('_blank');
+  expect(anchor?.getAttribute('rel')).to.equal('noopener noreferrer');
+  expect(anchor?.querySelector('img')?.getAttribute('src')).to.equal(card.image);
+  expect(anchor?.textContent).to.contain('Big Buck Bunny');
+  expect(anchor?.textContent).to.contain('A short film.');
+  expect(anchor?.textContent).to.contain('YouTube');
+  // A card is a link out: the platform is never embedded.
+  expect(element.querySelector('iframe')).to.equal(null);
 });
 
 it('includes typed Answer images in previous and next gallery navigation', async () => {
