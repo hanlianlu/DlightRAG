@@ -16,7 +16,7 @@ import httpx2
 import pytest
 from anthropic import AsyncAnthropic
 from google import genai
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 
 from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.tool_content import (
@@ -112,6 +112,57 @@ def _expected_payloads(count: int) -> list[bytes]:
     return [_PAYLOADS[index % 2] for index in range(count)]
 
 
+def _response_tool_batch() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _data_url(PAGE_ONE), "detail": "high"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _data_url(PAGE_TWO)},
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "view", "arguments": '{"locator":"1"}'},
+                },
+                {
+                    "id": "call-2",
+                    "type": "function",
+                    "function": {"name": "view", "arguments": '{"locator":"2"}'},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "view",
+            "content": "first pages",
+            "attachments": [_page_attachment(0), _page_attachment(1)],
+            "is_error": False,
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-2",
+            "name": "view",
+            "content": "",
+            "attachments": [_page_attachment(0)],
+            "is_error": False,
+        },
+    ]
+
+
 def _openai_complete_json() -> dict[str, Any]:
     return {
         "id": "chatcmpl-1",
@@ -176,7 +227,7 @@ def _openai_response_json() -> dict[str, Any]:
     }
 
 
-def _openai_response_stream_sse() -> bytes:
+def _openai_response_stream_sse(*, include_tool_call: bool) -> bytes:
     response = _openai_response_json()
     message = response["output"][0]
     call = {
@@ -187,7 +238,7 @@ def _openai_response_stream_sse() -> bytes:
         "name": "view",
         "arguments": '{"locator":"1"}',
     }
-    response["output"] = [message, call]
+    response["output"] = [message, call] if include_tool_call else [message]
     events = [
         {
             "type": "response.output_text.delta",
@@ -213,40 +264,47 @@ def _openai_response_stream_sse() -> bytes:
             "output_index": 0,
             "item": message,
         },
-        {
-            "type": "response.function_call_arguments.delta",
-            "sequence_number": 4,
-            "item_id": "fc-item-1",
-            "output_index": 1,
-            "delta": '{"locator":',
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "sequence_number": 5,
-            "item_id": "fc-item-1",
-            "output_index": 1,
-            "delta": '"1"}',
-        },
-        {
-            "type": "response.function_call_arguments.done",
-            "sequence_number": 6,
-            "item_id": "fc-item-1",
-            "output_index": 1,
-            "name": "view",
-            "arguments": '{"locator":"1"}',
-        },
-        {
-            "type": "response.output_item.done",
-            "sequence_number": 7,
-            "output_index": 1,
-            "item": call,
-        },
+    ]
+    if include_tool_call:
+        events.extend(
+            [
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "sequence_number": 4,
+                    "item_id": "fc-item-1",
+                    "output_index": 1,
+                    "delta": '{"locator":',
+                },
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "sequence_number": 5,
+                    "item_id": "fc-item-1",
+                    "output_index": 1,
+                    "delta": '"1"}',
+                },
+                {
+                    "type": "response.function_call_arguments.done",
+                    "sequence_number": 6,
+                    "item_id": "fc-item-1",
+                    "output_index": 1,
+                    "name": "view",
+                    "arguments": '{"locator":"1"}',
+                },
+                {
+                    "type": "response.output_item.done",
+                    "sequence_number": 7,
+                    "output_index": 1,
+                    "item": call,
+                },
+            ]
+        )
+    events.append(
         {
             "type": "response.completed",
             "sequence_number": 8,
             "response": response,
-        },
-    ]
+        }
+    )
     return "".join(
         f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
     ).encode()
@@ -390,10 +448,12 @@ class _HttpCapture:
         provider: str,
         *,
         response_jsons: list[dict[str, Any]] | None = None,
+        response_stream_tool_call: bool = False,
     ) -> None:
         self.provider = provider
         self.requests: list[dict[str, Any]] = []
         self.response_jsons = list(response_jsons or [])
+        self.response_stream_tool_call = response_stream_tool_call
 
     def handler(self, request: httpx2.Request) -> httpx2.Response:
         url = str(request.url)
@@ -421,7 +481,9 @@ class _HttpCapture:
                 return httpx2.Response(
                     200,
                     headers={"content-type": "text/event-stream"},
-                    content=_openai_response_stream_sse(),
+                    content=_openai_response_stream_sse(
+                        include_tool_call=self.response_stream_tool_call
+                    ),
                 )
             payload = self.response_jsons.pop(0) if self.response_jsons else _openai_response_json()
             return httpx2.Response(200, json=payload)
@@ -483,6 +545,18 @@ def _provider(name: str, capture: _HttpCapture) -> Any:
 
 
 def _wire_images(provider: str, body: dict[str, Any]) -> list[bytes]:
+    if provider == "openai_response":
+        images: list[bytes] = []
+        for item in body["input"]:
+            content = item.get("content")
+            output = item.get("output") if item.get("type") == "function_call_output" else None
+            parts = content if isinstance(content, list) else output
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if part.get("type") == "input_image":
+                    images.append(base64.b64decode(str(part["image_url"]).partition(",")[2]))
+        return images
     if provider == "openai":
         images: list[bytes] = []
         for message in body["messages"]:
@@ -563,7 +637,7 @@ async def _invoke(
     if entrypoint == "stream":
         holder: dict[str, Any] = {}
         tokens = [token async for token in provider.stream(messages, model, usage_holder=holder)]
-        assert tokens == [_MODEL_TEXT]
+        assert "".join(tokens) == _MODEL_TEXT
         assert holder.get("usage_details")
         return tokens
     if entrypoint == "complete_tool_turn":
@@ -580,7 +654,7 @@ async def _invoke(
         turn = await provider.complete_tool_turn_streaming(
             messages, model, tools=[_VIEW_TOOL], emit_text=emit_text
         )
-        assert emitted == [_MODEL_TEXT]
+        assert "".join(emitted) == _MODEL_TEXT
         assert turn.text == _MODEL_TEXT
         assert turn.usage_details
         return turn
@@ -589,7 +663,7 @@ async def _invoke(
         tokens = [
             token async for token in provider.stream_tool_text(messages, model, usage_holder=holder)
         ]
-        assert tokens == [_MODEL_TEXT]
+        assert "".join(tokens) == _MODEL_TEXT
         assert holder.get("usage_details")
         return tokens
     raise AssertionError(f"unhandled entrypoint {entrypoint!r}")
@@ -644,6 +718,181 @@ async def test_sdk_http_projects_tool_attachments(
         assert response["name"] == "view"
         assert response["response"]["output"] == _TOOL_TEXT
         assert response["response"]["is_error"] is False
+
+
+@pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
+async def test_response_sdk_http_keeps_each_image_with_its_canonical_owner(
+    entrypoint: str,
+) -> None:
+    capture = _HttpCapture("openai_response")
+    provider = get_provider(
+        "openai",
+        api_key="test-key",
+        api_family="response",
+        max_retries=0,
+    )
+    bind_mock_http(provider, capture.handler)
+    messages = _response_tool_batch()
+    snapshot = json.loads(json.dumps(messages))
+
+    try:
+        await _invoke(provider, entrypoint, messages, "gpt-5.4")
+    finally:
+        await provider.aclose()
+
+    assert messages == snapshot
+    assert capture.requests[-1]["url"] == "https://api.openai.com/v1/responses"
+    body = capture.body
+    assert body["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look"},
+                {
+                    "type": "input_image",
+                    "image_url": _data_url(PAGE_ONE),
+                    "detail": "high",
+                },
+                {"type": "input_image", "image_url": _data_url(PAGE_TWO)},
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "view",
+            "arguments": '{"locator":"1"}',
+        },
+        {
+            "type": "function_call",
+            "call_id": "call-2",
+            "name": "view",
+            "arguments": '{"locator":"2"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": [
+                {"type": "input_text", "text": "first pages"},
+                {"type": "input_image", "image_url": _data_url(PAGE_ONE)},
+                {"type": "input_image", "image_url": _data_url(PAGE_TWO)},
+            ],
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-2",
+            "output": [
+                {"type": "input_image", "image_url": _data_url(PAGE_ONE)},
+            ],
+        },
+    ]
+    assert _wire_images("openai_response", body) == [
+        PAGE_ONE,
+        PAGE_TWO,
+        PAGE_ONE,
+        PAGE_TWO,
+        PAGE_ONE,
+    ]
+    serialized = json.dumps(body)
+    for key in _PRIVATE_WIRE_KEYS:
+        assert f'"{key}"' not in serialized
+    assert '"messages"' not in serialized
+    assert [item.get("type") for item in body["input"]].count(None) == 1
+
+
+async def test_custom_response_endpoint_uses_the_same_standard_image_projection() -> None:
+    capture = _HttpCapture("openai_response")
+    provider = get_provider(
+        "openai",
+        api_key="test-key",
+        base_url="https://gateway.example/openai/v1",
+        api_family="response",
+        max_retries=0,
+    )
+    bind_mock_http(provider, capture.handler)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": _data_url(PAGE_ONE)}},
+            ],
+        }
+    ]
+
+    try:
+        result = await provider.complete(messages, "custom-vision-model")
+    finally:
+        await provider.aclose()
+
+    assert result == _MODEL_TEXT
+    assert capture.requests[-1]["url"] == "https://gateway.example/openai/v1/responses"
+    assert capture.body["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look"},
+                {"type": "input_image", "image_url": _data_url(PAGE_ONE)},
+            ],
+        }
+    ]
+
+
+async def test_response_image_rejection_surfaces_without_chat_or_image_downgrade() -> None:
+    requests: list[httpx2.Request] = []
+
+    def reject(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(
+            400,
+            request=request,
+            json={
+                "error": {
+                    "message": "image input rejected",
+                    "type": "invalid_request_error",
+                    "param": "input",
+                    "code": "unsupported_image",
+                }
+            },
+        )
+
+    provider = get_provider(
+        "openai",
+        api_key="test-key",
+        api_family="response",
+        max_retries=0,
+    )
+    bind_mock_http(provider, reject)
+    messages = _response_tool_batch()
+
+    try:
+        with pytest.raises(APIStatusError, match="image input rejected"):
+            await provider.complete_tool_turn(
+                messages,
+                "gpt-5.4",
+                tools=[_VIEW_TOOL],
+            )
+    finally:
+        await provider.aclose()
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://api.openai.com/v1/responses"
+    body = json.loads(requests[0].content.decode())
+    assert _wire_images("openai_response", body) == [
+        PAGE_ONE,
+        PAGE_TWO,
+        PAGE_ONE,
+        PAGE_TWO,
+        PAGE_ONE,
+    ]
+    assert body["tools"] == [
+        {
+            "type": "function",
+            "name": "view",
+            "description": "view a page",
+            "parameters": _VIEW_TOOL.parameters,
+            "strict": False,
+        }
+    ]
 
 
 async def test_sdk_http_keeps_an_image_bearing_tool_batch_contiguous() -> None:
@@ -835,7 +1084,7 @@ async def test_response_tool_loop_replays_finalized_native_items_and_exact_call_
 
 
 async def test_response_stream_uses_sdk_events_and_preserves_finalized_tool_items() -> None:
-    capture = _HttpCapture("openai_response")
+    capture = _HttpCapture("openai_response", response_stream_tool_call=True)
     provider = get_provider(
         "openai",
         api_key="test-key",

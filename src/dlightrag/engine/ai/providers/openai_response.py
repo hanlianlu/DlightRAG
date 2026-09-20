@@ -28,13 +28,18 @@ from dlightrag.engine.ai.response_policy import (
 
 _RESPONSE_REPLAY_KEY = "response_replay"
 _RESPONSE_REPLAY_VERSION = 1
+_RESPONSE_IMAGE_DETAILS = frozenset({"auto", "low", "high"})
 
 
 class ResponseStatusError(RuntimeError):
     """A Responses request ended without one valid completed model output."""
 
 
-def _response_content(content: object) -> str | list[dict[str, Any]]:
+def _response_content(
+    content: object,
+    *,
+    allow_images: bool = False,
+) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -50,8 +55,52 @@ def _response_content(content: object) -> str | list[dict[str, Any]]:
         if part_type == "text":
             projected.append({"type": "input_text", "text": str(raw.get("text") or "")})
             continue
+        if part_type == "image_url" and allow_images:
+            image = raw.get("image_url")
+            if not isinstance(image, Mapping):
+                raise ResponseRequestError("Response image_url content must be an object")
+            url = image.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise ResponseRequestError("Response image_url content requires a URL")
+            response_image: dict[str, Any] = {
+                "type": "input_image",
+                "image_url": url.strip(),
+            }
+            detail = image.get("detail")
+            if detail is not None:
+                if not isinstance(detail, str) or detail not in _RESPONSE_IMAGE_DETAILS:
+                    raise ResponseRequestError("Response image detail is unsupported")
+                response_image["detail"] = detail
+            projected.append(response_image)
+            continue
         raise ResponseRequestError(f"unsupported Response content part: {part_type!r}")
     return projected
+
+
+def _response_tool_output(message: Mapping[str, Any]) -> str | list[dict[str, Any]]:
+    content = message.get("content", "")
+    if not isinstance(content, str):
+        raise ResponseRequestError("Response Tool output must be text")
+    attachments = message.get("attachments") or ()
+    if not isinstance(attachments, list | tuple):
+        raise ResponseRequestError("Response Tool attachments must be a list")
+    images: list[dict[str, Any]] = []
+    for attachment in attachments:
+        if not isinstance(attachment, Mapping):
+            raise ResponseRequestError("Response Tool attachments must be objects")
+        data_url = attachment.get("data_url")
+        if data_url is None:
+            continue
+        if not isinstance(data_url, str) or not data_url.strip():
+            raise ResponseRequestError("Response Tool image requires a data URL")
+        images.append({"type": "input_image", "image_url": data_url.strip()})
+    if not images:
+        return content
+    output: list[dict[str, Any]] = []
+    if content:
+        output.append({"type": "input_text", "text": content})
+    output.extend(images)
+    return output
 
 
 def _canonical_tool_call(raw: object) -> dict[str, str]:
@@ -272,16 +321,11 @@ def response_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             call_id = message.get("tool_call_id")
             if not isinstance(call_id, str) or call_id not in pending_calls:
                 raise ResponseRequestError("Response Tool output requires a matching function call")
-            if message.get("attachments"):
-                raise ResponseRequestError("Response Tool-result images are not implemented")
-            content = message.get("content", "")
-            if not isinstance(content, str):
-                raise ResponseRequestError("Response Tool output must be text")
             projected.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": content,
+                    "output": _response_tool_output(message),
                 }
             )
             pending_calls.remove(call_id)
@@ -297,7 +341,9 @@ def response_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             projected.append(
                 {
                     "role": role,
-                    "content": _response_content(message.get("content", "")),
+                    "content": _response_content(
+                        message.get("content", ""), allow_images=role == "user"
+                    ),
                 }
             )
             continue
