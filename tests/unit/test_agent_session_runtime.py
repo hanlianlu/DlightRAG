@@ -18,6 +18,7 @@ from dlightrag.engine.agent.session.entries import (
     ToolResultMessageEntry,
     UserMessageEntry,
 )
+from dlightrag.engine.agent.session.fold import project_session_messages
 from dlightrag.engine.agent.session.ids import AttemptId, EntryId, LaneId, SessionId
 from dlightrag.engine.agent.session.operation import (
     Cancelling,
@@ -62,7 +63,10 @@ from dlightrag.engine.agent.session.transactions import (
 )
 from dlightrag.engine.agent.tool_content import tool_content_text
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.providers.openai_response import response_input
+from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 from dlightrag.engine.answer.evidence import has_unrepresentable_text
 from dlightrag.engine.dependencies import ProviderUnavailableError
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
@@ -355,6 +359,109 @@ async def test_live_runtime_commits_exact_request_ordered_batch_host_delta_and_t
     assert all(event.commit_sequence is not None or event.ephemeral for event in events)
     assert not any(record.ref.kind == "request_snapshot" for record in snapshot.registers)
     assert not any(record.ref.kind == "tool_arguments" for record in snapshot.registers)
+
+
+@pytest.mark.asyncio
+async def test_settled_response_tool_batch_survives_restart_without_reexecution() -> None:
+    class ProjectingEffects(_Effects):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.requests: list[RequestSnapshot] = []
+
+        async def assemble_request(
+            self,
+            context: RuntimeContext,
+            *,
+            compaction_declined: bool = False,
+        ) -> RequestSnapshot:
+            del compaction_declined
+            return RequestSnapshot.from_values(
+                operation_id=context.operation_id,
+                turn_number=getattr(context.state, "turn_count", 0) + 1,
+                plan_digest=context.meta.plan_digest,
+                model_role="query",
+                messages=project_session_messages(
+                    context.snapshot.tree.ancestry(context.lane_id),
+                    context.snapshot.active_projection,
+                ),
+                tools=[],
+                tool_choice="auto",
+                max_tokens=256,
+            )
+
+        async def call_provider(
+            self,
+            context: RuntimeContext,
+            request: RequestSnapshot,
+            attempt_id: AttemptId,
+            emit_ephemeral: Any,
+        ) -> AssistantTurn:
+            del context, attempt_id, emit_ephemeral
+            self.requests.append(request)
+            if not self.provider_turns:
+                raise asyncio.CancelledError
+            return self.provider_turns.pop(0)
+
+    native_call = {
+        "id": "fc-item-1",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": "call-1",
+        "name": "lookup",
+        "arguments": '{"value":"x"}',
+    }
+    fingerprint = ModelInvocationFingerprint("openai", "gpt-test", None, "response")
+    first_turn = bind_provider_replay(
+        AssistantTurn(
+            text="",
+            tool_calls=(ToolCall("call-1", "lookup", {"value": "x"}),),
+            stop_reason="tool_use",
+            usage_details={"input_tokens": 17, "output_tokens": 4},
+            provider_state={"response_replay": {"v": 1, "items": [native_call]}},
+        ),
+        fingerprint,
+    )
+    tool = _agent_tool(replayable=False)
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    first_effects = ProjectingEffects([first_turn])
+    runtime = _runtime(store, first_effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="response-restart",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    crashed = await runtime.restore(session_id=session_id, operation_id=accepted.operation_id)
+    assert isinstance(crashed.state, ProviderRequestPending)
+    assert first_effects.executed_sources == [0]
+
+    recovered_effects = ProjectingEffects([_assistant(text="done")])
+    final = await _runtime(store, recovered_effects, tool).drive(
+        session_id=session_id,
+        operation_id=accepted.operation_id,
+    )
+
+    assert isinstance(final.state, OperationCompleted)
+    assert recovered_effects.executed_sources == []
+    assert len(recovered_effects.requests) == 1
+    recovered_request = recovered_effects.requests[0]
+    assert recovered_request.messages[1]["provider_state"] == first_turn.provider_state
+    prepared = messages_for_model(recovered_request.messages, fingerprint)
+    assert response_input(prepared) == [
+        {"role": "user", "content": "question"},
+        native_call,
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "result:x",
+        },
+    ]
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,36 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Automatic checkpoint compaction parsing and projection contracts."""
 
+from datetime import UTC, datetime
+
 import pytest
 
-from dlightrag.engine.agent.session.fold import host_turn_starts
-from dlightrag.engine.agent.session.ids import LaneId, SessionId
+from dlightrag.engine.agent.session.effects import ToolResultEntry
+from dlightrag.engine.agent.session.entries import (
+    AssistantMessageEntry,
+    ToolResultMessageEntry,
+    UserMessageEntry,
+)
+from dlightrag.engine.agent.session.fold import host_turn_starts, project_session_messages
+from dlightrag.engine.agent.session.ids import (
+    AttemptId,
+    EntryId,
+    IntentId,
+    LaneId,
+    SessionId,
+)
 from dlightrag.engine.agent.session.projection import CompactionSummary, render_compaction_summary
+from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+from dlightrag.engine.agent.session.transactions import (
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionCommit,
+)
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.providers.openai_response import response_input
+from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 from dlightrag.engine.answer.compaction import (
     _MAX_DURABLE_HANDLES,
     CompactionCoordinator,
@@ -56,6 +80,133 @@ def test_unknown_compaction_sections_are_not_silently_dropped() -> None:
     summary = parse_compaction_summary("## Goal\nShip.\n\n## Extra\nKeep this.")
     assert "## Extra" in summary.critical_context
     assert "Keep this." in summary.critical_context
+
+
+@pytest.mark.asyncio
+async def test_compaction_removes_or_retains_whole_response_tool_exchanges() -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    root = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="question",
+    )
+
+    fingerprint = ModelInvocationFingerprint("openai", "gpt-test", None, "response")
+
+    def native_items(label: str) -> list[dict[str, object]]:
+        return [
+            {
+                "id": f"rs-{label}",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{"type": "summary_text", "text": f"reason {label}"}],
+            },
+            {
+                "id": f"fc-{label}",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": f"call-{label}",
+                "name": "lookup",
+                "arguments": f'{{"value":"{label}"}}',
+            },
+        ]
+
+    def assistant(parent: EntryId, label: str) -> AssistantMessageEntry:
+        bound = bind_provider_replay(
+            AssistantTurn(
+                text="",
+                stop_reason="tool_use",
+                tool_calls=(ToolCall(f"call-{label}", "lookup", {"value": label}),),
+                provider_state={"response_replay": {"v": 1, "items": native_items(label)}},
+            ),
+            fingerprint,
+        )
+        return AssistantMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            parent_entry_id=parent,
+            timestamp=datetime.now(UTC),
+            content="",
+            stop_reason="tool_use",
+            tool_calls=bound.tool_calls,
+            provider_state=bound.provider_state,
+        )
+
+    def result(parent: EntryId, label: str) -> ToolResultMessageEntry:
+        return ToolResultMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            parent_entry_id=parent,
+            timestamp=datetime.now(UTC),
+            result=ToolResultEntry.text(
+                tool_name="lookup",
+                call_id=f"call-{label}",
+                outcome="succeeded",
+                text=f"result {label}",
+            ),
+            intent_id=IntentId.new(),
+            source_index=0,
+            contract_version=1,
+            input_schema_digest="a" * 64,
+            replay_policy="never",
+            attempt_id=AttemptId.new(),
+            effective_input_digest=("b" if label == "old" else "c") * 64,
+        )
+
+    old_call = assistant(root.entry_id, "old")
+    old_result = result(old_call.entry_id, "old")
+    new_call = assistant(old_result.entry_id, "new")
+    new_result = result(new_call.entry_id, "new")
+    head = LaneHead(LaneId.main(), new_result.entry_id)
+    state = LaneState(LaneId.main())
+    committed = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[root, old_call, old_result, new_call, new_result],
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(committed, TransactionCommit)
+
+    async def stream_model(**_kwargs):
+        yield "## Goal\nKeep the newest complete exchange."
+
+    coordinator = CompactionCoordinator(
+        model_profile=ModelProfile(context_window_tokens=100_000),
+        context_policy=ContextPolicy(retained_tail_tokens=0),
+        stream_model=stream_model,
+    )
+    snapshot = await store.load(session_id)
+    projection, _outcome = await coordinator.prepare(
+        snapshot,
+        tail_target_tokens=0,
+        accounted_before=100,
+        trace={},
+    )
+    canonical = project_session_messages(snapshot.tree.ancestry(), projection)
+    prepared = messages_for_model(canonical, fingerprint)
+    wire = response_input(prepared)
+
+    assert projection.covered_through_entry_id == old_result.entry_id
+    assert "reason old" not in str(canonical)
+    assert "call-old" not in str(canonical)
+    assert "result old" not in str(canonical)
+    assert canonical[1]["provider_state"] == new_call.provider_state
+    assert wire[1:] == [
+        *native_items("new"),
+        {
+            "type": "function_call_output",
+            "call_id": "call-new",
+            "output": "result new",
+        },
+    ]
 
 
 @pytest.mark.asyncio

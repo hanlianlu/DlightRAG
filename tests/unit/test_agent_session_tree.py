@@ -6,8 +6,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
-from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, SessionId
+from dlightrag.engine.agent.session.effects import ToolResultEntry
+from dlightrag.engine.agent.session.entries import (
+    AssistantMessageEntry,
+    ToolResultMessageEntry,
+    UserMessageEntry,
+)
+from dlightrag.engine.agent.session.fold import project_session_messages
+from dlightrag.engine.agent.session.ids import AttemptId, EntryId, IntentId, LaneId, SessionId
 from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
 from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
@@ -16,7 +22,10 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionCommit,
     TransactionLeaseLost,
 )
-from dlightrag.engine.ai.messages import ToolCall
+from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.providers.openai_response import response_input
+from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
 
 
@@ -84,6 +93,169 @@ async def test_fork_requires_a_stable_checkpoint() -> None:
     await _seed(store, session_id, assistant)
     with pytest.raises(ValueError, match="stable checkpoint"):
         await _fork_branch(store, session_id, LaneId.new())
+
+
+@pytest.mark.asyncio
+async def test_response_fork_reconstructs_the_selected_local_branch() -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    root = _user(session_id, "base question")
+    native_call = {
+        "id": "fc-base",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": "call-base",
+        "name": "lookup",
+        "arguments": '{"value":"base"}',
+    }
+    fingerprint = ModelInvocationFingerprint("openai", "gpt-test", None, "response")
+    bound_call = bind_provider_replay(
+        AssistantTurn(
+            text="",
+            stop_reason="tool_use",
+            tool_calls=(ToolCall("call-base", "lookup", {"value": "base"}),),
+            provider_state={"response_replay": {"v": 1, "items": [native_call]}},
+        ),
+        fingerprint,
+    )
+    call = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=root.entry_id,
+        timestamp=datetime.now(UTC),
+        content="",
+        stop_reason="tool_use",
+        tool_calls=bound_call.tool_calls,
+        provider_state=bound_call.provider_state,
+    )
+    result = ToolResultMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=call.entry_id,
+        timestamp=datetime.now(UTC),
+        result=ToolResultEntry.text(
+            tool_name="lookup",
+            call_id="call-base",
+            outcome="succeeded",
+            text="base result",
+        ),
+        intent_id=IntentId.new(),
+        source_index=0,
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        replay_policy="never",
+        attempt_id=AttemptId.new(),
+        effective_input_digest="b" * 64,
+    )
+    native_answer = {
+        "id": "msg-base",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "base answer"}],
+    }
+    bound_answer = bind_provider_replay(
+        AssistantTurn(
+            text="base answer",
+            tool_calls=(),
+            stop_reason="stop",
+            provider_state={"response_replay": {"v": 1, "items": [native_answer]}},
+        ),
+        fingerprint,
+    )
+    checkpoint = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=result.entry_id,
+        timestamp=datetime.now(UTC),
+        content="base answer",
+        stop_reason="stop",
+        provider_state=bound_answer.provider_state,
+    )
+    later_user = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=checkpoint.entry_id,
+        timestamp=datetime.now(UTC),
+        content="main-only question",
+    )
+    later_answer = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=later_user.entry_id,
+        timestamp=datetime.now(UTC),
+        content="main-only answer",
+        stop_reason="stop",
+    )
+    main_head = LaneHead(LaneId.main(), later_answer.entry_id)
+    main_state = LaneState(LaneId.main())
+    committed = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[root, call, result, checkpoint, later_user, later_answer],
+            register_writes=[SetRegister(main_head), SetRegister(main_state)],
+            expectations=[
+                RegisterExpectation(main_head.ref, None),
+                RegisterExpectation(main_state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(committed, TransactionCommit)
+
+    branch_id = LaneId.new()
+    branch_head = LaneHead(branch_id, checkpoint.entry_id)
+    branch_state = LaneState(branch_id)
+    forked = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(branch_head), SetRegister(branch_state)],
+            expectations=[
+                RegisterExpectation(branch_head.ref, None),
+                RegisterExpectation(branch_state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(forked, TransactionCommit)
+    branch_question = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=checkpoint.entry_id,
+        timestamp=datetime.now(UTC),
+        content="branch question",
+    )
+    appended = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[branch_question],
+            register_writes=[SetRegister(LaneHead(branch_id, branch_question.entry_id))],
+            expectations=[
+                RegisterExpectation(
+                    branch_head.ref, dict(forked.register_sequences)[branch_head.ref]
+                )
+            ],
+        ),
+    )
+    assert isinstance(appended, TransactionCommit)
+
+    snapshot = await store.load(session_id)
+    canonical = project_session_messages(snapshot.tree.ancestry(branch_id), None)
+
+    assert "main-only" not in str(canonical)
+    prepared = messages_for_model(canonical, fingerprint)
+    assert response_input(prepared) == [
+        {"role": "user", "content": "base question"},
+        native_call,
+        {
+            "type": "function_call_output",
+            "call_id": "call-base",
+            "output": "base result",
+        },
+        native_answer,
+        {"role": "user", "content": "branch question"},
+    ]
 
 
 @pytest.mark.asyncio

@@ -858,6 +858,62 @@ def test_recorded_child_usage_is_summed_not_dropped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_response_input_usage_stops_a_systematically_undercounted_request() -> None:
+    from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
+    from dlightrag.engine.agent.session.ids import OperationId
+    from dlightrag.engine.agent.session.runtime import CompactionRequired
+    from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
+    from dlightrag.engine.answer.orchestration.orchestrator import PreparedRun
+    from dlightrag.engine.answer.research.context import ContextAssembler
+
+    profile = ModelProfile(context_window_tokens=100_000)
+    context = ContextAssembler(
+        model_profile=profile,
+        query="x" * 100_000,
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+    )
+    evidence = EvidenceLedger()
+    previous_estimate = context.accounted_input_tokens(
+        evidence=evidence,
+        working=WorkingContextProjection(),
+    )
+    assert previous_estimate < CONTEXT_POLICY.compaction_trigger(profile)
+    assert previous_estimate * 2 > CONTEXT_POLICY.compaction_trigger(profile)
+    run = PreparedRun(
+        context=context,
+        tools=[],
+        evidence=evidence,
+        working=WorkingContextProjection(),
+        registry=None,
+        trace={},
+        model_func=MagicMock(),
+        stream_model_func=None,
+        model_profile=profile,
+    )
+    runtime_context = MagicMock()
+    runtime_context.snapshot = SimpleNamespace(
+        active_projection=None,
+        graph=None,
+        entries=[_assistant_entry({"input_tokens": previous_estimate * 2})],
+    )
+    runtime_context.operation_id = OperationId.new()
+    runtime_context.state = MagicMock(turn_count=1)
+    runtime_context.meta.plan_digest = "a" * 64
+
+    assembled = await _orchestrator(mode="research").assemble_runtime_request(
+        run,
+        runtime_context,
+    )
+
+    # Responses calls report ``input_tokens`` rather than Chat's ``prompt_tokens``.
+    # The next turn compares that billed count with the estimate and stops for
+    # compaction instead of treating a repeatable 2x undercount as harmless drift.
+    assert isinstance(assembled, CompactionRequired)
+
+
+@pytest.mark.asyncio
 async def test_a_declined_compaction_still_assembles_the_request(tmp_path: Path) -> None:
     """Over the trigger is not a reason to ask twice for one impossible compaction.
 
