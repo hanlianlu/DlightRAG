@@ -37,6 +37,7 @@ from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.anthropic_native import AnthropicProvider
 from dlightrag.engine.ai.providers.gemini_native import GeminiProvider
 from dlightrag.engine.ai.providers.openai_compatible import OpenAICompatibleProvider
+from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
 from dlightrag.engine.ai.replay import bind_provider_replay
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
@@ -1081,6 +1082,209 @@ async def test_response_tool_loop_replays_finalized_native_items_and_exact_call_
     ]
     assert sum(item.get("id") == "fc-item-1" for item in second_input) == 1
     assert sum(item.get("call_id") == "call-1" for item in second_input) == 2
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_response_replays_phases_and_final_ciphertext_from_a_non_tool_turn(
+    streamed: bool,
+) -> None:
+    """A later tool request needs the complete earlier assistant output, not its text."""
+    first = _openai_response_json()
+    reasoning = {
+        "id": "rs-ready",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Checking readiness."}],
+        "encrypted_content": "final-ciphertext",
+    }
+    commentary = {
+        "id": "msg-commentary",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": "Checking. ", "annotations": []}],
+    }
+    answer = {
+        "id": "msg-answer",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "Ready.", "annotations": []}],
+    }
+    first["output"] = [reasoning, commentary, answer]
+    events: list[dict[str, Any]] = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {**reasoning, "encrypted_content": "partial-ciphertext", "summary": []},
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+    ]
+    for index, item in enumerate((commentary, answer), start=1):
+        events.extend(
+            [
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": item["id"],
+                    "output_index": index,
+                    "content_index": 0,
+                    "delta": item["content"][0]["text"],
+                    "logprobs": [],
+                },
+                {"type": "response.output_item.done", "output_index": index, "item": item},
+            ]
+        )
+    events.append({"type": "response.completed", "response": first})
+    wire = "".join(
+        f"event: {event['type']}\ndata: {json.dumps({**event, 'sequence_number': sequence})}\n\n"
+        for sequence, event in enumerate(events)
+    ).encode()
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == "https://api.openai.com/v1/responses"
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1 and streamed:
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
+        return httpx2.Response(200, json=first if len(requests) == 1 else _openai_response_json())
+
+    model = ToolModel(
+        ModelSettings(
+            provider="openai", model="gpt-5.4", api_family="response", api_key="test-key"
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    bind_mock_http(model._provider, handler)
+    user = {"role": "user", "content": "Get ready."}
+    followup = {"role": "user", "content": "Now view page one."}
+    emitted: list[str] = []
+
+    async def emit(delta: str) -> None:
+        emitted.append(delta)
+
+    try:
+        if streamed:
+            turn = await model.stream_turn(messages=[user], tools=[], emit_text=emit)
+        else:
+            turn = await model(messages=[user], tools=[])
+        assert turn.text == "Checking. Ready."
+        assert turn.reasoning == "Checking readiness."
+        assert turn.tool_calls == ()
+        assert turn.stop_reason == "stop"
+        assert turn.provider_state is not None
+        assert turn.provider_state["payload"] == {
+            "response_replay": {"v": 1, "items": [reasoning, commentary, answer]}
+        }
+        if streamed:
+            assert "".join(emitted) == turn.text
+        await model(
+            messages=[
+                user,
+                {
+                    "role": "assistant",
+                    "content": turn.text,
+                    "provider_state": turn.provider_state,
+                },
+                followup,
+            ],
+            tools=[_VIEW_TOOL],
+        )
+    finally:
+        await model.aclose()
+
+    assert len(requests) == 2
+    assert requests[1]["input"] == [user, reasoning, commentary, answer, followup]
+    assert requests[1]["tools"][0]["name"] == "view"
+    for body in requests:
+        assert body["store"] is False
+        assert body["background"] is False
+        assert body["truncation"] == "disabled"
+        assert "previous_response_id" not in body
+        assert "conversation" not in body
+        assert "partial-ciphertext" not in json.dumps(body)
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("terminal", ["refusal", "failed", "content_filter", "max_output_tokens"])
+async def test_response_sdk_terminal_never_exposes_an_unfinished_tool_call(
+    streamed: bool, terminal: str
+) -> None:
+    response = _openai_response_json()
+    response["output"] = []
+    if terminal == "refusal":
+        response["output"] = [
+            {
+                "id": "msg-refusal",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "refusal", "refusal": "Cannot comply."}],
+            }
+        ]
+    elif terminal == "failed":
+        response["status"] = "failed"
+        response["error"] = {"code": "server_error", "message": "Synthetic failure."}
+    else:
+        response["status"] = "incomplete"
+        response["incomplete_details"] = {"reason": terminal}
+        response["output"] = [
+            {
+                "id": "fc-partial",
+                "type": "function_call",
+                "status": "incomplete",
+                "call_id": "call-partial",
+                "name": "view",
+                "arguments": '{"locator":',
+            }
+        ]
+    events = [
+        {"type": "response.output_item.done", "output_index": index, "item": item}
+        for index, item in enumerate(response["output"])
+    ]
+    events.append({"type": f"response.{response['status']}", "response": response})
+    wire = "".join(
+        f"event: {event['type']}\ndata: {json.dumps({**event, 'sequence_number': sequence})}\n\n"
+        for sequence, event in enumerate(events)
+    ).encode()
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == "https://api.openai.com/v1/responses"
+        requests.append(json.loads(request.content))
+        if streamed:
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
+        return httpx2.Response(200, json=response)
+
+    provider = get_provider("openai", api_key="test-key", api_family="response", max_retries=0)
+    bind_mock_http(provider, handler)
+    emitted: list[str] = []
+
+    async def emit(delta: str) -> None:
+        emitted.append(delta)
+
+    async def invoke() -> AssistantTurn:
+        messages = [{"role": "user", "content": "View page one."}]
+        if streamed:
+            return await provider.complete_tool_turn_streaming(
+                messages, "gpt-5.4", tools=[_VIEW_TOOL], emit_text=emit
+            )
+        return await provider.complete_tool_turn(messages, "gpt-5.4", tools=[_VIEW_TOOL])
+
+    try:
+        if terminal == "max_output_tokens":
+            turn = await invoke()
+            assert turn.stop_reason == "length"
+            assert turn.tool_calls == ()
+            assert turn.provider_state is None
+        else:
+            with pytest.raises(ResponseStatusError):
+                await invoke()
+    finally:
+        await provider.aclose()
+    assert emitted == []
+    assert len(requests) == 1
 
 
 async def test_response_stream_uses_sdk_events_and_preserves_finalized_tool_items() -> None:
