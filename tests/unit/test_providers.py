@@ -2262,6 +2262,15 @@ class TestProviderUsageDialects:
         )
         assert provider_cache_hit_tokens({"prompt_tokens": 47_442}) is None
 
+    @pytest.mark.parametrize("cached_tokens", [0, 9_000])
+    def test_response_cache_hits_are_a_subset_of_total_input(self, cached_tokens: int) -> None:
+        usage = usage_counters(
+            {"input_tokens": 10_000, "input_tokens_details": {"cached_tokens": cached_tokens}}
+        )
+
+        assert provider_input_tokens(usage) == 10_000
+        assert provider_cache_hit_tokens(usage) == cached_tokens
+
     def test_anthropic_excludes_its_cache_siblings_from_the_input_counter(self) -> None:
         usage = {
             "input_tokens": 1_000,

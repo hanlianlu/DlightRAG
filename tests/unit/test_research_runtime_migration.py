@@ -1249,8 +1249,15 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     assert cache["cold_turns"] == 1
 
 
+@pytest.mark.parametrize(
+    ("input_key", "cache_key"),
+    [
+        ("prompt_tokens", "prompt_cache_hit_tokens"),
+        ("input_tokens", "input_tokens_details.cached_tokens"),
+    ],
+)
 def test_prompt_cache_counters_land_in_the_run_trace_and_warn_once_per_cold_turn(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, input_key: str, cache_key: str
 ) -> None:
     from dlightrag.engine.answer.research.runtime import _record_prompt_cache
 
@@ -1261,7 +1268,7 @@ def test_prompt_cache_counters_land_in_the_run_trace_and_warn_once_per_cold_turn
             text="x",
             tool_calls=(),
             stop_reason="stop",
-            usage_details={"prompt_tokens": billed, "prompt_cache_hit_tokens": hit},
+            usage_details={input_key: billed, cache_key: hit},
         )
 
     with caplog.at_level("WARNING"):

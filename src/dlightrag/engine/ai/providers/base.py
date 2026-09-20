@@ -257,6 +257,7 @@ def provider_cache_hit_tokens(usage: Mapping[str, int] | None) -> int | None:
         usage,
         (
             "prompt_tokens_details.cached_tokens",
+            "input_tokens_details.cached_tokens",
             "prompt_cache_hit_tokens",
             "cache_read_input_tokens",
             "cached_content_token_count",
