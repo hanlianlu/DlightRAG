@@ -9,8 +9,9 @@ it. Nothing here is a site list: YouTube (`og:video:url`) and Bilibili
 (`og:video` to its own player) declare it in the same shape, and an article
 (`og:type: website`) declares that it is not one.
 
-Cards are bounded on every axis: how many are read per answer, how many bytes
-each page may return, and how long each read may take. ADR 0026 records the
+Cards are bounded on every axis: how many are read per answer, how many bytes each
+page may return, how long the whole read may take including waiting for the shared
+network admission, and how much of a page is parsed. ADR 0026 records the
 decision, including that the card is a link out rather than an embed.
 """
 
@@ -30,19 +31,26 @@ from dlightrag.engine.public_http import fetch_public_http, validate_public_web_
 MAX_CARDS = 3
 _MAX_PAGE_BYTES = 256 * 1024
 #: One page gets a short deadline, and the reads run together, so an answer with
-#: three links costs about one deadline rather than three.
+#: three links costs about one deadline rather than three. The deadline covers
+#: admission and reading, not reading alone: the shared slot a fetch waits for is
+#: part of what the Answer's settlement is paying for.
 _PAGE_TIMEOUT_SECONDS = 4.0
 _MAX_TITLE = 200
 _MAX_DESCRIPTION = 400
 
-# An address as it appears in answer Markdown. Trailing punctuation that a
-# sentence owns is excluded, matching what the renderer will link.
+# One address as it appears in answer Markdown. Sentence punctuation a reader owns
+# is not part of it, and neither is a trailing dot.
 _ADDRESS = re.compile(r"https?://[^\s<>\"'`\u3000-\u303f\uff00-\uffef)\]},;]+")
-_META_TAG = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
-_ATTRIBUTE = re.compile(
-    r"(?P<name>[a-zA-Z:_-]+)\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s\"'>]+)",
-)
-_TITLE_TAG = re.compile(r"<title\b[^>]*>(?P<title>.*?)</title>", re.IGNORECASE | re.DOTALL)
+# Fenced blocks and inline code, where an address is quoted rather than written.
+_CODE = re.compile(r"```.*?```|~~~.*?~~~|`[^`\n]*`", re.DOTALL)
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# A meta tag, and the attributes inside it, are bounded before any pattern sees
+# them: an unclosed tag in a large page would otherwise be scanned per start.
+_META_TAG = re.compile(r"<meta\b[^>]{0,1024}>", re.IGNORECASE)
+_ATTRIBUTE = re.compile(r"(?P<name>[a-zA-Z:_-]+)\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s\"'>]+)")
+# The Open Graph video types. `video.other` is the one YouTube and Bilibili use.
+_VIDEO_TYPES = frozenset({"video.movie", "video.episode", "video.tv_show", "video.other"})
+_HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,13 +73,39 @@ class LinkCard:
         }
 
 
+def code_spans(answer: str) -> list[tuple[int, int]]:
+    """Return the answer spans that quote code rather than write an address."""
+    return [match.span() for match in _CODE.finditer(answer)]
+
+
+def card_key(url: str) -> str:
+    """Return the identity one address is matched by, without a trailing dot."""
+    return url.rstrip(".")
+
+
+def address_spans(answer: str) -> list[tuple[int, int, str]]:
+    """Return one span per written address, in order, as ``(start, end, key)``.
+
+    Both the card read and the Answer's parts replace addresses by these spans, so
+    they cannot disagree about where an address ends or drop the punctuation a
+    sentence owns. Addresses inside code are quoted, not written.
+    """
+    quoted = code_spans(answer)
+    spans: list[tuple[int, int, str]] = []
+    for match in _ADDRESS.finditer(answer):
+        if any(start <= match.start() < end for start, end in quoted):
+            continue
+        text = match.group(0)
+        key = card_key(text)
+        spans.append((match.start(), match.start() + len(key), key))
+    return spans
+
+
 def addresses_in(answer: str) -> list[str]:
     """Return the distinct public addresses one answer writes, in order."""
     seen: dict[str, None] = {}
-    for match in _ADDRESS.finditer(answer):
-        address = match.group(0).rstrip(".")
-        if address not in seen:
-            seen[address] = None
+    for _, _, key in address_spans(answer):
+        seen.setdefault(key, None)
     return list(seen)
 
 
@@ -83,18 +117,14 @@ def _attributes(tag: str) -> dict[str, str]:
 
 
 def _metadata(page: str) -> dict[str, str]:
-    """Return the page's own Open Graph and title metadata, first declaration wins."""
+    """Return the page's own Open Graph metadata, first declaration wins."""
     values: dict[str, str] = {}
-    for tag in _META_TAG.finditer(page):
+    for tag in _META_TAG.finditer(_COMMENT.sub("", page)):
         attributes = _attributes(tag.group(0))
         key = (attributes.get("property") or attributes.get("name") or "").lower()
         content = attributes.get("content")
-        if key and content and key not in values:
+        if key.startswith("og:") and content and key not in values:
             values[key] = content
-    if "og:title" not in values:
-        title = _TITLE_TAG.search(page)
-        if title:
-            values["og:title"] = _html.unescape(title.group("title"))
     return values
 
 
@@ -102,7 +132,13 @@ def _declares_video(values: dict[str, str]) -> bool:
     """Whether the page itself says it holds a video."""
     if any(key.startswith("og:video") for key in values):
         return True
-    return values.get("og:type", "").strip().lower().startswith("video")
+    return values.get("og:type", "").strip().lower() in _VIDEO_TYPES
+
+
+def _is_html(media_type: Any) -> bool:
+    """Whether the response is an HTML document rather than something HTML-ish."""
+    essence = str(media_type or "").split(";", 1)[0].strip().lower()
+    return not essence or essence in _HTML_MEDIA_TYPES
 
 
 def _card(url: str, values: dict[str, str]) -> LinkCard | None:
@@ -126,25 +162,46 @@ def _card(url: str, values: dict[str, str]) -> LinkCard | None:
     )
 
 
+async def _read_page(
+    address: str,
+    *,
+    fetch: Callable[..., Awaitable[Any]],
+    deadline: float,
+) -> Any:
+    """Read one page within the whole deadline, admission included.
+
+    ``fetch_public_http`` applies its own timeout after taking a shared network
+    slot, so the deadline is applied here as well: an answer waits for a card for
+    the deadline, not for the queue that serves it.
+    """
+    async with asyncio.timeout(deadline):
+        return await fetch(
+            address,
+            max_bytes=_MAX_PAGE_BYTES,
+            timeout=deadline,
+            agent_url=True,
+        )
+
+
 async def collect_link_cards(
     answer: str,
     *,
     fetch: Callable[..., Awaitable[Any]] = fetch_public_http,
     limit: int = MAX_CARDS,
+    deadline: float = _PAGE_TIMEOUT_SECONDS,
 ) -> tuple[LinkCard, ...]:
     """Read at most ``limit`` declared videos out of one answer's addresses.
 
     Every failure is silent by design: an address that cannot be read, answers too
-    slowly, or declares nothing stays an ordinary link in the Answer.
+    slowly, declares nothing, or answers with something that is not HTML stays an
+    ordinary link in the Answer. An address that names credentials in its query is
+    not read at all — the read is anonymous, as every Agent URL read is.
     """
     addresses = addresses_in(answer)[: max(0, limit)]
     if not addresses:
         return ()
     pages = await asyncio.gather(
-        *(
-            fetch(address, max_bytes=_MAX_PAGE_BYTES, timeout=_PAGE_TIMEOUT_SECONDS)
-            for address in addresses
-        ),
+        *(_read_page(address, fetch=fetch, deadline=deadline) for address in addresses),
         return_exceptions=True,
     )
     cards: list[LinkCard] = []
@@ -152,11 +209,9 @@ async def collect_link_cards(
         if isinstance(page, BaseException):
             # One unreachable link never fails an answer: it stays a plain link.
             continue
-        content = getattr(page, "content", b"")
-        media_type = getattr(page, "media_type", None)
-        if media_type is not None and "html" not in str(media_type).lower():
+        if not _is_html(getattr(page, "media_type", None)):
             continue
-        values = _metadata(content.decode("utf-8", errors="replace"))
+        values = _metadata(getattr(page, "content", b"").decode("utf-8", errors="replace"))
         if not _declares_video(values):
             continue
         card = _card(address, values)
@@ -193,19 +248,13 @@ def project_link_cards(cards: Sequence[Any]) -> list[dict[str, str | None]]:
     return projected
 
 
-def link_card_for(url: str, cards: Sequence[dict[str, str | None]]) -> dict[str, str | None] | None:
-    """Return the card one answer address placed, matching the address as written."""
-    for card in cards:
-        if card.get("url") == url:
-            return card
-    return None
-
-
 __all__ = [
     "MAX_CARDS",
     "LinkCard",
+    "address_spans",
     "addresses_in",
+    "card_key",
+    "code_spans",
     "collect_link_cards",
-    "link_card_for",
     "project_link_cards",
 ]

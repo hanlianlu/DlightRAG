@@ -240,7 +240,7 @@ _DONE = _frame(
     '"answer_text":"DlightRAG is a multimodal RAG system.",'
     '"parts":[{"type":"markdown","text":"DlightRAG is a multimodal RAG system.",'
     '"html":"<p>DlightRAG is a multimodal RAG system.</p>","artifact":null,'
-    '"evidence_image":null,"inline":false}],"sources":[],"evidence_images":[],'
+    '"evidence_image":null,"card":null,"inline":false}],"sources":[],"evidence_images":[],'
     '"artifacts":[],"artifact_outcome":{"status":"complete","issues":[]}}}',
 )
 _DONE_RENDERED = _DONE

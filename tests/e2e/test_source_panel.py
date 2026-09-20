@@ -55,6 +55,7 @@ def _source_presentation_domain(
                 "html": _CITED_HTML,
                 "artifact": None,
                 "evidenceImage": None,
+                "card": None,
                 "inline": False,
             }
         ],
@@ -96,6 +97,7 @@ def _source_presentation_wire(
                 "html": _CITED_HTML,
                 "artifact": None,
                 "evidence_image": None,
+                "card": None,
                 "inline": False,
             }
         ],

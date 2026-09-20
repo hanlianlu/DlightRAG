@@ -11,9 +11,11 @@ import pytest
 from dlightrag.engine.answer.links.cards import (
     MAX_CARDS,
     LinkCard,
+    address_spans,
     addresses_in,
+    card_key,
+    code_spans,
     collect_link_cards,
-    link_card_for,
     project_link_cards,
 )
 
@@ -55,8 +57,11 @@ class _Fetcher:
         self.pages = pages
         self.calls: list[tuple[str, int, float]] = []
 
-    async def __call__(self, url: str, *, max_bytes: int, timeout: float) -> Any:
+    async def __call__(
+        self, url: str, *, max_bytes: int, timeout: float, agent_url: bool = False
+    ) -> Any:
         self.calls.append((url, max_bytes, timeout))
+        assert agent_url, "a card read must be anonymous"
         answer = self.pages.get(url)
         if isinstance(answer, Exception):
             raise answer
@@ -89,11 +94,20 @@ async def test_a_declared_video_becomes_a_card() -> None:
     assert fetcher.calls == [("https://example.com/watch", 256 * 1024, 4.0)]
 
 
-async def test_a_page_that_declares_only_a_player_is_a_video() -> None:
-    page = _page('og:video" content="https://player.example.com/embed/1', title="Clip")
-    fetcher = _Fetcher({"https://example.com/clip": page})
+async def test_a_page_that_declares_a_player_needs_its_own_title() -> None:
+    """A card carries what the page declared; a document title is not a declaration."""
+    declared = _page(
+        'og:video" content="https://player.example.com/embed/1',
+        'og:title" content="Clip',
+    )
+    only_a_title = _page('og:video" content="https://player.example.com/embed/1', title="Clip")
+    fetcher = _Fetcher(
+        {"https://example.com/declared": declared, "https://example.com/title": only_a_title}
+    )
 
-    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+    cards = await collect_link_cards(
+        "https://example.com/declared https://example.com/title", fetch=fetcher
+    )
 
     assert [card.title for card in cards] == ["Clip"]
     assert cards[0].image is None
@@ -161,13 +175,6 @@ def test_projection_keeps_only_public_addresses() -> None:
     )
 
     assert [card["url"] for card in projected] == ["https://example.com/watch"]
-
-
-def test_a_card_is_found_by_the_address_as_written() -> None:
-    cards: list[dict[str, str | None]] = [{"url": "https://example.com/watch", "title": "Clip"}]
-
-    assert link_card_for("https://example.com/watch", cards) == cards[0]
-    assert link_card_for("https://example.com/other", cards) is None
 
 
 @pytest.mark.parametrize(
@@ -254,5 +261,128 @@ def test_an_address_without_a_card_stays_markdown() -> None:
         evidence_images=[],
         link_cards=[{"url": "https://example.com/other", "title": "Other"}],
     )
+
+    assert [part["type"] for part in parts] == ["markdown"]
+
+
+async def test_a_read_is_anonymous_and_bounded_by_its_deadline() -> None:
+    """The deadline covers waiting for the shared network slot, not only reading."""
+    import asyncio
+
+    class _Slow:
+        def __init__(self) -> None:
+            self.started = 0
+
+        async def __call__(
+            self, url: str, *, max_bytes: int, timeout: float, agent_url: bool
+        ) -> Any:
+            self.started += 1
+            assert agent_url, "a card read must be anonymous"
+            await asyncio.sleep(5)
+            raise AssertionError("a read past the deadline must be abandoned")
+
+    slow = _Slow()
+    started = asyncio.get_event_loop().time()
+
+    cards = await collect_link_cards(
+        "See https://example.com/one https://example.com/two", fetch=slow, deadline=0.05
+    )
+
+    elapsed = asyncio.get_event_loop().time() - started
+
+    assert cards == ()
+    assert slow.started == 2
+    assert elapsed < 1.0, f"the deadline must bound the whole read, took {elapsed}"
+
+
+def test_address_spans_keep_the_punctuation_a_sentence_owns() -> None:
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
+
+    answer = "See https://example.com/clip. And https://example.com/x。"
+    spans = address_spans(answer)
+
+    assert [key for _, _, key in spans] == ["https://example.com/clip", "https://example.com/x"]
+    assert answer[spans[0][1]] == ".", "the period stays outside the address"
+    assert answer[spans[1][1]] == "。"
+    assert card_key("https://example.com/clip.") == "https://example.com/clip"
+    assert render_source_chunk_html(answer)
+
+
+def test_addresses_quoted_as_code_are_not_written_addresses() -> None:
+    answer = "Run `curl https://example.com/a` and:\n\n```\nhttps://example.com/b\n```\n"
+
+    assert addresses_in(answer) == []
+    assert code_spans(answer)
+
+
+async def test_a_quoted_address_is_never_read() -> None:
+    fetcher = _Fetcher({"https://example.com/b": _video_page()})
+
+    cards = await collect_link_cards("```\nhttps://example.com/b\n```\n", fetch=fetcher)
+
+    assert cards == ()
+    assert fetcher.calls == []
+
+
+@pytest.mark.parametrize(
+    "declared",
+    ["videogame", "video", "videoplaylist"],
+)
+async def test_a_near_miss_type_is_not_a_video(declared: str) -> None:
+    page = _video_page(**{"og:type": declared, "og:video": ""})
+    fetcher = _Fetcher({"https://example.com/page": page})
+
+    assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
+
+
+async def test_a_commented_out_declaration_is_not_a_declaration() -> None:
+    page = _Page(
+        content=(
+            b'<html><head><!-- <meta property="og:type" content="video.other"> -->'
+            b'<meta property="og:title" content="Clip"></head></html>'
+        )
+    )
+    fetcher = _Fetcher({"https://example.com/page": page})
+
+    assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
+
+
+async def test_a_non_html_answer_with_html_words_is_not_a_page() -> None:
+    page = _Page(
+        content=b'og:type="video.other" og:title="Clip"',
+        media_type="text/plain; note=html",
+    )
+    fetcher = _Fetcher({"https://example.com/page": page})
+
+    assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
+
+
+def test_a_sentence_period_does_not_break_the_card_and_is_not_swallowed() -> None:
+    """The card key drops the period; the span must too, and the period stays text."""
+    from dlightrag.engine.answer.results import answer_parts_from_markdown
+
+    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
+
+    for answer, tail in [
+        ("See https://example.com/clip.", "."),
+        ("See https://example.com/clip, and more.", ", and more."),
+        ("看 https://example.com/clip。", "。"),
+    ]:
+        parts = answer_parts_from_markdown(
+            answer, artifacts=[], evidence_images=[], link_cards=[card]
+        )
+
+        assert [part["type"] for part in parts] == ["markdown", "link_card", "markdown"], answer
+        assert parts[1]["card"] == card, answer
+        assert parts[2]["text"] == tail, answer
+
+
+def test_a_markdown_link_inside_code_is_not_carded() -> None:
+    from dlightrag.engine.answer.results import answer_parts_from_markdown
+
+    card = {"url": "https://example.com/clip", "title": "Clip", "description": "", "site": ""}
+    answer = "```\n[clip](https://example.com/clip)\n```\n"
+
+    parts = answer_parts_from_markdown(answer, artifacts=[], evidence_images=[], link_cards=[card])
 
     assert [part["type"] for part in parts] == ["markdown"]

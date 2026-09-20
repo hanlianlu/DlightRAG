@@ -150,12 +150,12 @@ card.
 
 ## Consequences
 
-- **Link autolinking is implemented; link cards are not.** An answer and a
-  Markdown Artifact autolink an address that names its own scheme
-  (`linkify-it-py`, the engine markdown-it-py's own rule requires), bounded at
-  CJK text as described above. A source chunk keeps its quotation as written. No
-  card surface exists yet, so a video link is still presented as the plain link
-  the autolinker or the Model produced.
+- **Both halves are implemented.** An answer and a Markdown Artifact autolink an
+  address that names its own scheme (`linkify-it-py`, the engine markdown-it-py's
+  own rule requires), bounded at CJK text as described above; a source chunk keeps
+  its quotation as written. A link whose page declares a video becomes a card, and
+  the card reads the page over the same anonymous, SSRF-guarded public fetch an
+  Agent URL read uses — an address carrying a signed query is not read at all.
 - **Weaker video validation is a recorded residual,** not an oversight; the
   escape hatch in the caption is what a truncated or undecodable file gets.
 - **A browser that cannot decode the codec** (for example HEVC where the user's
