@@ -9,6 +9,7 @@ import hmac
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -163,18 +164,18 @@ from dlightrag.engine.answer.publication import (
     is_empty_answer,
     validate_publication,
 )
+from dlightrag.engine.answer.research.persistence import ResearchRunStore
 from dlightrag.engine.answer.research.runtime import (
     AnswerRuntimeControls,
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
     _answer_runtime_event_sink,
-    _async_store_method,
     _bound_child_dispatch_preparer,
     _bound_child_runner,
     _buffered_fetched_bytes_sink,
+    _check_child_write,
     _drive_answer_operation,
     _durable_child_usage,
-    _fenced_child_writer,
     _fenced_control_ack,
     _fenced_control_reader,
     _oldest_pending_input,
@@ -338,8 +339,8 @@ class ArtifactReader(Protocol):
     ) -> tuple[RunFetchedResource, ...]: ...
 
 
-class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
-    """Executor store: artifacts, fenced routing, and one Session-scoped lineage read."""
+class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, ResearchRunStore, Protocol):
+    """Answer execution persistence, including required Research child operations."""
 
     async def lineage_resource_rows(
         self,
@@ -1816,44 +1817,97 @@ class AnswerExecutor:
                     epoch=memory_epoch,
                     capability_current=self._memory_capability_current,
                 )
-                persist_child_runtime = _fenced_child_writer(store, "upsert_child_session", session)
-                claim_child = _fenced_child_writer(store, "claim_child_session", session)
-                renew_child = _fenced_child_writer(store, "heartbeat_child_session", session)
-                if persist_child_runtime is None or claim_child is None or renew_child is None:
-                    raise RunExecutionError(
-                        "run_execution_failed",
-                        "Child Session persistence is unavailable.",
+                # Keep partial's fence keywords explicit: expanding a dict here
+                # makes Pyright erase the remaining callback parameters.
+                persist_child_runtime = _check_child_write(
+                    partial(
+                        store.upsert_child_session,
+                        worker_id=session.worker_id,
+                        fencing_epoch=session.fencing_epoch,
                     )
+                )
+                claim_child = _check_child_write(
+                    partial(
+                        store.claim_child_session,
+                        worker_id=session.worker_id,
+                        fencing_epoch=session.fencing_epoch,
+                    )
+                )
+                renew_child = _check_child_write(
+                    partial(
+                        store.heartbeat_child_session,
+                        worker_id=session.worker_id,
+                        fencing_epoch=session.fencing_epoch,
+                    )
+                )
                 run.orchestrator.bind_subagents(
                     parent_session_id=session_id,
                     run_id=session.run_id,
                     owner_id=session.owner_id,
-                    persist=_fenced_child_writer(store, "upsert_child_session", session),
-                    load_child=_async_store_method(store, "load_child_session"),
-                    list_children=_async_store_method(store, "list_child_sessions"),
-                    finish_child=_fenced_child_writer(
-                        store,
-                        "finish_child_session",
-                        session,
+                    persist=persist_child_runtime,
+                    load_child=store.load_child_session,
+                    list_children=store.list_child_sessions,
+                    finish_child=_check_child_write(
+                        partial(
+                            store.finish_child_session,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        ),
                         false_is_lease_loss=False,
                     ),
-                    request_cancel=_fenced_child_writer(
-                        store, "request_child_cancellation", session
+                    request_cancel=_check_child_write(
+                        partial(
+                            store.request_child_cancellation,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        )
                     ),
-                    release_children=_fenced_child_writer(store, "release_child_sessions", session),
-                    steer_child=_fenced_child_writer(store, "enqueue_child_control", session),
-                    continue_child=_fenced_child_writer(store, "continue_child_session", session),
-                    reply_guidance=_fenced_child_writer(store, "reply_child_guidance", session),
-                    create_guidance=_fenced_child_writer(store, "create_child_guidance", session),
-                    load_guidance=_async_store_method(store, "load_child_guidance"),
-                    wait_guidance=_async_store_method(store, "wait_for_child_guidance"),
-                    expire_guidance=_fenced_child_writer(
-                        store,
-                        "expire_child_guidance",
-                        session,
+                    release_children=_check_child_write(
+                        partial(
+                            store.release_child_sessions,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        )
+                    ),
+                    steer_child=_check_child_write(
+                        partial(
+                            store.enqueue_child_control,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        )
+                    ),
+                    continue_child=_check_child_write(
+                        partial(
+                            store.continue_child_session,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        )
+                    ),
+                    reply_guidance=_check_child_write(
+                        partial(
+                            store.reply_child_guidance,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        )
+                    ),
+                    create_guidance=_check_child_write(
+                        partial(
+                            store.create_child_guidance,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        )
+                    ),
+                    load_guidance=store.load_child_guidance,
+                    wait_guidance=store.wait_for_child_guidance,
+                    expire_guidance=_check_child_write(
+                        partial(
+                            store.expire_child_guidance,
+                            worker_id=session.worker_id,
+                            fencing_epoch=session.fencing_epoch,
+                        ),
                         false_is_lease_loss=False,
                     ),
-                    list_guidance=_async_store_method(store, "list_pending_child_guidance"),
+                    list_guidance=store.list_pending_child_guidance,
                     prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(
                         orchestrator=run.orchestrator,
@@ -1869,7 +1923,7 @@ class AnswerExecutor:
                         persist_child_runtime=persist_child_runtime,
                         claim_child=claim_child,
                         renew_child=renew_child,
-                        load_child=_async_store_method(store, "load_child_session"),
+                        load_child=store.load_child_session,
                         control_reader=_fenced_control_reader(store, session),
                         control_ack=_fenced_control_ack(store, session),
                         is_detaching=(
@@ -1942,20 +1996,14 @@ class AnswerExecutor:
                     session=session,
                     session_id=session_id,
                     fetched_buffer=fetched_buffer,
-                    persist_child_intent=_fenced_child_writer(
-                        store, "upsert_child_session", session
-                    ),
+                    persist_child_intent=persist_child_runtime,
                     validate_pins=validate_research_pins,
                     publish_provider_text=True,
                     session_notes=notes_plane,
                 )
                 control_reader = _fenced_control_reader(store, session)
                 control_ack = _fenced_control_ack(store, session)
-                controls = (
-                    AnswerRuntimeControls(reader=control_reader, acknowledge=control_ack)
-                    if control_reader is not None and control_ack is not None
-                    else None
-                )
+                controls = AnswerRuntimeControls(reader=control_reader, acknowledge=control_ack)
                 agent_runtime = AgentSessionRuntime(
                     repository=repository,
                     effects=effects,
@@ -2372,7 +2420,7 @@ class AnswerExecutor:
                         for key, value in item["usage"].items():
                             root_usage[key] = root_usage.get(key, 0) + int(value)
                     child_usage = await _durable_child_usage(
-                        self._store,
+                        self._store.list_child_sessions,
                         owner_id=session.owner_id,
                         run_id=session.run_id,
                     )

@@ -1089,7 +1089,9 @@ async def test_durable_child_usage_aggregates_roster_rows() -> None:
         )
     )
 
-    assert await _durable_child_usage(store, owner_id="owner", run_id="run-1") == {
+    assert await _durable_child_usage(
+        store.list_child_sessions, owner_id="owner", run_id="run-1"
+    ) == {
         "input_tokens": 8,
         "output_tokens": 3,
     }

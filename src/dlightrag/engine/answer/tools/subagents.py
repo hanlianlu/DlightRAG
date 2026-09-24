@@ -25,6 +25,22 @@ from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
 from dlightrag.engine.answer.errors import ChildToolNarrowingError
 from dlightrag.engine.answer.evidence import EvidenceDelta
+from dlightrag.engine.answer.research.persistence import (
+    CancelChild,
+    ContinueChild,
+    CreateChildGuidance,
+    ExpireChildGuidance,
+    FinishChild,
+    ListChildGuidance,
+    ListChildren,
+    LoadChild,
+    LoadChildGuidance,
+    PersistChild,
+    ReleaseChildren,
+    ReplyChildGuidance,
+    SteerChild,
+    WaitChildGuidance,
+)
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 from dlightrag.engine.runtime.errors import RunCancelledError
 
@@ -263,20 +279,20 @@ class SubagentHost:
     async_lifecycle: bool = True
     interactive_controls: bool = True
     check_cancelled: Callable[[], Awaitable[None]] | None = None
-    persist: Callable[..., Awaitable[Any]] | None = None
-    load_child: Callable[..., Awaitable[Any]] | None = None
-    list_children: Callable[..., Awaitable[Any]] | None = None
-    finish_child: Callable[..., Awaitable[Any]] | None = None
-    request_cancel: Callable[..., Awaitable[Any]] | None = None
-    release_children: Callable[..., Awaitable[Any]] | None = None
-    steer_child: Callable[..., Awaitable[Any]] | None = None
-    continue_child: Callable[..., Awaitable[Any]] | None = None
-    reply_guidance: Callable[..., Awaitable[Any]] | None = None
-    create_guidance: Callable[..., Awaitable[Any]] | None = None
-    load_guidance: Callable[..., Awaitable[Any]] | None = None
-    wait_guidance: Callable[..., Awaitable[Any]] | None = None
-    expire_guidance: Callable[..., Awaitable[Any]] | None = None
-    list_guidance: Callable[..., Awaitable[Any]] | None = None
+    persist: PersistChild | None = None
+    load_child: LoadChild | None = None
+    list_children: ListChildren | None = None
+    finish_child: FinishChild | None = None
+    request_cancel: CancelChild | None = None
+    release_children: ReleaseChildren | None = None
+    steer_child: SteerChild | None = None
+    continue_child: ContinueChild | None = None
+    reply_guidance: ReplyChildGuidance | None = None
+    create_guidance: CreateChildGuidance | None = None
+    load_guidance: LoadChildGuidance | None = None
+    wait_guidance: WaitChildGuidance | None = None
+    expire_guidance: ExpireChildGuidance | None = None
+    list_guidance: ListChildGuidance | None = None
     guidance_timeout_seconds: int = 300
     model_guidance: str | None = None
     prepare_dispatch: (

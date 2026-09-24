@@ -2,12 +2,11 @@
 """Research Agent Runtime effects, controls, and Child Session drive."""
 
 import asyncio
-import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, overload
 
 from dlightrag.engine.agent.session.effects import EffectIntent, ToolResultEntry, canonical_json
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry
@@ -54,6 +53,16 @@ from dlightrag.engine.answer.evidence import (
     has_unrepresentable_text,
 )
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.research.persistence import (
+    ClaimChild,
+    ControlAcknowledger,
+    ControlReader,
+    ListChildren,
+    LoadChild,
+    PersistChild,
+    RenewChild,
+    ResearchRunStore,
+)
 from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
     FetchedResourceBytes,
@@ -564,7 +573,7 @@ class ResearchRuntimeEffects:
         session: RunSession,
         session_id: SessionId,
         fetched_buffer: FetchedResourceBuffer,
-        persist_child_intent: Callable[..., Awaitable[Any]] | None,
+        persist_child_intent: PersistChild | None,
         validate_pins: Callable[[], None] | None = None,
         publish_provider_text: bool = False,
         session_fencing_epoch: int | None = None,
@@ -1037,16 +1046,16 @@ def _bound_child_runner(
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
     parent_session_id: SessionId,
-    persist_child_runtime: Callable[..., Awaitable[Any]],
-    claim_child: Callable[..., Awaitable[Any]],
-    renew_child: Callable[..., Awaitable[Any]],
-    load_child: Callable[..., Awaitable[Any]] | None = None,
+    persist_child_runtime: PersistChild,
+    claim_child: ClaimChild,
+    renew_child: RenewChild,
+    load_child: LoadChild | None = None,
     restore_child_attachments: Callable[
         [SessionId, ChildContextSnapshot], Awaitable[Mapping[str, bytes]]
     ]
     | None = None,
-    control_reader: Callable[..., Awaitable[Any]] | None = None,
-    control_ack: Callable[..., Awaitable[Any]] | None = None,
+    control_reader: ControlReader | None = None,
+    control_ack: ControlAcknowledger | None = None,
     is_detaching: Callable[[], bool] | None = None,
     session_notes: SessionNotesPlane | None = None,
 ) -> Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]:
@@ -1093,16 +1102,16 @@ async def run_child_session(
     parent_call_id: str,
     parent_session_id: SessionId,
     context_snapshot: ChildContextSnapshot,
-    persist_child_runtime: Callable[..., Awaitable[Any]],
-    claim_child: Callable[..., Awaitable[Any]],
-    renew_child: Callable[..., Awaitable[Any]] | None = None,
-    load_child: Callable[..., Awaitable[Any]] | None = None,
+    persist_child_runtime: PersistChild,
+    claim_child: ClaimChild,
+    renew_child: RenewChild | None = None,
+    load_child: LoadChild | None = None,
     restore_child_attachments: Callable[
         [SessionId, ChildContextSnapshot], Awaitable[Mapping[str, bytes]]
     ]
     | None = None,
-    control_reader: Callable[..., Awaitable[Any]] | None = None,
-    control_ack: Callable[..., Awaitable[Any]] | None = None,
+    control_reader: ControlReader | None = None,
+    control_ack: ControlAcknowledger | None = None,
     is_detaching: Callable[[], bool] | None = None,
     session_notes: SessionNotesPlane | None = None,
 ) -> ChildOutcome:
@@ -1317,6 +1326,8 @@ async def run_child_session(
             )
         operation = await _drive_child_with_lease_renewal(
             runtime,
+            owner_id=session.owner_id,
+            run_id=session.run_id,
             session_id=child_id,
             operation_id=accepted.operation_id,
             child_fencing_epoch=child_epoch,
@@ -1368,10 +1379,12 @@ async def run_child_session(
 async def _drive_child_with_lease_renewal(
     runtime: AgentSessionRuntime[EffectHostUpdate],
     *,
+    owner_id: str,
+    run_id: str,
     session_id: SessionId,
     operation_id: OperationId,
     child_fencing_epoch: int,
-    renew_child: Callable[..., Awaitable[Any]] | None,
+    renew_child: RenewChild | None,
 ) -> Any:
     if renew_child is None:
         return await runtime.drive(session_id=session_id, operation_id=operation_id)
@@ -1381,6 +1394,8 @@ async def _drive_child_with_lease_renewal(
             await asyncio.sleep(_CHILD_LEASE_HEARTBEAT_SECONDS)
             try:
                 renewed = await renew_child(
+                    owner_id=owner_id,
+                    run_id=run_id,
                     child_session_id=session_id.value,
                     child_fencing_epoch=child_fencing_epoch,
                 )
@@ -1470,24 +1485,14 @@ def _delta_from_ledger(evidence: Any) -> Any:
     )
 
 
-def _async_store_method(store: object, name: str) -> Any | None:
-    method = getattr(store, name, None)
-    if inspect.iscoroutinefunction(method):
-        return method
-    return None
-
-
 async def _durable_child_usage(
-    store: object,
+    list_children: ListChildren,
     *,
     owner_id: str,
     run_id: str,
 ) -> dict[str, int]:
     """Aggregate settled child usage so recovery matches uninterrupted execution."""
-    method = _async_store_method(store, "list_child_sessions")
-    if method is None:
-        return {}
-    rows = await method(owner_id=owner_id, run_id=run_id)
+    rows = await list_children(owner_id=owner_id, run_id=run_id)
     aggregate: dict[str, int] = {}
     for row in rows or ():
         if not isinstance(row, Mapping):
@@ -1508,20 +1513,21 @@ async def _durable_child_usage(
     return aggregate
 
 
-def _fenced_control_reader(
-    store: object, session: RunSession
-) -> Callable[..., Awaitable[tuple[Mapping[str, Any], ...]]] | None:
-    method = _async_store_method(store, "load_pending_agent_controls")
-    if method is None:
-        return None
-
-    async def read(**kwargs: Any) -> tuple[Mapping[str, Any], ...]:
-        controls = await method(
+def _fenced_control_reader(store: ResearchRunStore, session: RunSession) -> ControlReader:
+    async def read(
+        *,
+        target_session_id: str | None = None,
+        target_operation_id: str | None = None,
+        child_fencing_epoch: int | None = None,
+    ) -> tuple[Mapping[str, Any], ...]:
+        controls = await store.load_pending_agent_controls(
             owner_id=session.owner_id,
             run_id=session.run_id,
             worker_id=session.worker_id,
             fencing_epoch=session.fencing_epoch,
-            **kwargs,
+            target_session_id=target_session_id,
+            target_operation_id=target_operation_id,
+            child_fencing_epoch=child_fencing_epoch,
         )
         if controls is None:
             raise LeaseLostError
@@ -1530,47 +1536,64 @@ def _fenced_control_reader(
     return read
 
 
-def _fenced_control_ack(
-    store: object, session: RunSession
-) -> Callable[..., Awaitable[bool]] | None:
-    method = _async_store_method(store, "acknowledge_agent_controls")
-    if method is None:
-        return None
-
-    async def acknowledge(sequences: tuple[int, ...], **kwargs: Any) -> bool:
-        held = await method(
+def _fenced_control_ack(store: ResearchRunStore, session: RunSession) -> ControlAcknowledger:
+    async def acknowledge(
+        sequences: tuple[int, ...],
+        *,
+        target_session_id: str | None = None,
+        target_operation_id: str | None = None,
+        child_fencing_epoch: int | None = None,
+    ) -> bool:
+        return await store.acknowledge_agent_controls(
             owner_id=session.owner_id,
             run_id=session.run_id,
             control_sequences=sequences,
             worker_id=session.worker_id,
             fencing_epoch=session.fencing_epoch,
-            **kwargs,
+            target_session_id=target_session_id,
+            target_operation_id=target_operation_id,
+            child_fencing_epoch=child_fencing_epoch,
         )
-        return bool(held)
 
     return acknowledge
 
 
-def _fenced_child_writer(
-    store: object,
-    name: str,
-    session: RunSession,
+@overload
+def _check_child_write[**P](
+    method: Callable[P, Awaitable[dict[str, Any] | Literal[False]]],
+    *,
+    false_is_lease_loss: Literal[True] = True,
+) -> Callable[P, Awaitable[dict[str, Any]]]: ...
+
+
+@overload
+def _check_child_write[**P, R](
+    method: Callable[P, Awaitable[R]],
     *,
     false_is_lease_loss: bool = True,
-) -> Any | None:
-    method = _async_store_method(store, name)
-    if method is None:
-        return None
+) -> Callable[P, Awaitable[R]]: ...
 
-    async def write(**kwargs: Any) -> Any:
-        held = await method(
-            **kwargs,
-            worker_id=session.worker_id,
-            fencing_epoch=session.fencing_epoch,
-        )
+
+def _check_child_write[**P, R](
+    method: Callable[P, Awaitable[R]],
+    *,
+    false_is_lease_loss: bool = True,
+) -> Callable[P, Awaitable[R]]:
+    """Check a lease-bound write without erasing its arguments or result type.
+
+    The caller binds the parent fence with partial. Reject overrides so a late
+    payload cannot replace that authority, including on unchecked Python calls.
+    False is an operation-specific outcome for finish/expiry; None from claim
+    means another child worker owns the lease and must pass through unchanged.
+    """
+
+    async def write(*args: P.args, **kwargs: P.kwargs) -> R:
+        if "worker_id" in kwargs or "fencing_epoch" in kwargs:
+            raise TypeError("Child writes cannot override their parent Run fence")
+        held = await method(*args, **kwargs)
         if held is False and false_is_lease_loss:
             raise LeaseLostError
-        return held
+        return cast(R, held)
 
     return write
 

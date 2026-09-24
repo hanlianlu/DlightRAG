@@ -17,7 +17,9 @@ import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from functools import partial
+from types import SimpleNamespace
+from typing import Any, cast
 
 import asyncpg
 import pytest
@@ -3840,7 +3842,7 @@ class TestAgentControlsAndChildren:
         assert child["host_state"]["terminal_outcome"]["status"] == "cancelled"
 
     async def test_child_lease_heartbeat_survives_original_window_and_fences_takeover(
-        self, store, pool
+        self, store: FingerprintingRunStore, pool, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
         claim = await _claimed(store)
@@ -3864,6 +3866,30 @@ class TestAgentControlsAndChildren:
         )
         assert child_epoch == 1
 
+        from dlightrag.engine.agent.session.ids import OperationId, SessionId
+        from dlightrag.engine.answer.research.runtime import (
+            _check_child_write,
+            _drive_child_with_lease_renewal,
+        )
+
+        monkeypatch.setattr(
+            "dlightrag.engine.answer.research.runtime._CHILD_LEASE_HEARTBEAT_SECONDS", 0.01
+        )
+
+        async def slow_drive(**_kwargs: Any) -> str:
+            await asyncio.sleep(0.3)
+            return "completed"
+
+        # Exercise the actual runtime-to-adapter callback: a loose AsyncMock
+        # previously hid the missing parent owner/run arguments at this seam.
+        renewed = _check_child_write(
+            partial(
+                store.heartbeat_child_session,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+            )
+        )
+
         async with pool.acquire() as conn:
             original_expiry = await conn.fetchval(
                 "UPDATE dlightrag_answer_child_sessions"
@@ -3874,19 +3900,22 @@ class TestAgentControlsAndChildren:
                 uuid.UUID(creation.run.run_id),
                 uuid.UUID(child_id),
             )
-        assert await store.heartbeat_child_session(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            child_session_id=child_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            child_fencing_epoch=child_epoch,
+        assert (
+            await _drive_child_with_lease_renewal(
+                cast(Any, SimpleNamespace(drive=slow_drive)),
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                session_id=SessionId(child_id),
+                operation_id=OperationId.new(),
+                child_fencing_epoch=child_epoch,
+                renew_child=renewed,
+            )
+            == "completed"
         )
-        await asyncio.sleep(0.3)
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT NOW() > $1", original_expiry)
 
-        from dlightrag.engine.agent.session.ids import LaneId, SessionId
+        from dlightrag.engine.agent.session.ids import LaneId
         from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
         from dlightrag.engine.agent.session.transactions import (
             RegisterExpectation,

@@ -135,7 +135,9 @@ async def test_child_continuation_terminal_usage_is_operation_local(
             return_value=[{"operation_usage": [first.usage, second.usage]}]
         )
     )
-    total = await _durable_child_usage(store, owner_id="owner", run_id=parent.value)
+    total = await _durable_child_usage(
+        store.list_child_sessions, owner_id="owner", run_id=parent.value
+    )
     assert total == {
         "input_tokens": 7 + expected_usage.get("input_tokens", 0),
         "output_tokens": 3 + expected_usage.get("output_tokens", 0),

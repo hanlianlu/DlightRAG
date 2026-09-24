@@ -12,6 +12,7 @@ import uuid
 import zipfile
 from contextlib import contextmanager
 from dataclasses import asdict, replace
+from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -59,11 +60,12 @@ from dlightrag.engine.answer.model_runtime import (
     WebSourceRuntimeSettings,
 )
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.research.persistence import ResearchRunStore
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     _bound_child_dispatch_preparer,
     _bound_child_runner,
-    _fenced_child_writer,
+    _check_child_write,
 )
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
@@ -216,7 +218,7 @@ async def test_same_host_async_spawn_dispatch_retry_and_continuation_budget(
     pg, max_images, child_views, child_context
 ):
     session, session_id = await new_run(pg[0])
-    store = pg[0]
+    store: ResearchRunStore = pg[0]
     child_seen = []
     async with ResourceRegistry() as registry:
         resource = registry.register(ResourceInput(filename="generated.png", content=png_bytes()))
@@ -275,9 +277,27 @@ async def test_same_host_async_spawn_dispatch_retry_and_continuation_budget(
         host._child_model_resolver = cast(Any, lambda role: (child_model, None, child_profile))
         budget = host._image_budget
         assert budget is not None
-        persist = _fenced_child_writer(store, "upsert_child_session", session)
-        claim = _fenced_child_writer(store, "claim_child_session", session)
-        renew = _fenced_child_writer(store, "heartbeat_child_session", session)
+        persist = _check_child_write(
+            partial(
+                store.upsert_child_session,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            )
+        )
+        claim = _check_child_write(
+            partial(
+                store.claim_child_session,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            )
+        )
+        renew = _check_child_write(
+            partial(
+                store.heartbeat_child_session,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            )
+        )
         assert persist and claim and renew
         dispatch = _bound_child_dispatch_preparer(host)
 
@@ -295,7 +315,13 @@ async def test_same_host_async_spawn_dispatch_retry_and_continuation_budget(
             persist=persist,
             load_child=store.load_child_session,
             list_children=store.list_child_sessions,
-            finish_child=_fenced_child_writer(store, "finish_child_session", session),
+            finish_child=_check_child_write(
+                partial(
+                    store.finish_child_session,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                )
+            ),
             prepare_dispatch=retried_dispatch,
             run_child=_bound_child_runner(
                 telemetry=NOOP_TELEMETRY,
@@ -334,7 +360,7 @@ async def test_same_host_async_spawn_dispatch_retry_and_continuation_budget(
             content="Verify again",
             submission_key="generated-continuation",
         )
-        assert receipt["outcome"] == "accepted"
+        assert isinstance(receipt, dict) and receipt["outcome"] == "accepted"
         await subagents.restore_pending()
         outcomes = await asyncio.wait_for(asyncio.gather(*subagents.tasks.values()), 10)
         assert outcomes[0].status == "succeeded" and child_seen == [child_profile] * (
@@ -780,6 +806,7 @@ async def test_fast_executor_rehydrates_historical_pixels_after_projection_and_r
 
 
 async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recovery(pg, monkeypatch):
+    child_store: ResearchRunStore = pg[0]
     data_stream = io.BytesIO()
     document = Document()
     document.add_paragraph("Native cancellation fixture")
@@ -902,9 +929,27 @@ async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recove
                 answer_model_profile(supports_images=True),
             ),
         )
-        persist = _fenced_child_writer(pg[0], "upsert_child_session", session)
-        claim = _fenced_child_writer(pg[0], "claim_child_session", session)
-        renew = _fenced_child_writer(pg[0], "heartbeat_child_session", session)
+        persist = _check_child_write(
+            partial(
+                child_store.upsert_child_session,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            )
+        )
+        claim = _check_child_write(
+            partial(
+                child_store.claim_child_session,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            )
+        )
+        renew = _check_child_write(
+            partial(
+                child_store.heartbeat_child_session,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            )
+        )
         assert persist and claim and renew
         subagents = SubagentHost(
             parent_session_id=session_id,
@@ -913,9 +958,27 @@ async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recove
             persist=persist,
             load_child=pg[0].load_child_session,
             list_children=pg[0].list_child_sessions,
-            finish_child=_fenced_child_writer(pg[0], "finish_child_session", session),
-            request_cancel=_fenced_child_writer(pg[0], "request_child_cancellation", session),
-            release_children=_fenced_child_writer(pg[0], "release_child_sessions", session),
+            finish_child=_check_child_write(
+                partial(
+                    child_store.finish_child_session,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                )
+            ),
+            request_cancel=_check_child_write(
+                partial(
+                    child_store.request_child_cancellation,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                )
+            ),
+            release_children=_check_child_write(
+                partial(
+                    child_store.release_child_sessions,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                )
+            ),
             prepare_dispatch=_bound_child_dispatch_preparer(host),
             run_child=_bound_child_runner(
                 telemetry=NOOP_TELEMETRY,

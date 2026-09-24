@@ -1329,13 +1329,21 @@ async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
         "dlightrag.engine.answer.research.runtime._CHILD_LEASE_HEARTBEAT_SECONDS", 0.005
     )
 
+    renewed = asyncio.Event()
+
+    async def heartbeat(
+        *, owner_id: str, run_id: str, child_session_id: str, child_fencing_epoch: int
+    ) -> bool:
+        renewed.set()
+        return True
+
     async def model(**_kwargs: object) -> AssistantTurn:
-        await asyncio.sleep(0.03)
+        await asyncio.wait_for(renewed.wait(), 1)
         return AssistantTurn(text="renewed child", tool_calls=(), stop_reason="stop")
 
     parent_id = SessionId.new()
     child_id = SessionId.deterministic(run_id=str(parent_id.value), name="child:renew")
-    renew_child = AsyncMock(return_value=True)
+    renew_child = AsyncMock(side_effect=heartbeat)
     outcome = await run_child_session(
         telemetry=NOOP_TELEMETRY,
         orchestrator=_child_orchestrator(model),
@@ -1356,6 +1364,8 @@ async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
     assert renew_child.await_count >= 1
     assert renew_child.await_args is not None
     assert renew_child.await_args.kwargs == {
+        "owner_id": "owner",
+        "run_id": parent_id.value,
         "child_session_id": child_id.value,
         "child_fencing_epoch": 1,
     }

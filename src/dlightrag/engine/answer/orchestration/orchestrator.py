@@ -82,13 +82,34 @@ from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.mode import ResolvedMode
 from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.context import ContextAssembler
+from dlightrag.engine.answer.research.persistence import (
+    CancelChild,
+    ContinueChild,
+    CreateChildGuidance,
+    ExpireChildGuidance,
+    FinishChild,
+    ListChildGuidance,
+    ListChildren,
+    LoadChild,
+    LoadChildGuidance,
+    PersistChild,
+    ReleaseChildren,
+    ReplyChildGuidance,
+    SteerChild,
+    WaitChildGuidance,
+)
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 from dlightrag.engine.answer.tools.memory import MemoryHost
-from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest, SubagentHost
+from dlightrag.engine.answer.tools.subagents import (
+    ChildContextSnapshot,
+    ChildOutcome,
+    ChildRequest,
+    SubagentHost,
+)
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 from dlightrag.engine.runtime.workspace import SessionNoteRecord, WorkspaceStore
@@ -238,23 +259,27 @@ class AnswerOrchestrator:
         parent_session_id: SessionId,
         run_id: str,
         owner_id: str,
-        persist: Any = None,
-        load_child: Any = None,
-        list_children: Any = None,
-        finish_child: Any = None,
-        request_cancel: Any = None,
-        release_children: Any = None,
-        steer_child: Any = None,
-        continue_child: Any = None,
-        reply_guidance: Any = None,
-        create_guidance: Any = None,
-        load_guidance: Any = None,
-        wait_guidance: Any = None,
-        expire_guidance: Any = None,
-        list_guidance: Any = None,
-        prepare_dispatch: Any = None,
-        run_child: Any = None,
-        check_cancelled: Any = None,
+        persist: PersistChild,
+        load_child: LoadChild,
+        list_children: ListChildren,
+        finish_child: FinishChild,
+        request_cancel: CancelChild,
+        release_children: ReleaseChildren,
+        steer_child: SteerChild,
+        continue_child: ContinueChild,
+        reply_guidance: ReplyChildGuidance,
+        create_guidance: CreateChildGuidance,
+        load_guidance: LoadChildGuidance,
+        wait_guidance: WaitChildGuidance,
+        expire_guidance: ExpireChildGuidance,
+        list_guidance: ListChildGuidance,
+        prepare_dispatch: Callable[
+            [SessionId, ChildRequest, ChildContextSnapshot], Mapping[str, Any]
+        ],
+        run_child: Callable[
+            [SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]
+        ],
+        check_cancelled: Callable[[], Awaitable[None]],
     ) -> None:
         if self._subagent_host is None:
             return

@@ -4,6 +4,7 @@
 import asyncio
 import uuid
 from dataclasses import asdict, replace
+from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -29,6 +30,7 @@ from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.execution.executor import AnswerExecutor
 from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.research.persistence import ResearchRunStore
 from dlightrag.engine.answer.research.runtime import FetchedResourceBuffer, ResearchRuntimeEffects
 from dlightrag.engine.answer.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
@@ -563,9 +565,10 @@ async def test_child_pinned_pixels_survive_parent_compaction_and_origin_cleanup(
     import base64
     import json
 
-    from dlightrag.engine.answer.research.runtime import _fenced_child_writer, run_child_session
+    from dlightrag.engine.answer.research.runtime import _check_child_write, run_child_session
     from dlightrag.engine.answer.tools.subagents import SubagentHost, _dispatch_from_row
 
+    child_store: ResearchRunStore = pg[0]
     old, current, snapshot, child_id, request, context = await pin_child(pg, same_run=same_run)
     compacted = await compact_parent(current, snapshot)
     assert AttachmentReplaySelection.from_snapshot(compacted).occurrences == ()
@@ -606,8 +609,20 @@ async def test_child_pinned_pixels_survive_parent_compaction_and_origin_cleanup(
     host = orchestrator(model, max_images=2)
     host._subagent_host = SubagentHost(parent_session_id=snapshot.session_id)
     host.prepare_run("compacted parent")  # Fresh process has no projected tool pixels.
-    persist = _fenced_child_writer(pg[0], "upsert_child_session", current)
-    claim = _fenced_child_writer(pg[0], "claim_child_session", current)
+    persist = _check_child_write(
+        partial(
+            child_store.upsert_child_session,
+            worker_id=current.worker_id,
+            fencing_epoch=current.fencing_epoch,
+        )
+    )
+    claim = _check_child_write(
+        partial(
+            child_store.claim_child_session,
+            worker_id=current.worker_id,
+            fencing_epoch=current.fencing_epoch,
+        )
+    )
     assert persist is not None and claim is not None
     outcome = await run_child_session(
         telemetry=NOOP_TELEMETRY,

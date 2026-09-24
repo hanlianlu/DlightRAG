@@ -10,7 +10,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 
@@ -1069,7 +1069,7 @@ class ChildRunStoreMixin:
         parent_session_id: str | None = None,
         worker_id: str | None = None,
         fencing_epoch: int | None = None,
-    ) -> dict[str, Any] | bool:
+    ) -> dict[str, Any] | Literal[False]:
         """Queue an idempotent steer for only the Child's current Operation."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -1091,7 +1091,7 @@ class ChildRunStoreMixin:
             f"steer\0{child_session_id}\0{text}\0{origin}".encode()
         ).hexdigest()
 
-        async def _operation(conn: Any) -> dict[str, Any] | bool:
+        async def _operation(conn: Any) -> dict[str, Any] | Literal[False]:
             async with conn.transaction():
                 run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
                 if run is None:
@@ -1197,7 +1197,7 @@ class ChildRunStoreMixin:
         reauthorize_user_cancelled: bool = False,
         worker_id: str | None = None,
         fencing_epoch: int | None = None,
-    ) -> dict[str, Any] | bool:
+    ) -> dict[str, Any] | Literal[False]:
         """Accept one explicit new Operation without changing the Child's pinned plan."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -1220,7 +1220,7 @@ class ChildRunStoreMixin:
         ).hexdigest()
         operation_id = uuid.UUID(OperationId.deterministic(idempotency_key=key).value)
 
-        async def _operation(conn: Any) -> dict[str, Any] | bool:
+        async def _operation(conn: Any) -> dict[str, Any] | Literal[False]:
             async with conn.transaction():
                 run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
                 if run is None:
@@ -1424,7 +1424,7 @@ class ChildRunStoreMixin:
         parent_session_id: str | None = None,
         worker_id: str | None = None,
         fencing_epoch: int | None = None,
-    ) -> dict[str, Any] | bool:
+    ) -> dict[str, Any] | Literal[False]:
         """Correlate one idempotent parent/user reply with a pending Child ask."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -1440,7 +1440,7 @@ class ChildRunStoreMixin:
             raise ValueError("invalid guidance reply origin")
         fingerprint = hashlib.sha256(f"reply\0{request_id}\0{text}\0{origin}".encode()).hexdigest()
 
-        async def _operation(conn: Any) -> dict[str, Any] | bool:
+        async def _operation(conn: Any) -> dict[str, Any] | Literal[False]:
             async with conn.transaction():
                 run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
                 if run is None:
