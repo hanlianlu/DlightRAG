@@ -344,10 +344,12 @@ async def read_answer_artifact_presentation(
     )
     projected.update(
         answer=markdown,
+        artifact_bindings=dict((descriptor or {}).get("artifact_bindings") or {}),
         parts=answer_parts_from_markdown(
             markdown,
             artifacts=projected["artifacts"],
             evidence_images=[],
+            artifact_bindings=dict((descriptor or {}).get("artifact_bindings") or {}),
         ),
         contexts={},
         references=[

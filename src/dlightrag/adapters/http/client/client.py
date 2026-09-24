@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -162,6 +162,7 @@ class AnswerArtifact:
     download_url: str | None = None
     presentation_url: str | None = None
     issue: AnswerArtifactIssue | None = None
+    artifact_bindings: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> AnswerArtifact:
@@ -185,6 +186,7 @@ class AnswerArtifact:
                 str(payload["presentation_url"]) if payload.get("presentation_url") else None
             ),
             issue=AnswerArtifactIssue.from_payload(issue) if isinstance(issue, Mapping) else None,
+            artifact_bindings=dict(payload.get("artifact_bindings") or {}),
         )
 
 
@@ -213,11 +215,15 @@ class EvidenceImage:
 
 @dataclass(frozen=True, slots=True)
 class AnswerPart:
+    """Whole Markdown or an in-document resource placement, never a source slice."""
+
     type: Literal["markdown", "artifact", "evidence_image"]
     text: str = ""
     artifact: AnswerArtifact | None = None
     evidence_image: EvidenceImage | None = None
     inline: bool = False
+    target: str = ""
+    slot: int | None = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> AnswerPart:
@@ -234,6 +240,8 @@ class AnswerPart:
             if isinstance(image, Mapping)
             else None,
             inline=bool(payload.get("inline")),
+            target=str(payload.get("target") or ""),
+            slot=int(payload["slot"]) if payload.get("slot") is not None else None,
         )
 
 
@@ -251,6 +259,7 @@ class AnswerResult:
     evidence: Mapping[str, Any]
     trace: Mapping[str, Any]
     image_descriptions: tuple[str, ...]
+    artifact_bindings: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> AnswerResult:
@@ -279,6 +288,7 @@ class AnswerResult:
             evidence=dict(payload.get("evidence") or {}),
             trace=dict(payload.get("trace") or {}),
             image_descriptions=tuple(str(item) for item in payload.get("image_descriptions") or ()),
+            artifact_bindings=dict(payload.get("artifact_bindings") or {}),
         )
 
 

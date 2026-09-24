@@ -15,6 +15,7 @@ Two renderers are provided:
 import html as _html
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 from markdown_it import MarkdownIt
 from markdown_it.common.normalize_url import normalizeLink
@@ -25,6 +26,7 @@ from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
 from dlightrag.engine.answer.markdown import answer_markdown, math_inline_rule
+from dlightrag.engine.answer.reference import InlineReference, inline_references
 
 _FORMATTER = HtmlFormatter(nowrap=True)
 
@@ -122,10 +124,19 @@ _md_chunk.add_render_rule("math_inline", _render_math_inline)
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class LinkedImagePlacement:
+    """A passive image source, or a resource slot replacing its containing link."""
+
+    image_url: str | None = None
+    replacement_html: str | None = None
+
+
 def _place_resources(
     blocks: list[Token],
     place: Callable[[str, str, bool], str | None] | None,
     citation_links: Mapping[str, str],
+    place_linked_image: Callable[[str, str], LinkedImagePlacement | None] | None,
 ) -> None:
     """Replace actual resource tokens, without reparsing any source fragment.
 
@@ -137,48 +148,46 @@ def _place_resources(
             continue
         children = block.children
         result: list[Token] = []
-        i = 0
-        while i < len(children):
-            token = children[i]
-            end = i + 1
+        cursor = 0
+        references = tuple(inline_references(children))
+        linked_images: dict[tuple[int, int], list[InlineReference]] = {}
+        for reference in references:
+            if reference.link_span is not None:
+                linked_images.setdefault(reference.link_span, []).append(reference)
+        for reference in references:
+            if reference.link_span is not None:
+                continue
+            result.extend(children[cursor : reference.start])
+            token = children[reference.start]
             replacement = None
-            if token.type == "image" and place is not None:
-                replacement = place(str(token.attrGet("src") or ""), token.content, True)
-            elif token.type == "link_open":
-                # Markdown forbids nested links. The matching close belongs to
-                # this token, even when the label contains emphasis or code.
-                while end < len(children) and children[end].type != "link_close":
-                    end += 1
-                if end < len(children):
-                    label_tokens = children[i + 1 : end]
-                    label = "".join(child.content for child in label_tokens)
-                    href = str(token.attrGet("href") or "")
-                    # A projected citation is a plain numeric label plus its
-                    # admitted source destination. Mark the original token;
-                    # never flatten rich labels or reconstruct their markup.
-                    citation = (
-                        re.fullmatch(r"([0-9]+)(?:-[0-9]+)?", label)
-                        if len(label_tokens) == 1 and label_tokens[0].type == "text"
-                        else None
-                    )
-                    if citation and citation_links.get(citation.group(1)) == href:
-                        token.attrJoin("class", "answer-citation-link")
-                    elif place is not None:
-                        replacement = place(href, label, False)
-                    end += 1
+            label_tokens = children[reference.start + 1 : reference.end - 1]
+            citation = (
+                re.fullmatch(r"([0-9]+)(?:-[0-9]+)?", reference.label)
+                if not reference.image and len(label_tokens) == 1 and label_tokens[0].type == "text"
+                else None
+            )
+            if citation and citation_links.get(citation.group(1)) == reference.target:
+                token.attrJoin("class", "answer-citation-link")
+            elif place is not None:
+                replacement = place(reference.target, reference.label, reference.image)
+            if replacement is None and not reference.image and place_linked_image is not None:
+                for nested in linked_images.get((reference.start, reference.end), ()):
+                    placement = place_linked_image(nested.target, nested.label)
+                    if placement is None:
+                        continue
+                    if placement.replacement_html is not None:
+                        replacement = placement.replacement_html
+                        break
+                    if placement.image_url is not None:
+                        children[nested.start].attrSet("src", placement.image_url)
             if replacement is not None:
                 slot = Token("html_inline", "", 0)
                 slot.content = replacement
                 result.append(slot)
-                i = end
-            elif token.type == "link_open":
-                # A linked image stays one external link. Placing an interactive
-                # Artifact inside its label would nest controls inside an anchor.
-                result.extend(children[i:end])
-                i = end
             else:
-                result.append(token)
-                i += 1
+                result.extend(children[reference.start : reference.end])
+            cursor = reference.end
+        result.extend(children[cursor:])
         block.children = result
 
 
@@ -186,6 +195,7 @@ def render_markdown(
     text: str,
     *,
     place_resource: Callable[[str, str, bool], str | None] | None = None,
+    place_linked_image: Callable[[str, str], LinkedImagePlacement | None] | None = None,
     citation_links: Mapping[str, str] | None = None,
 ) -> str:
     r"""Convert Markdown text to HTML with syntax-highlighted code blocks.
@@ -194,7 +204,7 @@ def render_markdown(
     (``$$...$$``, ``\[...\]``) are passed through verbatim for
     client-side MathJax rendering.
     """
-    if place_resource is None and not citation_links:
+    if place_resource is None and place_linked_image is None and not citation_links:
         return _md.render(text)
     env: dict = {}
     tokens = _md.parse(text, env)
@@ -202,6 +212,7 @@ def render_markdown(
         tokens,
         place_resource,
         {ref: normalizeLink(url) for ref, url in (citation_links or {}).items()},
+        place_linked_image,
     )
     return _md.renderer.render(tokens, _md.options, env)
 

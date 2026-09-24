@@ -14,6 +14,8 @@ from dlightrag.engine.answer.publication import (
     ArtifactAttachment,
     ArtifactValidationError,
     PublicationLimits,
+    artifact_link,
+    artifact_resource_id,
     is_empty_answer,
     prepare_artifact_attachment,
     validate_publication,
@@ -345,6 +347,7 @@ def test_answer_placed_video_is_inline(tmp_path: Path) -> None:
             plan.answer,
             artifacts=[item.descriptor() for item in plan.artifacts],
             evidence_images=[],
+            artifact_bindings=plan.artifact_bindings,
         )
         if part["type"] == "artifact"
     ]
@@ -430,9 +433,12 @@ def test_any_markdown_artifact_can_publish_linked_artifacts(tmp_path: Path) -> N
     assert plan.outcome == {"status": "complete", "issues": []}
     assert [item.relative_path for item in plan.artifacts] == ["peer_analysis.md", "data.csv"]
     assert all("scratch" not in str(item) for item in plan.descriptors)
-    assert "artifact:peer_analysis.md" not in plan.answer
-    assert "artifact:artifact-" in plan.answer
-    assert b"artifact:data.csv" not in plan.artifacts[0].content
+    assert plan.answer == "Done. [Open analysis](artifact:peer_analysis.md)"
+    assert plan.artifact_bindings == {"artifact:peer_analysis.md": plan.artifacts[0].resource_id}
+    assert plan.artifacts[0].content == (root / "peer_analysis.md").read_bytes()
+    assert plan.artifacts[0].artifact_bindings == {
+        "artifact:data.csv": plan.artifacts[1].resource_id
+    }
 
 
 def test_any_html_artifact_can_publish_linked_artifacts(tmp_path: Path) -> None:
@@ -451,7 +457,10 @@ def test_any_html_artifact_can_publish_linked_artifacts(tmp_path: Path) -> None:
     )
 
     assert [item.relative_path for item in plan.artifacts] == ["dashboard.html", "data.csv"]
-    assert b"artifact:data.csv" not in plan.artifacts[0].content
+    assert plan.artifacts[0].content == (root / "dashboard.html").read_bytes()
+    assert plan.artifacts[0].artifact_bindings == {
+        "artifact:data.csv": plan.artifacts[1].resource_id
+    }
 
 
 def test_invalid_nested_markdown_reference_is_settled_to_an_unavailable_artifact(
@@ -470,8 +479,10 @@ def test_invalid_nested_markdown_reference_is_settled_to_an_unavailable_artifact
     assert [item.relative_path for item in plan.artifacts] == ["analysis.md"]
     unavailable = next(item for item in plan.descriptors if item["status"] == "unavailable")
     assert unavailable["label"] == "Unsafe"
-    assert b"artifact:../secret.txt" not in plan.artifacts[0].content
-    assert f"artifact:{unavailable['resource_id']}".encode() in plan.artifacts[0].content
+    assert b"artifact:../secret.txt" in plan.artifacts[0].content
+    assert plan.artifacts[0].artifact_bindings == {
+        "artifact:../secret.txt": unavailable["resource_id"]
+    }
 
 
 def test_invalid_nested_html_reference_is_settled_to_an_unavailable_artifact(
@@ -492,8 +503,10 @@ def test_invalid_nested_html_reference_is_settled_to_an_unavailable_artifact(
 
     assert [item.relative_path for item in plan.artifacts] == ["dashboard.html"]
     unavailable = next(item for item in plan.descriptors if item["status"] == "unavailable")
-    assert b"artifact:../secret.txt" not in plan.artifacts[0].content
-    assert f"artifact:{unavailable['resource_id']}".encode() in plan.artifacts[0].content
+    assert b"artifact:../secret.txt" in plan.artifacts[0].content
+    assert plan.artifacts[0].artifact_bindings == {
+        "artifact:../secret.txt": unavailable["resource_id"]
+    }
 
 
 def test_nested_artifact_reference_cycles_are_rejected(tmp_path: Path) -> None:
@@ -525,7 +538,8 @@ def test_cycles_do_not_consume_the_artifact_admission_limit(tmp_path: Path) -> N
 
     assert [item.relative_path for item in plan.artifacts] == ["c.md", "d.md"]
     assert {issue.kind for issue in plan.issues} == {"reference_cycle"}
-    assert b"artifact:d.md" not in plan.artifacts[0].content
+    assert plan.artifacts[0].content == (root / "c.md").read_bytes()
+    assert plan.artifacts[0].artifact_bindings == {"artifact:d.md": plan.artifacts[1].resource_id}
 
 
 def test_unattached_reference_does_not_authorize_an_existing_file(tmp_path: Path) -> None:
@@ -540,7 +554,8 @@ def test_unattached_reference_does_not_authorize_an_existing_file(tmp_path: Path
     assert plan.issues[0].kind == "unattached_reference"
     assert plan.descriptors[0]["status"] == "unavailable"
     assert "role" not in plan.descriptors[0]
-    assert str(plan.descriptors[0]["resource_id"]) in plan.answer
+    assert plan.answer == "[Report](artifact:report.md)"
+    assert plan.artifact_bindings["artifact:report.md"] == plan.descriptors[0]["resource_id"]
     assert "missing.png" not in plan.answer
 
 
@@ -566,7 +581,12 @@ def test_workspace_links_require_publication_correction(tmp_path: Path, answer: 
     assert plan.issues[0].kind == "invalid_reference"
     assert "attach_artifact" in plan.correction_feedback()
     assert plan.descriptors[0]["status"] == "unavailable"
-    parts = answer_parts_from_markdown(plan.answer, artifacts=plan.descriptors, evidence_images=())
+    parts = answer_parts_from_markdown(
+        plan.answer,
+        artifacts=plan.descriptors,
+        evidence_images=(),
+        artifact_bindings=plan.artifact_bindings,
+    )
     assert any(
         part["type"] == "artifact"
         and part["artifact"]["resource_id"] == plan.descriptors[0]["resource_id"]
@@ -597,7 +617,6 @@ def test_workspace_link_correction_still_requires_explicit_attachment(tmp_path: 
         "[unused]: artifacts/report.html",
         "Use artifacts/report.html as a workspace path.",
         "[Example](https://example.com/artifacts/report.html)",
-        "[Documentation](docs/report.html)",
     ],
 )
 def test_workspace_path_examples_do_not_request_publication(tmp_path: Path, answer: str) -> None:
@@ -606,6 +625,97 @@ def test_workspace_path_examples_do_not_request_publication(tmp_path: Path, answ
     assert not plan.repairable
     assert plan.answer == answer
     assert plan.descriptors == ()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "`[Report](artifact:report.html)`",
+        "```markdown\n[Report](artifact:report.html)\n```",
+        "    [Report](artifact:report.html)",
+        "[unused]: artifact:report.html",
+        "$[Report](artifact:report.html)$",
+    ],
+)
+def test_artifact_examples_are_inert_across_publication_and_parts(
+    tmp_path: Path, answer: str
+) -> None:
+    plan = validate_publication(tmp_path / "artifacts", answer=answer)
+
+    assert plan.outcome == {"status": "complete", "issues": []}
+    assert plan.answer == answer
+    assert answer_parts_from_markdown(
+        plan.answer,
+        artifacts=[{"resource_id": "report.html", "label": "Report"}],
+        evidence_images=(),
+    ) == [{"type": "markdown", "text": answer}]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "[Report][r]\n\n[r]: artifact:report.html",
+        "[Report][]\n\n[Report]: artifact:report.html",
+        "[Report]\n\n[Report]: artifact:report.html",
+        "[**Report**](artifact:report.html)",
+        "[Report \\[final\\]](artifact:report.html)",
+    ],
+)
+def test_all_markdown_artifact_references_require_attachment(tmp_path: Path, answer: str) -> None:
+    plan = validate_publication(tmp_path / "artifacts", answer=answer)
+
+    assert plan.outcome["status"] == "failed"
+    assert [issue.kind for issue in plan.issues] == ["unattached_reference"]
+    parts = answer_parts_from_markdown(
+        plan.answer,
+        artifacts=plan.descriptors,
+        evidence_images=(),
+        artifact_bindings=plan.artifact_bindings,
+    )
+    assert len([part for part in parts if part["type"] == "artifact"]) == 1
+
+
+@pytest.mark.parametrize("target", ["./report.html", "docs/report.html", "/tmp/report.html"])
+def test_unresolvable_answer_links_fail_in_place(tmp_path: Path, target: str) -> None:
+    answer = f"Before [Report]({target}) after.\n\n`[Report]({target})`"
+    plan = validate_publication(tmp_path / "artifacts", answer=answer)
+
+    assert plan.outcome["status"] == "failed"
+    assert plan.artifacts == ()
+    assert f"`[Report]({target})`" in plan.answer
+    parts = answer_parts_from_markdown(
+        plan.answer,
+        artifacts=plan.descriptors,
+        evidence_images=(),
+        artifact_bindings=plan.artifact_bindings,
+    )
+    assert plan.answer == answer
+    assert [part["type"] for part in parts] == ["markdown", "artifact"]
+    assert parts[0]["text"] == answer
+    assert parts[1]["target"] == target
+    assert parts[1]["slot"] == 0
+
+
+def test_reference_style_dependencies_publish_but_examples_do_not(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.md").write_text(
+        "[Data][d]\n\n[d]: artifact:data.csv\n\n`[Example](artifact:missing.csv)`"
+    )
+    (root / "data.csv").write_text("value\n1\n")
+
+    plan = _validate(root, answer="[Report][r]\n\n[r]: artifact:report.md", attached=("report.md",))
+
+    assert plan.outcome == {"status": "complete", "issues": []}
+    assert [item.relative_path for item in plan.artifacts] == ["report.md", "data.csv"]
+    assert b"`[Example](artifact:missing.csv)`" in plan.artifacts[0].content
+    parts = answer_parts_from_markdown(
+        plan.answer,
+        artifacts=plan.descriptors,
+        evidence_images=(),
+        artifact_bindings=plan.artifact_bindings,
+    )
+    assert len([part for part in parts if part["type"] == "artifact"]) == 1
 
 
 def test_multiple_artifacts_with_report_like_names_are_independent(tmp_path: Path) -> None:
@@ -726,3 +836,152 @@ def test_active_html_must_be_self_contained_and_within_preview_budget(tmp_path: 
 
     assert external.issues[0].kind == "media_mismatch"
     assert oversized.issues[0].kind == "active_preview_too_large"
+
+
+def test_attachment_receipt_round_trips_without_rewriting_or_duplicate_placement(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report [final].md").write_text("Report")
+    attachment = _attachment(root, "report [final].md", label="Report [final]")
+    answer = "Ready. " + artifact_link(attachment)
+
+    plan = validate_publication(root, answer=answer, attachments=(attachment,))
+
+    assert plan.answer == answer
+    assert plan.outcome["status"] == "complete"
+    assert plan.artifact_bindings == {
+        f"artifact:{artifact_resource_id(attachment.relative_path)}": plan.artifacts[0].resource_id
+    }
+
+
+def test_canonical_dependency_ids_resolve_within_the_authorized_closure(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    dependency_id = artifact_resource_id("data.csv")
+    (root / "report.md").write_text(f"[Data](artifact:{dependency_id})")
+    (root / "data.csv").write_text("value\n1\n")
+    (root / "private.txt").write_text("private")
+    answer = f"[Report](artifact:report.md) [Data](artifact:{dependency_id})"
+
+    plan = _validate(root, answer=answer, attached=("report.md",))
+
+    assert [item.relative_path for item in plan.artifacts] == ["report.md", "data.csv"]
+    assert plan.answer == answer
+    assert plan.artifact_bindings[f"artifact:{dependency_id}"] == dependency_id
+    assert plan.artifacts[0].artifact_bindings == {f"artifact:{dependency_id}": dependency_id}
+    assert not _validate(
+        root, answer=f"[Private](artifact:{artifact_resource_id('private.txt')})"
+    ).artifacts
+
+
+def test_document_scopes_bind_identical_relative_targets_independently(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    for folder in ("one", "two"):
+        (root / folder).mkdir(parents=True)
+        (root / folder / "report.md").write_text("[Data](artifact:data.csv)")
+        (root / folder / "data.csv").write_text(f"value\n{folder}\n")
+
+    plan = _validate(root, answer="Reports", attached=("one/report.md", "two/report.md"))
+    reports = {item.relative_path: item for item in plan.artifacts}
+
+    assert plan.outcome["status"] == "complete"
+    for folder in ("one", "two"):
+        report = reports[f"{folder}/report.md"]
+        assert report.content == b"[Data](artifact:data.csv)"
+        assert report.artifact_bindings == {
+            "artifact:data.csv": reports[f"{folder}/data.csv"].resource_id
+        }
+        assert report.descriptor()["artifact_bindings"] == report.artifact_bindings
+
+
+def test_invalid_markdown_dependency_keeps_source_and_binds_failure_in_document(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    source = "[Download](./data.csv)\n\n`[Example](./data.csv)`"
+    (root / "report.md").write_text(source)
+    (root / "data.csv").write_text("private draft")
+
+    plan = _validate(root, answer="[Report](artifact:report.md)", attached=("report.md",))
+
+    assert plan.outcome["status"] == "partial"
+    assert [item.relative_path for item in plan.artifacts] == ["report.md"]
+    report = plan.artifacts[0]
+    failure = next(item for item in plan.descriptors if item["status"] == "unavailable")
+    assert report.content.decode() == source
+    assert report.artifact_bindings == {"./data.csv": failure["resource_id"]}
+    assert "./data.csv" not in plan.artifact_bindings
+
+
+def test_html_dependencies_come_from_attributes_not_comments_or_script_text(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    source = (
+        '<html><body><!-- <a href="artifact:missing.csv">ignored</a> -->'
+        "<script>const example = '<a href=\"artifact:also-missing.csv\">example</a>';</script>"
+        '<a href="artifact:data&#46;csv">Data</a></body></html>'
+    )
+    (root / "report.html").write_text(source)
+    (root / "data.csv").write_text("value\n1\n")
+
+    plan = _validate(root, answer="[Report](artifact:report.html)", attached=("report.html",))
+
+    assert plan.outcome["status"] == "complete"
+    assert [item.relative_path for item in plan.artifacts] == ["report.html", "data.csv"]
+    assert plan.artifacts[0].content.decode() == source
+    assert plan.artifacts[0].artifact_bindings == {
+        "artifact:data.csv": plan.artifacts[1].resource_id
+    }
+
+
+def test_unfinished_fence_cannot_hide_an_automatically_placed_root(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.txt").write_text("Report")
+    answer = "Example:\n\n```markdown\n[Report](artifact:report.txt)"
+
+    plan = _validate(root, answer=answer, attached=("report.txt",))
+
+    assert plan.outcome["status"] == "complete"
+    assert plan.answer.endswith(answer)
+    assert plan.answer.startswith("[report.txt](artifact:artifact-")
+    assert len(plan.artifact_bindings) == 1
+    parts = answer_parts_from_markdown(
+        plan.answer,
+        artifacts=plan.descriptors,
+        evidence_images=(),
+        artifact_bindings=plan.artifact_bindings,
+    )
+    assert len([part for part in parts if part["type"] == "artifact"]) == 1
+
+
+def test_unsafe_inventory_binds_actual_references_without_changing_examples(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "unsafe").symlink_to(tmp_path / "outside")
+    answer = "[Report](artifact:report.md) [Local](./report.md)\n\n`[Example](artifact:example.md)`"
+
+    plan = validate_publication(root, answer=answer)
+
+    assert plan.answer == answer
+    assert plan.outcome["status"] == "failed"
+    assert set(plan.artifact_bindings) == {"artifact:report.md", "./report.md"}
+    assert len(plan.descriptors) == 2
+
+
+@pytest.mark.parametrize(
+    ("answer", "empty"),
+    [
+        ("[Report][r]\n\n[r]: artifact:report.md", True),
+        ("**[Report](artifact:report.md)**", True),
+        ("`[Report](artifact:report.md)`", False),
+        ("```md\n[Report](artifact:report.md)\n```", False),
+        ("[unused]: artifact:report.md", True),
+        ("![](https://example.com/chart.png)", False),
+    ],
+)
+def test_answer_emptiness_uses_visible_markdown_semantics(answer: str, empty: bool) -> None:
+    assert is_empty_answer(answer=answer, has_artifacts=False) is empty

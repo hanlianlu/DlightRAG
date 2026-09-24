@@ -288,6 +288,12 @@ settlement order. Dependencies are published but are not auto-placed. Failed or
 stale attachments receive the single bounded correction pass. There is no
 reserved filename, privileged Artifact role, or hidden finalizer call.
 
+Markdown references use the same grammar for validation, result projection, and
+browser placement. Publication preserves source text and settles a document-local
+`artifact_bindings` map instead of rewriting Markdown with regular expressions.
+Unresolvable links enter correction and, if unresolved, display an unavailable
+resource in their original position. HTML dependencies use an HTML parser.
+
 Native tool-turn text deltas are streamed optimistically when the provider
 supports them. They are transient presentation: the Host resets them when the
 same turn contains tool calls, a provider attempt fails or is cancelled after
@@ -296,7 +302,8 @@ generation is recovered, or citation/Artifact finalization changes the terminal
 text. Persisted Request Snapshots, Assistant Turns, tool settlements, and the
 canonical result remain the recovery authorities.
 
-Both modes produce the same canonical result: ordered `parts`, cited `sources`,
+Both modes produce the same canonical result: complete Markdown and typed resource
+placements in `parts`, document-local `artifact_bindings`, cited `sources`,
 `references`, `evidence_images`, Artifacts/outcome, usage, and Evidence counts.
 
 ## Context And Model Budgets

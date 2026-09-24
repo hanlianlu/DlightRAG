@@ -198,6 +198,31 @@ def test_answer_cli_renders_typed_evidence_images(
     assert "References (1):" in output
 
 
+@pytest.mark.parametrize("status", ["available", "unavailable"])
+def test_terminal_keeps_whole_source_and_lists_each_resource_once(status: str) -> None:
+    from dlightrag.engine.answer.results import project_answer_result
+
+    answer = "Before [Report](artifact:report.md) after [again](artifact:report.md)."
+    projected = project_answer_result(
+        {
+            "answer": answer,
+            "artifact_bindings": {"artifact:report.md": "artifact-report"},
+            "artifacts": [{"resource_id": "artifact-report", "label": "Report", "status": status}],
+        },
+        run_id="run-1",
+    )
+
+    rendered = _cli._render_answer_for_terminal(_cli.AnswerResult.from_payload(projected))
+
+    assert rendered.startswith(answer + "\n\nResources:\n")
+    assert rendered.count("[Artifact:") == 1
+    assert (
+        "dlightrag://answer/run-1/artifacts/artifact-report" in rendered
+        if status == "available"
+        else rendered.endswith("unavailable")
+    )
+
+
 async def test_ingest_workspace_override_uses_the_durable_rest_facade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

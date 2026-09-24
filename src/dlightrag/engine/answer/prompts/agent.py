@@ -28,7 +28,7 @@ portions of the Artifact unless the user explicitly requests both inline and fil
 
 User-facing workspace files belong under `artifacts/`. After the final modification of \
 each root deliverable, call `attach_artifact`; attachment, not answer text, authorizes \
-publication. Use the returned relative Artifact URI to place it where useful in the final \
+publication. Use the returned stable Artifact URI to place it where useful in the final \
 Answer; an `artifacts/...` workspace path is not a user-openable link. The Host adds an \
 omitted attached root at the end automatically. Do not attach \
 files referenced by an attached Markdown or HTML root: its safe dependency closure is \

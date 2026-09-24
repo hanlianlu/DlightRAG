@@ -3,8 +3,8 @@
 
 Agent paths are request-local input. This module is the only publication boundary
 that may read them: structured attachments authorize roots, safe links discover
-dependencies and place outputs, and settlement replaces relative ``artifact:``
-targets with stable resource ids while exposing only safe metadata and issues.
+dependencies and place outputs. Settlement records document-scoped bindings to
+stable resource ids without rewriting model-authored Markdown or HTML.
 """
 
 from __future__ import annotations
@@ -15,21 +15,31 @@ import re
 import stat
 import xml.etree.ElementTree as ET
 import zipfile
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
+from dlightrag.engine.answer.citations.contracts import SourceReference
+from dlightrag.engine.answer.citations.finalization import finalize_answer
+from dlightrag.engine.answer.citations.projection import link_public_citations
 from dlightrag.engine.answer.markdown import answer_markdown
+from dlightrag.engine.answer.reference import (
+    classify_target,
+    html_references,
+    inline_references,
+    markdown_references,
+)
 from dlightrag.engine.answer.resources.converters import is_convertible
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
+from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 PresentationCapability = Literal["image", "video", "markdown", "html", "pdf", "text", "download"]
 ArtifactIssueKind = Literal[
@@ -47,14 +57,6 @@ ArtifactIssueKind = Literal[
     "unattached_reference",
 ]
 
-_ARTIFACT_TARGET = re.compile(
-    r"(?P<prefix>!?(?:\[[^\]]*\])\(\s*<?artifact:)(?P<path>[^\s)>]+)(?P<suffix>>?(?:\s+[^)]*)?\))",
-    re.IGNORECASE,
-)
-_HTML_ARTIFACT_TARGET = re.compile(
-    r"(?P<prefix>\b(?:href|src)\s*=\s*[\"']artifact:)(?P<path>[^\"']+)(?P<suffix>[\"'])",
-    re.IGNORECASE,
-)
 _HTML_EXTERNAL_RESOURCE = re.compile(
     r"<(?:script|img|audio|video|source|iframe)\b[^>]*\bsrc\s*=\s*[\"'](?!data:|blob:|artifact:)",
     re.IGNORECASE,
@@ -194,6 +196,7 @@ class StagedArtifact:
     width: int | None = None
     height: int | None = None
     content: bytes = b""
+    artifact_bindings: Mapping[str, str] = field(default_factory=dict)
 
     def descriptor(self, *, label: str = "") -> dict[str, object]:
         value: dict[str, object] = {
@@ -205,6 +208,7 @@ class StagedArtifact:
             "digest": self.digest,
             "presentation": self.presentation,
             "status": "available",
+            "artifact_bindings": dict(self.artifact_bindings),
         }
         if self.width is not None and self.height is not None:
             value["width"] = self.width
@@ -215,9 +219,11 @@ class StagedArtifact:
 @dataclass(frozen=True, slots=True)
 class PublicationPlan:
     answer: str
+    artifact_bindings: Mapping[str, str] = field(default_factory=dict)
     artifacts: tuple[StagedArtifact, ...] = ()
     descriptors: tuple[Mapping[str, object], ...] = ()
     issues: tuple[ArtifactIssue, ...] = ()
+    artifact_sources: Mapping[str, Sequence[SourceReference]] = field(default_factory=dict)
 
     @property
     def repairable(self) -> bool:
@@ -245,9 +251,25 @@ class PublicationPlan:
 
 
 def is_substantive_text(text: str) -> bool:
-    """True when text has content beyond an Artifact-only affordance."""
-    without_artifacts = _ARTIFACT_TARGET.sub("", text)
-    return bool(without_artifacts.strip(" \t\r\n.,;:!?，。；：！？"))
+    """True when visible content remains after actual Artifact affordances."""
+    punctuation = " \t\r\n.,;:!?，。；：！？"
+    for block in _ANSWER_MARKDOWN.parse(text):
+        if block.type in {"fence", "code_block", "html_block"}:
+            if block.content.strip(punctuation):
+                return True
+        if block.type != "inline":
+            continue
+        children = block.children or ()
+        excluded: set[int] = set()
+        for reference in inline_references(children):
+            if classify_target(reference.target, image=reference.image) == "artifact":
+                excluded.update(range(reference.start, reference.end))
+        for index, token in enumerate(children):
+            if index not in excluded and (
+                token.type == "image" or token.content.strip(punctuation)
+            ):
+                return True
+    return False
 
 
 def is_empty_answer(*, answer: str, has_artifacts: bool) -> bool:
@@ -317,30 +339,18 @@ def validate_publication(
     answer: str,
     attachments: Sequence[ArtifactAttachment] = (),
     limits: PublicationLimits | None = None,
+    contexts: RetrievalContexts | None = None,
 ) -> PublicationPlan:
-    """Resolve attached roots and their safe dependency closure for publication.
+    """Authorize roots, validate their closure, and bind actual document references.
 
-    ``attachments`` is the publication authority. ``artifact:`` references only
-    place authorized roots or dependencies; unplaced roots receive a deterministic
-    trailing affordance and un-attached references remain unavailable.
+    Each document keeps its own target-to-resource map and original source. Links
+    place structured attachments or their dependencies; they cannot authorize an
+    unattached root. Invalid targets bind to an unavailable descriptor in place.
     """
     limits = limits or PublicationLimits()
     roots: list[str] = []
     attached: dict[str, ArtifactAttachment] = {}
     invalid_references: dict[tuple[str | None, str], tuple[str, ArtifactIssue]] = {}
-    # A workspace URL is not publication authority or a browser address. Feed it
-    # into the existing correction pass instead of silently reporting success.
-    # Use the Answer grammar so quoted examples and unused definitions stay inert.
-    workspace_targets = _workspace_link_targets(answer)
-    for target in workspace_targets:
-        invalid_references[(None, target)] = (
-            PurePosixPath(unquote(target)).name,
-            ArtifactIssue(
-                "invalid_reference",
-                f"Workspace link {target!r} cannot be opened by the user. "
-                "Call attach_artifact for the completed file and use its returned artifact: URI.",
-            ),
-        )
     for attachment in attachments:
         try:
             relative = _normalize_reference(attachment.relative_path, parent=None)
@@ -358,47 +368,94 @@ def validate_publication(
         roots.append(relative)
         attached[relative] = attachment
 
+    paths_by_id = {artifact_resource_id(path): path for path in roots}
     placed: set[str] = set()
-    for raw, _label, _image in _references(answer, html=False):
+    for reference in markdown_references(answer):
+        if classify_target(reference.target, image=reference.image) != "artifact":
+            continue
         try:
-            placed.add(_normalize_reference(raw, parent=None))
+            placed.add(_reference_path(reference.target, parent=None, paths_by_id=paths_by_id))
         except ValueError:
             continue
-    for relative in roots:
-        if relative not in placed:
-            answer = _append_artifact_affordance(answer, attached[relative])
+    omitted = [attached[path] for path in roots if path not in placed]
+    if omitted:
+        answer = _append_artifact_affordances(answer, omitted)
 
     try:
         files = _inventory(artifacts_root, limits=limits)
     except PublicationScanError as exc:
         issue = ArtifactIssue("unsafe_file", _safe_issue_text(str(exc)))
-        settled, descriptor = _unavailable_answer(answer, issue)
-        return PublicationPlan(answer=settled, descriptors=descriptor, issues=(issue,))
+        bindings: dict[str, str] = {}
+        descriptors: list[Mapping[str, object]] = []
+        for reference in markdown_references(answer):
+            if (
+                classify_target(reference.target, image=reference.image)
+                not in {"artifact", "unsupported"}
+                or reference.target in bindings
+            ):
+                continue
+            resource_id = _invalid_reference_id(reference.target, parent=None)
+            bindings[reference.target] = resource_id
+            descriptors.append(_unavailable_descriptor(resource_id, reference.label, issue))
+        return PublicationPlan(
+            answer=answer,
+            artifact_bindings=bindings,
+            descriptors=tuple(descriptors),
+            issues=(issue,),
+        )
 
-    labels = {relative: attachment.label for relative, attachment in attached.items()}
-    answer_references: list[tuple[str, str]] = []
-    for raw, label, _image in _references(answer, html=False):
-        try:
-            normalized = _normalize_reference(raw, parent=None)
-        except ValueError:
-            invalid_references.setdefault(
-                (None, raw),
-                (
-                    label,
-                    ArtifactIssue(
-                        "invalid_reference", "An Artifact reference is not a safe relative path."
+    paths_by_id.update({artifact_resource_id(path): path for path in files})
+    labels = {path: attachment.label for path, attachment in attached.items()}
+    reference_paths: dict[str | None, dict[str, str]] = {}
+
+    def collect_references(text: str, *, parent: str | None, html: bool = False) -> list[str]:
+        references = html_references(text) if html else markdown_references(text)
+        children: list[str] = []
+        targets = reference_paths.setdefault(parent, {})
+        for reference in references:
+            kind = classify_target(reference.target, image=reference.image)
+            if kind == "unsupported" and not html:
+                invalid_references.setdefault(
+                    (parent, reference.target),
+                    (
+                        reference.label,
+                        ArtifactIssue(
+                            "invalid_reference",
+                            f"Link {reference.target!r} cannot be opened by the user. "
+                            "Use an external HTTP(S) link, or call attach_artifact for the "
+                            "completed file and use its returned artifact: URI.",
+                        ),
                     ),
-                ),
-            )
-            continue
-        if label:
-            labels[normalized] = label
-        answer_references.append((normalized, label))
+                )
+                continue
+            if kind != "artifact":
+                continue
+            try:
+                relative = _reference_path(reference.target, parent=parent, paths_by_id=paths_by_id)
+            except ValueError:
+                invalid_references.setdefault(
+                    (parent, reference.target),
+                    (
+                        reference.label,
+                        ArtifactIssue(
+                            "invalid_reference",
+                            "An Artifact reference is not a safe relative path.",
+                        ),
+                    ),
+                )
+                continue
+            targets[reference.target] = relative
+            labels.setdefault(relative, reference.label)
+            if relative not in children:
+                children.append(relative)
+        return children
 
+    collect_references(answer, parent=None)
     discovery: deque[str] = deque(roots)
     candidates: dict[str, StagedArtifact] = {}
     graph: dict[str, list[str]] = {}
     issues_by_path: dict[str, ArtifactIssue] = {}
+    artifact_sources: dict[str, list[SourceReference]] = {}
     while discovery:
         relative = discovery.popleft()
         if relative in candidates or relative in issues_by_path:
@@ -423,30 +480,43 @@ def validate_publication(
                 f"Attached Artifact {staged.filename} changed and must be attached again.",
             )
             continue
+        if staged.media_type == "text/markdown":
+            try:
+                original = staged.content.decode("utf-8")
+                cleaned = finalize_answer(original, contexts or {})
+                prepared = link_public_citations(cleaned.answer, cleaned.sources)
+                if _resource_references(original) != _resource_references(prepared):
+                    raise ArtifactValidationError(
+                        "invalid_reference",
+                        f"Citation preparation changed resource links in Artifact {staged.filename}. "
+                        "Use the stable artifact: URI returned by attach_artifact, percent-encode "
+                        "brackets in filenames, or use nonnumeric Markdown reference labels.",
+                    )
+                content = prepared.encode("utf-8")
+                if len(content) > limits.max_file_bytes:
+                    raise ArtifactValidationError(
+                        "file_too_large",
+                        f"Artifact {staged.filename} exceeds {limits.max_file_bytes} bytes after citation preparation.",
+                    )
+            except ArtifactValidationError as exc:
+                issues_by_path[relative] = ArtifactIssue(exc.kind, exc.description)
+                continue
+            artifact_sources[staged.resource_id] = list(cleaned.sources)
+            staged = replace(
+                staged,
+                content=content,
+                size_bytes=len(content),
+                digest=hashlib.sha256(content).hexdigest(),
+            )
         candidates[relative] = staged
         if staged.media_type in {"text/markdown", "text/html"}:
-            text = staged.content.decode("utf-8")
-            children: list[str] = []
-            for path, label, _image in _references(text, html=staged.media_type == "text/html"):
-                try:
-                    child = _normalize_reference(path, parent=relative)
-                except ValueError:
-                    invalid_references.setdefault(
-                        (relative, path),
-                        (
-                            label,
-                            ArtifactIssue(
-                                "invalid_reference",
-                                "An Artifact reference is not a safe relative path.",
-                            ),
-                        ),
-                    )
-                    continue
-                labels.setdefault(child, label)
-                if child not in children:
-                    children.append(child)
-                    discovery.append(child)
+            children = collect_references(
+                staged.content.decode("utf-8"),
+                parent=relative,
+                html=staged.media_type == "text/html",
+            )
             graph[relative] = children
+            discovery.extend(children)
 
     for relative in _cycle_nodes(graph):
         issues_by_path[relative] = ArtifactIssue(
@@ -478,106 +548,73 @@ def validate_publication(
         total += staged.size_bytes
         pending.extend(graph.get(relative, ()))
 
-    authorized = set(candidates) | set(issues_by_path)
-    for relative, _label in answer_references:
-        if relative not in authorized:
-            issues_by_path.setdefault(
-                relative,
-                ArtifactIssue(
+    # Every visible reference needs a disposition, including a dependency whose
+    # root was rejected before the dependency could enter the admitted closure.
+    visible_scopes = {None, *admitted}
+    for parent, targets in reference_paths.items():
+        if parent not in visible_scopes:
+            continue
+        for relative in targets.values():
+            if relative not in admitted and relative not in issues_by_path:
+                issues_by_path[relative] = ArtifactIssue(
                     "unattached_reference",
-                    f"Artifact {Path(relative).name or 'file'} was not attached.",
-                ),
-            )
+                    f"Artifact {Path(relative).name or 'file'} is not in the published attachment closure.",
+                )
 
     invalid_references = {
-        key: value
-        for key, value in invalid_references.items()
-        if key[0] is None or key[0] in admitted
+        key: value for key, value in invalid_references.items() if key[0] in visible_scopes
     }
-    invalid_resources: dict[str | None, dict[str, str]] = {}
-    for parent, raw in invalid_references:
-        invalid_resources.setdefault(parent, {})[raw] = _invalid_reference_id(raw, parent=parent)
+    resource_ids = {relative: item.resource_id for relative, item in admitted.items()}
+    resource_ids.update({relative: _unavailable_id(relative) for relative in issues_by_path})
+    bindings_by_scope: dict[str | None, dict[str, str]] = {
+        parent: {
+            target: resource_ids[path] for target, path in targets.items() if path in resource_ids
+        }
+        for parent, targets in reference_paths.items()
+        if parent in visible_scopes
+    }
+    for parent, target in invalid_references:
+        bindings_by_scope.setdefault(parent, {})[target] = _invalid_reference_id(
+            target, parent=parent
+        )
 
-    path_to_resource = {relative: item.resource_id for relative, item in admitted.items()}
-    unavailable_ids: dict[str, str] = {
-        relative: _unavailable_id(relative) for relative in issues_by_path
-    }
-    answer_settled = _rewrite_references(
-        answer,
-        resources={**path_to_resource, **unavailable_ids},
-        invalid_resources=invalid_resources.get(None, {}),
-        parent=None,
-        html=False,
+    settled_artifacts = tuple(
+        replace(item, artifact_bindings=bindings_by_scope.get(relative, {}))
+        for relative, item in admitted.items()
     )
-    settled_artifacts: list[StagedArtifact] = []
-    for relative, staged in admitted.items():
-        content = staged.content
-        if staged.media_type in {"text/markdown", "text/html"}:
-            content = _rewrite_references(
-                content.decode("utf-8"),
-                resources={**path_to_resource, **unavailable_ids},
-                invalid_resources=invalid_resources.get(relative, {}),
-                parent=relative,
-                html=staged.media_type == "text/html",
-            ).encode("utf-8")
-            staged = replace(
-                staged,
-                content=content,
-                size_bytes=len(content),
-                digest=hashlib.sha256(content).hexdigest(),
-            )
-        settled_artifacts.append(staged)
-
-    descriptors: list[Mapping[str, object]] = [
+    descriptors = [
         item.descriptor(label=labels.get(item.relative_path, "")) for item in settled_artifacts
     ]
     issues: list[ArtifactIssue] = []
     for relative, issue in issues_by_path.items():
-        resource_id = unavailable_ids[relative]
+        resource_id = resource_ids[relative]
         issue = replace(issue, resource_id=resource_id)
         issues.append(issue)
         descriptors.append(
-            {
-                "resource_id": resource_id,
-                "media_type": "application/octet-stream",
-                "label": labels.get(relative) or Path(relative).name or "Unavailable Artifact",
-                "filename": _safe_filename(relative),
-                "byte_size": 0,
-                "digest": "",
-                "presentation": "download",
-                "status": "unavailable",
-                "issue": issue.as_dict(),
-            }
+            _unavailable_descriptor(
+                resource_id,
+                labels.get(relative) or Path(relative).name,
+                issue,
+                filename=_safe_filename(relative),
+            )
         )
-    for (parent, raw), (label, issue) in invalid_references.items():
-        resource_id = invalid_resources[parent][raw]
-        safe_issue = replace(issue, resource_id=resource_id)
-        issues.append(safe_issue)
-        descriptors.append(
-            {
-                "resource_id": resource_id,
-                "media_type": "application/octet-stream",
-                "label": label or "Unavailable Artifact",
-                "filename": "artifact",
-                "byte_size": 0,
-                "digest": "",
-                "presentation": "download",
-                "status": "unavailable",
-                "issue": safe_issue.as_dict(),
-            }
-        )
-        if parent is None and raw in workspace_targets:
-            # Workspace URLs are not part of the Artifact placement grammar.
-            # Place their failure explicitly if the one correction pass fails,
-            # without rewriting matching paths in code examples or other prose.
-            failure_link = f"[{_escape_artifact_label(label)}](artifact:{resource_id})"
-            answer_settled = f"{answer_settled.rstrip()}\n\n{failure_link}"
+    for (parent, target), (label, issue) in invalid_references.items():
+        resource_id = bindings_by_scope[parent][target]
+        issue = replace(issue, resource_id=resource_id)
+        issues.append(issue)
+        descriptors.append(_unavailable_descriptor(resource_id, label, issue))
 
     return PublicationPlan(
-        answer=answer_settled,
-        artifacts=tuple(settled_artifacts),
+        answer=answer,
+        artifact_bindings=bindings_by_scope.get(None, {}),
+        artifacts=settled_artifacts,
         descriptors=tuple(descriptors),
         issues=tuple(_dedupe_issues(issues)),
+        artifact_sources={
+            item.resource_id: artifact_sources[item.resource_id]
+            for item in settled_artifacts
+            if item.resource_id in artifact_sources
+        },
     )
 
 
@@ -775,7 +812,7 @@ def _sanitize_svg(content: bytes) -> bytes:
 def artifact_link(attachment: ArtifactAttachment) -> str:
     """Return the canonical model-facing placement syntax for one attachment."""
     label = _escape_artifact_label(attachment.label)
-    uri = quote(attachment.relative_path, safe="/")
+    uri = artifact_resource_id(attachment.relative_path)
     prefix = "!" if attachment.presentation == "image" else ""
     # A video is deliberately not prefixed here. Inline playback is the Answer's
     # own placement; the framework's trailing affordance for a root the Answer
@@ -788,37 +825,32 @@ def _escape_artifact_label(label: str) -> str:
     return label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
 
-def _append_artifact_affordance(answer: str, attachment: ArtifactAttachment) -> str:
-    separator = "\n\n" if answer.strip() else ""
-    return f"{answer.rstrip()}{separator}{artifact_link(attachment)}"
+def _append_artifact_affordances(answer: str, attachments: Sequence[ArtifactAttachment]) -> str:
+    affordances = "\n\n".join(artifact_link(attachment) for attachment in attachments)
+    separator = "\n\n" if answer else ""
+    appended = f"{answer}{separator}{affordances}"
+    targets = {reference.target for reference in markdown_references(appended)}
+    expected = {f"artifact:{artifact_resource_id(item.relative_path)}" for item in attachments}
+    if expected <= targets:
+        return appended
+    # An unfinished fence or another enclosing construct can swallow a trailing
+    # link. Keep the original source intact and place automatic roots before it.
+    return f"{affordances}{separator}{answer}"
 
 
-def _references(text: str, *, html: bool) -> list[tuple[str, str, bool]]:
-    values: list[tuple[str, str, bool]] = []
-    pattern = _HTML_ARTIFACT_TARGET if html else _ARTIFACT_TARGET
-    for match in pattern.finditer(text):
-        raw = match.group("path")
-        prefix = match.group("prefix")
-        label = ""
-        if not html:
-            label_match = re.search(r"!?\[([^\]]*)\]", prefix)
-            label = label_match.group(1) if label_match else ""
-        values.append((raw, label.strip(), prefix.startswith("!")))
-    return values
+def _reference_path(target: str, *, parent: str | None, paths_by_id: Mapping[str, str]) -> str:
+    raw = target.partition(":")[2]
+    if raw in paths_by_id:
+        return paths_by_id[raw]
+    return _normalize_reference(raw, parent=parent)
 
 
-def _workspace_link_targets(answer: str) -> list[str]:
-    targets: dict[str, None] = {}
-    for block in _ANSWER_MARKDOWN.parse(answer):
-        if block.type != "inline":
-            continue
-        for token in block.children or ():
-            if token.type not in {"link_open", "image"}:
-                continue
-            target = str(token.attrGet("href" if token.type == "link_open" else "src") or "")
-            if unquote(target).removeprefix("./").startswith("artifacts/"):
-                targets.setdefault(target, None)
-    return list(targets)
+def _resource_references(text: str) -> Counter[tuple[str, bool]]:
+    return Counter(
+        (reference.target, reference.image)
+        for reference in markdown_references(text)
+        if classify_target(reference.target, image=reference.image) in {"artifact", "evidence"}
+    )
 
 
 def _normalize_reference(raw: str, *, parent: str | None) -> str:
@@ -831,31 +863,6 @@ def _normalize_reference(raw: str, *, parent: str | None) -> str:
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError("Artifact URI must stay beneath the Artifact root")
     return path.as_posix()
-
-
-def _rewrite_references(
-    text: str,
-    *,
-    resources: Mapping[str, str],
-    invalid_resources: Mapping[str, str],
-    parent: str | None,
-    html: bool,
-) -> str:
-    pattern = _HTML_ARTIFACT_TARGET if html else _ARTIFACT_TARGET
-
-    def replace_target(match: re.Match[str]) -> str:
-        raw = match.group("path")
-        try:
-            normalized = _normalize_reference(raw, parent=parent)
-        except ValueError:
-            resource = invalid_resources.get(raw)
-        else:
-            resource = resources.get(normalized)
-        if resource is None:
-            return match.group(0)
-        return f"{match.group('prefix')}{resource}{match.group('suffix')}"
-
-    return pattern.sub(replace_target, text)
 
 
 def _cycle_nodes(graph: Mapping[str, Sequence[str]]) -> set[str]:
@@ -919,28 +926,21 @@ def _safe_issue_text(value: str) -> str:
     return "The Artifact root contains an unsafe or unreadable entry."
 
 
-def _unavailable_answer(
-    answer: str, issue: ArtifactIssue
-) -> tuple[str, tuple[Mapping[str, object], ...]]:
-    descriptors: list[Mapping[str, object]] = []
-    settled = answer
-    for raw, label, _image in _references(answer, html=False):
-        resource_id = _unavailable_id(raw)
-        settled = settled.replace(f"artifact:{raw}", f"artifact:{resource_id}")
-        descriptors.append(
-            {
-                "resource_id": resource_id,
-                "media_type": "application/octet-stream",
-                "label": label or "Unavailable Artifact",
-                "filename": "artifact",
-                "byte_size": 0,
-                "digest": "",
-                "presentation": "download",
-                "status": "unavailable",
-                "issue": replace(issue, resource_id=resource_id).as_dict(),
-            }
-        )
-    return settled, tuple(descriptors)
+def _unavailable_descriptor(
+    resource_id: str, label: str, issue: ArtifactIssue, *, filename: str = "artifact"
+) -> Mapping[str, object]:
+    return {
+        "resource_id": resource_id,
+        "media_type": "application/octet-stream",
+        "label": label or "Unavailable Artifact",
+        "filename": filename,
+        "byte_size": 0,
+        "digest": "",
+        "presentation": "download",
+        "status": "unavailable",
+        "issue": replace(issue, resource_id=resource_id).as_dict(),
+        "artifact_bindings": {},
+    }
 
 
 def _dedupe_issues(issues: Sequence[ArtifactIssue]) -> list[ArtifactIssue]:

@@ -49,6 +49,7 @@ from dlightrag.engine.answer.execution.executor import (
     _child_lifecycle_for_plan,
     _close_execution_resources,
     _memory_recall_allowed,
+    _publication_plan,
     _stage_publications,
 )
 from dlightrag.engine.answer.execution.input import (
@@ -62,7 +63,10 @@ from dlightrag.engine.answer.execution.input import (
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
-from dlightrag.engine.answer.publication import prepare_artifact_attachment, validate_publication
+from dlightrag.engine.answer.publication import (
+    PublicationLimits,
+    prepare_artifact_attachment,
+)
 from dlightrag.engine.answer.resources import ResourceInput
 from dlightrag.engine.dependencies import ProviderUnavailableError
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved, RunSession
@@ -249,14 +253,6 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
     root.mkdir()
     (root / "analysis.md").write_text("Primary fact [1-1].", encoding="utf-8")
     (root / "appendix.md").write_text("Appendix fact [2-1].", encoding="utf-8")
-    plan = validate_publication(
-        root,
-        answer=("[Open analysis](artifact:analysis.md) [Open appendix](artifact:appendix.md)"),
-        attachments=(
-            prepare_artifact_attachment(root, path="analysis.md"),
-            prepare_artifact_attachment(root, path="appendix.md"),
-        ),
-    )
     contexts = {
         "chunks": [
             {
@@ -288,10 +284,20 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
         ]
     }
 
+    plan = _publication_plan(
+        root,
+        answer=("[Open analysis](artifact:analysis.md) [Open appendix](artifact:appendix.md)"),
+        attachments=(
+            prepare_artifact_attachment(root, path="analysis.md"),
+            prepare_artifact_attachment(root, path="appendix.md"),
+        ),
+        limits=PublicationLimits(),
+        contexts=contexts,
+    )
+
     publications, descriptors, artifact_sources = _stage_publications(
         plan=plan,
         answer=plan.answer,
-        contexts=contexts,
         session_id="01930000-0000-7000-8000-000000000001",
     )
 
@@ -1109,11 +1115,6 @@ def test_public_document_citations_are_projected_into_the_published_artifact(
         "Web fact [1]. Local fact [2]. Web excerpt [1-1]. Local excerpt [2-1].",
         encoding="utf-8",
     )
-    plan = validate_publication(
-        root,
-        answer="[Open report](artifact:report.md)",
-        attachments=(prepare_artifact_attachment(root, path="report.md"),),
-    )
     contexts = {
         "chunks": [
             {
@@ -1144,10 +1145,17 @@ def test_public_document_citations_are_projected_into_the_published_artifact(
         ]
     }
 
+    plan = _publication_plan(
+        root,
+        answer="[Open report](artifact:report.md)",
+        attachments=(prepare_artifact_attachment(root, path="report.md"),),
+        limits=PublicationLimits(),
+        contexts=contexts,
+    )
+
     publications, descriptors, _ = _stage_publications(
         plan=plan,
         answer=plan.answer,
-        contexts=contexts,
         session_id="01930000-0000-7000-8000-000000000001",
     )
 
@@ -2062,3 +2070,149 @@ def test_the_reserved_recall_block_mirrors_the_gates_that_allow_recall() -> None
     assert _worst_case_recall_block({"auth_mode": "jwt", "profile_memory_enabled": False}) == ""
     # A shared simple-auth caller owns no memory, so nothing is reserved for it.
     assert _worst_case_recall_block({"auth_mode": "simple"}) == ""
+
+
+@pytest.mark.parametrize(
+    ("original", "corrected", "filename"),
+    [
+        (
+            "[download](artifact:data[9].txt)",
+            "[download](artifact:data%5B9%5D.txt)",
+            "data[9].txt",
+        ),
+        (
+            "[download][9]\n\n[9]: artifact:data.txt",
+            "[download][data]\n\n[data]: artifact:data.txt",
+            "data.txt",
+        ),
+    ],
+)
+def test_citation_preparation_rejects_changed_resource_links_before_staging(
+    tmp_path: Path, original: str, corrected: str, filename: str
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    report = root / "report.md"
+    report.write_text(original)
+    (root / filename).write_text("data")
+
+    rejected = _publication_plan(
+        root,
+        answer="Report generated. [Report](artifact:report.md)",
+        attachments=(prepare_artifact_attachment(root, path="report.md"),),
+        contexts={},
+        limits=PublicationLimits(),
+    )
+    publications, descriptors, sources = _stage_publications(
+        plan=rejected, answer=rejected.answer, session_id="session"
+    )
+
+    assert rejected.outcome["status"] == "failed"
+    assert rejected.issues[0].kind == "invalid_reference"
+    assert "Citation preparation changed resource links" in rejected.correction_feedback()
+    assert publications == []
+    assert descriptors[0]["status"] == "unavailable"
+    assert sources == {}
+    assert report.read_text() == original
+
+    # An explicit correction produces one coherent plan: the bytes, discovered
+    # dependency and binding all describe the same final Markdown document.
+    report.write_text(corrected)
+    accepted = _publication_plan(
+        root,
+        answer="Report generated. [Report](artifact:report.md)",
+        attachments=(prepare_artifact_attachment(root, path="report.md"),),
+        contexts={},
+        limits=PublicationLimits(),
+    )
+    publications, descriptors, _ = _stage_publications(
+        plan=accepted, answer=accepted.answer, session_id="session"
+    )
+    assert accepted.outcome["status"] == "complete"
+    assert [item.relative_path for item in accepted.artifacts] == ["report.md", filename]
+    assert publications[0].content == corrected.encode()
+    assert list(accepted.artifacts[0].artifact_bindings.values()) == [publications[1].resource_id]
+    assert descriptors[0]["digest"] == artifact_digest(publications[0].content)
+
+
+def _public_artifact_context() -> dict[str, Any]:
+    return {
+        "chunks": [
+            {
+                "chunk_id": "public-fact",
+                "reference_id": "1",
+                "file_path": "Source",
+                "content": "Fact.",
+                "_workspace": "__web_search__",
+                "metadata": {
+                    "source_uri": "https://example.com/source",
+                    "source_download_locator": "https://example.com/source",
+                },
+            }
+        ]
+    }
+
+
+def test_citation_preparation_precedes_binding_and_staging_uses_validated_bytes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    original = "Fact [1]. [Data](artifact:data.txt)"
+    (root / "report.md").write_text(original)
+    (root / "data.txt").write_text("data")
+    attachment = prepare_artifact_attachment(root, path="report.md")
+
+    plan = _publication_plan(
+        root,
+        answer="[Report](artifact:report.md)",
+        attachments=(attachment,),
+        contexts=_public_artifact_context(),
+        limits=PublicationLimits(),
+    )
+    publications, descriptors, sources = _stage_publications(
+        plan=plan, answer=plan.answer, session_id="session"
+    )
+
+    assert plan.outcome["status"] == "complete"
+    report = plan.artifacts[0]
+    assert report.source_digest == attachment.content_digest == artifact_digest(original.encode())
+    assert report.content == publications[0].content
+    assert b"[1](<https://example.com/source>" in report.content
+    assert b"[Data](artifact:data.txt)" in report.content
+    assert report.artifact_bindings == {"artifact:data.txt": publications[1].resource_id}
+    assert descriptors[0]["byte_size"] == len(report.content)
+    assert descriptors[0]["digest"] == artifact_digest(report.content)
+    assert [source.id for source in sources[report.resource_id]] == ["1"]
+
+
+@pytest.mark.parametrize(
+    ("limits", "issue"),
+    [
+        (PublicationLimits(max_file_bytes=10), "file_too_large"),
+        (PublicationLimits(max_total_bytes=10), "answer_too_large"),
+    ],
+)
+def test_publication_budgets_include_projected_citation_bytes(
+    tmp_path: Path, limits: PublicationLimits, issue: str
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.md").write_text("Fact [1].")
+
+    plan = _publication_plan(
+        root,
+        answer="Report generated. [Report](artifact:report.md)",
+        attachments=(prepare_artifact_attachment(root, path="report.md"),),
+        contexts=_public_artifact_context(),
+        limits=limits,
+    )
+    publications, descriptors, sources = _stage_publications(
+        plan=plan, answer=plan.answer, session_id="session"
+    )
+
+    assert plan.outcome["status"] == "failed"
+    assert plan.issues[0].kind == issue
+    assert publications == []
+    assert descriptors[0]["status"] == "unavailable"
+    assert sources == {}

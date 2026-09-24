@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Chromium coverage for Artifact Canvas and the opaque active HTML boundary."""
 
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -136,6 +137,41 @@ def _open_ready_page(page: Page) -> None:
     ):
         page.goto(f"/web/conversations/{_CONVERSATION_ID}")
     page.wait_for_selector(".composer-input", timeout=10000)
+
+
+def test_unpublished_link_becomes_one_unavailable_card_in_place(page: Page, tmp_path: Path) -> None:
+    from dlightrag.adapters.http.browser.answer_events import render_done_event
+    from dlightrag.engine.answer.publication import validate_publication
+
+    answer = "Before [Report][r] after.\n\n`[Example](./report.html)`\n\n[r]: ./report.html"
+    plan = validate_publication(tmp_path / "artifacts", answer=answer)
+    done = render_done_event(
+        {
+            "result": {
+                "answer": plan.answer,
+                "artifacts": list(plan.descriptors),
+                "artifact_bindings": dict(plan.artifact_bindings),
+                "artifact_outcome": plan.outcome,
+            }
+        },
+        downloadable_workspaces=None,
+        visual_workspaces=None,
+        run_id=_RUN_ID,
+    )
+    assert done.presentation is not None
+    _install_history(page, done.presentation.model_dump())
+    _open_ready_page(page)
+
+    card = page.locator(".answer-artifact-unavailable")
+    expect(card).to_have_count(1)
+    expect(card).to_be_visible()
+    expect(card).to_contain_text("Report")
+    expect(page.locator("code").filter(has_text="[Example](./report.html)")).to_have_count(1)
+    expect(page.locator('a[href="./report.html"]')).to_have_count(0)
+    assert card.evaluate(
+        "el => el.parentElement.parentElement.textContent.includes('Before ') && "
+        "el.parentElement.parentElement.textContent.includes(' after.')"
+    )
 
 
 def test_markdown_artifact_uses_the_general_artifact_canvas(page: Page) -> None:

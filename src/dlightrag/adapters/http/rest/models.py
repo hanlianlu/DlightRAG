@@ -144,6 +144,7 @@ class AnswerArtifactResponse(ClientContractModel):
     download_url: str | None = None
     presentation_url: str | None = None
     issue: ArtifactIssueResponse | None = None
+    artifact_bindings: dict[str, str] = Field(default_factory=dict)
 
 
 class EvidenceImageResponse(ClientContractModel):
@@ -167,12 +168,16 @@ class LinkCardResponse(ClientContractModel):
 
 
 class AnswerPartResponse(ClientContractModel):
+    """Whole Markdown followed by resource placements, identified by target and slot."""
+
     type: Literal["markdown", "artifact", "evidence_image", "link_card"]
     text: str = ""
     artifact: AnswerArtifactResponse | None = None
     evidence_image: EvidenceImageResponse | None = None
     card: LinkCardResponse | None = None
     inline: bool = False
+    target: str = ""
+    slot: int | None = Field(default=None, ge=0)
 
 
 class AnswerResponse(RetrievalResponse):
@@ -183,6 +188,7 @@ class AnswerResponse(RetrievalResponse):
     link_cards: list[LinkCardResponse] = Field(default_factory=list)
     artifacts: list[AnswerArtifactResponse] = Field(default_factory=list)
     artifact_outcome: ArtifactOutcomeResponse = Field(default_factory=ArtifactOutcomeResponse)
+    artifact_bindings: dict[str, str] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     evidence: dict[str, Any] = Field(default_factory=dict)
 

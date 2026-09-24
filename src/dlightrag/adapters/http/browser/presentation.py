@@ -10,6 +10,7 @@ import nh3
 from pydantic import Field
 
 from dlightrag.adapters.http.browser.markdown import (
+    LinkedImagePlacement,
     inject_highlights,
     normalize_chunk_source,
     render_chunk_content,
@@ -25,6 +26,7 @@ from dlightrag.engine.answer.citations.contracts import (
     SourceReferencePayload,
 )
 from dlightrag.engine.answer.client_contracts import ClientContractModel
+from dlightrag.engine.answer.reference import resolve_artifact_target
 
 _CHUNK_ALLOWED_TAGS = {
     "table",
@@ -224,6 +226,7 @@ def render_answer_html(
     *,
     known_sources: Mapping[str, str],
     place_resource: Callable[[str, str, bool], str | None] | None = None,
+    place_linked_image: Callable[[str, str], LinkedImagePlacement | None] | None = None,
     citation_links: Mapping[str, str] | None = None,
 ) -> str:
     """Render one Markdown segment with semantic citation controls.
@@ -233,7 +236,12 @@ def render_answer_html(
     the click cannot open. A badge carries its source title as a tooltip, which is
     the only source name a private corpus document has in the interface.
     """
-    html = render_markdown(answer, place_resource=place_resource, citation_links=citation_links)
+    html = render_markdown(
+        answer,
+        place_resource=place_resource,
+        place_linked_image=place_linked_image,
+        citation_links=citation_links,
+    )
     html, protected = _protect_code_blocks(html)
     html = _protect_links(html, protected)
 
@@ -310,11 +318,16 @@ def build_answer_presentation(
     evidence_images: list[dict[str, Any]],
     artifacts: list[dict[str, Any]] | None = None,
     artifact_outcome: dict[str, Any] | None = None,
+    artifact_bindings: Mapping[str, str] | None = None,
     image_rewrites: Mapping[str, str] | None = None,
     link_cards: list[dict[str, Any]] | None = None,
 ) -> AnswerPresentation:
     """Build the bounded Web projection used identically by SSE and history."""
-    artifact_values = artifacts or []
+    # Document bindings are consumed by this adapter, not by the browser widget.
+    artifact_values = [
+        {key: value for key, value in item.items() if key != "artifact_bindings"}
+        for item in artifacts or []
+    ]
     image_values = evidence_images
     card_values = link_cards or []
     # Validate the sources once: they are both the payload this surface publishes
@@ -328,13 +341,15 @@ def build_answer_presentation(
     images_by_id = {str(item.get("id") or ""): item for item in image_values}
     placements: list[PresentationPart] = []
     video_links: dict[str, VideoPlaybackLink] = {}
+    linked_evidence_ids: set[str] = set()
 
     def place_resource(href: str, label: str, image: bool) -> str | None:
         if not image and (video := video_playback_link(href)) is not None:
             video_links[video.url] = video
-        scheme, _, resource = href.partition(":")
+        scheme, _, evidence_resource = href.partition(":")
+        resource = resolve_artifact_target(href, artifact_bindings or {})
         slot = len(placements)
-        if scheme.lower() == "artifact" and resource in artifacts_by_id:
+        if resource in artifacts_by_id:
             item = artifacts_by_id[resource]
             placements.append(
                 PresentationPart(
@@ -346,8 +361,8 @@ def build_answer_presentation(
                     slot=slot,
                 )
             )
-        elif scheme.lower() == "evidence" and image and resource in images_by_id:
-            item = images_by_id[resource]
+        elif scheme.lower() == "evidence" and image and evidence_resource in images_by_id:
+            item = images_by_id[evidence_resource]
             placements.append(
                 PresentationPart(
                     type="evidence_image",
@@ -362,12 +377,36 @@ def build_answer_presentation(
             return None
         return f'<span class="answer-resource-slot-{slot}"></span>'
 
+    def place_linked_image(href: str, label: str) -> LinkedImagePlacement | None:
+        resource = resolve_artifact_target(href, artifact_bindings or {})
+        item = artifacts_by_id.get(resource or "")
+        if item is not None:
+            if (
+                item.get("status") == "available"
+                and item.get("presentation") == "image"
+                and item.get("data_url")
+            ):
+                return LinkedImagePlacement(image_url=str(item["data_url"]))
+            # Failed resources and non-image Artifacts remain actionable in a
+            # normal slot. Replace the containing anchor to avoid nesting its
+            # controls, and do not pretend a PDF/video is a passive image.
+            return LinkedImagePlacement(replacement_html=place_resource(href, label, False))
+        scheme, _, evidence_resource = href.partition(":")
+        if scheme.lower() == "evidence" and evidence_resource in images_by_id:
+            image = images_by_id[evidence_resource]
+            source = image.get("url") or image.get("thumbnail_url")
+            if source:
+                linked_evidence_ids.add(evidence_resource)
+                return LinkedImagePlacement(image_url=str(source))
+        return None
+
     # Parse the whole answer exactly once. Splitting around resource-looking
     # source text first could turn code or a title into a new link on reparse.
     rendered = render_answer_html(
         answer,
         known_sources=known_sources,
         place_resource=place_resource,
+        place_linked_image=place_linked_image,
         citation_links=citation_links,
     )
     parts = [
@@ -378,7 +417,7 @@ def build_answer_presentation(
         ),
         *placements,
     ]
-    inline_evidence = {
+    inline_evidence = linked_evidence_ids | {
         part.evidence_image.id
         for part in parts
         if part.type == "evidence_image" and part.evidence_image is not None

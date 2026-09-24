@@ -314,6 +314,7 @@ async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
         "presentation": "markdown",
         "status": "available",
         "uri": f"dlightrag://answer/{_RUN_ID}/artifacts/artifact-report",
+        "artifact_bindings": {},
         "width": None,
         "height": None,
         "issue": None,
@@ -1054,7 +1055,8 @@ async def test_mcp_artifacts_use_stable_uris_without_browser_cookie_urls(
     assert artifact["uri"].startswith("dlightrag://answer/")
     assert artifact["data_url"] is None
     assert artifact["download_url"] is None
-    assert body["result"]["parts"][0]["artifact"]["resource_id"] == "artifact-1"
+    assert body["result"]["parts"][0]["text"] == stored["answer"]
+    assert body["result"]["parts"][1]["artifact"]["resource_id"] == "artifact-1"
 
 
 async def test_mcp_status_reports_a_failed_run_with_its_public_error(

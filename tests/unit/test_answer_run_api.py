@@ -973,6 +973,30 @@ async def test_markdown_presentation_returns_artifact_scoped_sources(
     assert body["sources"][0]["chunks"][0]["chunk_idx"] == 1
 
 
+async def test_markdown_presentation_returns_document_scoped_bindings(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    _publish_test_artifact(run_application)
+    assert run_application.record is not None and run_application.record.result is not None
+    result = dict(run_application.record.result)
+    target = "artifact:child.md"
+    result["artifacts"][0]["artifact_bindings"] = {target: "artifact-child"}
+    result["artifacts"].append({**result["artifacts"][0], "resource_id": "artifact-child"})
+    result["artifact_bindings"] = {target: _ARTIFACT_ID}
+    run_application.record = _record(status="succeeded", result=result)
+    markdown = "[Child][c]\n\n[c]: artifact:child.md"
+    run_application.artifact_bytes = markdown.encode()
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}/presentation")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == markdown
+    assert body["artifact_bindings"] == {target: "artifact-child"}
+    assert body["parts"][1]["artifact"]["resource_id"] == "artifact-child"
+    assert body["parts"][1]["target"] == target
+
+
 async def test_full_artifact_read_streams_without_a_range(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:

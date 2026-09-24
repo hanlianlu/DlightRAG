@@ -1960,10 +1960,14 @@ async def test_wait_subagent_wakes_on_ask_parent_and_parent_replies(
     assert "research" in purposes
 
 
+@pytest.mark.parametrize(
+    "final_answer", ["Report ready.", "[Report][r]\n\n[r]: artifact:report.html"]
+)
 async def test_workspace_link_correction_attaches_and_publishes_the_report(
     store: FingerprintingRunStore,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    final_answer: str,
 ) -> None:
     # The completed file is the state immediately before the real incident's
     # final answer. Publication and attachment settlement both remain real.
@@ -1980,7 +1984,7 @@ async def test_workspace_link_correction_attaches_and_publishes_the_report(
                 text="[Report](artifacts/report.html)", tool_calls=(), stop_reason="stop"
             )
         if model_calls == 2:
-            assert "Workspace link" in json.dumps(kwargs["messages"])
+            assert "cannot be opened" in json.dumps(kwargs["messages"])
             return AssistantTurn(
                 text="",
                 tool_calls=(
@@ -1994,7 +1998,7 @@ async def test_workspace_link_correction_attaches_and_publishes_the_report(
             )
         assert model_calls == 3
         assert "attached report.html" in json.dumps(kwargs["messages"])
-        return AssistantTurn(text="Report ready.", tool_calls=(), stop_reason="stop")
+        return AssistantTurn(text=final_answer, tool_calls=(), stop_reason="stop")
 
     orchestrator = AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
@@ -2037,7 +2041,24 @@ async def test_workspace_link_correction_attaches_and_publishes_the_report(
     artifact = run.result["artifacts"][0]
     assert artifact["filename"] == "report.html"
     assert artifact["status"] == "available"
-    assert artifact["resource_id"] in run.result["answer"]
+    if final_answer.startswith("[Report]"):
+        assert run.result["answer"] == final_answer
+        assert run.result["artifact_bindings"]["artifact:report.html"] == artifact["resource_id"]
+    else:
+        assert artifact["resource_id"] in run.result["answer"]
+    from dlightrag.adapters.http.browser.answer_events import render_done_event
+
+    presentation = render_done_event(
+        {"result": run.result},
+        downloadable_workspaces=None,
+        visual_workspaces=None,
+        run_id=run.run_id,
+    ).presentation
+    assert presentation is not None
+    placements = [part for part in presentation.parts if part.type == "artifact"]
+    assert len(placements) == 1
+    assert placements[0].artifact is not None
+    assert placements[0].artifact.resource_id == artifact["resource_id"]
     assert [item["purpose"] for item in run.result["trace"]["agent_operations"]] == [
         "research",
         "publication_correction",
@@ -2133,9 +2154,10 @@ async def test_publication_correction_is_one_linked_agent_operation(
         answer: str,
         attachments: Any,
         limits: Any,
+        contexts: Any,
     ) -> PublicationPlan:
         nonlocal publication_calls
-        del attachments, limits
+        del attachments, limits, contexts
         publication_calls += 1
         if publication_calls == 1:
             return PublicationPlan(

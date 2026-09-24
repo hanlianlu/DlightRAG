@@ -71,6 +71,7 @@ def render_done_event(
             link_cards=projected.get("link_cards") or [],
             artifacts=projected["artifacts"],
             artifact_outcome=projected["artifact_outcome"],
+            artifact_bindings=projected["artifact_bindings"],
             image_rewrites=image_rewrites,
         ),
     )

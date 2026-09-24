@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -20,18 +19,11 @@ from dlightrag.engine.answer.citations.sources import (
 )
 from dlightrag.engine.answer.citations.utils import context_chunk_key
 from dlightrag.engine.answer.links.cards import project_link_cards
+from dlightrag.engine.answer.reference import markdown_references, resolve_artifact_target
 from dlightrag.engine.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 IMAGE_URL_PREFIX = "/images"
-_ARTIFACT_PART = re.compile(
-    r"(?P<image>!)?\[(?P<label>[^\]]*)\]\(\s*<?artifact:(?P<resource>[^\s)>]+)>?(?:\s+[^)]*)?\)",
-    re.IGNORECASE,
-)
-_EVIDENCE_PART = re.compile(
-    r"!\[(?P<label>[^\]]*)\]\(\s*<?evidence:(?P<resource>[^\s)>]+)>?(?:\s+[^)]*)?\)",
-    re.IGNORECASE,
-)
 
 
 class Reference(BaseModel):
@@ -76,6 +68,7 @@ class AnswerArtifact:
     download_url: str | None = None
     presentation_url: str | None = None
     issue: AnswerArtifactIssue | None = None
+    artifact_bindings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +90,8 @@ class AnswerPart:
     evidence_image: EvidenceImage | None = None
     card: dict[str, Any] | None = None
     inline: bool = False
+    target: str = ""
+    slot: int | None = None
 
 
 @dataclass
@@ -111,6 +106,7 @@ class AnswerResult:
     evidence_images: list[EvidenceImage] = field(default_factory=list)
     artifacts: list[AnswerArtifact] = field(default_factory=list)
     artifact_outcome: ArtifactOutcome = field(default_factory=ArtifactOutcome)
+    artifact_bindings: dict[str, str] = field(default_factory=dict)
     trace: dict[str, Any] = field(default_factory=dict)
     image_descriptions: list[str] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
@@ -128,6 +124,7 @@ def store_answer_result(
     artifacts: Sequence[Mapping[str, Any]] = (),
     artifact_outcome: Mapping[str, Any] | None = None,
     artifact_sources: Mapping[str, Sequence[SourceReference]] | None = None,
+    artifact_bindings: Mapping[str, str] | None = None,
     link_cards: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Store one canonical Markdown Answer and transport-neutral identities."""
@@ -146,6 +143,7 @@ def store_answer_result(
         "image_descriptions": list(image_descriptions),
         "artifacts": [dict(item) for item in artifacts],
         "artifact_outcome": dict(artifact_outcome or {"status": "complete", "issues": []}),
+        "artifact_bindings": dict(artifact_bindings or {}),
         "artifact_sources": {
             str(resource_id): dump_answer_snapshot(list(source_values))["sources"]
             for resource_id, source_values in (artifact_sources or {}).items()
@@ -172,6 +170,7 @@ def restore_answer_result(stored: Mapping[str, Any]) -> AnswerResult:
         evidence_images=images,
         artifacts=artifacts,
         artifact_outcome=_outcome_model(projected["artifact_outcome"]),
+        artifact_bindings=dict(projected["artifact_bindings"]),
         trace=dict(projected["trace"]),
         image_descriptions=list(projected["image_descriptions"]),
         usage=dict(projected["usage"]),
@@ -219,6 +218,7 @@ def project_answer_result(
         if isinstance(item, Mapping)
     ]
     outcome = _public_outcome(stored.get("artifact_outcome"))
+    artifact_bindings = dict(stored.get("artifact_bindings") or {})
     link_cards = project_link_cards(stored.get("link_cards") or ())
     return {
         "answer": answer,
@@ -227,6 +227,7 @@ def project_answer_result(
             answer,
             artifacts=artifacts,
             evidence_images=images,
+            artifact_bindings=artifact_bindings,
         ),
         "contexts": project_contexts_for_client(
             dict(stored.get("contexts") or {}),
@@ -244,6 +245,7 @@ def project_answer_result(
         "image_descriptions": list(stored.get("image_descriptions") or ()),
         "artifacts": artifacts,
         "artifact_outcome": outcome,
+        "artifact_bindings": artifact_bindings,
     }
 
 
@@ -252,60 +254,41 @@ def answer_parts_from_markdown(
     *,
     artifacts: Sequence[Mapping[str, Any]],
     evidence_images: Sequence[Mapping[str, Any]],
+    artifact_bindings: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Place typed resources without slicing Markdown around external links.
+    """Keep whole Markdown plus ordered resource placements from its actual grammar.
 
-    Link cards travel as metadata. A renderer upgrades actual link occurrences;
-    no source offset or URL-key gate can authorize rewriting quoted text.
+    ``target`` identifies the parsed destination and ``slot`` the placement order.
+    Resources supplement the document; they are not additional trailing content.
+    A renderer replaces the corresponding token without reparsing source slices.
     """
     artifacts_by_id = {str(item.get("resource_id") or ""): dict(item) for item in artifacts}
     images_by_id = {str(item.get("id") or ""): dict(item) for item in evidence_images}
-    matches: list[tuple[int, int, str, Any]] = [
-        (match.start(), match.end(), "artifact", match) for match in _ARTIFACT_PART.finditer(answer)
-    ]
-    matches.extend(
-        (match.start(), match.end(), "evidence_image", match)
-        for match in _EVIDENCE_PART.finditer(answer)
-    )
-    matches.sort(key=lambda value: value[0])
-    result: list[dict[str, Any]] = []
-    cursor = 0
-    for start, end, kind, match in matches:
-        if start < cursor:
-            continue
-        if start > cursor:
-            result.append({"type": "markdown", "text": answer[cursor:start]})
-        resource = str(match.group("resource"))
-        label = str(match.group("label") or "")
-        if kind == "artifact":
-            artifact = artifacts_by_id.get(resource)
-            if artifact is None:
-                result.append({"type": "markdown", "text": match.group(0)})
-            else:
-                artifact = {**artifact, "label": label or artifact.get("label")}
-                result.append(
-                    {
-                        "type": "artifact",
-                        "artifact": artifact,
-                        "inline": bool(match.group("image")),
-                    }
-                )
+    result: list[dict[str, Any]] = [{"type": "markdown", "text": answer}] if answer else []
+    slot = 0
+    for reference in markdown_references(answer):
+        resource = resolve_artifact_target(reference.target, artifact_bindings or {})
+        artifact = artifacts_by_id.get(resource or "")
+        scheme, _, evidence_id = reference.target.partition(":")
+        image = images_by_id.get(evidence_id) if scheme.lower() == "evidence" else None
+        placement: dict[str, Any]
+        if artifact is not None:
+            placement = {
+                "type": "artifact",
+                "artifact": {**artifact, "label": reference.label or artifact.get("label")},
+                "inline": reference.image,
+            }
+        elif reference.image and image is not None:
+            placement = {
+                "type": "evidence_image",
+                "evidence_image": {**image, "label": reference.label or image.get("label")},
+                "inline": True,
+            }
         else:
-            image = images_by_id.get(resource)
-            if image is None:
-                result.append({"type": "markdown", "text": match.group(0)})
-            else:
-                result.append(
-                    {
-                        "type": "evidence_image",
-                        "evidence_image": {**image, "label": label or image.get("label")},
-                        "inline": True,
-                    }
-                )
-        cursor = end
-    if cursor < len(answer) or not result:
-        result.append({"type": "markdown", "text": answer[cursor:]})
-    return [part for part in result if part.get("type") != "markdown" or part.get("text")]
+            continue
+        result.append({**placement, "target": reference.target, "slot": slot})
+        slot += 1
+    return result
 
 
 def project_artifact_sources(
@@ -352,6 +335,7 @@ def _public_artifact(
         "width": item.get("width"),
         "height": item.get("height"),
         "issue": dict(issue) if isinstance(issue, Mapping) else None,
+        "artifact_bindings": dict(item.get("artifact_bindings") or {}),
     }
     if artifact_url_prefix is not None and run_id and value["status"] == "available":
         base = (
@@ -478,6 +462,7 @@ def _artifact_model(value: Mapping[str, Any]) -> AnswerArtifact:
             str(value["presentation_url"]) if value.get("presentation_url") else None
         ),
         issue=issue,
+        artifact_bindings=dict(value.get("artifact_bindings") or {}),
     )
 
 
@@ -512,6 +497,8 @@ def _part_models(values: Sequence[Mapping[str, Any]]) -> list[AnswerPart]:
                 ),
                 card=(dict(value["card"]) if isinstance(value.get("card"), Mapping) else None),
                 inline=bool(value.get("inline")),
+                target=str(value.get("target") or ""),
+                slot=int(value["slot"]) if value.get("slot") is not None else None,
             )
         )
     return result

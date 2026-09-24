@@ -37,13 +37,31 @@ finally:
 | `sources` | Document-level groups containing chunks, pages, and media routes. `/answer` returns only cited sources. |
 | `references` | Compact cited-document projection derived from validated inline citations. |
 | `evidence_images` | Cited visual evidence available for rendering. |
-| `parts` | Ordered Markdown, Artifact, and explicitly inline Evidence Image parts. |
+| `parts` | One complete Markdown document followed by its actual Artifact/Evidence Image placements. Each placement carries its parsed `target` and zero-based `slot`; these replace occurrences inside the document, not additional trailing content. |
+| `artifact_bindings` | Validated parsed destination → resource id bindings for this document. Available and unavailable resources share this resolution path. Each Artifact descriptor carries its own document's bindings. |
 | `usage` | Root, child, and inclusive provider usage when available. |
 | `evidence` | Counts of admitted chunks, entities, relationships, and cited sources. |
 A Resource handle a later turn may name includes a Published Artifact of the same Agent
 Session (`artifact-<hash of its path>`), because publication registers it as a Resource
 ([ADR 0023](adr/0023-a-published-product-is-a-resource.md)); the handle is what the
 attaching Tool returns and what the compaction summary keeps naming.
+
+Render the complete Markdown once and place resources at its actual link/image
+tokens. Do not concatenate `parts` as alternating source fragments or scan the
+source for resource-looking strings: code, math, link titles, and unused reference
+definitions are inert. Repeated resource occurrences have distinct slots. An
+`artifact:` stable id can also resolve directly against the returned descriptors;
+the binding map covers path references and explicitly unavailable targets. The
+map records terminal validation and grants no publication authority.
+
+Images inside link labels are actual references too; links quoted inside image
+alt text are not. The browser keeps a valid linked image passive inside its
+outer link. An unavailable image or a resource needing its own controls replaces
+the whole outer link with one resource placement, avoiding nested controls.
+
+The plain-text CLI prints the complete Markdown once, then a separately labelled
+Resources catalogue with each resource identity listed once. It does not attempt
+an interactive inline layout or concatenate placement metadata into the prose.
 
 | `parent_run_id`, `continuation_kind` | Follow-up/fork lineage. A Session-backed continuation injects no history; only a caller with no Agent Session branch point has its parent's accepted history injected. |
 

@@ -101,7 +101,6 @@ from dlightrag.engine.answer.capabilities import (
     RequestModelContext,
 )
 from dlightrag.engine.answer.citations.finalization import finalize_answer
-from dlightrag.engine.answer.citations.projection import link_public_citations
 from dlightrag.engine.answer.citations.sources import project_contexts_for_client
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
 from dlightrag.engine.answer.client_contracts import AnswerEffort
@@ -2304,6 +2303,7 @@ class AnswerExecutor:
                     answer=finalized.answer,
                     attachments=artifact_attachments,
                     limits=self._settings.publication,
+                    contexts=contexts,
                 )
                 finalized.answer = publication.answer
                 if (
@@ -2382,6 +2382,7 @@ class AnswerExecutor:
                         answer=finalized.answer,
                         attachments=artifact_attachments,
                         limits=self._settings.publication,
+                        contexts=contexts,
                     )
                     finalized.answer = publication.answer
                     correction_record["publication_outcome"] = publication.outcome
@@ -2458,7 +2459,6 @@ class AnswerExecutor:
                 publications, artifact_descriptors, artifact_sources = _stage_publications(
                     plan=publication,
                     answer=finalized.answer,
-                    contexts=contexts,
                     session_id=agent_session_id.value,
                 )
                 # Fast terminal settlement has no publication channel; Research
@@ -2476,6 +2476,7 @@ class AnswerExecutor:
                     image_descriptions=run.image_descriptions,
                     artifacts=artifact_descriptors,
                     artifact_outcome=publication.outcome,
+                    artifact_bindings=publication.artifact_bindings,
                     artifact_sources=artifact_sources,
                 )
                 if fast_boundaries is not None:
@@ -3283,6 +3284,7 @@ def _publication_plan(
     answer: str,
     attachments: Sequence[ArtifactAttachment],
     limits: PublicationLimits,
+    contexts: RetrievalContexts,
 ) -> PublicationPlan:
     if not isinstance(root, Path):
         return PublicationPlan(answer=answer)
@@ -3291,6 +3293,7 @@ def _publication_plan(
         answer=answer,
         attachments=attachments,
         limits=limits,
+        contexts=contexts,
     )
 
 
@@ -3298,39 +3301,28 @@ def _stage_publications(
     *,
     plan: PublicationPlan,
     answer: str,
-    contexts: RetrievalContexts,
     session_id: str,
 ) -> tuple[list[PendingPublication], list[dict[str, Any]], dict[str, list[Any]]]:
     """Stage one accepted answer's publications, or reject an answer-less run."""
     if is_empty_answer(answer=answer, has_artifacts=bool(plan.artifacts)):
         raise RunExecutionError("empty_answer", "The run produced no answer.")
     publications: list[PendingPublication] = []
-    artifact_sources: dict[str, list[Any]] = {}
+    artifact_sources = {
+        resource_id: list(sources) for resource_id, sources in plan.artifact_sources.items()
+    }
     descriptors = [dict(item) for item in plan.descriptors]
     labels = {
         str(descriptor.get("resource_id")): str(descriptor.get("label") or "")
         for descriptor in descriptors
     }
     for item in plan.artifacts:
-        payload = item.content
-        if item.media_type == "text/markdown":
-            cleaned = finalize_answer(payload.decode("utf-8"), contexts)
-            # A published file travels outside the app, where an internal marker
-            # cites nothing: project validated public citations onto their URL.
-            payload = link_public_citations(cleaned.answer, cleaned.sources).encode("utf-8")
-            artifact_sources[item.resource_id] = list(cleaned.sources)
-            for descriptor in descriptors:
-                if descriptor.get("resource_id") == item.resource_id:
-                    descriptor["byte_size"] = len(payload)
-                    descriptor["digest"] = artifact_digest(payload)
-                    break
         publications.append(
             PendingPublication(
                 resource_id=item.resource_id,
                 reference_kind="published_artifact",
                 filename=item.filename,
                 mime_type=item.media_type,
-                content=payload,
+                content=item.content,
                 session_id=session_id,
                 relative_path=item.relative_path,
                 presentation=item.presentation,

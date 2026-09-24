@@ -150,38 +150,40 @@ def _format_evidence_image(source_ref: str, label: str, url: str) -> str:
 
 
 def _render_answer_for_terminal(data: AnswerResult) -> str:
-    """Render typed Answer parts and the default Evidence Image region."""
-    rendered: list[str] = []
+    """Print whole source once and a distinct, deduplicated resource catalogue."""
+    resources: list[str] = []
+    seen_artifacts: set[str] = set()
+    seen_images: set[str] = set()
     for part in data.parts:
-        if part.type == "markdown":
-            rendered.append(part.text)
-        elif part.type == "artifact" and part.artifact is not None:
+        if part.type == "artifact" and part.artifact is not None:
             artifact = part.artifact
+            if artifact.resource_id in seen_artifacts:
+                continue
+            seen_artifacts.add(artifact.resource_id)
             suffix = artifact.uri if artifact.status == "available" else "unavailable"
-            rendered.append(f"\n[Artifact: {artifact.label}] {suffix}\n")
+            resources.append(f"[Artifact: {artifact.label}] {suffix}")
         elif part.type == "evidence_image" and part.evidence_image is not None:
             image = part.evidence_image
-            rendered.append(
-                "\n"
-                + _format_evidence_image(
+            if image.id in seen_images:
+                continue
+            seen_images.add(image.id)
+            resources.append(
+                _format_evidence_image(
                     image.source_ref, image.label, image.thumbnail_url or image.url
                 )
-                + "\n"
             )
-    inline_images = {
-        part.evidence_image.id
-        for part in data.parts
-        if part.type == "evidence_image" and part.evidence_image is not None
-    }
     for image in data.evidence_images:
-        if image.id not in inline_images:
-            rendered.append(
-                "\n"
-                + _format_evidence_image(
+        if image.id not in seen_images:
+            seen_images.add(image.id)
+            resources.append(
+                _format_evidence_image(
                     image.source_ref, image.label, image.thumbnail_url or image.url
                 )
             )
-    return "".join(rendered).strip() or data.answer or "(no answer)"
+    rendered = data.answer.strip()
+    if resources:
+        rendered += "\n\nResources:\n" + "\n".join(resources)
+    return rendered.strip() or "(no answer)"
 
 
 # ═══════════════════════════════════════════════════════════════════

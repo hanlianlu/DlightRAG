@@ -10,6 +10,63 @@ from dlightrag.engine.answer.results import (
 )
 
 
+def test_settled_bindings_round_trip_and_place_only_real_references() -> None:
+    from dlightrag.adapters.http.browser.answer_events import render_done_event
+    from dlightrag.adapters.http.client.client import AnswerResult
+    from dlightrag.adapters.http.rest.models import AnswerResponse
+
+    answer = "Before **[Report][r]** after.\n\n`[Report](./report.html)`\n\n[r]: ./report.html"
+    binding = {"./report.html": "unavailable-report"}
+    artifact = {
+        "resource_id": "unavailable-report",
+        "media_type": "application/octet-stream",
+        "label": "Report",
+        "filename": "report.html",
+        "byte_size": 0,
+        "digest": "",
+        "presentation": "download",
+        "status": "unavailable",
+    }
+    stored = store_answer_result(
+        answer=answer,
+        contexts={},
+        sources=[],
+        evidence_images=[],
+        trace={},
+        image_descriptions=[],
+        artifacts=[artifact],
+        artifact_bindings=binding,
+        artifact_outcome={"status": "failed", "issues": []},
+    )
+
+    projected = project_answer_result(stored, run_id="run-1")
+    assert projected["answer"] == answer
+    assert projected["artifact_bindings"] == binding
+    assert projected["parts"][0] == {"type": "markdown", "text": answer}
+    assert [part["type"] for part in projected["parts"]] == ["markdown", "artifact"]
+    assert projected["parts"][1]["target"] == "./report.html"
+    assert projected["parts"][1]["slot"] == 0
+    assert restore_answer_result(stored).artifact_bindings == binding
+    client_result = AnswerResult.from_payload(projected)
+    assert client_result.artifact_bindings == binding
+    assert client_result.parts[1].target == "./report.html"
+    assert client_result.parts[1].slot == 0
+    assert AnswerResponse.model_validate(projected).artifact_bindings == binding
+
+    done = render_done_event(
+        {"result": stored}, downloadable_workspaces=None, visual_workspaces=None, run_id="run-1"
+    )
+    assert done.presentation is not None
+    assert done.presentation.answer_text == answer
+    assert len(done.presentation.parts) == 2
+    rendered = done.presentation.parts[0].html
+    assert 'Before <strong><span class="answer-resource-slot-0"></span></strong> after.' in rendered
+    assert "<code>[Report](./report.html)</code>" in rendered
+    assert "<a " not in rendered
+    assert done.presentation.parts[1].artifact is not None
+    assert done.presentation.parts[1].artifact.status == "unavailable"
+
+
 def test_usage_and_evidence_round_trip_on_every_projection() -> None:
     stored = store_answer_result(
         answer="Grounded answer.",
@@ -127,12 +184,14 @@ def test_parts_derive_artifact_and_inline_evidence_placements() -> None:
     assert [part["type"] for part in projected["parts"]] == [
         "markdown",
         "artifact",
-        "markdown",
         "evidence_image",
-        "markdown",
     ]
     assert "role" not in projected["parts"][1]["artifact"]
     assert projected["parts"][1]["artifact"]["data_url"].endswith(
         "/run-1/artifacts/artifact-report"
     )
-    assert projected["parts"][3]["evidence_image"]["source_ref"] == "1"
+    assert projected["parts"][0]["text"] == stored["answer"]
+    assert projected["parts"][1]["target"] == "artifact:artifact-report"
+    assert projected["parts"][1]["slot"] == 0
+    assert projected["parts"][2]["evidence_image"]["source_ref"] == "1"
+    assert projected["parts"][2]["slot"] == 1

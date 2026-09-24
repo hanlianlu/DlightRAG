@@ -873,6 +873,32 @@ async def test_general_artifact_route_returns_markdown_presentation(
     application_double.answers.read_artifact.assert_awaited_once()
 
 
+async def test_markdown_artifact_uses_its_own_settled_bindings(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
+) -> None:
+    result = _with_artifact(stored_result())
+    target = "artifact:data.md"
+    child = {**result["artifacts"][0], "resource_id": "artifact-child", "label": "Child"}
+    result["artifacts"][0]["artifact_bindings"] = {target: "artifact-child"}
+    result["artifacts"].append(child)
+    result["artifact_bindings"] = {target: _REPORT_RESOURCE}
+    markdown = "[Data][d]\n\n[d]: artifact:data.md\n\n`[Example](artifact:data.md)`"
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+    application_double.answers.read_artifact = AsyncMock(return_value=markdown.encode())
+
+    response = await client.get(
+        f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_text"] == markdown
+    placements = [part for part in body["parts"] if part["type"] == "artifact"]
+    assert len(placements) == 1
+    assert placements[0]["artifact"]["resource_id"] == "artifact-child"
+    assert "<code>[Example](artifact:data.md)</code>" in body["parts"][0]["html"]
+
+
 async def test_markdown_artifact_presentation_projects_its_own_citation_sources(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
@@ -1452,7 +1478,8 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
 
 
 def test_a_succeeded_turn_exposes_a_published_artifact_part() -> None:
-    result = _with_artifact(stored_result())
+    result = _with_artifact(stored_result(), answer="[Report][r]\n\n[r]: artifact:report.md")
+    result["artifact_bindings"] = {"artifact:report.md": _REPORT_RESOURCE}
     turn = project_conversation_turn(
         linked_turn(answer_run(status="succeeded", result=result)),
     )

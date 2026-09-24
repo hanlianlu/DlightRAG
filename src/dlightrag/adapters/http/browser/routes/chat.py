@@ -609,6 +609,7 @@ async def answer_artifact_presentation(
         link_cards=projected.get("link_cards") or [],
         artifacts=projected["artifacts"],
         artifact_outcome=projected["artifact_outcome"],
+        artifact_bindings=dict((descriptor or {}).get("artifact_bindings") or {}),
     )
 
 
