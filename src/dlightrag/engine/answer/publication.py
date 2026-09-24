@@ -27,6 +27,7 @@ import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
+from dlightrag.engine.answer.markdown import answer_markdown
 from dlightrag.engine.answer.resources.converters import is_convertible
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 
@@ -112,6 +113,7 @@ _VIDEO_MEDIA = frozenset({"video/mp4", "video/quicktime", "video/webm"})
 # it is built once per process and only when a video Artifact is actually
 # validated.
 _MEDIA_IDENTIFIER: Any = None
+_ANSWER_MARKDOWN = answer_markdown()
 
 
 def _identify_media_type(content: bytes) -> str:
@@ -326,6 +328,19 @@ def validate_publication(
     roots: list[str] = []
     attached: dict[str, ArtifactAttachment] = {}
     invalid_references: dict[tuple[str | None, str], tuple[str, ArtifactIssue]] = {}
+    # A workspace URL is not publication authority or a browser address. Feed it
+    # into the existing correction pass instead of silently reporting success.
+    # Use the Answer grammar so quoted examples and unused definitions stay inert.
+    workspace_targets = _workspace_link_targets(answer)
+    for target in workspace_targets:
+        invalid_references[(None, target)] = (
+            PurePosixPath(unquote(target)).name,
+            ArtifactIssue(
+                "invalid_reference",
+                f"Workspace link {target!r} cannot be opened by the user. "
+                "Call attach_artifact for the completed file and use its returned artifact: URI.",
+            ),
+        )
     for attachment in attachments:
         try:
             relative = _normalize_reference(attachment.relative_path, parent=None)
@@ -551,6 +566,12 @@ def validate_publication(
                 "issue": safe_issue.as_dict(),
             }
         )
+        if parent is None and raw in workspace_targets:
+            # Workspace URLs are not part of the Artifact placement grammar.
+            # Place their failure explicitly if the one correction pass fails,
+            # without rewriting matching paths in code examples or other prose.
+            failure_link = f"[{_escape_artifact_label(label)}](artifact:{resource_id})"
+            answer_settled = f"{answer_settled.rstrip()}\n\n{failure_link}"
 
     return PublicationPlan(
         answer=answer_settled,
@@ -753,7 +774,7 @@ def _sanitize_svg(content: bytes) -> bytes:
 
 def artifact_link(attachment: ArtifactAttachment) -> str:
     """Return the canonical model-facing placement syntax for one attachment."""
-    label = attachment.label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    label = _escape_artifact_label(attachment.label)
     uri = quote(attachment.relative_path, safe="/")
     prefix = "!" if attachment.presentation == "image" else ""
     # A video is deliberately not prefixed here. Inline playback is the Answer's
@@ -761,6 +782,10 @@ def artifact_link(attachment: ArtifactAttachment) -> str:
     # forgot stays a card, so a player never appears in the reading column
     # without the Model asking for one (ADR 0026).
     return f"{prefix}[{label}](artifact:{uri})"
+
+
+def _escape_artifact_label(label: str) -> str:
+    return label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
 
 def _append_artifact_affordance(answer: str, attachment: ArtifactAttachment) -> str:
@@ -780,6 +805,20 @@ def _references(text: str, *, html: bool) -> list[tuple[str, str, bool]]:
             label = label_match.group(1) if label_match else ""
         values.append((raw, label.strip(), prefix.startswith("!")))
     return values
+
+
+def _workspace_link_targets(answer: str) -> list[str]:
+    targets: dict[str, None] = {}
+    for block in _ANSWER_MARKDOWN.parse(answer):
+        if block.type != "inline":
+            continue
+        for token in block.children or ():
+            if token.type not in {"link_open", "image"}:
+                continue
+            target = str(token.attrGet("href" if token.type == "link_open" else "src") or "")
+            if unquote(target).removeprefix("./").startswith("artifacts/"):
+                targets.setdefault(target, None)
+    return list(targets)
 
 
 def _normalize_reference(raw: str, *, parent: str | None) -> str:

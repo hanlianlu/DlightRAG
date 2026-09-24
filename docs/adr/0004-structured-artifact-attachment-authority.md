@@ -21,4 +21,6 @@ The selection policy belongs primarily to the capability-gated Agent prompt beca
 
 Fast and Child Sessions do not receive publication authority. Attachment settlement must be durable and atomic with the model-visible tool result; final publication remains a fenced Host transaction. Editing an attached root requires reattachment, and citation validation still runs independently inside every published Markdown Artifact.
 
+A final Answer that links directly to an `artifacts/` workspace path is an invalid publication reference. The Answer grammar identifies actual links and images, excluding code examples and unused reference definitions. These references enter the existing bounded publication correction pass, where the Agent must attach the file and use the returned URI. Detecting a workspace link does not authorize publication. If correction still fails, the publication outcome exposes the failure instead of claiming completion.
+
 Prompt tests preserve the default-Answer, selective-Artifact, and non-duplication guidance. Tool tests preserve the local optionality reminder. Semantic similarity remains an observational quality signal rather than a hard runtime invariant.

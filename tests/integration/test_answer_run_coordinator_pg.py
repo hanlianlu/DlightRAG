@@ -18,6 +18,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, cast
 
 import asyncpg
@@ -32,6 +33,7 @@ from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationS
 from dlightrag.application import Application
 from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, RuntimeConfig
 from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
+from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry, UserMessageEntry
@@ -72,9 +74,10 @@ from dlightrag.engine.answer.execution.input import (
 )
 from dlightrag.engine.answer.fast import FastRunBoundaries
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
-from dlightrag.engine.answer.publication import ArtifactIssue, PublicationPlan
+from dlightrag.engine.answer.publication import ArtifactIssue, PublicationLimits, PublicationPlan
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.answer.tools.subagents import SubagentHost
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import (
@@ -1955,6 +1958,91 @@ async def test_wait_subagent_wakes_on_ask_parent_and_parent_replies(
     assert run.result["answer"] == "parent synthesized after the child question"
     purposes = [item["purpose"] for item in run.result["trace"]["agent_operations"]]
     assert "research" in purposes
+
+
+async def test_workspace_link_correction_attaches_and_publishes_the_report(
+    store: FingerprintingRunStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The completed file is the state immediately before the real incident's
+    # final answer. Publication and attachment settlement both remain real.
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.html").write_text("<!doctype html><html><body>Report</body></html>")
+    model_calls = 0
+
+    async def model(**kwargs: Any) -> AssistantTurn:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return AssistantTurn(
+                text="[Report](artifacts/report.html)", tool_calls=(), stop_reason="stop"
+            )
+        if model_calls == 2:
+            assert "Workspace link" in json.dumps(kwargs["messages"])
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="attach-report",
+                        name="attach_artifact",
+                        arguments={"path": "report.html"},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+        assert model_calls == 3
+        assert "attached report.html" in json.dumps(kwargs["messages"])
+        return AssistantTurn(text="Report ready.", tool_calls=(), stop_reason="stop")
+
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_func=model,
+        model_profile=ModelProfile(context_window_tokens=1_000_000),
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="research",
+        injected_tools=[
+            attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "artifact_root", lambda: root)
+    plan = AgentRunPlan.from_tools(
+        orchestrator.prepare_run("Publish the report").tools,
+        model_role="query",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
+    request = _answer_run_request(mode="research", agent_run_plan=plan)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=run_request_fingerprint(request),
+    )
+    await coordinator.start()
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert run is not None and run.result is not None
+    assert model_calls == 3
+    assert run.result["artifact_outcome"] == {"status": "complete", "issues": []}
+    assert len(run.result["artifacts"]) == 1
+    artifact = run.result["artifacts"][0]
+    assert artifact["filename"] == "report.html"
+    assert artifact["status"] == "available"
+    assert artifact["resource_id"] in run.result["answer"]
+    assert [item["purpose"] for item in run.result["trace"]["agent_operations"]] == [
+        "research",
+        "publication_correction",
+    ]
+    assert len(await store.list_artifact_attachments(owner_id=_OWNER, run_id=run.run_id)) == 1
 
 
 async def test_publication_correction_is_one_linked_agent_operation(

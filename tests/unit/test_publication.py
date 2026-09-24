@@ -544,6 +544,70 @@ def test_unattached_reference_does_not_authorize_an_existing_file(tmp_path: Path
     assert "missing.png" not in plan.answer
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "**[artifacts/report.html](artifacts/report.html)**",
+        "[Report](./artifacts/report.html)",
+        "[Report][report]\n\n[report]: artifacts/report.html",
+        "![Report](artifacts/report.html)",
+    ],
+)
+def test_workspace_links_require_publication_correction(tmp_path: Path, answer: str) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.html").write_text("<!doctype html><html><body>Report</body></html>")
+
+    plan = validate_publication(root, answer=answer)
+
+    assert plan.repairable
+    assert plan.outcome["status"] == "failed"
+    assert plan.artifacts == ()
+    assert plan.issues[0].kind == "invalid_reference"
+    assert "attach_artifact" in plan.correction_feedback()
+    assert plan.descriptors[0]["status"] == "unavailable"
+    parts = answer_parts_from_markdown(plan.answer, artifacts=plan.descriptors, evidence_images=())
+    assert any(
+        part["type"] == "artifact"
+        and part["artifact"]["resource_id"] == plan.descriptors[0]["resource_id"]
+        for part in parts
+    )
+
+
+def test_workspace_link_correction_still_requires_explicit_attachment(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.html").write_text("<!doctype html><html><body>Report</body></html>")
+
+    unattached = validate_publication(root, answer="[Report](artifact:report.html)")
+    assert unattached.issues[0].kind == "unattached_reference"
+    assert unattached.artifacts == ()
+
+    corrected = _validate(root, answer="[Report](artifact:report.html)", attached=("report.html",))
+    assert not corrected.repairable
+    assert len(corrected.artifacts) == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "`[Report](artifacts/report.html)`",
+        "```markdown\n[Report](artifacts/report.html)\n```",
+        "    [Report](artifacts/report.html)",
+        "[unused]: artifacts/report.html",
+        "Use artifacts/report.html as a workspace path.",
+        "[Example](https://example.com/artifacts/report.html)",
+        "[Documentation](docs/report.html)",
+    ],
+)
+def test_workspace_path_examples_do_not_request_publication(tmp_path: Path, answer: str) -> None:
+    plan = validate_publication(tmp_path / "artifacts", answer=answer)
+
+    assert not plan.repairable
+    assert plan.answer == answer
+    assert plan.descriptors == ()
+
+
 def test_multiple_artifacts_with_report_like_names_are_independent(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
