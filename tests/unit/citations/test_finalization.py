@@ -88,7 +88,7 @@ class TestFinalizeAnswer:
             full_contexts,
         )
 
-        assert result.answer == "Answer cites valid [1-1] and invalid ."
+        assert result.answer == "Answer cites valid [1-1] and invalid .\n\nReferences\n made up"
         assert result.cited_chunks == {"1": ["c1"]}
         assert [source.id for source in result.sources] == ["1"]
         assert result.sources[0].chunks is not None
@@ -215,9 +215,9 @@ class TestFinalizeWithoutEvidence:
         assert result.answer == "See  and ."
         assert result.sources == []
 
-    def test_a_references_section_is_stripped_without_evidence(self) -> None:
+    def test_a_references_heading_does_not_authorize_deleting_prose(self) -> None:
         from dlightrag.engine.answer.citations.finalization import finalize_answer
 
         result = finalize_answer("Body text.\n\n## References\n[9] made up", {"chunks": []})
 
-        assert result.answer == "Body text."
+        assert result.answer == "Body text.\n\n## References\n made up"

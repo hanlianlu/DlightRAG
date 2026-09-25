@@ -183,3 +183,16 @@ class TestReservedMetadataKeys:
     def test_finalization_journal_is_reserved_from_user_metadata(self) -> None:
         with pytest.raises(ValueError, match="built-in metadata field"):
             normalize_user_metadata({INGEST_FINALIZATION_COMPLETE_FIELD: True})
+
+
+def test_source_options_are_owned_by_ingestion_not_user_metadata() -> None:
+    from dlightrag.engine.rag.retrieval.metadata_fields import (
+        METADATA_FIELD_IDS,
+        SOURCE_RETRIEVAL_OPTIONS_FIELD,
+        MetadataValidationError,
+        normalize_user_metadata,
+    )
+
+    assert SOURCE_RETRIEVAL_OPTIONS_FIELD not in METADATA_FIELD_IDS
+    with pytest.raises(MetadataValidationError):
+        normalize_user_metadata({SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": "us-east-1"}})

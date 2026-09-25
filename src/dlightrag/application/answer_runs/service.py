@@ -20,8 +20,7 @@ from dlightrag.application.runs import (
 )
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.tools import AgentTool
-from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.agent.tools import ToolDeclaration
 from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY,
     CONTEXT_POLICY_REVISION,
@@ -34,10 +33,8 @@ from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestMode
 from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
-    InvalidToolConfigurationError,
     UnsupportedAnswerModeError,
 )
-from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution import (
     ResolvedAnswerResources,
     research_history_input_measure,
@@ -81,11 +78,13 @@ from dlightrag.engine.answer.results import AnswerResult, restore_answer_result
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-from dlightrag.engine.answer.tools import compose_research_tools
-from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
+from dlightrag.engine.answer.tools.composition import (
+    ResearchToolDeclarations,
+    research_tool_declarations,
+)
 from dlightrag.engine.network_admission import public_http_url_identity
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
-from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions, RetrievalResult
+from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 from dlightrag.engine.runtime.contracts import RunKind
@@ -758,7 +757,7 @@ class AnswerService:
             [ChatModelSelector], ModelInvocationFingerprint
         ],
         child_roster_cursor_secret: bytes,
-        research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
+        research_tool_declarations: ResearchToolDeclarations | None = None,
         bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
         run_retention_seconds: int = 365 * 24 * 3600,
@@ -772,7 +771,7 @@ class AnswerService:
         self._models = models
         self._resources = resources
         self._model_invocation_fingerprint_for_role = model_invocation_fingerprint_for_role
-        self._research_tool_supplements = research_tool_supplements or (lambda: ())
+        self._research_tool_declarations = research_tool_declarations
         self._bind_research = bind_research
         self._memory_capability = memory_capability
         self._run_retention_seconds = int(run_retention_seconds)
@@ -1836,7 +1835,9 @@ class AnswerService:
         auth_mode: str = "none",
         memory_enabled: bool = True,
     ) -> AsyncIterator[
-        Callable[[Sequence[AgentTool]], Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]]]
+        Callable[
+            [Sequence[ToolDeclaration]], Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]]
+        ]
     ]:
         """Resolve one normalized request and its capacity-narrowed mode set."""
         async with self._project_acceptance(
@@ -1849,7 +1850,7 @@ class AnswerService:
         ) as project:
 
             async def prepare(
-                connection_tools: Sequence[AgentTool],
+                connection_tools: Sequence[ToolDeclaration],
             ) -> tuple[AnswerRunInput, frozenset[ResolvedMode]]:
                 projection = await project(connection_tools)
                 return AnswerRunInput(
@@ -1889,7 +1890,7 @@ class AnswerService:
         allowed_modes: frozenset[ResolvedMode],
         auth_mode: str = "none",
         memory_enabled: bool = True,
-    ) -> AsyncIterator[Callable[[Sequence[AgentTool]], Awaitable[_AcceptanceProjection]]]:
+    ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
         """Resolve the exact shared-history envelopes without building the run rig."""
         model_profiles = self._capabilities.current_profiles()
         models = self._capabilities.request_model_context(model_profiles)
@@ -1917,7 +1918,7 @@ class AnswerService:
             )
             schema = await self._retrieval.schema_for(workspaces)
 
-            async def project(connection_tools: Sequence[AgentTool]) -> _AcceptanceProjection:
+            async def project(connection_tools: Sequence[ToolDeclaration]) -> _AcceptanceProjection:
                 agent_run_plan: AgentRunPlan | None = None
                 memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
                 effective_modes = allowed_modes
@@ -2006,56 +2007,21 @@ class AnswerService:
                             ),
                         )
                     )
-                    evidence = EvidenceLedger(image_budget=resolved.image_budget)
-
-                    async def unused_retrieve(_query: str) -> RetrievalResult:
-                        raise RuntimeError("acceptance tool definitions are never executed")
-
-                    tools = compose_research_tools(
-                        evidence=evidence,
-                        trace={},
-                        retrieve_knowledge_base=unused_retrieve,
-                        search_web=(
-                            resolved.web_sources.search
-                            if resolved.web_sources is not None
-                            and resolved.web_sources.search_enabled
-                            else None
-                        ),
-                        injected_tools=[],
-                        register_web_source=(
-                            resolved.registry.register_discovered_link
-                            if resolved.registry is not None and resolved.web_sources is not None
-                            else None
-                        ),
+                    web_search = (
+                        resolved.web_sources is not None and resolved.web_sources.search_enabled
                     )
-                    supplements = [*self._research_tool_supplements(), *connection_tools]
-                    child_definitions = {
-                        tool.name: tool
-                        for tool in subagent_tools(
-                            host=SubagentHost(model_guidance=child_model_guidance(pinned_models))
+                    tools = list(
+                        self._research_tool_declarations(
+                            web_search=web_search,
+                            memory=memory_enabled,
+                            model_guidance=child_model_guidance(pinned_models),
+                            injected=connection_tools,
                         )
-                    }
-                    supplements = [
-                        replace(
-                            tool,
-                            description=child_definitions[tool.name].description,
-                            input_model=child_definitions[tool.name].input_model,
-                            contract_version=child_definitions[tool.name].contract_version,
+                        if self._research_tool_declarations is not None
+                        else research_tool_declarations(
+                            web_search=web_search, injected=connection_tools
                         )
-                        if tool.name in child_definitions
-                        else tool
-                        for tool in supplements
-                    ]
-                    if not memory_enabled:
-                        supplements = [
-                            tool
-                            for tool in supplements
-                            if tool.name not in {"remember", "forget", "recall_memory"}
-                        ]
-                    try:
-                        tools = list(ToolRegistry([*tools, *supplements]).resolve())
-                    except DuplicateToolError as exc:
-                        raise InvalidToolConfigurationError(exc.names) from exc
+                    )
                     agent_run_plan = AgentRunPlan.from_tools(
                         tools,
                         model_role="query",

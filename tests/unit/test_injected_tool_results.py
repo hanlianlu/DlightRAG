@@ -29,7 +29,9 @@ class Args(BaseModel):
 
 def prepared_tools(tmp_path, result, *, child=False, workspace=True):
     execute = AsyncMock(return_value=result)
-    injected = AgentTool("external", "External fixture", Args, execute, guidance="Exact guidance")
+    injected = AgentTool(
+        "external", "External fixture", Args, execute=execute, guidance="Exact guidance"
+    )
     profile = answer_model_profile()
     orchestrator = AnswerOrchestrator(
         synthesizer=MagicMock(),
@@ -78,6 +80,8 @@ async def test_injected_tool_small_result_unchanged_and_large_spilled_readable(t
     assert tools["external"].definition == injected.definition
     assert tools["external"].replay_policy == injected.replay_policy
     assert tools["external"].guidance == injected.guidance
+    assert tools["external"].input_schema_digest == injected.input_schema_digest
+    assert tools["external"].contract_version == injected.contract_version
     evidence = EvidenceSourceFact("r", "fixture", "fixture:r", "Keep")
     full = "payload line\n" * 6000
     execute.return_value = ToolResult.text(full, effects=ToolEffects(evidence_sources=(evidence,)))

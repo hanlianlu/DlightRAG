@@ -8,7 +8,7 @@ from hashlib import sha256
 from typing import Any
 
 from dlightrag.engine.agent.session.effects import ReplayPolicy, canonical_json
-from dlightrag.engine.agent.tools.contracts import AgentTool
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration
 from dlightrag.engine.ai.tokens import estimate_tokens
 
 AGENT_RUN_PLAN_SCHEMA_VERSION = 2
@@ -37,7 +37,7 @@ class AgentToolPlan:
             raise ValueError("Agent Tool Plan schema digest must be SHA-256")
 
     @classmethod
-    def from_tool(cls, tool: AgentTool) -> AgentToolPlan:
+    def from_tool(cls, tool: ToolDeclaration) -> AgentToolPlan:
         return cls(
             definition_json=canonical_json(asdict(tool.definition)),
             guidance=tool.guidance,
@@ -127,7 +127,7 @@ class AgentRunPlan:
     @classmethod
     def from_tools(
         cls,
-        tools: Sequence[AgentTool],
+        tools: Sequence[ToolDeclaration],
         *,
         model_role: str,
         context_policy_revision: str,

@@ -19,7 +19,13 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, RootModel, SecretStr, model_validator
 
 from dlightrag.application.connections.policy import ConnectionPolicy
-from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import (
+    AgentTool,
+    ToolDeclaration,
+    ToolExecute,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.engine.answer.execution.connection_binding import (
     ResearchToolClaim,
     RunConnectionBinding,
@@ -104,7 +110,7 @@ class Connections:
             return BoundResearchConnections()
         catalogues = await self._store.research_catalogues(owner_id)
         return BoundResearchConnections(
-            tools=tuple(_catalogue_tool(tool) for _, tools in catalogues for tool in tools),
+            tools=tuple(_catalogue_declaration(tool) for _, tools in catalogues for tool in tools),
             bindings=tuple(binding for binding, _ in catalogues),
         )
 
@@ -950,11 +956,7 @@ def _call_failure(tool: CatalogueTool, *, unknown: bool) -> ToolResult:
     )
 
 
-def _catalogue_tool(
-    tool: CatalogueTool,
-    *,
-    execute: Callable[[BaseModel, ToolRuntime], Awaitable[ToolResult]] | None = None,
-) -> AgentTool:
+def _catalogue_declaration(tool: CatalogueTool) -> ToolDeclaration:
     schema = deepcopy(tool.input_schema)
 
     class CatalogueArguments(RootModel[dict[str, Any]]):
@@ -968,21 +970,22 @@ def _catalogue_tool(
         def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
             return deepcopy(schema)
 
+    return ToolDeclaration(
+        name=tool.local_name,
+        description=tool.description,
+        input_model=CatalogueArguments,
+        replay_policy="never",
+    )
+
+
+def _catalogue_tool(tool: CatalogueTool, *, execute: ToolExecute) -> AgentTool:
     used: set[tuple[str, str]] = set()
 
     async def call(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
-        if execute is None:
-            raise RuntimeError("Acceptance definitions cannot execute")
         key = (runtime.execution_scope, runtime.intent_id.value)
         if key in used:
             return _call_failure(tool, unknown=True)
         used.add(key)
         return await execute(raw, runtime)
 
-    return AgentTool(
-        name=tool.local_name,
-        description=tool.description,
-        input_model=CatalogueArguments,
-        execute=call,
-        replay_policy="never",
-    )
+    return _catalogue_declaration(tool).bind(call)

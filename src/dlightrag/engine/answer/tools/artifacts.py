@@ -7,7 +7,7 @@ from typing import cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.engine.agent.environment.access import AccessScheduler, WorkspaceAccess
-from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.publication import (
     ArtifactValidationError,
     PublicationLimits,
@@ -30,6 +30,23 @@ class AttachArtifactArgs(BaseModel):
         default=None,
         max_length=200,
         description="Optional user-facing label; defaults to the safe filename.",
+    )
+
+
+def attach_artifact_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="attach_artifact",
+        description="Attach one optional, completed artifacts/ file as a root user deliverable. "
+        "Call only after its final write or edit; linked dependencies are included "
+        "automatically.",
+        input_model=AttachArtifactArgs,
+        replay_policy="replayable",
+        contract_version=1,
+        guidance="attach_artifact: path is relative to artifacts/. Attach only a root deliverable "
+        "the user requested as a file or that genuinely benefits from a separate reading "
+        "or download surface, never merely because the tool is available. Attach after "
+        "the final modification. The returned Artifact link controls placement; the Host "
+        "places an attached root automatically if the final Answer omits it.",
     )
 
 
@@ -80,25 +97,7 @@ def attach_artifact_tool(
             },
         )
 
-    return AgentTool(
-        name="attach_artifact",
-        description=(
-            "Attach one optional, completed artifacts/ file as a root user deliverable. "
-            "Call only after its final write or edit; linked dependencies are included "
-            "automatically."
-        ),
-        input_model=AttachArtifactArgs,
-        execute=execute,
-        replay_policy="replayable",
-        contract_version=1,
-        guidance=(
-            "attach_artifact: path is relative to artifacts/. Attach only a root deliverable "
-            "the user requested as a file or that genuinely benefits from a separate reading "
-            "or download surface, never merely because the tool is available. Attach after "
-            "the final modification. The returned Artifact link controls placement; the Host "
-            "places an attached root automatically if the final Answer omits it."
-        ),
-    )
+    return attach_artifact_declaration().bind(execute)
 
 
 __all__ = ["AttachArtifactArgs", "attach_artifact_tool"]

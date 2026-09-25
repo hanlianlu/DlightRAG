@@ -36,12 +36,14 @@ from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
 )
 from dlightrag.engine.rag.corpus.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.engine.rag.corpus.ingestion.paths import lightrag_archived_source_path
+from dlightrag.engine.rag.corpus.sources.factory import SourceRetrievalOptions
 from dlightrag.engine.rag.corpus.sources.source_contract import (
     local_source_uri,
     safe_source_filename,
 )
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
+    SOURCE_RETRIEVAL_OPTIONS_FIELD,
     extract_system_metadata,
     normalize_user_metadata,
 )
@@ -74,6 +76,7 @@ class PreparedIngestFile:
     title: str | None = None
     author: str | None = None
     metadata: Mapping[str, Any] | None = None
+    source_options: SourceRetrievalOptions | None = None
     source_uri_explicit: bool = True
     download_locator_explicit: bool = True
     display_filename_explicit: bool = False
@@ -526,6 +529,7 @@ class UnifiedIngestionEngine:
                 item.parser_path,
                 source_uri=item.source_uri,
                 download_locator=item.download_locator,
+                source_options=item.source_options,
                 display_filename=item.display_filename,
                 title=effective_title,
                 author=effective_author,
@@ -604,6 +608,17 @@ class UnifiedIngestionEngine:
 
         chunks = list(_mapping_get(existing_status, "chunks_list") or [])
         persisted = await self._metadata_index.get(entry.doc_id)
+        # Metadata-only edits do not silently discard accepted routing. An
+        # explicitly declared choice (including SDK discovery) still replaces
+        # it, while a changed locator starts with its own options.
+        if (
+            isinstance(persisted, Mapping)
+            and not entry.metadata_record[SOURCE_RETRIEVAL_OPTIONS_FIELD]
+            and entry.metadata_record["download_locator"] == persisted.get("download_locator")
+        ):
+            entry.metadata_record[SOURCE_RETRIEVAL_OPTIONS_FIELD] = (
+                deepcopy(persisted.get(SOURCE_RETRIEVAL_OPTIONS_FIELD)) or {}
+            )
         if not ingest_finalization_complete(persisted):
             # LightRAG may have committed PROCESSED immediately before a hard
             # crash. Replay only DlightRAG's idempotent required finalization.
@@ -653,6 +668,7 @@ class UnifiedIngestionEngine:
         *,
         source_uri: str,
         download_locator: str,
+        source_options: SourceRetrievalOptions | None = None,
         display_filename: str | None = None,
         title: str | None,
         author: str | None,
@@ -673,6 +689,7 @@ class UnifiedIngestionEngine:
         return {
             **system_metadata,
             "custom_metadata": normalized_metadata.custom_metadata,
+            SOURCE_RETRIEVAL_OPTIONS_FIELD: source_options.payload() if source_options else {},
             # Application-owned crash journal; user metadata cannot override it.
             _FINALIZATION_COMPLETE_KEY: False,
         }
@@ -1166,6 +1183,7 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "filename_stem": metadata_record.get("filename_stem"),
         "source_uri": metadata_record.get("source_uri"),
         "download_locator": metadata_record.get("download_locator"),
+        SOURCE_RETRIEVAL_OPTIONS_FIELD: metadata_record.get(SOURCE_RETRIEVAL_OPTIONS_FIELD) or {},
         "file_extension": metadata_record.get("file_extension"),
         "title": metadata_record.get("title"),
         "author": metadata_record.get("author"),

@@ -16,7 +16,7 @@ from dlightrag_memory import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.memory import memory_owner_allowed
 
 MemoryKindInput = Literal["preference", "fact"]
@@ -76,6 +76,20 @@ async def _require_available(host: MemoryHost, settlement: object | None) -> Non
         raise MemoryWriteRejectedError("Profile Memory is not active for this owner.")
 
 
+def remember_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        "remember",
+        "Store one durable owner preference or fact for future conversations. "
+        "Use when the user explicitly asks to remember eligible stable information, or "
+        "for one minimally inferred repeated preference. Never store task state, "
+        "research claims, evidence, citations, "
+        "transcripts, credentials, or private keys. Recall first and pass supersedes_id "
+        "when correcting an existing memory.",
+        RememberInput,
+        replay_policy="replayable",
+    )
+
+
 def remember_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
@@ -99,18 +113,14 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
             return _rejected("remember", str(exc.public_message))
         return _receipt_result(receipt)
 
-    return AgentTool(
-        "remember",
-        (
-            "Store one durable owner preference or fact for future conversations. "
-            "Use when the user explicitly asks to remember eligible stable information, or "
-            "for one minimally inferred repeated preference. Never store task state, "
-            "research claims, evidence, citations, "
-            "transcripts, credentials, or private keys. Recall first and pass supersedes_id "
-            "when correcting an existing memory."
-        ),
-        RememberInput,
-        execute,
+    return remember_declaration().bind(execute)
+
+
+def forget_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        "forget",
+        "Forget one active Profile Memory by id or exact body. Recall first when the id is unknown.",
+        ForgetInput,
         replay_policy="replayable",
     )
 
@@ -137,11 +147,15 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
             return _rejected("forget", str(exc.public_message))
         return _receipt_result(receipt)
 
-    return AgentTool(
-        "forget",
-        "Forget one active Profile Memory by id or exact body. Recall first when the id is unknown.",
-        ForgetInput,
-        execute,
+    return forget_declaration().bind(execute)
+
+
+def recall_memory_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        "recall_memory",
+        "Recall owner preferences and facts relevant to a query, including ids needed "
+        "before replacing or forgetting one. Context only; never evidence or a citation.",
+        RecallInput,
         replay_policy="replayable",
     )
 
@@ -164,16 +178,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         lines = [f"- {row.memory_id} ({row.kind}) {row.body}" for row in result.records]
         return ToolResult.text("Relevant memories:\n" + "\n".join(lines))
 
-    return AgentTool(
-        "recall_memory",
-        (
-            "Recall owner preferences and facts relevant to a query, including ids needed "
-            "before replacing or forgetting one. Context only; never evidence or a citation."
-        ),
-        RecallInput,
-        execute,
-        replay_policy="replayable",
-    )
+    return recall_memory_declaration().bind(execute)
 
 
 def _receipt_result(receipt: MemoryOperationReceipt) -> ToolResult:

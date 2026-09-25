@@ -174,6 +174,73 @@ def test_unpublished_link_becomes_one_unavailable_card_in_place(page: Page, tmp_
     )
 
 
+def test_finalized_answer_preserves_citation_context_in_browser(page: Page) -> None:
+    from dlightrag.adapters.http.browser.answer_events import render_done_event
+    from dlightrag.engine.answer.citations.finalization import finalize_answer
+    from dlightrag.engine.answer.results import store_answer_result
+    from dlightrag.engine.rag.retrieval import RetrievalContexts
+
+    answer = (
+        "Read `values[9]`. Literal \\[2] remains text. Evidence [2-1].\n\n"
+        "[Official][1]\n\n"
+        "```markdown\n## References\nCode example [9]\n```\n\n"
+        "Explanation after the example.\n\n[1]: https://example.com/reference"
+    )
+    contexts: RetrievalContexts = {
+        "chunks": [
+            {
+                "chunk_id": "citation-context-chunk",
+                "reference_id": "2",
+                "full_doc_id": "citation-context-document",
+                "file_path": "evidence.txt",
+                "content": "Evidence remains available beside the preserved example.",
+                "_workspace": "default",
+                "metadata": {
+                    "source_type": "local",
+                    "source_uri": "local://default/evidence.txt",
+                    "source_download_locator": "/docs/evidence.txt",
+                },
+            }
+        ],
+    }
+    finalized = finalize_answer(answer, contexts)
+    assert finalized.answer == answer
+    stored = store_answer_result(
+        answer=finalized.answer,
+        contexts=contexts,
+        sources=finalized.sources,
+        evidence_images=[],
+        trace={},
+        image_descriptions=[],
+    )
+    done = render_done_event(
+        {"result": stored},
+        downloadable_workspaces={"default"},
+        visual_workspaces={"default"},
+        run_id=_RUN_ID,
+    )
+    assert done.presentation is not None
+    _install_history(page, done.presentation.model_dump())
+    _open_ready_page(page)
+
+    answer_view = page.locator("dl-answer-presentation").last
+    expect(answer_view.locator("code").filter(has_text="values[9]")).to_have_count(1)
+    expect(answer_view.locator("pre")).to_contain_text("## References")
+    expect(answer_view).to_contain_text("Explanation after the example.")
+    expect(answer_view).to_contain_text("Literal [2] remains text.")
+    expect(answer_view.get_by_role("link", name="Official", exact=True)).to_have_attribute(
+        "href", "https://example.com/reference"
+    )
+    badge = answer_view.locator(".citation-badge")
+    expect(badge).to_have_count(1)
+    expect(badge).to_have_attribute("data-ref", "2")
+    expect(badge).to_have_attribute("data-chunk", "1")
+    badge.click()
+    expect(page.locator("#panel-content [data-source-content]")).to_contain_text(
+        "Evidence remains available beside the preserved example."
+    )
+
+
 def test_markdown_artifact_uses_the_general_artifact_canvas(page: Page) -> None:
     _install_history(
         page,

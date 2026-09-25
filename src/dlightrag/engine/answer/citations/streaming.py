@@ -7,10 +7,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from typing import Any, cast
 
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
-from dlightrag.engine.answer.citations.parser import (
-    clean_invalid_citations,
-    strip_generated_references_section,
-)
+from dlightrag.engine.answer.citations.parser import clean_invalid_citations
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +57,6 @@ class AnswerStream(AsyncIterator[str]):
             yield chunk
 
         full = "".join(self._parts)
-        full = strip_generated_references_section(full)
 
         if self._indexer is not None:
             full = clean_invalid_citations(self._indexer, full)

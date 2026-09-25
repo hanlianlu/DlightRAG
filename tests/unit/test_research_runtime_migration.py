@@ -118,7 +118,7 @@ async def _settle_bounded_research_tool(
         assert _runtime.fencing_epoch == (session_fencing_epoch or 1)
         return ToolResult.text(text)
 
-    tool = AgentTool("bounded", "Return bounded text.", _EmptyToolInput, execute)
+    tool = AgentTool("bounded", "Return bounded text.", _EmptyToolInput, execute=execute)
     prepared = SimpleNamespace(
         tools=(tool,),
         model_profile=profile,
@@ -428,7 +428,7 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
         await runtime.emit_update(ToolResult.text("", subject="quarterly revenue 2026"))
         return ToolResult.text("added 3 new passages.")
 
-    tool = AgentTool("search_knowledge_base", "Search.", _EmptyToolInput, execute)
+    tool = AgentTool("search_knowledge_base", "Search.", _EmptyToolInput, execute=execute)
     prepared = SimpleNamespace(
         tools=(tool,),
         model_profile=answer_model_profile(),
@@ -492,7 +492,7 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
         await asyncio.sleep(0.03)
         return ToolResult.text("too slow", is_error=True)
 
-    tool = AgentTool("mcp_connection_hash", "Call a remote tool.", _EmptyToolInput, execute)
+    tool = AgentTool("mcp_connection_hash", "Call a remote tool.", _EmptyToolInput, execute=execute)
     prepared = SimpleNamespace(
         tools=(tool,),
         model_profile=answer_model_profile(),
@@ -553,7 +553,7 @@ async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None
     class _SearchInput(BaseModel):
         query: str
 
-    tool = AgentTool("mcp_connection_hash", "Call a remote tool.", _SearchInput, execute)
+    tool = AgentTool("mcp_connection_hash", "Call a remote tool.", _SearchInput, execute=execute)
     prepared = SimpleNamespace(
         tools=(tool,),
         model_profile=answer_model_profile(),

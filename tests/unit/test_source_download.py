@@ -208,3 +208,52 @@ async def test_s3_credentials_failure_is_unavailable(test_config) -> None:
         pytest.raises(SourceDownloadUnavailableError, match="S3 credentials not configured"),
     ):
         await _service(test_config, metadata_index).prepare("doc-report")
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ({"s3_region": "eu-north-1"}, "eu-north-1"),
+        ({"s3_region": None}, None),
+        (None, "us-east-1"),
+        ({}, "us-east-1"),
+    ],
+)
+async def test_s3_download_uses_durable_region(test_config, stored, expected) -> None:
+    from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
+
+    mutate_config(test_config, "corpus.sources.s3_region", "us-east-1")
+    metadata = AsyncMock()
+    metadata.get.return_value = {
+        "download_locator": "s3://bucket/report.pdf",
+        SOURCE_RETRIEVAL_OPTIONS_FIELD: stored,
+    }
+    with patch(
+        "dlightrag.engine.rag.corpus.downloads.generate_s3_presigned_url",
+        new_callable=AsyncMock,
+        return_value="https://bucket.s3.example/report.pdf?sig=x",
+    ) as signer:
+        await _service(test_config, metadata).prepare("doc-report")
+    assert signer.await_args is not None
+    assert signer.await_args.kwargs["region"] == expected
+
+
+@pytest.mark.parametrize(
+    "locator,stored",
+    [
+        ("s3://bucket/report.pdf", {"s3_region": 42}),
+        ("s3://bucket/report.pdf", {"aws_secret_access_key": "bad"}),
+        ("s3://bucket/report.pdf", []),
+        ("https://example.com/report.pdf", {"s3_region": "eu-north-1"}),
+    ],
+)
+async def test_download_rejects_invalid_source_options(test_config, locator, stored) -> None:
+    from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
+
+    metadata = AsyncMock()
+    metadata.get.return_value = {
+        "download_locator": locator,
+        SOURCE_RETRIEVAL_OPTIONS_FIELD: stored,
+    }
+    with pytest.raises(SourceDownloadInvalidError):
+        await _service(test_config, metadata).prepare("doc-report")

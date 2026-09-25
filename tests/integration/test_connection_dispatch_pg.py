@@ -638,7 +638,7 @@ async def test_research_runtime_continues_other_tools_and_reports_unavailable_pa
             "healthy",
             "Independent built-in",
             Args,
-            AsyncMock(return_value=ToolResult.text("healthy result")),
+            execute=AsyncMock(return_value=ToolResult.text("healthy result")),
         )
         tools = {tool.name: tool, healthy.name: healthy}
 

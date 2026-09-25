@@ -13,7 +13,10 @@ from dlightrag.engine.rag.corpus.sources.aws_s3 import (
     generate_s3_presigned_url,
 )
 from dlightrag.engine.rag.corpus.sources.azure_blob import generate_azure_sas_url
+from dlightrag.engine.rag.corpus.sources.factory import resolve_source_options
 from dlightrag.engine.rag.corpus.sources.source_contract import validate_download_uri
+from dlightrag.engine.rag.corpus.sources.uri import parse_remote_uri
+from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
 from dlightrag.engine.rag.retrieval.visibility import ingest_finalization_complete
 from dlightrag.engine.rag.workspace.settings import RagSettings
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
@@ -83,7 +86,7 @@ class SourceDownloadService:
 
         if "://" not in locator:
             return await self._prepare_local(document_id, locator)
-        return await self._prepare_remote(locator)
+        return await self._prepare_remote(locator, metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD))
 
     async def _prepare_local(
         self,
@@ -123,9 +126,15 @@ class SourceDownloadService:
             filename=resolved.name,
         )
 
-    async def _prepare_remote(self, locator: str) -> RedirectDownloadTarget:
+    async def _prepare_remote(
+        self, locator: str, stored_options: object = None
+    ) -> RedirectDownloadTarget:
         try:
             canonical = validate_download_uri(locator)
+            source_type, _ = parse_remote_uri(canonical)
+            options = resolve_source_options(
+                source_type, stored_options, default_s3_region=self._settings.s3_region
+            )
         except ValueError as exc:
             raise SourceDownloadInvalidError("Source download metadata is invalid") from exc
 
@@ -148,7 +157,7 @@ class SourceDownloadService:
                 url = await generate_s3_presigned_url(
                     raw_path=canonical,
                     expiry_seconds=self._settings.s3_presign_expiry,
-                    region=self._settings.s3_region,
+                    region=options.s3_region if options is not None else None,
                 )
             except S3CredentialsUnavailable as exc:
                 raise SourceDownloadUnavailableError("S3 credentials not configured") from exc

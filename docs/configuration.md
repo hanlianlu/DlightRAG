@@ -517,6 +517,23 @@ overrides SDK discovery. Prefer
 standard AWS credential chain. Deleting DlightRAG data never deletes provider
 objects. See [Sources](interfaces.md#sources).
 
+Built-in S3 ingestion stores the accepted region (request override, then this
+configuration, then explicit SDK discovery) with each non-retained document.
+Failed-document retry and source-download signing reuse that routing even if
+the deployment default changes. Historical rows and custom SDK sources that
+did not declare routing use the current deployment default; their original
+region cannot be reconstructed. The additive metadata migration leaves those
+rows unset. Credentials, signed-URL expiry, URL size limits and private-host
+policy always come from the current deployment. Retained sources are replayed
+from their workspace-contained local bytes. An explicitly supplied mirror
+`download_uri` has its own routing and does not inherit the original S3 region.
+
+Routing is internal metadata, separate from user fields and never a credential
+snapshot. Historical rows use SQL NULL; newly ingested sources without fixed routing use an empty
+object, which also clears stale routing when the locator changes. A metadata-only
+update for the same locator preserves an existing region unless a new routing
+choice is explicitly supplied.
+
 ## PostgreSQL And Process Role
 
 DlightRAG requires PostgreSQL 18 for KV, graph, document status, BM25, metadata,

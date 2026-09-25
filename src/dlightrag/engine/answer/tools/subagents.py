@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
 from dlightrag.engine.agent.tool_content import tool_content_message_fields
-from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
 from dlightrag.engine.answer.errors import ChildToolNarrowingError
 from dlightrag.engine.answer.evidence import EvidenceDelta
@@ -496,6 +496,89 @@ _SPAWN_DESCRIPTION = (
 )
 
 
+def subagent_declarations(
+    *,
+    model_guidance: str | None = None,
+    async_lifecycle: bool = True,
+    interactive_controls: bool = True,
+) -> tuple[ToolDeclaration, ...]:
+    """Declare the exact child-session contract without constructing a Host."""
+    if not async_lifecycle:
+        descriptions = (
+            "Run one or many foreground child Agent Sessions and wait for all results.",
+            "Read one foreground or completed child session status.",
+            "Wait for one known foreground child session.",
+            "Cancel one known foreground child session.",
+        )
+    else:
+        descriptions = (
+            _SPAWN_DESCRIPTION,
+            "Read one accepted asynchronous or completed child session status.",
+            "Wait for one known asynchronous child session to settle.",
+            "Durably cancel one known child session without cancelling its siblings.",
+        )
+
+    five_models = model_guidance is not None
+    version = 5
+    return (
+        ToolDeclaration(
+            "spawn_agent",
+            descriptions[0] + ("\n" + (model_guidance or "") if five_models else ""),
+            SpawnAgentInput,
+            replay_policy="replayable",
+            contract_version=version,
+        ),
+        ToolDeclaration(
+            "subagent_status",
+            descriptions[1],
+            ChildControlInput,
+            replay_policy="replayable",
+            contract_version=version,
+        ),
+        ToolDeclaration(
+            "wait_subagent",
+            descriptions[2],
+            ChildControlInput,
+            replay_policy="replayable",
+            contract_version=version,
+        ),
+        ToolDeclaration(
+            "cancel_subagent",
+            descriptions[3],
+            ChildControlInput,
+            replay_policy="never",
+            contract_version=version,
+        ),
+        *(
+            (
+                ToolDeclaration(
+                    "steer_subagent",
+                    "Queue guidance for only the current Operation of a running child.",
+                    ChildMessageInput,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+                ToolDeclaration(
+                    "continue_subagent",
+                    "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
+                    ChildMessageInput,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+                ToolDeclaration(
+                    "reply_subagent",
+                    "Reply to one correlated ask_parent request from a child.",
+                    GuidanceReplyInput,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+            )
+            if async_lifecycle and interactive_controls
+            else ()
+        ),
+    )
+
+
 def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     """Return versioned spawn/status/wait/cancel tools over one durable roster."""
 
@@ -590,92 +673,33 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         )
         return ToolResult.text(canonical_json(dict(receipt)))
 
-    if not host.async_lifecycle:
-        descriptions = (
-            "Run one or many foreground child Agent Sessions and wait for all results.",
-            "Read one foreground or completed child session status.",
-            "Wait for one known foreground child session.",
-            "Cancel one known foreground child session.",
+    handlers = {
+        "spawn_agent": spawn,
+        "subagent_status": status,
+        "wait_subagent": wait,
+        "cancel_subagent": cancel,
+        "steer_subagent": steer,
+        "continue_subagent": continue_child,
+        "reply_subagent": reply,
+    }
+    return tuple(
+        declaration.bind(handlers[declaration.name])
+        for declaration in subagent_declarations(
+            model_guidance=host.model_guidance,
+            async_lifecycle=host.async_lifecycle,
+            interactive_controls=host.interactive_controls,
         )
-    elif host.interactive_controls:
-        descriptions = (
-            _SPAWN_DESCRIPTION,
-            "Read one accepted asynchronous or completed child session status.",
-            "Wait for one known asynchronous child session to settle.",
-            "Durably cancel one known child session without cancelling its siblings.",
-        )
-    else:
-        descriptions = (
-            _SPAWN_DESCRIPTION,
-            "Read one accepted asynchronous or completed child session status.",
-            "Wait for one known asynchronous child session to settle.",
-            "Durably cancel one known child session without cancelling its siblings.",
-        )
+    )
 
-    five_models = host.model_guidance is not None
-    version = 5
+
+def child_guidance_declarations() -> tuple[ToolDeclaration, ...]:
     return (
-        AgentTool(
-            "spawn_agent",
-            descriptions[0] + ("\n" + (host.model_guidance or "") if five_models else ""),
-            SpawnAgentInput,
-            spawn,
+        ToolDeclaration(
+            "ask_parent",
+            "Ask the parent one correlated question and wait durably for its reply.",
+            AskParentInput,
             replay_policy="replayable",
-            contract_version=version,
-        ),
-        AgentTool(
-            "subagent_status",
-            descriptions[1],
-            ChildControlInput,
-            status,
-            replay_policy="replayable",
-            contract_version=version,
-        ),
-        AgentTool(
-            "wait_subagent",
-            descriptions[2],
-            ChildControlInput,
-            wait,
-            replay_policy="replayable",
-            contract_version=version,
-        ),
-        AgentTool(
-            "cancel_subagent",
-            descriptions[3],
-            ChildControlInput,
-            cancel,
-            replay_policy="never",
-            contract_version=version,
-        ),
-        *(
-            (
-                AgentTool(
-                    "steer_subagent",
-                    "Queue guidance for only the current Operation of a running child.",
-                    ChildMessageInput,
-                    steer,
-                    replay_policy="replayable",
-                    contract_version=version,
-                ),
-                AgentTool(
-                    "continue_subagent",
-                    "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
-                    ChildMessageInput,
-                    continue_child,
-                    replay_policy="replayable",
-                    contract_version=version,
-                ),
-                AgentTool(
-                    "reply_subagent",
-                    "Reply to one correlated ask_parent request from a child.",
-                    GuidanceReplyInput,
-                    reply,
-                    replay_policy="replayable",
-                    contract_version=version,
-                ),
-            )
-            if host.async_lifecycle and host.interactive_controls
-            else ()
+            contract_version=4,
         ),
     )
 
@@ -768,16 +792,7 @@ def child_guidance_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             if not isinstance(guidance, Mapping):
                 return ToolResult.text("Parent guidance request disappeared.", is_error=True)
 
-    return (
-        AgentTool(
-            "ask_parent",
-            "Ask the parent one correlated question and wait durably for its reply.",
-            AskParentInput,
-            ask,
-            replay_policy="replayable",
-            contract_version=4,
-        ),
-    )
+    return tuple(declaration.bind(ask) for declaration in child_guidance_declarations())
 
 
 async def _spawn(

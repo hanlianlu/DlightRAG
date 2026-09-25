@@ -19,8 +19,10 @@ async def _execute(_args: BaseModel, _runtime: object) -> ToolResult:
 
 def test_agent_run_plan_round_trips_one_canonical_payload() -> None:
     tools = (
-        AgentTool("search", "Search docs.", SearchArgs, _execute, replay_policy="replayable"),
-        AgentTool("mutate", "Mutate state.", SearchArgs, _execute),
+        AgentTool(
+            "search", "Search docs.", SearchArgs, execute=_execute, replay_policy="replayable"
+        ),
+        AgentTool("mutate", "Mutate state.", SearchArgs, execute=_execute),
     )
 
     plan = AgentRunPlan.from_tools(
@@ -54,12 +56,12 @@ def test_agent_run_plan_round_trips_one_canonical_payload() -> None:
 
 def test_agent_run_plan_digest_pins_provider_definition_and_execution_contract() -> None:
     first = AgentRunPlan.from_tools(
-        (AgentTool("search", "Search docs.", SearchArgs, _execute),),
+        (AgentTool("search", "Search docs.", SearchArgs, execute=_execute),),
         model_role="query",
         context_policy_revision="policy-1",
     )
     changed_description = AgentRunPlan.from_tools(
-        (AgentTool("search", "Search trusted docs.", SearchArgs, _execute),),
+        (AgentTool("search", "Search trusted docs.", SearchArgs, execute=_execute),),
         model_role="query",
         context_policy_revision="policy-1",
     )
@@ -69,7 +71,7 @@ def test_agent_run_plan_digest_pins_provider_definition_and_execution_contract()
                 "search",
                 "Search docs.",
                 SearchArgs,
-                _execute,
+                execute=_execute,
                 replay_policy="replayable",
             ),
         ),

@@ -508,7 +508,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
             model_settings_for_role(config, role)
         ),
-        research_tool_supplements=answer_executor.acceptance_research_tools,
+        research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
         bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors

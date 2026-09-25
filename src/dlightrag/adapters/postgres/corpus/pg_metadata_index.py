@@ -26,6 +26,7 @@ from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     INGEST_FINALIZATION_COMPLETE_FIELD,
     METADATA_FIELD_IDS,
+    SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
@@ -81,6 +82,7 @@ def _build_create_table() -> str:
     for f in _PG_METADATA_COLUMNS:
         cols.append(f"    {f.field_id}    {f.pg_type}")
     cols.append(f"    {_FINALIZATION_COMPLETE_COLUMN}    BOOLEAN NOT NULL DEFAULT FALSE")
+    cols.append(f"    {SOURCE_RETRIEVAL_OPTIONS_FIELD}    JSONB")
     cols.append("    PRIMARY KEY (workspace, doc_id)")
     return (
         "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n"
@@ -519,6 +521,16 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             (_PUBLISH_LEGACY_PROCESSED_DOCUMENTS,),
         )
     )
+    migrations.append(
+        Migration(
+            "source_retrieval_options",
+            "Persist non-secret source retrieval routing separately from user metadata",
+            (
+                "ALTER TABLE dlightrag_doc_metadata "
+                f"ADD COLUMN IF NOT EXISTS {SOURCE_RETRIEVAL_OPTIONS_FIELD} JSONB",
+            ),
+        )
+    )
     return tuple(migrations)
 
 
@@ -533,6 +545,7 @@ _SCHEMA_TABLES = (
             *METADATA_FIELD_IDS,
             "custom_metadata_search",
             _FINALIZATION_COMPLETE_COLUMN,
+            SOURCE_RETRIEVAL_OPTIONS_FIELD,
         ),
         primary_key=("workspace", "doc_id"),
         indexes=(
@@ -558,6 +571,7 @@ _CUSTOM = "custom_metadata"
 _UPSERT_FIELD_IDS = (
     *(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at"),
     _FINALIZATION_COMPLETE_COLUMN,
+    SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
 
 
@@ -644,17 +658,13 @@ def _build_update() -> str:
 
 
 def _build_params(workspace: str, doc_id: str, metadata: dict[str, Any]) -> list[Any]:
-    custom = metadata.get(_CUSTOM)
-    return [
-        workspace,
-        doc_id,
-        *(
-            json.dumps(custom if isinstance(custom, dict) else {})
-            if field_id == _CUSTOM
-            else metadata.get(field_id)
-            for field_id in _UPSERT_FIELD_IDS
-        ),
-    ]
+    values = dict(metadata)
+    custom = values.get(_CUSTOM)
+    values[_CUSTOM] = json.dumps(custom if isinstance(custom, dict) else {})
+    options = values.get(SOURCE_RETRIEVAL_OPTIONS_FIELD)
+    if options is not None:
+        values[SOURCE_RETRIEVAL_OPTIONS_FIELD] = json.dumps(options)
+    return [workspace, doc_id, *(values.get(field_id) for field_id in _UPSERT_FIELD_IDS)]
 
 
 _UPSERT = _build_upsert()
@@ -853,6 +863,9 @@ def _decoded_row(row: Any) -> dict[str, Any]:
     decoded.pop(_SEARCH_COLUMN, None)
     raw = decoded.get("custom_metadata")
     decoded["custom_metadata"] = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    options = decoded.get(SOURCE_RETRIEVAL_OPTIONS_FIELD)
+    if isinstance(options, str):
+        decoded[SOURCE_RETRIEVAL_OPTIONS_FIELD] = json.loads(options)
     return decoded
 
 

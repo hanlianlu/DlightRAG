@@ -313,8 +313,12 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
     assert content_by_filename["appendix.md"] == b"Appendix fact [2-1]."
 
 
-def test_acceptance_research_tools_include_every_configured_non_resource_surface() -> None:
-    from dlightrag.engine.agent.skills import SkillsBundle
+def test_research_declarations_include_every_configured_surface_without_binding(
+    monkeypatch,
+) -> None:
+    from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.engine.agent.skills import SkillsBundle, SkillsBundleFactory
+    from dlightrag.engine.agent.tools import ToolDeclaration
 
     executor = AnswerExecutor(
         store=MagicMock(),
@@ -332,12 +336,22 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         execution_environment="trust",
         shell_confinement=ConfinementPolicy(),
         memory_store=MagicMock(),
-        skills_bundle_factory=lambda owner_id, requested_skill=None: SkillsBundle(
+        skills_bundle_factory=SkillsBundleFactory(
             global_root=Path("/nonexistent-global-skills"),
         ),
     )
 
-    names = {tool.name for tool in executor.acceptance_research_tools()}
+    def forbid_execution_setup(*_args, **_kwargs):
+        raise AssertionError("acceptance must use declarations without runtime setup")
+
+    monkeypatch.setattr(LocalExecutionEnvironment, "__init__", forbid_execution_setup)
+    monkeypatch.setattr(SkillsBundleFactory, "__call__", forbid_execution_setup)
+    monkeypatch.setattr(SkillsBundle, "catalog", forbid_execution_setup)
+    declarations = executor.research_tool_declarations(
+        web_search=False, memory=True, model_guidance="", injected=()
+    )
+    assert all(type(tool) is ToolDeclaration for tool in declarations)
+    names = {tool.name for tool in declarations}
 
     assert {
         "read",
@@ -358,6 +372,10 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         "recall_memory",
         "load_skill",
     } <= names
+    without_memory = executor.research_tool_declarations(
+        web_search=False, memory=False, model_guidance="", injected=()
+    )
+    assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
 
 
 def test_pinned_child_lifecycle_requires_current_contract() -> None:
@@ -392,7 +410,7 @@ def test_pinned_child_lifecycle_requires_current_contract() -> None:
         supported.name,
         supported.description,
         supported.input_model,
-        execute,
+        execute=execute,
         replay_policy=supported.replay_policy,
         contract_version=9,
     )
@@ -428,7 +446,9 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         execution_environment="trust",
         shell_confinement=ConfinementPolicy(),
     )
-    accepted = executor.acceptance_research_tools()
+    accepted = executor.research_tool_declarations(
+        web_search=False, memory=True, model_guidance="", injected=()
+    )
 
     async def retrieve(_query: str) -> Any:
         raise RuntimeError("tool definitions are never executed")
@@ -447,7 +467,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         environment=LocalExecutionEnvironment(tmp_path),
         artifacts_root=tmp_path / "artifacts",
         publication_limits=executor._settings.publication,
-        subagent_host=SubagentHost(),
+        subagent_host=SubagentHost(model_guidance=""),
         skill_tools=[],
     )
     runtime_by_name = {tool.name: tool for tool in runtime_tools}
@@ -479,7 +499,7 @@ def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> N
     async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
         return ToolResult.text("unused")
 
-    accepted_tool = AgentTool("lookup", "Accepted description.", Args, execute)
+    accepted_tool = AgentTool("lookup", "Accepted description.", Args, execute=execute)
     plan = AgentRunPlan.from_tools(
         (accepted_tool,),
         model_role="query",
@@ -496,7 +516,7 @@ def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> N
     with pytest.raises(IncompatibleActiveRunError, match="differs"):
         AnswerExecutor.validate_pinned_agent_run_plan(
             request,
-            (AgentTool("lookup", "Changed description.", Args, execute),),
+            (AgentTool("lookup", "Changed description.", Args, execute=execute),),
         )
 
 
@@ -2073,51 +2093,20 @@ def test_the_reserved_recall_block_mirrors_the_gates_that_allow_recall() -> None
 
 
 @pytest.mark.parametrize(
-    ("original", "corrected", "filename"),
+    ("original", "filename"),
     [
-        (
-            "[download](artifact:data[9].txt)",
-            "[download](artifact:data%5B9%5D.txt)",
-            "data[9].txt",
-        ),
-        (
-            "[download][9]\n\n[9]: artifact:data.txt",
-            "[download][data]\n\n[data]: artifact:data.txt",
-            "data.txt",
-        ),
+        ("[download](artifact:data[9].txt)", "data[9].txt"),
+        ("[download][9]\n\n[9]: artifact:data.txt", "data.txt"),
     ],
 )
-def test_citation_preparation_rejects_changed_resource_links_before_staging(
-    tmp_path: Path, original: str, corrected: str, filename: str
+def test_citation_preparation_preserves_resource_links_before_staging(
+    tmp_path: Path, original: str, filename: str
 ) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
     report = root / "report.md"
     report.write_text(original)
     (root / filename).write_text("data")
-
-    rejected = _publication_plan(
-        root,
-        answer="Report generated. [Report](artifact:report.md)",
-        attachments=(prepare_artifact_attachment(root, path="report.md"),),
-        contexts={},
-        limits=PublicationLimits(),
-    )
-    publications, descriptors, sources = _stage_publications(
-        plan=rejected, answer=rejected.answer, session_id="session"
-    )
-
-    assert rejected.outcome["status"] == "failed"
-    assert rejected.issues[0].kind == "invalid_reference"
-    assert "Citation preparation changed resource links" in rejected.correction_feedback()
-    assert publications == []
-    assert descriptors[0]["status"] == "unavailable"
-    assert sources == {}
-    assert report.read_text() == original
-
-    # An explicit correction produces one coherent plan: the bytes, discovered
-    # dependency and binding all describe the same final Markdown document.
-    report.write_text(corrected)
     accepted = _publication_plan(
         root,
         answer="Report generated. [Report](artifact:report.md)",
@@ -2130,9 +2119,10 @@ def test_citation_preparation_rejects_changed_resource_links_before_staging(
     )
     assert accepted.outcome["status"] == "complete"
     assert [item.relative_path for item in accepted.artifacts] == ["report.md", filename]
-    assert publications[0].content == corrected.encode()
+    assert publications[0].content == original.encode()
     assert list(accepted.artifacts[0].artifact_bindings.values()) == [publications[1].resource_id]
     assert descriptors[0]["digest"] == artifact_digest(publications[0].content)
+    assert report.read_text() == original
 
 
 def _public_artifact_context() -> dict[str, Any]:

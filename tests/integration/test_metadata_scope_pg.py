@@ -1083,3 +1083,66 @@ async def test_custom_containment_matches_numbers_bools_and_nulls_like_storage(
             _WORKSPACE,
         )
         await conn.close()
+
+
+async def test_source_options_migrate_without_guessing_historical_routing(
+    writer_corpus: WriterCorpus,
+) -> None:
+    """Real old-schema upgrade preserves rows; partial metadata writes preserve routing."""
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+    from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
+
+    index = PGMetadataIndex(workspace=_WORKSPACE)
+    document_id = "source-options-migration"
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        # Restore just the pre-options schema in this dedicated scratch database.
+        await conn.execute(
+            "ALTER TABLE dlightrag_doc_metadata DROP COLUMN _dlightrag_source_options"
+        )
+        await conn.execute(
+            "DELETE FROM dlightrag_schema_migrations "
+            "WHERE scope = 'doc_metadata' AND version = 'source_retrieval_options'"
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_doc_metadata "
+            "(workspace, doc_id, download_locator, _dlightrag_finalization_complete) "
+            "VALUES ($1, $2, 's3://bucket/report.pdf', TRUE)",
+            _WORKSPACE,
+            document_id,
+        )
+        await index.initialize()
+        await index.initialize(validate_only=True)
+        historical = await index.get(document_id)
+        assert historical is not None
+        assert historical[SOURCE_RETRIEVAL_OPTIONS_FIELD] is None
+        assert historical["download_locator"] == "s3://bucket/report.pdf"
+
+        await index.upsert(
+            document_id,
+            {
+                SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": "eu-north-1"},
+            },
+        )
+        await index.merge_custom_metadata(document_id, {"custom_metadata": {"team": "research"}})
+        stored = await index.get(document_id)
+        assert stored is not None
+        assert stored[SOURCE_RETRIEVAL_OPTIONS_FIELD] == {"s3_region": "eu-north-1"}
+        assert stored["custom_metadata"] == {"team": "research"}
+        # A fresh explicit SDK-default choice replaces, rather than JSON-merges,
+        # the previous routing contract.
+        await index.upsert(document_id, {SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": None}})
+        stored = await index.get(document_id)
+        assert stored is not None
+        assert stored[SOURCE_RETRIEVAL_OPTIONS_FIELD] == {"s3_region": None}
+        await index.upsert(document_id, {SOURCE_RETRIEVAL_OPTIONS_FIELD: {}})
+        stored = await index.get(document_id)
+        assert stored is not None
+        assert stored[SOURCE_RETRIEVAL_OPTIONS_FIELD] == {}
+    finally:
+        await conn.execute(
+            "DELETE FROM dlightrag_doc_metadata WHERE workspace = $1 AND doc_id = $2",
+            _WORKSPACE,
+            document_id,
+        )
+        await conn.close()

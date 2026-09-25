@@ -79,6 +79,7 @@ from dlightrag.engine.agent.skills import SkillsBundle, SkillsBundleFactory
 from dlightrag.engine.agent.tools import (
     AgentTool,
 )
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
@@ -881,63 +882,33 @@ class AnswerExecutor:
             model_settings_for_role=self._models.model_settings,
         )
 
-    def acceptance_research_tools(self) -> tuple[AgentTool, ...]:
-        """Return non-resource definitions execution may expose to Research.
+    def research_tool_declarations(
+        self,
+        *,
+        web_search: bool,
+        memory: bool,
+        model_guidance: str,
+        injected: Sequence[ToolDeclaration],
+    ) -> tuple[ToolDeclaration, ...]:
+        """Project configured capabilities without constructing execution dependencies."""
+        from dlightrag.engine.answer.tools.composition import research_tool_declarations
+        from dlightrag.engine.answer.tools.subagents import subagent_declarations
 
-        Acceptance combines these exact factories with request-specific search
-        and resource tools. The execute closures are never invoked here.
-        """
-        from dlightrag.engine.agent.environment import AccessScheduler
-        from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-        from dlightrag.engine.agent.tools.files import path_tools, read_tool, view_tool
-        from dlightrag.engine.agent.tools.registry import ToolRegistry
-        from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
-        from dlightrag.engine.answer.tools.memory import (
-            forget_tool,
-            recall_memory_tool,
-            remember_tool,
+        return research_tool_declarations(
+            web_search=web_search,
+            resource_read=True,
+            resource_view=True,
+            environment=self._execution_adapter is not None,
+            artifact_publication=self._execution_adapter is not None,
+            subagents=subagent_declarations(model_guidance=model_guidance),
+            memory=memory and self._memory_store is not None,
+            skills=(
+                self._skills_bundle_factory.declarations(child=False)
+                if self._skills_bundle_factory is not None
+                else ()
+            ),
+            injected=injected,
         )
-        from dlightrag.engine.answer.tools.subagents import subagent_tools
-
-        access = AccessScheduler()
-
-        async def unused_resource_reader(_request: Any, _runtime: Any) -> Any:
-            raise RuntimeError("acceptance tool definitions are never executed")
-
-        # Research always creates a ResourceRegistry so direct public-URL reads
-        # and later resource cursors have one stable accepted contract.
-        tools: list[AgentTool] = [
-            read_tool(None, access, resource_reader=unused_resource_reader),
-            view_tool(None, access),
-        ]
-        if self._execution_adapter is not None:
-            tools.extend(
-                tool
-                for tool in path_tools(
-                    LocalExecutionEnvironment(Path.cwd()),
-                    scheduler=access,
-                )
-                if tool.name not in {"read", "view"}
-            )
-            tools.append(
-                attach_artifact_tool(
-                    Path.cwd() / "artifacts",
-                    scheduler=access,
-                    limits=self._settings.publication,
-                )
-            )
-        tools.extend(subagent_tools(host=SubagentHost()))
-        if self._memory_store is not None:
-            host = MemoryHost()
-            tools.extend(
-                (remember_tool(host=host), forget_tool(host=host), recall_memory_tool(host=host))
-            )
-        if self._skills_bundle_factory is not None:
-            # Acceptance needs schemas only: a sentinel owner produces the same
-            # tool membership (load always; publish/delete for parents) without
-            # touching any owner directory.
-            tools.extend(self._skills_bundle_factory("__acceptance__").tools(child=False))
-        return ToolRegistry(tools).resolve()
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
         """Execute one claimed run; this is the trace that owns everything the run does."""

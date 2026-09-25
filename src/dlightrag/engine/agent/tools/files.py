@@ -48,6 +48,7 @@ from dlightrag.engine.agent.tools.contracts import (
     CommittedOutput,
     EvidenceSourceFact,
     ResourceAttachmentBytes,
+    ToolDeclaration,
     ToolEffects,
     ToolResult,
     ToolRuntime,
@@ -368,6 +369,36 @@ def path_tools(
     ]
 
 
+def read_declaration(*, public_url: bool) -> ToolDeclaration:
+    url_enabled = public_url
+    description = (
+        "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
+        "anonymous public HTTP(S) url. URL reads accept only optional http.user_agent, "
+        "http.accept, and http.accept_language representation preferences; continue "
+        "with the returned resource_id and cursor."
+        if url_enabled
+        else "Read one workspace path or Host-provided durable resource_id registered in this run."
+    )
+    guidance = (
+        "read: one of path, resource_id, or url; file pages carry an offset while "
+        "directory/resource pages carry opaque cursors. Follow the printed continuation "
+        "instead of re-reading the whole target."
+        if url_enabled
+        else (
+            "read: one of path or resource_id; files page by offset and directories/resources "
+            "by opaque cursor. Follow the printed continuation."
+        )
+    )
+    return ToolDeclaration(
+        name="read",
+        description=description,
+        input_model=ReadArgs if url_enabled else ReadWithoutUrlArgs,
+        replay_policy="replayable",
+        contract_version=4 if url_enabled else 3,
+        guidance=guidance,
+    )
+
+
 def read_tool(
     environment: ExecutionEnvironment | None,
     scheduler: AccessScheduler,
@@ -466,34 +497,7 @@ def read_tool(
                 ),
             )
 
-    url_enabled = resource_reader is not None
-    description = (
-        "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
-        "anonymous public HTTP(S) url. URL reads accept only optional http.user_agent, "
-        "http.accept, and http.accept_language representation preferences; continue "
-        "with the returned resource_id and cursor."
-        if url_enabled
-        else "Read one workspace path or Host-provided durable resource_id registered in this run."
-    )
-    guidance = (
-        "read: one of path, resource_id, or url; file pages carry an offset while "
-        "directory/resource pages carry opaque cursors. Follow the printed continuation "
-        "instead of re-reading the whole target."
-        if url_enabled
-        else (
-            "read: one of path or resource_id; files page by offset and directories/resources "
-            "by opaque cursor. Follow the printed continuation."
-        )
-    )
-    return AgentTool(
-        name="read",
-        description=description,
-        input_model=ReadArgs if url_enabled else ReadWithoutUrlArgs,
-        execute=execute,
-        replay_policy="replayable",
-        contract_version=4 if url_enabled else 3,
-        guidance=guidance,
-    )
+    return read_declaration(public_url=resource_reader is not None).bind(execute)
 
 
 class ViewArgs(BaseModel):
@@ -527,6 +531,16 @@ class ViewArgs(BaseModel):
 
 
 type ResourceViewer = Callable[[ViewArgs, ToolRuntime, ImagePreparer], Awaitable[ToolResult]]
+
+
+def view_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="view",
+        description="View pixels from exactly one resource registered in this run, anonymous public URL, or workspace image path. PDF without locator returns a bounded overview; select a physical page for detail. No separate model is called.",
+        input_model=ViewArgs,
+        replay_policy="replayable",
+        guidance="view: use PDF overviews to find physical pages, not to transcribe small text. Follow the printed continuation. Paths support standalone images only.",
+    )
 
 
 def view_tool(
@@ -576,13 +590,17 @@ def view_tool(
         except PathRejected as exc:
             return ToolResult.text(str(exc), is_error=True)
 
-    return AgentTool(
-        name="view",
-        description="View pixels from exactly one resource registered in this run, anonymous public URL, or workspace image path. PDF without locator returns a bounded overview; select a physical page for detail. No separate model is called.",
-        input_model=ViewArgs,
-        execute=execute,
-        replay_policy="replayable",
-        guidance="view: use PDF overviews to find physical pages, not to transcribe small text. Follow the printed continuation. Paths support standalone images only.",
+    return view_declaration().bind(execute)
+
+
+def write_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="write",
+        description="Create or overwrite a UTF-8 workspace file.",
+        input_model=WriteArgs,
+        replay_policy="never",
+        contract_version=3,
+        guidance="write: replaces the whole file; the success line reports UTF-8 byte size.",
     )
 
 
@@ -612,14 +630,18 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
             effects=ToolEffects(workspace_inventory=inventory),
         )
 
-    return AgentTool(
-        name="write",
-        description="Create or overwrite a UTF-8 workspace file.",
-        input_model=WriteArgs,
-        execute=execute,
+    return write_declaration().bind(execute)
+
+
+def edit_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="edit",
+        description="Replace exact text in a workspace file.",
+        input_model=EditArgs,
         replay_policy="never",
         contract_version=3,
-        guidance="write: replaces the whole file; the success line reports UTF-8 byte size.",
+        guidance="edit: every old_text must match exactly once in the current file; all edits "
+        "apply atomically or none do. Read the file first when a match fails.",
     )
 
 
@@ -700,17 +722,18 @@ def edit_tool(
             ),
         )
 
-    return AgentTool(
-        name="edit",
-        description="Replace exact text in a workspace file.",
-        input_model=EditArgs,
-        execute=execute,
-        replay_policy="never",
+    return edit_declaration().bind(execute)
+
+
+def grep_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="grep",
+        description="Search workspace files with ripgrep.",
+        input_model=GrepArgs,
+        replay_policy="replayable",
         contract_version=3,
-        guidance=(
-            "edit: every old_text must match exactly once in the current file; all edits "
-            "apply atomically or none do. Read the file first when a match fails."
-        ),
+        guidance="grep: regex by default (literal=true for plain text); limit caps matching "
+        "lines, not context lines; hidden files are searched while ignore rules apply.",
     )
 
 
@@ -822,17 +845,19 @@ def grep_tool(
             effects=result.effects,
         )
 
-    return AgentTool(
-        name="grep",
-        description="Search workspace files with ripgrep.",
-        input_model=GrepArgs,
-        execute=execute,
-        replay_policy="replayable",
+    return grep_declaration().bind(execute)
+
+
+def bash_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="bash",
+        description="Run a bash command in the workspace.",
+        input_model=BashArgs,
+        replay_policy="never",
         contract_version=3,
-        guidance=(
-            "grep: regex by default (literal=true for plain text); limit caps matching "
-            "lines, not context lines; hidden files are searched while ignore rules apply."
-        ),
+        guidance="bash: output streams live and stays bounded; timed-out or failing commands "
+        "still return partial output as errors. Never leave symlinks, FIFOs, sockets, "
+        "device files, or quota overflow behind: the workspace latches until external cleanup.",
     )
 
 
@@ -928,19 +953,7 @@ def bash_tool(
             ),
         )
 
-    return AgentTool(
-        name="bash",
-        description="Run a bash command in the workspace.",
-        input_model=BashArgs,
-        execute=execute,
-        replay_policy="never",
-        contract_version=3,
-        guidance=(
-            "bash: output streams live and stays bounded; timed-out or failing commands "
-            "still return partial output as errors. Never leave symlinks, FIFOs, sockets, "
-            "device files, or quota overflow behind: the workspace latches until external cleanup."
-        ),
-    )
+    return bash_declaration().bind(execute)
 
 
 def _sniff_image_media_type(data: bytes) -> str | None:
@@ -1096,6 +1109,18 @@ def _integrity_blocked(environment: ExecutionEnvironment) -> ToolResult | None:
     )
 
 
+def find_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="find",
+        description="Find workspace paths recursively with fd glob semantics.",
+        input_model=FindArgs,
+        replay_policy="replayable",
+        contract_version=2,
+        guidance="find: fd --glob semantics relative to the requested search root; hidden paths "
+        "are included, .git and active ignore rules are respected, and symlinks are not followed.",
+    )
+
+
 def find_tool(
     environment: ExecutionEnvironment,
     scheduler: AccessScheduler,
@@ -1172,17 +1197,18 @@ def find_tool(
             effects=ToolEffects(committed_outputs=((committed,) if committed is not None else ())),
         )
 
-    return AgentTool(
-        name="find",
-        description="Find workspace paths recursively with fd glob semantics.",
-        input_model=FindArgs,
-        execute=execute,
+    return find_declaration().bind(execute)
+
+
+def ls_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="ls",
+        description="List one workspace directory without following symlinks.",
+        input_model=LsArgs,
         replay_policy="replayable",
         contract_version=2,
-        guidance=(
-            "find: fd --glob semantics relative to the requested search root; hidden paths "
-            "are included, .git and active ignore rules are respected, and symlinks are not followed."
-        ),
+        guidance="ls: one sorted directory level, kind/size/name per entry; continue large "
+        "listings with the opaque cursor. Symlinks are listed, never followed.",
     )
 
 
@@ -1214,18 +1240,7 @@ def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> Ag
             tool="ls",
         )
 
-    return AgentTool(
-        name="ls",
-        description="List one workspace directory without following symlinks.",
-        input_model=LsArgs,
-        execute=execute,
-        replay_policy="replayable",
-        contract_version=2,
-        guidance=(
-            "ls: one sorted directory level, kind/size/name per entry; continue large "
-            "listings with the opaque cursor. Symlinks are listed, never followed."
-        ),
-    )
+    return ls_declaration().bind(execute)
 
 
 class _GrepJsonCollector:

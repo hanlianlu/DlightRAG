@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.web_search import web_context_rows
 from dlightrag.engine.answer.web_sources import (
@@ -82,6 +82,14 @@ class WebSearchInput(SearchInput):
         return WebSearchRequest(**self.model_dump())
 
 
+def knowledge_base_search_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        "search_knowledge_base",
+        "Search the indexed knowledge base for one concrete unresolved fact.",
+        SearchInput,
+    )
+
+
 def knowledge_base_search_tool(
     *,
     retrieve: KnowledgeRetrieval,
@@ -93,11 +101,16 @@ def knowledge_base_search_tool(
         await runtime.emit_update(ToolResult.text("", subject=args.query))
         return await _search_corpus(retrieve, args.query, evidence, trace)
 
-    return AgentTool(
-        "search_knowledge_base",
-        "Search the indexed knowledge base for one concrete unresolved fact.",
-        SearchInput,
-        execute,
+    return knowledge_base_search_declaration().bind(execute)
+
+
+def web_search_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        "search_web",
+        "Search the open web for one concrete unresolved or current fact, source page, "
+        "document, image, or file. Use it before claiming open-web search is unavailable.",
+        WebSearchInput,
+        contract_version=2,
     )
 
 
@@ -113,14 +126,7 @@ def web_search_tool(
         await runtime.emit_update(ToolResult.text("", subject=args.query))
         return await _search_open_web(search, args.request(), evidence, trace, register_web_source)
 
-    return AgentTool(
-        "search_web",
-        "Search the open web for one concrete unresolved or current fact, source page, "
-        "document, image, or file. Use it before claiming open-web search is unavailable.",
-        WebSearchInput,
-        execute,
-        contract_version=2,
-    )
+    return web_search_declaration().bind(execute)
 
 
 async def _search_corpus(

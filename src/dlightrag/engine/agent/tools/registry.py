@@ -3,7 +3,7 @@
 
 from collections.abc import Iterable
 
-from dlightrag.engine.agent.tools.contracts import AgentTool
+from dlightrag.engine.agent.tools.contracts import ToolDeclaration
 
 
 class DuplicateToolError(ValueError):
@@ -14,19 +14,19 @@ class DuplicateToolError(ValueError):
         super().__init__(f"duplicate Agent tool names: {', '.join(names)}")
 
 
-class ToolRegistry:
+class ToolRegistry[T: ToolDeclaration]:
     """Own a run-local ordered tool set behind a small registration interface."""
 
-    def __init__(self, tools: Iterable[AgentTool] = ()) -> None:
-        self._tools: dict[str, AgentTool] = {}
+    def __init__(self, tools: Iterable[T] = ()) -> None:
+        self._tools: dict[str, T] = {}
         self.extend(tools)
 
-    def register(self, tool: AgentTool) -> None:
+    def register(self, tool: T) -> None:
         if tool.name in self._tools:
             raise DuplicateToolError((tool.name,))
         self._tools[tool.name] = tool
 
-    def extend(self, tools: Iterable[AgentTool]) -> None:
+    def extend(self, tools: Iterable[T]) -> None:
         incoming = tuple(tools)
         names = [tool.name for tool in incoming]
         duplicates = sorted(
@@ -41,11 +41,11 @@ class ToolRegistry:
         names: Iterable[str] | None = None,
         *,
         exclude: Iterable[str] = (),
-    ) -> tuple[AgentTool, ...]:
+    ) -> tuple[T, ...]:
         excluded = frozenset(exclude)
         if names is None:
             return tuple(tool for name, tool in self._tools.items() if name not in excluded)
-        selected: list[AgentTool] = []
+        selected: list[T] = []
         missing: list[str] = []
         for name in names:
             tool = self._tools.get(name)
@@ -62,7 +62,7 @@ class ToolRegistry:
         *,
         names: Iterable[str] | None = None,
         exclude: Iterable[str] = (),
-    ) -> ToolRegistry:
+    ) -> ToolRegistry[T]:
         """Return an immutable-by-copy child registry selection."""
         return ToolRegistry(self.resolve(names, exclude=exclude))
 

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import Any
 
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.engine.agent.tools import AgentTool
+from dlightrag.engine.agent.tools import ToolDeclaration
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -24,7 +24,7 @@ def research_history_input_measure(
     query_images: list[dict[str, Any]] | None,
     resource_manifest: tuple[ResourceManifestEntry, ...],
     image_budget: AnswerImageBudget | None,
-    tools: list[AgentTool],
+    tools: list[ToolDeclaration],
     memory_text: str = "",
     episodic_summary: str = "",
 ) -> Callable[..., int]:

@@ -419,7 +419,7 @@ class TestAnswerSynthesizerPolicy:
         assert trace["answer_capacity_dropped_chunk_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_the_settled_answer_drops_a_model_generated_references_tail(self) -> None:
+    async def test_the_settled_answer_preserves_a_references_heading(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(),
             model_profile=answer_model_profile(),
@@ -431,7 +431,7 @@ class TestAnswerSynthesizerPolicy:
 
         settled = cast(Any, token_iter).answer
         assert "Growth is 15%" in settled
-        assert "### References" not in settled
+        assert "### References" in settled
 
 
 # ---------------------------------------------------------------------------

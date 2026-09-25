@@ -1,11 +1,9 @@
+from dlightrag.engine.answer.citations.contracts import CITATION_PATTERN, DOC_CITATION_PATTERN
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.citations.parser import (
-    CITATION_PATTERN,
-    DOC_CITATION_PATTERN,
     claimless_chunk_ids,
     clean_invalid_citations,
     extract_cited_chunks,
-    strip_generated_references_section,
 )
 
 
@@ -209,15 +207,3 @@ class TestCleanInvalidCitationsDocLevel:
         )
         cleaned = clean_invalid_citations(indexer, "See [99].")
         assert "[99]" not in cleaned
-
-
-class TestStripGeneratedReferencesSection:
-    def test_strips_trailing_markdown_references(self):
-        answer = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
-
-        assert strip_generated_references_section(answer) == "Revenue grew 15% [1-1]."
-
-    def test_preserves_body_text_that_mentions_references(self):
-        answer = "The References Act is discussed in the document [1-1]."
-
-        assert strip_generated_references_section(answer) == answer

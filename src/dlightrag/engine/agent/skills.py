@@ -26,12 +26,17 @@ from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.engine.agent.context import ContextContribution
-from dlightrag.engine.agent.tools.contracts import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    ToolDeclaration,
+    ToolResult,
+    ToolRuntime,
+)
 
 _MAX_SKILL_FILE_CHARS = 50_000
 _OWNER_MAX_SKILLS = 20
@@ -221,21 +226,60 @@ class SkillsBundle:
         return tuple(item for item in (requested, skill) if item is not None)
 
     def tools(self, *, child: bool) -> list[AgentTool]:
-        tools: list[AgentTool] = []
         catalog = self.catalog()
-        if catalog is not None:
-            tools.append(load_skill_tool(catalog))
-        if not child and self._owner_root is not None:
-            # Parent runs only: the validated owner publication channel.
-            tools.append(publish_skill_tool(self._owner_root))
-            tools.append(delete_skill_tool(self._owner_root))
-        return tools
+        bindings = {
+            "load_skill": lambda: load_skill_tool(cast(SkillCatalog, catalog)),
+            "publish_skill": lambda: publish_skill_tool(self._owner_root),
+            "delete_skill": lambda: delete_skill_tool(self._owner_root),
+        }
+        return [
+            bindings[declaration.name]()
+            for declaration in skill_declarations(
+                load=catalog is not None, publish=self._owner_root is not None, child=child
+            )
+        ]
 
 
-class SkillsBundleFactory(Protocol):
-    """Builds one run's SkillsBundle for an owner, optionally with a directive."""
+def skill_declarations(*, load: bool, publish: bool, child: bool) -> tuple[ToolDeclaration, ...]:
+    """Select configured Skill capabilities without reading any catalogue or owner."""
+    return (
+        *((load_skill_declaration(),) if load else ()),
+        *(
+            (publish_skill_declaration(), delete_skill_declaration())
+            if publish and not child
+            else ()
+        ),
+    )
 
-    def __call__(self, owner_id: str, requested_skill: str | None = None) -> SkillsBundle: ...
+
+@dataclass(frozen=True, slots=True)
+class SkillsBundleFactory:
+    """Configured Skill capabilities, binding an actual owner only at execution."""
+
+    builtin_root: Traversable | None = None
+    global_root: Path | None = None
+    owner_root: Path | None = None
+    disabled_builtin_skills: frozenset[str] = frozenset()
+
+    def declarations(self, *, child: bool) -> tuple[ToolDeclaration, ...]:
+        return skill_declarations(
+            load=any(
+                root is not None for root in (self.builtin_root, self.global_root, self.owner_root)
+            ),
+            publish=self.owner_root is not None,
+            child=child,
+        )
+
+    def __call__(self, owner_id: str, requested_skill: str | None = None) -> SkillsBundle:
+        return SkillsBundle(
+            builtin_root=self.builtin_root,
+            global_root=self.global_root,
+            owner_root=(
+                owner_skill_root(self.owner_root, owner_id) if self.owner_root is not None else None
+            ),
+            disabled_builtin_skills=self.disabled_builtin_skills,
+            requested_skill=requested_skill,
+        )
 
 
 def _requested_skill_contribution(name: str | None) -> ContextContribution | None:
@@ -263,6 +307,15 @@ def _requested_skill_contribution(name: str | None) -> ContextContribution | Non
     )
 
 
+def load_skill_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="load_skill",
+        description="Load one discovered Agent Skill document on demand. Never executes Skill code.",
+        input_model=LoadSkillInput,
+        replay_policy="replayable",
+    )
+
+
 def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(LoadSkillInput, raw)
@@ -276,12 +329,21 @@ def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
             f"--- {args.name}/{args.path} ---\n{text}"
         )
 
-    return AgentTool(
-        name="load_skill",
-        description="Load one discovered Agent Skill document on demand. Never executes Skill code.",
-        input_model=LoadSkillInput,
-        execute=execute,
-        replay_policy="replayable",
+    return load_skill_declaration().bind(execute)
+
+
+def publish_skill_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="publish_skill",
+        description="Publish one durable Agent Skill for the current user. Validates the skill "
+        "(frontmatter name/description, kebab-case name, per-file 50K char cap, "
+        "20 skills / 20MiB owner quota) and installs it atomically. Publishing an "
+        "existing name updates it. Never touches global or built-in skills.",
+        input_model=PublishSkillInput,
+        replay_policy="never",
+        guidance="publish_skill is the only channel for making a skill durable: drafts in the "
+        "run workspace or conversation do not survive the run. Follow the skill-creator "
+        "skill for the drafting workflow before publishing.",
     )
 
 
@@ -307,22 +369,17 @@ def publish_skill_tool(owner_root: Path | None) -> AgentTool:
             f"into your owner skill directory. It is discoverable on your next answer run."
         )
 
-    return AgentTool(
-        name="publish_skill",
-        description=(
-            "Publish one durable Agent Skill for the current user. Validates the skill "
-            "(frontmatter name/description, kebab-case name, per-file 50K char cap, "
-            "20 skills / 20MiB owner quota) and installs it atomically. Publishing an "
-            "existing name updates it. Never touches global or built-in skills."
-        ),
-        input_model=PublishSkillInput,
-        execute=execute,
+    return publish_skill_declaration().bind(execute)
+
+
+def delete_skill_declaration() -> ToolDeclaration:
+    return ToolDeclaration(
+        name="delete_skill",
+        description="Delete one durable Agent Skill owned by the current user. Idempotent.",
+        input_model=DeleteSkillInput,
         replay_policy="never",
-        guidance=(
-            "publish_skill is the only channel for making a skill durable: drafts in the "
-            "run workspace or conversation do not survive the run. Follow the skill-creator "
-            "skill for the drafting workflow before publishing."
-        ),
+        guidance="delete_skill removes only the current user's own skills, never global or built-in "
+        "ones. A same-named lower-tier skill becomes visible on the next answer run.",
     )
 
 
@@ -342,17 +399,7 @@ def delete_skill_tool(owner_root: Path | None) -> AgentTool:
             return ToolResult.text(f"Agent Skill '{args.name}' does not exist; nothing to delete.")
         return ToolResult.text(f"Deleted Agent Skill '{args.name}'.")
 
-    return AgentTool(
-        name="delete_skill",
-        description="Delete one durable Agent Skill owned by the current user. Idempotent.",
-        input_model=DeleteSkillInput,
-        execute=execute,
-        replay_policy="never",
-        guidance=(
-            "delete_skill removes only the current user's own skills, never global or built-in "
-            "ones. A same-named lower-tier skill becomes visible on the next answer run."
-        ),
-    )
+    return delete_skill_declaration().bind(execute)
 
 
 # ---------------------------------------------------------------------------

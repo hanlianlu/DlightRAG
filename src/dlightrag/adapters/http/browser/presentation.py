@@ -2,7 +2,6 @@
 """Safe semantic projection shared by browser history, SSE, and Artifact views."""
 
 import html as html_module
-import re
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
@@ -21,10 +20,9 @@ from dlightrag.adapters.http.browser.safe_html import sanitize_html_fragment
 from dlightrag.adapters.http.browser.video_playback import VideoPlaybackLink, video_playback_link
 from dlightrag.application.corpus_admin import validate_public_web_url
 from dlightrag.engine.answer.citations.contracts import (
-    CITATION_PATTERN,
-    DOC_CITATION_PATTERN,
     SourceReferencePayload,
 )
+from dlightrag.engine.answer.citations.syntax import Citation
 from dlightrag.engine.answer.client_contracts import ClientContractModel
 from dlightrag.engine.answer.reference import resolve_artifact_target
 
@@ -176,41 +174,6 @@ class AnswerPresentation(ClientContractModel):
     artifact_outcome: PresentationArtifactOutcome
 
 
-def _protect_spans(
-    html: str,
-    patterns: tuple[str, ...],
-    protected: list[str],
-) -> str:
-    """Mask spans from citation substitution, appending each to ``protected``."""
-
-    def replace(match: re.Match[str]) -> str:
-        index = len(protected)
-        protected.append(match.group(0))
-        return f"\x00CODE{index}\x00"
-
-    for pattern in patterns:
-        html = re.sub(pattern, replace, html, flags=re.DOTALL)
-    return html
-
-
-def _protect_code_blocks(html: str) -> tuple[str, list[str]]:
-    protected: list[str] = []
-    html = _protect_spans(html, (r"<pre[^>]*>.*?</pre>", r"<code[^>]*>.*?</code>"), protected)
-    return html, protected
-
-
-def _protect_links(html: str, protected: list[str]) -> str:
-    """Mask link text: a projected citation is a link whose label holds its own
-    marker, and badging that marker would nest a control inside the link."""
-    return _protect_spans(html, (r"<a\b[^>]*>.*?</a>",), protected)
-
-
-def _restore_code_blocks(html: str, protected: list[str]) -> str:
-    for index in range(len(protected) - 1, -1, -1):
-        html = html.replace(f"\x00CODE{index}\x00", protected[index])
-    return html
-
-
 def _reference_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
     ref = str(ref_id)
     return ref if chunk_idx is None or chunk_idx == "" else f"{ref}-{chunk_idx}"
@@ -236,42 +199,29 @@ def render_answer_html(
     the click cannot open. A badge carries its source title as a tooltip, which is
     the only source name a private corpus document has in the interface.
     """
-    html = render_markdown(
-        answer,
-        place_resource=place_resource,
-        place_linked_image=place_linked_image,
-        citation_links=citation_links,
-    )
-    html, protected = _protect_code_blocks(html)
-    html = _protect_links(html, protected)
 
-    def chunk_citation(match: re.Match[str]) -> str:
-        ref_id, chunk_idx = match.group(1), match.group(2)
+    def render_citation(citation: Citation) -> str:
+        ref_id, chunk_idx = citation.ref_id, citation.chunk_idx
         title = known_sources.get(ref_id)
         if title is None:
-            return match.group(0)
+            return html_module.escape(citation.marker)
+        chunk = f' data-chunk="{chunk_idx}"' if chunk_idx is not None else ""
         return (
-            f'<cite class="citation-badge" data-ref="{ref_id}" data-chunk="{chunk_idx}" '
+            f'<cite class="citation-badge" data-ref="{ref_id}"{chunk} '
             f'role="button" tabindex="0" title="{html_module.escape(title, quote=True)}" '
             f'aria-label="{_reference_aria_label(ref_id, chunk_idx)}">'
             f"{_reference_label(ref_id, chunk_idx)}</cite>"
         )
 
-    def document_citation(match: re.Match[str]) -> str:
-        ref_id = match.group(1)
-        title = known_sources.get(ref_id)
-        if title is None:
-            return match.group(0)
-        return (
-            f'<cite class="citation-badge" data-ref="{ref_id}" role="button" tabindex="0" '
-            f'title="{html_module.escape(title, quote=True)}" '
-            f'aria-label="{_reference_aria_label(ref_id)}">'
-            f"{_reference_label(ref_id)}</cite>"
+    return sanitize_html_fragment(
+        render_markdown(
+            answer,
+            place_resource=place_resource,
+            place_linked_image=place_linked_image,
+            citation_links=citation_links,
+            render_citation=render_citation,
         )
-
-    html = CITATION_PATTERN.sub(chunk_citation, html)
-    html = DOC_CITATION_PATTERN.sub(document_citation, html)
-    return sanitize_html_fragment(_restore_code_blocks(html, protected))
+    )
 
 
 def render_source_chunk_html(content: str, phrases: list[str] | None = None) -> str:

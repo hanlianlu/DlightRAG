@@ -449,8 +449,24 @@ context:
 - unknown markers are removed;
 - a chunk marker pointing only to Markdown headings degrades to its document
   marker because the chunk supports no factual claim;
-- generated bibliography tails are discarded; and
 - cited sources/references are derived from the surviving inline markers.
+
+The shared Answer Markdown grammar identifies citation tokens once for cleanup
+and source selection. Highlight extraction, browser badges and portable Markdown
+links use that same syntax. Real Markdown links (including numeric reference
+labels) take priority; code, math, escapes, link destinations/labels, reference
+definitions and image alt text are not citations. Cleanup and public-link
+projection edit exact source spans and preserve every other source character,
+including line endings and table escapes. A `References` heading never authorizes
+deleting prose. Prompts ask the Model to omit duplicate bibliographies; source
+authority continues to come only from validated inline citations.
+
+The parser's private source adapter carries contiguous offset runs through
+markdown-it normalization and container extraction. Table recognition remains
+upstream's; a row/column adapter mirrors only escaped-pipe removal and asserts
+that its source-mapped cell equals the emitted cell. Syntax matrix tests cover
+these dependency seams when upgrading markdown-it; no source-position guessing
+or full-document reserialization is used.
 
 Finalization also derives `evidence_images` and ordered Markdown/Artifact/image
 `parts`; transports never trust model-generated Markdown image URLs. Every

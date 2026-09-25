@@ -12,6 +12,9 @@ from linkify_it import LinkifyIt
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline
 
+from dlightrag.engine.answer.citations.syntax import install_citation_syntax
+from dlightrag.engine.answer.markdown_source import install_source_mapping
+
 # CJK punctuation ends an autolinked address; CJK letters may belong to one of
 # its components. The fullwidth block holds both kinds, so it is split: its
 # punctuation forms U+FF01-FF0F, FF1A-FF20, FF3B-FF40, FF5B-FF65 end an address
@@ -240,6 +243,8 @@ def answer_markdown() -> MarkdownIt:
     md = MarkdownIt("gfm-like", {"html": False})
     _configure_autolinking(md)
     md.inline.ruler.before("escape", "math_inline", math_inline_rule)
+    install_source_mapping(md)
+    install_citation_syntax(md)
     return md
 
 

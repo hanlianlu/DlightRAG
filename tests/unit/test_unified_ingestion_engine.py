@@ -1259,6 +1259,7 @@ async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
             "file_extension": "pdf",
             "custom_metadata": {},
             _FINALIZATION_COMPLETE_KEY: False,
+            "_dlightrag_source_options": {},
         }
     ]
 
@@ -2934,3 +2935,93 @@ async def test_non_image_sources_are_not_normalized(tmp_path: Path) -> None:
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["file_paths"] == [str(source)]
+
+
+async def test_source_options_survive_parser_failure_and_same_content_update(
+    tmp_path: Path,
+) -> None:
+    from dlightrag.engine.rag.corpus.sources.factory import SourceRetrievalOptions
+    from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
+
+    path = tmp_path / "report.pdf"
+    content = b"%PDF-test"
+    path.write_bytes(content)
+    engine, deps = _make_engine()
+    item = PreparedIngestFile(
+        parser_path=path,
+        source_uri="s3://bucket/report.pdf",
+        download_locator="s3://bucket/report.pdf",
+        source_options=SourceRetrievalOptions("eu-north-1"),
+    )
+    deps["stores"].get_doc_status.return_value = None
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = RuntimeError("parser failed")
+    with pytest.raises(RuntimeError, match="parser failed"):
+        await engine.aingest_files([item])
+    pending = deps["metadata_index"].upsert.await_args.args[1]
+    assert pending[SOURCE_RETRIEVAL_OPTIONS_FIELD] == {"s3_region": "eu-north-1"}
+    assert pending[_FINALIZATION_COMPLETE_KEY] is False
+    assert pending["custom_metadata"] == {}
+
+    # Routing alone changes while bytes match: update metadata, do not reparse.
+    deps["metadata_index"].get.return_value = {
+        **pending,
+        SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": "us-east-1"},
+        _FINALIZATION_COMPLETE_KEY: True,
+    }
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    deps["metadata_index"].upsert.reset_mock()
+    deps["lightrag"].apipeline_enqueue_documents.reset_mock()
+    result = await engine.aingest_files([item], replace=False)
+    assert result["results"][0]["source_kind"] == "metadata_updated"
+    saved = deps["metadata_index"].upsert.await_args.args[1]
+    assert saved[SOURCE_RETRIEVAL_OPTIONS_FIELD] == {"s3_region": "eu-north-1"}
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "new_locator,expected_options",
+    [
+        ("s3://bucket/report.pdf", {"s3_region": "eu-north-1"}),
+        ("https://cdn.example.com/report.pdf", {}),
+    ],
+)
+async def test_metadata_only_update_preserves_routing_for_same_locator(
+    tmp_path: Path, new_locator: str, expected_options: dict
+) -> None:
+    from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
+
+    content = b"%PDF-routing"
+    source = tmp_path / "report.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    deps["metadata_index"].get.return_value = {
+        "filename": "report.pdf",
+        "filename_stem": "report",
+        "file_extension": "pdf",
+        "source_uri": "s3://bucket/report.pdf",
+        "download_locator": "s3://bucket/report.pdf",
+        "custom_metadata": {},
+        _FINALIZATION_COMPLETE_KEY: True,
+        SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": "eu-north-1"},
+    }
+    result = await engine.aingest_file(
+        source,
+        source_uri="s3://bucket/report.pdf",
+        download_locator=new_locator,
+        title="Updated title",
+        replace=False,
+    )
+    assert result["source_kind"] == "metadata_updated"
+    saved = deps["metadata_index"].upsert.await_args.args[1]
+    assert saved[SOURCE_RETRIEVAL_OPTIONS_FIELD] == expected_options
+    assert saved["title"] == "Updated title"
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()

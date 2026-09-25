@@ -22,7 +22,7 @@ async def _execute(arguments: BaseModel, _runtime: object) -> ToolResult:
 
 
 def _tool(name: str) -> AgentTool:
-    return AgentTool(name, f"{name} tool", _Input, _execute)
+    return AgentTool(name, f"{name} tool", _Input, execute=_execute)
 
 
 def test_context_projector_orders_authorities_and_keeps_source_order() -> None:

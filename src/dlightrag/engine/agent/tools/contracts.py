@@ -2,7 +2,7 @@
 """The contracts one model-visible tool call is made of."""
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -195,8 +195,8 @@ type ToolExecute = Callable[[BaseModel, ToolRuntime], Awaitable["ToolResult"]]
 
 
 @dataclass(frozen=True, slots=True)
-class AgentTool:
-    """Executable tool with a Pydantic argument contract.
+class ToolDeclaration:
+    """Pure tool declaration with a Pydantic argument contract.
 
     ``replay_policy``, ``contract_version``, and ``input_schema_digest`` are the
     intent facts replay must match exactly. Replay is fail-closed: tools opt in
@@ -208,10 +208,9 @@ class AgentTool:
     name: str
     description: str
     input_model: type[BaseModel]
-    execute: ToolExecute
     replay_policy: ReplayPolicy = "never"
     contract_version: int = 2
-    input_schema_digest: str = ""
+    input_schema_digest: str = field(init=False)
     guidance: str = ""
 
     def __post_init__(self) -> None:
@@ -233,6 +232,25 @@ class AgentTool:
             parameters=self.input_model.model_json_schema(),
         )
 
+    def bind(self, execute: ToolExecute) -> AgentTool:
+        """Bind this exact declaration to one run's execution capability."""
+        return AgentTool(
+            self.name,
+            self.description,
+            self.input_model,
+            replay_policy=self.replay_policy,
+            contract_version=self.contract_version,
+            guidance=self.guidance,
+            execute=execute,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTool(ToolDeclaration):
+    """A declared tool with its required, run-local execution binding."""
+
+    execute: ToolExecute = field(kw_only=True)
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutedTurn:
@@ -247,6 +265,7 @@ __all__ = [
     "EvidenceSourceFact",
     "ExecutedTurn",
     "ResourceAttachmentBytes",
+    "ToolDeclaration",
     "ToolExecute",
     "ToolModelFunc",
     "ToolResult",

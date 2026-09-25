@@ -604,6 +604,13 @@ Inline citations accept:
 Resolve `[1-2]` by finding source `id: "1"`, then chunk `chunk_idx: 2`.
 `page_number` helps navigation but does not affect citation validity.
 
+Markers are recognized in Markdown prose. Code, math, escaped brackets, existing
+link/image contents and reference definitions stay literal. A real reference
+link such as `[official][1]` with a `[1]: ...` definition takes priority over
+the numeric citation form. Validation, source selection, highlights and browser
+badges share this interpretation. Finalization preserves surrounding Markdown
+and ordinary `References` sections; only actual invalid markers are removed.
+
 Visual bytes are read through authenticated routes. Both full and thumbnail
 reads return 404 when the chunk has no attributable, currently finalized
 Product Document; cached thumbnails do not bypass that check:

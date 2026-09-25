@@ -11,9 +11,9 @@ from .parser import (
     claimless_chunk_ids,
     clean_invalid_citations,
     extract_cited_chunks,
-    strip_generated_references_section,
 )
 from .source_builder import build_sources_from_chunks
+from .syntax import parse_citations
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +52,13 @@ class CitationProcessor:
 
     def process(self, answer_text: str) -> CitationResult:
         """Clean citations, extract chunks, build source references."""
-        answer_body = strip_generated_references_section(answer_text)
+        document = parse_citations(answer_text)
         cleaned = clean_invalid_citations(
-            self._indexer, answer_body, claimless_chunks=self._claimless_chunks
+            self._indexer, document, claimless_chunks=self._claimless_chunks
         )
-        cited_chunks = extract_cited_chunks(self._indexer, cleaned)
+        cited_chunks = extract_cited_chunks(
+            self._indexer, document, claimless_chunks=self._claimless_chunks
+        )
         sources = self._filter_cited_sources(cited_chunks)
 
         return CitationResult(

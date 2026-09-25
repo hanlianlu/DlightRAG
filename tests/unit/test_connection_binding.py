@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from dlightrag.application.connections import BoundResearchConnections, ConnectionsError
-from dlightrag.engine.agent.tools import AgentTool
+from dlightrag.engine.agent.tools import ToolDeclaration
 from dlightrag.engine.answer.execution.connection_binding import (
     RunConnectionBinding,
     StaleConnectionBindingError,
@@ -31,11 +31,10 @@ class Arguments(BaseModel):
 def bound(generation=1):
     return BoundResearchConnections(
         tools=(
-            AgentTool(
+            ToolDeclaration(
                 name="mcp_fixture",
                 description=f"generation {generation}",
                 input_model=Arguments,
-                execute=AsyncMock(),
             ),
         ),
         bindings=(RunConnectionBinding("owner-1", "a" * 32, generation, 1, "b" * 64),),

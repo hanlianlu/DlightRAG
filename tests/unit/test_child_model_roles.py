@@ -382,7 +382,14 @@ async def test_acceptance_and_execution_share_pinned_five_model_spawn_guidance(m
     cast(Any, service._capabilities).current_profiles = lambda: {
         pin.role: pin.profile for pin in pins
     }
-    service._research_tool_supplements = lambda: subagent_tools(host=SubagentHost())
+    from dlightrag.engine.answer.tools.composition import research_tool_declarations
+    from dlightrag.engine.answer.tools.subagents import subagent_declarations
+
+    service._research_tool_declarations = lambda **options: research_tool_declarations(
+        web_search=options["web_search"],
+        injected=options["injected"],
+        subagents=subagent_declarations(model_guidance=options["model_guidance"]),
+    )
     await service.create(request=_request(mode="research"), owner_id=_OWNER)
     accepted = AnswerRunInput.from_request(cast(Any, service._store).created[0]["prepared_input"])
     assert accepted.pinned_models == pins

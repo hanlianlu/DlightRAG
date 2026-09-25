@@ -25,6 +25,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
+from dlightrag.engine.answer.citations.syntax import Citation, citation_reference
 from dlightrag.engine.answer.markdown import answer_markdown, math_inline_rule
 from dlightrag.engine.answer.reference import InlineReference, inline_references
 
@@ -161,12 +162,12 @@ def _place_resources(
             token = children[reference.start]
             replacement = None
             label_tokens = children[reference.start + 1 : reference.end - 1]
-            citation = (
-                re.fullmatch(r"([0-9]+)(?:-[0-9]+)?", reference.label)
+            citation_ref = (
+                citation_reference(f"[{reference.label}]")
                 if not reference.image and len(label_tokens) == 1 and label_tokens[0].type == "text"
                 else None
             )
-            if citation and citation_links.get(citation.group(1)) == reference.target:
+            if citation_ref and citation_links.get(citation_ref) == reference.target:
                 token.attrJoin("class", "answer-citation-link")
             elif place is not None:
                 replacement = place(reference.target, reference.label, reference.image)
@@ -197,6 +198,7 @@ def render_markdown(
     place_resource: Callable[[str, str, bool], str | None] | None = None,
     place_linked_image: Callable[[str, str], LinkedImagePlacement | None] | None = None,
     citation_links: Mapping[str, str] | None = None,
+    render_citation: Callable[[Citation], str] | None = None,
 ) -> str:
     r"""Convert Markdown text to HTML with syntax-highlighted code blocks.
 
@@ -204,9 +206,14 @@ def render_markdown(
     (``$$...$$``, ``\[...\]``) are passed through verbatim for
     client-side MathJax rendering.
     """
-    if place_resource is None and place_linked_image is None and not citation_links:
+    if (
+        place_resource is None
+        and place_linked_image is None
+        and not citation_links
+        and render_citation is None
+    ):
         return _md.render(text)
-    env: dict = {}
+    env: dict = {"render_citation": render_citation}
     tokens = _md.parse(text, env)
     _place_resources(
         tokens,

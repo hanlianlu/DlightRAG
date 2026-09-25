@@ -50,6 +50,11 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
 )
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
 from dlightrag.engine.rag.corpus.sources.base import AsyncDataSource, SourceDocument
+from dlightrag.engine.rag.corpus.sources.factory import (
+    RemoteSourceFactory,
+    SourceRetrievalOptions,
+    resolve_source_options,
+)
 from dlightrag.engine.rag.corpus.sources.source_contract import (
     SourceDownloadContractError,
     local_source_uri,
@@ -62,6 +67,7 @@ from dlightrag.engine.rag.lightrag.models import LightRagChatModels, build_light
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
+    SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
 from dlightrag.engine.rag.retrieval.rerank import (
     build_product_reranker,
@@ -190,6 +196,7 @@ _INTERNAL_FIELDS = frozenset(
         "workspace",
         "doc_id",
         "download_locator",
+        SOURCE_RETRIEVAL_OPTIONS_FIELD,
         INGEST_FINALIZATION_COMPLETE_FIELD,
     }
 )
@@ -866,6 +873,7 @@ class WorkspaceRag:
         download_locator: str,
         batch_root: Path,
         retain_source_file: bool,
+        source_options: SourceRetrievalOptions | None = None,
     ) -> PreparedIngestFile:
         key = document.display_filename or document.key
         if retain_source_file:
@@ -886,6 +894,7 @@ class WorkspaceRag:
             title=document.title,
             author=document.author,
             metadata=document.metadata,
+            source_options=source_options if not retain_source_file else None,
         )
 
     async def _aingest_remote_documents(
@@ -904,6 +913,7 @@ class WorkspaceRag:
         resume_from_window: int = 0,
         retain_source_file: bool | None = None,
         track_id: str | None = None,
+        source_options: SourceRetrievalOptions | None = None,
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
         if self._ingestion_engine is None:
@@ -1020,6 +1030,15 @@ class WorkspaceRag:
                         download_locator=download_locator,
                         batch_root=current_batch_root,
                         retain_source_file=retain_source_files,
+                        # An explicit mirror locator has its own routing. Do
+                        # not stamp the original provider's options onto it.
+                        source_options=(
+                            source_options
+                            if source_options is not None
+                            and download_uri_for_key is not None
+                            and download_locator == download_uri_for_key(document.key)
+                            else None
+                        ),
                     )
                 except SourceDownloadContractError as exc:
                     return _RemoteDownloadFailure(str(exc))
@@ -1167,6 +1186,7 @@ class WorkspaceRag:
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
         _track_id: str | None = None,
+        _source_options: SourceRetrievalOptions | None = None,
     ) -> dict[str, Any]:
         """Ingest documents from a caller-provided async data source.
 
@@ -1206,6 +1226,7 @@ class WorkspaceRag:
                 resume_from_window=_resume_from_window,
                 retain_source_file=retain_source_file,
                 track_id=_track_id,
+                source_options=_source_options,
             )
         finally:
             if close is not None:
@@ -1214,59 +1235,30 @@ class WorkspaceRag:
                     _ = await result
 
     async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
+        factory = RemoteSourceFactory(self.settings)
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
-            from dlightrag.engine.rag.corpus.sources.url import URLDataSource
-
-            source = URLDataSource(
+            source = factory.url(
                 documents=[
                     _source_document_from_manifest(document, key=cast(str, document.url))
                     for document in documents
-                ],
-                max_download_bytes=self.settings.url_ingest_max_bytes,
-                allow_private_hosts=self.settings.url_ingest_private_host_allowlist,
+                ]
             )
-            result = await self.aingest_source(
-                source,
-                source_type="url",
-                source_uri_for_key=source.source_uri_for_key,
-                download_uri_for_key=source.download_uri_for_key,
-                replace=replace,
-                title=kwargs.get("title"),
-                author=kwargs.get("author"),
-                metadata=kwargs.get("metadata"),
-                retain_source_file=kwargs.get("retain_source_file"),
-                _progress_callback=kwargs.get("_progress_callback"),
-                _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
-                _track_id=kwargs.get("_track_id"),
+            single = len(documents) == 1
+        else:
+            raw_urls = kwargs.get("urls")
+            urls = list(raw_urls) if isinstance(raw_urls, list) else []
+            if kwargs.get("url"):
+                urls = [str(kwargs["url"])]
+            source = factory.url(
+                urls=urls,
+                filename=kwargs.get("filename"),
+                source_uri=kwargs.get("source_uri"),
+                source_uris=kwargs.get("source_uris"),
+                download_uri=kwargs.get("download_uri"),
+                download_uris=kwargs.get("download_uris"),
             )
-            if len(documents) == 1:
-                return self._single_file_result(result)
-            return result
-
-        raw_urls = kwargs.get("urls")
-        urls = list(raw_urls) if isinstance(raw_urls, list) else []
-        if kwargs.get("url"):
-            urls = [str(kwargs["url"])]
-
-        from dlightrag.engine.rag.corpus.sources.url import URLDataSource
-
-        source_kwargs: dict[str, Any] = {"urls": urls}
-        if kwargs.get("filename") is not None:
-            source_kwargs["filename"] = kwargs["filename"]
-        if kwargs.get("source_uri") is not None:
-            source_kwargs["source_uri"] = kwargs["source_uri"]
-        if kwargs.get("source_uris") is not None:
-            source_kwargs["source_uris"] = kwargs["source_uris"]
-        if kwargs.get("download_uri") is not None:
-            source_kwargs["download_uri"] = kwargs["download_uri"]
-        if kwargs.get("download_uris") is not None:
-            source_kwargs["download_uris"] = kwargs["download_uris"]
-        source = URLDataSource(
-            **source_kwargs,
-            max_download_bytes=self.settings.url_ingest_max_bytes,
-            allow_private_hosts=self.settings.url_ingest_private_host_allowlist,
-        )
+            single = len(urls) == 1
         result = await self.aingest_source(
             source,
             source_type="url",
@@ -1281,9 +1273,7 @@ class WorkspaceRag:
             _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
             _track_id=kwargs.get("_track_id"),
         )
-        if len(urls) == 1:
-            return self._single_file_result(result)
-        return result
+        return self._single_file_result(result) if single else result
 
     async def _aingest_object_store(
         self,
@@ -1294,6 +1284,7 @@ class WorkspaceRag:
         single_key: str | None,
         replace: bool,
         kwargs: dict[str, Any],
+        source_options: SourceRetrievalOptions | None = None,
     ) -> dict[str, Any]:
         """Shared manifest/single-key/prefix routing for blob-style sources."""
         common_kwargs = {
@@ -1308,6 +1299,7 @@ class WorkspaceRag:
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
             "_track_id": kwargs.get("_track_id"),
+            "_source_options": source_options,
         }
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
@@ -1336,12 +1328,7 @@ class WorkspaceRag:
         if source is None:
             if not container_name:
                 raise ValueError("'container_name' is required for azure_blob source_type")
-            from dlightrag.engine.rag.corpus.sources.azure_blob import AzureBlobDataSource
-
-            source = AzureBlobDataSource(
-                connection_string=self.settings.blob_connection_string,
-                container_name=container_name,
-            )
+            source = RemoteSourceFactory(self.settings).azure(str(container_name))
         blob_path = kwargs.get("blob_path")
         return await self._aingest_object_store(
             source_type="azure_blob",
@@ -1355,14 +1342,14 @@ class WorkspaceRag:
     async def _aingest_s3(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         bucket = kwargs.get("bucket")
         source = kwargs.get("source")
+        source_options = None
         if source is None:
             if not bucket:
                 raise ValueError("'bucket' is required for s3 source_type")
-            from dlightrag.engine.rag.corpus.sources.aws_s3 import S3DataSource
-
-            source = S3DataSource(
-                bucket=str(bucket), region=kwargs.get("s3_region") or self.settings.s3_region
+            source_options = SourceRetrievalOptions(
+                kwargs.get("s3_region") or self.settings.s3_region
             )
+            source = RemoteSourceFactory(self.settings).s3(str(bucket), source_options)
         # The MCP contract accepts either name for the single-object case.
         key = kwargs.get("s3_key") or kwargs.get("blob_path")
         return await self._aingest_object_store(
@@ -1372,6 +1359,7 @@ class WorkspaceRag:
             single_key=str(key) if key else None,
             replace=replace,
             kwargs=kwargs,
+            source_options=source_options,
         )
 
     async def aingest(
@@ -1890,7 +1878,12 @@ class WorkspaceRag:
 
             try:
                 display_filename = _retry_display_filename(stored_filename)
-                self._validate_retry_source_contract(source_uri, download_locator)
+                source_type, _ = self._validate_retry_source_contract(source_uri, download_locator)
+                resolve_source_options(
+                    source_type,
+                    metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD),
+                    default_s3_region=self.settings.s3_region,
+                )
             except (OSError, TypeError, ValueError) as exc:
                 if recovered_processed:
                     raise RetryOutcomeUncertainError(
@@ -2042,6 +2035,8 @@ class WorkspaceRag:
         custom = metadata.get("custom_metadata")
         if isinstance(custom, Mapping):
             allowed["custom_metadata"] = dict(custom)
+        if SOURCE_RETRIEVAL_OPTIONS_FIELD in metadata:
+            allowed[SOURCE_RETRIEVAL_OPTIONS_FIELD] = metadata[SOURCE_RETRIEVAL_OPTIONS_FIELD]
         return allowed
 
     @staticmethod
@@ -2164,6 +2159,11 @@ class WorkspaceRag:
             source_type=source_type,
             parts=parts,
             track_id=track_id,
+            source_options=resolve_source_options(
+                source_type,
+                retry_metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD) if retry_metadata else None,
+                default_s3_region=self.settings.s3_region,
+            ),
             **retry_kwargs,
         )
 
@@ -2181,6 +2181,7 @@ class WorkspaceRag:
         replacement_doc_ids: tuple[str, ...] = (),
         replacement_ownership: tuple[tuple[str, str, str], ...] = (),
         track_id: str | None = None,
+        source_options: SourceRetrievalOptions | None = None,
     ) -> dict[str, Any]:
         """Download one remote retry locator and replay it in the same-ID seam.
 
@@ -2196,36 +2197,24 @@ class WorkspaceRag:
             "author": author,
             "metadata": metadata,
         }
+        factory = RemoteSourceFactory(self.settings)
         if source_type == "url":
-            from dlightrag.engine.rag.corpus.sources.url import URLDataSource
-
             document = IngestDocument(
                 url=download_locator, download_uri=download_locator, **common_fields
             )
             source_document = _source_document_from_manifest(document, key=cast(str, document.url))
-            source: AsyncDataSource = URLDataSource(
-                documents=[source_document],
-                max_download_bytes=self.settings.url_ingest_max_bytes,
-                allow_private_hosts=self.settings.url_ingest_private_host_allowlist,
-            )
+            source: AsyncDataSource = factory.url(documents=[source_document])
         else:
             object_key = str(parts["blob_path"] if source_type == "azure_blob" else parts["key"])
             document = IngestDocument(key=object_key, **common_fields)
             source_document = _source_document_from_manifest(document, key=object_key)
             if source_type == "s3":
-                from dlightrag.engine.rag.corpus.sources.aws_s3 import S3DataSource
-
-                source = S3DataSource(
-                    bucket=str(parts["bucket"]),
-                    region=self.settings.s3_region,
+                source = factory.s3(
+                    str(parts["bucket"]),
+                    source_options or SourceRetrievalOptions(self.settings.s3_region),
                 )
             else:
-                from dlightrag.engine.rag.corpus.sources.azure_blob import AzureBlobDataSource
-
-                source = AzureBlobDataSource(
-                    connection_string=self.settings.blob_connection_string,
-                    container_name=str(parts["container_name"]),
-                )
+                source = factory.azure(str(parts["container_name"]))
 
         try:
             parser_path = (
@@ -2243,6 +2232,7 @@ class WorkspaceRag:
                 title=title,
                 author=author,
                 metadata=metadata,
+                source_options=source_options,
                 replacement_doc_ids=replacement_doc_ids,
                 replacement_ownership=replacement_ownership,
             )

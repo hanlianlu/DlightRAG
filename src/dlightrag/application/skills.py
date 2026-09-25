@@ -11,7 +11,6 @@ from dlightrag.application.settings import (
 )
 from dlightrag.engine.agent.environment.confinement import DeclaredLayer
 from dlightrag.engine.agent.skills import (
-    SkillsBundle,
     SkillsBundleFactory,
     builtin_skills_root,
     owner_skill_root,
@@ -71,16 +70,12 @@ def skills_bundle_factory(
         global_root.mkdir(parents=True, exist_ok=True)
         owner_root.mkdir(parents=True, exist_ok=True)
 
-    def build(owner_id: str, requested_skill: str | None = None) -> SkillsBundle:
-        return SkillsBundle(
-            builtin_root=builtin_root,
-            global_root=global_root,
-            owner_root=owner_skill_root(owner_root, owner_id),
-            disabled_builtin_skills=disabled_builtins,
-            requested_skill=requested_skill,
-        )
-
-    return build
+    return SkillsBundleFactory(
+        builtin_root=builtin_root,
+        global_root=global_root,
+        owner_root=owner_root,
+        disabled_builtin_skills=disabled_builtins,
+    )
 
 
 __all__ = ["skill_read_layers", "skill_roots", "skills_bundle_factory"]

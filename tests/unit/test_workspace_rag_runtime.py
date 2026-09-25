@@ -2042,6 +2042,11 @@ class TestWorkspaceRagLightRAGMainPath:
         cls.assert_called_once_with(
             urls=["https://api.bynder.com/docs/getting-started"],
             filename="getting-started.html",
+            documents=None,
+            source_uri=None,
+            source_uris=None,
+            download_uri=None,
+            download_uris=None,
             max_download_bytes=test_config.corpus.ingestion.url_max_bytes,
             allow_private_hosts=("*.corp.example",),
         )
@@ -3964,3 +3969,121 @@ async def test_retry_identity_mismatch_records_failed_without_status_write(
     assert result["failed"] == 1
     assert outcomes == [("doc-a", "failed")]
     service._lightrag_stores.doc_status.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "requested,configured,expected",
+    [
+        ("eu-north-1", "us-east-1", "eu-north-1"),
+        (None, "eu-west-1", "eu-west-1"),
+        (None, None, None),
+    ],
+)
+@pytest.mark.parametrize("selection", ["single", "manifest", "prefix"])
+async def test_s3_ingest_retry_preserves_accepted_region(
+    test_config: DlightragConfig, requested, configured, expected, selection: str
+) -> None:
+    """A retry after settings change uses the same accepted routing, for every input form."""
+    from dlightrag.engine.rag.retrieval.metadata_fields import SOURCE_RETRIEVAL_OPTIONS_FIELD
+
+    mutate_config(test_config, "corpus.sources.s3_region", configured)
+    regions: list[str | None] = []
+    closed: list[bool] = []
+    prepared: list[PreparedIngestFile] = []
+
+    class Source(AsyncDataSource):
+        def __init__(self, bucket: str, region: str | None) -> None:
+            assert bucket == "reports"
+            regions.append(region)
+
+        async def aiter_documents(self, prefix: str | None = None):
+            assert prefix == "docs/"
+            yield SourceDocument(key="docs/report.pdf")
+
+        async def amaterialize_document(self, document: SourceDocument, destination: Path):
+            assert document.key == "docs/report.pdf"
+            destination.write_bytes(b"%PDF-source")
+
+        async def aclose(self):
+            closed.append(True)
+
+    async def ingest(items: list[PreparedIngestFile], **kwargs: Any):
+        assert kwargs["replace"] is False
+        prepared.extend(items)
+        return {"processed": 1, "errors": [], "results": [{"doc_id": "doc-report"}]}
+
+    first = _service(test_config)
+    first._initialized = True
+    first._ingestion_engine = MagicMock()
+    first._ingestion_engine.aingest_files = AsyncMock(side_effect=ingest)
+    arguments: dict[str, Any] = {"bucket": "reports", "s3_region": requested, "replace": False}
+    if selection == "single":
+        arguments["s3_key"] = "docs/report.pdf"
+    elif selection == "manifest":
+        arguments["documents"] = [{"key": "docs/report.pdf"}]
+    else:
+        arguments["prefix"] = "docs/"
+
+    with patch("dlightrag.engine.rag.corpus.sources.aws_s3.S3DataSource", Source):
+        await first.aingest(source_type="s3", **arguments)
+        original = prepared[0]
+        assert original.source_options is not None
+        assert original.source_options.payload() == {"s3_region": expected}
+        # An application restart sees only this saved non-secret contract.
+        stored = {
+            "source_uri": original.source_uri,
+            "download_locator": original.download_locator,
+            "filename": original.display_filename,
+            SOURCE_RETRIEVAL_OPTIONS_FIELD: original.source_options.payload(),
+        }
+        mutate_config(test_config, "corpus.sources.s3_region", "ap-south-1")
+        retry = _service(test_config)
+        _set_failed_docs(retry, [{"doc_id": "doc-report", "error": "parser failed"}])
+        retry._metadata_index = AsyncMock()
+        retry._metadata_index.get.return_value = stored
+        retry._metadata_index.find_by_download_locator.return_value = []
+        retry._ingestion_engine = MagicMock()
+        retry._ingestion_engine.aingest_files = AsyncMock(side_effect=ingest)
+        result = await retry.aretry_failed_docs()
+
+    assert result["succeeded"] == 1
+    assert regions == [expected, expected]
+    assert len(closed) == 2
+    assert len(prepared) == 2
+    assert prepared[1].source_options == original.source_options
+    assert prepared[1].source_uri == original.source_uri
+    assert prepared[1].download_locator == original.download_locator
+    assert all(not item.parser_path.exists() for item in prepared)
+
+
+@pytest.mark.parametrize(
+    "mirror",
+    [
+        "https://cdn.example.com/report.pdf",
+        "s3://mirror-bucket/report.pdf",
+    ],
+)
+async def test_s3_manifest_mirror_does_not_inherit_original_routing(test_config, mirror) -> None:
+    service = _service(test_config)
+    service._initialized = True
+    service._ingestion_engine = MagicMock()
+    items: list[PreparedIngestFile] = []
+
+    async def ingest(prepared: list[PreparedIngestFile], **_):
+        items.extend(prepared)
+        return {"processed": 1, "errors": [], "results": [{"doc_id": "report"}]}
+
+    source = AsyncMock()
+    source.amaterialize_document.side_effect = lambda _doc, dest: dest.write_bytes(b"%PDF-file")
+    service._ingestion_engine.aingest_files = AsyncMock(side_effect=ingest)
+    with patch("dlightrag.engine.rag.corpus.sources.aws_s3.S3DataSource", return_value=source):
+        await service.aingest(
+            source_type="s3",
+            bucket="original",
+            s3_region="eu-north-1",
+            documents=[{"key": "report.pdf", "download_uri": mirror}],
+        )
+    assert len(items) == 1
+    assert items[0].source_uri == "s3://original/report.pdf"
+    assert items[0].download_locator == mirror
+    assert items[0].source_options is None

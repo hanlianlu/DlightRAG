@@ -15,7 +15,7 @@ import re
 import stat
 import xml.etree.ElementTree as ET
 import zipfile
-from collections import Counter, deque
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from io import BytesIO
@@ -485,13 +485,6 @@ def validate_publication(
                 original = staged.content.decode("utf-8")
                 cleaned = finalize_answer(original, contexts or {})
                 prepared = link_public_citations(cleaned.answer, cleaned.sources)
-                if _resource_references(original) != _resource_references(prepared):
-                    raise ArtifactValidationError(
-                        "invalid_reference",
-                        f"Citation preparation changed resource links in Artifact {staged.filename}. "
-                        "Use the stable artifact: URI returned by attach_artifact, percent-encode "
-                        "brackets in filenames, or use nonnumeric Markdown reference labels.",
-                    )
                 content = prepared.encode("utf-8")
                 if len(content) > limits.max_file_bytes:
                     raise ArtifactValidationError(
@@ -843,14 +836,6 @@ def _reference_path(target: str, *, parent: str | None, paths_by_id: Mapping[str
     if raw in paths_by_id:
         return paths_by_id[raw]
     return _normalize_reference(raw, parent=parent)
-
-
-def _resource_references(text: str) -> Counter[tuple[str, bool]]:
-    return Counter(
-        (reference.target, reference.image)
-        for reference in markdown_references(text)
-        if classify_target(reference.target, image=reference.image) in {"artifact", "evidence"}
-    )
 
 
 def _normalize_reference(raw: str, *, parent: str | None) -> str:

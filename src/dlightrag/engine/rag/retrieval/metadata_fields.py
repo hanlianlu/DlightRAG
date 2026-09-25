@@ -42,6 +42,7 @@ def _coerce_creation_date(value: Any) -> datetime:
 # Application-owned crash journal shared with metadata adapters. It is not a
 # public filter and callers may never supply it through user metadata.
 INGEST_FINALIZATION_COMPLETE_FIELD = "_dlightrag_finalization_complete"
+SOURCE_RETRIEVAL_OPTIONS_FIELD = "_dlightrag_source_options"
 
 # The one built-in column a caller may set through `metadata`. Everything else
 # about a document is derived from the file, and title/author have their own
@@ -131,5 +132,5 @@ FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 _RESERVED_METADATA_KEYS: frozenset[str] = (
     frozenset(FILTER_FIELD_COLUMNS)
     | set(METADATA_FIELD_IDS)
-    | {"workspace", "doc_id", INGEST_FINALIZATION_COMPLETE_FIELD}
+    | {"workspace", "doc_id", INGEST_FINALIZATION_COMPLETE_FIELD, SOURCE_RETRIEVAL_OPTIONS_FIELD}
 ) - {_CALLER_SETTABLE_COLUMN}

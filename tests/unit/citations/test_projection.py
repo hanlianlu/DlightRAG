@@ -147,8 +147,8 @@ def test_double_backtick_and_indented_code_keep_their_markers() -> None:
 def test_existing_markdown_structures_are_left_alone() -> None:
     """A marker inside a link, image, definition, or autolink is data, not a citation.
 
-    A *text* reference link (``[a][9]``) is deliberately not protected: two
-    adjacent citations (``[9-1][10-1]``) are lexically identical, and citations win.
+    Real reference links have priority over citation-shaped labels; adjacent
+    markers without definitions remain citations.
     """
     sources = [_source("9", uri="https://example.com/a", title="T")]
 
@@ -157,7 +157,8 @@ def test_existing_markdown_structures_are_left_alone() -> None:
         "[x](https://example.com/path/[9])",
         "![9](img.png)",
         "[9]: https://example.com",
-        "![alt][9]",
+        "![alt][9]\n\n[9]: https://example.com/image.png",
+        "[text][9]\n\n[9]: https://example.com/page",
         "<https://example.com/[9]>",
     ):
         assert link_public_citations(text, sources) == text

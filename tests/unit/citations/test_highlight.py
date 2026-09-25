@@ -87,10 +87,10 @@ def test_extract_citing_sentences_supports_named_chunk_references():
     }
 
 
-def test_extract_citing_sentences_ignores_generated_references_section():
+def test_extract_citing_sentences_preserves_normal_references_prose():
     text = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
     result = extract_all_citing_sentences(text)
-    assert result == {"1-1": ["Revenue grew 15% [1-1]."]}
+    assert result == {"1-1": ["Revenue grew 15% [1-1]."], "1": ["[1] report."]}
 
 
 def test_extract_citing_sentences_empty():

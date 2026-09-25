@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.execution.connection_binding import (
     ResearchToolClaim,
     RunConnectionBinding,
@@ -20,7 +20,7 @@ from .policy import ConnectionPolicy
 
 @dataclass(frozen=True, slots=True)
 class BoundResearchConnections:
-    tools: tuple[AgentTool, ...] = ()
+    tools: tuple[ToolDeclaration, ...] = ()
     bindings: tuple[RunConnectionBinding, ...] = ()
 
 

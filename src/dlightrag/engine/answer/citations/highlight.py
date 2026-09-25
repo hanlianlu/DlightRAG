@@ -20,7 +20,7 @@ from dlightrag.engine.answer.prompts import (
     HIGHLIGHT_SYSTEM_PROMPT,
 )
 
-from .parser import CITATION_PATTERN, DOC_CITATION_PATTERN, strip_generated_references_section
+from .syntax import Citation, parse_citations
 
 logger = logging.getLogger(__name__)
 
@@ -67,25 +67,30 @@ def _chunks[T](items: Sequence[T], size: int) -> list[list[T]]:
 
 
 def extract_all_citing_sentences(answer_text: str) -> dict[str, list[str]]:
-    """Extract all sentences that contain each citation."""
-    answer_text = strip_generated_references_section(answer_text)
-    sentences = _SENTENCE_SPLIT_RE.split(answer_text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-
+    """Extract sentences only where the Markdown grammar identified a citation."""
+    document = parse_citations(answer_text)
     result: dict[str, list[str]] = {}
-    for sentence in sentences:
-        positions = [
-            *((match.start(), match.group(1)) for match in DOC_CITATION_PATTERN.finditer(sentence)),
-            *(
-                (match.start(), f"{match.group(1)}-{match.group(2)}")
-                for match in CITATION_PATTERN.finditer(sentence)
-            ),
+    by_scope: dict[tuple[int, int], list[Citation]] = {}
+    for citation in document.citations:
+        by_scope.setdefault(citation.scope, []).append(citation)
+    for (start, end), citations in by_scope.items():
+        cursor = start
+        citation_index = 0
+        boundaries = [
+            (start + match.start(), start + match.end())
+            for match in _SENTENCE_SPLIT_RE.finditer(answer_text[start:end])
         ]
-        for _, key in sorted(positions):
-            result.setdefault(key, [])
-            if sentence not in result[key]:
-                result[key].append(sentence)
-
+        for sentence_end, next_start in [*boundaries, (end, end)]:
+            sentence = answer_text[cursor:sentence_end].strip()
+            while (
+                citation_index < len(citations) and citations[citation_index].start < sentence_end
+            ):
+                key = citations[citation_index].key
+                result.setdefault(key, [])
+                if sentence and sentence not in result[key]:
+                    result[key].append(sentence)
+                citation_index += 1
+            cursor = next_start
     return result
 
 

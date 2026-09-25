@@ -9,29 +9,33 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
-from dlightrag.engine.answer.citations.contracts import CITATION_PATTERN, DOC_CITATION_PATTERN
-
 from .indexer import CitationIndexer
+from .syntax import Citation, CitationDocument, parse_citations
 
 logger = logging.getLogger(__name__)
 
 
-def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str, list[str]]:
+def extract_cited_chunks(
+    indexer: CitationIndexer,
+    answer_text: str | CitationDocument,
+    *,
+    claimless_chunks: frozenset[str] = frozenset(),
+) -> dict[str, list[str]]:
     """Extract cited chunk_ids grouped by ref_id.
 
     Handles both [n] (all chunks for ref) and [n-m] (specific chunk).
     """
-    positions: list[tuple[int, str, int | None]] = []
-    for m in CITATION_PATTERN.finditer(answer_text):
-        positions.append((m.start(), m.group(1), int(m.group(2))))
-    for m in DOC_CITATION_PATTERN.finditer(answer_text):
-        positions.append((m.start(), m.group(1), None))
-
+    document = parse_citations(answer_text) if isinstance(answer_text, str) else answer_text
     result: defaultdict[str, list[str]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
-    for _, ref_id, chunk_idx in sorted(positions, key=lambda item: item[0]):
+    for original in document.citations:
+        citation = _validated_citation(indexer, original, claimless_chunks)
+        if citation is None:
+            continue
+        ref_id, chunk_idx = citation.ref_id, citation.chunk_idx
         if chunk_idx is not None:
             chunk_id = indexer.get_chunk_id(ref_id, chunk_idx)
             if chunk_id is None:
@@ -77,7 +81,7 @@ def claimless_chunk_ids(contexts: Iterable[dict[str, Any]]) -> frozenset[str]:
 
 def clean_invalid_citations(
     indexer: CitationIndexer,
-    answer_text: str,
+    answer_text: str | CitationDocument,
     *,
     claimless_chunks: frozenset[str] = frozenset(),
 ) -> str:
@@ -87,45 +91,23 @@ def clean_invalid_citations(
     marker: the claim is supported by the document, just not by that excerpt.
     """
 
-    def _replace_chunk(m: re.Match) -> str:
-        ref_id = m.group(1)
-        chunk_idx = int(m.group(2))
-        chunk_id = indexer.get_chunk_id(ref_id, chunk_idx)
-        if chunk_id is None:
-            logger.debug("Removing invalid citation [%s-%d]", ref_id, chunk_idx)
-            return ""
-        if chunk_id in claimless_chunks:
-            logger.debug("Degrading claimless citation [%s-%d] to [%s]", ref_id, chunk_idx, ref_id)
-            return f"[{ref_id}]"
-        return m.group(0)
+    document = parse_citations(answer_text) if isinstance(answer_text, str) else answer_text
 
-    def _replace_doc(m: re.Match) -> str:
-        ref_id = m.group(1)
-        if indexer.get_max_chunk_idx(ref_id) > 0:
-            return m.group(0)
-        logger.debug("Removing invalid citation [%s]", ref_id)
-        return ""
+    def replacement(original: Citation) -> str:
+        citation = _validated_citation(indexer, original, claimless_chunks)
+        return citation.marker if citation is not None else ""
 
-    text = CITATION_PATTERN.sub(_replace_chunk, answer_text)
-    text = DOC_CITATION_PATTERN.sub(_replace_doc, text)
-    return text
+    return document.rewrite(replacement)
 
 
-# Matches generated reference-section headings at a line boundary:
-# # References, ## References, **References**, References:, References
-_REFERENCES_HEADING_RE = re.compile(r"(?im)^\s{0,3}(?:#{1,6}\s*|\*{2})?references(?:\*{2})?[:\s]*$")
-
-
-def strip_generated_references_section(answer_text: str) -> str:
-    """Strip a model-generated trailing References section from answer text.
-
-    DlightRAG builds cited sources deterministically from validated inline
-    markers. A model-generated ``### References`` tail is therefore protocol
-    noise, not a trusted data source.
-    """
-    match = None
-    for candidate in _REFERENCES_HEADING_RE.finditer(answer_text):
-        match = candidate
-    if match is None:
-        return answer_text
-    return answer_text[: match.start()].rstrip()
+def _validated_citation(
+    indexer: CitationIndexer, citation: Citation, claimless_chunks: frozenset[str]
+) -> Citation | None:
+    if citation.chunk_idx is None:
+        return citation if indexer.get_max_chunk_idx(citation.ref_id) > 0 else None
+    chunk_id = indexer.get_chunk_id(citation.ref_id, citation.chunk_idx)
+    if chunk_id is None:
+        return None
+    if chunk_id in claimless_chunks:
+        return replace(citation, chunk_idx=None, marker=f"[{citation.ref_id}]")
+    return citation

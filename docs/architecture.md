@@ -141,6 +141,16 @@ create a nested Retrieval Run:
   or Web, use rooted files/Bash when enabled, call owner-authorized MCP Connections,
   use Profile Memory, load Skills, and run bounded Child Sessions.
 
+Tool acceptance consumes immutable `ToolDeclaration` values: model definitions,
+argument contracts, usage guidance, and replay policy. `AgentTool` specializes a
+declaration with a required execution binding. Each tool owns its declaration;
+Research uses one declaration selection function for admission and execution,
+including child narrowing. Admission pins and measures those declarations without
+creating execution environments, owner Skill catalogues, or callable placeholders.
+Execution binds the same contracts to the actual Run's capabilities, then checks
+them against the accepted Agent Run Plan. Personal Connections follow the same
+split: stored catalogue declarations at admission, authorized dispatch at execution.
+
 Research parents admit Child Sessions asynchronously: `spawn_agent` returns
 stable handles without waiting for children to finish. Children default to the
 parent's tools minus the Run's authority, cannot spawn grandchildren, and remain attached
