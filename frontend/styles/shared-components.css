@@ -216,9 +216,25 @@ dl-icon-button.panel-close {
 .memory-list summary,
 .workspace-actions summary,
 .roster-execution-details summary {
+    border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
     padding-block: var(--space-tight);
+    transition: color 150ms;
+    width: fit-content;
+}
+
+.memory-list summary:hover,
+.workspace-actions summary:hover,
+.roster-execution-details summary:hover {
+    color: var(--color-text-primary);
+}
+
+.memory-list summary:focus-visible,
+.workspace-actions summary:focus-visible,
+.roster-execution-details summary:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: 2px;
 }
 
 .settings-section {

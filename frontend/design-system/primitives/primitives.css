@@ -75,7 +75,8 @@ a.dl-btn {
     color: var(--color-danger);
 }
 
-.dl-dialog-actions button:disabled {
+.dl-dialog-actions button:disabled,
+.dl-btn:disabled {
     cursor: not-allowed;
     opacity: 0.5;
 }
