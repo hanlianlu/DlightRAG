@@ -216,7 +216,7 @@ dl-icon-button.panel-close {
 .memory-list summary,
 .workspace-actions summary,
 .roster-execution-details summary {
-    color: var(--color-text-dim);
+    color: var(--color-text-secondary);
     cursor: pointer;
     padding-block: var(--space-tight);
 }
