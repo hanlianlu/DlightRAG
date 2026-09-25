@@ -44,6 +44,7 @@ class AccessAction:
     WORKSPACE_READ_VISUAL_ASSET = "workspace.read_visual_asset"
     WORKSPACE_CREATE = "workspace.create"
     WORKSPACE_RESET = "workspace.reset"
+    WORKSPACE_DELETE = "workspace.delete"
     # Storage/promotion facts are operator-facing: only the admin preset (and
     # explicitly granted rules) carry this action; ordinary readers/editors
     # never see tier, promotion state, or retry details.
@@ -82,7 +83,8 @@ def corpus_mutation_access_action(action: object) -> str:
         "retry": AccessAction.WORKSPACE_INGEST,
         "delete": AccessAction.WORKSPACE_DELETE_FILES,
         "reset": AccessAction.WORKSPACE_RESET,
-    }.get(str(action or ""), AccessAction.WORKSPACE_RESET)
+        "delete_workspace": AccessAction.WORKSPACE_DELETE,
+    }.get(str(action or ""), AccessAction.WORKSPACE_DELETE)
 
 
 class AccessDeniedError(PermissionError):

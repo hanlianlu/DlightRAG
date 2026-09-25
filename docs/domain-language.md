@@ -26,10 +26,10 @@ _Avoid_: QueryRun, query service
 
 **Corpus Mutation Lane**:
 The bounded execution and admission lane for Workspace-scoped ingest, replace,
-exact delete, retry, and reset Runs. Runs are FIFO within one Corpus Workspace
-and may execute concurrently across Workspaces; the lane has a separate
-deployment-wide nonterminal admission limit from the Query Lane.
-_Avoid_: Ingest Job queue, per-action coordinator, Workspace Delete
+exact delete, retry, reset, and Workspace Delete Runs. Runs are FIFO within one
+Corpus Workspace and may execute concurrently across Workspaces; the lane has a
+separate deployment-wide nonterminal admission limit from the Query Lane.
+_Avoid_: Ingest Job queue, per-action coordinator
 
 **Corpus Mutation Run**:
 A Workspace-scoped Run with `run_kind=corpus_mutation` and
@@ -115,6 +115,14 @@ An authorized full Corpus Reset may explicitly supersede one
 Run identity; reset preserves Corpus Workspace identity and history rather than
 recreating the Workspace.
 _Avoid_: Workspace Delete, hidden repair abandonment
+
+**Workspace Delete**:
+The Workspace's final Corpus Mutation (`delete_workspace`): a full Corpus Reset
+that retains no sources, then removal of the Workspace's catalog identity and
+cancellation of every mutation queued behind it. Owner-scoped history (Runs,
+Conversations, Agent Sessions, historical Artifacts) remains. The deployment's
+configured default Workspace cannot be deleted.
+_Avoid_: Corpus Reset, identity-preserving reset, synchronous registry delete
 
 **Authorized Workspace Set**:
 The concrete canonical Corpus Workspace ids a caller may use after authentication and access expansion are complete.

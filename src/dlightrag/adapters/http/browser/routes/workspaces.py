@@ -255,3 +255,49 @@ async def reset_workspace(
             status_code=503,
         )
     return corpus_run_receipt(creation.run, workspace=ws)
+
+
+@router.post("/workspaces/delete", response_model=WebCorpusRunReceipt, status_code=202)
+async def delete_workspace(
+    request: Request,
+    workspace_name: str = Form(default=""),
+    confirm_name: str = Form(default=""),
+):
+    """Accept Workspace Delete after type-to-confirm verification."""
+    application = get_application(request)
+    name = workspace_name.strip()
+    confirm = confirm_name.strip()
+
+    if not name:
+        return _error("Workspace name cannot be empty")
+    if normalize_workspace(name) != normalize_workspace(confirm):
+        return _error("Confirmation name does not match")
+
+    ws = normalize_workspace(name)
+    await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
+    try:
+        registered = await application.corpora.workspace_exists(ws)
+    except Exception:
+        logger.exception("Workspace catalog lookup failed before Workspace Delete")
+        return _error("Workspace catalog is temporarily unavailable", status_code=503)
+    if not registered:
+        return _error("Workspace no longer exists", status_code=404)
+
+    try:
+        creation = await application.corpus_mutations.create_workspace_delete(
+            workspace=ws,
+            submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
+        )
+    except ValueError as exc:
+        return _error(str(exc))
+    except RunAdmissionLimitExceededError:
+        return _error("Deployment-wide nonterminal admission limit reached", status_code=503)
+    except CorpusMutationUnavailableError as exc:
+        return _error(str(exc), status_code=503)
+    except Exception:
+        logger.exception("Workspace Delete Run acceptance failed")
+        return _error(
+            "Failed to accept Workspace Delete; see server logs for details.",
+            status_code=503,
+        )
+    return corpus_run_receipt(creation.run, workspace=ws)

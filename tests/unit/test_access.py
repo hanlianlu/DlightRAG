@@ -172,6 +172,7 @@ async def test_admin_preset_allows_every_action(test_config: DlightragConfig) ->
         AccessAction.WORKSPACE_INGEST,
         AccessAction.WORKSPACE_CREATE,
         AccessAction.WORKSPACE_RESET,
+        AccessAction.WORKSPACE_DELETE,
         AccessAction.MODEL_CATALOGUE_WRITE,
     ):
         await access_control.check(user, action, workspace="finance")
@@ -185,7 +186,8 @@ async def test_admin_preset_allows_every_action(test_config: DlightragConfig) ->
         ("retry", AccessAction.WORKSPACE_INGEST),
         ("delete", AccessAction.WORKSPACE_DELETE_FILES),
         ("reset", AccessAction.WORKSPACE_RESET),
-        ("unknown", AccessAction.WORKSPACE_RESET),
+        ("delete_workspace", AccessAction.WORKSPACE_DELETE),
+        ("unknown", AccessAction.WORKSPACE_DELETE),
     ],
 )
 def test_corpus_mutation_action_mapping_fails_closed(mutation: str, expected: str) -> None:

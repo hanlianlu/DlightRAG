@@ -58,12 +58,17 @@ from .errors import (
 )
 from .service import IngestSpec, safe_upload_basename
 
-type CorpusMutationAction = Literal["ingest", "replace", "delete", "retry", "reset"]
+type CorpusMutationAction = Literal[
+    "ingest", "replace", "delete", "retry", "reset", "delete_workspace"
+]
 type RetrySelector = Literal["all_retryable"]
 
 _REPAIR_REASON = "The upstream corpus outcome is not safe to repeat automatically."
 _REPAIR_REMEDY = "Inspect the public LightRAG state, repair it, then resume this Run."
 _MAX_RESULT_DOCUMENTS = 100
+# A recovered handoff of these actions is never repeated without repair evidence.
+_DESTRUCTIVE_ACTIONS = frozenset({"replace", "delete", "retry", "reset", "delete_workspace"})
+_SUCCESSOR_PAGE_LIMIT = 100
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _DEFER_BASE_SECONDS = 2
 _DEFER_MAX_SECONDS = 60
@@ -90,6 +95,12 @@ class CorpusMutationStore(Protocol):
         docs: int,
         chunks: int,
     ) -> bool: ...
+
+    async def list_runs(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> Sequence[Any]: ...
+
+    async def request_cancellation(self, *, owner_id: str, run_id: str) -> Any: ...
 
 
 class CorpusMutationScheduler(Protocol):
@@ -120,11 +131,13 @@ class CorpusMutationService:
         store: CorpusMutationStore,
         coordinator: CorpusMutationScheduler,
         writable: bool = True,
+        default_workspace: str = "default",
     ) -> None:
         self._input_root = Path(input_root)
         self._store = store
         self._coordinator = coordinator
         self._writable = writable
+        self._default_workspace = require_canonical_workspace_id(default_workspace)
 
     def _require_writable(self) -> None:
         """Refuse a corpus write before any of it happens, or say who can take it."""
@@ -416,6 +429,25 @@ class CorpusMutationService:
             fields={"supersedes_run_id": supersedes_run_id},
         )
 
+    async def create_workspace_delete(
+        self,
+        *,
+        workspace: str,
+        submitted_by: str,
+        idempotency_key: str | None = None,
+    ) -> RunCreation:
+        """Accept the Workspace's final mutation: a full reset, then identity removal."""
+        self._require_writable()
+        if require_canonical_workspace_id(workspace) == self._default_workspace:
+            raise ValueError("The default workspace cannot be deleted; reset its corpus instead.")
+        return await self._create_action(
+            action="delete_workspace",
+            workspace=workspace,
+            submitted_by=submitted_by,
+            idempotency_key=idempotency_key,
+            fields={},
+        )
+
     async def _create_action(
         self,
         *,
@@ -688,11 +720,13 @@ class CorpusMutationExecutor(RunExecutor):
                 return await self._delete(session, runtime, raw, checkpoint)
             if action == "retry":
                 return await self._retry(session, runtime, raw, checkpoint)
+            if action == "delete_workspace":
+                return await self._delete_workspace(session, runtime, checkpoint)
             return await self._reset(session, runtime, raw, checkpoint)
         except WorkspaceWriteFencedError, _TrackedPipelineNotSettled:
             return _deferred(checkpoint, "corpus_storage", now=self._now)
         except RetryOutcomeUncertainError:
-            if action in {"replace", "delete", "retry", "reset"} and session.handoff_started:
+            if action in _DESTRUCTIVE_ACTIONS and session.handoff_started:
                 return WaitingForRepair(_repair_checkpoint(checkpoint, ()))
             return _deferred(checkpoint, "corpus_storage", now=self._now)
         except FileNotFoundError:
@@ -708,7 +742,7 @@ class CorpusMutationExecutor(RunExecutor):
                 result=_result(action, (), checkpoint),
             )
         except Exception as exc:
-            if action in {"replace", "delete", "retry", "reset"} and session.handoff_started:
+            if action in _DESTRUCTIVE_ACTIONS and session.handoff_started:
                 return WaitingForRepair(_repair_checkpoint(checkpoint, ()))
             component = classify_transient_dependency(exc)
             if component is not None:
@@ -979,6 +1013,52 @@ class CorpusMutationExecutor(RunExecutor):
         await self._pool.evict(session.owner_id)
         return Succeeded(_result("reset", _checkpoint_documents(checkpoint), checkpoint))
 
+    async def _delete_workspace(
+        self,
+        session: RunSession,
+        runtime: Any,
+        checkpoint: dict[str, Any],
+    ) -> RunExecutionOutcome:
+        """Reset the whole corpus, then retire the Workspace and every queued successor.
+
+        The per-Workspace FIFO lane guarantees that every earlier mutation is
+        terminal and no successor has started. Identity removal precedes the
+        successor sweep so a browser submission can no longer join the queue.
+        Both are idempotent, so recovery after the settled reset repeats them.
+        """
+        workspace = session.owner_id
+        if checkpoint.get("operation_settled") is not True:
+            if not session.handoff_started:
+                await session.begin_handoff({**checkpoint, "phase": "handoff_started"})
+            await session.enter_phase("resetting_corpus")
+            async with self._maintenance.workspace_write_gate(workspace):
+                # No later source survives: every queued successor is cancelled below.
+                result = await _join_public_operation(runtime.areset(dry_run=False))
+            documents = [dict(result)] if isinstance(result, Mapping) else []
+            if not isinstance(result, Mapping) or result.get("errors"):
+                return WaitingForRepair(_repair_checkpoint(checkpoint, documents))
+            checkpoint.update(document_outcomes=documents, operation_settled=True)
+            await session.checkpoint_state(checkpoint, phase="reset_settled")
+        await session.enter_phase("removing_workspace")
+        await self._maintenance.unregister_workspace(workspace)
+        await self._cancel_successors(workspace, session.run_id)
+        await self._pool.evict(workspace)
+        return Succeeded(_result("delete_workspace", _checkpoint_documents(checkpoint), checkpoint))
+
+    async def _cancel_successors(self, workspace: str, run_id: str) -> None:
+        """Cancel every Corpus Mutation queued behind this one in its Workspace."""
+        after = run_id
+        while True:
+            page = await self._store.list_runs(
+                owner_id=workspace, after_run_id=after, limit=_SUCCESSOR_PAGE_LIMIT
+            )
+            for record in page:
+                if record.run_kind == "corpus_mutation" and not record.terminal:
+                    await self._store.request_cancellation(owner_id=workspace, run_id=record.run_id)
+            if len(page) < _SUCCESSOR_PAGE_LIMIT:
+                return
+            after = page[-1].run_id
+
 
 async def _join_public_operation[T](operation: Awaitable[T]) -> T:
     """Never let task cancellation abandon an in-process upstream operation."""
@@ -997,7 +1077,7 @@ def validate_corpus_mutation_prepared_input(
 ) -> tuple[CorpusMutationAction, str]:
     """Validate the closed durable action schema used for recovery compatibility."""
     action = str(raw.get("action") or "")
-    if action not in {"ingest", "replace", "delete", "retry", "reset"}:
+    if action not in {"ingest", "replace", "delete", "retry", "reset", "delete_workspace"}:
         raise ValueError("unknown Corpus Mutation action")
     workspace = require_canonical_workspace_id(str(raw.get("workspace") or ""))
     track_id = str(raw.get("track_id") or "")
@@ -1016,6 +1096,7 @@ def validate_corpus_mutation_prepared_input(
         "delete": {"file_paths", "filenames", "document_ids"},
         "retry": {"document_ids", "selector"},
         "reset": {"supersedes_run_id"},
+        "delete_workspace": set(),
     }
     expected_fields = common | action_fields[action]
     allowed_field_sets = {frozenset(expected_fields)}
@@ -1188,7 +1269,7 @@ def _bounded_unique(values: Sequence[str]) -> list[str]:
 
 def _accepted_selector(payload: Mapping[str, Any]) -> dict[str, Any]:
     action = str(payload.get("action") or "")
-    if action in {"delete", "retry", "reset"}:
+    if action in {"delete", "retry", "reset", "delete_workspace"}:
         return {
             key: value
             for key, value in payload.items()

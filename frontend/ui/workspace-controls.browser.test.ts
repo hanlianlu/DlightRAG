@@ -131,7 +131,7 @@ it('preserves typed confirmation and focus after a failed corpus reset', async (
   const scope = await mountFiles();
   await scope.updateComplete;
   scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')?.click();
-  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open));
+  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open));
   const input = scope.querySelector<HTMLInputElement>('[aria-label="Type Default to confirm"]')!;
   input.value = 'Default';
   input.dispatchEvent(new Event('input'));
@@ -143,7 +143,7 @@ it('preserves typed confirmation and focus after a failed corpus reset', async (
   await waitFor(() => calls === 1 && submit.disabled === false);
 
   expect(input.value).to.equal('Default');
-  expect(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open).to.equal(true);
+  expect(scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open).to.equal(true);
   expect(document.activeElement).to.equal(input);
 });
 
@@ -242,7 +242,7 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   const scope = await mountFiles();
   await scope.updateComplete;
   scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')?.click();
-  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open));
+  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open));
   let input = scope.querySelector<HTMLInputElement>('[aria-label="Type Default to confirm"]')!;
   input.value = 'Default';
   input.dispatchEvent(new Event('input'));
@@ -251,7 +251,7 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   await waitFor(() => requests.length === 1
     && buttonNamed(scope, 'Accepting reset…')?.disabled === true);
 
-  let dialog = scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')!;
+  let dialog = scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')!;
   const cancel = buttonNamed(dialog, 'Cancel')!;
   expect(cancel.disabled).to.equal(true);
   cancel.click();
@@ -264,10 +264,10 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
     status: 500,
     headers: {'Content-Type': 'application/json'},
   }));
-  await waitFor(() => buttonNamed(scope.querySelector('#reset-workspace-dialog')!, 'Cancel')?.disabled === false
+  await waitFor(() => buttonNamed(scope.querySelector('#workspace-action-dialog')!, 'Cancel')?.disabled === false
     && input.readOnly === false);
-  buttonNamed(scope.querySelector('#reset-workspace-dialog')!, 'Cancel')?.click();
-  await waitFor(() => !scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open
+  buttonNamed(scope.querySelector('#workspace-action-dialog')!, 'Cancel')?.click();
+  await waitFor(() => !scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open
     && document.activeElement === scope.querySelector<HTMLButtonElement>('[data-reset-workspace]'));
   await scope.updateComplete;
 
@@ -400,12 +400,12 @@ it('restores the Files action focus when reset is cancelled', async () => {
   await scope.updateComplete;
   const trigger = scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')!;
   scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')?.click();
-  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open));
+  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open));
 
-  buttonNamed(scope.querySelector('#reset-workspace-dialog')!, 'Cancel')?.click();
+  buttonNamed(scope.querySelector('#workspace-action-dialog')!, 'Cancel')?.click();
   await waitFor(() => document.activeElement === trigger);
 
-  expect(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open).to.equal(false);
+  expect(scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open).to.equal(false);
   expect(document.activeElement).to.equal(trigger);
 });
 
@@ -573,8 +573,8 @@ it('resumes accepted corpus reset tracking when Files reopens and refreshes its 
   await waitFor(() => !panel.loading);
   panel.querySelector<HTMLDetailsElement>('.workspace-actions')!.open = true;
   panel.querySelector<HTMLButtonElement>('[data-reset-workspace]')!.click();
-  await waitFor(() => panel.querySelector<HTMLDialogElement>('#reset-workspace-dialog')!.open);
-  const input = panel.querySelector<HTMLInputElement>('#reset-workspace-confirm-input')!;
+  await waitFor(() => panel.querySelector<HTMLDialogElement>('#workspace-action-dialog')!.open);
+  const input = panel.querySelector<HTMLInputElement>('#workspace-action-confirm-input')!;
   input.value = 'Default';
   input.dispatchEvent(new Event('input'));
   await panel.updateComplete;
@@ -587,4 +587,133 @@ it('resumes accepted corpus reset tracking when Files reopens and refreshes its 
   expect(statusReads).to.equal(2);
   expect(panel.querySelector<HTMLButtonElement>('[data-reset-workspace]')!.disabled).to.equal(false);
   expect(panel.snapshot?.files).to.deep.equal([]);
+});
+
+function mountFilesFor(
+  workspace: string,
+  routes: (url: string, init?: RequestInit) => Response | Promise<Response> | null,
+): Promise<DlInspectorFiles> {
+  ingestStore.set(workspace);
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    return await routes(url, init)
+      ?? Response.json({workspace: ingestStore.workspace, files: [], next_cursor: null});
+  };
+  const panel = document.createElement('dl-inspector-files');
+  panel.active = true;
+  document.body.appendChild(panel);
+  return waitFor(() => !panel.loading).then(() => {
+    panel.querySelector<HTMLDetailsElement>('.workspace-actions')!.open = true;
+    return panel;
+  });
+}
+
+async function confirmWorkspaceAction(
+  panel: DlInspectorFiles,
+  trigger: string,
+  typed: string,
+  submitLabel: string,
+): Promise<void> {
+  panel.querySelector<HTMLButtonElement>(trigger)!.click();
+  await waitFor(() => Boolean(panel.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open));
+  const input = panel.querySelector<HTMLInputElement>('#workspace-action-confirm-input')!;
+  input.value = typed;
+  input.dispatchEvent(new Event('input'));
+  await panel.updateComplete;
+  buttonNamed(panel, submitLabel)!.click();
+}
+
+function initTwoWorkspaces(): void {
+  workspaceStore.init([
+    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
+    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
+  ], ['default', 'research'], 'research', null, null, null, 'default');
+}
+
+it('deletes a workspace and retargets Files and the search scope', async () => {
+  initTwoWorkspaces();
+  let deleteBody = '';
+  const toasts: string[] = [];
+  const panel = await mountFilesFor('research', (url, init) => {
+    if (url.includes('/workspaces/delete')) {
+      deleteBody = String(init?.body);
+      return Response.json(corpusReceipt('run-delete', 'research'), {status: 202});
+    }
+    if (url.includes('/corpus-runs/run-delete')) {
+      return Response.json({...corpusReceipt('run-delete', 'research'), status: 'succeeded'});
+    }
+    return null;
+  });
+  panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+  const dialog = panel.querySelector<HTMLDialogElement>('#workspace-action-dialog')!;
+
+  await confirmWorkspaceAction(panel, '[data-delete-workspace]', 'Research', 'Delete workspace');
+  expect(dialog.getAttribute('aria-labelledby')).to.equal('workspace-action-title');
+  await waitFor(() => ingestStore.workspace === 'default' && !panel.loading);
+
+  expect(new URLSearchParams(deleteBody).get('workspace_name')).to.equal('research');
+  expect(new URLSearchParams(deleteBody).get('confirm_name')).to.equal('research');
+  expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['default']);
+  expect(workspaceStore.knownWorkspaces).to.deep.equal(['default']);
+  expect(workspaceStore.active).to.deep.equal(['default']);
+  expect(workspaceStore.primary).to.equal('default');
+  expect(document.cookie).to.contain('dlightrag_workspace_ids=default');
+  expect(toasts).to.deep.equal([
+    'Workspace deletion accepted for research.',
+    'Workspace Research deleted.',
+  ]);
+  expect(panel.snapshot?.workspace).to.equal('default');
+  expect(panel.mutationRun).to.equal(null);
+  expect(dialog.open).to.equal(false);
+});
+
+it('keeps the deployment default workspace resettable but not deletable', async () => {
+  initTwoWorkspaces();
+  const panel = await mountFilesFor('default', () => null);
+
+  expect(panel.querySelector('[data-delete-workspace]')).to.equal(null);
+  expect(panel.querySelector('[data-reset-workspace]')).not.to.equal(null);
+  expect(panel.querySelector('.workspace-actions-note')?.textContent?.trim())
+    .to.equal('The default workspace can be reset but not deleted.');
+});
+
+it('refuses uploads behind a pending deletion and keeps the workspace when it fails', async () => {
+  initTwoWorkspaces();
+  let statusReads = 0;
+  let uploads = 0;
+  const toasts: string[] = [];
+  const panel = await mountFilesFor('research', (url) => {
+    if (url.includes('/workspaces/delete')) {
+      return Response.json(corpusReceipt('run-delete', 'research'), {status: 202});
+    }
+    if (url.includes('/corpus-runs/run-delete')) {
+      statusReads += 1;
+      return Response.json({
+        ...corpusReceipt('run-delete', 'research'),
+        status: statusReads === 1 ? 'running' : 'cancelled',
+      });
+    }
+    if (url.includes('/upload')) uploads += 1;
+    return null;
+  });
+  panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+
+  await confirmWorkspaceAction(panel, '[data-delete-workspace]', 'Research', 'Delete workspace');
+  await waitFor(() => statusReads === 1 && panel.mutationRun?.status === 'running');
+  await panel.updateComplete;
+  expect(panel.querySelector('#ingest-progress')?.textContent?.trim()).to.equal('Deleting workspace…');
+  expect(panel.querySelector<HTMLButtonElement>('[data-delete-workspace]')!.disabled).to.equal(true);
+
+  await panel.upload([new File(['x'], 'late.pdf')]);
+  expect(uploads).to.equal(0);
+  expect(toasts.at(-1)).to.equal('This workspace is being deleted.');
+
+  // Reopening Files resumes tracking; the cancelled deletion keeps the workspace.
+  panel.active = false;
+  await panel.updateComplete;
+  panel.active = true;
+  await waitFor(() => statusReads === 2 && !panel.loading && panel.mutationRun?.status === 'cancelled');
+  expect(toasts.at(-1)).to.equal('Workspace deletion did not finish.');
+  expect(workspaceStore.records.some((record) => record.workspace === 'research')).to.equal(true);
+  expect(ingestStore.workspace).to.equal('research');
 });

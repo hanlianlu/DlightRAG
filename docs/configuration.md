@@ -709,8 +709,8 @@ runtime:
 ```
 
 One RunRuntime schedules top-level Retrieval and Answer Runs on the Query Lane
-and all ingest, replace, exact delete, retry, and reset Runs on the Corpus
-Mutation Lane. Each lane has a per-process worker bound and a deployment-wide
+and all ingest, replace, exact delete, retry, reset, and Workspace Delete Runs
+on the Corpus Mutation Lane. Each lane has a per-process worker bound and a deployment-wide
 nonterminal admission limit. Deployment configuration owns process count and
 therefore total active Run capacity. The [captured local load
 evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence)

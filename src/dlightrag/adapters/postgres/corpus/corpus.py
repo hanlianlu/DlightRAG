@@ -468,6 +468,9 @@ class PGCorpusMaintenanceStore:
             embedding_model=embedding_model,
         )
 
+    async def unregister_workspace(self, workspace: str) -> bool:
+        return await self._workspace_registry.delete(workspace)
+
     async def get_workspace_record(self, workspace: str) -> dict[str, Any] | None:
         """Return the full registry row including storage/promotion facts."""
         return await self._workspace_registry.get_row(workspace)

@@ -163,6 +163,15 @@ async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> N
             },
             id="closed-staged-source-record",
         ),
+        pytest.param(
+            {
+                "action": "delete_workspace",
+                "workspace": "research",
+                "track_id": _TRACK_ID,
+                "supersedes_run_id": None,
+            },
+            id="workspace-delete-carries-no-selector",
+        ),
     ],
 )
 def test_prepared_input_validator_rejects_noncanonical_shapes(payload) -> None:
@@ -183,6 +192,15 @@ def test_prepared_input_validator_accepts_exact_retry_selector() -> None:
 
     assert action == "retry"
     assert workspace == "default"
+
+
+def test_prepared_input_validator_accepts_workspace_delete() -> None:
+    action, workspace = validate_corpus_mutation_prepared_input(
+        {"action": "delete_workspace", "workspace": "research", "track_id": _TRACK_ID}
+    )
+
+    assert action == "delete_workspace"
+    assert workspace == "research"
 
 
 def test_public_result_is_bounded_and_drops_paths_and_diagnostics() -> None:
@@ -234,9 +252,16 @@ class _Session:
 
 
 class _Maintenance:
+    def __init__(self) -> None:
+        self.unregistered: list[str] = []
+
     @asynccontextmanager
     async def workspace_write_gate(self, _workspace: str):
         yield
+
+    async def unregister_workspace(self, workspace: str) -> bool:
+        self.unregistered.append(workspace)
+        return True
 
 
 def _payload(action: str, **fields: Any) -> dict[str, Any]:
@@ -248,15 +273,22 @@ def _payload(action: str, **fields: Any) -> dict[str, Any]:
     }
 
 
-def _executor(runtime: Any, *, now=None, acquire_error: Exception | None = None):
+def _executor(
+    runtime: Any,
+    *,
+    now=None,
+    acquire_error: Exception | None = None,
+    maintenance: _Maintenance | None = None,
+    store: Any = None,
+):
     pool = SimpleNamespace(
         acquire=AsyncMock(side_effect=acquire_error, return_value=runtime),
         evict=AsyncMock(),
     )
-    store = SimpleNamespace(record_corpus_window=AsyncMock(return_value=True))
+    store = store or SimpleNamespace(record_corpus_window=AsyncMock(return_value=True))
     executor = CorpusMutationExecutor(
         pool=cast(Any, pool),
-        maintenance=cast(Any, _Maintenance()),
+        maintenance=cast(Any, maintenance or _Maintenance()),
         store=cast(Any, store),
         now=now,
     )
@@ -348,6 +380,7 @@ async def test_explicit_repair_resume_is_consumed_before_delete_reexecution() ->
     [
         ("retry", {"document_ids": ["doc-1"], "selector": None}, "aretry_failed_docs"),
         ("reset", {"supersedes_run_id": None}, "areset"),
+        ("delete_workspace", {}, "areset"),
     ],
 )
 async def test_recovered_destructive_handoff_does_not_blindly_repeat(
@@ -575,6 +608,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
         service.create_delete(workspace="default", document_ids=["doc-1"], submitted_by="owner"),
         service.create_retry(workspace="default", submitted_by="owner"),
         service.create_reset(workspace="default", submitted_by="owner"),
+        service.create_workspace_delete(workspace="research", submitted_by="owner"),
     )
     for call in calls:
         with pytest.raises(CorpusMutationUnavailableError, match="read-only replica"):
@@ -589,3 +623,139 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
             max_bytes=1024,
         )
     assert list(tmp_path.rglob("*")) == []
+
+
+def _run_record(run_id: str, *, status: str = "queued", run_kind: str = "corpus_mutation"):
+    return SimpleNamespace(
+        run_id=run_id,
+        run_kind=run_kind,
+        terminal=status in {"succeeded", "failed", "cancelled"},
+    )
+
+
+def _successor_store(*pages: tuple[Any, ...]) -> SimpleNamespace:
+    return SimpleNamespace(
+        list_runs=AsyncMock(side_effect=list(pages)),
+        request_cancellation=AsyncMock(),
+    )
+
+
+def _workspace_delete_session(**kwargs: Any) -> _Session:
+    session = _Session(
+        {"action": "delete_workspace", "workspace": "research", "track_id": _TRACK_ID},
+        **kwargs,
+    )
+    session.owner_id = "research"
+    return session
+
+
+async def test_workspace_delete_resets_everything_then_retires_identity_and_successors() -> None:
+    runtime = _runtime()
+    maintenance = _Maintenance()
+    store = _successor_store(
+        (
+            _run_record("run-queued"),
+            _run_record("run-done", status="succeeded"),
+            _run_record("run-answer", run_kind="answer"),
+        ),
+    )
+    executor, pool, _store = _executor(runtime, maintenance=maintenance, store=store)
+    session = _workspace_delete_session()
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Succeeded)
+    assert outcome.result["action"] == "delete_workspace"
+    # No source is preserved: every queued successor is cancelled, never replayed.
+    runtime.areset.assert_awaited_once_with(dry_run=False)
+    assert session.handoff_started is True
+    assert session.phases == ["resetting_corpus", "removing_workspace"]
+    assert maintenance.unregistered == ["research"]
+    store.list_runs.assert_awaited_once_with(owner_id="research", after_run_id=_RUN_ID, limit=100)
+    store.request_cancellation.assert_awaited_once_with(owner_id="research", run_id="run-queued")
+    pool.evict.assert_awaited_once_with("research")
+
+
+async def test_workspace_delete_pages_through_every_queued_successor() -> None:
+    first = tuple(_run_record(f"run-{index:03d}") for index in range(100))
+    store = _successor_store(first, (_run_record("run-last"),))
+    executor, _pool, _store = _executor(_runtime(), store=store)
+
+    outcome = await executor.execute(cast(Any, _workspace_delete_session()))
+
+    assert isinstance(outcome, Succeeded)
+    assert store.list_runs.await_args_list[1].kwargs["after_run_id"] == "run-099"
+    assert store.request_cancellation.await_count == 101
+
+
+async def test_settled_workspace_delete_repeats_only_idempotent_retirement() -> None:
+    runtime = _runtime()
+    maintenance = _Maintenance()
+    store = _successor_store(())
+    executor, pool, _store = _executor(runtime, maintenance=maintenance, store=store)
+    session = _workspace_delete_session(
+        handoff_started=True,
+        checkpoint={"operation_settled": True, "document_outcomes": [{"documents_deleted": 1}]},
+    )
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Succeeded)
+    runtime.areset.assert_not_awaited()
+    assert maintenance.unregistered == ["research"]
+    pool.evict.assert_awaited_once_with("research")
+
+
+async def test_workspace_delete_with_reset_errors_waits_for_repair_and_keeps_identity() -> None:
+    runtime = _runtime()
+    runtime.areset.return_value = {"errors": ["Phase 1 (chunks): dropped connection"]}
+    maintenance = _Maintenance()
+    store = _successor_store(())
+    executor, pool, _store = _executor(runtime, maintenance=maintenance, store=store)
+
+    outcome = await executor.execute(cast(Any, _workspace_delete_session()))
+
+    assert isinstance(outcome, WaitingForRepair)
+    assert maintenance.unregistered == []
+    store.list_runs.assert_not_awaited()
+    pool.evict.assert_not_awaited()
+
+
+async def test_workspace_delete_refuses_the_deployment_default(tmp_path: Path) -> None:
+    store = AsyncMock()
+    service = CorpusMutationService(
+        input_root=tmp_path,
+        store=store,
+        coordinator=cast(Any, SimpleNamespace()),
+        default_workspace="research",
+    )
+
+    with pytest.raises(ValueError, match="default workspace cannot be deleted"):
+        await service.create_workspace_delete(workspace="research", submitted_by="owner")
+    store.accept_run.assert_not_awaited()
+
+
+async def test_workspace_delete_is_accepted_as_a_workspace_scoped_mutation(
+    tmp_path: Path,
+) -> None:
+    store = AsyncMock()
+    store.accept_run.side_effect = RuntimeError("captured envelope")
+
+    @asynccontextmanager
+    async def admission():
+        yield True
+
+    coordinator = SimpleNamespace(is_started=True, admission=admission, wake=lambda: None)
+    service = CorpusMutationService(
+        input_root=tmp_path,
+        store=store,
+        coordinator=cast(Any, coordinator),
+    )
+
+    with pytest.raises(RuntimeError, match="captured envelope"):
+        await service.create_workspace_delete(workspace="research", submitted_by="operator")
+
+    envelope = store.accept_run.await_args.kwargs["envelope"]
+    assert envelope.access_scope.scope_id == "research"
+    assert envelope.payload["action"] == "delete_workspace"
+    assert envelope.accepted_input == {"action": "delete_workspace", "workspace": "research"}

@@ -768,36 +768,54 @@ def e2e_base_url(
             }
         )
 
-    async def _create_reset_run(*, workspace: str, submitted_by: str) -> SimpleNamespace:
+    corpus_runs: dict[str, RunView] = {}
+
+    def _settled_corpus_run(*, action: str, workspace: str, submitted_by: str) -> SimpleNamespace:
         now = datetime.now(UTC)
-        run_id = str(uuid4())
-        return SimpleNamespace(
-            run=RunView(
-                run_id=run_id,
-                run_kind="corpus_mutation",
-                lane="corpus_mutation",
-                submitted_by=submitted_by,
-                access_scope_kind="workspace",
-                access_scope_id=workspace,
-                status="succeeded",
-                phase="completed",
-                durable_progress_version=1,
-                next_event_sequence=2,
-                events_trimmed_at=None,
-                cancel_requested=False,
-                result={"action": "reset", "document_count": 0, "documents": []},
-                error_kind=None,
-                error_message=None,
-                created_at=now,
-                started_at=now,
-                finished_at=now,
-                request={"action": "reset", "workspace": workspace},
-            )
+        run = RunView(
+            run_id=str(uuid4()),
+            run_kind="corpus_mutation",
+            lane="corpus_mutation",
+            submitted_by=submitted_by,
+            access_scope_kind="workspace",
+            access_scope_id=workspace,
+            status="succeeded",
+            phase="completed",
+            durable_progress_version=1,
+            next_event_sequence=2,
+            events_trimmed_at=None,
+            cancel_requested=False,
+            result={"action": action, "document_count": 0, "documents": []},
+            error_kind=None,
+            error_message=None,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            request={"action": action, "workspace": workspace},
+        )
+        corpus_runs[run.run_id] = run
+        return SimpleNamespace(run=run)
+
+    async def _create_reset_run(*, workspace: str, submitted_by: str) -> SimpleNamespace:
+        return _settled_corpus_run(action="reset", workspace=workspace, submitted_by=submitted_by)
+
+    async def _create_workspace_delete_run(*, workspace: str, submitted_by: str) -> SimpleNamespace:
+        # The double settles the durable Run at acceptance, as its executor would.
+        workspace_records[:] = [
+            record for record in workspace_records if str(record["workspace"]) != workspace
+        ]
+        return _settled_corpus_run(
+            action="delete_workspace", workspace=workspace, submitted_by=submitted_by
         )
 
+    async def _get_corpus_run(*, run_id: str) -> RunView | None:
+        return corpus_runs.get(run_id)
+
     application_double.corpus_mutations = SimpleNamespace(
-        create_reset=AsyncMock(side_effect=_create_reset_run)
+        create_reset=AsyncMock(side_effect=_create_reset_run),
+        create_workspace_delete=AsyncMock(side_effect=_create_workspace_delete_run),
     )
+    application_double.runs.get_global.side_effect = _get_corpus_run
     application_double.corpora.list_workspaces.side_effect = _list_workspaces
     application_double.corpora.alist_workspace_records.side_effect = _list_workspace_records
     application_double.corpora.list_workspace_records_page.side_effect = (

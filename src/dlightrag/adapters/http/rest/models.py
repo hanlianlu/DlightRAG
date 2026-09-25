@@ -96,6 +96,12 @@ class ResetRequest(ClientContractModel):
     supersedes_run_id: str | None = None
 
 
+class WorkspaceDeleteRequest(ClientContractModel):
+    """Request to delete one explicitly named workspace."""
+
+    workspace: str
+
+
 class MetadataUpdateRequest(ClientContractModel):
     metadata: dict[str, Any]
 
@@ -262,12 +268,6 @@ class WorkspaceCreateResponse(ClientContractModel):
     workspace: str
     display_name: str
     created: bool
-
-
-class WorkspaceDeleteResponse(ClientContractModel):
-    workspace: str
-    deleted: bool
-    result: dict[str, Any]
 
 
 class MetadataResponse(ClientContractModel):

@@ -20,6 +20,7 @@ from dlightrag.adapters.http.rest.models import (
     ResetRequest,
     RetryRequest,
     RunDescriptor,
+    WorkspaceDeleteRequest,
 )
 from dlightrag.application.access import (
     UserContext,
@@ -209,6 +210,25 @@ async def reset(
             workspace=workspace,
             submitted_by=submitted_by,
             supersedes_run_id=body.supersedes_run_id,
+            idempotency_key=key,
+        )
+    )
+
+
+@router.post("/delete-workspace", response_model=RunDescriptor, status_code=202)
+async def delete_workspace(
+    body: WorkspaceDeleteRequest,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    application, workspace, submitted_by = await _authorize(
+        request, user, body.workspace, "delete_workspace"
+    )
+    key = _required_idempotency_key(request)
+    return await _accept(
+        lambda: application.corpus_mutations.create_workspace_delete(
+            workspace=workspace,
+            submitted_by=submitted_by,
             idempotency_key=key,
         )
     )

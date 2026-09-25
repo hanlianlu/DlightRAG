@@ -229,6 +229,7 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         create_delete=AsyncMock(),
         create_retry=AsyncMock(),
         create_reset=AsyncMock(),
+        create_workspace_delete=AsyncMock(),
         stage_upload=AsyncMock(),
         discard_staged_run=AsyncMock(),
         create_staged_ingest=AsyncMock(),
@@ -1713,6 +1714,58 @@ class TestDeleteEndpoint:
     @pytest.mark.usefixtures("_patch_application")
     async def test_legacy_delete_route_is_not_a_mutator(self, client: AsyncClient) -> None:
         assert (await client.request("DELETE", "/files", json={})).status_code == 405
+
+    async def test_workspace_delete_is_an_explicitly_named_durable_run(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpus_mutations.create_workspace_delete.return_value = RunCreation(
+            run=_queued_run_record(run_kind="corpus_mutation"), replayed=False
+        )
+        app.state.application = mock_application
+        response = await client.post(
+            "/runs/corpus/delete-workspace",
+            headers={"Idempotency-Key": "delete-research"},
+            json={"workspace": "Research"},
+        )
+        assert response.status_code == 202
+        assert response.json()["run_kind"] == "corpus_mutation"
+        mock_application.corpus_mutations.create_workspace_delete.assert_awaited_once_with(
+            workspace="research",
+            submitted_by=ANY,
+            idempotency_key="delete-research",
+        )
+
+    async def test_workspace_delete_requires_a_workspace_and_an_idempotency_key(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        app.state.application = mock_application
+        unnamed = await client.post(
+            "/runs/corpus/delete-workspace",
+            headers={"Idempotency-Key": "delete-unnamed"},
+            json={},
+        )
+        unkeyed = await client.post(
+            "/runs/corpus/delete-workspace",
+            json={"workspace": "research"},
+        )
+        assert unnamed.status_code == 422
+        assert unkeyed.status_code == 400
+        mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
+
+    async def test_workspace_delete_refusal_is_a_client_error(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpus_mutations.create_workspace_delete.side_effect = ValueError(
+            "The default workspace cannot be deleted; reset its corpus instead."
+        )
+        app.state.application = mock_application
+        response = await client.post(
+            "/runs/corpus/delete-workspace",
+            headers={"Idempotency-Key": "delete-default"},
+            json={"workspace": "default"},
+        )
+        assert response.status_code == 400
+        assert "cannot be deleted" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

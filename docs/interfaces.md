@@ -160,12 +160,13 @@ run = await application.runs.get(owner_id="default", run_id=creation.run.run_id)
 
 MCP `ingest` exposes the REST source arguments and returns the common Run
 descriptor. MCP also exposes `retry_files` and `delete_files`; use `get_run` and
-`cancel_run` for their shared lifecycle. Corpus reset and explicit operator
+`cancel_run` for their shared lifecycle. Corpus reset, Workspace Delete, and explicit operator
 repair/resume are available through Web and REST.
 
 ### Runs And Results
 
-Corpus Mutation actions are `ingest`, `replace`, `delete`, `retry`, and `reset`.
+Corpus Mutation actions are `ingest`, `replace`, `delete`, `retry`, `reset`, and
+`delete_workspace`.
 They use the common `queued`, `running`, `succeeded`, `failed`, and `cancelled`
 states and the common `GET|DELETE /runs/{run_id}` plus
 `GET /runs/{run_id}/events` observation routes. Cancellation closes at the
@@ -687,6 +688,7 @@ validation failure), and the Run trace's `agent_effort` records the level that r
 | `POST /workspaces` | Create an empty workspace (201; duplicate 409). |
 | `GET /workspaces/{workspace}/storage` | Read operator storage/promotion state. |
 | `POST /runs/corpus/reset` | Accept Corpus Reset while retaining Workspace identity and history. |
+| `POST /runs/corpus/delete-workspace` | Accept Workspace Delete for an explicitly named non-default workspace. |
 | `GET /files` | Page processed files for one workspace. |
 | `POST /runs/corpus/delete` | Accept durable deletion by exact path, name, or document ID. |
 | `GET /files/failed` | Page failed documents. |
@@ -714,8 +716,10 @@ maximum 100) plus a signed cursor. Access filtering happens after catalog
 paging. The response contains `workspaces`, `records`, and `next_cursor`. MCP
 `list_workspaces` returns only the first 50 plus `has_more`.
 
-Corpus deletion and reset are durable Run actions rather than direct mutation
-routes. Reset preserves the Workspace registry, access scope, and history. Web
+Corpus deletion, reset, and Workspace Delete are durable Run actions rather than
+direct mutation routes. Reset preserves the Workspace registry, access scope, and
+history. Workspace Delete also removes the Workspace from the catalogue and
+cancels mutations queued behind it; Runs and Conversations stay. Web
 Files uses a workspace-bound signed keyset cursor, defaults
 to 50 files (maximum 100), and orders by `updated_at DESC, id ASC`; processed
 rows appear only after Product Document finalization. The failed-files view

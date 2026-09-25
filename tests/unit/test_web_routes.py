@@ -155,6 +155,7 @@ def mock_application():
         create_staged_batch=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
         create_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
         create_reset=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
+        create_workspace_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
         stage_upload=AsyncMock(),
         discard_staged_run=AsyncMock(),
     )
@@ -709,6 +710,7 @@ class TestWebBootstrap:
             "primary_workspace": "default",
             "active_workspaces": ["default", "test_ws"],
             "known_workspaces": ["default", "test_ws"],
+            "default_workspace": "default",
             "answer_attachments": {
                 "count_limit": 6,
                 "image_max_bytes": 104_857_600,
@@ -1452,6 +1454,80 @@ async def test_reset_workspace_projects_the_admission_limit(
 
     assert response.status_code == 503
     assert response.json()["error"] == "Deployment-wide nonterminal admission limit reached"
+
+
+async def test_delete_workspace_accepts_a_durable_run_behind_the_delete_permission(
+    client: AsyncClient, mock_application, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.adapters.http.browser.routes import workspaces as workspace_routes
+
+    checked: list[tuple[str, str]] = []
+
+    async def record_access(_request: Any, action: str, workspace: str) -> None:
+        checked.append((action, workspace))
+
+    monkeypatch.setattr(workspace_routes, "enforce_web_access", record_access)
+
+    response = await client.post(
+        "/web/api/workspaces/delete",
+        data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["run_kind"] == "corpus_mutation"
+    assert response.json()["workspace"] == "test_ws"
+    assert checked == [("workspace.delete", "test_ws")]
+    mock_application.corpus_mutations.create_workspace_delete.assert_awaited_once_with(
+        workspace="test_ws",
+        submitted_by=DEPLOYMENT_OWNER_ID,
+    )
+    mock_application.corpus_mutations.create_reset.assert_not_awaited()
+
+
+async def test_delete_workspace_requires_a_matching_confirmation(
+    client: AsyncClient, mock_application
+) -> None:
+    response = await client.post(
+        "/web/api/workspaces/delete",
+        data={"workspace_name": "test-ws", "confirm_name": "other"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Confirmation name does not match"
+    mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
+
+
+async def test_delete_workspace_reports_a_workspace_that_is_already_gone(
+    client: AsyncClient, mock_application
+) -> None:
+    mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+
+    response = await client.post(
+        "/web/api/workspaces/delete",
+        data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "Workspace no longer exists"
+    mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
+
+
+async def test_delete_workspace_explains_why_the_default_is_kept(
+    client: AsyncClient, mock_application
+) -> None:
+    mock_application.corpus_mutations.create_workspace_delete.side_effect = ValueError(
+        "The default workspace cannot be deleted; reset its corpus instead."
+    )
+
+    response = await client.post(
+        "/web/api/workspaces/delete",
+        data={"workspace_name": "default", "confirm_name": "default"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == (
+        "The default workspace cannot be deleted; reset its corpus instead."
+    )
 
 
 class TestSourcePresentation:

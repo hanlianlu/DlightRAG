@@ -29,6 +29,7 @@ const bootstrap = {
   primary_workspace: 'default',
   active_workspaces: ['default'],
   known_workspaces: ['default'],
+  default_workspace: 'default',
   answer_attachments: {
     count_limit: 6,
     image_max_bytes: 1024,
@@ -138,6 +139,7 @@ it('renders the application shell from the typed bootstrap before resolving read
     primaryWorkspace: 'default',
     activeWorkspaces: ['default'],
     knownWorkspaces: ['default'],
+    defaultWorkspace: 'default',
     answerAttachments: {
       countLimit: 6,
       imageMaxBytes: 1024,

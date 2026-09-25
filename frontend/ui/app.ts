@@ -60,6 +60,7 @@ const EMPTY_BOOTSTRAP: WebBootstrap = {
   activeWorkspaces: [],
   workspacesNextCursor: null,
   knownWorkspaces: null,
+  defaultWorkspace: '',
   answerAttachments: {
     countLimit: 0,
     imageMaxBytes: 0,
@@ -189,6 +190,7 @@ export class DlApp extends LightElement {
         (cursor, signal) => getWorkspacesPage(cursor, signal),
         bootstrap.workspacesNextCursor ?? null,
         bootstrap.knownWorkspaces ?? null,
+        bootstrap.defaultWorkspace,
       );
       this.bootState = 'ready';
       await this.updateComplete;

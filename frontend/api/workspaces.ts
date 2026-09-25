@@ -100,3 +100,16 @@ export function resetWorkspaceRequest(
     signal,
   );
 }
+
+export function deleteWorkspaceRequest(
+  name: string,
+  signal?: AbortSignal,
+): Promise<WebCorpusRunReceipt> {
+  return post(
+    '/web/api/workspaces/delete',
+    {workspace_name: name, confirm_name: name},
+    corpusRunReceipt,
+    'Could not accept workspace deletion.',
+    signal,
+  );
+}

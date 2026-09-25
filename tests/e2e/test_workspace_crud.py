@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""E2E tests for workspace creation, selection, and identity-preserving reset."""
+"""E2E tests for workspace creation, selection, identity-preserving reset, and deletion."""
 
 import pytest
 from playwright.sync_api import expect
@@ -207,3 +207,39 @@ def test_workspace_corpus_reset_server_round_trip(page):
     expect(
         page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research")
     ).to_have_count(1)
+
+
+@pytest.mark.e2e
+def test_workspace_delete_server_round_trip(page):
+    """Delete a disposable workspace through the real Web route and every picker."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    popover = page.get_by_role("dialog", name="Workspaces")
+    popover.get_by_label("New workspace name").fill("Scratch")
+    with page.expect_response("**/web/api/workspaces/create") as create_response:
+        popover.get_by_label("Create workspace").click()
+    assert create_response.value.ok
+    expect(popover).to_be_hidden()
+
+    page.locator("#files-btn").click()
+    page.locator("#ingest-target-trigger").click()
+    page.get_by_role("dialog", name="Select ingest workspace").get_by_role(
+        "button", name="Scratch", exact=True
+    ).click()
+    page.get_by_text("Workspace actions", exact=True).click()
+    page.get_by_role("button", name="Delete workspace…", exact=True).click()
+    dialog = page.get_by_role("dialog", name="Delete workspace")
+    dialog.get_by_label("Type Scratch to confirm").fill("Scratch")
+    with page.expect_response("**/web/api/workspaces/delete") as delete_response:
+        dialog.get_by_role("button", name="Delete workspace", exact=True).click()
+    assert delete_response.value.status == 202
+
+    expect(dialog).to_be_hidden()
+    expect(page.locator("[data-ingest-name]")).to_have_text("Default")
+    expect(page.get_by_role("button", name="Delete workspace…", exact=True)).to_have_count(0)
+    page.locator("#workspace-selector").click()
+    expect(
+        page.locator(".dl-popover--workspace .dl-popover-item", has_text="Scratch")
+    ).to_have_count(0)

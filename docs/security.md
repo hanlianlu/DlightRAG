@@ -248,6 +248,7 @@ are a canonical ID or `*`. Action patterns may be exact, `*`, a prefix such as
 | `workspace.update_metadata` | Update metadata |
 | `workspace.read_visual_asset` | Read rendered visuals |
 | `workspace.create`, `.reset` | Workspace creation and identity-preserving Corpus Reset, including repair resume/supersession for reset |
+| `workspace.delete` | Workspace Delete, including repair resume for it; unknown mutation actions fail closed to this action |
 | `workspace.storage_status` | Read storage/promotion state |
 | `model_catalogue.write` | Change deployment-wide model catalogue |
 

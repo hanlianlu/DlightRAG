@@ -249,6 +249,7 @@ async def test_http_client_exposes_every_corpus_use_case_through_common_observat
             "action"
         ] == "ingest"
         assert (await runs.reset({"workspace": "default"}))["action"] == "ingest"
+        assert (await runs.delete_workspace({"workspace": "research"}))["action"] == "ingest"
         assert (await runs.resume("run-1"))["action"] == "ingest"
 
     assert [request.url.path for request in requests] == [
@@ -259,6 +260,8 @@ async def test_http_client_exposes_every_corpus_use_case_through_common_observat
         "/runs/corpus/retry",
         "/runs/run-1",
         "/runs/corpus/reset",
+        "/runs/run-1",
+        "/runs/corpus/delete-workspace",
         "/runs/run-1",
         "/runs/run-1/resume",
         "/runs/run-1",

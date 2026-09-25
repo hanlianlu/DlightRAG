@@ -237,6 +237,20 @@ dl-icon-button.panel-close {
     outline-offset: 2px;
 }
 
+.workspace-actions-body {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+    padding-top: var(--space-tight);
+}
+
+.workspace-actions-note {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+}
+
 .settings-section {
     border-top: 1px solid var(--color-border-subtle);
     padding-block: var(--space-section);

@@ -60,6 +60,8 @@ class WebBootstrap(ClientContractModel):
     primary_workspace: str
     active_workspaces: list[str]
     known_workspaces: list[str]
+    # The deployment's configured Workspace, which Workspace Delete refuses.
+    default_workspace: str
     answer_attachments: WebAttachmentBootstrap
     active_html_preview_enabled: bool
     agent_effort: WebAnswerEffort
@@ -150,6 +152,7 @@ async def build_web_bootstrap(
         primary_workspace=primary,
         active_workspaces=active,
         known_workspaces=authorized_full,
+        default_workspace=normalize_workspace(application.config.deployment.workspace),
         answer_attachments=WebAttachmentBootstrap(
             count_limit=application.config.answer.generation.max_attachments,
             image_max_bytes=attachment_limit,

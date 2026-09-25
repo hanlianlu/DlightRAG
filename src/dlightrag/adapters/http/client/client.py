@@ -413,7 +413,7 @@ class AnswerRunClient:
 
     async def _create_corpus_action(
         self,
-        action: Literal["ingest", "replace", "delete", "retry", "reset"],
+        action: Literal["ingest", "replace", "delete", "retry", "reset", "delete-workspace"],
         payload: Mapping[str, Any],
         *,
         idempotency_key: str | None = None,
@@ -515,6 +515,17 @@ class AnswerRunClient:
         idempotency_key: str | None = None,
     ) -> RunDescriptor:
         return await self._create_corpus_action("reset", payload, idempotency_key=idempotency_key)
+
+    async def create_workspace_delete(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> RunDescriptor:
+        """Submit the Workspace's final mutation: full reset, then identity removal."""
+        return await self._create_corpus_action(
+            "delete-workspace", payload, idempotency_key=idempotency_key
+        )
 
     async def resume_corpus_mutation(self, run_id: str) -> RunDescriptor:
         """Explicitly requeue the same waiting-for-repair mutation Run."""
@@ -618,6 +629,15 @@ class AnswerRunClient:
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         descriptor = await self.create_corpus_reset(payload, idempotency_key=idempotency_key)
+        return await self.wait_corpus_mutation(descriptor.run_id)
+
+    async def delete_workspace(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        descriptor = await self.create_workspace_delete(payload, idempotency_key=idempotency_key)
         return await self.wait_corpus_mutation(descriptor.run_id)
 
     async def resume(self, run_id: str) -> dict[str, Any]:

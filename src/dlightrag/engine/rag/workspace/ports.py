@@ -79,6 +79,10 @@ class CorpusMaintenanceStore(Protocol):
         embedding_model: str,
     ) -> None: ...
 
+    async def unregister_workspace(self, workspace: str) -> bool:
+        """Remove one Workspace identity from the catalog; False when already absent."""
+        ...
+
     async def get_workspace_record(self, workspace: str) -> dict[str, Any] | None:
         """Return the full registry row including storage/promotion facts."""
         ...

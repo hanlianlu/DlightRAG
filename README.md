@@ -134,7 +134,7 @@ docker compose --profile reader up -d dlightrag-reader
 localhost:8102/health` answers `service_role: reader`, and an upload in Web Files
 answers `503 This deployment is a read-only replica of the knowledge
 base: it accepts no corpus writes. Send the upload, retry, or delete to a
-writer.` Retry, Delete, and Corpus Reset answer the same way; add a read-only
+writer.` Retry, Delete, Corpus Reset, and Workspace Delete answer the same way; add a read-only
 corpus mount to serve source downloads. See
 [Service roles](docs/postgresql.md#service-roles-and-shared-artifacts).
 

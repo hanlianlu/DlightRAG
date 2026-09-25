@@ -31,6 +31,7 @@ export class WorkspaceStore extends Store {
   #known: string[] = [];
   #active: string[] = [];
   #primary = '';
+  #deploymentDefault = '';
   #loader: WorkspacePageLoader | null = null;
   readonly #pager: KeysetPager<WorkspacePageItem>;
 
@@ -50,6 +51,11 @@ export class WorkspaceStore extends Store {
     return this.#primary || this.#fallbackPrimary();
   }
 
+  /** The deployment's configured Workspace: it can be reset but never deleted. */
+  get deploymentDefault(): string {
+    return this.#deploymentDefault;
+  }
+
   get hasMoreWorkspaces(): boolean {
     return this.#loader !== null && this.#pager.hasOlder;
   }
@@ -65,8 +71,10 @@ export class WorkspaceStore extends Store {
     loader: WorkspacePageLoader | null = null,
     nextCursor: string | null = null,
     knownWorkspaces: string[] | null = null,
+    deploymentDefault = '',
   ): void {
     this.#loader = loader;
+    this.#deploymentDefault = deploymentDefault;
     this.#pager.reset(nextCursor);
     this.#records = records;
     // The full authorized id set stays separate from the bounded display
@@ -161,17 +169,12 @@ export class WorkspaceStore extends Store {
     this.changed();
   }
 
-  remove(workspace: string, nextWorkspace: string): void {
+  /** Forget a deleted Workspace while keeping a valid search scope. */
+  remove(workspace: string): void {
     this.#records = this.#records.filter((r) => r.workspace !== workspace);
     this.#known = this.#known.filter((known) => known !== workspace);
-    if (nextWorkspace && !this.#known.includes(nextWorkspace)) {
-      this.#known.push(nextWorkspace);
-    }
-    const remaining = this.#active.filter((a) => a !== workspace);
-    this.#active = remaining.length > 0 ? remaining : nextWorkspace ? [nextWorkspace] : [];
-    if (this.#primary === workspace || !this.#active.includes(this.#primary)) {
-      this.#primary = this.#fallbackPrimary(nextWorkspace);
-    }
+    this.#active = this.#validActive(this.#active.filter((active) => active !== workspace));
+    this.#primary = this.#validPrimary(this.#primary);
     this.#syncCookies();
     this.changed();
   }
