@@ -10,14 +10,21 @@ in [RunRuntime and durable query execution](durable-answer-runs.md), and authori
 
 | Interface | Use when | Ingestion |
 |---|---|---|
-| REST | DlightRAG runs as a service | Durable Corpus Mutation Runs |
-| MCP | An agent connects over stdio or streamable HTTP | Durable Corpus Mutation Runs |
-| Web | A browser user uploads and chats | Durable Corpus Mutation Runs |
+| REST | An application or script integrates knowledge, research, or authorized management capabilities | Durable Corpus Mutation Runs |
+| MCP | An external agent manages knowledge and delegates answers or research over stdio or streamable HTTP | Durable Corpus Mutation Runs |
+| Web | A browser user works with knowledge, research, personal settings, and authorized administration | Durable Corpus Mutation Runs |
 | In-process Application | Your process owns DlightRAG and its dependencies | Durable Corpus Mutation Runs |
 
 Remote clients should not import `dlightrag`; use REST, MCP, or Web. Configure
 models, PostgreSQL, credentials, and the parser once, then reuse the service or
 Application instance.
+
+The interfaces share Application services and authorization, while exposing
+operations suited to their callers. Web's `/web/api/*` contracts support the
+first-party experience. Public REST also supports custom clients, explicit
+child-agent supervision, owner-scoped Memory management, and authorized service
+administration. MCP exposes knowledge tasks and answer-level interaction; it
+does not mirror every REST route or browser action.
 
 ```python
 from dlightrag import DlightragConfig, create_application
@@ -152,8 +159,9 @@ run = await application.runs.get(owner_id="default", run_id=creation.run.run_id)
 ```
 
 MCP `ingest` exposes the REST source arguments and returns the common Run
-descriptor. MCP also exposes `retry_files`, `delete_files`, `reset_corpus`, and
-`resume_corpus_run`; use `get_run` and `cancel_run` for their shared lifecycle.
+descriptor. MCP also exposes `retry_files` and `delete_files`; use `get_run` and
+`cancel_run` for their shared lifecycle. Corpus reset and explicit operator
+repair/resume are available through Web and REST.
 
 ### Runs And Results
 
@@ -451,21 +459,38 @@ formatted equivalent JSON in its first text block. Expected validation or
 authorization failures set `isError: true`; protocol failures remain JSON-RPC
 errors.
 
+The 18 public tools form one fixed task interface. `answer(mode="research")`
+retains autonomous research, including its internal tools, child agents, and
+Memory under the existing owner policy. Run-level steering, continuation,
+branching, transcript access, cancellation, and Artifact reads let the caller
+direct and receive the work without taking over individual child agents.
+
 Registered public tool names are:
 
 - query/run: `retrieve`, `answer`, `get_run`, `cancel_run`, `list_runs`,
   `steer_answer_run`, `follow_up_answer_run`, `fork_answer_run`,
-  `get_answer_transcript`, `list_answer_children`, `get_answer_child`,
-  `control_answer_child`, `reply_answer_child`, `list_answer_artifacts`,
-  `read_answer_artifact`
+  `get_answer_transcript`, `list_answer_artifacts`, `read_answer_artifact`
 - corpus: `list_workspaces`, `get_capabilities`,
-  `get_workspace_storage_status`, `create_workspace`, `ingest`, `retry_files`,
-  `list_files`, `delete_files`, `reset_corpus`, `resume_corpus_run`
-- model catalogue: `get_model_catalogue`, `upsert_model_catalogue_entry`,
-  `remove_model_catalogue_entry`
-- memory: `list_memories`, `remember_memory`, `forget_memory`,
-  `undo_memory_change`, `get_memory_settings`, `set_memory_enabled`,
-  `clear_memory`
+  `create_workspace`, `ingest`, `retry_files`, `list_files`, `delete_files`
+
+**Integration change in v2.0.16:** the 17 management and child-supervision MCP
+tools below were removed from both discovery and invocation. Integrations using
+them should use the corresponding authenticated REST contracts, or perform the
+operation in Web. Refresh the client's MCP tool discovery after upgrading.
+
+| Removed MCP tools | Existing REST interface |
+|---|---|
+| `list_memories`, `remember_memory`, `forget_memory`, `undo_memory_change`, `get_memory_settings`, `set_memory_enabled`, `clear_memory` | `/memory`, `/memory/{memory_id}`, `/memory/changes/{change_id}/undo`, `/memory/settings`, `/memory/clear` |
+| `get_model_catalogue`, `upsert_model_catalogue_entry`, `remove_model_catalogue_entry` | `GET`, `PUT`, `DELETE /models/catalogue` |
+| `get_workspace_storage_status` | `GET /workspaces/{workspace}/storage` |
+| `reset_corpus`, `resume_corpus_run` | `POST /runs/corpus/reset`, `POST /runs/{run_id}/resume` |
+| `list_answer_children`, `get_answer_child`, `control_answer_child`, `reply_answer_child` | `GET /answer/{run_id}/children`, `GET /answer/{run_id}/children/{child_session_id}`, `POST /answer/{run_id}/children/{child_session_id}/control`, `POST /answer/{run_id}/child-guidance/{request_id}/reply` |
+
+REST request bodies and responses follow their documented contracts above and
+below; MCP argument objects are not REST compatibility payloads. Owner identity,
+resource permissions, and required idempotency keys still apply. There is no
+optional management tool profile or compatibility dispatcher. The standalone
+Memory package's separately bound MCP server retains its own four-tool contract.
 
 ### Web
 

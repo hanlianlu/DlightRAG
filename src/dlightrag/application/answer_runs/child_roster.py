@@ -155,7 +155,7 @@ def child_result_lineage(row: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def public_child_status(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the Web/REST/MCP child projection without private runtime envelopes."""
+    """Return the Web/REST child projection without private runtime envelopes."""
     lineage = child_result_lineage(row)
     usage = row.get("usage")
     return {

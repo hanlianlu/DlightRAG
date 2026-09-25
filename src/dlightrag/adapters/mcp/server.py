@@ -2,8 +2,8 @@
 """MCP server for agent integration (stdio + streamable-http).
 
 Entry point: dlightrag-mcp
-Primarily used by DeerFlow and other MCP-compatible agents for
-retrieve() + lightweight ingest().
+External agents manage source-backed knowledge and delegate durable answers and
+research. Web and REST serve personal management, operations, and child control.
 """
 
 import asyncio

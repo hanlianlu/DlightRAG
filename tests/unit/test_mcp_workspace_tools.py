@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for MCP workspace lifecycle tools."""
+"""MCP knowledge tasks, answer delegation, and durable lifecycle contracts."""
 
 import datetime
 import json
@@ -113,7 +113,6 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         create_ingest=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
         create_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
         create_retry=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
-        create_reset=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
     )
     application.retrieval = SimpleNamespace(
         create=AsyncMock(
@@ -136,7 +135,6 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         cancel=AsyncMock(
             return_value=SimpleNamespace(outcome="cancelled", run=_run_record(status="cancelled"))
         ),
-        resume_repair=AsyncMock(return_value=True),
     )
     application.answers = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(run=_run_record(), replayed=False)),
@@ -149,10 +147,6 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         follow_up=AsyncMock(return_value=None),
         fork=AsyncMock(return_value=None),
         transcript_tail=AsyncMock(return_value=None),
-        children=AsyncMock(return_value=None),
-        observe_child=AsyncMock(return_value=None),
-        control_child=AsyncMock(return_value=None),
-        reply_to_child=AsyncMock(return_value=None),
     )
     monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
     monkeypatch.setattr(mcp_server, "create_application", AsyncMock(return_value=application))
@@ -299,8 +293,14 @@ async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
     ]
     stored["artifact_outcome"] = {"status": "partial", "issues": []}
     mock_mcp_application.runs.get.return_value = _run_record(status="succeeded", result=stored)
+    mock_mcp_application.answers.read_artifact.return_value = b"report"
 
-    result = await mcp_server.mcp_app.call_tool("list_answer_artifacts", {"run_id": _RUN_ID})
+    async with Client(mcp_server.mcp_app) as client:
+        result = await client.call_tool("list_answer_artifacts", {"run_id": _RUN_ID})
+        resource_id = _tool_json(result)["artifacts"][0]["resource_id"]
+        content = await client.call_tool(
+            "read_answer_artifact", {"run_id": _RUN_ID, "resource_id": resource_id}
+        )
 
     payload = _tool_json(result)
     descriptor = payload["artifacts"][0]
@@ -324,6 +324,19 @@ async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
     }
     assert payload["artifact_outcome"] == {"status": "partial", "issues": []}
     assert "kind" not in descriptor
+    assert _tool_json(content) == {
+        "data": "cmVwb3J0",
+        "offset": 0,
+        "next_offset": 6,
+        "bytes": 6,
+    }
+    mock_mcp_application.answers.read_artifact.assert_awaited_once_with(
+        owner_id=_EXPECTED_OWNER,
+        run_id=_RUN_ID,
+        resource_id=resource_id,
+        offset=0,
+        length=1_048_576,
+    )
 
 
 async def test_list_answer_artifacts_does_not_invent_an_in_flight_outcome(
@@ -351,7 +364,6 @@ async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_application: AsyncMo
         "ingest",
         "retry_files",
         "delete_files",
-        "reset_corpus",
         "get_run",
     } <= tool_names
     assert "get_ingest_job" not in tool_names
@@ -383,8 +395,10 @@ async def test_mcp_protocol_errors_remain_protocol_errors() -> None:
         await app.call_tool("reject", {})
 
 
-async def test_mcp_lists_workspace_lifecycle_tools() -> None:
-    tools = await mcp_server.mcp_app.list_tools()
+@pytest.mark.parametrize("auth_mode", ["none", "simple", "jwt"])
+async def test_mcp_exposes_knowledge_and_answer_tasks(auth_mode: str) -> None:
+    with request_scope_context(RequestScope(auth_mode=auth_mode)):
+        tools = await mcp_server.mcp_app.list_tools()
     names = {tool.name for tool in tools}
 
     assert names == {
@@ -394,32 +408,15 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "delete_files",
         "get_run",
         "get_capabilities",
-        "get_workspace_storage_status",
         "ingest",
-        "forget_memory",
-        "remember_memory",
-        "remove_model_catalogue_entry",
-        "undo_memory_change",
-        "upsert_model_catalogue_entry",
-        "get_memory_settings",
-        "get_model_catalogue",
-        "set_memory_enabled",
-        "clear_memory",
-        "control_answer_child",
-        "reply_answer_child",
         "follow_up_answer_run",
         "fork_answer_run",
         "get_answer_transcript",
-        "get_answer_child",
         "list_answer_artifacts",
-        "list_answer_children",
         "list_runs",
-        "list_memories",
         "list_files",
         "list_workspaces",
         "read_answer_artifact",
-        "reset_corpus",
-        "resume_corpus_run",
         "retrieve",
         "retry_files",
         "steer_answer_run",
@@ -472,6 +469,42 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert {"document_ids", "selector", "workspace", "idempotency_key"} == set(
         retry_files_tool.input_schema["properties"]
     )
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "list_memories",
+        "remember_memory",
+        "forget_memory",
+        "undo_memory_change",
+        "get_memory_settings",
+        "set_memory_enabled",
+        "clear_memory",
+        "get_workspace_storage_status",
+        "reset_corpus",
+        "resume_corpus_run",
+        "get_model_catalogue",
+        "upsert_model_catalogue_entry",
+        "remove_model_catalogue_entry",
+        "list_answer_children",
+        "get_answer_child",
+        "control_answer_child",
+        "reply_answer_child",
+    ],
+)
+async def test_management_tools_cannot_be_called_through_mcp(
+    tool_name: str, mock_mcp_application: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ensure_application = AsyncMock(return_value=mock_mcp_application)
+    monkeypatch.setattr(mcp_server, "_ensure_application", ensure_application)
+
+    async with Client(mcp_server.mcp_app) as client:
+        result = await client.call_tool(tool_name, {})
+
+    assert result.is_error is True
+    assert _tool_text(result) == f"Error: Unknown tool: {tool_name}"
+    ensure_application.assert_not_awaited()
 
 
 def test_mcp_security_defaults_are_loopback_only() -> None:
@@ -783,30 +816,16 @@ async def test_mcp_create_workspace_uses_corpus_catalog(mock_mcp_application) ->
     )
 
 
-async def test_mcp_reset_corpus_accepts_a_durable_run(mock_mcp_application) -> None:
-    result = await mcp_server.mcp_app.call_tool(
-        "reset_corpus",
-        {"workspace": "Old Workspace"},
-    )
-
-    body = _tool_json(result)
-    assert body["run_kind"] == "corpus_mutation"
-    mock_mcp_application.corpus_mutations.create_reset.assert_awaited_once_with(
-        workspace="old_workspace",
-        submitted_by=_EXPECTED_OWNER,
-        supersedes_run_id=None,
-        idempotency_key=None,
-    )
-
-
 async def test_mcp_corpus_mutation_projects_the_admission_limit(mock_mcp_application) -> None:
     from dlightrag.application.runs import RunAdmissionLimitExceededError
 
-    mock_mcp_application.corpus_mutations.create_reset.side_effect = RunAdmissionLimitExceededError(
+    mock_mcp_application.corpus_mutations.create_retry.side_effect = RunAdmissionLimitExceededError(
         "limit reached"
     )
 
-    result = await mcp_server.mcp_app.call_tool("reset_corpus", {"workspace": "default"})
+    result = await mcp_server.mcp_app.call_tool(
+        "retry_files", {"workspace": "default", "selector": "all_retryable"}
+    )
 
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
@@ -903,8 +922,10 @@ async def test_mcp_requests_stay_bound_to_running_application_config(
     )
 
 
+@pytest.mark.parametrize("mode", ["auto", "fast", "research"])
 async def test_mcp_answer_returns_a_descriptor_without_waiting(
     mock_mcp_application: AsyncMock,
+    mode: str,
 ) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "answer",
@@ -916,6 +937,7 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
             "attachments": [{"url": "https://example.com/report.pdf", "filename": "report.pdf"}],
             "filters": {"title": "Manual"},
             "semantic_highlights": True,
+            "mode": mode,
             "effort": "max",
             "idempotency_key": "key-1",
         },
@@ -941,6 +963,7 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
     assert answer_request.retrieval.top_k == 8
     assert answer_request.retrieval.chunk_top_k == 12
     assert answer_request.semantic_highlights is True
+    assert answer_request.mode == mode
     # The answering agent's effort is part of the accepted request, not decoration.
     assert answer_request.effort == "max"
     assert call_kwargs["idempotency_key"] == "key-1"
@@ -1099,34 +1122,6 @@ async def test_mcp_cancel_reports_the_pending_request(mock_mcp_application: Asyn
     assert body["status"] == "running"
     assert body["cancel_requested"] is True
     assert mock_mcp_application.runs.cancel.await_args.kwargs["owner_id"] == _EXPECTED_OWNER
-
-
-async def test_mcp_resume_requeues_the_same_authorized_repair_run(
-    mock_mcp_application: AsyncMock,
-) -> None:
-    waiting = RunView.from_runtime(
-        _run_record(
-            status="running",
-            run_kind="corpus_mutation",
-            phase="waiting_for_repair",
-            checkpoint={
-                "repair_reason": "Inspect upstream state.",
-                "repair_remedy": "Repair it, then resume.",
-            },
-        )
-    )
-    queued = RunView.from_runtime(_run_record(run_kind="corpus_mutation"))
-    mock_mcp_application.runs.get_global.side_effect = None
-    mock_mcp_application.runs.get_global.return_value = waiting
-    mock_mcp_application.runs.get.return_value = queued
-
-    body = _tool_json(await mcp_server.mcp_app.call_tool("resume_corpus_run", {"run_id": _RUN_ID}))
-
-    assert body["run_id"] == _RUN_ID
-    assert body["status"] == "queued"
-    mock_mcp_application.runs.resume_repair.assert_awaited_once_with(
-        owner_id="default", run_id=_RUN_ID
-    )
 
 
 async def test_mcp_answer_preserves_answer_input_error_kind(
@@ -1331,12 +1326,6 @@ async def test_mcp_list_workspaces_returns_the_bounded_first_page(
         ),
         ("fork_answer_run", {"run_id": _RUN_ID, "query": "branch"}, "terminal owned run"),
         ("get_answer_transcript", {"run_id": _RUN_ID}, "Answer run not found"),
-        ("list_answer_children", {"run_id": _RUN_ID}, "Answer run not found"),
-        (
-            "get_answer_child",
-            {"run_id": _RUN_ID, "child_session_id": "child-1"},
-            "Answer child not found",
-        ),
         ("list_answer_artifacts", {"run_id": _RUN_ID}, "Answer run not found"),
         (
             "read_answer_artifact",

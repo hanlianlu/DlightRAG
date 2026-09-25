@@ -190,10 +190,13 @@ For a local stdio client:
 }
 ```
 
-The Compose stack also exposes streamable HTTP on port 8101. MCP supports
-durable Retrieval and Answer Runs, steering, follow-up/fork, child observation and controls,
-corpus administration, and capability discovery. The authoritative tool list
-is in [Interfaces](docs/interfaces.md#mcp-server).
+The Compose stack also exposes streamable HTTP on port 8101. MCP lets external
+agents manage source-backed knowledge, delegate durable Retrieval and Answer
+Runs, steer or continue research, and read its Artifacts. Its 18 tools cover
+these tasks; personal Memory management, service administration, and direct
+child-agent supervision are available through Web and REST. All interfaces
+reuse the same Application services and authorization rules. See
+[Interfaces](docs/interfaces.md#mcp-server) for the tool list and integration changes.
 
 ### Python
 

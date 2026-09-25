@@ -123,7 +123,7 @@ If reconciliation cannot prove a safe outcome, the same nonterminal Run enters
 `waiting_for_repair`, releases its lease and local execution slot, and exposes bounded
 `repair_reason` and `repair_remedy` fields. It is not failed and no replacement
 Run is created. An authorized operator repairs upstream state, then explicitly
-resumes this same Run through REST, same-origin browser, MCP, Python, or the
+resumes this same Run through REST, same-origin browser, Python, or the
 Application Run service. Resume records repair confirmation and requeues only
 that identity.
 

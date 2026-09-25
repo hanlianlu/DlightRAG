@@ -32,7 +32,6 @@ from dlightrag.application.corpus_admin import (
     managed_local_ingest_documents,
     managed_local_ingest_path,
     normalize_workspace,
-    validate_workspace_name,
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError, RunCreation
 from dlightrag.engine.answer.image_capability import answer_image_capability_summary
@@ -96,36 +95,6 @@ async def get_capabilities_tool() -> dict[str, Any]:
 
 
 @mcp_app.tool(
-    name="get_workspace_storage_status",
-    description=(
-        "Operator-facing storage facts for one workspace: storage_tier "
-        "(shared or hot), promotion_state, monotonic ingested_docs_total and "
-        "ingested_chunks_total, promotion_last_error, promotion_next_retry_at, "
-        "and write_fenced with retry_after_seconds. Requires the admin-only "
-        "workspace.storage_status action; ordinary users are never granted it."
-    ),
-    annotations=ToolAnnotations(read_only_hint=True),
-)
-async def get_workspace_storage_status_tool(
-    workspace: Annotated[
-        str | None,
-        Field(default=None, description="Workspace to inspect. Omit for default."),
-    ] = None,
-) -> dict[str, Any]:
-    application = await mcp_server._ensure_application()
-    workspace_name = normalize_workspace(workspace or application.config.deployment.workspace)
-    await mcp_server._enforce_access(
-        AccessAction.WORKSPACE_STORAGE_STATUS,
-        workspace_name,
-        application=application,
-    )
-    status = await application.corpora.get_workspace_storage_status(workspace_name)
-    if status is None:
-        raise ValueError(f"Workspace not found: {workspace_name}")
-    return status
-
-
-@mcp_app.tool(
     name="create_workspace",
     description=(
         "Create and register an empty DlightRAG workspace. Optional display_name is "
@@ -165,42 +134,6 @@ async def create_workspace_tool(
         "display_name": normalized_display_name,
         "created": True,
     }
-
-
-@mcp_app.tool(
-    name="reset_corpus",
-    description=(
-        "Accept a full Corpus Reset while preserving Workspace identity. "
-        "Returns the common durable Run descriptor."
-    ),
-    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True),
-)
-async def reset_corpus_tool(
-    workspace: Annotated[str, Field(description="Workspace whose corpus is reset.")],
-    supersedes_run_id: Annotated[
-        str | None,
-        Field(description="Waiting-for-repair mutation Run explicitly superseded by this Reset."),
-    ] = None,
-    idempotency_key: Annotated[
-        str | None,
-        Field(default=None, max_length=255, description="Stable caller replay key."),
-    ] = None,
-) -> dict[str, Any]:
-    application = await mcp_server._ensure_application()
-    normalized_workspace = normalize_workspace(validate_workspace_name(workspace))
-    await mcp_server._enforce_access(
-        AccessAction.WORKSPACE_RESET,
-        normalized_workspace,
-        application=application,
-    )
-    return await _accepted_corpus_mutation(
-        application.corpus_mutations.create_reset(
-            workspace=normalized_workspace,
-            submitted_by=mcp_server._owner_id(),
-            supersedes_run_id=supersedes_run_id,
-            idempotency_key=idempotency_key,
-        )
-    )
 
 
 @mcp_app.tool(

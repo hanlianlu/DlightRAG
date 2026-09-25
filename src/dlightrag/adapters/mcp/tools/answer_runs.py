@@ -26,10 +26,6 @@ from dlightrag.application.access import (
     current_request_scope,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
-from dlightrag.application.answer_runs import (
-    child_control_receipt_payload,
-    child_control_succeeded,
-)
 from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.retrieval import (
     MetadataFilter,
@@ -241,36 +237,6 @@ async def cancel_run_tool(
 
 
 @mcp_app.tool(
-    name="resume_corpus_run",
-    description=(
-        "Explicitly confirm operator repair and resume the same Corpus Mutation Run. "
-        "The Run must be in phase waiting_for_repair and remains the lifecycle authority."
-    ),
-    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
-)
-async def resume_corpus_run_tool(
-    run_id: Annotated[str, Field(description="Waiting-for-repair Corpus Mutation Run id.")],
-) -> dict[str, Any]:
-    args = AnswerRunInput.model_validate(locals())
-    application = await mcp_server._ensure_application()
-    record = await _authorized_run(application, args.run_id, cancel=True)
-    if record.run_kind != "corpus_mutation" or record.phase != "waiting_for_repair":
-        raise ValueError("Run is not waiting for repair")
-    if not await application.runs.resume_repair(
-        owner_id=record.access_scope_id,
-        run_id=args.run_id,
-    ):
-        raise ValueError("Run could not be resumed")
-    updated = await application.runs.get(
-        owner_id=record.access_scope_id,
-        run_id=args.run_id,
-    )
-    if updated is None:
-        raise ValueError(f"Run not found: {args.run_id}")
-    return mcp_server._run_descriptor(updated)
-
-
-@mcp_app.tool(
     name="steer_answer_run",
     description="Queue one ordered steering instruction for a live Research run.",
     annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
@@ -289,66 +255,6 @@ async def steer_answer_run_tool(
         "control_sequence": receipt.control_sequence,
         "kind": receipt.kind,
     }
-
-
-@mcp_app.tool(
-    name="control_answer_child",
-    description=(
-        "Steer, explicitly continue, or cancel one owned child Agent Session. "
-        "Steer targets only its current Operation; continue creates a new Operation "
-        "without changing the pinned model or tools."
-    ),
-    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
-)
-async def control_answer_child_tool(
-    run_id: Annotated[str, Field(description="Parent Answer run id")],
-    child_session_id: Annotated[str, Field(description="Child Session id")],
-    action: Annotated[Literal["steer", "continue", "cancel"], Field()],
-    idempotency_key: Annotated[str, Field(min_length=1, max_length=200)],
-    content: Annotated[str, Field(max_length=20_000)] = "",
-    reauthorize_user_cancelled: bool = False,
-) -> dict[str, Any]:
-    if action != "cancel" and not idempotency_key:
-        raise ValueError("idempotency_key is required for steer and continue")
-    receipt = await (await mcp_server._ensure_application()).answers.control_child(
-        owner_id=mcp_server._owner_id(),
-        run_id=run_id,
-        child_session_id=child_session_id,
-        action=action,
-        content=content,
-        idempotency_key=idempotency_key,
-        reauthorize_user_cancelled=reauthorize_user_cancelled,
-    )
-    if receipt is None:
-        raise ValueError("Answer child not found")
-    if not child_control_succeeded(receipt.outcome):
-        raise ValueError(f"Child control rejected: {receipt.outcome}")
-    return child_control_receipt_payload(receipt)
-
-
-@mcp_app.tool(
-    name="reply_answer_child",
-    description="Reply to one correlated ask_parent request from an owned child.",
-    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
-)
-async def reply_answer_child_tool(
-    run_id: Annotated[str, Field(description="Parent Answer run id")],
-    request_id: Annotated[str, Field(description="ask_parent request id")],
-    content: Annotated[str, Field(min_length=1, max_length=20_000)],
-    idempotency_key: Annotated[str, Field(min_length=1, max_length=200)],
-) -> dict[str, Any]:
-    receipt = await (await mcp_server._ensure_application()).answers.reply_to_child(
-        owner_id=mcp_server._owner_id(),
-        run_id=run_id,
-        request_id=request_id,
-        content=content,
-        idempotency_key=idempotency_key,
-    )
-    if receipt is None:
-        raise ValueError("Child guidance request not found")
-    if receipt.outcome != "replied":
-        raise ValueError(f"Child guidance reply rejected: {receipt.outcome}")
-    return child_control_receipt_payload(receipt)
 
 
 async def _authorized_run(application: Any, run_id: str, *, cancel: bool) -> RunView:
@@ -454,55 +360,6 @@ async def get_answer_transcript_tool(
         "status": transcript.status,
         "messages": list(transcript.messages),
     }
-
-
-@mcp_app.tool(
-    name="list_answer_children",
-    description=(
-        "Return at most the newest 50 children of one owned run's foreground "
-        "roster. has_more=true marks additional older children that are only "
-        "available through the Web/REST children endpoints with cursor paging."
-    ),
-    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
-)
-async def list_answer_children_tool(
-    run_id: Annotated[str, Field(description="Run id")],
-) -> dict[str, Any]:
-    page = await (await mcp_server._ensure_application()).answers.children(
-        owner_id=mcp_server._owner_id(), run_id=run_id
-    )
-    if page is None:
-        raise ValueError(f"Answer run not found: {run_id}")
-    return {
-        "run_id": run_id,
-        "children": [dict(child) for child in page.children],
-        "has_more": page.next_cursor is not None,
-    }
-
-
-@mcp_app.tool(
-    name="get_answer_child",
-    description=(
-        "Return one bounded observation of an owned child Agent Session: "
-        "status, transcript tail, controls, questions, and evidence handles. "
-        "Does not include provider-private reasoning."
-    ),
-    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
-)
-async def get_answer_child_tool(
-    run_id: Annotated[str, Field(description="Parent Answer run id")],
-    child_session_id: Annotated[str, Field(description="Child Session id")],
-    limit: Annotated[int, Field(default=20, ge=1, le=100)] = 20,
-) -> dict[str, Any]:
-    observation = await (await mcp_server._ensure_application()).answers.observe_child(
-        owner_id=mcp_server._owner_id(),
-        run_id=run_id,
-        child_session_id=child_session_id,
-        limit=limit,
-    )
-    if observation is None:
-        raise ValueError("Answer child not found")
-    return observation.payload()
 
 
 @mcp_app.tool(

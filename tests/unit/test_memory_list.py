@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Bounded Profile Memory listing: cursor, service gate, REST, MCP, SQL contract."""
+"""Bounded Profile Memory listing: cursor, service gate, REST, SQL contract."""
 
 import datetime
 import uuid
@@ -14,8 +14,7 @@ from dlightrag_memory.store import InMemoryMemoryStore
 from fastapi import HTTPException
 
 from dlightrag.adapters.http.rest.routes.memory import list_memories as rest_list_memories
-from dlightrag.adapters.mcp.tools.memory import list_memories_tool
-from dlightrag.application.access import RequestScope, UserContext, request_scope_context
+from dlightrag.application.access import UserContext
 from dlightrag.application.memory import (
     MEMORY_LIST_PAGE_DEFAULT_LIMIT,
     MEMORY_LIST_PAGE_MAX_LIMIT,
@@ -392,88 +391,6 @@ async def test_rest_maps_disabled_and_unavailable_unchanged() -> None:
     with pytest.raises(HTTPException) as exc:
         await rest_list_memories(_request(application), user=_user())
     assert exc.value.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# MCP tool
-# ---------------------------------------------------------------------------
-
-
-async def test_mcp_lists_bounded_first_page_with_has_more(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.adapters.mcp import server as mcp_server
-
-    memory = _MemoryFake(secret=b"memory-list-tests")
-    record = _record(owner="deployment")
-    memory.list_active_page.return_value = MemoryListPage(records=(record,), next_cursor=None)
-    application = SimpleNamespace(memory=memory)
-    monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
-    monkeypatch.setattr(mcp_server, "_owner_id", lambda: "deployment")
-
-    with request_scope_context(RequestScope(auth_mode="jwt")):
-        result = await list_memories_tool()
-
-    assert result["memories"] == [
-        {"memory_id": record.memory_id, "kind": record.kind, "body": record.body}
-    ]
-    assert result["has_more"] is False
-    page_call = memory.list_active_page.await_args
-    assert page_call is not None
-    page_kwargs = page_call.kwargs
-    assert page_kwargs["owner_id"] == "deployment"
-    assert page_kwargs["auth_mode"] == "jwt"
-
-
-async def test_mcp_reports_has_more_when_continuation_exists(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.adapters.mcp import server as mcp_server
-
-    memory = _MemoryFake(secret=b"memory-list-tests")
-    memory.list_active_page.return_value = MemoryListPage(
-        records=(),
-        next_cursor=MemoryListCursor(
-            updated_at=datetime.datetime(2026, 3, 4, tzinfo=_UTC),
-            memory_id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
-        ),
-    )
-    application = SimpleNamespace(memory=memory)
-    monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
-    monkeypatch.setattr(mcp_server, "_owner_id", lambda: "deployment")
-
-    with request_scope_context(RequestScope(auth_mode="jwt")):
-        result = await list_memories_tool()
-
-    assert result["has_more"] is True
-
-
-async def test_mcp_disabled_raises_public_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    from dlightrag.adapters.mcp import server as mcp_server
-
-    memory = _MemoryFake(secret=b"memory-list-tests")
-    memory.list_active_page.side_effect = MemoryDisabledError()
-    application = SimpleNamespace(memory=memory)
-    monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
-    monkeypatch.setattr(mcp_server, "_owner_id", lambda: "deployment")
-
-    with request_scope_context(RequestScope(auth_mode="jwt")):
-        with pytest.raises(ValueError, match="not active"):
-            await list_memories_tool()
-
-
-async def test_mcp_tool_declares_the_bound_in_its_description() -> None:
-    from dlightrag.adapters.mcp.server import mcp_app
-
-    tools = await mcp_app.list_tools()
-    tool = next(tool for tool in tools if tool.name == "list_memories")
-    assert tool.description is not None
-    assert "first 50" in tool.description
-    assert "has_more" in tool.description
-    assert "REST" in tool.description
-    assert tool.annotations is not None
-    assert tool.annotations.read_only_hint is True
-    assert tool.annotations.idempotent_hint is True
 
 
 # ---------------------------------------------------------------------------

@@ -134,7 +134,7 @@ class MemoryService:
 
     @property
     def memory_list_cursor_codec(self) -> MemoryListCursorCodec:
-        """Return the codec shared with the REST and MCP memory adapters."""
+        """Return the cursor codec for owner-scoped Memory browsing."""
         return self._memory_list_codec
 
     async def list_active_page(
