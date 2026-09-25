@@ -827,18 +827,9 @@ export class DlChildrenRoster extends LightElement {
         <h3 id="dl-child-observation-title">${msg('Selected child', {id: 'runDialogs.selectedChild'})}</h3>
         <p>
           ${this.#statusLabel(status)}
-          ${child.operationStatus
-            ? html` · ${msg('Operation', {id: 'runDialogs.operation'})}: ${this.#statusLabel(child.operationStatus)}`
-            : nothing}
-          ${child.cancellationOrigin
-            ? html` · ${msg('Cancellation', {id: 'runDialogs.cancellation'})}: ${this.#cancellationOriginLabel(child.cancellationOrigin)}`
-            : nothing}
+
         </p>
         ${child.summary ? html`<p>${child.summary}</p>` : nothing}
-        ${observation.result?.handles.length ? html`
-          <p>${msg('Evidence handles', {id: 'runDialogs.evidenceHandles'})}:
-            ${observation.result.handles.join(', ')}</p>
-        ` : nothing}
         ${outcome ? html`<p role="status">${this.#outcomeLabel(outcome)}</p>` : nothing}
         <h4>${msg('Transcript', {id: 'runDialogs.transcript'})}</h4>
         <ol class="roster-lineage">
@@ -846,19 +837,6 @@ export class DlChildrenRoster extends LightElement {
             <li>${msg('No transcript entries yet.', {id: 'runDialogs.noTranscript'})}</li>
           ` : observation.transcript.map((entry) => html`
             <li>${this.#roleLabel(entry.role)}: ${entry.content || entry.name}</li>
-          `)}
-        </ol>
-        <h4>${msg('Controls', {id: 'runDialogs.controls'})}</h4>
-        <ol class="roster-lineage">
-          ${observation.controls.length === 0 ? html`
-            <li>${msg('No control messages yet.', {id: 'runDialogs.noControls'})}</li>
-          ` : observation.controls.map((record) => html`
-            <li>
-              ${record.consumed
-                ? msg('Consumed', {id: 'runDialogs.controlConsumed'})
-                : msg('Queued', {id: 'runDialogs.controlQueued'})}
-              · ${this.#originLabel(record.origin)}: ${record.content}
-            </li>
           `)}
         </ol>
         <h4>${msg('Questions', {id: 'runDialogs.questions'})}</h4>
@@ -934,6 +912,32 @@ export class DlChildrenRoster extends LightElement {
             </fieldset>
           </form>
         `) : nothing}
+        <details class="roster-execution-details">
+          <summary>${msg('Execution details', {id: 'runDialogs.executionDetails'})}</summary>
+          ${child.operationStatus
+            ? html`<p>${msg('Operation', {id: 'runDialogs.operation'})}: ${this.#statusLabel(child.operationStatus)}</p>`
+            : nothing}
+          ${child.cancellationOrigin
+            ? html`<p>${msg('Cancellation', {id: 'runDialogs.cancellation'})}: ${this.#cancellationOriginLabel(child.cancellationOrigin)}</p>`
+            : nothing}
+          ${observation.result?.handles.length ? html`
+            <p>${msg('Evidence handles', {id: 'runDialogs.evidenceHandles'})}:
+              ${observation.result.handles.join(', ')}</p>
+          ` : nothing}
+          <h4>${msg('Controls', {id: 'runDialogs.controls'})}</h4>
+          <ol class="roster-lineage">
+            ${observation.controls.length === 0 ? html`
+              <li>${msg('No control messages yet.', {id: 'runDialogs.noControls'})}</li>
+            ` : observation.controls.map((record) => html`
+              <li>
+                ${record.consumed
+                  ? msg('Consumed', {id: 'runDialogs.controlConsumed'})
+                  : msg('Queued', {id: 'runDialogs.controlQueued'})}
+                · ${this.#originLabel(record.origin)}: ${record.content}
+              </li>
+            `)}
+          </ol>
+        </details>
       </section>
     `;
   }

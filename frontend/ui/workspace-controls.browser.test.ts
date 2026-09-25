@@ -5,6 +5,8 @@ import {ingestStore} from '../stores/ingest-store.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
 import type {DlWorkspaceScope} from './workspace-scope.ts';
 import './workspace-scope.ts';
+import './inspector-files.ts';
+import type {DlInspectorFiles} from './inspector-files.ts';
 import type {DlIngestTarget} from './ingest-target.ts';
 import './ingest-target.ts';
 import type {ToastRequestDetail} from './toast.ts';
@@ -43,6 +45,24 @@ function mountScope(): DlWorkspaceScope {
   const scope = document.createElement('dl-workspace-scope') as DlWorkspaceScope;
   document.body.appendChild(scope);
   return scope;
+}
+
+async function mountFiles(): Promise<DlInspectorFiles> {
+  const fetchReset = window.fetch;
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes('/workspaces/reset')) return fetchReset(input, init);
+    if (url.includes('/corpus-runs/')) return Response.json({
+      ...corpusReceipt('run-reset', ingestStore.workspace), status: 'succeeded', phase: 'succeeded',
+    });
+    return Response.json({workspace: ingestStore.workspace, files: [], next_cursor: null});
+  };
+  const panel = document.createElement('dl-inspector-files');
+  panel.active = true;
+  document.body.appendChild(panel);
+  await waitFor(() => !panel.loading);
+  panel.querySelector<HTMLDetailsElement>('.workspace-actions')!.open = true;
+  return panel;
 }
 
 beforeEach(() => {
@@ -99,7 +119,7 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   expect(document.activeElement).to.equal(trigger);
 });
 
-it('restores typed-name deletion intent after a failed workspace request', async () => {
+it('preserves typed confirmation and focus after a failed corpus reset', async () => {
   let calls = 0;
   window.fetch = async () => {
     calls += 1;
@@ -108,12 +128,10 @@ it('restores typed-name deletion intent after a failed workspace request', async
       headers: {'Content-Type': 'application/json'},
     });
   };
-  const scope = mountScope();
+  const scope = await mountFiles();
   await scope.updateComplete;
-  buttonNamed(scope, 'Choose search workspaces')?.click();
-  await scope.updateComplete;
-  scope.querySelector<HTMLButtonElement>('[aria-label="Reset Corpus Default"]')?.click();
-  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('dialog')?.open));
+  scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')?.click();
+  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open));
   const input = scope.querySelector<HTMLInputElement>('[aria-label="Type Default to confirm"]')!;
   input.value = 'Default';
   input.dispatchEvent(new Event('input'));
@@ -125,7 +143,7 @@ it('restores typed-name deletion intent after a failed workspace request', async
   await waitFor(() => calls === 1 && submit.disabled === false);
 
   expect(input.value).to.equal('Default');
-  expect(scope.querySelector<HTMLDialogElement>('dialog')?.open).to.equal(true);
+  expect(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open).to.equal(true);
   expect(document.activeElement).to.equal(input);
 });
 
@@ -221,13 +239,10 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   ], ['default'], 'default');
   const requests: Array<(response: Response) => void> = [];
   window.fetch = async () => await new Promise<Response>((resolve) => { requests.push(resolve); });
-  const scope = mountScope();
+  const scope = await mountFiles();
   await scope.updateComplete;
-  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
-  trigger.click();
-  await scope.updateComplete;
-  scope.querySelector<HTMLButtonElement>('[aria-label="Reset Corpus Default"]')?.click();
-  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('dialog')?.open));
+  scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')?.click();
+  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open));
   let input = scope.querySelector<HTMLInputElement>('[aria-label="Type Default to confirm"]')!;
   input.value = 'Default';
   input.dispatchEvent(new Event('input'));
@@ -236,8 +251,8 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   await waitFor(() => requests.length === 1
     && buttonNamed(scope, 'Accepting reset…')?.disabled === true);
 
-  let dialog = scope.querySelector<HTMLDialogElement>('dialog')!;
-  const cancel = buttonNamed(scope, 'Cancel')!;
+  let dialog = scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')!;
+  const cancel = buttonNamed(dialog, 'Cancel')!;
   expect(cancel.disabled).to.equal(true);
   cancel.click();
   const cancelEvent = new Event('cancel', {cancelable: true});
@@ -249,21 +264,16 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
     status: 500,
     headers: {'Content-Type': 'application/json'},
   }));
-  await waitFor(() => buttonNamed(scope, 'Cancel')?.disabled === false
+  await waitFor(() => buttonNamed(scope.querySelector('#reset-workspace-dialog')!, 'Cancel')?.disabled === false
     && input.readOnly === false);
-  buttonNamed(scope, 'Cancel')?.click();
-  await waitFor(() => !scope.querySelector<HTMLDialogElement>('dialog')?.open
-    && document.activeElement === buttonNamed(scope, 'Choose search workspaces'));
+  buttonNamed(scope.querySelector('#reset-workspace-dialog')!, 'Cancel')?.click();
+  await waitFor(() => !scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open
+    && document.activeElement === scope.querySelector<HTMLButtonElement>('[data-reset-workspace]'));
   await scope.updateComplete;
 
-  const nextTrigger = buttonNamed(scope, 'Choose search workspaces')!;
-  nextTrigger.click();
-  await scope.updateComplete;
-  expect(nextTrigger.getAttribute('aria-expanded')).to.equal('true');
-  const deleteResearch = scope.querySelector<HTMLButtonElement>(
-    '[aria-label="Reset Corpus Research"]',
-  )!;
-  expect(deleteResearch).not.to.equal(null);
+  ingestStore.set('research');
+  await waitFor(() => scope.snapshot?.workspace === 'research' && !scope.loading);
+  const deleteResearch = scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')!;
   deleteResearch.click();
   await waitFor(() => Boolean(scope.querySelector<HTMLInputElement>(
     '[aria-label="Type Research to confirm"]',
@@ -332,38 +342,25 @@ it('uses native dialog popover controls and restores ingest-trigger focus', asyn
   await waitFor(() => popover.hidden && document.activeElement === trigger);
 });
 
-it('resets workspace popover and deletion state across disconnect and reconnect', async () => {
+it('resets the search popover across reconnect and exposes no reset action', async () => {
   const scope = mountScope();
-  const modalStates: boolean[] = [];
-  scope.addEventListener('dl-modal-state-change', (event) => {
-    modalStates.push(event.detail.open);
-  });
   await scope.updateComplete;
-  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
-  trigger.click();
+  buttonNamed(scope, 'Choose search workspaces')!.click();
   await scope.updateComplete;
-  scope.querySelector<HTMLButtonElement>('[aria-label="Reset Corpus Default"]')?.click();
-  const dialog = scope.querySelector<HTMLDialogElement>('dialog')!;
-  await waitFor(() => dialog.open);
-  expect(modalStates.at(-1)).to.equal(true);
-
+  expect(scope.querySelector('[data-reset-workspace]')).to.equal(null);
+  expect(scope.querySelector('dialog')).to.equal(null);
+  expect(scope.textContent).not.to.contain('Reset Corpus');
   scope.remove();
   document.body.appendChild(scope);
   await scope.updateComplete;
-
-  const reconnectedTrigger = buttonNamed(scope, 'Choose search workspaces')!;
-  const popover = scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')!;
-  expect(reconnectedTrigger.getAttribute('aria-expanded')).to.equal('false');
+  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
+  const popover = scope.querySelector<HTMLElement>('[aria-label="Workspaces"]')!;
+  expect(trigger.getAttribute('aria-expanded')).to.equal('false');
   expect(popover.hidden).to.equal(true);
-  expect(dialog.open).to.equal(false);
-  await waitFor(() => modalStates.at(-1) === false);
-
-  reconnectedTrigger.click();
+  trigger.click();
   await scope.updateComplete;
-  document.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Escape', bubbles: true, cancelable: true,
-  }));
-  await waitFor(() => popover.hidden && document.activeElement === reconnectedTrigger);
+  document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}));
+  await waitFor(() => popover.hidden && document.activeElement === trigger);
 });
 
 it('resets ingest popover state and document listeners across reconnect', async () => {
@@ -398,19 +395,17 @@ it('resets ingest popover state and document listeners across reconnect', async 
   await waitFor(() => popover.hidden && document.activeElement === reconnectedTrigger);
 });
 
-it('restores workspace-selector trigger focus when deletion is cancelled', async () => {
-  const scope = mountScope();
+it('restores the Files action focus when reset is cancelled', async () => {
+  const scope = await mountFiles();
   await scope.updateComplete;
-  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
-  trigger.click();
-  await scope.updateComplete;
-  scope.querySelector<HTMLButtonElement>('[aria-label="Reset Corpus Default"]')?.click();
-  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('dialog')?.open));
+  const trigger = scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')!;
+  scope.querySelector<HTMLButtonElement>('[data-reset-workspace]')?.click();
+  await waitFor(() => Boolean(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open));
 
-  buttonNamed(scope, 'Cancel')?.click();
+  buttonNamed(scope.querySelector('#reset-workspace-dialog')!, 'Cancel')?.click();
   await waitFor(() => document.activeElement === trigger);
 
-  expect(scope.querySelector<HTMLDialogElement>('dialog')?.open).to.equal(false);
+  expect(scope.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open).to.equal(false);
   expect(document.activeElement).to.equal(trigger);
 });
 
@@ -555,4 +550,41 @@ it('preserves server-validated active and primary beyond the first display page'
   const scope = mountScope();
   await scope.updateComplete;
   expect(scope.querySelector('#workspace-label')?.textContent).to.equal('All workspaces (3)');
+});
+
+it('resumes accepted corpus reset tracking when Files reopens and refreshes its snapshot', async () => {
+  let statusReads = 0;
+  let resetAccepted = false;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/workspaces/reset')) {
+      resetAccepted = true;
+      return Response.json(corpusReceipt('reset-reopen', 'default'), {status: 202});
+    }
+    if (url.includes('/corpus-runs/')) {
+      statusReads += 1;
+      return Response.json({...corpusReceipt('reset-reopen', 'default'), status: statusReads === 1 ? 'running' : 'succeeded'});
+    }
+    return Response.json({workspace: 'default', files: resetAccepted ? [] : [{file_name: 'Old file', file_path: '/old'}], next_cursor: null});
+  };
+  const panel = document.createElement('dl-inspector-files');
+  panel.active = true;
+  document.body.appendChild(panel);
+  await waitFor(() => !panel.loading);
+  panel.querySelector<HTMLDetailsElement>('.workspace-actions')!.open = true;
+  panel.querySelector<HTMLButtonElement>('[data-reset-workspace]')!.click();
+  await waitFor(() => panel.querySelector<HTMLDialogElement>('#reset-workspace-dialog')!.open);
+  const input = panel.querySelector<HTMLInputElement>('#reset-workspace-confirm-input')!;
+  input.value = 'Default';
+  input.dispatchEvent(new Event('input'));
+  await panel.updateComplete;
+  buttonNamed(panel, 'Reset Corpus')!.click();
+  await waitFor(() => panel.mutationRun?.status === 'running');
+  panel.active = false;
+  await panel.updateComplete;
+  panel.active = true;
+  await waitFor(() => panel.mutationRun?.status === 'succeeded' && !panel.loading);
+  expect(statusReads).to.equal(2);
+  expect(panel.querySelector<HTMLButtonElement>('[data-reset-workspace]')!.disabled).to.equal(false);
+  expect(panel.snapshot?.files).to.deep.equal([]);
 });

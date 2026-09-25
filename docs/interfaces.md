@@ -735,6 +735,10 @@ remains administrative and available for repair regardless of publication.
 | `GET|PUT /memory/settings` | Read/change the owner capability switch. |
 | `POST /memory/clear` | Clear owner records; returns 204. |
 
+The Web adapter exposes the same paginated `GET /web/api/memory` contract for
+the Settings memory list; per-record forget and undo use the existing Web
+mutation routes and owner policy. Settings opens independently of Memory reads.
+
 Memory cursors are signed and owner-independent as tokens; owner scope remains
 an authenticated query predicate. Invalid cursors return 422 before storage.
 When Memory is disabled, mutation/recall operations are unavailable except

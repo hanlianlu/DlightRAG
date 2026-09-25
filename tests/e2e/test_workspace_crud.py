@@ -187,7 +187,15 @@ def test_workspace_corpus_reset_server_round_trip(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.get_by_label("Reset Corpus Research").click()
+    expect(page.get_by_label("Reset Corpus Research")).to_have_count(0)
+    page.keyboard.press("Escape")
+    page.locator("#files-btn").click()
+    page.locator("#ingest-target-trigger").click()
+    page.get_by_role("dialog", name="Select ingest workspace").get_by_role(
+        "button", name="Research", exact=True
+    ).click()
+    page.get_by_text("Workspace actions", exact=True).click()
+    page.get_by_role("button", name="Reset Corpus…", exact=True).click()
     dialog = page.get_by_role("dialog", name="Reset Corpus")
     dialog.get_by_label("Type Research to confirm").fill("Research")
     with page.expect_response("**/web/api/workspaces/reset") as reset_response:
@@ -196,4 +204,6 @@ def test_workspace_corpus_reset_server_round_trip(page):
 
     expect(dialog).to_be_hidden()
     page.locator("#workspace-selector").click()
-    expect(page.get_by_label("Reset Corpus Research")).to_have_count(1)
+    expect(
+        page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research")
+    ).to_have_count(1)

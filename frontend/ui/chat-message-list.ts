@@ -524,20 +524,6 @@ export class DlChatMessageList extends LightElement {
   }
 
   #answer(turn: ChatTurnView): TemplateResult | typeof nothing {
-    if (turn.sawChildren && turn.state !== 'succeeded' && turn.state !== 'failed'
-        && turn.state !== 'cancelled') {
-      return html`
-        <button type="button" class=${chatStyles.childAgentChip}
-                @click=${() => this.#runAction('children', turn.runId)}>
-          ${msg('View child agents', {id: 'chatMessageList.viewChildAgents'})}
-        </button>
-        ${this.#answerBody(turn)}
-      `;
-    }
-    return this.#answerBody(turn);
-  }
-
-  #answerBody(turn: ChatTurnView): TemplateResult | typeof nothing {
     if (turn.state === 'succeeded' && turn.presentation) {
       return html`<dl-answer-presentation .presentation=${turn.presentation}></dl-answer-presentation>`;
     }
@@ -591,19 +577,18 @@ export class DlChatMessageList extends LightElement {
         </div>
       `;
     }
-    const evidenceCount = Number(turn.evidence.chunks || 0);
+    const sourceCount = turn.presentation?.sources.length ?? 0;
     const usageDetails = turn.usage.usage_details as Record<string, unknown> | undefined;
     const tokenCount = Number(usageDetails?.total_tokens || 0);
     return html`
       <div class=${chatStyles.runActions}>
         <button type="button" @click=${() => this.#runAction('fork', turn.runId)}>${msg('Fork', {id: 'chatMessageList.fork'})}</button>
-        ${evidenceCount || tokenCount ? html`
+        ${sourceCount > 0 ? html`
           <span class=${chatStyles.runSummary}
                 title=${[
-                  evidenceCount ? msg(str`${evidenceCount} evidence chunks`, {id: 'chatMessageList.evidenceChunksTitle'}) : '',
                   tokenCount ? msg(str`${tokenCount} tokens`, {id: 'chatMessageList.tokensTitle'}) : '',
                 ].filter(Boolean).join(' · ')}>
-            ${evidenceCount ? msg(str`${evidenceCount} sources`, {id: 'chatMessageList.sources'}) : ''}
+            ${msg(str`${sourceCount} sources`, {id: 'chatMessageList.sources'})}
           </span>
         ` : nothing}
       </div>

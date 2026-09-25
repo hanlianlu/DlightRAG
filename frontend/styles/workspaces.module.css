@@ -57,38 +57,4 @@
   white-space: nowrap;
 }
 
-.workspacePopoverDelete {
-  align-items: center;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-control);
-  color: var(--color-text-dim);
-  cursor: pointer;
-  display: flex;
-  flex-shrink: 0;
-  font: inherit;
-  font-size: var(--font-size-caption);
-  height: var(--size-button);
-  justify-content: center;
-  opacity: 0.45;
-  transition: all 0.15s;
-  width: var(--size-button);
-}
-
-@media (hover: hover) {
-  .workspacePopoverDelete {
-    opacity: 0;
-  }
-
-  .workspacePopoverDelete:focus-visible,
-  .workspacePopoverItem:hover .workspacePopoverDelete {
-    opacity: 1;
-  }
-}
-
-.workspacePopoverDelete:hover {
-  background: var(--color-danger-surface);
-  color: var(--color-danger);
-}
-
 }

@@ -96,3 +96,31 @@ export async function clearMemory(signal?: AbortSignal): Promise<void> {
     throw new Error(`Failed to clear memory (${response.status})`);
   }
 }
+
+const memoryRecord = v.pipe(
+  v.object({memory_id: v.string(), kind: v.picklist(['preference', 'fact']), body: v.string()}),
+  v.transform((w) => ({memoryId: w.memory_id, kind: w.kind, body: w.body})),
+);
+export type MemoryRecord = v.InferOutput<typeof memoryRecord>;
+const memoryPage = v.pipe(
+  v.object({memories: v.array(memoryRecord), next_cursor: v.nullable(v.string())}),
+  v.transform((w) => ({items: w.memories, nextCursor: w.next_cursor})),
+);
+
+export async function listMemories(cursor: string | null, signal?: AbortSignal) {
+  const query = new URLSearchParams({limit: '20'});
+  if (cursor) query.set('cursor', cursor);
+  const response = await fetch(`/web/api/memory?${query}`, {signal});
+  return parseWire(response, memoryPage,
+    (status, message) => new Error(`${message} (${status})`), 'Failed to load memories');
+}
+
+export async function forgetMemory(memoryId: string, signal?: AbortSignal): Promise<MemoryOperationReceipt> {
+  const response = await fetch(`/web/api/memory/${encodeURIComponent(memoryId)}`, {
+    method: 'DELETE',
+    headers: {...csrfHeaders(), 'Idempotency-Key': crypto.randomUUID()},
+    signal,
+  });
+  return parseWire(response, memoryOperationReceipt,
+    (status, message) => new Error(`${message} (${status})`), 'Failed to forget memory');
+}

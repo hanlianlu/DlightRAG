@@ -1519,9 +1519,11 @@ it('Message List exposes child-agent progress and roster intent through public s
   list.addEventListener('dl-chat-run-action', (event) => {
     action = (event as CustomEvent<ChatRunActionDetail>).detail;
   });
-  Array.from(list.querySelectorAll('button')).find(
-    (button) => button.textContent?.includes('View child agents'),
-  )?.click();
+  const actions = Array.from(list.querySelectorAll('button')).filter(
+    (button) => button.textContent?.trim() === 'Child agents',
+  );
+  expect(actions.length).to.equal(1);
+  actions[0].click();
   expect(action).to.deep.equal({action: 'children', runId: 'run-with-child'});
 });
 
@@ -2223,4 +2225,19 @@ it('renders a named, timed tool trace and ticks only while a row is running', as
   await list.updateComplete;
   expect(text()).to.contain('8.0s', 'server truth replaces the viewer clock');
   list.remove();
+});
+
+it('counts published reference sources rather than retrieval chunks', async () => {
+  const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  const turn = storedTurn();
+  turn.evidence = {chunks: 89, sources: 20};
+  turn.presentation = {...presentation, sources: [
+    {id: '1', title: 'One source', sourceUrl: 'https://example.com/one', downloadUrl: null, chunks: []},
+    {id: '2', title: 'Another source', sourceUrl: 'https://example.com/two', downloadUrl: null, chunks: []},
+  ]};
+  list.turns = [storedTurnView(turn)];
+  document.body.appendChild(list);
+  await list.updateComplete;
+  expect(list.querySelector('.runSummary')!.textContent?.trim()).to.equal('2 sources');
+  expect(list.textContent).not.to.contain('89 sources');
 });

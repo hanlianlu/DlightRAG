@@ -3,7 +3,11 @@
 
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
+import {repeat} from 'lit/directives/repeat.js';
+import {KeysetPager} from '../lib/paged.ts';
 import './settings-connections.ts';
+import './toast.ts';
+import type {ToastRequestDetail} from './toast.ts';
 import {
   currentLanguagePreference,
   setLanguagePreference,
@@ -11,6 +15,9 @@ import {
 import {parseLanguagePreference, type LanguagePreference} from '../lib/language.ts';
 import {
   clearMemory,
+  forgetMemory,
+  listMemories,
+  type MemoryRecord,
   getMemorySettings,
   putMemorySettings,
   undoMemoryChange,
@@ -30,7 +37,9 @@ function memorySummary(event: ChatMemoryOperationDetail): string {
   const body = String(event.body || '').replace(/\s+/g, ' ').trim();
   const concise = body.length > 120 ? `${body.slice(0, 117)}…` : body;
   if (event.outcome === 'unchanged') {
-    return msg('Already remembered.', {id: 'settings.memory.alreadyRemembered'});
+    return event.operation === 'forget'
+      ? msg('Already forgotten.', {id: 'settings.memory.alreadyForgotten'})
+      : msg('Already remembered.', {id: 'settings.memory.alreadyRemembered'});
   }
   if (event.outcome === 'conflict') {
     return msg('Profile Memory changed; recall it before retrying.', {
@@ -65,6 +74,8 @@ export class DlSettingsDialog extends LightElement {
     memory: {state: true},
     memoryLoading: {state: true},
     memoryPending: {state: true},
+    memoryRecords: {state: true},
+    memoryListOpen: {state: true},
     language: {state: true},
   };
 
@@ -75,12 +86,18 @@ export class DlSettingsDialog extends LightElement {
   declare memory: MemorySettings | null;
   declare memoryLoading: boolean;
   declare memoryPending: boolean;
+  declare memoryRecords: MemoryRecord[] | null;
+  declare memoryListOpen: boolean;
   declare language: LanguagePreference;
 
   #events: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
   #seenMemoryOperations = new Set<string>();
   #memoryReadGeneration = 0;
+  readonly #memoryPager = new KeysetPager<MemoryRecord>(
+    (cursor, signal) => listMemories(cursor || null, signal),
+    () => this.requestUpdate(),
+  );
 
   constructor() {
     super();
@@ -92,6 +109,8 @@ export class DlSettingsDialog extends LightElement {
     this.memory = null;
     this.memoryLoading = false;
     this.memoryPending = false;
+    this.memoryRecords = null;
+    this.memoryListOpen = false;
     this.language = currentLanguagePreference();
     /** Store reads: conversations.length. */
     new StoreController(this, this.handles.conversations);
@@ -105,7 +124,7 @@ export class DlSettingsDialog extends LightElement {
   override disconnectedCallback(): void {
     this.#events?.abort();
     this.#events = null;
-    this.#memoryReadGeneration += 1;
+    this.#invalidateMemoryReads();
     document.body.classList.remove('settings-open');
     super.disconnectedCallback();
   }
@@ -117,30 +136,19 @@ export class DlSettingsDialog extends LightElement {
     this.#returnFocus = returnFocus ?? (
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     );
-    // Connections is independent of the Memory projection. Render it up front so
-    // its first paint can never coincide with the Memory control resolving a value
-    // the user is not looking at.
     this.showConnections = true;
-    if (!this.memoryPending) {
-      this.memoryLoading = true;
-      const read = await this.#readMemory();
-      if (read === 'failed') {
-        this.memory = null;
-        requestToast(this, {
-          message: msg('Could not load memory settings.', {id: 'settings.memoryLoadFailed'}),
-          duration: 3000,
-        });
-      }
-      if (!signal.aborted) this.memoryLoading = false;
-    }
-    if (signal.aborted) return;
-    this.showConnections = true;
+    if (!this.memoryPending) this.memoryLoading = true;
     await this.updateComplete;
+    if (signal.aborted) return;
     const dialog = this.#dialog();
-    if (!dialog || dialog.open) return;
-    dialog.returnValue = '';
-    showOwnedModal(this, dialog);
-    document.body.classList.add('settings-open');
+    if (!dialog) return;
+    if (!dialog.open) {
+      dialog.returnValue = '';
+      showOwnedModal(this, dialog);
+      document.body.classList.add('settings-open');
+    }
+    // The visible dialog and Connections never wait for the Memory service.
+    void this.#refreshMemory();
   }
 
   /** Consume one live Profile Memory domain fact from Chat composition. */
@@ -155,21 +163,35 @@ export class DlSettingsDialog extends LightElement {
     this.#seenMemoryOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.changeId) {
-      requestToast(this, {message, duration: 3000});
+      this.#notifyMemory({message, duration: 3000});
       return;
     }
     const changeId = event.changeId;
     const signal = this.#events?.signal;
-    requestToast(this, {
+    this.#notifyMemory({
       message,
       action: {
         actionLabel: msg('Undo', {id: 'settings.memory.undo'}),
         duration: 3000,
         onAction: async () => {
+          if (this.memoryPending) throw new Error('Memory operation in progress');
+          this.memoryPending = true;
           this.#invalidateMemoryReads();
-          const receipt = await undoMemoryChange(changeId, signal);
-          if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
-          await this.#refreshMemory();
+          try {
+            const receipt = await undoMemoryChange(changeId, signal);
+            if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
+          } catch (error) {
+            if (!signal?.aborted) this.#notifyMemory({
+              message: msg('Could not undo the change.', {id: 'toast.undoFailed'}),
+            });
+            throw error;
+          } finally {
+            this.memoryPending = false;
+            void this.#refreshMemory();
+          }
+          if (!signal?.aborted) this.#notifyMemory({
+            message: msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'}),
+          });
           return msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'});
         },
       },
@@ -211,6 +233,10 @@ export class DlSettingsDialog extends LightElement {
                   ? msg('1 stored item', {id: 'settings.oneStoredItem'})
                   : msg(str`${active ?? 0} stored items`, {id: 'settings.nStoredItems'})}
               </p>
+              ${this.memory?.enabled ? this.#memoryList() : nothing}
+              ${this.showConnections ? html`
+                <dl-toast-region class="settings-memory-feedback" role="status" aria-live="polite"></dl-toast-region>
+              ` : nothing}
               <div class="settings-actions">
                 <button type="button" id="memory-clear-btn" class="dl-btn dl-btn-danger-text"
                         ?hidden=${!this.memory?.enabled} ?disabled=${this.memoryPending}
@@ -286,7 +312,12 @@ export class DlSettingsDialog extends LightElement {
   }
 
   #closed = (): void => {
+    const toast = this.querySelector('dl-toast-region');
+    const notice = toast?.request;
+    if (notice?.action && !toast?.pending) requestToast(this, {message: notice.message, action: notice.action});
     this.showConnections = false;
+    this.memoryListOpen = false;
+    this.#invalidateMemoryReads();
     publishModalState(this);
     document.body.classList.remove('settings-open');
     const returnFocus = this.#returnFocus;
@@ -303,17 +334,23 @@ export class DlSettingsDialog extends LightElement {
     this.#invalidateMemoryReads();
     try {
       const memory = await putMemorySettings(requested, signal);
-      if (!signal.aborted) this.memory = memory;
+      if (!signal.aborted) {
+        this.memory = memory;
+        if (!memory.enabled) this.memoryListOpen = false;
+      }
     } catch {
       if (!signal.aborted) {
         input.checked = !requested;
-        requestToast(this, {
+        this.#notifyMemory({
           message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
           duration: 3000,
         });
       }
     } finally {
-      if (!signal.aborted) this.memoryPending = false;
+      if (!signal.aborted) {
+        this.memoryPending = false;
+        this.#reloadMemoryList();
+      }
     }
   };
 
@@ -327,24 +364,128 @@ export class DlSettingsDialog extends LightElement {
     this.#invalidateMemoryReads();
     try {
       await clearMemory(signal);
-      if (await this.#readMemory() === 'failed') throw new Error('Memory refresh failed');
       if (!signal.aborted) {
-        requestToast(this, {
+        this.#notifyMemory({
           message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
           duration: 3000,
         });
       }
     } catch {
       if (!signal.aborted) {
-        requestToast(this, {
+        this.#notifyMemory({
           message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
           duration: 3000,
         });
       }
     } finally {
-      if (!signal.aborted) this.memoryPending = false;
+      if (!signal.aborted) {
+        this.memoryPending = false;
+        await this.#refreshMemory();
+      }
     }
   };
+
+  #notifyMemory(detail: ToastRequestDetail): void {
+    const toast = this.#dialog()?.open ? this.querySelector('dl-toast-region') : null;
+    if (!toast) requestToast(this, detail);
+    else if (detail.action) toast.showAction(detail.message, detail.action);
+    else toast.show(detail.message, detail.duration);
+  }
+
+  #memoryList(): TemplateResult {
+    const pager = this.#memoryPager;
+    return html`
+      <details class="memory-list" ?open=${this.memoryListOpen} @toggle=${this.#toggleMemoryList}>
+        <summary>${msg('View memories', {id: 'settings.memory.view'})}</summary>
+        <ul aria-label=${msg('Stored memories', {id: 'settings.memory.stored'})}>
+          ${repeat(this.memoryRecords ?? [], (record) => record.memoryId, (record) => html`
+            <li>
+              <p>${record.body}</p>
+              <button type="button" class="dl-btn dl-btn-danger-text"
+                      ?disabled=${this.memoryPending || this.memoryLoading}
+                      @click=${() => { void this.#forgetMemory(record); }}>
+                ${msg('Forget', {id: 'settings.memory.forget'})}
+              </button>
+            </li>
+          `)}
+        </ul>
+        <p class="settings-note" role="status">${pager.state === 'loading'
+          ? msg('Loading memories…', {id: 'settings.memory.listLoading'})
+          : pager.state === 'error'
+            ? msg('Could not load memories.', {id: 'settings.memory.listFailed'})
+            : this.memoryRecords?.length === 0
+              ? msg('No stored memories.', {id: 'settings.memory.empty'}) : nothing}</p>
+        ${pager.hasOlder ? html`
+          <button type="button" class="dl-btn" data-memory-load-more
+                  ?disabled=${this.memoryPending || pager.state === 'loading'}
+                  @click=${() => { void this.#loadMemoryPage(); }}>
+            ${pager.state === 'error'
+              ? msg('Retry', {id: 'settings.memory.retry'})
+              : msg('Load more', {id: 'settings.memory.loadMore'})}
+          </button>
+        ` : nothing}
+      </details>`;
+  }
+
+  #toggleMemoryList = (event: Event): void => {
+    this.memoryListOpen = (event.currentTarget as HTMLDetailsElement).open;
+    if (this.memoryListOpen && this.memoryRecords === null && !this.#memoryPager.hasOlder) {
+      this.#reloadMemoryList();
+    }
+  };
+
+  #reloadMemoryList(): void {
+    if (!this.memoryListOpen || !this.memory?.enabled || !this.#dialog()?.open) return;
+    this.memoryRecords = null;
+    // Empty cursor denotes the first page; subsequent cursors come from the server.
+    this.#memoryPager.reset('');
+    void this.#loadMemoryPage();
+  }
+
+  async #loadMemoryPage(): Promise<void> {
+    const trigger = this.querySelector<HTMLButtonElement>('[data-memory-load-more]');
+    const restoreFocus = trigger !== null && document.activeElement === trigger;
+    await this.#memoryPager.loadNext((page) => {
+      const records = new Map((this.memoryRecords ?? []).map((record) => [record.memoryId, record]));
+      for (const record of page.items) records.set(record.memoryId, record);
+      this.memoryRecords = [...records.values()];
+    });
+    await this.updateComplete;
+    if (restoreFocus && !this.#memoryPager.hasOlder && this.memoryListOpen) {
+      this.querySelector<HTMLElement>('.memory-list summary')?.focus();
+    }
+  }
+
+  async #forgetMemory(record: MemoryRecord): Promise<void> {
+    const signal = this.#events?.signal;
+    if (!signal || signal.aborted || this.memoryPending || this.memoryLoading) return;
+    this.memoryPending = true;
+    this.#invalidateMemoryReads();
+    try {
+      const receipt = await forgetMemory(record.memoryId, signal);
+      if (signal.aborted) return;
+      this.handleMemoryOperation({
+        live: true, operation: receipt.action, outcome: receipt.outcome,
+        changeId: receipt.changeId, body: receipt.body || record.body,
+      });
+    } catch {
+      if (!signal.aborted) this.#notifyMemory({
+        message: msg('Could not forget this memory.', {id: 'settings.memory.forgetFailed'}), duration: 3000,
+      });
+    } finally {
+      if (!signal.aborted) {
+        this.memoryPending = false;
+        void this.#refreshMemory();
+        await this.updateComplete;
+        const toast = this.querySelector('dl-toast-region');
+        await toast?.updateComplete;
+        if (this.#dialog()?.open) {
+          (toast?.querySelector<HTMLButtonElement>('button')
+            ?? this.querySelector<HTMLElement>('.memory-list summary'))?.focus();
+        }
+      }
+    }
+  }
 
   #deleteAll = async (event: Event): Promise<void> => {
     const returnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
@@ -362,6 +503,8 @@ export class DlSettingsDialog extends LightElement {
   #invalidateMemoryReads(): void {
     this.#memoryReadGeneration += 1;
     this.memoryLoading = false;
+    this.#memoryPager.reset(null);
+    this.memoryRecords = null;
   }
 
   async #readMemory(): Promise<MemoryReadResult> {
@@ -375,13 +518,18 @@ export class DlSettingsDialog extends LightElement {
       return 'loaded';
     } catch {
       if (signal.aborted || generation !== this.#memoryReadGeneration) return 'stale';
+      this.memory = null;
       return 'failed';
+    } finally {
+      if (!signal.aborted && generation === this.#memoryReadGeneration) this.memoryLoading = false;
     }
   }
 
   async #refreshMemory(): Promise<void> {
     if (this.memoryPending) return;
-    await this.#readMemory();
+    this.#memoryPager.reset(null);
+    this.memoryRecords = null;
+    if (await this.#readMemory() === 'loaded') this.#reloadMemoryList();
   }
 }
 

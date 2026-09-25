@@ -22,7 +22,8 @@ import {isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {withRelativePath} from './folder-upload.ts';
-import {modalResult} from './modal.ts';
+import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
+import {resetWorkspaceRequest, WorkspaceApiError} from '../api/workspaces.ts';
 import {requestToast} from './toast-request.ts';
 import './failed-file-recovery.ts';
 import fileStyles from '../styles/inspector-files.module.css';
@@ -61,6 +62,9 @@ export class DlInspectorFiles extends LightElement {
     acceptedFiles: {state: true},
     mutationRun: {state: true},
     filesLoadMoreState: {state: true},
+    resetWorkspace: {state: true},
+    resetPending: {state: true},
+    resetConfirmed: {state: true},
   };
 
   declare handles: AppHandles;
@@ -72,6 +76,11 @@ export class DlInspectorFiles extends LightElement {
   declare acceptedFiles: number;
   declare mutationRun: MutationRun | null;
   declare filesLoadMoreState: 'idle' | 'loading' | 'error';
+
+  declare resetWorkspace: string | null;
+  declare resetPending: boolean;
+  declare resetConfirmed: boolean;
+  #resetReturnFocus: HTMLElement | null = null;
 
   #workspace = '';
   #requestGeneration = 0;
@@ -93,6 +102,9 @@ export class DlInspectorFiles extends LightElement {
     this.acceptedFiles = 0;
     this.mutationRun = null;
     this.filesLoadMoreState = 'idle';
+    this.resetWorkspace = null;
+    this.resetPending = false;
+    this.resetConfirmed = false;
     this.#workspace = this.handles.ingest.workspace;
     /** Store reads: this.handles.ingest.workspace. */
     new StoreController(this, this.handles.ingest);
@@ -133,6 +145,7 @@ export class DlInspectorFiles extends LightElement {
     if (workspace !== this.#workspace) {
       // Hide the old Workspace before any new-Workspace I/O. A failed load must
       // never leave actionable rows from the previously selected Workspace.
+      this.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.close();
       this.snapshot = null;
       this.acceptedFiles = 0;
       this.mutationRun = null;
@@ -141,7 +154,7 @@ export class DlInspectorFiles extends LightElement {
     this.#workspace = workspace;
     this.uploading = false;
     const {controller, generation} = this.#startRequest();
-    if (!corpusRunActive(this.mutationRun)) this.#stopPolling();
+    this.#stopPolling();
     if (showLoading) this.loading = true;
     this.error = null;
     try {
@@ -164,7 +177,11 @@ export class DlInspectorFiles extends LightElement {
         ? error.message
         : msg('Failed to load files.', {id: 'inspectorFiles.loadFailed'});
     } finally {
-      if (this.#session.finishRequest(controller)) this.loading = false;
+      if (this.#session.finishRequest(controller)) {
+        this.loading = false;
+        if (this.active && this.isConnected && corpusRunActive(this.mutationRun)
+            && !waitingForRepair(this.mutationRun)) void this.#poll(workspace);
+      }
     }
   }
 
@@ -289,6 +306,8 @@ export class DlInspectorFiles extends LightElement {
   }
 
   pause(): void {
+    this.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.close();
+    this.#resetClosed();
     this.#invalidateOlderFiles();
     this.#session.pause();
     this.uploading = false;
@@ -342,7 +361,8 @@ export class DlInspectorFiles extends LightElement {
     const controller = this.#session.startPollRequest();
     try {
       const status = await getCorpusRunStatus(receipt.statusUrl, controller.signal);
-      if (workspace !== this.handles.ingest.workspace || !this.active || !this.isConnected) return;
+      if (controller.signal.aborted || workspace !== this.handles.ingest.workspace
+          || !this.active || !this.isConnected) return;
       if (this.mutationRun?.runId !== receipt.runId) return;
       this.mutationRun = {
         ...status,
@@ -496,6 +516,125 @@ export class DlInspectorFiles extends LightElement {
     if (trigger?.isConnected) trigger.focus();
   }
 
+  async #requestReset(workspace: string, trigger: HTMLElement): Promise<void> {
+    if (!this.active || this.loading || this.hasActiveMutation || corpusRunActive(this.mutationRun)) return;
+    this.#resetReturnFocus = trigger;
+    this.resetWorkspace = workspace;
+    this.resetConfirmed = false;
+    await this.updateComplete;
+    const dialog = this.querySelector<HTMLDialogElement>('#reset-workspace-dialog');
+    if (!dialog || !this.active || !this.isConnected || workspace !== this.handles.ingest.workspace) return;
+    const input = this.querySelector<HTMLInputElement>('#reset-workspace-confirm-input');
+    if (input) input.value = '';
+    dialog.returnValue = '';
+    showOwnedModal(this, dialog);
+    window.requestAnimationFrame(() => {
+      this.querySelector<HTMLInputElement>('#reset-workspace-confirm-input')?.focus();
+    });
+  }
+
+  #resetDialog(): TemplateResult {
+    const workspace = this.resetWorkspace ?? '';
+    const displayName = this.handles.workspaces.records.find((record) => record.workspace === workspace)
+      ?.displayName ?? workspace;
+    return html`
+      <dialog id="reset-workspace-dialog" class="workspace-dialog"
+              aria-labelledby="reset-workspace-title" @cancel=${this.#resetCancelled}
+              @close=${this.#resetClosed}>
+        <form @submit=${this.#submitReset}>
+          <h3 class="workspace-dialog-title" id="reset-workspace-title">${msg('Reset Corpus', {id: 'inspectorFiles.resetTitle'})}</h3>
+          <p class="workspace-dialog-text">${msg('This will permanently remove all Corpus data while preserving workspace', {id: 'inspectorFiles.resetWarning'})} <strong>${displayName}</strong>.</p>
+          <p class="workspace-dialog-text">${msg('Type the workspace name to confirm', {id: 'inspectorFiles.typeToConfirm'})}</p>
+          <input type="text" id="reset-workspace-confirm-input" class="dl-dialog-input"
+                 autocomplete="off"
+                 placeholder=${msg('Type workspace name...', {id: 'inspectorFiles.confirmPlaceholder'})}
+                 aria-label=${msg(str`Type ${displayName} to confirm`, {id: 'inspectorFiles.typeNameToConfirmAria'})}
+                 .readOnly=${this.resetPending}
+                 @input=${this.#resetInput}>
+          <div class="dl-dialog-actions">
+            <button type="button" ?disabled=${this.resetPending}
+                    @click=${() => this.querySelector<HTMLDialogElement>(
+                      '#reset-workspace-dialog',
+                    )?.close()}>${msg('Cancel', {id: 'inspectorFiles.cancel'})}</button>
+            <button type="submit" class="dl-dialog-danger"
+                    ?disabled=${this.resetPending || !this.resetConfirmed}>
+              ${this.resetPending
+                ? msg('Accepting reset…', {id: 'inspectorFiles.resetting'})
+                : msg('Reset Corpus', {id: 'inspectorFiles.reset'})}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    `;
+  }
+
+  #resetInput = (event: Event): void => {
+    const input = event.currentTarget as HTMLInputElement;
+    const workspace = this.resetWorkspace ?? '';
+    const displayName = this.handles.workspaces.records.find((record) => record.workspace === workspace)
+      ?.displayName ?? workspace;
+    this.resetConfirmed = input.value.trim() === displayName || input.value.trim() === workspace;
+  };
+
+  #submitReset = async (event: SubmitEvent): Promise<void> => {
+    event.preventDefault();
+    const workspace = this.resetWorkspace;
+    if (!workspace || this.resetPending || !this.resetConfirmed) return;
+    if (workspace !== this.handles.ingest.workspace || !this.active || this.hasActiveMutation
+        || corpusRunActive(this.mutationRun)) return;
+    this.#invalidateOlderFiles();
+    this.#stopPolling();
+    const {controller, generation} = this.#startRequest();
+    this.#beginMutation();
+    this.resetPending = true;
+    try {
+      const receipt = await resetWorkspaceRequest(workspace, controller.signal);
+      if (!this.#isCurrent(controller, workspace, generation)) return;
+      this.mutationRun = receipt;
+      this.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.close();
+      requestToast(this, {
+        message: msg(str`Corpus reset accepted for ${workspace}.`, {id: 'inspectorFiles.resetAccepted'}),
+      });
+      void this.#poll(workspace);
+    } catch (error) {
+      if (!isAbortError(error) && this.#isCurrent(controller, workspace, generation)) {
+        requestToast(this, {
+          message: error instanceof WorkspaceApiError
+            ? error.message
+            : msg('Could not accept Corpus reset.', {id: 'inspectorFiles.resetFailed'}),
+          duration: 3000,
+        });
+      }
+    } finally {
+      this.#finishMutation();
+      if (this.#session.finishRequest(controller)) {
+        this.resetPending = false;
+        await this.updateComplete;
+        if (this.querySelector<HTMLDialogElement>('#reset-workspace-dialog')?.open) {
+          this.querySelector<HTMLInputElement>('#reset-workspace-confirm-input')?.focus();
+        }
+      }
+    }
+  };
+
+  #resetCancelled = (event: Event): void => {
+    if (this.resetPending) event.preventDefault();
+  };
+
+  #resetClosed = (): void => {
+    publishModalState(this);
+    this.resetWorkspace = null;
+    this.resetPending = false;
+    this.resetConfirmed = false;
+    const returnFocus = this.#resetReturnFocus;
+    this.#resetReturnFocus = null;
+    const target = returnFocus?.isConnected && !returnFocus.inert
+      && !returnFocus.closest('[hidden]')
+      ? returnFocus
+      : null;
+    if (target?.isConnected && !target.inert) target.focus();
+  };
+
   #deleteDialog(): TemplateResult {
     return html`
       <dialog id="delete-file-dialog" class="confirm-dialog"
@@ -617,6 +756,15 @@ export class DlInspectorFiles extends LightElement {
           ${msg(str`${this.acceptedFiles} new file(s) accepted for ingest`, {id: 'inspectorFiles.acceptedForIngest'})}
         </div>
       ` : nothing}
+      <details class="workspace-actions">
+        <summary>${msg('Workspace actions', {id: 'inspectorFiles.workspaceActions'})}</summary>
+        <button type="button" class="dl-btn dl-btn-danger-text" data-reset-workspace
+                ?disabled=${this.loading || this.hasActiveMutation || corpusRunActive(this.mutationRun)}
+                @click=${(event: Event) => { void this.#requestReset(
+                  this.handles.ingest.workspace, event.currentTarget as HTMLElement,
+                ); }}>${msg('Reset Corpus…', {id: 'inspectorFiles.resetAction'})}</button>
+      </details>
+      ${this.#resetDialog()}
       ${this.#deleteDialog()}
     `;
   }

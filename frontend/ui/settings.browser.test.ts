@@ -90,6 +90,8 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
   const settings = mount();
 
   await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
 
   expect(settings.querySelector<HTMLDialogElement>('dialog[open]')).not.to.equal(null);
   // A refused read leaves no control at all: a disabled unchecked checkbox would
@@ -113,6 +115,8 @@ it('owns an explicit memory toggle mutation and its final visible state', async 
   };
   const settings = mount();
   await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
   const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
 
   toggle.checked = false;
@@ -133,11 +137,13 @@ it('restores the authoritative checkbox state after a failed toggle mutation', a
   };
   const settings = mount();
   await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
   const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
 
   toggle.checked = false;
   toggle.dispatchEvent(new Event('change'));
-  const toast = document.querySelector('dl-toast-region')!;
+  const toast = settings.querySelector('dl-toast-region')!;
   await waitFor(() => !toggle.disabled
     && (toast.textContent?.includes('Could not save memory settings.') ?? false));
 
@@ -178,6 +184,8 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
   });
   await waitFor(() => reads === 1);
   await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
   const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
   toggle.checked = false;
   toggle.dispatchEvent(new Event('change'));
@@ -210,7 +218,8 @@ it('renders Connections independently and never paints an unread memory state', 
 
   // The MCP section is on screen while the memory projection is still unknown,
   // and Profile Memory is not painted as "off" in the meantime.
-  expect(Boolean(settings.querySelector('dl-settings-connections'))).to.equal(true);
+  expect(settings.querySelector<HTMLDialogElement>('#settings-dialog')!.open).to.equal(true);
+  expect(settings.querySelector('dl-settings-connections')!.getBoundingClientRect().height).to.be.greaterThan(0);
   expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
   expect(settings.textContent).to.contain('Loading memory settings');
 
@@ -232,10 +241,132 @@ it('hides personal Connections without capability and tears the Feature down on 
     : {enabled: false, active_count: 0});
   const settings = mount();
   await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
   expect(settings.querySelector('dl-settings-connections')).to.equal(null);
   settings.personalMcpConnections = true;
   await settings.updateComplete;
   expect(settings.querySelector('dl-settings-connections')).not.to.equal(null);
   settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
   await waitFor(() => settings.querySelector('dl-settings-connections') === null);
+});
+
+it('browses paginated memories, retries a page, forgets one item and restores it with Undo', async () => {
+  let forgotten = false;
+  let olderAttempts = 0;
+  const mutations: Array<{method: string; key: string | undefined}> = [];
+  window.fetch = async (input, init) => {
+    const url = new URL(String(input), window.location.origin);
+    if (url.pathname.endsWith('/settings')) return Response.json({enabled: true, active_count: forgotten ? 1 : 2});
+    if (init?.method === 'DELETE' || init?.method === 'POST') {
+      mutations.push({method: init.method, key: (init.headers as Record<string, string>)['Idempotency-Key']});
+      forgotten = init.method === 'DELETE';
+      return Response.json({action: forgotten ? 'forget' : 'undo', outcome: 'changed',
+        change_id: forgotten ? 'forgot-1' : 'undo-1', memory_ids: ['one'], body: 'Use concise answers'});
+    }
+    if (url.searchParams.has('cursor')) {
+      olderAttempts += 1;
+      if (olderAttempts === 1) return new Response('Unavailable', {status: 503});
+      return Response.json({memories: [{memory_id: 'two', kind: 'fact', body: '<img src=x> Lives in Sweden'}], next_cursor: null});
+    }
+    return Response.json({memories: forgotten ? [{memory_id: 'two', kind: 'fact', body: 'Lives in Sweden'}]
+      : [{memory_id: 'one', kind: 'preference', body: 'Use concise answers'}], next_cursor: forgotten ? null : 'older'});
+  };
+  const settings = mount();
+  await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
+  expect(settings.querySelector('.memory-list li')).to.equal(null);
+  settings.querySelector<HTMLDetailsElement>('.memory-list')!.open = true;
+  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 1);
+  buttonNamed(settings, 'Load more')!.click();
+  await waitFor(() => Boolean(buttonNamed(settings, 'Retry')));
+  buttonNamed(settings, 'Retry')!.click();
+  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 2);
+  expect(settings.querySelector('.memory-list img')).to.equal(null);
+  expect(settings.textContent).to.contain('<img src=x> Lives in Sweden');
+  expect(buttonNamed(settings, 'Load more')).to.equal(null);
+
+  buttonNamed(settings, 'Forget')!.click();
+  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 1 && !settings.memoryPending);
+  expect(settings.querySelector('.memory-list')!.textContent).not.to.contain('Use concise answers');
+  const toast = settings.querySelector('dl-toast-region')!;
+  expect(toast.textContent).to.contain('Forgot: Use concise answers');
+  const undo = buttonNamed(toast, 'Undo')!;
+  undo.focus();
+  expect(document.activeElement).to.equal(undo);
+  expect(undo.closest('dialog[open]')).to.equal(settings.querySelector('#settings-dialog'));
+  expect(toast.inert).to.equal(false);
+  undo.click();
+  await waitFor(() => settings.querySelector('.memory-list')!.textContent?.includes('Use concise answers') ?? false);
+  expect(mutations.map((item) => item.method)).to.deep.equal(['DELETE', 'POST']);
+  expect(mutations.every((item) => Boolean(item.key))).to.equal(true);
+});
+
+it('rejects a stale list page after memory is disabled, even when transport ignores abort', async () => {
+  let releasePage!: (response: Response) => void;
+  let pageStarted = false;
+  window.fetch = async (input, init) => {
+    if (String(input).includes('/settings')) return Response.json({enabled: init?.method !== 'PUT', active_count: 1});
+    pageStarted = true;
+    return new Promise<Response>((resolve) => { releasePage = resolve; });
+  };
+  const settings = mount();
+  await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
+  settings.querySelector<HTMLDetailsElement>('.memory-list')!.open = true;
+  await waitFor(() => pageStarted);
+  settings.querySelector<HTMLInputElement>('#memory-enabled-toggle')!.click();
+  await waitFor(() => settings.memory?.enabled === false);
+  releasePage(Response.json({memories: [{memory_id: 'late', kind: 'fact', body: 'Stale private content'}], next_cursor: null}));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(settings.memoryRecords).to.equal(null);
+  expect(settings.textContent).not.to.contain('Stale private content');
+});
+
+it('does not reopen Settings or publish a late Memory read after closing it', async () => {
+  let releaseRead!: (response: Response) => void;
+  window.fetch = async () => new Promise<Response>((resolve) => { releaseRead = resolve; });
+  const settings = mount();
+  const opened = settings.open();
+  await waitFor(() => settings.querySelector<HTMLDialogElement>('#settings-dialog')?.open === true);
+  settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
+  await waitFor(() => !document.body.classList.contains('settings-open'));
+  releaseRead(Response.json({enabled: true, active_count: 1}));
+  await opened;
+  expect(settings.memory).to.equal(null);
+  expect(settings.querySelector<HTMLDialogElement>('#settings-dialog')!.open).to.equal(false);
+});
+
+for (const reopen of [false, true]) it(`settles in-flight Undo after close (reopen=${reopen}) without a second Undo`, async () => {
+  let releaseUndo!: (response: Response) => void;
+  let undoCalls = 0;
+  window.fetch = async (input, init) => {
+    if (String(input).includes('/settings')) return Response.json({enabled: true, active_count: 1});
+    if (init?.method === 'POST') {
+      undoCalls += 1;
+      return new Promise<Response>((resolve) => { releaseUndo = resolve; });
+    }
+    return Response.json({memories: [], next_cursor: null});
+  };
+  const settings = mount();
+  await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  settings.handleMemoryOperation({live: true, operation: 'forget', outcome: 'changed', changeId: 'forgot-slow', body: 'One item'});
+  const localToast = settings.querySelector('dl-toast-region')!;
+  await localToast.updateComplete;
+  buttonNamed(localToast, 'Undo')!.click();
+  await waitFor(() => undoCalls === 1);
+  settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
+  await waitFor(() => settings.querySelector('dl-toast-region') === null);
+  const shellToast = document.querySelector('dl-toast-region')!;
+  expect(buttonNamed(shellToast, 'Undo')).to.equal(null);
+  if (reopen) await settings.open();
+  const visibleToast = reopen ? settings.querySelector('dl-toast-region')! : shellToast;
+  releaseUndo(Response.json({action: 'undo', outcome: 'changed', change_id: 'undo-slow', memory_ids: [], body: ''}));
+  await waitFor(() => visibleToast.textContent?.trim() === 'Profile Memory change undone.');
+  expect(buttonNamed(shellToast, 'Undo')).to.equal(null);
+  expect(buttonNamed(visibleToast, 'Undo')).to.equal(null);
+  expect(undoCalls).to.equal(1);
 });

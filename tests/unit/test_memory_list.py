@@ -13,8 +13,9 @@ from dlightrag_memory.errors import MemoryUnavailableError
 from dlightrag_memory.store import InMemoryMemoryStore
 from fastapi import HTTPException
 
+from dlightrag.adapters.http.browser.routes.memory import list_memories as web_list_memories
 from dlightrag.adapters.http.rest.routes.memory import list_memories as rest_list_memories
-from dlightrag.application.access import UserContext
+from dlightrag.application.access import UserContext, owner_id_from_user
 from dlightrag.application.memory import (
     MEMORY_LIST_PAGE_DEFAULT_LIMIT,
     MEMORY_LIST_PAGE_MAX_LIMIT,
@@ -311,14 +312,26 @@ class _MemoryFake:
 
 
 def _request(application: Any) -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(application=application)))
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(application=application)),
+        state=SimpleNamespace(user_context=_user()),
+    )
 
 
 def _user() -> UserContext:
     return UserContext(user_id="u-1", auth_mode="jwt")
 
 
-async def test_rest_returns_page_with_next_cursor() -> None:
+@pytest.fixture(params=["rest", "web"])
+def list_memories(request):
+    from functools import partial
+
+    return (
+        partial(rest_list_memories, user=_user()) if request.param == "rest" else web_list_memories
+    )
+
+
+async def test_http_returns_page_with_next_cursor(list_memories) -> None:
     memory = _MemoryFake(secret=b"memory-list-tests")
     record = _record(owner="deployment")
     cursor = MemoryListCursor(
@@ -331,7 +344,7 @@ async def test_rest_returns_page_with_next_cursor() -> None:
     )
     application = SimpleNamespace(memory=memory)
 
-    response = await rest_list_memories(_request(application), user=_user())
+    response = await list_memories(_request(application))
 
     assert response["memories"] == [
         {"memory_id": record.memory_id, "kind": record.kind, "body": record.body}
@@ -340,11 +353,13 @@ async def test_rest_returns_page_with_next_cursor() -> None:
     memory.list_active_page.assert_awaited_once()
     forwarded = memory.list_active_page.await_args
     assert forwarded is not None
+    assert forwarded.kwargs["owner_id"] == owner_id_from_user(_user())
+    assert forwarded.kwargs["auth_mode"] == "jwt"
     assert forwarded.kwargs["page"].limit == MEMORY_LIST_PAGE_DEFAULT_LIMIT
     assert forwarded.kwargs["page"].cursor is None
 
 
-async def test_rest_decodes_cursor_and_passes_it_through() -> None:
+async def test_http_decodes_cursor_and_passes_it_through(list_memories) -> None:
     memory = _MemoryFake(secret=b"memory-list-tests")
     cursor = MemoryListCursor(
         updated_at=datetime.datetime(2026, 3, 4, tzinfo=_UTC),
@@ -353,9 +368,8 @@ async def test_rest_decodes_cursor_and_passes_it_through() -> None:
     memory.list_active_page.return_value = MemoryListPage(records=(), next_cursor=None)
     application = SimpleNamespace(memory=memory)
 
-    response = await rest_list_memories(
+    response = await list_memories(
         _request(application),
-        user=_user(),
         limit=1,
         cursor=memory.memory_list_cursor_codec.encode(cursor),
     )
@@ -368,28 +382,28 @@ async def test_rest_decodes_cursor_and_passes_it_through() -> None:
     assert forwarded.cursor == cursor
 
 
-async def test_rest_rejects_tampered_cursor_before_service() -> None:
+async def test_http_rejects_tampered_cursor_before_service(list_memories) -> None:
     memory = _MemoryFake(secret=b"memory-list-tests")
     application = SimpleNamespace(memory=memory)
 
     with pytest.raises(HTTPException) as exc:
-        await rest_list_memories(_request(application), user=_user(), cursor="tampered.token")
+        await list_memories(_request(application), cursor="tampered.token")
     assert exc.value.status_code == 422
     memory.list_active_page.assert_not_awaited()
 
 
-async def test_rest_maps_disabled_and_unavailable_unchanged() -> None:
+async def test_http_maps_disabled_and_unavailable_unchanged(list_memories) -> None:
     memory = _MemoryFake(secret=b"memory-list-tests")
     application = SimpleNamespace(memory=memory)
 
     memory.list_active_page.side_effect = MemoryDisabledError()
     with pytest.raises(HTTPException) as exc:
-        await rest_list_memories(_request(application), user=_user())
+        await list_memories(_request(application))
     assert exc.value.status_code == 409
 
     memory.list_active_page.side_effect = MemoryUnavailableError()
     with pytest.raises(HTTPException) as exc:
-        await rest_list_memories(_request(application), user=_user())
+        await list_memories(_request(application))
     assert exc.value.status_code == 403
 
 
