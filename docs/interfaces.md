@@ -84,7 +84,10 @@ visual search.
 `POST /runs/corpus/ingest` and `/runs/corpus/replace` accept JSON and
 return `202 Accepted` with a durable `corpus_mutation` Run descriptor.
 Single and batch multipart uploads use the corresponding `/upload` and
-`/uploads` suffixes. A single upload may provide a 64-character hexadecimal
+`/uploads` suffixes. Every surface stages uploads through the same Application
+bounds: each file under `corpus.ingestion.max_upload_bytes`, the whole request
+under `interfaces.max_upload_size_mb`, and at most 100 files. A single upload may
+provide a 64-character hexadecimal
 `content_sha256`; mismatch rejects acceptance and deletes the Run-exclusive
 staging directory. Every REST mutation requires `Idempotency-Key`.
 
@@ -473,6 +476,10 @@ Registered public tool names are:
   `get_answer_transcript`, `list_answer_artifacts`, `read_answer_artifact`
 - corpus: `list_workspaces`, `get_capabilities`,
   `create_workspace`, `ingest`, `retry_files`, `list_files`, `delete_files`
+
+`read_answer_artifact` serves only an available Published Artifact from the
+Run's stored result, the same rule as the REST and Web artifact routes; input
+uploads and fetched resources are not artifacts.
 
 **Integration change in v2.0.16:** the 17 management and child-supervision MCP
 tools below were removed from both discovery and invocation. Integrations using

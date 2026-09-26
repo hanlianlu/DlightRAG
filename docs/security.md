@@ -296,7 +296,8 @@ Azure, S3, or queryless HTTPS. Authorization is necessary but not sufficient:
 the metadata row must also carry `_dlightrag_finalization_complete=true`.
 Guessed IDs for pending, failed-finalization, legacy-unproven, or direct
 LightRAG-bypass documents return 404. Full and thumbnail image routes enforce
-the same rule, including on cache hits.
+the same rule, including on cache hits, and answer `Cache-Control: private,
+no-store` so no shared cache replays one caller's authorized image to another.
 
 Signed/query-bearing URLs are fetch credentials, not durable locators. Retain
 the bytes or provide a separate queryless `download_uri`; signed queries never

@@ -225,7 +225,7 @@ routing, Session, control, child, and blob-reference state:
 | `dlightrag_agent_sessions` | `(owner_id, session_id)` | Session commit sequence, Entry sequence, current run owner and fencing epoch |
 | `dlightrag_agent_session_entries` | `(owner_id, session_id, sequence)` | immutable parent-linked User/Assistant/ToolResult/Control/Compaction Entries |
 | `dlightrag_agent_session_registers` | `(owner_id, session_id, kind, key)` | exact-CAS Lane heads/state, total OperationState, Plan metadata, request/tool snapshots, bounded inputs and Fast reservation |
-| `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, workspace inventory, spills, and blobs |
+| `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, workspace inventory, spills, and blobs; a Tool settlement stores the Session's Evidence ledger only when it changed, and recovery reads the latest snapshot |
 | `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage |
 | `dlightrag_answer_child_operations` | parent run + child Session + operation sequence | same-Session continuation Operations, idempotency, origin, status, cancellation origin, usage/outcome |
 | `dlightrag_answer_child_guidance` | parent run + request id | correlated `ask_parent` questions, expiry, reply origin, and status `pending` / `replied` / `expired` / `cancelled` |
