@@ -133,6 +133,29 @@ async def test_workspace_registry_upserts_lists_and_deletes() -> None:
     assert ("old_workspace",) in [args for _, args in conn.executed]
 
 
+async def test_workspace_registry_insert_never_renames_an_existing_workspace() -> None:
+    class _StatusConn(_Conn):
+        async def execute(self, query: str, *args: Any) -> str:  # type: ignore[override]
+            self.executed.append((query, args))
+            exists = any(row["workspace"] == args[0] for row in self.rows)
+            return "INSERT 0 0" if exists else "INSERT 0 1"
+
+    conn = _StatusConn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    created = await registry.insert(
+        workspace="finance", display_name="Finance", embedding_model="voyage-multimodal-3.5"
+    )
+    duplicate = await registry.insert(
+        workspace="research", display_name="Renamed", embedding_model="voyage-multimodal-3.5"
+    )
+
+    assert (created, duplicate) == (True, False)
+    query = conn.executed[-1][0]
+    assert "ON CONFLICT (workspace) DO NOTHING" in query
+    assert "DO UPDATE" not in query
+
+
 async def test_workspace_registry_exists_uses_one_primary_key_point_lookup() -> None:
     conn = _Conn()
     registry = PGWorkspaceRegistry(pool=_Pool(conn))

@@ -468,6 +468,19 @@ class PGCorpusMaintenanceStore:
             embedding_model=embedding_model,
         )
 
+    async def create_workspace_record(
+        self,
+        *,
+        workspace: str,
+        display_name: str,
+        embedding_model: str,
+    ) -> bool:
+        return await self._workspace_registry.insert(
+            workspace=workspace,
+            display_name=display_name,
+            embedding_model=embedding_model,
+        )
+
     async def unregister_workspace(self, workspace: str) -> bool:
         return await self._workspace_registry.delete(workspace)
 

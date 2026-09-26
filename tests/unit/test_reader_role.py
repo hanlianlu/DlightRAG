@@ -135,7 +135,7 @@ _SERVICE_WRITE_CALLS = [
     ("aingest", ("local",), {}),
     ("aingest_source", (None,), {}),
     ("aretry_failed_docs", (), {}),
-    ("_upsert_workspace_meta", (), {}),
+    ("_create_workspace_meta", (), {}),
 ]
 
 

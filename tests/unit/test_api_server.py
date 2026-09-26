@@ -44,6 +44,7 @@ from dlightrag.application.corpus_admin import (
     MetadataSearchCursorCodec,
     MetadataSearchPage,
     MetadataValidationError,
+    UploadLimits,
     WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
@@ -230,7 +231,8 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         create_retry=AsyncMock(),
         create_reset=AsyncMock(),
         create_workspace_delete=AsyncMock(),
-        stage_upload=AsyncMock(),
+        stage_uploads=AsyncMock(),
+        upload_limits=UploadLimits(file_bytes=100 * 1024 * 1024, request_bytes=512 * 1024 * 1024),
         discard_staged_run=AsyncMock(),
         create_staged_ingest=AsyncMock(),
         create_staged_batch=AsyncMock(),
@@ -543,7 +545,6 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         app.state.application = mock_application
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/workspaces",
@@ -564,13 +565,18 @@ class TestWorkspaceLifecycleAPI:
     async def test_create_workspace_rejects_duplicate(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
+        from dlightrag.application.corpus_admin import WorkspaceExistsError
+
         app.state.application = mock_application
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.create_workspace = AsyncMock(
+            side_effect=WorkspaceExistsError("Workspace 'default' already exists")
+        )
 
         resp = await client.post("/workspaces", json={"workspace": "default"})
 
+        # The registry refuses the duplicate; nothing renames the existing workspace.
         assert resp.status_code == 409
-        mock_application.corpora.create_workspace.assert_not_awaited()
+        assert resp.json()["detail"] == "Workspace 'default' already exists"
 
     @pytest.mark.usefixtures("_patch_application")
     async def test_simple_wrong_scheme_401(
@@ -1078,12 +1084,14 @@ class TestCorpusMutationEndpoints:
         app.state.application = mock_application
         source = tmp_path / "report.pdf"
         source.write_bytes(b"content")
-        mock_application.corpus_mutations.stage_upload.return_value = SimpleNamespace(
-            path=source,
-            filename="report.pdf",
-            size_bytes=7,
-            content_sha256="a" * 64,
-        )
+        mock_application.corpus_mutations.stage_uploads.return_value = [
+            SimpleNamespace(
+                path=source,
+                filename="report.pdf",
+                size_bytes=7,
+                content_sha256="a" * 64,
+            )
+        ]
         mock_application.corpus_mutations.create_staged_ingest.side_effect = ValueError(
             "acceptance rejected"
         )

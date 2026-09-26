@@ -110,6 +110,7 @@ from dlightrag.engine.runtime.records import (
 from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
 from dlightrag.engine.runtime.records import RunEvent as RuntimeRunEvent
 
+from .artifacts import published_artifact_descriptor
 from .child_roster import (
     ChildRosterCursor,
     ChildRosterCursorCodec,
@@ -1043,6 +1044,19 @@ class AnswerService:
         if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
             return None
         return await self._store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
+
+    async def published_artifact(
+        self, *, owner_id: str, run_id: str, resource_id: str
+    ) -> Mapping[str, Any] | None:
+        """Return one owned Answer's available Published Artifact descriptor.
+
+        Bytes readers resolve input uploads and fetched resources too, so a
+        transport must ask this before serving an id as an artifact.
+        """
+        record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        return published_artifact_descriptor(record.result, resource_id)
 
     async def read_artifact(
         self,

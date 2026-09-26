@@ -21,7 +21,6 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.adapters.http.artifact_delivery import (
-    artifact_descriptor,
     artifact_presentation_available,
     artifact_range,
     artifact_response,
@@ -43,6 +42,10 @@ from dlightrag.application.answer_runs import (
     child_control_succeeded,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
+from dlightrag.application.answer_runs.artifacts import (
+    artifact_descriptor,
+    published_artifact_descriptor,
+)
 from dlightrag.application.config import AnswerConfig
 from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.corpus_admin import safe_source_filename
@@ -373,8 +376,8 @@ async def read_answer_artifact(
     application = get_application(request)
     owner_id = owner_id_from_user(user)
     record = await application.runs.get(owner_id=owner_id, run_id=run_id)
-    descriptor = artifact_descriptor(record.result if record else None, resource_id)
-    if descriptor is None or descriptor.get("status") != "available":
+    descriptor = published_artifact_descriptor(record.result if record else None, resource_id)
+    if descriptor is None:
         raise HTTPException(status_code=404, detail="artifact not found")
     header = request.headers.get("range", "").strip()
     total = await application.answers.artifact_size(

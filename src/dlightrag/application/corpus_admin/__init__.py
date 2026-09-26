@@ -21,6 +21,7 @@ from .errors import (
     SourceDownloadUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
+    WorkspaceExistsError,
 )
 from .file_panel import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
@@ -52,6 +53,7 @@ from .mutations import (
     CorpusMutationService,
     RetrySelector,
     StagedCorpusSource,
+    UploadLimits,
 )
 from .service import (
     CorpusAdmin,
@@ -125,7 +127,9 @@ __all__ = [
     "SourceDownloadUnavailableError",
     "CorpusMutationUnavailableError",
     "UnsafeUploadNameError",
+    "UploadLimits",
     "UploadTooLargeError",
+    "WorkspaceExistsError",
     "WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT",
     "WORKSPACE_CATALOG_PAGE_MAX_LIMIT",
     "WorkspaceCatalogCursor",

@@ -90,6 +90,12 @@ SELECT EXISTS (
 )
 """
 
+_INSERT = """
+INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model)
+VALUES ($1, $2, $3)
+ON CONFLICT (workspace) DO NOTHING
+"""
+
 _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
 
 _ADD_INGESTED_COUNTS = """
@@ -399,6 +405,21 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
             return bool(await conn.fetchval(_EXISTS, workspace_id))
 
         return await self._run(_operation)
+
+    async def insert(
+        self,
+        *,
+        workspace: str,
+        display_name: str,
+        embedding_model: str,
+    ) -> bool:
+        """Create one registry row; False when the workspace identity already exists."""
+        workspace_id = _workspace_id(workspace)
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(_INSERT, workspace_id, display_name, embedding_model)
+
+        return (await self._run(_operation)) != "INSERT 0 0"
 
     async def delete(self, workspace: str) -> bool:
         """Delete one workspace registry row."""

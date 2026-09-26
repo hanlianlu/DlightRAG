@@ -1371,6 +1371,35 @@ def _reference(
     )
 
 
+async def test_published_artifact_is_only_an_available_result_artifact() -> None:
+    """Uploads and fetched resources share the id space but are never artifacts."""
+    result = {
+        "artifacts": [
+            {"resource_id": "artifact-report", "status": "available"},
+            {"resource_id": "artifact-draft", "status": "unavailable"},
+        ]
+    }
+    service = _service(store=_Store(run=_record(status="succeeded", result=result)))
+
+    published = await service.published_artifact(
+        owner_id=_OWNER, run_id="run-1", resource_id="artifact-report"
+    )
+    assert published == {"resource_id": "artifact-report", "status": "available"}
+    for resource_id in ("artifact-draft", "res-upload-0"):
+        assert (
+            await service.published_artifact(
+                owner_id=_OWNER, run_id="run-1", resource_id=resource_id
+            )
+            is None
+        )
+    assert (
+        await service.published_artifact(
+            owner_id="someone-else", run_id="run-1", resource_id="artifact-report"
+        )
+        is None
+    )
+
+
 async def test_read_input_artifact_returns_accepted_input_metadata_and_bytes() -> None:
     store = _Store(
         references=(

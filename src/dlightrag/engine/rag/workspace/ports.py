@@ -79,6 +79,16 @@ class CorpusMaintenanceStore(Protocol):
         embedding_model: str,
     ) -> None: ...
 
+    async def create_workspace_record(
+        self,
+        *,
+        workspace: str,
+        display_name: str,
+        embedding_model: str,
+    ) -> bool:
+        """Create one Workspace identity; False when it already exists."""
+        ...
+
     async def unregister_workspace(self, workspace: str) -> bool:
         """Remove one Workspace identity from the catalog; False when already absent."""
         ...

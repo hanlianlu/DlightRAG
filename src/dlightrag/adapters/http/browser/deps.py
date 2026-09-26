@@ -18,14 +18,17 @@ from dlightrag.application.settings import access_settings
 if TYPE_CHECKING:
     from dlightrag.application.web_conversations import WebConversationService
 
-DEFAULT_WORKSPACE = "default"
 
-
-def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) -> str:
-    """Read current workspace from cookie, normalized to a safe identifier."""
+def get_workspace(
+    request: Request,
+    dlightrag_workspace: str | None = Cookie(default=None),
+) -> str:
+    """Read the current workspace from its cookie, else the configured deployment one."""
     from dlightrag.application.corpus_admin import normalize_workspace
 
-    return normalize_workspace(dlightrag_workspace)
+    return normalize_workspace(
+        dlightrag_workspace or get_application(request).config.deployment.workspace
+    )
 
 
 def get_web_conversation_service(request: Request) -> WebConversationService:

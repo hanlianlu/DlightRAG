@@ -13,7 +13,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.adapters.http.artifact_delivery import (
-    artifact_descriptor,
     artifact_presentation_available,
     artifact_range,
     artifact_response,
@@ -56,6 +55,10 @@ from dlightrag.application.answer_runs import (
     ChildRosterPageRequest,
     child_control_receipt_payload,
     child_control_succeeded,
+)
+from dlightrag.application.answer_runs.artifacts import (
+    artifact_descriptor,
+    published_artifact_descriptor,
 )
 from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.corpus_admin import normalize_workspace_ids
@@ -520,8 +523,8 @@ async def answer_artifact_data(
     user = getattr(request.state, "user_context", None)
     turn = await conversation_service.turn_for_run(user, run_id)
     result = turn.run.result if turn is not None else None
-    descriptor = artifact_descriptor(result, resource_id)
-    if descriptor is None or descriptor.get("status") != "available":
+    descriptor = published_artifact_descriptor(result, resource_id)
+    if descriptor is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     owner = owner_id_from_user(user)
     application = get_application(request)

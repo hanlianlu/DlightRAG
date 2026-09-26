@@ -121,6 +121,15 @@ class StagedCorpusSource:
     size_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class UploadLimits:
+    """Bounds every upload surface shares: one file, one request, and file count."""
+
+    file_bytes: int
+    request_bytes: int
+    request_files: int = 100
+
+
 class CorpusMutationService:
     """Accept all product corpus writes as generic ``corpus_mutation`` Runs."""
 
@@ -130,12 +139,14 @@ class CorpusMutationService:
         input_root: Path,
         store: CorpusMutationStore,
         coordinator: CorpusMutationScheduler,
+        upload_limits: UploadLimits,
         writable: bool = True,
         default_workspace: str = "default",
     ) -> None:
         self._input_root = Path(input_root)
         self._store = store
         self._coordinator = coordinator
+        self._upload_limits = upload_limits
         self._writable = writable
         self._default_workspace = require_canonical_workspace_id(default_workspace)
 
@@ -524,6 +535,49 @@ class CorpusMutationService:
         except RuntimeRunAdmissionLimitExceededError as exc:
             raise RunAdmissionLimitExceededError(str(exc)) from exc
         return RunCreation.from_runtime(creation)
+
+    @property
+    def upload_limits(self) -> UploadLimits:
+        return self._upload_limits
+
+    async def stage_uploads(
+        self,
+        *,
+        workspace: str,
+        run_id: str,
+        uploads: Sequence[tuple[str, Any]],
+        content_sha256: str | None = None,
+    ) -> list[StagedCorpusSource]:
+        """Stage one request's files under the shared per-file and per-request caps.
+
+        Every file is bounded by the per-file cap and by what the request has left,
+        so no surface can let one file use the whole request budget. A failed file
+        removes the whole Run-exclusive stage.
+        """
+        limits = self._upload_limits
+        if not uploads:
+            raise ValueError("at least one upload is required")
+        if len(uploads) > limits.request_files:
+            raise UploadTooLargeError(f"upload contains more than {limits.request_files} files")
+        if content_sha256 is not None and len(uploads) != 1:
+            raise ValueError("content_sha256 is supported only for a single upload")
+        staged: list[StagedCorpusSource] = []
+        remaining = limits.request_bytes
+        for filename, reader in uploads:
+            if remaining <= 0:
+                await self.discard_staged_run(workspace=workspace, run_id=run_id)
+                raise UploadTooLargeError(f"upload exceeds {limits.request_bytes} bytes")
+            item = await self.stage_upload(
+                workspace=workspace,
+                run_id=run_id,
+                filename=filename,
+                reader=reader,
+                max_bytes=min(limits.file_bytes, remaining),
+                content_sha256=content_sha256,
+            )
+            staged.append(item)
+            remaining -= item.size_bytes
+        return staged
 
     async def stage_upload(
         self,
@@ -1441,5 +1495,6 @@ __all__ = [
     "CorpusMutationService",
     "RetrySelector",
     "StagedCorpusSource",
+    "UploadLimits",
     "validate_corpus_mutation_prepared_input",
 ]

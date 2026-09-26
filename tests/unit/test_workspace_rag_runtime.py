@@ -144,20 +144,20 @@ class TestWorkspaceRagAingest:
         service._ingestion_engine = ingestion
         return service, ingestion
 
-    async def test_workspace_meta_upsert_uses_canonical_workspace_id(
+    async def test_workspace_meta_creation_uses_canonical_workspace_id(
         self,
         test_config: DlightragConfig,
     ) -> None:
         mutate_config(test_config, "deployment.workspace", "test-fallback-ws")
         maintenance = MagicMock()
-        maintenance.register_workspace = AsyncMock()
+        maintenance.create_workspace_record = AsyncMock(return_value=True)
         backend = _backend("test_fallback_ws", read_only=False)
         backend.maintenance = maintenance
         service = _service(test_config, backend=backend)
 
-        await service._upsert_workspace_meta()
+        assert await service._create_workspace_meta() is True
 
-        maintenance.register_workspace.assert_awaited_once_with(
+        maintenance.create_workspace_record.assert_awaited_once_with(
             workspace="test_fallback_ws",
             display_name="test_fallback_ws",
             embedding_model=test_config.models.embedding.model,

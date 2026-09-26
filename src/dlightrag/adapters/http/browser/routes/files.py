@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 _FAILED_PAGE_DEFAULT_LIMIT = 5
-_MAX_BROWSER_UPLOAD_FILES = 100
+_MIB = 1024 * 1024
 
 
 @router.get("/files/raw/{document_id:path}", response_model=None)
@@ -282,6 +282,8 @@ async def start_failed_file_retry(
         # A read-only replica refuses before staging anything; report the role rather
         # than a generic acceptance failure.
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception:
         logger.exception(
             "Could not accept failed-document retry for workspace %s",
@@ -308,14 +310,8 @@ async def upload_files(
 ):
     """Stage uploaded files and accept one durable Corpus Mutation Run."""
     application = get_application(request)
-    cfg = application.config
-    # Per-file document cap is the single shared limit used by every ingest
-    # path (Run upload, URL, web upload): one document may not exceed it.
-    # The larger per-request cap is a temp-directory guard for multi-file
-    # (folder) uploads.
-    per_file_max_bytes = cfg.corpus.ingestion.max_upload_bytes
-    batch_max_bytes = cfg.max_upload_batch_bytes
-    per_file_max_mb = per_file_max_bytes // (1024 * 1024)
+    # The Corpus Mutation service owns the per-file, per-request, and count caps.
+    limits = application.corpus_mutations.upload_limits
 
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     if not await _workspace_is_registered(request, selected_workspace):
@@ -324,34 +320,17 @@ async def upload_files(
 
     run_id = str(uuid7())
     stage_owned = True
-    staged = []
-    total_bytes = 0
     try:
         if not files:
             raise HTTPException(status_code=400, detail="No valid files selected")
-        if len(files) > _MAX_BROWSER_UPLOAD_FILES:
+        if len(files) > limits.request_files:
             raise HTTPException(status_code=413, detail="Too many upload files")
-        if content_sha256 is not None and len(files) != 1:
-            raise HTTPException(
-                status_code=400,
-                detail="content_sha256 is supported only for a single upload",
-            )
-        for upload in files:
-            remaining = batch_max_bytes - total_bytes
-            if remaining <= 0:
-                raise UploadTooLargeError("upload batch exceeds configured maximum")
-            item = await application.corpus_mutations.stage_upload(
-                run_id=run_id,
-                workspace=selected_workspace,
-                filename=upload.filename or "",
-                reader=upload,
-                max_bytes=min(per_file_max_bytes, remaining),
-                content_sha256=content_sha256,
-            )
-            staged.append(item)
-            total_bytes += item.size_bytes
-        if total_bytes > batch_max_bytes:
-            raise UploadTooLargeError("upload batch exceeds configured maximum")
+        staged = await application.corpus_mutations.stage_uploads(
+            workspace=selected_workspace,
+            run_id=run_id,
+            uploads=[(upload.filename or "", upload) for upload in files],
+            content_sha256=content_sha256,
+        )
         try:
             creation = await application.corpus_mutations.create_staged_batch(
                 workspace=selected_workspace,
@@ -387,8 +366,8 @@ async def upload_files(
         raise HTTPException(
             status_code=413,
             detail=(
-                f"Upload exceeds limit ({per_file_max_mb} MB per file, "
-                f"{cfg.interfaces.max_upload_size_mb} MB per request)"
+                f"Upload exceeds limit ({limits.file_bytes // _MIB} MB per file, "
+                f"{limits.request_bytes // _MIB} MB per request)"
             ),
         ) from None
     except ValueError as exc:
@@ -445,6 +424,8 @@ async def delete_files(
         ) from None
     except CorpusMutationUnavailableError:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception:
         logger.exception("Delete Run acceptance failed")
         raise HTTPException(status_code=503, detail="Delete could not be accepted") from None

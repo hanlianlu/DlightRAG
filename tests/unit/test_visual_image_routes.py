@@ -50,6 +50,9 @@ async def test_api_image_route_serves_asset() -> None:
     assert response.status_code == 200
     assert response.content == b"png"
     assert response.headers["content-type"] == "image/png"
+    # Authorized bytes: no shared cache may replay them to another caller.
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
     application_double.corpora.get_visual_asset.assert_awaited_once_with(
         "default", "chunk_1", size="thumb"
     )
@@ -77,6 +80,8 @@ async def test_web_image_route_serves_same_origin_asset() -> None:
     assert response.status_code == 200
     assert response.content == b"jpeg"
     assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
     application_double.corpora.get_visual_asset.assert_awaited_once_with(
         "default", "chunk_1", size="full"
     )

@@ -4,6 +4,7 @@
 import datetime
 import json
 import logging
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
@@ -18,6 +19,7 @@ from dlightrag.application.access import (
     owner_id_from_principal,
     request_scope_context,
 )
+from dlightrag.application.answer_runs.artifacts import published_artifact_descriptor
 from dlightrag.application.answer_runs.service import AgentEffortOffer
 from dlightrag.application.config import (
     AccessControlConfig,
@@ -136,11 +138,22 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
             return_value=SimpleNamespace(outcome="cancelled", run=_run_record(status="cancelled"))
         ),
     )
+
+    async def _published_artifact(
+        *, owner_id: str, run_id: str, resource_id: str
+    ) -> Mapping[str, Any] | None:
+        record = await application.runs.get(owner_id=owner_id, run_id=run_id)
+        if record is None or record.run_kind != "answer":
+            return None
+        return published_artifact_descriptor(record.result, resource_id)
+
     application.answers = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(run=_run_record(), replayed=False)),
         capabilities=capability_view.read,
         agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
         list_artifacts=AsyncMock(return_value=()),
+        # The real publication rule over whatever run the test stores.
+        published_artifact=AsyncMock(side_effect=_published_artifact),
         read_artifact=AsyncMock(return_value=None),
         steer=AsyncMock(return_value=None),
         continuation_workspaces=AsyncMock(return_value=None),
@@ -798,6 +811,20 @@ async def test_mcp_rejects_mutually_exclusive_s3_key_and_prefix(mock_mcp_applica
     assert "mutually exclusive" in _tool_text(result)
 
 
+async def test_mcp_create_workspace_surfaces_a_duplicate(mock_mcp_application) -> None:
+    from dlightrag.application.corpus_admin import WorkspaceExistsError
+
+    mock_mcp_application.corpora.create_workspace.side_effect = WorkspaceExistsError(
+        "Workspace 'Default' already exists"
+    )
+
+    result = await mcp_server.mcp_app.call_tool("create_workspace", {"workspace": "Default"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == "Error: Workspace 'Default' already exists"
+
+
 async def test_mcp_create_workspace_uses_corpus_catalog(mock_mcp_application) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "create_workspace",
@@ -830,6 +857,59 @@ async def test_mcp_corpus_mutation_projects_the_admission_limit(mock_mcp_applica
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert _tool_text(result) == "Error: Deployment-wide nonterminal admission limit reached"
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(
+            "CorpusMutationUnavailableError",
+            id="read-only-replica",
+        ),
+        pytest.param("IdempotencyKeyConflict", id="idempotency-conflict"),
+    ],
+)
+async def test_mcp_corpus_mutation_surfaces_caller_refusals(
+    mock_mcp_application, refusal: str
+) -> None:
+    """A reader's refusal and a reused key are the caller's to fix, not internal failures."""
+    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+    from dlightrag.application.runs import IdempotencyKeyConflict
+
+    error = {
+        "CorpusMutationUnavailableError": CorpusMutationUnavailableError(
+            "This deployment is a read-only replica of the knowledge base."
+        ),
+        "IdempotencyKeyConflict": IdempotencyKeyConflict("key reused with different input"),
+    }[refusal]
+    mock_mcp_application.corpus_mutations.create_retry.side_effect = error
+
+    result = await mcp_server.mcp_app.call_tool(
+        "retry_files", {"workspace": "default", "selector": "all_retryable"}
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == f"Error: {error}"
+
+
+async def test_mcp_read_answer_artifact_serves_only_published_artifacts(
+    mock_mcp_application,
+) -> None:
+    """An input upload or fetched resource id is not an artifact, even for its owner."""
+    mock_mcp_application.runs.get.return_value = _run_record(
+        status="succeeded",
+        result={"artifacts": [{"resource_id": "artifact-report", "status": "available"}]},
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "read_answer_artifact", {"run_id": _RUN_ID, "resource_id": "res-upload-0"}
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == "Error: artifact not found"
+    mock_mcp_application.answers.read_artifact.assert_not_awaited()
 
 
 async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_application) -> None:

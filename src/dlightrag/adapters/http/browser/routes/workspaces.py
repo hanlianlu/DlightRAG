@@ -25,6 +25,7 @@ from dlightrag.application.corpus_admin import (
     CorpusMutationUnavailableError,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
+    WorkspaceExistsError,
     normalize_workspace,
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
@@ -193,14 +194,11 @@ async def create_workspace(
     ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
 
-    # Duplicate check
-    existing = await application.corpora.list_workspaces()
-    if ws in existing:
-        return _error(f"Workspace '{name}' already exists", status_code=409)
-
-    # Initialize workspace (creates the WorkspaceRag)
+    # Initialize workspace (creates the WorkspaceRag); the registry keeps it unique.
     try:
         await application.corpora.create_workspace(ws, display_name=name)
+    except WorkspaceExistsError:
+        return _error(f"Workspace '{name}' already exists", status_code=409)
     except Exception:
         logger.exception("Workspace creation failed")
         return _error(

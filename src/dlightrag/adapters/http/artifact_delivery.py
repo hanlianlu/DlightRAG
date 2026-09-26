@@ -9,17 +9,6 @@ from fastapi import HTTPException
 _INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
 
 
-def artifact_descriptor(
-    result: Mapping[str, Any] | None,
-    resource_id: str,
-) -> Mapping[str, Any] | None:
-    """Return one published Artifact descriptor from an owner-scoped result."""
-    for item in (result or {}).get("artifacts") or ():
-        if isinstance(item, Mapping) and item.get("resource_id") == resource_id:
-            return item
-    return None
-
-
 def artifact_range(header: str, total: int) -> tuple[int, int | None, int, str | None]:
     """Resolve one optional HTTP byte range against an Artifact size."""
     if not header:
@@ -94,7 +83,6 @@ def _range_not_satisfiable(total: int) -> HTTPException:
 
 
 __all__ = [
-    "artifact_descriptor",
     "artifact_presentation_available",
     "artifact_range",
     "artifact_response",

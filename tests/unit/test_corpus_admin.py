@@ -125,6 +125,21 @@ def _admin(
     return admin, pool, maintenance, jobs, file_panel, download
 
 
+async def test_create_workspace_refuses_an_existing_identity_instead_of_renaming_it() -> None:
+    from dlightrag.application.corpus_admin import WorkspaceExistsError
+
+    admin, pool, _maintenance, _, _, _ = _admin()
+    runtime = pool.acquire.return_value
+    runtime.aregister_workspace = AsyncMock(return_value=False)
+
+    with pytest.raises(WorkspaceExistsError, match="'Finance' already exists"):
+        await admin.create_workspace("finance", display_name="Finance")
+
+    runtime.aregister_workspace = AsyncMock(return_value=True)
+    await admin.create_workspace("legal", display_name="Legal")
+    runtime.aregister_workspace.assert_awaited_once_with(display_name="Legal")
+
+
 async def test_initialize_registers_default_only_for_writer() -> None:
     writer, _, writer_maintenance, _, _, _ = _admin()
     reader, _, reader_maintenance, _, _, _ = _admin(read_only=True)

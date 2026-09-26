@@ -65,6 +65,7 @@ from .errors import (
     SourceDownloadNotFoundError,
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
+    WorkspaceExistsError,
 )
 from .file_panel import (
     FailedFileRowPage,
@@ -538,7 +539,8 @@ class CorpusAdmin:
         self._require_writer("workspace creation")
         workspace = require_canonical_workspace_id(workspace_id)
         runtime = await _acquire_workspace(self._pool, workspace)
-        await runtime.aregister_workspace(display_name=display_name)
+        if not await runtime.aregister_workspace(display_name=display_name):
+            raise WorkspaceExistsError(f"Workspace '{display_name or workspace}' already exists")
 
     async def file_panel_snapshot(
         self,

@@ -111,6 +111,7 @@ async def build_web_bootstrap(
         raise WebBootstrapUnavailableError from exc
 
     known = set(record["workspace"] for record in records)
+    default_workspace = normalize_workspace(application.config.deployment.workspace)
     if next_cursor is None:
         # Degraded catalog fallback: a synthetic default record the full
         # authorization list carries but the registry page could not may only
@@ -132,7 +133,9 @@ async def build_web_bootstrap(
         active = authorized_full
     if primary not in known:
         primary = (
-            "default" if "default" in known else (authorized_full[0] if authorized_full else "")
+            default_workspace
+            if default_workspace in known
+            else (authorized_full[0] if authorized_full else "")
         )
 
     capability = capabilities.answer
@@ -152,7 +155,7 @@ async def build_web_bootstrap(
         primary_workspace=primary,
         active_workspaces=active,
         known_workspaces=authorized_full,
-        default_workspace=normalize_workspace(application.config.deployment.workspace),
+        default_workspace=default_workspace,
         answer_attachments=WebAttachmentBootstrap(
             count_limit=application.config.answer.generation.max_attachments,
             image_max_bytes=attachment_limit,

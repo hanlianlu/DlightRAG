@@ -20,6 +20,7 @@ from dlightrag.application.corpus_admin import (
     FilePanelCursor,
     FilePanelCursorCodec,
     FilePanelPageRequest,
+    UploadLimits,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
 )
@@ -156,7 +157,8 @@ def mock_application():
         create_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
         create_reset=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
         create_workspace_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
-        stage_upload=AsyncMock(),
+        stage_uploads=AsyncMock(),
+        upload_limits=UploadLimits(file_bytes=100 * 1024 * 1024, request_bytes=512 * 1024 * 1024),
         discard_staged_run=AsyncMock(),
     )
     application_double.runs = SimpleNamespace(
@@ -1173,9 +1175,11 @@ class TestWebFiles:
     ) -> None:
         source = tmp_path / "report.pdf"
         source.write_bytes(b"%PDF-fake")
-        mock_application.corpus_mutations.stage_upload.return_value = SimpleNamespace(
-            path=source, filename="report.pdf", size_bytes=9, content_sha256="a" * 64
-        )
+        mock_application.corpus_mutations.stage_uploads.return_value = [
+            SimpleNamespace(
+                path=source, filename="report.pdf", size_bytes=9, content_sha256="a" * 64
+            )
+        ]
 
         response = await client.post(
             "/web/api/files/upload",
@@ -1186,7 +1190,7 @@ class TestWebFiles:
         body = response.json()
         assert body["run_kind"] == "corpus_mutation"
         assert body["file_count"] == 1
-        mock_application.corpus_mutations.stage_upload.assert_awaited_once()
+        mock_application.corpus_mutations.stage_uploads.assert_awaited_once()
         mock_application.corpus_mutations.create_staged_batch.assert_awaited_once()
         mock_application.corpus_mutations.discard_staged_run.assert_not_awaited()
 
@@ -1196,9 +1200,9 @@ class TestWebFiles:
         source = tmp_path / "report.pdf"
         source.write_bytes(b"content")
         digest = "a" * 64
-        mock_application.corpus_mutations.stage_upload.return_value = SimpleNamespace(
-            path=source, filename="report.pdf", size_bytes=7, content_sha256=digest
-        )
+        mock_application.corpus_mutations.stage_uploads.return_value = [
+            SimpleNamespace(path=source, filename="report.pdf", size_bytes=7, content_sha256=digest)
+        ]
 
         response = await client.post(
             "/web/api/files/upload",
@@ -1208,20 +1212,17 @@ class TestWebFiles:
 
         assert response.status_code == 202
         assert (
-            mock_application.corpus_mutations.stage_upload.await_args.kwargs["content_sha256"]
+            mock_application.corpus_mutations.stage_uploads.await_args.kwargs["content_sha256"]
             == digest
         )
 
-    async def test_upload_discards_the_whole_stage_after_mid_loop_batch_cap_failure(
-        self, client: AsyncClient, mock_application, test_config: DlightragConfig, tmp_path: Path
+    async def test_upload_maps_a_cap_refusal_to_413_and_discards_the_stage(
+        self, client: AsyncClient, mock_application
     ) -> None:
-        source = tmp_path / "first.pdf"
-        source.write_bytes(b"first")
-        mock_application.corpus_mutations.stage_upload.return_value = SimpleNamespace(
-            path=source,
-            filename="first.pdf",
-            size_bytes=test_config.max_upload_batch_bytes,
-            content_sha256="a" * 64,
+        from dlightrag.application.corpus_admin import UploadTooLargeError
+
+        mock_application.corpus_mutations.stage_uploads.side_effect = UploadTooLargeError(
+            "upload exceeds 536870912 bytes"
         )
 
         response = await client.post(
@@ -1233,6 +1234,9 @@ class TestWebFiles:
         )
 
         assert response.status_code == 413
+        assert response.json()["detail"] == (
+            "Upload exceeds limit (100 MB per file, 512 MB per request)"
+        )
         mock_application.corpus_mutations.create_staged_batch.assert_not_awaited()
         mock_application.corpus_mutations.discard_staged_run.assert_awaited_once()
 
@@ -1241,9 +1245,11 @@ class TestWebFiles:
     ) -> None:
         source = tmp_path / "report.pdf"
         source.write_bytes(b"content")
-        mock_application.corpus_mutations.stage_upload.return_value = SimpleNamespace(
-            path=source, filename="report.pdf", size_bytes=7, content_sha256="a" * 64
-        )
+        mock_application.corpus_mutations.stage_uploads.return_value = [
+            SimpleNamespace(
+                path=source, filename="report.pdf", size_bytes=7, content_sha256="a" * 64
+            )
+        ]
         mock_application.corpus_mutations.create_staged_batch.side_effect = (
             RunAdmissionLimitExceededError("limit reached")
         )
@@ -1262,9 +1268,11 @@ class TestWebFiles:
     ) -> None:
         source = tmp_path / "report.pdf"
         source.write_bytes(b"content")
-        mock_application.corpus_mutations.stage_upload.return_value = SimpleNamespace(
-            path=source, filename="report.pdf", size_bytes=7, content_sha256="a" * 64
-        )
+        mock_application.corpus_mutations.stage_uploads.return_value = [
+            SimpleNamespace(
+                path=source, filename="report.pdf", size_bytes=7, content_sha256="a" * 64
+            )
+        ]
         mock_application.corpus_mutations.create_staged_batch.side_effect = RuntimeError(
             "admission unavailable"
         )
@@ -1290,7 +1298,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_application.corpus_mutations.stage_upload.assert_not_awaited()
+        mock_application.corpus_mutations.stage_uploads.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "filename",
@@ -1323,6 +1331,18 @@ class TestWebFiles:
             file_paths=["/tmp/test.pdf"],
             submitted_by=DEPLOYMENT_OWNER_ID,
         )
+
+    async def test_delete_files_reports_an_invalid_identifier_as_a_client_error(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpus_mutations.create_delete.side_effect = ValueError(
+            "delete requires an exact identifier"
+        )
+
+        response = await client.request("DELETE", "/web/api/files", params={"file_path": " "})
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "delete requires an exact identifier"
 
     async def test_delete_files_projects_the_admission_limit(
         self, client: AsyncClient, mock_application
@@ -1368,10 +1388,9 @@ class TestWebWorkspaceCreate:
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
         mock_application.corpora.create_workspace = AsyncMock()
-        # First call (duplicate check): workspace does not exist yet
-        # Second call (post-create list): includes the new workspace
+        # The registry owns uniqueness; the catalog is read once, for the cookies.
         mock_application.corpora.list_workspaces = AsyncMock(
-            side_effect=[["default", "test_ws"], ["default", "test_ws", "new_workspace"]]
+            return_value=["default", "test_ws", "new_workspace"]
         )
         resp = await client.post(
             "/web/api/workspaces/create",
@@ -1394,11 +1413,17 @@ class TestWebWorkspaceCreate:
     async def test_create_workspace_duplicate(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
+        from dlightrag.application.corpus_admin import WorkspaceExistsError
+
+        mock_application.corpora.create_workspace = AsyncMock(
+            side_effect=WorkspaceExistsError("Workspace 'default' already exists")
+        )
         resp = await client.post(
             "/web/api/workspaces/create",
             data={"workspace_name": "default"},
         )
         assert resp.status_code == 409
+        assert resp.json()["error"] == "Workspace 'default' already exists"
 
     @pytest.mark.parametrize(
         "workspace_name",
@@ -1420,6 +1445,22 @@ class TestWebWorkspaceCreate:
         )
         assert resp.status_code == 400
         assert resp.json()["error"]
+
+
+async def test_bootstrap_falls_back_to_the_configured_default_workspace(
+    client: AsyncClient, test_config: DlightragConfig
+) -> None:
+    """A deployment whose default is not literally "default" must not scope to "default"."""
+    mutate_config(test_config, "deployment.workspace", "Test WS")
+    client.cookies.delete("dlightrag_workspace")
+
+    unscoped = (await client.get("/web/api/bootstrap")).json()
+    client.cookies.set("dlightrag_workspace", "deleted_ws")
+    stale = (await client.get("/web/api/bootstrap")).json()
+
+    assert unscoped["default_workspace"] == "test_ws"
+    assert unscoped["primary_workspace"] == "test_ws"
+    assert stale["primary_workspace"] == "test_ws"
 
 
 async def test_reset_workspace_accepts_a_durable_corpus_run(
@@ -1609,7 +1650,7 @@ class TestSourcePresentation:
             "This deployment is a read-only replica of the knowledge base: it accepts no "
             "corpus writes. Send the upload, retry, or delete to a writer."
         )
-        mock_application.corpus_mutations.stage_upload.side_effect = refusal
+        mock_application.corpus_mutations.stage_uploads.side_effect = refusal
         mock_application.corpus_mutations.create_retry.side_effect = refusal
         mock_application.corpus_mutations.create_delete.side_effect = refusal
 

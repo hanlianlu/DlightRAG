@@ -122,9 +122,7 @@ async def create_workspace_tool(
         normalized_workspace,
         application=application,
     )
-    existing = await application.corpora.list_workspaces()
-    if normalized_workspace in existing:
-        raise ValueError(f"Workspace '{normalized_display_name}' already exists")
+    # WorkspaceExistsError is a ValueError, so a duplicate surfaces as a refusal.
     await application.corpora.create_workspace(
         normalized_workspace,
         display_name=normalized_display_name,

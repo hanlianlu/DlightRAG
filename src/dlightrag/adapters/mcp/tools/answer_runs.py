@@ -420,9 +420,18 @@ async def read_answer_artifact_tool(
     import base64
 
     application = await mcp_server._ensure_application()
+    owner_id = mcp_server._owner_id()
+    # Inputs and fetched resources share the id space; only published artifacts are served.
+    if (
+        await application.answers.published_artifact(
+            owner_id=owner_id, run_id=run_id, resource_id=resource_id
+        )
+        is None
+    ):
+        raise ValueError("artifact not found")
     start = max(0, offset)
     chunk = await application.answers.read_artifact(
-        owner_id=mcp_server._owner_id(),
+        owner_id=owner_id,
         run_id=run_id,
         resource_id=resource_id,
         offset=start,

@@ -111,6 +111,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         CorpusAdmin,
         CorpusMutationExecutor,
         CorpusMutationService,
+        UploadLimits,
     )
     from dlightrag.application.corpus_admin.mutations import (
         validate_corpus_mutation_prepared_input,
@@ -483,6 +484,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         input_root=config.input_dir_path,
         store=run_store,
         coordinator=coordinator,
+        upload_limits=UploadLimits(
+            file_bytes=config.corpus.ingestion.max_upload_bytes,
+            request_bytes=config.max_upload_batch_bytes,
+        ),
         # A reader registers no corpus-mutation executor, so it refuses writes at
         # acceptance rather than staging bytes for a Run it can never execute.
         writable=not config.is_reader,

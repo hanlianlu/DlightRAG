@@ -46,11 +46,16 @@ from dlightrag.application.access import (
 from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.corpus_admin import (
+    CorpusMutationUnavailableError,
     normalize_workspace,
     normalize_workspace_ids,
 )
 from dlightrag.application.retrieval import CorpusUnavailableError
-from dlightrag.application.runs import RunRuntimeUnavailableError, RunView
+from dlightrag.application.runs import (
+    IdempotencyKeyConflict,
+    RunRuntimeUnavailableError,
+    RunView,
+)
 from dlightrag.application.settings import access_settings
 from dlightrag.engine.answer.client_contracts import (
     MAX_HISTORY_MESSAGES,
@@ -140,6 +145,21 @@ def _run_descriptor(record: RunView) -> dict[str, Any]:
     }
 
 
+# Caller-facing refusals surface verbatim; any other failure stays behind the
+# generic internal-failure text. One list, so a new refusal cannot be surfaced
+# in one branch and hidden in the other.
+_REJECTIONS: tuple[type[BaseException], ...] = (
+    ValueError,
+    PermissionError,
+    ApplicationClosedError,
+    CorpusUnavailableError,
+    AnswerRuntimeUnavailableError,
+    RunRuntimeUnavailableError,
+    CorpusMutationUnavailableError,
+    IdempotencyKeyConflict,
+)
+
+
 class DlightRAGMCPServer(MCPServer):
     """MCPServer with DlightRAG's strict input and text-error contract."""
 
@@ -159,28 +179,12 @@ class DlightRAGMCPServer(MCPServer):
             # inspect __cause__ as well. Server misconfiguration is a server failure;
             # user-facing validation/authorization messages are surfaced as rejections;
             # unexpected internals hide behind a generic message.
-            surfaced = (
-                ValueError,
-                PermissionError,
-                InvalidToolConfigurationError,
-                ApplicationClosedError,
-                CorpusUnavailableError,
-                AnswerRuntimeUnavailableError,
-                RunRuntimeUnavailableError,
-            )
+            surfaced = (InvalidToolConfigurationError, *_REJECTIONS)
             inner = exc if isinstance(exc, surfaced) else exc.__cause__
             if isinstance(inner, InvalidToolConfigurationError):
                 logger.exception("MCP tool '%s' failed: %s", name, inner)
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
-            elif isinstance(
-                inner,
-                ValueError
-                | PermissionError
-                | ApplicationClosedError
-                | CorpusUnavailableError
-                | AnswerRuntimeUnavailableError
-                | RunRuntimeUnavailableError,
-            ):
+            elif isinstance(inner, _REJECTIONS):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = (
                     f"Error [{inner.error_kind}]: {inner.public_message}"

@@ -1,10 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Authenticated visual chunk image routes."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
 from dlightrag.adapters.http.rest.auth import get_current_user
+from dlightrag.adapters.http.visual_asset_delivery import visual_asset_response
 from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.corpus_admin import VisualAssetSize
 
@@ -25,13 +26,8 @@ async def image(
     application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_VISUAL_ASSET, workspace=ws)
-    asset = await application.corpora.get_visual_asset(ws, chunk_id, size=size)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Image not found")
-    return Response(
-        content=asset.data,
-        media_type=asset.media_type,
-        headers={"Cache-Control": "public, max-age=3600"},
+    return await visual_asset_response(
+        application.corpora, workspace=ws, chunk_id=chunk_id, size=size
     )
 
 

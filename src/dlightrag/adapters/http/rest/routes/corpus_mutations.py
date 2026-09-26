@@ -46,7 +46,6 @@ from .runs import run_descriptor
 
 router = APIRouter(prefix="/runs/corpus", tags=["Corpus Mutation Runs"])
 
-_MAX_UPLOAD_FILES = 100
 _MAX_FORM_FIELDS = 8
 _FORM_PART_MAX_BYTES = 1024 * 1024
 _SINGLE_UPLOAD_FIELDS = frozenset(
@@ -249,8 +248,9 @@ async def _parse_upload_form(
     batch: bool,
 ) -> FormData:
     try:
+        limits = get_application(request).corpus_mutations.upload_limits
         form = await request.form(
-            max_files=_MAX_UPLOAD_FILES if batch else 1,
+            max_files=limits.request_files if batch else 1,
             max_fields=_MAX_FORM_FIELDS,
             max_part_size=_FORM_PART_MAX_BYTES,
         )
@@ -310,25 +310,12 @@ async def _upload_action(
         )
         application = authorized_application
         staged_workspace = workspace
-        max_bytes = (
-            authorized_application.config.max_upload_batch_bytes
-            if batch
-            else authorized_application.config.corpus.ingestion.max_upload_bytes
+        staged = await authorized_application.corpus_mutations.stage_uploads(
+            workspace=workspace,
+            run_id=run_id,
+            uploads=[(str(item.filename), item) for item in uploads],
+            content_sha256=None if batch else _text_field(form, "content_sha256"),
         )
-        staged = []
-        for item in uploads:
-            staged.append(
-                await authorized_application.corpus_mutations.stage_upload(
-                    workspace=workspace,
-                    run_id=run_id,
-                    filename=str(item.filename),
-                    reader=item,
-                    max_bytes=max_bytes,
-                    content_sha256=None if batch else _text_field(form, "content_sha256"),
-                )
-            )
-        if sum(item.size_bytes for item in staged) > max_bytes:
-            raise UploadTooLargeError(f"upload exceeds {max_bytes} bytes")
 
         if batch:
             return await _accept(

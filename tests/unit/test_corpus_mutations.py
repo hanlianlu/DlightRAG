@@ -12,9 +12,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from dlightrag.application.corpus_admin import UploadTooLargeError
 from dlightrag.application.corpus_admin.mutations import (
     CorpusMutationExecutor,
     CorpusMutationService,
+    UploadLimits,
     _join_public_operation,
     _result,
     validate_corpus_mutation_prepared_input,
@@ -28,6 +30,7 @@ from dlightrag.engine.runtime.records import (
 
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
 _TRACK_ID = f"dlightrag-corpus-{_RUN_ID}"
+_LIMITS = UploadLimits(file_bytes=10, request_bytes=15, request_files=3)
 
 
 class _Reader:
@@ -44,6 +47,7 @@ def _service(tmp_path: Path) -> CorpusMutationService:
         input_root=tmp_path,
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
+        upload_limits=_LIMITS,
     )
 
 
@@ -62,6 +66,7 @@ async def test_reset_exposes_supersession_as_a_typed_run_envelope_field(
         input_root=tmp_path,
         store=store,
         coordinator=cast(Any, coordinator),
+        upload_limits=_LIMITS,
     )
     superseded = "0199a0a0-0000-7000-8000-000000000002"
 
@@ -102,6 +107,60 @@ async def test_discard_staged_run_owns_the_private_stage_layout(tmp_path: Path) 
     await _service(tmp_path).discard_staged_run(workspace="default", run_id=_RUN_ID)
 
     assert not run_root.exists()
+
+
+async def test_stage_uploads_bounds_one_file_by_the_per_file_cap(tmp_path: Path) -> None:
+    """A single file may not borrow the larger per-request budget."""
+    with pytest.raises(UploadTooLargeError):
+        await _service(tmp_path).stage_uploads(
+            workspace="default",
+            run_id=_RUN_ID,
+            uploads=[("report.pdf", _Reader(b"x" * 11))],
+        )
+
+    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+
+
+async def test_stage_uploads_bounds_each_file_by_the_remaining_request_budget(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    with pytest.raises(UploadTooLargeError):
+        await service.stage_uploads(
+            workspace="default",
+            run_id=_RUN_ID,
+            uploads=[("first.pdf", _Reader(b"a" * 8)), ("second.pdf", _Reader(b"b" * 8))],
+        )
+
+    # The failed file removes the whole Run-exclusive stage, earlier files included.
+    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+
+    staged = await service.stage_uploads(
+        workspace="default",
+        run_id=_RUN_ID,
+        uploads=[("first.pdf", _Reader(b"a" * 8)), ("second.pdf", _Reader(b"b" * 7))],
+    )
+    assert [item.size_bytes for item in staged] == [8, 7]
+
+
+async def test_stage_uploads_refuses_counts_and_digests_it_cannot_honour(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    with pytest.raises(UploadTooLargeError, match="more than 3 files"):
+        await service.stage_uploads(
+            workspace="default",
+            run_id=_RUN_ID,
+            uploads=[(f"{index}.pdf", _Reader(b"x")) for index in range(4)],
+        )
+    with pytest.raises(ValueError, match="only for a single upload"):
+        await service.stage_uploads(
+            workspace="default",
+            run_id=_RUN_ID,
+            uploads=[("a.pdf", _Reader(b"a")), ("b.pdf", _Reader(b"b"))],
+            content_sha256=hashlib.sha256(b"a").hexdigest(),
+        )
+    assert not (tmp_path / "default").exists()
 
 
 async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> None:
@@ -597,6 +656,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
         input_root=tmp_path,
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
+        upload_limits=_LIMITS,
         writable=False,
     )
 
@@ -727,6 +787,7 @@ async def test_workspace_delete_refuses_the_deployment_default(tmp_path: Path) -
         input_root=tmp_path,
         store=store,
         coordinator=cast(Any, SimpleNamespace()),
+        upload_limits=_LIMITS,
         default_workspace="research",
     )
 
@@ -750,6 +811,7 @@ async def test_workspace_delete_is_accepted_as_a_workspace_scoped_mutation(
         input_root=tmp_path,
         store=store,
         coordinator=cast(Any, coordinator),
+        upload_limits=_LIMITS,
     )
 
     with pytest.raises(RuntimeError, match="captured envelope"):

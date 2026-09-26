@@ -9,6 +9,10 @@ class UnsafeUploadNameError(ValueError):
     """An upload filename is unsafe or not a single basename."""
 
 
+class WorkspaceExistsError(ValueError):
+    """A workspace with this canonical identity is already registered."""
+
+
 class UploadTooLargeError(ValueError):
     """A streamed upload exceeded its configured byte cap."""
 
@@ -68,4 +72,5 @@ __all__ = [
     "SourceDownloadUnavailableError",
     "UnsafeUploadNameError",
     "UploadTooLargeError",
+    "WorkspaceExistsError",
 ]
