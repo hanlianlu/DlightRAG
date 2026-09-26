@@ -288,7 +288,7 @@
     align-items: center;
     background: transparent;
     border: 0;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     cursor: pointer;
     display: flex;
     flex: 0 0 auto;

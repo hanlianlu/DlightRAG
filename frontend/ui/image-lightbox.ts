@@ -4,7 +4,7 @@
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {icon} from '../design-system/index.ts';
-import {wrapTabFocus} from '../lib/dom.ts';
+import {tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import lightboxStyles from '../styles/lightbox.module.css';
@@ -142,8 +142,7 @@ export class DlImageLightbox extends LightElement {
   };
 
   #focusables(): HTMLElement[] {
-    return Array.from(this.querySelectorAll<HTMLElement>('button:not([hidden])'))
-      .filter((element) => element.getClientRects().length > 0);
+    return tabbables(this);
   }
 
   #keydown = (event: KeyboardEvent): void => {

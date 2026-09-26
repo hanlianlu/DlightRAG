@@ -35,6 +35,33 @@ const memoryOperationReceipt = v.pipe(
 );
 export type MemoryOperationReceipt = v.InferOutput<typeof memoryOperationReceipt>;
 
+/** A live `memory_operation_settled` Answer event, as the browser projection sends it. */
+const memoryOperationEvent = v.pipe(
+  v.object({
+    operation: v.picklist(['remember', 'forget', 'undo']),
+    outcome: v.picklist(['changed', 'unchanged', 'rejected', 'conflict']),
+    change_id: v.optional(v.nullable(v.string())),
+    intent_id: v.optional(v.nullable(v.string())),
+    body: v.optional(v.nullable(v.string())),
+    live: v.optional(v.boolean()),
+  }),
+  v.transform((w) => ({
+    operation: w.operation,
+    outcome: w.outcome,
+    changeId: w.change_id ?? null,
+    intentId: w.intent_id ?? null,
+    body: w.body ?? '',
+    live: w.live ?? false,
+  })),
+);
+export type MemoryOperationEvent = v.InferOutput<typeof memoryOperationEvent>;
+
+/** Return the typed event, or null for a payload this client cannot interpret. */
+export function parseMemoryOperationEvent(value: unknown): MemoryOperationEvent | null {
+  const parsed = v.safeParse(memoryOperationEvent, value);
+  return parsed.success ? parsed.output : null;
+}
+
 export async function getMemorySettings(signal?: AbortSignal): Promise<MemorySettings> {
   const response = await fetch('/web/api/memory/settings', {signal});
   return parseWire(

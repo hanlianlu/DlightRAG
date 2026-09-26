@@ -4,7 +4,7 @@ import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt } from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
-import {wrapTabFocus} from '../lib/dom.ts';
+import {tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import canvasStyles from '../styles/artifact-canvas.module.css';
@@ -370,10 +370,7 @@ export class DlArtifactCanvas extends LightElement {
       return;
     }
     if (event.key === 'Tab' && this.#isModal()) {
-      const focusable = Array.from(this.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), dl-icon-button:not([disabled]), a[href], iframe, video[controls], [tabindex]:not([tabindex="-1"])',
-      )).filter((element) => element.getClientRects().length > 0);
-      wrapTabFocus(focusable, event);
+      wrapTabFocus(tabbables(this), event);
     }
   }
 }

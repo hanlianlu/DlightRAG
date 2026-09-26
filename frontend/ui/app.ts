@@ -4,6 +4,7 @@ import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
+import type {MemoryOperationEvent} from '../api/memory.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
@@ -25,7 +26,6 @@ import type {ComposerWorkspaceDropDetail} from './chat-composer.ts';
 import type {
   ChatChildActivityDetail,
   ChatContentChangeDetail,
-  ChatMemoryOperationDetail,
   ChatRunActionDetail,
   ChatRunningChangeDetail,
   ChatViewActionDetail,
@@ -347,7 +347,7 @@ export class DlApp extends LightElement {
     return await this.#conversationSidebar()?.deleteAll(returnFocus) ?? false;
   };
 
-  #memoryOperation(event: CustomEvent<ChatMemoryOperationDetail>): void {
+  #memoryOperation(event: CustomEvent<MemoryOperationEvent>): void {
     this.querySelector<DlSettingsDialog>('dl-settings-dialog')
       ?.handleMemoryOperation(event.detail);
   }

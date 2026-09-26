@@ -10,6 +10,7 @@ import type {
   ConversationTurn,
   PresentationImage,
 } from '../api/conversations.ts';
+import type {MemoryOperationEvent} from '../api/memory.ts';
 import {AGENT_EFFORT_STORAGE_KEY} from '../lib/agent-effort.ts';
 import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
 import {attachmentStore} from '../stores/attachment-store.ts';
@@ -1307,7 +1308,8 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
     if (index === 499 || index === 1_499) {
       chunks.push(
         `id: ${sequence}\nevent: memory_operation_settled\n`
-        + `data: {"operation":"remember","intent_id":"memory-${index}"}\n\n`,
+        + `data: {"operation":"remember","outcome":"changed",`
+        + `"intent_id":"memory-${index}","change_id":"change-${index}"}\n\n`,
       );
       sequence += 1;
     }
@@ -1349,8 +1351,8 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
     };
     const memoryOperations: string[] = [];
     feature.addEventListener('dl-chat-memory-operation', (event) => {
-      const detail = (event as CustomEvent<{intent_id?: string}>).detail;
-      memoryOperations.push(detail.intent_id ?? '');
+      const detail = (event as CustomEvent<MemoryOperationEvent>).detail;
+      memoryOperations.push(`${detail.intentId}/${detail.changeId}`);
     });
     document.body.appendChild(feature);
     await waitFor(() => feature.querySelector('dl-chat-message-list') !== null);
@@ -1400,7 +1402,7 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
 
     expect(feature.turns[0].streamText).to.equal(expected);
     expect(feature.turns[0].liveStatus).to.equal('Answer stopped');
-    expect(memoryOperations).to.deep.equal(['memory-499', 'memory-1499']);
+    expect(memoryOperations).to.deep.equal(['memory-499/change-499', 'memory-1499/change-1499']);
     expect(turnAssignments).to.equal(6);
     expect(listTurnsUpdates).to.equal(5);
     expect(feature.querySelectorAll('[role="status"]:not([data-older-status])')).to.have.length(1);

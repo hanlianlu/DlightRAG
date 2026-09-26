@@ -96,7 +96,7 @@ dl-inspector[aria-hidden='true'] {
 }
 
 dl-icon-button.panel-close {
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     flex: 0 0 auto;
     margin-left: auto;
 }

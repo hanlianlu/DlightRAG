@@ -410,7 +410,7 @@ export class DlInspectorFiles extends LightElement {
         message: status.status === 'succeeded'
           ? msg('Corpus update finished.', {id: 'inspectorFiles.corpusUpdateFinished'})
           : msg('Corpus update did not finish.', {id: 'inspectorFiles.corpusUpdateFailed'}),
-        duration: 4000,
+        duration: 3000,
       });
       await this.reload(false);
       const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
@@ -457,7 +457,7 @@ export class DlInspectorFiles extends LightElement {
         id: 'inspectorFiles.corpusResumeFailed',
       });
       this.error = message;
-      requestToast(this, {message, duration: 4000});
+      requestToast(this, {message, duration: 3000});
     } finally {
       this.#finishMutation();
       this.#session.finishRequest(controller);
@@ -680,7 +680,7 @@ export class DlInspectorFiles extends LightElement {
     if (!succeeded) {
       requestToast(this, {
         message: msg('Workspace deletion did not finish.', {id: 'inspectorFiles.deleteWorkspaceDidNotFinish'}),
-        duration: 4000,
+        duration: 3000,
       });
       await this.reload(false);
       return;
@@ -691,7 +691,7 @@ export class DlInspectorFiles extends LightElement {
     this.handles.ingest.resetToPrimary();
     requestToast(this, {
       message: msg(str`Workspace ${name} deleted.`, {id: 'inspectorFiles.workspaceDeleted'}),
-      duration: 4000,
+      duration: 3000,
     });
   }
 

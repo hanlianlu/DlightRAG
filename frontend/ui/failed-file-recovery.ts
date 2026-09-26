@@ -5,6 +5,7 @@ import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
+  CorpusRunApiError,
   corpusRunActive,
   getCorpusRunStatus,
   resumeCorpusRun,
@@ -54,14 +55,22 @@ function failureTime(value: string): string {
   }).format(parsed);
 }
 
+/** HTTP status of a Files or Corpus Run refusal; null for any other failure. */
+function refusalStatus(error: unknown): number | null {
+  return error instanceof FilesApiError || error instanceof CorpusRunApiError
+    ? error.status
+    : null;
+}
+
 function recoveryRequestError(error: unknown, fallback: string): string {
-  if (!(error instanceof FilesApiError)) return fallback;
-  if (error.status === 401 || error.status === 403) {
+  const status = refusalStatus(error);
+  if (status === null) return fallback;
+  if (status === 401 || status === 403) {
     return msg('You do not have permission to recover documents in this workspace.', {
       id: 'inspectorFiles.recovery.forbidden',
     });
   }
-  if (error.status === 409) {
+  if (status === 409) {
     return msg('This workspace is no longer available.', {
       id: 'inspectorFiles.recovery.workspaceGone',
     });
@@ -439,7 +448,7 @@ export class DlFailedFileRecovery extends LightElement {
         message: msg('Corpus repair resume failed.', {
           id: 'inspectorFiles.recovery.resumeFailed',
         }),
-        duration: 4000,
+        duration: 3000,
       });
     } finally {
       if (this.#session.finishMutation(controller)) this.recoveryPending = false;
@@ -472,7 +481,9 @@ export class DlFailedFileRecovery extends LightElement {
         || !this.active
         || !this.isConnected
       ) return;
-      if (error instanceof FilesApiError && [401, 403, 404, 409].includes(error.status)) {
+      // The status poll speaks the Corpus Run API; a refusal ends polling for good.
+      const status = refusalStatus(error);
+      if (status !== null && [401, 403, 404, 409].includes(status)) {
         this.page = null;
         this.recovery = null;
         this.error = recoveryRequestError(
@@ -507,13 +518,13 @@ export class DlFailedFileRecovery extends LightElement {
     if (run.status === 'succeeded') {
       requestToast(this, {
         message: msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'}),
-        duration: 5000,
+        duration: 3000,
       });
       return;
     }
     requestToast(this, {
       message: msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
-      duration: 4000,
+      duration: 3000,
     });
   }
 

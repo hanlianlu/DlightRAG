@@ -21,20 +21,20 @@ import {
   getMemorySettings,
   putMemorySettings,
   undoMemoryChange,
+  type MemoryOperationEvent,
   type MemorySettings,
 } from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
-import type {ChatMemoryOperationDetail} from './chat-feature.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
 
 const MAX_SEEN_MEMORY_OPERATIONS = 500;
 type MemoryReadResult = 'loaded' | 'stale' | 'failed';
 
-function memorySummary(event: ChatMemoryOperationDetail): string {
-  const body = String(event.body || '').replace(/\s+/g, ' ').trim();
+function memorySummary(event: MemoryOperationEvent): string {
+  const body = event.body.replace(/\s+/g, ' ').trim();
   const concise = body.length > 120 ? `${body.slice(0, 117)}…` : body;
   if (event.outcome === 'unchanged') {
     return event.operation === 'forget'
@@ -152,9 +152,9 @@ export class DlSettingsDialog extends LightElement {
   }
 
   /** Consume one live Profile Memory domain fact from Chat composition. */
-  handleMemoryOperation(event: ChatMemoryOperationDetail): void {
+  handleMemoryOperation(event: MemoryOperationEvent): void {
     if (!event.live) return;
-    const identity = event.changeId || `${event.intent_id || ''}:${event.operation}:${event.outcome}`;
+    const identity = event.changeId || `${event.intentId || ''}:${event.operation}:${event.outcome}`;
     if (!identity || this.#seenMemoryOperations.has(identity)) return;
     if (this.#seenMemoryOperations.size >= MAX_SEEN_MEMORY_OPERATIONS) {
       const oldest = this.#seenMemoryOperations.values().next().value;
@@ -466,7 +466,7 @@ export class DlSettingsDialog extends LightElement {
       if (signal.aborted) return;
       this.handleMemoryOperation({
         live: true, operation: receipt.action, outcome: receipt.outcome,
-        changeId: receipt.changeId, body: receipt.body || record.body,
+        changeId: receipt.changeId, intentId: null, body: receipt.body || record.body,
       });
     } catch {
       if (!signal.aborted) this.#notifyMemory({

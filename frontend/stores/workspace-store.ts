@@ -196,7 +196,9 @@ export class WorkspaceStore extends Store {
   }
 
   #defaultWorkspace(): string {
-    if (this.#known.includes('default')) return 'default';
+    // A bootstrap without the deployment default predates it; 'default' was the convention.
+    const configured = this.#deploymentDefault || 'default';
+    if (this.#known.includes(configured)) return configured;
     return this.#records[0]?.workspace || '';
   }
 

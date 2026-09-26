@@ -393,7 +393,7 @@ body.files-panel-open #files-btn {
 .composer-effort-trigger {
     border: none;
     background: transparent;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     font: inherit;
     font-size: 0.75rem;
     min-height: var(--size-button);

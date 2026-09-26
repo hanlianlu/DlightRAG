@@ -124,6 +124,47 @@ it('accepts one durable retry Run and polls its canonical status URL', async () 
   expect(requests.some(({url}) => url.includes('/files/retry/run-'))).to.equal(false);
 });
 
+it('stops polling a status the Corpus Run API refuses', async () => {
+  let statusReads = 0;
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    if ((init?.method ?? 'GET') === 'POST') {
+      return new Response(JSON.stringify(receipt()), {
+        status: 202,
+        headers: {'Content-Type': 'application/json'},
+      });
+    }
+    if (url === '/web/api/corpus-runs/run-retry-1') {
+      statusReads += 1;
+      return new Response(JSON.stringify({detail: 'Corpus Mutation Run not found'}), {
+        status: 404,
+        headers: {'Content-Type': 'application/json'},
+      });
+    }
+    return new Response(JSON.stringify(failedPage()), {
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+
+  const recovery = mount();
+  await waitFor(() => recovery.page?.failed.length === 1);
+  recovery.querySelector<HTMLButtonElement>('.failed-file-retry')?.click();
+  const dialog = recovery.querySelector<HTMLDialogElement>('#retry-failed-files-dialog')!;
+  await waitFor(() => dialog.open);
+  dialog.returnValue = 'retry';
+  dialog.close();
+
+  await waitFor(() => recovery.error !== null);
+  const reads = statusReads;
+  for (let tick = 0; tick < 20; tick += 1) {
+    await new Promise((resolve) => originalSetTimeout(resolve, 0));
+  }
+  expect(statusReads).to.equal(reads);
+  expect(recovery.recovery).to.equal(null);
+  expect(recovery.error).to.equal('Document recovery status is no longer available.');
+});
+
 it('offers explicit same-Run resume while waiting for operator repair', async () => {
   const requests: Array<{url: string; method: string}> = [];
   window.fetch = async (input, init) => {

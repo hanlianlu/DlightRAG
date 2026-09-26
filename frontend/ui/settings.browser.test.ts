@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {parseMemoryOperationEvent} from '../api/memory.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
@@ -66,14 +67,15 @@ it('consumes a typed memory fact through its command and refreshes after Undo', 
   };
   const settings = mount();
 
-  settings.handleMemoryOperation({
+  // The server's own field names, through the same parser the stream uses.
+  settings.handleMemoryOperation(parseMemoryOperationEvent({
     live: true,
     intent_id: 'intent-settings-test',
     operation: 'remember',
     outcome: 'changed',
-    changeId: 'change-settings-test',
+    change_id: 'change-settings-test',
     body: 'Use concise answers',
-  });
+  })!);
   await waitFor(() => settings.textContent?.includes('1 stored item') ?? false);
 
   const toast = document.querySelector('dl-toast-region')!;
@@ -174,14 +176,14 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
   const settings = mount();
   settings.memory = {enabled: true, activeCount: 2};
 
-  settings.handleMemoryOperation({
+  settings.handleMemoryOperation(parseMemoryOperationEvent({
     live: true,
     intent_id: 'stale-read-intent',
     operation: 'remember',
     outcome: 'changed',
-    changeId: 'stale-read-change',
+    change_id: 'stale-read-change',
     body: 'Remember this',
-  });
+  })!);
   await waitFor(() => reads === 1);
   await settings.open();
   await waitFor(() => !settings.memoryLoading);
@@ -353,7 +355,10 @@ for (const reopen of [false, true]) it(`settles in-flight Undo after close (reop
   const settings = mount();
   await settings.open();
   await waitFor(() => !settings.memoryLoading);
-  settings.handleMemoryOperation({live: true, operation: 'forget', outcome: 'changed', changeId: 'forgot-slow', body: 'One item'});
+  settings.handleMemoryOperation({
+    live: true, operation: 'forget', outcome: 'changed', changeId: 'forgot-slow',
+    intentId: null, body: 'One item',
+  });
   const localToast = settings.querySelector('dl-toast-region')!;
   await localToast.updateComplete;
   buttonNamed(localToast, 'Undo')!.click();

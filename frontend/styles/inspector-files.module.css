@@ -37,7 +37,7 @@
     background: transparent;
     border: none;
     border-radius: var(--radius-control);
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     cursor: pointer;
     display: flex;
     flex-shrink: 0;
@@ -163,7 +163,7 @@
     border-radius: var(--radius-content);
     padding: var(--space-related);
     text-align: center;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     cursor: pointer;
     margin-bottom: var(--space-related);
     transition: border-color 0.2s, background 0.2s;

@@ -4,7 +4,7 @@ import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {wrapTabFocus} from '../lib/dom.ts';
+import {tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
@@ -294,9 +294,7 @@ export class DlInspector extends LightElement {
   #focusableElements(): HTMLElement[] {
     const panel = this.querySelector<HTMLElement>('#panel');
     if (!panel) return [];
-    return Array.from(panel.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), dl-icon-button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    )).filter((element) => !element.hidden && element.getClientRects().length > 0);
+    return tabbables(panel);
   }
 
   #isCompact(): boolean {

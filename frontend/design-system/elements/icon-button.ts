@@ -26,7 +26,7 @@ template.innerHTML = `
     }
     button:hover { background: var(--color-bg-elevated, transparent); }
     button:focus-visible {
-      outline: 2px solid var(--color-border-focus, currentColor);
+      outline: 2px solid var(--color-control-ring, currentColor);
       outline-offset: 2px;
     }
     button:disabled { cursor: default; opacity: 0.5; }

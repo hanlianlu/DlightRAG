@@ -224,6 +224,32 @@ it('owns compact dialog semantics, entry focus, Escape, and typed state', async 
   expect(states.at(-1)?.open).to.equal(false);
 });
 
+it('keeps the compact Files drawer trap on its Workspace actions disclosure', async () => {
+  window.matchMedia = media(true);
+  window.fetch = async () => new Response(JSON.stringify({
+    workspace: 'default', files: [], next_cursor: null,
+  }), {status: 200, headers: {'Content-Type': 'application/json'}});
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.appendChild(inspector);
+  await inspector.openFiles();
+  const files = inspector.querySelector('dl-inspector-files')!;
+  await waitFor(() => files.loading === false);
+  const panel = inspector.querySelector<HTMLElement>('#panel')!;
+  const summary = panel.querySelector<HTMLElement>('.workspace-actions summary')!;
+
+  const first = inspector.querySelector<HTMLElement>('#ingest-target-trigger')!;
+  const tab = (shiftKey: boolean) => panel.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Tab', shiftKey, bubbles: true, cancelable: true,
+  }));
+
+  // The collapsed disclosure is the drawer's last Tab stop: its hidden actions are not.
+  summary.focus();
+  tab(false);
+  expect(document.activeElement).to.equal(first);
+  tab(true);
+  expect(document.activeElement).to.equal(summary);
+});
+
 it('activates and pauses typed Files content without a legacy element alias', async () => {
   window.matchMedia = media(false);
   window.fetch = async () => new Response(JSON.stringify({

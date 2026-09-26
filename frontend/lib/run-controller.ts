@@ -5,6 +5,10 @@ import {
   getRun,
   type ConversationTurn,
 } from '../api/conversations.ts';
+import {
+  parseMemoryOperationEvent,
+  type MemoryOperationEvent,
+} from '../api/memory.ts';
 import {createSSEParser, parseData} from './sse.ts';
 import {
   answerEventCursorStore,
@@ -23,7 +27,7 @@ export type AnswerRunEvent =
       eventType: 'tool_start' | 'tool_progress' | 'tool_end';
       payload: unknown;
     }
-  | {kind: 'memory'; payload: unknown}
+  | {kind: 'memory'; operation: MemoryOperationEvent}
   | {kind: 'error'; payload: unknown}
   | {kind: 'done'; payload: unknown};
 
@@ -361,7 +365,8 @@ export class RunController {
       return {kind: 'tool', eventType, payload: parseData(data)};
     }
     if (eventType === 'memory_operation_settled') {
-      return {kind: 'memory', payload: parseData(data)};
+      const operation = parseMemoryOperationEvent(parseData(data));
+      return operation === null ? null : {kind: 'memory', operation};
     }
     if (eventType === 'error') return {kind: 'error', payload: parseData(data)};
     if (eventType === 'done') return {kind: 'done', payload: parseData(data)};

@@ -3,7 +3,7 @@
 .panel-close {
     background: none;
     border: none;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     font-size: var(--font-size-body);
     cursor: pointer;
     margin-left: auto;
@@ -154,7 +154,7 @@ dl-icon-button.panel-close {
     background: transparent;
     border: 0;
     border-radius: var(--radius-control);
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     cursor: pointer;
     display: flex;
     flex: 0 0 auto;

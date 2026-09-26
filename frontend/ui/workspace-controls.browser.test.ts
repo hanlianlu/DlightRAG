@@ -717,3 +717,24 @@ it('refuses uploads behind a pending deletion and keeps the workspace when it fa
   expect(workspaceStore.records.some((record) => record.workspace === 'research')).to.equal(true);
   expect(ingestStore.workspace).to.equal('research');
 });
+
+it('keeps a primary-following Files panel on the workspace it acts on', async () => {
+  initTwoWorkspaces();
+  ingestStore.resetToPrimary();
+  const listed: string[] = [];
+  const panel = await mountFilesFor('research', (url) => {
+    if (url.startsWith('/web/api/files?')) {
+      listed.push(new URL(url, window.location.origin).searchParams.get('workspace') ?? '');
+    }
+    return null;
+  });
+  ingestStore.resetToPrimary();
+  await waitFor(() => panel.snapshot?.workspace === 'research' && !panel.loading);
+
+  // The topbar scope changes the primary while Files is open.
+  workspaceStore.select('default');
+
+  await waitFor(() => panel.snapshot?.workspace === 'default' && !panel.loading);
+  expect(ingestStore.workspace).to.equal('default');
+  expect(listed.at(-1)).to.equal('default');
+});

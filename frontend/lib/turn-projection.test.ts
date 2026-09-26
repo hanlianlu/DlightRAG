@@ -62,7 +62,13 @@ test('progress applies known phases and ignores unknown ones', () => {
 test('memory events never change the view', () => {
   const base = turn();
   assert.equal(
-    applyAnswerEvent(base, {kind: 'memory', payload: {operation: 'remember'}}, 1000),
+    applyAnswerEvent(base, {
+      kind: 'memory',
+      operation: {
+        operation: 'remember', outcome: 'changed', changeId: 'change-1',
+        intentId: null, body: '', live: true,
+      },
+    }, 1000),
     base,
   );
 });

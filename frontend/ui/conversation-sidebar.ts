@@ -5,7 +5,7 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {wrapTabFocus} from '../lib/dom.ts';
+import {tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
@@ -539,10 +539,8 @@ export class DlConversationSidebar extends LightElement {
 
   #focusTrap = (event: KeyboardEvent): void => {
     if (this.desktop || !this.drawerOpen || event.key !== 'Tab') return;
-    const focusable = Array.from(this.querySelectorAll<HTMLElement>(
-      'nav button:not([disabled]), nav input:not([disabled]), nav [tabindex]:not([tabindex="-1"])',
-    )).filter((element) => !element.hidden);
-    wrapTabFocus(focusable, event);
+    const nav = this.querySelector('nav');
+    if (nav) wrapTabFocus(tabbables(nav), event);
   };
 
   #documentKeydown = (event: KeyboardEvent): void => {

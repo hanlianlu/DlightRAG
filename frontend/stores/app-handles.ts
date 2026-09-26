@@ -36,10 +36,11 @@ export function productionHandles(): AppHandles {
 }
 
 export function createAppHandles(overrides: Partial<AppHandles> = {}): AppHandles {
+  const workspaces = overrides.workspaces ?? new WorkspaceStore();
   return {
     conversations: overrides.conversations ?? new ConversationStore(),
-    workspaces: overrides.workspaces ?? new WorkspaceStore(),
-    ingest: overrides.ingest ?? new IngestStore(),
+    workspaces,
+    ingest: overrides.ingest ?? new IngestStore(workspaces),
     attachments: overrides.attachments ?? new AttachmentStore(),
     answerEventCursors: overrides.answerEventCursors ?? new AnswerEventCursorStore(),
   };

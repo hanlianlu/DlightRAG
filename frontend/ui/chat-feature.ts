@@ -4,6 +4,7 @@ import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {waitFor} from 'xstate';
 import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
+import type {MemoryOperationEvent} from '../api/memory.ts';
 import {
   ChildControlRejectedError,
   ConversationApiError,
@@ -71,19 +72,6 @@ export interface ChatContentChangeDetail {
 
 export interface ChatChildActivityDetail {
   runId: string;
-}
-
-export interface ChatMemoryOperationDetail {
-  body?: string;
-  changeId?: string | null;
-  intent_id?: string;
-  live?: boolean;
-  operation?: 'remember' | 'forget' | 'undo';
-  outcome?: 'changed' | 'unchanged' | 'rejected' | 'conflict';
-}
-
-function isMemoryOperation(value: unknown): value is ChatMemoryOperationDetail {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function childCommandAmbiguous(error: unknown): boolean {
@@ -792,10 +780,10 @@ export class DlChatFeature extends LightElement {
     const turnIndex = this.turns.findIndex((candidate) => candidate.id === turnId);
     const turn = this.turns[turnIndex];
     for (const event of events) {
-      if (event.kind === 'memory' && isMemoryOperation(event.payload)) {
-        this.dispatchEvent(new CustomEvent<ChatMemoryOperationDetail>(
+      if (event.kind === 'memory') {
+        this.dispatchEvent(new CustomEvent<MemoryOperationEvent>(
           'dl-chat-memory-operation',
-          {bubbles: true, composed: true, detail: event.payload},
+          {bubbles: true, composed: true, detail: event.operation},
         ));
       }
     }
