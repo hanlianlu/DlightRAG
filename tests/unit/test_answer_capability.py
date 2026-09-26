@@ -203,6 +203,35 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
     assert health_updates[-1]["status"] == "supported"
 
 
+async def test_image_probe_runs_on_the_configured_wire_and_keys_its_cache_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Response-family model is probed over the Response wire, not Chat Completions."""
+    families: list[str] = []
+
+    class _StubProvider:
+        async def aclose(self) -> None:
+            pass
+
+    def fake_get_provider(*_args, **kwargs):
+        families.append(kwargs["api_family"])
+        return _StubProvider()
+
+    async def fake_probe(provider, *, model, model_kwargs=None):
+        return ImageProbeOutcome(status="supported")
+
+    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", fake_get_provider)
+    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", fake_probe)
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
+
+    await capabilities.resolve(ModelSettings(model="shared", api_family="response"))
+    await capabilities.resolve(ModelSettings(model="shared", api_family="response"))
+    await capabilities.resolve(ModelSettings(model="shared", api_family="chat_completion"))
+
+    # Same model on another wire is another capability fact; the same wire is cached.
+    assert families == ["response", "chat_completion"]
+
+
 def _reprobe_config() -> DlightragConfig:
     return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
@@ -751,6 +780,7 @@ async def test_rerank_capability_is_probed_from_the_rerank_scoring_model(
         "openai",
         api_key=None,
         base_url="http://host.docker.internal:9999/v1",
+        api_family="chat_completion",
         timeout=240.0,
         max_retries=3,
     )

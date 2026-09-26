@@ -38,6 +38,13 @@ pytestmark = [
 ]
 
 
+def _only_document(batch: dict) -> dict:
+    """Return the single settled document of a one-file local ingest."""
+    assert batch["errors"] == []
+    (document,) = batch["results"]
+    return document
+
+
 @pytest.fixture(scope="module", autouse=True)
 async def _isolated_pg18_database():
     async with isolated_pg18_database():
@@ -106,11 +113,13 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
         )
         doc_path = tmp_path / "workspace-isolation.md"
         doc_path.write_text("Tenant workspace isolation marker.", encoding="utf-8")
-        result = await tenant.aingest(
-            source_type="local",
-            path=str(doc_path),
-            replace=True,
-            title="Workspace isolation",
+        result = _only_document(
+            await tenant.aingest(
+                source_type="local",
+                path=str(doc_path),
+                replace=True,
+                title="Workspace isolation",
+            )
         )
 
         assert (
@@ -184,19 +193,23 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     doc_path.write_text(doc_text, encoding="utf-8")
 
     try:
-        first = await service.aingest(
-            source_type="local",
-            path=str(doc_path),
-            replace=True,
-            title="PG18 E2E Document",
-            metadata={"e2e_case": " pg18 "},
+        first = _only_document(
+            await service.aingest(
+                source_type="local",
+                path=str(doc_path),
+                replace=True,
+                title="PG18 E2E Document",
+                metadata={"e2e_case": " pg18 "},
+            )
         )
-        second = await service.aingest(
-            source_type="local",
-            path=str(doc_path),
-            replace=True,
-            title="PG18 E2E Document",
-            metadata={"e2e_case": " pg18 "},
+        second = _only_document(
+            await service.aingest(
+                source_type="local",
+                path=str(doc_path),
+                replace=True,
+                title="PG18 E2E Document",
+                metadata={"e2e_case": " pg18 "},
+            )
         )
 
         doc_id = second["doc_id"]
@@ -550,12 +563,14 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
             "and serves stateless reads.\n",
             encoding="utf-8",
         )
-        result = await writer.aingest(
-            source_type="local",
-            path=str(doc_path),
-            replace=True,
-            title="Reader Smoke",
-            metadata={"e2e_case": "reader"},
+        result = _only_document(
+            await writer.aingest(
+                source_type="local",
+                path=str(doc_path),
+                replace=True,
+                title="Reader Smoke",
+                metadata={"e2e_case": "reader"},
+            )
         )
         doc_id = result["doc_id"]
         chunk_id = result["chunks"][0]

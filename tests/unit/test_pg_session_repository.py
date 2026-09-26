@@ -96,7 +96,9 @@ class _RecordingConnection:
         register_sequences: dict[tuple[str, str], int | None] | None = None,
         entry_ids: set[str] | None = None,
         lane_rows: list[dict[str, Any]] | None = None,
+        latest_evidence_digest: str | None = None,
     ) -> None:
+        self.latest_evidence_digest = latest_evidence_digest
         self.register_sequences = register_sequences or {}
         self.entry_ids = entry_ids or set()
         self.lane_rows = lane_rows or []
@@ -128,6 +130,8 @@ class _RecordingConnection:
         self.fetchvals.append((query, args))
         if "LEFT JOIN dlightrag_answer_evidence" in query:
             return None
+        if "SELECT content_digest" in query and "ORDER BY created_at DESC" in query:
+            return self.latest_evidence_digest
         raise AssertionError(f"unexpected fetchval: {query}")
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -487,13 +491,44 @@ async def test_agent_evidence_write_uses_two_statements_regardless_of_count(coun
     )
 
     assert len(connection.executes) == 1
-    assert len(connection.fetchvals) == 1
+    # One latest-snapshot lookup per Session, then the insert and its identity probe.
+    latest, probe_query = connection.fetchvals
+    assert "ORDER BY created_at DESC" in latest[0]
     insert, insert_args = connection.executes[0]
-    probe, probe_args = connection.fetchvals[0]
+    probe, probe_args = probe_query
     assert "INSERT INTO dlightrag_answer_evidence" in insert
     assert "LEFT JOIN dlightrag_answer_evidence" in probe
     assert all(len(values) == count for values in insert_args[2:])
     assert all(len(values) == count for values in probe_args[2:])
+
+
+async def test_unchanged_ledger_snapshot_is_not_rewritten_after_every_tool() -> None:
+    """A Tool that adds no Evidence must not store another copy of the whole ledger."""
+    content = b'{"ledger": "unchanged"}'
+    digest = hashlib.sha256(content).hexdigest()
+    session_id = SessionId.new()
+    connection = _RecordingConnection(latest_evidence_digest=digest)
+    snapshot = OpaqueEvidenceWrite(
+        session_id=session_id.value,
+        intent_id=IntentId.new().value,
+        result_ordinal=0,
+        content_digest=digest,
+        locator_digest=hashlib.sha256(b"{}").hexdigest(),
+        content=content,
+        locator=b"{}",
+    )
+
+    await _repository()._write_host_update(  # pyright: ignore[reportPrivateUsage]
+        cast(Any, connection),
+        session_id,
+        IntentId.new(),
+        EffectHostUpdate(evidence=(snapshot,)),
+    )
+
+    assert not any(
+        "INSERT INTO dlightrag_answer_evidence" in query for query, _ in connection.executes
+    )
+    assert [query for query, _ in connection.fetchvals if "LEFT JOIN" in query] == []
 
 
 async def test_entry_and_register_mutations_are_one_statement_per_nonempty_category() -> None:

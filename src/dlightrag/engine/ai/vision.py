@@ -150,6 +150,7 @@ class ModelImageCapabilities:
                     settings.provider,
                     api_key=settings.api_key,
                     base_url=settings.base_url,
+                    api_family=settings.api_family,
                     timeout=settings.timeout,
                     max_retries=settings.max_retries,
                 )
@@ -193,6 +194,8 @@ class ModelImageCapabilities:
             [
                 settings.provider,
                 settings.base_url,
+                # ADR 0027: the wire is part of the invocation identity.
+                settings.api_family,
                 settings.model,
                 settings.model_kwargs_copy(),
             ],

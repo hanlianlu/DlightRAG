@@ -203,7 +203,7 @@ class TestWorkspaceRagAingest:
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path=str(fake_pdf))
-        call_kwargs = ingestion.aingest_file.call_args
+        call_kwargs = ingestion.aingest_files.call_args
         assert call_kwargs.kwargs["replace"] is True
 
     async def test_aingest_replace_explicit_overrides_config(
@@ -214,8 +214,26 @@ class TestWorkspaceRagAingest:
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path=str(fake_pdf), replace=False)
-        call_kwargs = ingestion.aingest_file.call_args
+        call_kwargs = ingestion.aingest_files.call_args
         assert call_kwargs.kwargs["replace"] is False
+
+    async def test_aingest_single_file_failure_is_a_document_outcome(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """A corrupt single file must not raise; a raise parks replace in repair."""
+        fake_pdf = tmp_path / "broken.pdf"
+        fake_pdf.write_bytes(b"not a pdf")
+        service, ingestion = self._make_initialized_service(test_config)
+        ingestion.aingest_files.return_value = {
+            "processed": 0,
+            "errors": ["broken.pdf: document processing failed"],
+            "results": [],
+        }
+
+        result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
+
+        assert result["errors"] == ["broken.pdf: document processing failed"]
+        ingestion.aingest_file.assert_not_awaited()
 
     # -- Azure blob lifecycle --
 
@@ -2162,30 +2180,26 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            return_value={"doc_id": "d1", "page_count": 3, "file_path": str(fake_pdf)}
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 1,
+                "errors": [],
+                "results": [{"doc_id": "d1", "page_count": 3, "file_path": str(fake_pdf)}],
+            }
         )
 
         result = await service.aingest(source_type="local", path=str(fake_pdf))
-        service._ingestion_engine.aingest_file.assert_awaited_once()
+        service._ingestion_engine.aingest_files.assert_awaited_once()
         staged = test_config.input_dir_path / test_config.deployment.workspace / "f.pdf"
-        assert service._ingestion_engine.aingest_file.call_args.args[0] == staged
-        assert service._ingestion_engine.aingest_file.call_args.kwargs["source_uri"] == (
-            f"local://{test_config.deployment.workspace}/f.pdf"
-        )
-        assert service._ingestion_engine.aingest_file.call_args.kwargs["download_locator"] == str(
-            staged
-        )
+        (item,) = service._ingestion_engine.aingest_files.call_args.args[0]
+        assert item.parser_path == staged
+        assert item.source_uri == f"local://{test_config.deployment.workspace}/f.pdf"
+        assert item.download_locator == str(staged)
         assert staged.read_bytes() == b"%PDF-fake"
-        assert result["doc_id"] == "d1"
-        assert result["page_count"] == 3
-        assert (
-            service._ingestion_engine.aingest_file.call_args.kwargs["source_uri_explicit"] is False
-        )
-        assert (
-            service._ingestion_engine.aingest_file.call_args.kwargs["download_locator_explicit"]
-            is False
-        )
+        assert result["results"][0]["doc_id"] == "d1"
+        assert result["results"][0]["page_count"] == 3
+        assert item.source_uri_explicit is False
+        assert item.download_locator_explicit is False
 
     async def test_aingest_local_directory_uses_batch_pipeline(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2319,16 +2333,20 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            return_value={"doc_id": "new-doc", "page_count": 1, "file_path": str(fake_pdf)}
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 1,
+                "errors": [],
+                "results": [{"doc_id": "new-doc", "page_count": 1, "file_path": str(fake_pdf)}],
+            }
         )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
 
         result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
 
-        assert result["doc_id"] == "new-doc"
-        assert service._ingestion_engine.aingest_file.await_args.kwargs["replace"] is True
+        assert result["results"][0]["doc_id"] == "new-doc"
+        assert service._ingestion_engine.aingest_files.await_args.kwargs["replace"] is True
         service._lightrag.adelete_by_doc_id.assert_not_awaited()
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:

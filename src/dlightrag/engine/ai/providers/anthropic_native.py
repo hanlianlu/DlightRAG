@@ -221,6 +221,7 @@ class AnthropicProvider(CompletionProvider):
         if self._client is None:
             self._client = AsyncAnthropic(
                 api_key=self._api_key,
+                base_url=self._base_url,
                 timeout=self._timeout,
                 max_retries=self._max_retries,
             )

@@ -712,45 +712,6 @@ class WorkspaceRag:
         except Exception as exc:
             raise RetryOutcomeUncertainError("retry replacement ownership lookup failed") from exc
 
-    async def _aingest_local_file(
-        self,
-        file_path: Path,
-        *,
-        replace: bool,
-        source_root: Path | None = None,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        track_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Ingest one local file through the unified LightRAG path."""
-        if self._ingestion_engine is None:
-            raise RuntimeError("Ingestion engine not initialized")
-
-        file_path = await asyncio.to_thread(
-            stage_input_file,
-            input_root=self._workspace_input_root(),
-            file_path=file_path,
-            relative_to=source_root,
-        )
-        source_uri = local_source_uri(
-            self.workspace_id,
-            file_path.relative_to(self._workspace_input_root()),
-        )
-        result = await self._ingestion_engine.aingest_file(
-            file_path,
-            source_uri=source_uri,
-            download_locator=str(file_path),
-            source_uri_explicit=False,
-            download_locator_explicit=False,
-            replace=replace,
-            title=title,
-            author=author,
-            metadata=metadata,
-            track_id=track_id,
-        )
-        return result
-
     async def _aingest_local_files(
         self,
         file_paths: list[Path],
@@ -1406,7 +1367,10 @@ class WorkspaceRag:
                 "track_id": track_id,
             }
             if local_path.is_file():
-                return await self._aingest_local_file(local_path, **common_kwargs)
+                # One file is a one-item batch: a failed document settles as a
+                # per-document outcome, never as an exception the Corpus Mutation
+                # executor must treat as an ambiguous destructive handoff.
+                return await self._aingest_local_files([local_path], **common_kwargs)
 
             return await self._aingest_local_files(
                 file_paths,

@@ -190,14 +190,17 @@ class GeminiProvider(CompletionProvider):
 
     def _get_client(self) -> Any:
         if self._client is None:
-            http_opts: dict[str, Any] = {}
+            # attempts counts the original request, so max_retries=0 means one attempt.
+            http_opts: dict[str, Any] = {
+                "retry_options": genai.types.HttpRetryOptions(attempts=self._max_retries + 1)
+            }
             if self._base_url is not None:
                 http_opts["base_url"] = self._base_url
             if self._timeout:
                 http_opts["timeout"] = int(self._timeout * 1000)
             self._client = genai.Client(
                 api_key=self._api_key,
-                http_options=genai.types.HttpOptions(**http_opts) if http_opts else None,
+                http_options=genai.types.HttpOptions(**http_opts),
             )
         return self._client
 

@@ -1600,13 +1600,12 @@ def _check_child_write[**P, R](
 
 async def _restore_durable_evidence(prepared: Any, repository: Any, session_id: SessionId) -> None:
     """Restore the latest durable Evidence state into the live ledger."""
-    loader = getattr(repository, "load_evidence", None)
+    loader = getattr(repository, "load_latest_evidence", None)
     if loader is None or prepared is None:
         return
-    writes = await loader(session_id)
-    if not writes:
+    latest = await loader(session_id)
+    if latest is None:
         return
     import json as _json
 
-    latest = writes[-1]
     prepared.evidence.restore_ledger_state(_json.loads(latest.content.decode("utf-8")))

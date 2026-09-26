@@ -67,6 +67,12 @@ class TestProviderRegistry:
 
 
 class TestAnthropicProvider:
+    def test_client_honours_the_configured_base_url(self):
+        p = get_provider("anthropic", api_key="test-key", base_url="https://proxy.example/v1")
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+            cast(Any, p)._get_client()
+        assert sdk.call_args.kwargs["base_url"] == "https://proxy.example/v1"
+
     @pytest.mark.asyncio
     async def test_complete_extracts_system_message(self):
         p = get_provider("anthropic", api_key="test-key")
@@ -1742,6 +1748,14 @@ class TestOpenAICompatibleProvider:
 
 
 class TestGeminiProvider:
+    def test_client_honours_the_configured_retry_budget(self):
+        p = get_provider("gemini", api_key="test-key", max_retries=2)
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as genai:
+            cast(Any, p)._get_client()
+        genai.types.HttpRetryOptions.assert_called_once_with(attempts=3)
+        options = genai.types.HttpOptions.call_args.kwargs
+        assert options["retry_options"] is genai.types.HttpRetryOptions.return_value
+
     @pytest.mark.asyncio
     async def test_complete_extracts_system_instruction(self):
         p = get_provider("gemini", api_key="test-key")

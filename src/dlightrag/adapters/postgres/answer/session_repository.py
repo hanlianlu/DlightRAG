@@ -287,6 +287,23 @@ ORDER BY input.ordinality
 ON CONFLICT (owner_id, run_id, session_id, intent_id, result_ordinal) DO NOTHING
 """
 
+_SELECT_LATEST_EVIDENCE = """
+SELECT session_id::text, intent_id::text, result_ordinal,
+       content_digest, locator_digest, content, locator
+FROM dlightrag_answer_evidence
+WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+ORDER BY created_at DESC, result_ordinal DESC
+LIMIT 1
+"""
+
+_SELECT_LATEST_EVIDENCE_DIGEST = """
+SELECT content_digest
+FROM dlightrag_answer_evidence
+WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+ORDER BY created_at DESC, result_ordinal DESC
+LIMIT 1
+"""
+
 _SELECT_EVIDENCE_CONFLICT = """
 SELECT 1
 FROM unnest(
@@ -342,6 +359,30 @@ class _EvidenceIdentityConflict(Exception):
 def _uuid(value: Any) -> Any:
     """Coerce a canonical id value to a PostgreSQL UUID parameter."""
     return uuid.UUID(str(value))
+
+
+async def _changed_ledger_snapshots(
+    conn: Any,
+    *,
+    owner_id: str,
+    run_id: Any,
+    writes: Sequence[OpaqueEvidenceWrite],
+) -> list[OpaqueEvidenceWrite]:
+    """Drop a Tool settlement's Evidence ledger snapshot the Session already stores.
+
+    A Tool settlement carries the Session's whole ledger, so rewriting it after
+    every Tool (a bash or ls call adds no Evidence) grows storage quadratically.
+    Comparing inside the settlement transaction keeps this exact: a rolled-back
+    settlement changes nothing, and a settlement whose host update was refused
+    leaves the stored ledger behind, so the next snapshot differs and is written.
+    """
+    latest: dict[str, str | None] = {}
+    for write in writes:
+        if write.session_id not in latest:
+            latest[write.session_id] = await conn.fetchval(
+                _SELECT_LATEST_EVIDENCE_DIGEST, owner_id, run_id, _uuid(write.session_id)
+            )
+    return [write for write in writes if write.content_digest != latest[write.session_id]]
 
 
 async def _write_evidence_identities(
@@ -983,31 +1024,26 @@ class PGAgentSessionRepository:
             self._fencing_epoch,
         )
 
-    async def load_evidence(self, session_id: SessionId) -> list[OpaqueEvidenceWrite]:
-        """Return this run's durable evidence writes, oldest first (adapter read)."""
+    async def load_latest_evidence(self, session_id: SessionId) -> OpaqueEvidenceWrite | None:
+        """Return the Session's latest durable Evidence ledger snapshot (adapter read)."""
         async with self._connection() as conn:
-            rows = await conn.fetch(
-                "SELECT session_id::text, intent_id::text, result_ordinal,"
-                " content_digest, locator_digest, content, locator"
-                " FROM dlightrag_answer_evidence"
-                " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3"
-                " ORDER BY created_at, result_ordinal",
+            row = await conn.fetchrow(
+                _SELECT_LATEST_EVIDENCE,
                 self._owner_id,
                 self._run_id,
                 _uuid(session_id.value),
             )
-        return [
-            OpaqueEvidenceWrite(
-                session_id=str(row["session_id"]),
-                intent_id=str(row["intent_id"]),
-                result_ordinal=int(row["result_ordinal"]),
-                content_digest=str(row["content_digest"]),
-                locator_digest=str(row["locator_digest"]),
-                content=bytes(row["content"]),
-                locator=bytes(row["locator"]),
-            )
-            for row in rows
-        ]
+        if row is None:
+            return None
+        return OpaqueEvidenceWrite(
+            session_id=str(row["session_id"]),
+            intent_id=str(row["intent_id"]),
+            result_ordinal=int(row["result_ordinal"]),
+            content_digest=str(row["content_digest"]),
+            locator_digest=str(row["locator_digest"]),
+            content=bytes(row["content"]),
+            locator=bytes(row["locator"]),
+        )
 
     async def _write_host_update(
         self,
@@ -1020,7 +1056,12 @@ class PGAgentSessionRepository:
             conn,
             owner_id=self._owner_id,
             run_id=self._run_id,
-            writes=update.evidence,
+            writes=await _changed_ledger_snapshots(
+                conn,
+                owner_id=self._owner_id,
+                run_id=self._run_id,
+                writes=update.evidence,
+            ),
         )
         for resource in update.resources:
             await self._write_evidence_resource(conn, resource)
