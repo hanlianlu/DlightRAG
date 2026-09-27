@@ -404,7 +404,6 @@ const conversationTurn = v.pipe(
     user_attachments: v.array(attachmentReference),
     presentation: v.nullable(answerPresentation),
     usage: v.record(v.string(), v.unknown()),
-    evidence: v.record(v.string(), v.number()),
     error_kind: v.nullable(v.string()),
     error_message: v.nullable(v.string()),
     created_at: v.string(),
@@ -421,7 +420,6 @@ const conversationTurn = v.pipe(
     userAttachments: w.user_attachments,
     presentation: w.presentation,
     usage: w.usage,
-    evidence: w.evidence,
     errorKind: w.error_kind,
     errorMessage: w.error_message,
     createdAt: w.created_at,
@@ -494,15 +492,6 @@ export async function listConversations(
   const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
   const response = await fetch(`/web/api/conversations${query}`, {signal});
   return parseWire(response, conversationPage, makeError, 'Failed to load conversations');
-}
-
-export async function createConversation(signal?: AbortSignal): Promise<ConversationSummary> {
-  const response = await fetch('/web/api/conversations', {
-    method: 'POST',
-    headers: csrfHeaders(),
-    signal,
-  });
-  return parseWire(response, conversationSummary, makeError, 'Failed to create conversation');
 }
 
 export async function getConversationHistory(

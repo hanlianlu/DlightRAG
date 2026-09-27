@@ -75,7 +75,6 @@ it('chat message list has no new serious axe violations', async () => {
       artifactOutcome: {status: 'complete', issues: []},
     },
     usage: {},
-    evidence: {},
     error: '',
     progress: '',
     liveStatus: '',

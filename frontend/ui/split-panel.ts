@@ -88,8 +88,8 @@ function scheduleRenderedWidthSync(): void {
 function updateMaximums(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   const wideCanvas = document.body.classList.contains('artifact-canvas-wide');
-  const fullscreenCanvas = document.body.classList.contains('artifact-canvas-fullscreen');
-  const expandedCanvas = wideCanvas || fullscreenCanvas;
+  const overlayCanvas = document.body.classList.contains('artifact-canvas-overlay');
+  const expandedCanvas = wideCanvas || overlayCanvas;
   const artifact = states.find((state) => state.widthVar === '--artifact-canvas-width');
   for (const state of states) {
     if (isConversation(state)) {
@@ -137,16 +137,16 @@ function desktopOpen(state: SplitState): boolean {
 export function syncPanelSplitState(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   const wideCanvas = document.body.classList.contains('artifact-canvas-wide');
-  const fullscreenCanvas = document.body.classList.contains('artifact-canvas-fullscreen');
+  const overlayCanvas = document.body.classList.contains('artifact-canvas-overlay');
   for (const state of states) {
     const open = desktopOpen(state);
     const canvasState = state.widthVar === '--artifact-canvas-width';
     const splitOpen = isConversation(state)
-      ? open && !drawer && !fullscreenCanvas
+      ? open && !drawer && !overlayCanvas
       : canvasState
         ? open
-        : open && !fullscreenCanvas;
-    state.split.disabled = drawer || !splitOpen || (canvasState && (wideCanvas || fullscreenCanvas));
+        : open && !overlayCanvas;
+    state.split.disabled = drawer || !splitOpen || (canvasState && (wideCanvas || overlayCanvas));
     state.split.toggleAttribute('data-open', splitOpen);
     state.split.size = splitOpen ? state.preferred : 0;
   }
@@ -157,12 +157,12 @@ export function syncPanelSplitState(): void {
     const open = desktopOpen(state);
     const canvasState = state.widthVar === '--artifact-canvas-width';
     const splitOpen = isConversation(state)
-      ? open && !drawer && !fullscreenCanvas
+      ? open && !drawer && !overlayCanvas
       : canvasState
         ? open
-        : open && !fullscreenCanvas;
+        : open && !overlayCanvas;
     if (!splitOpen) continue;
-    state.split.size = canvasState && (wideCanvas || fullscreenCanvas)
+    state.split.size = canvasState && (wideCanvas || overlayCanvas)
       ? state.split.max
       : Math.min(state.preferred, state.split.max);
   }

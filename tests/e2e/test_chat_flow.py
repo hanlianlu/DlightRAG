@@ -140,7 +140,7 @@ def test_chat_submit_keeps_open_panel_visible(page):
 
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
     assert page.locator("#panel").evaluate("el => el.classList.contains('open')")
-    assert page.locator("body").evaluate("el => el.classList.contains('panel-open')")
+    assert page.locator("body").evaluate("el => el.classList.contains('files-panel-open')")
 
 
 @pytest.mark.e2e

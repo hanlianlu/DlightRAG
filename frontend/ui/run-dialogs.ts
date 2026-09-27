@@ -781,7 +781,7 @@ export class DlChildrenRoster extends LightElement {
           </div>
         ` : nothing}
         ${this.#observationPanel()}
-        <span class="sr-only" data-roster-status role="status" aria-live="polite">
+        <span class="dl-sr-only" data-roster-status role="status" aria-live="polite">
           ${this.#announcement}
         </span>
         <form method="dialog">
@@ -851,7 +851,7 @@ export class DlChildrenRoster extends LightElement {
               <fieldset>
                 <legend>${msg('Reply to this question', {id: 'runDialogs.replyLegend'})}</legend>
                 <label>
-                  <span class="sr-only">${msg('Reply', {id: 'runDialogs.replyLabel'})}</span>
+                  <span class="dl-sr-only">${msg('Reply', {id: 'runDialogs.replyLabel'})}</span>
                   <textarea class="dl-dialog-input" name="reply" rows="2" required
                             ?disabled=${this.#formBusy('reply', question.requestId)}></textarea>
                 </label>
@@ -870,7 +870,7 @@ export class DlChildrenRoster extends LightElement {
             <fieldset>
               <legend>${msg('Steer this child', {id: 'runDialogs.steerLegend'})}</legend>
               <label>
-                <span class="sr-only">${msg('Steering instruction', {id: 'runDialogs.steerLabel'})}</span>
+                <span class="dl-sr-only">${msg('Steering instruction', {id: 'runDialogs.steerLabel'})}</span>
                 <textarea class="dl-dialog-input" name="instruction" rows="2" required
                           ?disabled=${steerBusy}></textarea>
               </label>
@@ -894,7 +894,7 @@ export class DlChildrenRoster extends LightElement {
             <fieldset>
               <legend>${msg('Continue this child', {id: 'runDialogs.continueLegend'})}</legend>
               <label>
-                <span class="sr-only">${msg('Continuation instruction', {id: 'runDialogs.continueLabel'})}</span>
+                <span class="dl-sr-only">${msg('Continuation instruction', {id: 'runDialogs.continueLabel'})}</span>
                 <textarea class="dl-dialog-input" name="instruction" rows="2" required
                           ?disabled=${continueBusy}></textarea>
               </label>

@@ -105,7 +105,6 @@ function optimisticTurn(
     streamText: '',
     presentation: null,
     usage: {},
-    evidence: {},
     error: '',
     progress: '',
     liveStatus: '',

@@ -16,7 +16,6 @@ function turn(overrides: Partial<ChatTurnView> = {}): ChatTurnView {
     streamText: '',
     presentation: null,
     usage: {},
-    evidence: {},
     error: '',
     progress: '',
     liveStatus: '',
@@ -113,12 +112,11 @@ test('done settles succeeded, cancelled, and malformed payloads', () => {
       status: 'succeeded',
       presentation: {answer_text: 'answer', sources: []},
       usage: {tokens: 1},
-      evidence: {sources: 2},
     },
   }, 1000);
   assert.equal(succeeded.state, 'succeeded');
   assert.equal(succeeded.streamText, 'answer');
-  assert.equal(succeeded.evidence.sources, 2);
+  assert.deepEqual(succeeded.usage, {tokens: 1});
 
   const cancelled = applyAnswerEvent(turn(), {kind: 'done', payload: {status: 'cancelled'}}, 1000);
   assert.equal(cancelled.state, 'cancelled');

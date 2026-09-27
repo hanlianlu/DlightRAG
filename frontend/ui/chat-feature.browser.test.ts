@@ -81,7 +81,6 @@ function storedTurn(): ConversationTurn {
     userAttachments: [],
     presentation,
     usage: {},
-    evidence: {},
     errorKind: null,
     errorMessage: null,
     createdAt: '2026-01-01T00:00:00Z',
@@ -230,7 +229,6 @@ function turnWire(turn: ConversationTurn): Record<string, unknown> {
     user_attachments: turn.userAttachments.map(attachmentWire),
     presentation: turn.presentation === null ? null : presentationWire(turn.presentation),
     usage: turn.usage,
-    evidence: turn.evidence,
     error_kind: turn.errorKind,
     error_message: turn.errorMessage,
     created_at: turn.createdAt,
@@ -432,7 +430,6 @@ it('maps and renders every reconnect state with one visible status and action', 
     streamText: '',
     presentation: null,
     usage: {},
-    evidence: {},
     error: '',
     progress: '',
     liveStatus: '',
@@ -1417,7 +1414,7 @@ it('Message List anchors the completed turn at its latest user question', async 
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const earlier: ChatTurnView = {
     id: 'turn-earlier', userText: 'Earlier question', runId: 'run-earlier', state: 'succeeded',
-    userAttachments: [], streamText: presentation.answerText, presentation, usage: {}, evidence: {},
+    userAttachments: [], streamText: presentation.answerText, presentation, usage: {},
     error: '', progress: '', liveStatus: '', sawChildren: false, cancelRequested: false,
     steeringMessages: [],
     toolRows: [],
@@ -1471,7 +1468,7 @@ it('Message List bounds steering wrappers within one retained turn', async () =>
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const turn: ChatTurnView = {
     id: 'turn-steered', userText: 'Steer repeatedly', runId: 'run-steered', state: 'streaming',
-    userAttachments: [], streamText: 'Working', presentation: null, usage: {}, evidence: {},
+    userAttachments: [], streamText: 'Working', presentation: null, usage: {},
     error: '', progress: '', liveStatus: '', sawChildren: false, cancelRequested: false,
     steeringMessages: Array.from({length: 51}, (_, index) => `Steering ${index}`),
     toolRows: [],
@@ -1496,7 +1493,6 @@ it('Message List exposes child-agent progress and roster intent through public s
     streamText: 'Working',
     presentation: null,
     usage: {},
-    evidence: {},
     error: '',
     progress: 'Tool working...',
     liveStatus: 'Tool working...',
@@ -1544,7 +1540,6 @@ it('Message List announces image state and prunes it with the owning turns', asy
     streamText: '',
     presentation,
     usage: {},
-    evidence: {},
     error: '',
     progress: '',
     liveStatus: '',
@@ -1886,7 +1881,7 @@ it('Message List revokes live attachment URLs when a turn is evicted', async () 
       mimeType: 'text/markdown', byteSize: 2, url: 'blob:http://localhost/live-turn',
       thumbnailUrl: null, label: 'notes.md',
     }],
-    streamText: '', presentation: null, usage: {}, evidence: {}, error: '', progress: '',
+    streamText: '', presentation: null, usage: {}, error: '', progress: '',
     liveStatus: '', sawChildren: false, cancelRequested: false, steeringMessages: [],
     toolRows: [],
 
@@ -2152,7 +2147,6 @@ it('renders a named, timed tool trace and ticks only while a row is running', as
     streamText: '',
     presentation: null,
     usage: {},
-    evidence: {},
     error: '',
     progress: '',
     liveStatus: '',
@@ -2229,10 +2223,9 @@ it('renders a named, timed tool trace and ticks only while a row is running', as
   list.remove();
 });
 
-it('counts published reference sources rather than retrieval chunks', async () => {
+it('counts published reference sources', async () => {
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const turn = storedTurn();
-  turn.evidence = {chunks: 89, sources: 20};
   turn.presentation = {...presentation, sources: [
     {id: '1', title: 'One source', sourceUrl: 'https://example.com/one', downloadUrl: null, chunks: []},
     {id: '2', title: 'Another source', sourceUrl: 'https://example.com/two', downloadUrl: null, chunks: []},
@@ -2241,5 +2234,4 @@ it('counts published reference sources rather than retrieval chunks', async () =
   document.body.appendChild(list);
   await list.updateComplete;
   expect(list.querySelector('.runSummary')!.textContent?.trim()).to.equal('2 sources');
-  expect(list.textContent).not.to.contain('89 sources');
 });

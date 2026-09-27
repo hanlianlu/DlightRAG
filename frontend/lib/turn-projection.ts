@@ -53,7 +53,6 @@ interface DonePayload {
   status: 'succeeded' | 'cancelled';
   presentation: DonePresentationWire | null;
   usage?: Record<string, unknown>;
-  evidence?: Record<string, number>;
 }
 
 function isDonePayload(payload: unknown): payload is DonePayload {
@@ -139,7 +138,6 @@ export function applyAnswerEvent(
         presentation: payload.presentation as unknown as AnswerPresentation,
         streamText: payload.presentation.answer_text,
         usage: payload.usage ?? {},
-        evidence: payload.evidence ?? {},
         progress: '',
         liveStatus: msg('Answer ready', {id: 'chatFeature.answerReady'}),
       };

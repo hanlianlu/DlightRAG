@@ -157,14 +157,10 @@ export class DlApp extends LightElement {
     document.body.classList.remove(
       'conversation-sidebar-open',
       'conversation-drawer-open',
-      'panel-open',
       'files-panel-open',
       'sources-panel-open',
-      'panel-drawer-open',
       'artifact-canvas-open',
       'artifact-canvas-overlay',
-      'artifact-canvas-fullscreen',
-      'artifact-canvas-modal',
       'artifact-canvas-wide',
       'settings-open',
     );
@@ -442,17 +438,10 @@ export class DlApp extends LightElement {
       'conversation-drawer-open',
       this.conversationExpanded && this.conversationCompact,
     );
-    document.body.classList.toggle('panel-open', this.inspectorOpen || this.canvasOpen);
     document.body.classList.toggle('files-panel-open', this.inspectorKind === 'files');
     document.body.classList.toggle('sources-panel-open', this.inspectorKind === 'sources');
-    document.body.classList.toggle(
-      'panel-drawer-open',
-      this.inspectorOpen && this.inspectorCompact,
-    );
     document.body.classList.toggle('artifact-canvas-open', this.canvasOpen);
     document.body.classList.toggle('artifact-canvas-overlay', this.canvasOverlay);
-    document.body.classList.toggle('artifact-canvas-fullscreen', this.canvasOverlay);
-    document.body.classList.toggle('artifact-canvas-modal', this.canvasModal);
     document.body.classList.toggle('artifact-canvas-wide', this.canvasWide);
     syncPanelSplitState();
   }

@@ -162,7 +162,7 @@ export class DlWorkspaceScope extends LightElement {
         ${this.#allOption()}
         ${repeat(sorted, (record) => record.workspace, (record) => this.#option(record))}
         ${this.#loadMoreControl()}
-        <span class="sr-only" data-workspaces-status role="status" aria-live="polite">
+        <span class="dl-sr-only" data-workspaces-status role="status" aria-live="polite">
           ${this.#loadMoreAnnouncement}
         </span>
         <dl-workspace-create .handles=${this.handles}></dl-workspace-create>

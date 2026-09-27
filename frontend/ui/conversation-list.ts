@@ -299,7 +299,7 @@ export class DlConversationList extends LightElement {
         ${Array.from({length: SKELETON_COUNT}, () => html`
           <div class="conversation-skeleton" aria-hidden="true"></div>
         `)}
-        <span class="sr-only">${msg('Loading conversations', {id: 'conversationList.loadingConversations'})}</span>
+        <span class="dl-sr-only">${msg('Loading conversations', {id: 'conversationList.loadingConversations'})}</span>
       `;
     }
     return html`

@@ -319,11 +319,3 @@ dl-icon-button.panel-close {
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1.5;
 }
-
-.workspace-dialog-name {
-    color: var(--color-accent-action);
-    font-size: var(--font-size-body);
-    font-weight: 600;
-    margin: var(--space-tight) 0;
-    overflow-wrap: anywhere;
-}

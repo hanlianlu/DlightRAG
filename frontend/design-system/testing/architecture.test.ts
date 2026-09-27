@@ -75,6 +75,8 @@ test('legacy class namespace and Web Awesome are absent', () => {
   for (const path of governedSources) {
     const content = source(path);
     assert.equal(content.includes('ui-'), false, `${relative(frontend, path)} retains .ui-*`);
+    assert.equal(/(?<![\w-])sr-only\b/.test(content), false,
+      `${relative(frontend, path)} uses sr-only; use the design system's dl-sr-only`);
     assert.equal(/<\/?wa-|@awesome\.me\/webawesome|--wa-/.test(content), false,
       `${relative(frontend, path)} retains Web Awesome`);
   }

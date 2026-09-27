@@ -38,8 +38,6 @@ export const templates: Record<
   'connections.modeNone': '无',
   'connections.modeBearer': 'Bearer',
   'connections.modeOauth': 'OAuth',
-  'connections.unauthenticated': '无身份验证',
-  'connections.personalBearer': '个人 Bearer',
   'connections.authentication': '身份验证',
   'connections.label': '名称',
   'connections.endpoint': '端点',
@@ -137,7 +135,6 @@ export const templates: Record<
   'chatFeature.stopping': '正在停止…',
   'chatFeature.answerInProgress': '回答生成中…',
   'chatFeature.conversationUnavailable': '会话服务不可用。请重新加载会话后重试。',
-  'chatFeature.conversationChanged': '回答开始前活动会话已变化。',
   'chatFeature.serviceError': '服务出错，请重试。',
   'chatFeature.unexpectedConversation': '该回答被接收至意外会话。',
   'chatFeature.connectionError': '连接出错，请重试。',
@@ -421,10 +418,6 @@ export const templates: Record<
   'inspectorFiles.deleteTitle': '删除文件',
   'inspectorFiles.cancel': '取消',
   'inspectorFiles.delete': '删除',
-  'inspectorFiles.ingesting': '正在摄取…',
-  'inspectorFiles.ingestProgressAria': '摄取进度',
-  'inspectorFiles.batchProgress': str`批次 ${0}/${1} · ${2} 个文档`,
-  'inspectorFiles.queueNotice': str`${0} 个上传已排队——将在当前批次后处理`,
   'inspectorFiles.chooseFilesAria': '选择文件',
   'inspectorFiles.dropHint': '拖放文件或文件夹，或点击选择文件',
   'inspectorFiles.chooseFolder': '选择文件夹',
@@ -464,7 +457,6 @@ export const templates: Record<
   'inspectorFiles.recovery.started': '文档恢复已开始。',
   'inspectorFiles.recovery.startFailed': '无法启动文档恢复。',
   'inspectorFiles.recovery.statusUnavailable': '文档恢复状态已不可用。',
-  'inspectorFiles.recovery.finishedPartial': str`恢复完成：${0} 个成功，${1} 个仍然失败。`,
   'inspectorFiles.recovery.finished': '文档恢复已完成。',
   'inspectorFiles.recovery.failed': '文档恢复失败。',
   'inspectorFiles.recovery.confirmTitle': '重试失败文档？',
@@ -575,10 +567,9 @@ export const templates: Record<
   // Errors
   'errors.service': '服务出错，请重试。',
   'errors.kind.MODEL_CAPABILITY_UNAVAILABLE': '所配置的查询模型无法使用该回答请求所需的工具。',
-  'errors.kind.UNSUPPORTED_RESOURCE_CAPABILITY':
+  'errors.kind.unsupported_resource_capability':
     '该请求所需的资源能力没有任何回答模式可以提供。',
   'errors.kind.ANSWER_RESOURCE_INVALID': '某个回答附件或链接未能被安全接收。',
-  'errors.kind.memory_disabled': '该所有者未启用个人记忆。',
   'errors.kind.invalid_tool_configuration': '回答工具配置有误。',
   'errors.kind.ANSWER_IMAGE_CAPABILITY_UNKNOWN':
     '回答模型的图片能力未知：启动探测未确认图片支持。请提供具备视觉能力的查询模型，或在模型可达后重试。',

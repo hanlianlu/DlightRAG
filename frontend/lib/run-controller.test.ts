@@ -26,7 +26,6 @@ function stored(status: ConversationTurn['status']): ConversationTurn {
     userAttachments: [],
     presentation: null,
     usage: {},
-    evidence: {},
     errorKind: null,
     errorMessage: null,
     createdAt: '2026-01-01T00:00:00Z',

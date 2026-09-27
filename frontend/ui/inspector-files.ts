@@ -141,10 +141,6 @@ export class DlInspectorFiles extends LightElement {
     if (this.active && workspace !== this.#workspace && this.isConnected) {
       void this.reload();
     }
-    this.querySelectorAll<HTMLElement>('[data-pct]').forEach((fill) => {
-      const value = Number(fill.dataset.pct);
-      fill.style.width = `${Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0))}%`;
-    });
   }
 
   get hasActiveMutation(): boolean {
@@ -825,7 +821,7 @@ export class DlInspectorFiles extends LightElement {
             </button>
           </div>
         ` : nothing}
-        <span class="sr-only" data-older-files-status role="status" aria-live="polite">
+        <span class="dl-sr-only" data-older-files-status role="status" aria-live="polite">
           ${this.#olderFilesAnnouncement}
         </span>
       ` : nothing}

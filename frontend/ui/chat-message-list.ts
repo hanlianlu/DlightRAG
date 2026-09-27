@@ -373,7 +373,7 @@ export class DlChatMessageList extends LightElement {
     return html`
       <main class="chat-area" id="chat-area" aria-label=${msg('Chat', {id: 'chatMessageList.chatAria'})} @click=${this.#backgroundClick}>
         ${this.#olderMessagesControl()}
-        <span class="sr-only" data-older-status role="status" aria-live="polite">
+        <span class="dl-sr-only" data-older-status role="status" aria-live="polite">
           ${this.#olderAnnouncement}
         </span>
         <div class="chat-messages" id="chat-messages" role="log" tabindex="-1"
@@ -512,7 +512,7 @@ export class DlChatMessageList extends LightElement {
         </div>
         ${this.#runActions(turn)}
         ${turn.liveStatus ? html`
-          <span class="sr-only" role="status" aria-live="polite">${turn.liveStatus}</span>
+          <span class="dl-sr-only" role="status" aria-live="polite">${turn.liveStatus}</span>
         ` : nothing}
       </article>
       ${turn.steeringMessages.slice(-MAX_STEERING_MESSAGES).map((message) => html`
@@ -806,7 +806,6 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     streamText: '',
     presentation: stored.presentation,
     usage: stored.usage ?? {},
-    evidence: stored.evidence ?? {},
     error,
     progress: (stored.status === 'queued' || stored.status === 'running')
       && stored.cancelRequested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',

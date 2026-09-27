@@ -389,7 +389,7 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
     history: [{
       turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
       status: 'succeeded', cancelRequested: false, userText: 'Question', assistantText: 'Stored answer.',
-      userAttachments: [], presentation: answer, usage: {}, evidence: {}, errorKind: null,
+      userAttachments: [], presentation: answer, usage: {}, errorKind: null,
       errorMessage: null, createdAt: '2026-01-01T00:00:00Z',
     }],
   };
@@ -468,8 +468,8 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   expect(canvas.classList.contains('open')).to.equal(false);
   expect(canvas.inert).to.equal(true);
   expect(app.querySelector<HTMLElement>('#panel')?.inert).to.equal(false);
-  expect(document.body.classList.contains('panel-drawer-open')).to.equal(true);
-  expect(document.body.classList.contains('artifact-canvas-modal')).to.equal(false);
+  expect(app.querySelector('#panel')?.getAttribute('aria-modal')).to.equal('true');
+  expect(app.querySelector('.topbar')?.hasAttribute('inert')).to.equal(true);
   expect(document.activeElement).to.equal(app.querySelector('#panel-close-btn'));
 
   app.querySelector<HTMLButtonElement>('#panel-close-btn')?.click();

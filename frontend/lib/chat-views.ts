@@ -19,7 +19,6 @@ export interface ChatTurnView {
   streamText: string;
   presentation: AnswerPresentation | null;
   usage: Record<string, unknown>;
-  evidence: Record<string, number>;
   error: string;
   progress: string;
   liveStatus: string;

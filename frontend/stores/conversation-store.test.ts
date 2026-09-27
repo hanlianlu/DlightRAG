@@ -42,7 +42,6 @@ function turn(number: number) {
     userAttachments: [],
     presentation: null,
     usage: {},
-    evidence: {},
     errorKind: null,
     errorMessage: null,
     createdAt: '2026-08-20T00:00:00Z',

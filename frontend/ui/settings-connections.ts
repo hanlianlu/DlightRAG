@@ -562,7 +562,7 @@ export class DlSettingsConnections extends LightElement {
         ? msg('add a connection', {id: 'connections.groupEmpty'})
         : msg(str`${enabled} of ${total} enabled`, {id: 'connections.groupSummary'})}</span>
       ${attention > 0
-        ? html`<span class="sr-only">${attention === 1
+        ? html`<span class="dl-sr-only">${attention === 1
           ? msg('1 connection needs attention', {id: 'connections.attentionOne'})
           : msg(str`${attention} connections need attention`, {id: 'connections.attentionMany'})}</span>`
         : nothing}

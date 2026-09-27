@@ -2,12 +2,15 @@
 
 /** Localized projection of durable answer-run error kinds.
 
- * The server taxonomy lives in `src/dlightrag/application/answer_runs/errors.py`.
- * Kinds whose public message is static map to catalog copy whose English
- * source is the server message verbatim; kinds with dynamic payloads
+ * The server taxonomy lives in `src/dlightrag/engine/answer/errors.py`.
+ * MODEL_CAPABILITY_UNAVAILABLE is historical: no current path raises it, but
+ * Runs stored by earlier releases still carry it. Kinds whose public message
+ * is static map to catalog copy whose English source is the server message
+ * without its bracketed marker; kinds with dynamic payloads
  * (filenames, limits, mode names) keep the server message so no detail is
  * lost. Unknown kinds and unmapped payloads fall back to the server message,
  * then to the localized generic failure copy.
+ * tests/unit/test_run_error_kind_vocabulary.py locks the keys to the server.
  */
 
 import {msg} from '@lit/localize';
@@ -16,10 +19,9 @@ import {answerErrorMessage} from './errors.ts';
 const RUN_ERROR_KIND_COPY: Record<string, string> = {
   MODEL_CAPABILITY_UNAVAILABLE:
     'The configured query model cannot use the tools required for this answer request.',
-  UNSUPPORTED_RESOURCE_CAPABILITY:
+  unsupported_resource_capability:
     'This request needs a resource capability that no answer mode can provide.',
   ANSWER_RESOURCE_INVALID: 'An answer attachment or link could not be admitted safely.',
-  memory_disabled: 'Profile Memory is not active for this owner.',
   invalid_tool_configuration: 'Answer tooling is misconfigured.',
   ANSWER_IMAGE_CAPABILITY_UNKNOWN:
     'Answer-model image capability is unknown: the startup probe did not confirm image '
