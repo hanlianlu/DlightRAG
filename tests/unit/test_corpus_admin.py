@@ -4,7 +4,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -36,14 +35,12 @@ from dlightrag.engine.rag.retrieval import MetadataFilter
 def _settings(
     *,
     read_only: bool = False,
-    input_root: str | Path = "/tmp/inputs",
     default_workspace_id: str = "default",
 ) -> CorpusAdminSettings:
     return CorpusAdminSettings(
         default_workspace_id=default_workspace_id,
         default_display_name="Default",
         default_embedding_model="embedding-model",
-        input_root=input_root,
         read_only=read_only,
     )
 
@@ -56,7 +53,6 @@ async def _noop_write_gate(workspace: str) -> AsyncIterator[None]:
 def _admin(
     *,
     read_only: bool = False,
-    input_root: str | Path = "/tmp/inputs",
     default_workspace_id: str = "default",
     metadata_search: Any | None = None,
 ) -> tuple[CorpusAdmin, Any, Any, Any, Any, Any]:
@@ -110,7 +106,6 @@ def _admin(
     admin = CorpusAdmin(
         settings=_settings(
             read_only=read_only,
-            input_root=input_root,
             default_workspace_id=default_workspace_id,
         ),
         pool=cast(Any, pool),

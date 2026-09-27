@@ -29,9 +29,10 @@ def workspace_input_root(input_dir: Path, workspace: str) -> Path:
 def iter_ingestable_files(path: Path) -> list[Path]:
     """Resolve a local ingest target into concrete source files.
 
-    Broad directory scans skip LightRAG parser sidecars and DlightRAG web upload
-    staging. Explicit web upload batch directories remain ingestable because the
-    upload route passes ``.../__uploads__/<batch-id>`` directly.
+    Broad directory scans skip LightRAG parser sidecars, dot-prefixed paths,
+    remote ingest/source staging, and the ``__uploads__`` staging that earlier
+    releases left under workspace inputs. A directory inside ``__uploads__`` stays
+    ingestable when a caller names it explicitly.
     """
     if path.is_file():
         return [path]
@@ -40,7 +41,7 @@ def iter_ingestable_files(path: Path) -> list[Path]:
     if not path.is_dir():
         raise ValueError(f"Local ingest path is not a file or directory: {path}")
 
-    explicit_upload_batch = is_explicit_upload_batch_dir(path)
+    explicit_upload_batch = _is_explicit_upload_batch_dir(path)
     files = [
         item
         for item in sorted(
@@ -54,7 +55,7 @@ def iter_ingestable_files(path: Path) -> list[Path]:
     return files
 
 
-def is_explicit_upload_batch_dir(path: Path) -> bool:
+def _is_explicit_upload_batch_dir(path: Path) -> bool:
     """Return True for ``.../__uploads__/<batch>`` style explicit batch dirs."""
     return path.name != UPLOADS_DIR_NAME and UPLOADS_DIR_NAME in {p.name for p in path.parents}
 

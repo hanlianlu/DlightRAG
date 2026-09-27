@@ -752,30 +752,6 @@ class PostgresMemoryStore:
 
         await self._write(operation)
 
-    async def forget(self, *, owner_id: str, memory_id: str) -> bool:
-        async def operation(conn: PGConnection) -> bool:
-            async with conn.transaction():
-                tag = await conn.execute(_DELETE, owner_id, _uuid(memory_id, label="memory_id"))
-                return not str(tag).endswith(" 0")
-
-        return await self._write(operation)
-
-    async def forget_matching(self, *, owner_id: str, body: str) -> int:
-        async def operation(conn: PGConnection) -> int:
-            async with conn.transaction():
-                result = await conn.execute(_DELETE_BODY, owner_id, body.strip())
-                return int(str(result).rsplit(" ", 1)[-1])
-
-        return await self._write(operation)
-
-    async def forget_all(self, *, owner_id: str) -> int:
-        async def operation(conn: PGConnection) -> int:
-            async with conn.transaction():
-                result = await conn.execute(_DELETE_ALL, owner_id)
-                return int(str(result).rsplit(" ", 1)[-1])
-
-        return await self._write(operation)
-
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None:
         async def operation(conn: PGConnection) -> MemoryRecord | None:
             row = await conn.fetchrow(_SELECT_ONE, owner_id, _uuid(memory_id, label="memory_id"))
@@ -1210,24 +1186,6 @@ _MARK_SUPERSEDED = """
 UPDATE dlightrag_memory_records
 SET status = 'superseded', updated_at = NOW()
 WHERE owner_id = $1 AND memory_id = $2 AND status = 'active'
-"""
-
-_DELETE = """
-UPDATE dlightrag_memory_records
-SET status = 'forgotten', updated_at = NOW()
-WHERE owner_id = $1 AND memory_id = $2 AND status != 'forgotten'
-"""
-
-_DELETE_BODY = """
-UPDATE dlightrag_memory_records
-SET status = 'forgotten', updated_at = NOW()
-WHERE owner_id = $1 AND body = $2 AND status != 'forgotten'
-"""
-
-_DELETE_ALL = """
-UPDATE dlightrag_memory_records
-SET status = 'forgotten', updated_at = NOW()
-WHERE owner_id = $1 AND status != 'forgotten'
 """
 
 _SELECT_ONE = f"""

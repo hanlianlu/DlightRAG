@@ -1,23 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Upload staging helpers shared by REST and Web routes."""
+"""Upload filename sanitization shared by every upload surface."""
 
-import uuid
 from pathlib import Path, PureWindowsPath
-
-from dlightrag.engine.rag.corpus.ingestion.paths import UPLOADS_DIR_NAME
-
-
-class UploadTooLargeError(ValueError):
-    """Raised after a streamed upload exceeds its byte cap."""
-
-
-def upload_batch_dir(input_root: Path) -> Path:
-    """Return a fresh explicit upload batch directory under a workspace input root."""
-    root = input_root / UPLOADS_DIR_NAME
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
 
 
 def safe_upload_relative_path(filename: str) -> Path:
@@ -46,8 +30,6 @@ def safe_upload_basename(filename: str) -> str:
 
 
 __all__ = [
-    "UploadTooLargeError",
     "safe_upload_basename",
     "safe_upload_relative_path",
-    "upload_batch_dir",
 ]

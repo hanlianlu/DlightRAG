@@ -2,8 +2,8 @@
 """FastAPI app factory for DlightRAG REST server.
 
 Entry point: dlightrag-api
-All endpoint logic lives in routes.py; this module handles app lifecycle,
-middleware, exception handlers, and router mounting.
+Endpoint logic lives in the ``rest.routes`` and ``browser.routes`` packages; this
+module handles app lifecycle, middleware, exception handlers, and router mounting.
 """
 
 import logging

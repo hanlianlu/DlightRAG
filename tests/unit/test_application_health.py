@@ -87,11 +87,11 @@ def test_health_defaults_image_capability_to_fail_closed_unknown() -> None:
 
 def test_closing_preserves_degraded_diagnostics() -> None:
     health = ApplicationHealth(readiness_probe=None)
-    health.mark_degraded("startup failed")
+    health.mark_component_degraded("corpus_storage")
 
     health.mark_closed()
     health.mark_ready()
-    health.mark_degraded("late transition")
+    health.mark_component_degraded("providers")
 
     assert health.is_closed is True
     assert health.is_ready is False

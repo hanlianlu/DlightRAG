@@ -393,7 +393,7 @@ class PGCorpusMaintenanceStore:
         finally:
             await conn.close()
 
-    async def clean_orphan_rows(self, workspace: str, *, dry_run: bool) -> int:
+    async def clean_orphan_rows(self, workspace: str) -> int:
         """Clear corpus-owned rows and maintenance counters, never Workspace identity."""
         async with self._connection() as conn:
             async with conn.transaction():
@@ -404,37 +404,28 @@ class PGCorpusMaintenanceStore:
                     if await conn.fetchrow(_HAS_WORKSPACE_COLUMN, table) is None:
                         continue
                     quoted = await conn.fetchval("SELECT quote_ident($1)", table)
-                    qualified = f"public.{quoted}"
-                    count_row = await conn.fetchrow(
-                        f"SELECT COUNT(*) as count FROM {qualified} WHERE workspace = $1",  # noqa: S608
+                    tag = await conn.execute(
+                        f"DELETE FROM public.{quoted} WHERE workspace = $1",  # noqa: S608
                         workspace,
                     )
-                    count = int(count_row["count"]) if count_row else 0
-                    if count <= 0:
-                        continue
-                    if not dry_run:
-                        await conn.execute(
-                            f"DELETE FROM {qualified} WHERE workspace = $1",  # noqa: S608
-                            workspace,
-                        )
-                    cleaned += 1
-                if not dry_run:
-                    await conn.execute(
-                        "DELETE FROM dlightrag_promotion_jobs WHERE workspace = $1",
-                        workspace,
-                    )
-                    await conn.execute(
-                        """UPDATE dlightrag_workspace_meta
-                           SET ingested_docs_total = 0,
-                               ingested_chunks_total = 0,
-                               promotion_state = 'none',
-                               promotion_retry_count = 0,
-                               promotion_last_error = NULL,
-                               promotion_next_retry_at = NULL,
-                               updated_at = NOW()
-                           WHERE workspace = $1""",
-                        workspace,
-                    )
+                    if not str(tag).endswith(" 0"):
+                        cleaned += 1
+                await conn.execute(
+                    "DELETE FROM dlightrag_promotion_jobs WHERE workspace = $1",
+                    workspace,
+                )
+                await conn.execute(
+                    """UPDATE dlightrag_workspace_meta
+                       SET ingested_docs_total = 0,
+                           ingested_chunks_total = 0,
+                           promotion_state = 'none',
+                           promotion_retry_count = 0,
+                           promotion_last_error = NULL,
+                           promotion_next_retry_at = NULL,
+                           updated_at = NOW()
+                       WHERE workspace = $1""",
+                    workspace,
+                )
                 return cleaned
 
     async def list_workspace_records(self) -> tuple[dict[str, Any], ...]:
@@ -680,12 +671,11 @@ def _build_promotion_worker(config: DlightragConfig) -> PGPromotionWorker | None
 
 
 class PGReadinessProbe:
-    """Probe only the writable PostgreSQL Operational State authority."""
+    """Probe only the writable PostgreSQL Operational State authority.
 
-    def __init__(self, config: DlightragConfig) -> None:
-        # Keep the config parameter as the composition contract; corpus role is
-        # intentionally irrelevant to control-plane readiness.
-        self._service_role = config.deployment.service_role
+    Corpus role is irrelevant to control-plane readiness, so the probe takes no
+    configuration.
+    """
 
     async def __call__(self) -> str | None:
         try:

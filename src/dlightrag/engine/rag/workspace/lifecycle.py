@@ -61,12 +61,8 @@ def _collect_worker_pools(lightrag: Any) -> list[tuple[str, Any]]:
     return funcs
 
 
-async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False) -> int:
-    """Best-effort shutdown of LightRAG worker pools.
-
-    Returns the number of unique shutdown-capable pools discovered during a
-    dry-run, or the number successfully shut down in real mode.
-    """
+async def shutdown_lightrag_worker_pools(lightrag: Any) -> int:
+    """Best-effort shutdown of LightRAG worker pools; returns how many shut down."""
     if lightrag is None:
         return 0
 
@@ -78,9 +74,6 @@ async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False
             continue
         seen.add(id(func))
         if not callable(getattr(func, "shutdown", None)):
-            continue
-        if dry_run:
-            shutdown_count += 1
             continue
         try:
             result = func.shutdown(graceful=True)

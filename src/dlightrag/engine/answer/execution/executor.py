@@ -2,7 +2,6 @@
 """Answer execution over durable Runtime sessions and RAG workspaces."""
 
 import asyncio
-import base64
 import datetime
 import hashlib
 import hmac
@@ -16,7 +15,6 @@ from typing import Any, Protocol, cast
 from dlightrag_memory import Memory, MemoryStore
 
 from dlightrag.engine.agent.environment import (
-    ExecutionEnvironment,
     ExecutionMode,
     SearchToolchain,
     confinement_state,
@@ -303,11 +301,6 @@ def _child_lifecycle_for_plan(plan: AgentRunPlan | None) -> tuple[bool, bool]:
     raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
 
 
-def _async_subagents_for_plan(plan: AgentRunPlan | None) -> bool:
-    """Select the exact accepted child lifecycle contract without plan rewriting."""
-    return _child_lifecycle_for_plan(plan)[0]
-
-
 def _scoped_secret(secret: bytes | None, scope: str | None) -> bytes | None:
     if secret is None or scope is None:
         return secret
@@ -565,8 +558,6 @@ class AnswerResourceResolver:
             self._check_current_image_admission(
                 image_count=declared_image_count,
                 capability=image_capability,
-                models=models,
-                resolved_mode=resolved_mode,
             )
         (
             current_images,
@@ -578,8 +569,6 @@ class AnswerResourceResolver:
         self._check_current_image_admission(
             image_count=len(current_images),
             capability=image_capability,
-            models=models,
-            resolved_mode=resolved_mode,
         )
 
         web_sources = self._models.web_sources()
@@ -696,8 +685,6 @@ class AnswerResourceResolver:
         *,
         image_count: int,
         capability: AnswerImageCapability | None,
-        models: RequestModelContext,
-        resolved_mode: ResolvedMode,
     ) -> None:
         if image_count <= 0:
             return
@@ -864,7 +851,6 @@ class AnswerExecutor:
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
-        self._shell_confinement = shell_confinement
         self._execution_adapter = resolve_execution_adapter(
             execution_environment, confinement=shell_confinement
         )
@@ -2521,7 +2507,6 @@ class AnswerExecutor:
         worst_case_memory: str = "",
         projected_history: PriorTurns,
         model_profiles: Mapping[ChatModelSelector, ModelProfile],
-        environment: ExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
         resource_scope: str,
         skills: SkillsBundle | None = None,
@@ -2655,7 +2640,6 @@ class AnswerExecutor:
                 context_policy=CONTEXT_POLICY,
                 publication_limits=self._settings.publication,
                 telemetry=self._telemetry,
-                environment=environment,
                 search_toolchain=self._search_toolchain,
                 resolved_mode=resolved_mode,
                 subagent_host=(
@@ -2913,19 +2897,6 @@ class AnswerExecutor:
             for attachment in request.history_attachments
         )
         return resources
-
-    async def _load_corpus_image(self, workspace: str, chunk_id: str) -> str | None:
-        try:
-            runtime = await self._pool.acquire(workspace)
-            asset = await runtime.aget_visual_asset(chunk_id, size="full")
-        except Exception:
-            logger.info(
-                "Knowledge-base visual for '%s' no longer resolves; dropping the image block",
-                safe_log_text(chunk_id),
-            )
-            return None
-        content = getattr(asset, "data", None)
-        return base64.b64encode(content).decode("ascii") if content else None
 
     @staticmethod
     def validate_pinned_agent_run_plan(

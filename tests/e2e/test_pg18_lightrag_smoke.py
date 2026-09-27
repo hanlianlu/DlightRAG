@@ -141,10 +141,10 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
     finally:
         if tenant is not None:
             if tenant._initialized:
-                await tenant.areset(keep_files=False)
+                await tenant.areset()
             await tenant.aclose()
         if deployment._initialized:
-            await deployment.areset(keep_files=False)
+            await deployment.areset()
         await deployment.aclose()
         await pg_pool.close()
 
@@ -506,7 +506,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         }
     finally:
         if service._initialized:
-            await service.areset(keep_files=False)
+            await service.areset()
         await service.aclose()
         await pg_pool.close()
 
@@ -663,7 +663,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         telemetry=LangfuseTelemetry(),
     )
     try:
-        await cleanup.areset(keep_files=False)
+        await cleanup.areset()
     finally:
         await cleanup.aclose()
         await pg_pool.close()

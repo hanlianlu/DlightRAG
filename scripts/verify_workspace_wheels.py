@@ -1029,7 +1029,6 @@ def _smoke_root_interfaces() -> None:
                 default_workspace_id="default",
                 default_display_name="Default",
                 default_embedding_model="embed-model",
-                input_root=Path(tempfile.gettempdir()) / "installed-corpus",
                 read_only=False,
             ),
             pool=cast(Any, pool),

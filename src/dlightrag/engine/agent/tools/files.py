@@ -300,15 +300,6 @@ class BashArgs(BaseModel):
     )
 
 
-def bound_tool_text(text: str, *, spill: SpillWriter | None) -> str:
-    """Apply the unified byte/line guard. Spill if available, else raise."""
-    if _within_result_bounds(text):
-        return text
-    if spill is None:
-        raise FullOutputUnavailable("oversized tool result has no spill or cursor backing")
-    raise FullOutputUnavailable("spill writer must be awaited by the tool, not bound_tool_text")
-
-
 async def preview_or_spill(
     text: str,
     *,
@@ -352,7 +343,6 @@ def path_tools(
             scheduler,
             resource_reader=resource_reader,
             spill=spill,
-            image_preparer=image_preparer,
         ),
         view_tool(environment, scheduler, image_preparer=image_preparer),
         bash_tool(environment, scheduler, output_stage_factory=output_stage_factory),
@@ -405,7 +395,6 @@ def read_tool(
     *,
     resource_reader: ResourceReader | None = None,
     spill: SpillWriter | None = None,
-    image_preparer: ImagePreparer | None = None,
 ) -> AgentTool:
     """Build ``read`` with whichever branches the host actually has."""
 
@@ -1647,7 +1636,6 @@ __all__ = [
     "SpillWriter",
     "WriteArgs",
     "bash_tool",
-    "bound_tool_text",
     "edit_tool",
     "find_tool",
     "grep_tool",

@@ -177,7 +177,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         source="startup model catalogue",
         path="models.catalogue",
     )
-    health = ApplicationHealth(readiness_probe=PGReadinessProbe(config))
+    health = ApplicationHealth(readiness_probe=PGReadinessProbe())
     health.set_agent_shell_confinement(confinement_state(config.answer.agent.execution_environment))
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()

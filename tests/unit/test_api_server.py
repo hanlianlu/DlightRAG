@@ -348,7 +348,7 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
     from dlightrag.engine.answer.image_capability import answer_image_capability_summary
 
     application.health = ApplicationHealth(
-        readiness_probe=PGReadinessProbe(test_config),
+        readiness_probe=PGReadinessProbe(),
     )
     application.health.mark_ready()
     application.health.set_answer_image_capability(
@@ -1519,7 +1519,7 @@ class TestReadinessEndpoint:
         from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
 
         mutate_config(mock_config, "deployment.service_role", "reader")
-        mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
+        mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe())
         mock_application.health.mark_ready()
         mock_application.health.mark_component_degraded("corpus_storage")
         app.state.health = mock_application.health
@@ -1545,7 +1545,7 @@ class TestReadinessEndpoint:
         from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
 
         mutate_config(mock_config, "deployment.service_role", "reader")
-        mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
+        mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe())
         mock_application.health.mark_ready()
         app.state.health = mock_application.health
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))

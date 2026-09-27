@@ -117,23 +117,7 @@ class TestAresetPhase0:
             result = await service.areset()
 
         assert result["pending_tasks_cancelled"] == 2
-        shutdown.assert_awaited_once_with(service.lightrag, dry_run=False)
-
-    async def test_dry_run_counts_worker_pools_without_shutting_down(self) -> None:
-        service = _make_service()
-        inner_func = SimpleNamespace(shutdown=AsyncMock())
-        embedding_func = SimpleNamespace(func=inner_func)
-        lr = SimpleNamespace()
-        lr.embedding_func = embedding_func
-        role_func = SimpleNamespace(shutdown=AsyncMock())
-        lr._role_llm_states = {"query": SimpleNamespace(wrapped=role_func)}
-        lr.chunks_vdb = SimpleNamespace(drop=AsyncMock())
-        service._lightrag = lr
-
-        result = await service.areset(dry_run=True)
-        assert result["pending_tasks_cancelled"] == 2
-        inner_func.shutdown.assert_not_called()
-        role_func.shutdown.assert_not_called()
+        shutdown.assert_awaited_once_with(service.lightrag)
 
 
 class TestAresetPhase1:
@@ -201,16 +185,11 @@ class TestAresetPhase3:
         result = await service.areset()
 
         assert result["orphan_tables_cleaned"] == 3
-        maintenance.clean_orphan_rows.assert_awaited_once_with("test_ws", dry_run=False)
+        maintenance.clean_orphan_rows.assert_awaited_once_with("test_ws")
 
 
 class TestAresetPhase4:
     """Phase 4: Local files."""
-
-    async def test_keep_files_skips_cleanup(self) -> None:
-        service = _make_service()
-        result = await service.areset(keep_files=True)
-        assert result["local_files_removed"] == 0
 
     async def test_removes_local_files(self, tmp_path: Path) -> None:
         service = _make_service()
@@ -225,11 +204,14 @@ class TestAresetPhase4:
         (ws_dir / "parsed_doc.json").write_text("{}")
         (ws_dir / "subdir").mkdir()
         (ws_dir / "subdir" / "data.bin").write_bytes(b"x" * 100)
+        run_sources = ws_dir / ".runs" / "0199a0a0-0000-7000-8000-000000000001" / "sources"
+        run_sources.mkdir(parents=True)
+        (run_sources / "report.pdf").write_bytes(b"pdf")
 
         result = await service.areset()
 
-        # Only workspace-scoped files counted and removed
-        assert result["local_files_removed"] == 2
+        # Without preservation (Workspace Delete) Run sources go too.
+        assert result["local_files_removed"] == 3
         assert not ws_dir.exists()
 
     async def test_preserves_sources_accepted_after_reset_run(self, tmp_path: Path) -> None:
@@ -246,15 +228,22 @@ class TestAresetPhase4:
         for source in (older, reset, newer, invalid):
             source.mkdir(parents=True)
             (source / "report.pdf").write_bytes(b"pdf")
+        workspace = runs.parent
+        (workspace / "parsed_doc.json").write_text("{}")
+        (workspace / "staged").mkdir()
+        (workspace / "staged" / "a.pdf").write_bytes(b"a")
 
         result = await service.areset(
             preserve_run_sources_after="0199a0a0-0000-7000-8000-000000000002"
         )
 
-        assert result["local_files_removed"] == 3
+        # Preservation spares only later Runs' sources; the rest of the corpus goes.
+        assert result["local_files_removed"] == 5
         assert not older.exists()
         assert not reset.exists()
         assert not invalid.exists()
+        assert not (workspace / "parsed_doc.json").exists()
+        assert not (workspace / "staged").exists()
         assert (newer / "report.pdf").read_bytes() == b"pdf"
 
     async def test_root_files_survive_reset(self, tmp_path: Path) -> None:
@@ -299,22 +288,6 @@ class TestAresetPhase4:
         assert result["local_files_removed"] == 1
         assert outside.exists()
         assert not normalized_ws_dir.exists()
-
-
-class TestAresetDryRun:
-    """dry_run=True collects stats without executing."""
-
-    async def test_dry_run_no_drops(self) -> None:
-        service = _make_service()
-        result = await service.areset(dry_run=True)
-
-        # Stats reported but no actual drops
-        assert result["lightrag_storages_dropped"] == len(_FAKE_STORAGE_ATTRS)
-        for attr in ("full_docs", "chunks_vdb"):
-            getattr(service._lightrag, attr).drop.assert_not_awaited()
-        cast(Any, service._metadata_index).clear.assert_not_awaited()
-        # A preview must leave the live runtime intact.
-        assert service._initialized is True
 
 
 class TestAresetErrorHandling:

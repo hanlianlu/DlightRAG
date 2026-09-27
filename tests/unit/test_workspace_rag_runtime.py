@@ -17,12 +17,12 @@ from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NoopTelemetry
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
-    RobustDocumentEmbedder,
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
 )
 from dlightrag.engine.rag.corpus.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag.engine.rag.corpus.ingestion.paths import (
+    REMOTE_INGEST_DIR_NAME,
     iter_ingestable_files,
     lightrag_archived_source_path,
     remote_parser_input_path,
@@ -329,19 +329,6 @@ class TestWorkspaceRagClose:
 
         # Should not raise
         await service.aclose()
-
-    async def test_close_only_closes_underlying_multimodal_embedder(
-        self, test_config: DlightragConfig
-    ) -> None:
-        service = _service(test_config)
-        service._initialized = True
-        service._multimodal_embedder = AsyncMock()
-        service._document_embedder = MagicMock(spec=RobustDocumentEmbedder)
-
-        await service.aclose()
-
-        service._multimodal_embedder.aclose.assert_awaited_once()
-        assert service._document_embedder.mock_calls == []
 
     async def test_close_shuts_down_lightrag_role_worker_pools(
         self, test_config: DlightragConfig
@@ -2138,10 +2125,10 @@ class TestWorkspaceRagLightRAGMainPath:
         assert delegated["source_uri_for_key"] is mock_source.source_uri_for_key
         assert delegated["download_uri_for_key"] is mock_source.download_uri_for_key
 
-    async def test_aingest_unified_blob_batch_failure_leaves_no_temp_dirs(
+    async def test_aingest_unified_blob_batch_failure_removes_remote_staging(
         self, test_config: DlightragConfig
     ) -> None:
-        """Remote batch failures do not create obsolete temp directories."""
+        """A failed remote batch removes the parser inputs it staged."""
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
@@ -2149,10 +2136,14 @@ class TestWorkspaceRagLightRAGMainPath:
             side_effect=RuntimeError("render failed")
         )
 
+        staged: list[Path] = []
+
+        def _materialize(_doc_id: str, destination: Path) -> None:
+            staged.append(destination)
+            destination.write_bytes(b"%PDF-fake")
+
         mock_source = AsyncMock()
-        mock_source.amaterialize_document = AsyncMock(
-            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF-fake")
-        )
+        mock_source.amaterialize_document = AsyncMock(side_effect=_materialize)
 
         with pytest.raises(RuntimeError, match="render failed"):
             await service.aingest(
@@ -2162,13 +2153,10 @@ class TestWorkspaceRagLightRAGMainPath:
                 source=mock_source,
             )
 
-        # Verify no temp dirs remain
-        import os
-
-        temp_base = test_config.temp_dir
-        if temp_base.exists():
-            assert len(os.listdir(temp_base)) == 0
-        assert not (test_config.deployment.working_dir_path / "sources").exists()
+        assert staged, "the batch must have staged a parser input"
+        assert REMOTE_INGEST_DIR_NAME in staged[0].parts
+        assert not staged[0].exists()
+        assert not (service._workspace_input_root() / REMOTE_INGEST_DIR_NAME).exists()
 
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2297,7 +2285,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_aingest_explicit_upload_batch_directory_is_ingestable(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Web upload batches live under __uploads__ and must still be ingestable."""
+        """A directory inside legacy ``__uploads__`` staging stays ingestable when named."""
         upload_dir = tmp_path / "docs" / "__uploads__" / "batch"
         upload_dir.mkdir(parents=True)
         pdf = upload_dir / "uploaded.pdf"

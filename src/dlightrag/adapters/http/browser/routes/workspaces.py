@@ -61,13 +61,6 @@ def _default_workspace(workspaces: list[str]) -> str:
     return "default" if "default" in workspaces else workspaces[0]
 
 
-def _cookie_active_workspaces(request: Request, visible_workspaces: list[str]) -> list[str]:
-    visible = set(visible_workspaces)
-    raw = request.cookies.get("dlightrag_workspace_ids", "")
-    active = [normalize_workspace(item.strip()) for item in raw.split(",") if item.strip()]
-    return _ordered_unique([workspace for workspace in active if workspace in visible])
-
-
 def _set_workspace_cookies(
     response: Response,
     request: Request,

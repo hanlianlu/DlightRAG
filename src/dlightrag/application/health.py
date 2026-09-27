@@ -164,11 +164,6 @@ class ApplicationHealth:
     def set_agent_shell_confinement(self, state: str) -> None:
         self._agent_shell_confinement = state
 
-    def add_warning(self, warning: str) -> None:
-        """Compatibility shim: record a bounded generic dependency warning."""
-        if warning:
-            self.mark_component_degraded("corpus_storage")
-
     def mark_component_degraded(self, component: HealthComponentName) -> None:
         if self._closed or component == "process":
             return
@@ -196,12 +191,6 @@ class ApplicationHealth:
         self._ready = False
         self._components["operational_state"] = "degraded"
         self._readiness.invalidate()
-
-    def mark_degraded(self, warning: str | None = None) -> None:
-        """Compatibility transition for a non-authoritative dependency outage."""
-        if self._closed:
-            return
-        self.mark_component_degraded("corpus_storage")
 
     def mark_closed(self) -> None:
         self._ready = False

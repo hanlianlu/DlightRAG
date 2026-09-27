@@ -776,7 +776,7 @@ class CorpusMutationExecutor(RunExecutor):
                 return await self._retry(session, runtime, raw, checkpoint)
             if action == "delete_workspace":
                 return await self._delete_workspace(session, runtime, checkpoint)
-            return await self._reset(session, runtime, raw, checkpoint)
+            return await self._reset(session, runtime, checkpoint)
         except WorkspaceWriteFencedError, _TrackedPipelineNotSettled:
             return _deferred(checkpoint, "corpus_storage", now=self._now)
         except RetryOutcomeUncertainError:
@@ -1045,7 +1045,6 @@ class CorpusMutationExecutor(RunExecutor):
         self,
         session: RunSession,
         runtime: Any,
-        raw: Mapping[str, Any],
         checkpoint: dict[str, Any],
     ) -> RunExecutionOutcome:
         if checkpoint.get("operation_settled") is not True:
@@ -1054,10 +1053,7 @@ class CorpusMutationExecutor(RunExecutor):
             await session.enter_phase("resetting_corpus")
             async with self._maintenance.workspace_write_gate(session.owner_id):
                 result = await _join_public_operation(
-                    runtime.areset(
-                        dry_run=False,
-                        preserve_run_sources_after=session.run_id,
-                    )
+                    runtime.areset(preserve_run_sources_after=session.run_id)
                 )
             documents = [dict(result)] if isinstance(result, Mapping) else []
             if not isinstance(result, Mapping) or result.get("errors"):
@@ -1087,7 +1083,7 @@ class CorpusMutationExecutor(RunExecutor):
             await session.enter_phase("resetting_corpus")
             async with self._maintenance.workspace_write_gate(workspace):
                 # No later source survives: every queued successor is cancelled below.
-                result = await _join_public_operation(runtime.areset(dry_run=False))
+                result = await _join_public_operation(runtime.areset())
             documents = [dict(result)] if isinstance(result, Mapping) else []
             if not isinstance(result, Mapping) or result.get("errors"):
                 return WaitingForRepair(_repair_checkpoint(checkpoint, documents))

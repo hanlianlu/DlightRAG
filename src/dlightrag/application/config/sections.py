@@ -15,7 +15,6 @@ DLIGHTRAG_* → backend env vars so both modes work seamlessly.
 import json
 import math
 import os
-import re
 import ssl
 import warnings
 from collections.abc import Mapping
@@ -53,8 +52,6 @@ type ServiceRole = Literal["writer", "reader"]
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
-_PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PG_QUALIFIED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 _LOCAL_MCP_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://127.0.0.1:*",
@@ -91,31 +88,6 @@ def _validate_oauth_endpoint_url(value: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must not include query or fragment components")
     if parsed.scheme != "https" and parsed.hostname not in _LOCAL_API_HOSTS:
         raise ValueError(f"{field_name} must use HTTPS except on loopback")
-
-
-MinerULanguage = Literal[
-    "ch",
-    "ch_server",
-    "korean",
-    "ta",
-    "te",
-    "ka",
-    "th",
-    "el",
-    "arabic",
-    "east_slavic",
-    "cyrillic",
-    "devanagari",
-]
-MinerULocalBackend = Literal[
-    "pipeline",
-    "vlm-engine",
-    "hybrid-engine",
-]
-
-
-# Auto-derived from the typed sidecar models below.
-_LIGHTRAG_SIDECAR_ENV_KEYS: frozenset[str] = frozenset()  # populated after class definitions
 
 
 def _find_env_file() -> Path | None:
@@ -1001,10 +973,6 @@ class DlightragConfig(BaseSettings):
     @property
     def working_dir_path(self) -> Path:
         return Path(self.deployment.working_dir)
-
-    @property
-    def temp_dir(self) -> Path:
-        return self.working_dir_path / ".tmp"
 
     @property
     def input_dir_path(self) -> Path:

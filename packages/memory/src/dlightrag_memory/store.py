@@ -477,14 +477,6 @@ class InMemoryMemoryStore:
         )
         self._rows[(new.owner_id, new.memory_id)] = new
 
-    async def forget(self, *, owner_id: str, memory_id: str) -> bool:
-        key = (owner_id, memory_id)
-        current = self._rows.get(key)
-        if current is None or current.status != "active":
-            return False
-        self._rows[key] = replace(current, status="forgotten", updated_at=datetime.now(UTC))
-        return True
-
     async def clear_owner(
         self,
         *,

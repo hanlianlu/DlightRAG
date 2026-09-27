@@ -13,7 +13,6 @@ from __future__ import annotations
 
 CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
 CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
-CURRENT_DOCUMENT_PARSE_FAILED = "CURRENT_DOCUMENT_PARSE_FAILED"
 ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
@@ -54,19 +53,6 @@ class CurrentImagePayloadError(AnswerImageError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, error_kind=CURRENT_IMAGE_LIMIT_EXCEEDED)
-
-
-class CurrentDocumentParseError(AnswerInputError):
-    """A current attachment document could not be parsed safely."""
-
-    def __init__(self, safe_filename: str) -> None:
-        super().__init__(
-            public_message=(
-                f"Could not read {safe_filename}. Check that the document is valid and "
-                "the document parser is available."
-            ),
-            error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
-        )
 
 
 class AnswerInputOverflowError(AnswerInputError):
@@ -170,7 +156,6 @@ __all__ = [
     "ANSWER_INPUT_OVERFLOW",
     "ANSWER_STREAM_FAILED",
     "ANSWER_RESOURCE_INVALID",
-    "CURRENT_DOCUMENT_PARSE_FAILED",
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "INVALID_TOOL_CONFIGURATION",
@@ -183,7 +168,6 @@ __all__ = [
     "AnswerInputOverflowError",
     "AnswerResourceAdmissionError",
     "ChildToolNarrowingError",
-    "CurrentDocumentParseError",
     "CurrentImagePayloadError",
     "InvalidToolConfigurationError",
     "UnsupportedAnswerModeError",

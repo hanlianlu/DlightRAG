@@ -167,7 +167,7 @@ class Application:
         components = self._components
         from dlightrag.engine.answer.execution_settings import validate_agent_execution
 
-        self._workspace_root = validate_agent_execution(
+        validate_agent_execution(
             execution_environment=self._config.answer.agent.execution_environment,
             workspace_root=self._config.answer.agent.workspace_root,
             working_dir=self._config.deployment.working_dir,

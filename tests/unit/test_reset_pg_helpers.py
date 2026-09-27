@@ -120,18 +120,10 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
             return [{"tablename": 'dlightrag_bad"name'}]
 
         async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
-            if "information_schema.columns" in query:
-                assert "table_schema = 'public'" in query
-                assert args == ('dlightrag_bad"name',)
-                return {"?column?": 1}
-            if "COUNT(*)" in query:
-                assert query == (
-                    'SELECT COUNT(*) as count FROM public."dlightrag_bad""name" '
-                    "WHERE workspace = $1"
-                )
-                assert args == ("research",)
-                return {"count": 1}
-            raise AssertionError(query)
+            assert "information_schema.columns" in query
+            assert "table_schema = 'public'" in query
+            assert args == ('dlightrag_bad"name',)
+            return {"?column?": 1}
 
         async def fetchval(self, query: str, *args: object) -> str:
             assert query == "SELECT quote_ident($1)"
@@ -154,7 +146,7 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
     monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
     store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
-    cleaned = await store.clean_orphan_rows("research", dry_run=False)
+    cleaned = await store.clean_orphan_rows("research")
 
     assert cleaned == 1
     assert conn.executed[0] == (
@@ -190,12 +182,9 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
             return [{"tablename": "dlightrag_doc_metadata"}]
 
         async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
-            if "information_schema.columns" in query:
-                return {"?column?": 1}
-            if "COUNT(*)" in query:
-                return {"count": 1}
             # A "SELECT EXISTS ... has_rows" probe would mean the DROP path is back.
-            raise AssertionError(f"unexpected has_rows/DROP probe: {query}")
+            assert "information_schema.columns" in query, f"unexpected probe: {query}"
+            return {"?column?": 1}
 
         async def fetchval(self, query: str, *args: object) -> str:
             assert query == "SELECT quote_ident($1)"
@@ -216,7 +205,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
     monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
     store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
-    cleaned = await store.clean_orphan_rows("default", dry_run=False)
+    cleaned = await store.clean_orphan_rows("default")
 
     assert cleaned == 1
     assert conn.executed[0] == (
@@ -226,6 +215,53 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
     assert not any("DROP TABLE" in query for query, _ in conn.executed)
     assert not any("DELETE FROM dlightrag_workspace_meta" in query for query, _ in conn.executed)
     assert conn.closed is True
+
+
+async def test_clean_orphan_rows_resets_workspace_state_even_without_orphans(
+    monkeypatch, config
+) -> None:
+    """Earlier phases usually leave no orphans; the promotion and counter reset still runs once."""
+
+    class Conn:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, tuple[object, ...]]] = []
+
+        def transaction(self) -> _Tx:
+            return _Tx()
+
+        async def fetch(self, query: str) -> list[dict[str, str]]:
+            return [{"tablename": "lightrag_doc_chunks"}, {"tablename": "dlightrag_doc_metadata"}]
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
+            return {"?column?": 1}
+
+        async def fetchval(self, query: str, *args: object) -> object:
+            return args[0]
+
+        async def execute(self, query: str, *args: object) -> str:
+            self.executed.append((query, args))
+            return "DELETE 0"
+
+        async def close(self) -> None:
+            pass
+
+    conn = Conn()
+
+    async def fake_connect(**kwargs):
+        return conn
+
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
+
+    store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
+    cleaned = await store.clean_orphan_rows("research")
+
+    assert cleaned == 0
+    assert [query.split()[:3] for query, _ in conn.executed] == [
+        ["DELETE", "FROM", "public.lightrag_doc_chunks"],
+        ["DELETE", "FROM", "public.dlightrag_doc_metadata"],
+        ["DELETE", "FROM", "dlightrag_promotion_jobs"],
+        ["UPDATE", "dlightrag_workspace_meta", "SET"],
+    ]
 
 
 async def test_list_workspace_records_page_delegates_to_the_operational_registry(

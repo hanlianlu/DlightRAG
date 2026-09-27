@@ -86,10 +86,6 @@ class _VisualQueryCacheKey:
     payload_digest: bytes
 
 
-class RetrievalTimeoutError(RuntimeError):
-    """Legacy name for a terminal Retrieval timeout classification."""
-
-
 class RetrievalInputError(ValueError):
     """A top-level Retrieval request failed pre-acceptance validation."""
 
@@ -879,7 +875,6 @@ __all__ = [
     "RetrievalRunScheduler",
     "RetrievalService",
     "RetrievalSettings",
-    "RetrievalTimeoutError",
     "SchemaLookup",
     "retrieval_response_payload",
 ]

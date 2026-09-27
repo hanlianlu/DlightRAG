@@ -83,7 +83,6 @@ from dlightrag.engine.rag.workspace.settings import RagSettings
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
 if TYPE_CHECKING:
-    from dlightrag.engine.rag.corpus.ingestion.document_embedding import RobustDocumentEmbedder
     from dlightrag.engine.rag.lightrag.stores import LightRAGStores
     from dlightrag.engine.rag.retrieval.lightrag_backend import LightRAGMixBackend
     from dlightrag.engine.rag.retrieval.ports import BM25Search, RetrievalBackend
@@ -277,14 +276,12 @@ class WorkspaceRag:
         self._lightrag: Any = None  # Direct LightRAG reference
         self._metadata_index: MetadataIndexProtocol | None = None
         self._doc_status_lookup: DocStatusLookup | None = None
-        self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
         self._lightrag_stores: LightRAGStores | None = None
         self._ingestion_engine: UnifiedIngestionEngine | None = None
         self._bm25: BM25Search | None = None
         self._retrieval_orchestrator: UnifiedRetriever | None = None
         self._chat_models: LightRagChatModels | None = None
         self._multimodal_embedder: MultimodalEmbedder | None = None
-        self._document_embedder: RobustDocumentEmbedder | None = None
         self._rerank_func: Any = None
         self._direct_image_embedding_enabled = False
         self._visual_asset_resolver: VisualAssetResolver | None = None
@@ -403,7 +400,6 @@ class WorkspaceRag:
             multimodal_embedder,
             image_enabled=self._direct_image_embedding_enabled,
         )
-        self._document_embedder = document_embedder
 
         lightrag = self.backend.runtime.create(
             models=CorpusRuntimeModels(
@@ -536,8 +532,6 @@ class WorkspaceRag:
                 "WorkspaceRag not initialized. Use 'await WorkspaceRag.acreate()' instead."
             )
 
-    # -- Graph verification ----------------------------------------------------
-
     async def aclose(self) -> None:
         """Clean up storages and worker pools (best-effort)."""
         cancellation: asyncio.CancelledError | None = None
@@ -597,11 +591,9 @@ class WorkspaceRag:
     async def areset(
         self,
         *,
-        keep_files: bool = False,
-        dry_run: bool = False,
         preserve_run_sources_after: str | None = None,
     ) -> dict[str, Any]:
-        """Completely remove this workspace -- all data, graph schemas, and files.
+        """Clear this workspace's corpus content and files; its identity stays registered.
 
         Delegates to the dedicated five-phase RAG reset module.
         """
@@ -614,12 +606,9 @@ class WorkspaceRag:
             lightrag=self.lightrag,
             metadata_index=self._metadata_index,
             maintenance=self.backend.maintenance,
-            keep_files=keep_files,
-            dry_run=dry_run,
             preserve_run_sources_after=preserve_run_sources_after,
         )
-        if not dry_run:
-            self._initialized = False
+        self._initialized = False
         return result
 
     async def _shutdown_worker_pools(self) -> None:

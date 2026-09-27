@@ -779,9 +779,9 @@ General errors are `{detail, error_type, error_kind?}` where `error_type` is
 answer error kinds are:
 
 - `CURRENT_IMAGES_UNSUPPORTED`, `CURRENT_IMAGE_LIMIT_EXCEEDED`,
-  `CURRENT_DOCUMENT_PARSE_FAILED`, `ANSWER_IMAGE_CAPABILITY_UNKNOWN`,
-  `ANSWER_INPUT_OVERFLOW`, `MODEL_CAPABILITY_UNAVAILABLE`,
-  `unsupported_resource_capability`, and `ANSWER_RESOURCE_INVALID`;
+  `ANSWER_IMAGE_CAPABILITY_UNKNOWN`, `ANSWER_INPUT_OVERFLOW`,
+  `MODEL_CAPABILITY_UNAVAILABLE`, `unsupported_resource_capability`, and
+  `ANSWER_RESOURCE_INVALID`;
 - `invalid_tool_configuration`, `unsupported_answer_mode`, `routing_failed`,
   `tool_contract_changed`, `run_abandoned`, and `run_execution_failed`; and
 - `ANSWER_STREAM_FAILED`.

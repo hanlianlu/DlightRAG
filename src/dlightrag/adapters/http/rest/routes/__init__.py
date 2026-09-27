@@ -6,7 +6,6 @@ from fastapi import APIRouter
 from .answer_runs import router as answer_runs_router
 from .corpus_mutations import router as corpus_mutations_router
 from .files import router as files_router
-from .files import serve_file
 from .images import router as images_router
 from .memory import router as memory_router
 from .metadata import router as metadata_router
@@ -29,4 +28,4 @@ router.include_router(metadata_router)
 router.include_router(memory_router)
 router.include_router(model_catalogue_router)
 
-__all__ = ["router", "serve_file"]
+__all__ = ["router"]

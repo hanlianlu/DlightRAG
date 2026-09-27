@@ -42,7 +42,6 @@ from dlightrag.engine.answer.research.persistence import (
     WaitChildGuidance,
 )
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
-from dlightrag.engine.runtime.errors import RunCancelledError
 
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
 type ChildContextMode = Literal["isolated", "parent"]
@@ -920,7 +919,7 @@ async def _run_one(
                 parent_call_id,
                 context_snapshot,
             )
-    except (RunCancellationObserved, RunCancelledError) as exc:
+    except RunCancellationObserved as exc:
         await _finish_cancelled_child(host, child_id.value)
         raise _ParentRunCancelled from exc
     except _ParentRunCancelled:
@@ -1046,7 +1045,7 @@ async def _check_cancelled(host: SubagentHost) -> None:
         return
     try:
         await host.check_cancelled()
-    except (RunCancellationObserved, RunCancelledError) as exc:
+    except RunCancellationObserved as exc:
         raise _ParentRunCancelled from exc
 
 

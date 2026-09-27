@@ -473,13 +473,6 @@ WHERE owner_id = $1 AND run_id = $2 AND request_id = $3
 RETURNING 1
 """
 
-_BIND_CHILD_PARENT_INTENT = """
-UPDATE dlightrag_answer_child_sessions
-SET parent_intent_id = $4, updated_at = NOW()
-WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
-  AND parent_intent_id IS NULL
-"""
-
 _FINISH_CHILD_SESSION = """
 UPDATE dlightrag_answer_child_sessions
 SET status = $4,
@@ -1858,36 +1851,5 @@ class ChildRunStoreMixin:
                     cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
                 )
                 return True
-
-        return await self._run_write(_operation)
-
-    async def bind_child_parent_intent(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        child_session_id: str,
-        parent_intent_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-    ) -> bool:
-        owner = _require_owner(owner_id)
-        run_uuid = parse_run_id(run_id)
-        child_uuid = parse_run_id(child_session_id)
-        intent_uuid = parse_run_id(parent_intent_id)
-        if run_uuid is None or child_uuid is None or intent_uuid is None:
-            raise ValueError("child session ids must be canonical UUIDs")
-
-        async def _operation(conn: Any) -> bool:
-            async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
-                    return False
-                tag = await conn.execute(
-                    _BIND_CHILD_PARENT_INTENT, owner, run_uuid, child_uuid, intent_uuid
-                )
-                return not str(tag).endswith(" 0")
 
         return await self._run_write(_operation)

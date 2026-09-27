@@ -193,7 +193,6 @@ def corpus_admin_settings(config: DlightragConfig) -> CorpusAdminSettings:
         default_workspace_id=normalize_workspace(config.deployment.workspace),
         default_display_name=config.deployment.workspace,
         default_embedding_model=config.models.embedding.model,
-        input_root=config.input_dir_path,
         read_only=config.is_reader,
     )
 
@@ -203,23 +202,15 @@ def model_settings_for_role(config: DlightragConfig, role: ChatModelSelector) ->
     return config.models.chat.resolve(role)
 
 
-def model_profile_for_settings(
-    config: DlightragConfig,
-    settings: ModelSettings,
-) -> ModelProfile:
-    """Resolve endpoint facts and validate its configured semantic reasoning."""
-    del config
+def model_profile_for_role(config: DlightragConfig, role: ChatModelSelector) -> ModelProfile:
+    """Resolve one role's capacity profile and validate its configured reasoning."""
+    settings = model_settings_for_role(config, role)
     profile = resolve_model_profile(
         model_endpoint_fingerprint(settings.provider, settings.model, settings.base_url)
     )
     resolve_reasoning(profile.reasoning, settings.reasoning)
     resolve_reasoning(profile.reasoning, settings.effective_agentic_reasoning)
     return profile
-
-
-def model_profile_for_role(config: DlightragConfig, role: ChatModelSelector) -> ModelProfile:
-    """Resolve one role's model settings and independent capacity profile."""
-    return model_profile_for_settings(config, model_settings_for_role(config, role))
 
 
 def rerank_scoring_model_settings(config: DlightragConfig) -> ModelSettings:
@@ -239,7 +230,6 @@ def rag_settings(config: DlightragConfig) -> RagSettings:
 
 __all__ = [
     "model_profile_for_role",
-    "model_profile_for_settings",
     "model_settings_for_role",
     "rag_settings",
     "rerank_scoring_model_settings",

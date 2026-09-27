@@ -36,7 +36,7 @@ from dlightrag.engine.answer.capabilities import (
     RequestModelContext,
 )
 from dlightrag.engine.answer.errors import (
-    CurrentDocumentParseError,
+    AnswerInputOverflowError,
     CurrentImagePayloadError,
 )
 from dlightrag.engine.answer.execution import (
@@ -762,14 +762,14 @@ async def test_child_model_calls_inherit_run_scheduler_ownership() -> None:
 async def test_actionable_answer_errors_keep_their_public_message() -> None:
     executor = _executor()
     executor._execute = AsyncMock(  # type: ignore[method-assign]
-        side_effect=CurrentDocumentParseError("report.pdf")
+        side_effect=AnswerInputOverflowError("Attached documents exceed the context window.")
     )
 
     with pytest.raises(RunExecutionError) as raised:
         await executor.execute(cast(RunSession, MagicMock()))
 
-    assert raised.value.kind == "CURRENT_DOCUMENT_PARSE_FAILED"
-    assert "report.pdf" in raised.value.public_message
+    assert raised.value.kind == "ANSWER_INPUT_OVERFLOW"
+    assert raised.value.public_message == "Attached documents exceed the context window."
 
 
 @pytest.mark.parametrize(

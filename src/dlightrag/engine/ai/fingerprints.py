@@ -9,7 +9,7 @@ from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.engine.ai.contracts import ApiFamily
-from dlightrag.engine.ai.settings import EmbeddingSettings, ModelSettings
+from dlightrag.engine.ai.settings import ModelSettings
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,15 +120,9 @@ def model_invocation_fingerprint(settings: ModelSettings) -> ModelInvocationFing
     )
 
 
-def embedding_endpoint_fingerprint(settings: EmbeddingSettings) -> ModelEndpointFingerprint:
-    """Project embedding settings into their endpoint identity."""
-    return model_endpoint_fingerprint(settings.provider, settings.model, settings.base_url)
-
-
 __all__ = [
     "ModelEndpointFingerprint",
     "ModelInvocationFingerprint",
-    "embedding_endpoint_fingerprint",
     "model_endpoint_fingerprint",
     "model_invocation_fingerprint",
     "normalized_endpoint_fingerprint",

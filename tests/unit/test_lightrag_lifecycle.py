@@ -56,26 +56,7 @@ class TestShutdownLightRagWorkerPools:
         shared.shutdown.assert_awaited_once_with(graceful=True)
         rerank.shutdown.assert_awaited_once_with(graceful=True)
 
-    async def test_dry_run_counts_without_shutting_down(self) -> None:
-        embedding = _shutdown_target()
-        llm = _shutdown_target()
-        lightrag = SimpleNamespace(
-            embedding_func=SimpleNamespace(func=embedding),
-            _role_llm_states={
-                "query": SimpleNamespace(wrapped=SimpleNamespace(func=embedding)),
-                "answer": SimpleNamespace(wrapped=SimpleNamespace(func=llm)),
-            },
-        )
-
-        count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
-
-        assert count == 2
-        embedding.shutdown.assert_not_called()
-        llm.shutdown.assert_not_called()
-
-    async def test_dry_run_counts_discovered_targets_but_real_mode_counts_only_successful_shutdowns(
-        self, caplog
-    ) -> None:
+    async def test_counts_only_successful_shutdowns(self, caplog) -> None:
         broken = _shutdown_target()
         healthy = _shutdown_target()
         lightrag = SimpleNamespace(
@@ -86,11 +67,9 @@ class TestShutdownLightRagWorkerPools:
         broken.shutdown.side_effect = RuntimeError("boom")
 
         with caplog.at_level(logging.DEBUG):
-            dry_run_count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
-            real_count = await shutdown_lightrag_worker_pools(lightrag)
+            count = await shutdown_lightrag_worker_pools(lightrag)
 
-        assert dry_run_count == 2
-        assert real_count == 1
+        assert count == 1
         broken.shutdown.assert_awaited_once_with(graceful=True)
         healthy.shutdown.assert_awaited_once_with(graceful=True)
         assert "Failed to shutdown embedding_func worker pool" in caplog.text

@@ -199,7 +199,7 @@ name = "Transports depend on Application Corpus Administration"
 type = "forbidden"
 allow_indirect_imports = true
 source_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
-forbidden_modules = ["dlightrag.engine.rag.workspace.pool", "dlightrag.engine.rag.workspace.ports", "dlightrag.engine.rag.corpus.ingest_jobs", "dlightrag.engine.rag.corpus.metadata_index", "dlightrag.engine.rag.retrieval.ports", "dlightrag.engine.rag.corpus.ingestion", "dlightrag.engine.rag.corpus.downloads", "dlightrag.engine.rag.retrieval.federation", "dlightrag.engine.rag.lightrag", "dlightrag.engine.rag.retrieval.rerank", "dlightrag.engine.rag.corpus.reset", "dlightrag.engine.rag.workspace.settings", "dlightrag.engine.rag.corpus.visual_assets", "dlightrag.engine.rag.workspace.workspace_rag"]
+forbidden_modules = ["dlightrag.engine.rag.workspace.pool", "dlightrag.engine.rag.workspace.ports", "dlightrag.engine.rag.corpus.metadata_index", "dlightrag.engine.rag.retrieval.ports", "dlightrag.engine.rag.corpus.ingestion", "dlightrag.engine.rag.corpus.downloads", "dlightrag.engine.rag.retrieval.federation", "dlightrag.engine.rag.lightrag", "dlightrag.engine.rag.retrieval.rerank", "dlightrag.engine.rag.corpus.reset", "dlightrag.engine.rag.workspace.settings", "dlightrag.engine.rag.corpus.visual_assets", "dlightrag.engine.rag.workspace.workspace_rag"]
 
 [[tool.importlinter.contracts]]
 id = "answer-independence"

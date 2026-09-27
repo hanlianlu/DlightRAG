@@ -221,7 +221,6 @@ def compose_research_tools(
                 access,
                 resource_reader=resource_reader,
                 spill=spill,
-                image_preparer=image_preparer,
             ),
             evidence,
         ),

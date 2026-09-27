@@ -15,23 +15,6 @@ class IncompatibleActiveRunError(RuntimeError):
     """An accepted active Run cannot execute under this Runtime revision."""
 
 
-class RunCancelledError(RuntimeError):
-    """The run this caller waited on was cancelled by its owner."""
-
-    def __init__(self, run_id: str) -> None:
-        super().__init__(f"Run {run_id} was cancelled")
-        self.run_id = run_id
-
-
-class RunFailedError(RuntimeError):
-    """The run this caller waited on failed with one public error."""
-
-    def __init__(self, kind: str, message: str) -> None:
-        super().__init__(message)
-        self.error_kind = kind
-        self.public_message = message
-
-
 class RunExecutionError(RuntimeError):
     """An owning executor's already-classified public run failure."""
 
@@ -43,8 +26,6 @@ class RunExecutionError(RuntimeError):
 
 __all__ = [
     "IncompatibleActiveRunError",
-    "RunCancelledError",
-    "RunFailedError",
     "RunExecutionError",
     "RunSchemaError",
 ]

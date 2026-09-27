@@ -245,11 +245,6 @@ class FailedFilesResponse(ClientContractModel):
     fetched_rows: int
 
 
-class DeleteFilesResponse(ClientContractModel):
-    results: list[dict[str, Any]]
-    workspace: str
-
-
 class WorkspaceRecord(ClientContractModel):
     workspace: str
     display_name: str

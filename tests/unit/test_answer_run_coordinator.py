@@ -610,14 +610,6 @@ def _coordinator(
     )
 
 
-def _traceback_depth(exc: BaseException) -> int:
-    depth, frame = 0, exc.__traceback__
-    while frame is not None:
-        depth += 1
-        frame = frame.tb_next
-    return depth
-
-
 class TestSchedulingAndLease:
     async def test_reserves_a_local_slot_before_it_claims_a_row(self) -> None:
         store = _MemoryStore()
@@ -1425,8 +1417,8 @@ class TestDurableProgress:
 
         async def body(session: RunSession) -> RunExecutionOutcome:
             raise RunExecutionError(
-                "CURRENT_DOCUMENT_PARSE_FAILED",
-                "Could not read report.pdf.",
+                "ANSWER_INPUT_OVERFLOW",
+                "Attached documents exceed the context window.",
             )
 
         coordinator = _coordinator(store, _Executor(body), query_worker_concurrency=1)
@@ -1439,8 +1431,8 @@ class TestDurableProgress:
 
         payload = store.events["run-a"][-1].payload
         assert payload == {
-            "kind": "CURRENT_DOCUMENT_PARSE_FAILED",
-            "message": "Could not read report.pdf.",
+            "kind": "ANSWER_INPUT_OVERFLOW",
+            "message": "Attached documents exceed the context window.",
         }
 
     async def test_an_unclassified_failure_never_leaks_its_exception_text(self) -> None:

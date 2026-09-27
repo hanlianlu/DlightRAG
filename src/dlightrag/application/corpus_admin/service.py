@@ -365,7 +365,6 @@ class CorpusAdminSettings:
     default_workspace_id: str
     default_display_name: str
     default_embedding_model: str
-    input_root: Path | str
     read_only: bool
 
 
@@ -626,17 +625,6 @@ class CorpusAdmin:
         if isinstance(target, _EngineRedirectDownloadTarget):
             return RedirectDownloadTarget(url=target.url)
         raise SourceDownloadInvalidError("Source download target is invalid")
-
-    async def preview_delete_files(
-        self,
-        workspace_id: str,
-        *,
-        file_paths: list[str] | None = None,
-        filenames: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Resolve exact deletion identities without taking the mutation barrier."""
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        return await runtime.adelete_files(file_paths=file_paths, filenames=filenames, dry_run=True)
 
     async def get_visual_asset(
         self,

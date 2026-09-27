@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 
@@ -22,6 +22,7 @@ from dlightrag.application.corpus_admin.mutations import (
     validate_corpus_mutation_prepared_input,
 )
 from dlightrag.engine.dependencies import TransientDependencyError
+from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.runtime.records import (
     Deferred,
     Succeeded,
@@ -359,27 +360,30 @@ def _runtime(*, tracked: dict[str, Any] | None = None) -> SimpleNamespace:
         aget_docs_by_track_id=AsyncMock(return_value=tracked or {}),
         apipeline_process_enqueue_documents=AsyncMock(),
     )
+    # Autospecced so a call the real WorkspaceRag signature rejects fails here too.
+    real = create_autospec(WorkspaceRag, instance=True)
+    real.aingest.return_value = {
+        "processed": 1,
+        "errors": [],
+        "results": [{"doc_id": "doc-1", "chunks": ["chunk-1"]}],
+    }
+    real.adelete_files.return_value = [{"identifier": "doc-1", "status": "deleted"}]
+    real.aretryable_document_ids.return_value = ("doc-1",)
+    real.aretry_failed_docs.return_value = {
+        "retried": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "succeeded_docs": [{"doc_id": "doc-1"}],
+        "failed_docs": [],
+    }
+    real.areset.return_value = {"documents_deleted": 1, "errors": []}
     return SimpleNamespace(
         lightrag=lightrag,
-        aingest=AsyncMock(
-            return_value={
-                "processed": 1,
-                "errors": [],
-                "results": [{"doc_id": "doc-1", "chunks": ["chunk-1"]}],
-            }
-        ),
-        adelete_files=AsyncMock(return_value=[{"identifier": "doc-1", "status": "deleted"}]),
-        aretryable_document_ids=AsyncMock(return_value=("doc-1",)),
-        aretry_failed_docs=AsyncMock(
-            return_value={
-                "retried": 1,
-                "succeeded": 1,
-                "failed": 0,
-                "succeeded_docs": [{"doc_id": "doc-1"}],
-                "failed_docs": [],
-            }
-        ),
-        areset=AsyncMock(return_value={"documents_deleted": 1, "errors": []}),
+        aingest=real.aingest,
+        adelete_files=real.adelete_files,
+        aretryable_document_ids=real.aretryable_document_ids,
+        aretry_failed_docs=real.aretry_failed_docs,
+        areset=real.areset,
     )
 
 
@@ -549,10 +553,7 @@ async def test_fresh_reset_preserves_later_run_sources_and_evicts_only_runtime()
     outcome = await executor.execute(cast(Any, session))
 
     assert isinstance(outcome, Succeeded)
-    runtime.areset.assert_awaited_once_with(
-        dry_run=False,
-        preserve_run_sources_after=_RUN_ID,
-    )
+    runtime.areset.assert_awaited_once_with(preserve_run_sources_after=_RUN_ID)
     pool.evict.assert_awaited_once_with("default")
 
 
@@ -727,7 +728,7 @@ async def test_workspace_delete_resets_everything_then_retires_identity_and_succ
     assert isinstance(outcome, Succeeded)
     assert outcome.result["action"] == "delete_workspace"
     # No source is preserved: every queued successor is cancelled, never replayed.
-    runtime.areset.assert_awaited_once_with(dry_run=False)
+    runtime.areset.assert_awaited_once_with()
     assert session.handoff_started is True
     assert session.phases == ["resetting_corpus", "removing_workspace"]
     assert maintenance.unregistered == ["research"]
