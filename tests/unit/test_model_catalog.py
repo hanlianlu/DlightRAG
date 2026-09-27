@@ -402,7 +402,15 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
             _GROK_LEVELS,
         ),
         (
-            "xiaomi/mimo-v2.5",
+            "xiaomi/mimo-v2.6-pro",
+            1_048_576,
+            None,
+            131_072,
+            True,
+            _MIMO_LEVELS,
+        ),
+        (
+            "xiaomi/mimo-v2.6-flash",
             1_048_576,
             None,
             131_072,

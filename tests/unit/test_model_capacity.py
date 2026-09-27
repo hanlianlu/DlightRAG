@@ -53,13 +53,13 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
 def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() -> None:
     fingerprint = ModelEndpointFingerprint(
         provider="openai",
-        model="xiaomi/mimo-v2.5",
+        model="xiaomi/mimo-v2.6-flash",
         endpoint_fingerprint=normalized_endpoint_fingerprint("https://openrouter.ai/api/v1"),
     )
     overlay = parse_catalogue_entry(
         {
             "provider": "openai",
-            "model": "xiaomi/mimo-v2.5",
+            "model": "xiaomi/mimo-v2.6-flash",
             "base_url": "https://openrouter.ai/api/v1",
             "profile": {
                 "context_window_tokens": 90_000,
@@ -78,6 +78,7 @@ def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() ->
         MODEL_CATALOGUE.replace_overlay(previous)
 
     catalog_profile = resolve_model_profile(fingerprint)
+    assert MODEL_CATALOGUE.is_builtin(fingerprint)
     assert catalog_profile.context_window_tokens == 1_048_576
     assert catalog_profile.max_output_tokens == 131_072
     assert catalog_profile.supports_images is True

@@ -4,7 +4,10 @@
 import pytest
 from pydantic import ValidationError
 
+from dlightrag.engine.ai.catalog import _BUILTIN_MODEL_ENTRIES, MODEL_CATALOGUE
+from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import (
+    REASONING_LEVELS,
     ReasoningConfigurationError,
     ReasoningLevels,
     ReasoningProfile,
@@ -134,6 +137,63 @@ def test_response_family_translates_compatible_profiles_to_reasoning_effort(
     assert reasoning_request_kwargs(resolved, api_family="response") == {
         "reasoning": {"effort": expected_effort}
     }
+
+
+def test_response_family_enables_an_on_off_openrouter_toggle_at_medium_effort() -> None:
+    """The Response API names reasoning only by effort; enabled=true is medium on OpenRouter."""
+    profile = _profile(off="disabled", low="enabled", high=None, max=None)
+
+    assert reasoning_request_kwargs(resolve_reasoning(profile, "low"), api_family="response") == {
+        "reasoning": {"effort": "medium"}
+    }
+    assert reasoning_request_kwargs(resolve_reasoning(profile, "off"), api_family="response") == {
+        "reasoning": {"effort": "none"}
+    }
+    assert reasoning_request_kwargs(resolve_reasoning(profile, "low")) == {
+        "reasoning": {"enabled": True}
+    }
+
+
+#: Effort values OpenRouter's unified reasoning parameter documents.
+_RESPONSE_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        entry
+        for entry in _BUILTIN_MODEL_ENTRIES
+        if entry.profile.reasoning is not None
+        and entry.profile.reasoning.format in {"openai", "openrouter", "deepseek"}
+    ],
+    ids=lambda entry: f"{entry.provider}:{entry.model}",
+)
+def test_every_packaged_level_translates_to_a_response_effort(entry) -> None:
+    profile = entry.profile.reasoning
+    for level in REASONING_LEVELS:
+        if getattr(profile.levels, level) is None:
+            continue
+        resolved = resolve_reasoning(profile, level)
+        effort = reasoning_request_kwargs(resolved, api_family="response")["reasoning"]["effort"]
+        assert effort in _RESPONSE_EFFORTS, (level, effort)
+
+
+def test_packaged_mimo_toggle_enables_reasoning_at_medium_on_the_response_family() -> None:
+    fingerprint = model_endpoint_fingerprint(
+        "openai", "xiaomi/mimo-v2.6-flash", "https://openrouter.ai/api/v1"
+    )
+    profile = MODEL_CATALOGUE.snapshot.resolve(fingerprint)
+    assert profile is not None and profile.reasoning is not None
+
+    for requested in ("low", "high", "max"):
+        resolved = resolve_reasoning(profile.reasoning, requested)
+        assert reasoning_request_kwargs(resolved, api_family="response") == {
+            "reasoning": {"effort": "medium"}
+        }
+        assert reasoning_request_kwargs(resolved) == {"reasoning": {"enabled": True}}
+    off = resolve_reasoning(profile.reasoning, "off")
+    assert reasoning_request_kwargs(off, api_family="response") == {"reasoning": {"effort": "none"}}
+    assert reasoning_request_kwargs(off) == {"reasoning": {"enabled": False}}
 
 
 def test_response_family_rejects_non_response_reasoning_formats() -> None:

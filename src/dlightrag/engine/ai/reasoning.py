@@ -231,7 +231,14 @@ def reasoning_request_kwargs(
             raise ReasoningConfigurationError(
                 f"reasoning format {format_name!r} cannot be represented by the Response API"
             )
-        effort = "none" if level == "off" else value
+        if level == "off":
+            effort = "none"
+        elif format_name == "openrouter" and value == "enabled":
+            # An on/off-only endpoint has no effort to name. This path names reasoning
+            # by effort, and OpenRouter documents enabled=true as medium effort.
+            effort = "medium"
+        else:
+            effort = value
         return {"reasoning": {"effort": effort}}
 
     if format_name == "openrouter":

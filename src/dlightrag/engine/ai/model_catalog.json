@@ -439,7 +439,30 @@
     },
     {
       "provider": "openai",
-      "model": "xiaomi/mimo-v2.5",
+      "model": "xiaomi/mimo-v2.6-pro",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1048576,
+        "max_input_tokens": null,
+        "max_output_tokens": 131072,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": "disabled",
+            "minimal": null,
+            "low": "enabled",
+            "medium": null,
+            "high": null,
+            "xhigh": null,
+            "max": null
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "xiaomi/mimo-v2.6-flash",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 1048576,

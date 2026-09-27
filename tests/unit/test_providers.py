@@ -1169,7 +1169,7 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = create
             turn = await p.complete_tool_turn(
                 [{"role": "user", "content": "latest inflation"}],
-                "mimo-v2.5",
+                "mimo-v2.6-flash",
                 tools=[tool],
                 tool_choice="required",
             )
@@ -1222,7 +1222,7 @@ class TestOpenAICompatibleProvider:
                     usage=None,
                 )
             )
-            await p.complete_tool_turn([replay], "mimo-v2.5", tools=[])
+            await p.complete_tool_turn([replay], "mimo-v2.6-flash", tools=[])
         replay_args = replay_client.return_value.chat.completions.create.await_args
         assert replay_args is not None
         replay_message = replay_args.kwargs["messages"][0]
@@ -1250,7 +1250,7 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=response)
             turn = await p.complete_tool_turn(
                 [{"role": "user", "content": "q"}],
-                "mimo-v2.5",
+                "mimo-v2.6-flash",
                 tools=[],
             )
 
@@ -1270,7 +1270,7 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=response)
             turn = await p.complete_tool_turn(
                 [{"role": "user", "content": "q"}],
-                "mimo-v2.5",
+                "mimo-v2.6-flash",
                 tools=[],
             )
 
@@ -1348,7 +1348,7 @@ class TestOpenAICompatibleProvider:
         with patch.object(p, "_open_stream", AsyncMock(return_value=fake_stream())):
             turn = await p.complete_tool_turn_streaming(
                 [{"role": "user", "content": "latest inflation"}],
-                "mimo-v2.5",
+                "mimo-v2.6-flash",
                 tools=[],
                 emit_text=emit_text,
             )
@@ -1735,7 +1735,7 @@ class TestOpenAICompatibleProvider:
                 token
                 async for token in p.stream_tool_text(
                     messages,
-                    "mimo-v2.5",
+                    "mimo-v2.6-flash",
                 )
             ]
 
