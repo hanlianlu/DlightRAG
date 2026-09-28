@@ -62,7 +62,7 @@ from dlightrag.engine.answer.history import (
 )
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
-from dlightrag.engine.answer.memory import memory_owner_allowed, standing_memory_for_acceptance
+from dlightrag.engine.answer.memory import standing_memory_for_acceptance
 from dlightrag.engine.answer.mode import (
     AnswerMode,
     ModeCapability,
@@ -73,6 +73,7 @@ from dlightrag.engine.answer.mode import (
     resource_role,
     valid_modes,
 )
+from dlightrag.engine.answer.owner import personal_owner
 from dlightrag.engine.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.results import AnswerResult, restore_answer_result
@@ -912,7 +913,7 @@ class AnswerService:
             self._history_resource_input(owner_id, resource)
             for resource in request.history_resources
         )
-        memory_enabled = memory_owner_allowed(auth_mode)
+        memory_enabled = personal_owner(auth_mode)
         memory_epoch = 0
         if memory_enabled and self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)

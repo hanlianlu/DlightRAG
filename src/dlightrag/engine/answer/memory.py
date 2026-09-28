@@ -26,6 +26,8 @@ from dlightrag_memory.policy import (
     evaluate_memory_operation,
 )
 
+from dlightrag.engine.answer.owner import personal_owner
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryCapability:
@@ -33,15 +35,6 @@ class MemoryCapability:
 
     enabled: bool
     epoch: int
-
-
-def memory_owner_allowed(auth_mode: str) -> bool:
-    """Allow JWT owners and the stable local single-user deployment owner.
-
-    ``simple`` remains a shared password bucket and is not a personal identity.
-    Eligibility is root product policy, not package behaviour.
-    """
-    return auth_mode in {"jwt", "none"}
 
 
 def render_auto_recall(records: tuple[MemoryRecord, ...]) -> str:
@@ -88,7 +81,7 @@ def reserved_auto_recall_text() -> str:
 
 def standing_memory_for_acceptance(auth_mode: str) -> str:
     """Reserve full auto-recall at accept so execute cannot overflow after 202."""
-    if not memory_owner_allowed(auth_mode):
+    if not personal_owner(auth_mode):
         return ""
     return reserved_auto_recall_text()
 
@@ -118,7 +111,6 @@ __all__ = [
     "MemoryStatus",
     "MemoryUnavailableError",
     "evaluate_memory_operation",
-    "memory_owner_allowed",
     "render_auto_recall",
     "reserved_auto_recall_text",
     "standing_memory_for_acceptance",

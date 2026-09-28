@@ -43,6 +43,7 @@ from dlightrag.engine.answer.execution.connection_binding import (
     StaleConnectionBindingError,
     decode_connection_bindings,
 )
+from dlightrag.engine.answer.owner import personal_owner
 
 logger = logging.getLogger(__name__)
 
@@ -1623,7 +1624,8 @@ class PGConnectionPinWriter:
         if decode_connection_bindings(payload.get("run_connection_bindings", [])) != bindings:
             raise ValueError("Run Connection input and normalized pins differ")
         if bindings and (
-            payload.get("auth_mode", "none") not in {"none", "jwt"} or payload.get("mode") == "fast"
+            not personal_owner(str(payload.get("auth_mode", "none")))
+            or payload.get("mode") == "fast"
         ):
             raise ValueError("Run Connections require eligible Research acceptance")
         ordered = sorted(bindings, key=lambda b: (b.owner_id, b.connection_id))

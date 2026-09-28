@@ -17,8 +17,8 @@ from dlightrag_memory.store import default_purge_cutoff
 from dlightrag.engine.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryCapability,
-    memory_owner_allowed,
 )
+from dlightrag.engine.answer.owner import personal_owner
 
 from .errors import MemoryDisabledError
 from .memory_list import (
@@ -304,7 +304,7 @@ class MemoryService:
 
     @staticmethod
     def _require_owner(auth_mode: str) -> None:
-        if not memory_owner_allowed(auth_mode):
+        if not personal_owner(auth_mode):
             raise MemoryUnavailableError()
 
 

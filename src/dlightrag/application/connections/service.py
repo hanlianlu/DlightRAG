@@ -30,6 +30,7 @@ from dlightrag.engine.answer.execution.connection_binding import (
     ResearchToolClaim,
     RunConnectionBinding,
 )
+from dlightrag.engine.answer.owner import personal_owner
 from dlightrag.engine.network_admission import (
     validate_credential_free_query,
     validate_public_http_url,
@@ -94,19 +95,15 @@ class Connections:
         self._worker = uuid.uuid4().hex
         self._tasks: list[asyncio.Task[None]] = []
 
-    @staticmethod
-    def eligible(auth_mode: str) -> bool:
-        return auth_mode in {"jwt", "none"}
-
     def _authorize(self, owner_id: str, auth_mode: str) -> None:
-        if not owner_id or not self.eligible(auth_mode):
+        if not owner_id or not personal_owner(auth_mode):
             raise ConnectionsError(
                 "Personal Connections unavailable for this authentication mode", 403
             )
 
     async def bind_research(self, *, owner_id: str, auth_mode: str) -> BoundResearchConnections:
         """Read only complete enabled local definitions; never discover on acceptance."""
-        if not owner_id or not self.eligible(auth_mode):
+        if not owner_id or not personal_owner(auth_mode):
             return BoundResearchConnections()
         catalogues = await self._store.research_catalogues(owner_id)
         return BoundResearchConnections(
@@ -143,7 +140,7 @@ class Connections:
         with no pins, a retained catalogue that no longer resolves -- returns the
         same empty mapping, so a missing label can never fail or blank a trace.
         """
-        if not owner_id or not self.eligible(auth_mode):
+        if not owner_id or not personal_owner(auth_mode):
             return {}
         facts = await self._store.pinned_tool_facts(owner_id=owner_id, run_id=run_id)
         return {fact.local_name: label for fact in facts if (label := _tool_label(fact)) != ""}

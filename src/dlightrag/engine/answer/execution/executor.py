@@ -148,13 +148,13 @@ from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.links.cards import collect_link_cards
 from dlightrag.engine.answer.media import evidence_images_from_sources
 from dlightrag.engine.answer.memory import (
-    memory_owner_allowed,
     render_auto_recall,
     standing_memory_for_acceptance,
 )
 from dlightrag.engine.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.owner import personal_owner
 from dlightrag.engine.answer.publication import (
     ArtifactAttachment,
     PublicationLimits,
@@ -1700,7 +1700,7 @@ class AnswerExecutor:
         memory_epoch = int(prepared_input.get("profile_memory_epoch") or 0)
         memory_recall_record_count = 0
         memory_recall_chars = 0
-        if self._memory is None or not memory_owner_allowed(auth_mode):
+        if self._memory is None or not personal_owner(auth_mode):
             recall_allowed = False
         elif recall_allowed and self._memory_capability_current is not None:
             recall_allowed = await self._memory_capability_current(
@@ -3305,7 +3305,7 @@ def _worst_case_recall_block(prepared_input: Mapping[str, Any] | None) -> str:
     if not bool(prepared.get("profile_memory_enabled", True)):
         return ""
     auth_mode = str(prepared.get("auth_mode") or "none")
-    return standing_memory_for_acceptance(auth_mode) if memory_owner_allowed(auth_mode) else ""
+    return standing_memory_for_acceptance(auth_mode) if personal_owner(auth_mode) else ""
 
 
 def _trailing_unanswered_host_turn(entries: Sequence[SessionEntry]) -> EntryId | None:

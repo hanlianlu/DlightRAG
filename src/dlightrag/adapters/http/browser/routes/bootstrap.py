@@ -16,7 +16,6 @@ from dlightrag.adapters.http.browser.workspace_models import (
     project_workspace_record,
 )
 from dlightrag.application.access import AccessAction, WorkspaceRecord
-from dlightrag.application.connections import Connections
 from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
     WorkspaceCatalogPageRequest,
@@ -27,6 +26,7 @@ from dlightrag.engine.answer.client_contracts import (
     ClientContractModel,
 )
 from dlightrag.engine.answer.image_capability import ImageCapabilityStatus
+from dlightrag.engine.answer.owner import personal_owner
 
 router = APIRouter()
 
@@ -149,7 +149,7 @@ async def build_web_bootstrap(
     extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
     attachment_limit = application.config.answer.generation.max_attachment_bytes
     return WebBootstrap(
-        personal_mcp_connections=Connections.eligible(request.state.user_context.auth_mode),
+        personal_mcp_connections=personal_owner(request.state.user_context.auth_mode),
         workspaces=workspaces,
         workspaces_next_cursor=next_cursor,
         primary_workspace=primary,
