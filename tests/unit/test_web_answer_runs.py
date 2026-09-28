@@ -13,7 +13,7 @@ import json
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -35,6 +35,7 @@ from dlightrag.application.answer_runs import (
     ChildRosterPage,
     ChildRosterPageRequest,
 )
+from dlightrag.application.config import DlightragConfig
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -54,7 +55,8 @@ from dlightrag.engine.answer.errors import (
     UnsupportedAnswerModeError,
     UnsupportedResourceCapabilityError,
 )
-from tests.unit.conftest import answer_capability_view
+from tests.support.application_double import application_double as build_application_double
+from tests.unit.conftest import answer_capabilities
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
     SUBMISSION_ID,
@@ -102,8 +104,9 @@ def _with_artifact(result: dict[str, Any], *, answer: str | None = None) -> dict
 
 
 @pytest.fixture
-def service() -> AsyncMock:
-    created = AsyncMock()
+def service(application_double: Any) -> Any:
+    """The Web conversation service the routes reach through the Application."""
+    created = application_double.web_conversations
     created.start_answer.return_value = web_answer_submission(conversation_id=_CID)
     created.fork_answer.return_value = web_answer_submission(conversation_id=_CID)
     created.turn_for_run.return_value = linked_turn(conversation_id=_CID)
@@ -114,39 +117,26 @@ def service() -> AsyncMock:
 
 
 @pytest.fixture
-def application_double() -> AsyncMock:
-    created = AsyncMock()
-    capability_view = answer_capability_view()
-    created.runs = SimpleNamespace(
-        get=AsyncMock(return_value=answer_run()),
-        list=AsyncMock(return_value=(answer_run(),)),
-        cancel=AsyncMock(),
-        subscribe=MagicMock(),
-    )
-    created.answers = SimpleNamespace(
-        capabilities=capability_view.read,
-        steer=AsyncMock(
-            return_value=SimpleNamespace(run_id=RUN_ID, control_sequence=1, kind="steer")
-        ),
-        children=AsyncMock(
-            return_value=ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
-        ),
-        child_roster_cursor_codec=ChildRosterCursorCodec(b"web-children-test"),
-        observe_child=AsyncMock(return_value=None),
-        control_child=AsyncMock(return_value=None),
-        reply_to_child=AsyncMock(return_value=None),
-    )
-    created.corpora = SimpleNamespace(
-        alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}])
-    )
+def application_double(test_config: DlightragConfig) -> Any:
+    """The strict double; the builder is aliased because this fixture keeps its name."""
+    created = build_application_double(test_config)
+    created.runs.get.return_value = answer_run()
+    created.runs.list.return_value = (answer_run(),)
+    answers = created.answers
+    answers.capabilities.return_value = answer_capabilities()
+    answers.steer.return_value = SimpleNamespace(run_id=RUN_ID, control_sequence=1, kind="steer")
+    answers.children.return_value = ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
+    answers.child_roster_cursor_codec = ChildRosterCursorCodec(b"web-children-test")
+    answers.observe_child.return_value = None
+    answers.control_child.return_value = None
+    answers.reply_to_child.return_value = None
+    created.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
     return created
 
 
 @pytest.fixture
-async def client(service: AsyncMock, application_double: AsyncMock, test_config):
+async def client(service: AsyncMock, application_double: AsyncMock):
     application = create_app(include_web_app=True)
-    application_double.config = test_config
-    application_double.web_conversations = service
     application.state.application = application_double
     transport = ASGITransport(app=application)
     async with AsyncClient(
@@ -1122,7 +1112,7 @@ async def test_general_artifact_route_returns_markdown_presentation(
         stored_result(answer=""), answer=f"[View report](artifact:{_REPORT_RESOURCE})"
     )
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
-    application_double.answers.read_artifact = AsyncMock(return_value=b"# Title\n\nBody")
+    application_double.answers.read_artifact.return_value = b"# Title\n\nBody"
 
     response = await client.get(
         f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
@@ -1149,7 +1139,7 @@ async def test_markdown_artifact_uses_its_own_settled_bindings(
     result["artifact_bindings"] = {target: _REPORT_RESOURCE}
     markdown = "[Data][d]\n\n[d]: artifact:data.md\n\n`[Example](artifact:data.md)`"
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
-    application_double.answers.read_artifact = AsyncMock(return_value=markdown.encode())
+    application_double.answers.read_artifact.return_value = markdown.encode()
 
     response = await client.get(
         f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
@@ -1183,9 +1173,7 @@ async def test_markdown_artifact_presentation_projects_its_own_citation_sources(
     ]
     result["artifact_sources"] = {_REPORT_RESOURCE: [source]}
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
-    application_double.answers.read_artifact = AsyncMock(
-        return_value=b"# Analysis\n\nGrounded detail [1-1]."
-    )
+    application_double.answers.read_artifact.return_value = b"# Analysis\n\nGrounded detail [1-1]."
 
     response = await client.get(
         f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
@@ -1206,12 +1194,12 @@ async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
     result["artifacts"][0]["presentation"] = "html"
     result["artifacts"][0]["filename"] = "report.html"
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
-    application_double.answers.artifact_size = AsyncMock(return_value=13)
+    application_double.answers.artifact_size.return_value = 13
 
     async def stream():
         yield b"<h1>HTML</h1>"
 
-    application_double.answers.open_artifact = AsyncMock(return_value=stream())
+    application_double.answers.open_artifact.return_value = stream()
 
     response = await client.get(f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}")
 
@@ -1230,12 +1218,12 @@ async def test_browser_svg_artifact_is_inline_only_under_an_inert_document_polic
         media_type="image/svg+xml", presentation="image", filename="chart.svg"
     )
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
-    application_double.answers.artifact_size = AsyncMock(return_value=46)
+    application_double.answers.artifact_size.return_value = 46
 
     async def stream():
         yield b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
-    application_double.answers.open_artifact = AsyncMock(return_value=stream())
+    application_double.answers.open_artifact.return_value = stream()
 
     response = await client.get(f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}")
 
@@ -1266,7 +1254,7 @@ async def test_general_artifact_presentation_rejects_an_unavailable_descriptor(
     result = _with_artifact(stored_result())
     result["artifacts"][0]["status"] = "unavailable"
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
-    application_double.answers.read_artifact = AsyncMock(return_value=b"must not be read")
+    application_double.answers.read_artifact.return_value = b"must not be read"
 
     response = await client.get(
         f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
@@ -1324,11 +1312,10 @@ async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: AsyncMoc
 
 
 @pytest.fixture
-async def scoped_client(application_double: AsyncMock, test_config):
+async def scoped_client(application_double: AsyncMock):
     """A client whose conversation service is real, over a store that must not run."""
     store = AsyncMock()
     application = create_app(include_web_app=True)
-    application_double.config = test_config
     application_double.web_conversations = WebConversationService(
         store=store,
         answers=FakeAnswers(),
