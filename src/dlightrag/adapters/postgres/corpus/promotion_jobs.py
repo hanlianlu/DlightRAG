@@ -148,8 +148,8 @@ WHERE job_id = $1
   AND $4::timestamptz > NOW()
 """
 
-# The fenced failure and completion transitions. The worker runs these same
-# statements inside its own transactions, so one definition fences both.
+# The fenced failure and completion transitions, shared with the worker through
+# mark_failed_in and mark_done_in so one definition fences both.
 _MARK_FAILED = """
 UPDATE dlightrag_promotion_jobs
 SET state = 'failed',
@@ -291,8 +291,12 @@ class PGPromotionJobStore(PostgresOperationRunner):
         Every successful claim increments and returns ``lease_generation``.
         The worker carries that generation through every side effect and
         transition, so an expired stale worker cannot complete a newer claim.
-        A replay of this call (same owner and ``lease_until``) returns the job
-        it already leased, unchanged, so a lost response strands nothing.
+
+        ``lease_until`` doubles as this call's idempotency token: compute it
+        afresh for every claim call and reuse it only for that call's retries. A
+        replay (same owner and ``lease_until``) returns the job the call already
+        leased, unchanged, so a lost response strands nothing; reusing one value
+        across calls would hand back a lease instead of claiming the next job.
         """
         owner_id = _nonempty(owner, field="lease owner")
 
@@ -328,20 +332,18 @@ class PGPromotionJobStore(PostgresOperationRunner):
         next_retry_at: Any,
     ) -> bool:
         """Schedule retry for one still-current, unexpired fenced lease."""
-        identity = _lease_identity(job_id, owner, lease_generation)
-        error_text = _nonempty(error, field="promotion error")
-        if next_retry_at is None:
-            raise ValueError("next_retry_at is required for a failed promotion job")
 
-        async def _operation(conn: Any) -> str:
-            return await conn.execute(
-                _MARK_FAILED,
-                *identity,
-                error_text,
-                next_retry_at,
+        async def _operation(conn: Any) -> bool:
+            return await mark_failed_in(
+                conn,
+                job_id=job_id,
+                owner=owner,
+                lease_generation=lease_generation,
+                error=error,
+                next_retry_at=next_retry_at,
             )
 
-        return (await self._run(_operation)) != "UPDATE 0"
+        return await self._run(_operation)
 
     async def mark_done(
         self,
@@ -351,12 +353,44 @@ class PGPromotionJobStore(PostgresOperationRunner):
         lease_generation: int,
     ) -> bool:
         """Complete one still-current, unexpired fenced lease."""
-        identity = _lease_identity(job_id, owner, lease_generation)
 
-        async def _operation(conn: Any) -> str:
-            return await conn.execute(_MARK_DONE, *identity)
+        async def _operation(conn: Any) -> bool:
+            return await mark_done_in(
+                conn, job_id=job_id, owner=owner, lease_generation=lease_generation
+            )
 
-        return (await self._run(_operation)) != "UPDATE 0"
+        return await self._run(_operation)
+
+
+async def mark_failed_in(
+    conn: Any,
+    *,
+    job_id: int,
+    owner: str,
+    lease_generation: int,
+    error: str,
+    next_retry_at: Any,
+) -> bool:
+    """Schedule retry for one still-current, unexpired fenced lease on ``conn``.
+
+    The caller owns the transaction, so the transition can commit together with
+    the caller's other fenced writes (the worker releases its write fence with it).
+    """
+    identity = _lease_identity(job_id, owner, lease_generation)
+    error_text = _nonempty(error, field="promotion error")
+    if next_retry_at is None:
+        raise ValueError("next_retry_at is required for a failed promotion job")
+    return bool(await conn.fetchval(_MARK_FAILED, *identity, error_text, next_retry_at))
+
+
+async def mark_done_in(conn: Any, *, job_id: int, owner: str, lease_generation: int) -> bool:
+    """Complete one still-current, unexpired fenced lease on ``conn``.
+
+    The caller owns the transaction, so completion commits with the worker's
+    cutover or not at all.
+    """
+    identity = _lease_identity(job_id, owner, lease_generation)
+    return (await conn.execute(_MARK_DONE, *identity)) != "UPDATE 0"
 
 
 def _nonempty(value: Any, *, field: str) -> str:
@@ -378,4 +412,4 @@ def _lease_identity(job_id: int, owner: str, lease_generation: int) -> tuple[int
     return job_id, _nonempty(owner, field="lease owner"), lease_generation
 
 
-__all__ = ["PGPromotionJobStore"]
+__all__ = ["PGPromotionJobStore", "mark_done_in", "mark_failed_in"]

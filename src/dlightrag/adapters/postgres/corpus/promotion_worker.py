@@ -43,9 +43,9 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     rebuild_metadata_field_stats_for_workspace,
 )
 from dlightrag.adapters.postgres.corpus.promotion_jobs import (
-    _MARK_DONE,
-    _MARK_FAILED,
     PGPromotionJobStore,
+    mark_done_in,
+    mark_failed_in,
 )
 from dlightrag.adapters.postgres.corpus.workspace_write_gate import workspace_write_gate
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
@@ -63,7 +63,7 @@ _PROMOTION_ERROR_PREFIX = "promotion failed"
 
 _LEASE_RENEW_INTERVAL_DIVISOR = 3  # renew when one third of the lease remains
 
-# Guarded failure transition: the job row (the job store's _MARK_FAILED) proves
+# Guarded failure transition: the job row (the job store's mark_failed_in) proves
 # the attempt still owns its unexpired lease; the registry update additionally
 # proves the fence owner.
 _FAIL_REGISTRY_GUARDED = """
@@ -80,7 +80,7 @@ WHERE workspace = $1
 RETURNING 1
 """
 
-# Guarded success flips: the registry flip and the job store's _MARK_DONE must
+# Guarded success flips: the registry flip and the job store's mark_done_in must
 # each affect exactly one row or the cutover transaction rolls back (stale
 # attempts can never flip a newer state).
 _FLIP_HOT_GUARDED = """
@@ -448,13 +448,12 @@ class PGPromotionWorker:
             flipped = await conn.execute(_FLIP_HOT_GUARDED, workspace, fence_owner)
             if flipped == "UPDATE 0":
                 raise StalePromotionAttempt("registry flip refused: fence not current")
-            done = await conn.execute(
-                _MARK_DONE,
-                claim.job_id,
-                claim.owner,
-                claim.lease_generation,
-            )
-            if done == "UPDATE 0":
+            if not await mark_done_in(
+                conn,
+                job_id=claim.job_id,
+                owner=claim.owner,
+                lease_generation=claim.lease_generation,
+            ):
                 raise StalePromotionAttempt("job completion refused: lease not current")
         logger.info(
             "Workspace '%s' promoted to dedicated partitions across %d table(s)",
@@ -528,15 +527,14 @@ class PGPromotionWorker:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                job_guard = await conn.fetchval(
-                    _MARK_FAILED,
-                    claim.job_id,
-                    claim.owner,
-                    claim.lease_generation,
-                    error,
-                    next_retry,
-                )
-                if not int(job_guard or 0):
+                if not await mark_failed_in(
+                    conn,
+                    job_id=claim.job_id,
+                    owner=claim.owner,
+                    lease_generation=claim.lease_generation,
+                    error=error,
+                    next_retry_at=next_retry,
+                ):
                     return False
                 registry_guard = await conn.fetchval(
                     _FAIL_REGISTRY_GUARDED,

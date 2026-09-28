@@ -198,3 +198,26 @@ async def test_transition_identity_and_retry_inputs_are_validated() -> None:
             error="failed",
             next_retry_at=None,
         )
+
+
+async def test_transitions_run_on_the_callers_connection_for_its_transaction() -> None:
+    """The worker completes or fails a job inside its own cutover or failure transaction."""
+    conn = _Conn()
+
+    assert await promotion_jobs.mark_done_in(conn, job_id=7, owner="worker-1", lease_generation=2)
+    sql, args = conn.executed[-1]
+    assert "SET state = 'done'" in sql
+    assert args == (7, "worker-1", 2)
+
+    # The fake answers no row, which is the refusal a stale generation gets.
+    assert not await promotion_jobs.mark_failed_in(
+        conn,
+        job_id=7,
+        owner="worker-1",
+        lease_generation=2,
+        error="cutover invariant mismatch",
+        next_retry_at="2026-04-02T00:00:00Z",
+    )
+    sql, args = conn.executed[-1]
+    assert "SET state = 'failed'" in sql
+    assert args == (7, "worker-1", 2, "cutover invariant mismatch", "2026-04-02T00:00:00Z")
