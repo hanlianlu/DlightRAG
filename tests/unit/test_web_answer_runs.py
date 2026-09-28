@@ -737,6 +737,110 @@ async def test_a_fork_whose_parent_cannot_be_read_is_a_typed_service_failure(
     }
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "message"),
+    [
+        ("POST", "/web/api/answer", "Answer submission is temporarily unavailable"),
+        (
+            "GET",
+            f"/web/api/answer-submissions/{SUBMISSION_ID}",
+            "Answer submission lookup is temporarily unavailable",
+        ),
+    ],
+    ids=["submit", "lookup"],
+)
+async def test_an_outage_after_acceptance_is_a_retryable_typed_failure(
+    client: AsyncClient, service: AsyncMock, method: str, path: str, message: str
+) -> None:
+    """Projecting an accepted submission can fail; the browser then reconciles."""
+    service.submission.return_value = web_answer_submission(conversation_id=_CID)
+    service.run_external_sources.side_effect = WebConversationUnavailableError()
+
+    response = await client.request(method, path, json=_BODY if method == "POST" else None)
+
+    assert response.status_code == 503
+    assert response.json() == {"kind": "service_unavailable", "message": message}
+
+
+async def test_a_submission_outside_the_callers_scope_is_scope_forbidden(
+    client: AsyncClient, service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        chat_routes,
+        "enforce_web_access",
+        AsyncMock(side_effect=HTTPException(status_code=403, detail="Access denied")),
+    )
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 403
+    assert response.json() == {"kind": "scope_forbidden", "message": "Access denied"}
+    service.start_answer.assert_not_awaited()
+
+
+async def test_a_refusal_outside_the_command_table_keeps_the_general_envelope(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 must still read as "sign in", never as an editable input error."""
+    monkeypatch.setattr(
+        chat_routes,
+        "enforce_web_access",
+        AsyncMock(side_effect=HTTPException(status_code=401, detail="Sign in again")),
+    )
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Sign in again", "error_type": "auth"}
+
+
+@pytest.mark.parametrize(
+    ("path", "operation", "reused"),
+    [
+        ("/web/api/answer", "start_answer", "request"),
+        (f"/web/api/answer/{RUN_ID}/fork", "fork_answer", "continuation"),
+    ],
+    ids=["submit", "fork"],
+)
+async def test_a_reused_submission_id_names_what_it_collided_with(
+    client: AsyncClient, service: AsyncMock, path: str, operation: str, reused: str
+) -> None:
+    getattr(service, operation).side_effect = IdempotencyKeyConflict()
+    body = (
+        _BODY
+        if operation == "start_answer"
+        else {
+            "content": "What next?",
+            "submission_id": SUBMISSION_ID,
+        }
+    )
+
+    response = await client.post(path, json=body)
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "kind": "submission_conflict",
+        "message": f"This submission id was already used for a different {reused}",
+    }
+
+
+async def test_a_fork_at_the_admission_limit_says_so(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.fork_answer.side_effect = RunAdmissionLimitExceededError()
+
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/fork",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "kind": "service_unavailable",
+        "message": "Deployment-wide nonterminal admission limit reached",
+    }
+
+
 async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
     client: AsyncClient, service: AsyncMock
 ) -> None:

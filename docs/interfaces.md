@@ -538,11 +538,14 @@ For a first submission, the server creates conversation, turn, blobs, and run in
 one transaction from the owner-scoped `submission_id`. On an ambiguous result,
 use `GET /web/api/answer-submissions/{submission_id}`; the browser must not
 blindly repeat the POST. Submit, lookup, and `POST /web/api/answer/{run_id}/fork`
-fail with `{kind, message, error_kind?}`, where `kind` is one of
-`invalid_request`, `attachment_rejected`, `scope_forbidden`,
+refuse typed failures with `{kind, message, error_kind?}`, where `kind` is one
+of `invalid_request`, `attachment_rejected`, `scope_forbidden`,
 `conversation_missing`, `submission_conflict`, or `service_unavailable`, and
 `error_kind` names the stable answer error kind when admission rejected the
-input.
+input. `service_unavailable` can also follow an accepted submission, so the
+browser reconciles through the lookup or retries with the same `submission_id`.
+Request-shape validation, sign-in, and internal failures keep the general
+envelope.
 
 The Web event stream follows the same durable sequence as REST but projects a
 typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,

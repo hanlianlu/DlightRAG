@@ -156,18 +156,14 @@ async def _start_answer_run(
     cfg = application.config
     # Enforce the probed answer capability at admission (pre-acceptance 4xx).
     capability = (await application.answers.capabilities()).answer
-    try:
-        body = await parse_web_answer_request(
-            request,
-            max_attachments=cfg.answer.generation.max_attachments,
-            max_attachment_bytes=cfg.answer.generation.max_attachment_bytes,
-            max_total_attachment_bytes=cfg.answer.generation.max_total_attachment_bytes,
-            image_max_pixels=cfg.answer.generation.image_max_pixels,
-            answer_image_capability=capability,
-        )
-    except HTTPException as exc:
-        kind = "attachment_rejected" if exc.status_code == 413 else "invalid_request"
-        raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
+    body = await parse_web_answer_request(
+        request,
+        max_attachments=cfg.answer.generation.max_attachments,
+        max_attachment_bytes=cfg.answer.generation.max_attachment_bytes,
+        max_total_attachment_bytes=cfg.answer.generation.max_total_attachment_bytes,
+        image_max_pixels=cfg.answer.generation.image_max_pixels,
+        answer_image_capability=capability,
+    )
     query = body.query.strip()
     if not query:
         raise _command_error(422, "invalid_request", "A question is required")
@@ -211,9 +207,7 @@ async def accepted_answer_submission(
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ) -> AcceptedAnswer:
     """Recover one owner-scoped accepted command after an ambiguous POST result."""
-    with _answer_command(
-        reuse="request", unavailable="Answer submission lookup is temporarily unavailable"
-    ):
+    with _answer_command(unavailable="Answer submission lookup is temporarily unavailable"):
         submission = await conversation_service.submission(
             getattr(request.state, "user_context", None), str(submission_id)
         )
@@ -688,28 +682,36 @@ def _rejected_input(exc: AnswerInputError) -> HTTPException:
     return _command_error(422, "invalid_request", exc.public_message, error_kind=exc.error_kind)
 
 
+# The command kinds an HTTP refusal maps to; any other status (a 401 that asks
+# the browser to sign in, a server error) keeps the general envelope.
 _HTTP_COMMAND_KINDS: dict[int, WebCommandErrorKind] = {
+    400: "invalid_request",
     403: "scope_forbidden",
+    404: "invalid_request",
     409: "submission_conflict",
     413: "attachment_rejected",
+    422: "invalid_request",
     503: "service_unavailable",
 }
 
 
 @contextmanager
-def _answer_command(*, reuse: str, unavailable: str) -> Iterator[None]:
-    """Answer every failure of one browser Answer command with the typed envelope.
+def _answer_command(*, unavailable: str, reuse: str = "request") -> Iterator[None]:
+    """Answer the typed failures of one browser Answer command with its envelope.
 
-    ``reuse`` names what a reused submission id collided with; ``unavailable``
-    is the retryable text for storage and runtime outages. Anything untyped
-    stays an internal error.
+    ``unavailable`` is the retryable text for storage and runtime outages, which
+    may also follow an accepted submission: the browser then reconciles through
+    the submission lookup. ``reuse`` names what a reused submission id collided
+    with. Untyped failures stay internal errors.
     """
     try:
         yield
     except HTTPException as exc:
         if isinstance(exc.detail, dict):
             raise  # already a command envelope
-        kind = _HTTP_COMMAND_KINDS.get(exc.status_code, "invalid_request")
+        kind = _HTTP_COMMAND_KINDS.get(exc.status_code)
+        if kind is None:
+            raise
         raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
     except AnswerInputError as exc:
         raise _rejected_input(exc) from None
@@ -721,10 +723,15 @@ def _answer_command(*, reuse: str, unavailable: str) -> Iterator[None]:
         ) from None
     except ApplicationConflictError as exc:
         raise _command_error(409, "submission_conflict", str(exc)) from None
-    except RunAdmissionLimitExceededError as exc:
-        raise _command_error(503, "service_unavailable", str(exc)) from None
-    except ApplicationUnavailableError:
-        raise _command_error(503, "service_unavailable", unavailable) from None
+    except ApplicationUnavailableError as exc:
+        # As the shared handler does: a translated outage keeps its cause's traceback.
+        logger.warning(
+            "Browser Answer command is unavailable: %s",
+            exc,
+            exc_info=exc if exc.__cause__ is not None else None,
+        )
+        message = str(exc) if isinstance(exc, RunAdmissionLimitExceededError) else unavailable
+        raise _command_error(503, "service_unavailable", message) from None
 
 
 async def _projection_workspaces(
