@@ -1066,8 +1066,9 @@ class PGAgentSessionRepository:
             writes=tuple(write for fetched in update.fetched for write in fetched.evidence),
         )
 
+        from dlightrag.adapters.postgres.answer.workspace import _upsert_spill, write_inventory
+
         if update.committed_outputs:
-            from dlightrag.adapters.postgres.answer.workspace import _upsert_spill
             from dlightrag.engine.runtime.workspace import CommittedSpillRecord
 
             for output in update.committed_outputs:
@@ -1086,38 +1087,14 @@ class PGAgentSessionRepository:
 
         inventory = update.workspace_inventory
         if inventory is not None:
-            if inventory.replace_all:
-                await conn.execute(
-                    "DELETE FROM dlightrag_answer_workspace_inventory"
-                    " WHERE owner_id = $1 AND run_id = $2",
-                    self._owner_id,
-                    self._run_id,
-                )
-            else:
-                for path in inventory.deletes:
-                    await conn.execute(
-                        "DELETE FROM dlightrag_answer_workspace_inventory"
-                        " WHERE owner_id = $1 AND run_id = $2 AND relative_path = $3",
-                        self._owner_id,
-                        self._run_id,
-                        path,
-                    )
-            for record in inventory.upserts:
-                await conn.execute(
-                    "INSERT INTO dlightrag_answer_workspace_inventory ("
-                    " owner_id, run_id, relative_path, entry_type, mode, size_bytes, content_digest)"
-                    " VALUES ($1, $2, $3, $4, $5, $6, $7)"
-                    " ON CONFLICT (owner_id, run_id, relative_path) DO UPDATE SET"
-                    " entry_type = EXCLUDED.entry_type, mode = EXCLUDED.mode,"
-                    " size_bytes = EXCLUDED.size_bytes, content_digest = EXCLUDED.content_digest",
-                    self._owner_id,
-                    self._run_id,
-                    record.relative_path,
-                    record.entry_type,
-                    record.mode,
-                    record.size_bytes,
-                    record.content_digest,
-                )
+            await write_inventory(
+                conn,
+                self._owner_id,
+                self._run_id,
+                upserts=inventory.upserts,
+                deletes=inventory.deletes,
+                replace_all=inventory.replace_all,
+            )
 
         attachment = update.artifact_attachment
         if attachment is not None:

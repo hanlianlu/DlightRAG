@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 _RUN_ACTIVITY_CHANNEL = "dlightrag_run_activity"
 _MAX_PENDING_CHILD_CONTROLS = 100
+# One read locks at most this many pending controls. The parent inbox takes user
+# steers and mirrored interventions without a cap, and the consuming runtime polls
+# again after applying a batch, so every pending control still arrives, in order.
+PENDING_CONTROL_READ_LIMIT = 100
 _MAX_PENDING_CHILD_GUIDANCE = 8
 _GUIDANCE_HINT_POLL_SECONDS = 1.0
 
@@ -350,6 +354,7 @@ FROM dlightrag_agent_controls
 WHERE owner_id = $1 AND run_id = $2 AND target_session_id IS NULL
   AND consumed_at IS NULL
 ORDER BY control_sequence
+LIMIT $3
 FOR UPDATE
 """
 
@@ -359,6 +364,7 @@ FROM dlightrag_agent_controls
 WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
   AND target_operation_id = $4 AND consumed_at IS NULL
 ORDER BY control_sequence
+LIMIT $5
 FOR UPDATE
 """
 

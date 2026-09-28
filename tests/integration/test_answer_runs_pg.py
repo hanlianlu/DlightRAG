@@ -2647,6 +2647,47 @@ class TestAgentControlsAndChildren:
         assert [item["content"] for item in controls or ()] == ["first", "second"]
         assert replay == ()
 
+    async def test_a_long_inbox_is_read_in_bounded_ordered_batches(self, store) -> None:
+        """The parent inbox has no enqueue cap, so one read locks a bounded batch."""
+        from dlightrag.adapters.postgres.runtime._child import PENDING_CONTROL_READ_LIMIT
+
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        total = PENDING_CONTROL_READ_LIMIT + 5
+        for index in range(total):
+            queued = await store.enqueue_agent_control(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                kind="steer",
+                content=f"steer {index}",
+            )
+            assert queued is not None
+        claim = await _claimed(store)
+
+        delivered: list[str] = []
+        batches: list[int] = []
+        while True:
+            batch = await store.load_pending_agent_controls(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+            )
+            assert batch is not None
+            if not batch:
+                break
+            batches.append(len(batch))
+            delivered.extend(str(item["content"]) for item in batch)
+            assert await store.acknowledge_agent_controls(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                control_sequences=tuple(int(item["control_sequence"]) for item in batch),
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+            )
+
+        assert batches == [PENDING_CONTROL_READ_LIMIT, 5]
+        assert delivered == [f"steer {index}" for index in range(total)]
+
     @pytest.mark.parametrize("model_role", ["query", "extract", "keyword", "vlm", "default"])
     async def test_one_spawn_call_persists_multiple_child_lineages(self, store, model_role) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))

@@ -38,6 +38,42 @@ from dlightrag.engine.runtime.workspace import (
 #: share. A Session with no row yet (a bind-time migration into a brand-new Session)
 #: has nothing to serialize against, and its write is refused by the note table's own
 #: foreign key instead.
+# An inventory write is two statements whatever the file count. A bash settlement
+# rescans the whole workspace and writes it while the Run and Session rows are
+# locked, so the write deletes only the paths that went away and rewrites only the
+# rows whose observation changed; an unchanged file costs no new row version.
+_DELETE_INVENTORY_PATHS = """
+DELETE FROM dlightrag_answer_workspace_inventory
+WHERE owner_id = $1 AND run_id = $2 AND relative_path = ANY($3::text[])
+"""
+
+_DELETE_INVENTORY_EXCEPT = """
+DELETE FROM dlightrag_answer_workspace_inventory AS inventory
+WHERE inventory.owner_id = $1 AND inventory.run_id = $2
+  AND NOT EXISTS (
+      SELECT 1 FROM unnest($3::text[]) AS kept(relative_path)
+      WHERE kept.relative_path = inventory.relative_path
+  )
+"""
+
+_UPSERT_INVENTORY = """
+INSERT INTO dlightrag_answer_workspace_inventory AS inventory (
+    owner_id, run_id, relative_path, entry_type, mode, size_bytes, content_digest
+)
+SELECT $1, $2, observed.relative_path, observed.entry_type, observed.mode,
+       observed.size_bytes, observed.content_digest
+FROM unnest($3::text[], $4::text[], $5::integer[], $6::bigint[], $7::text[])
+    AS observed(relative_path, entry_type, mode, size_bytes, content_digest)
+ON CONFLICT (owner_id, run_id, relative_path) DO UPDATE SET
+    entry_type = EXCLUDED.entry_type,
+    mode = EXCLUDED.mode,
+    size_bytes = EXCLUDED.size_bytes,
+    content_digest = EXCLUDED.content_digest
+WHERE (inventory.entry_type, inventory.mode, inventory.size_bytes, inventory.content_digest)
+    IS DISTINCT FROM
+    (EXCLUDED.entry_type, EXCLUDED.mode, EXCLUDED.size_bytes, EXCLUDED.content_digest)
+"""
+
 _LOCK_SESSION_FOR_NOTES = """
 SELECT 1
 FROM dlightrag_agent_sessions
@@ -113,7 +149,9 @@ class PGWorkspaceStore:
                 )
                 if updated is None:
                     return HandoffLeaseLost()
-                await self._replace_inventory_locked(conn, inventory)
+                await write_inventory(
+                    conn, self._owner_id, self._run_id, upserts=inventory, replace_all=True
+                )
                 return HandoffCommit(workspace_epoch=int(updated))
 
     async def load_inventory(self) -> tuple[InventoryPathRecord, ...]:
@@ -128,7 +166,9 @@ class PGWorkspaceStore:
             async with conn.transaction():
                 if not await self._hold_lease(conn):
                     return "lease_lost"
-                await self._replace_inventory_locked(conn, records)
+                await write_inventory(
+                    conn, self._owner_id, self._run_id, upserts=records, replace_all=True
+                )
                 return "committed"
 
     async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
@@ -317,27 +357,41 @@ class PGWorkspaceStore:
                 )
                 return "committed"
 
-    async def _replace_inventory_locked(
-        self, conn: Any, records: Sequence[InventoryPathRecord]
-    ) -> None:
-        await conn.execute(
-            "DELETE FROM dlightrag_answer_workspace_inventory WHERE owner_id = $1 AND run_id = $2",
-            self._owner_id,
-            self._run_id,
-        )
-        for record in records:
-            await conn.execute(
-                "INSERT INTO dlightrag_answer_workspace_inventory ("
-                " owner_id, run_id, relative_path, entry_type, mode, size_bytes, content_digest)"
-                " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                self._owner_id,
-                self._run_id,
-                record.relative_path,
-                record.entry_type,
-                record.mode,
-                record.size_bytes,
-                record.content_digest,
-            )
+
+async def write_inventory(
+    conn: Any,
+    owner_id: str,
+    run_id: uuid.UUID,
+    *,
+    upserts: Sequence[InventoryPathRecord],
+    deletes: Sequence[str] = (),
+    replace_all: bool = False,
+) -> None:
+    """Apply one inventory observation inside the caller's fenced transaction.
+
+    ``replace_all`` makes ``upserts`` the whole inventory: every other path is
+    removed. Otherwise ``deletes`` are removed first and ``upserts`` applied after,
+    so a path both deleted and observed stays. A path observed twice keeps its last
+    observation.
+    """
+    observed = {record.relative_path: record for record in upserts}
+    if replace_all:
+        await conn.execute(_DELETE_INVENTORY_EXCEPT, owner_id, run_id, list(observed))
+    elif deletes:
+        await conn.execute(_DELETE_INVENTORY_PATHS, owner_id, run_id, list(deletes))
+    if not observed:
+        return
+    records = list(observed.values())
+    await conn.execute(
+        _UPSERT_INVENTORY,
+        owner_id,
+        run_id,
+        [record.relative_path for record in records],
+        [record.entry_type for record in records],
+        [record.mode for record in records],
+        [record.size_bytes for record in records],
+        [record.content_digest for record in records],
+    )
 
 
 async def load_run_artifacts(
@@ -457,4 +511,10 @@ async def _upsert_spill(
     )
 
 
-__all__ = ["PGWorkspaceStore", "load_run_artifacts", "load_run_inventory", "load_session_notes"]
+__all__ = [
+    "PGWorkspaceStore",
+    "load_run_artifacts",
+    "load_run_inventory",
+    "load_session_notes",
+    "write_inventory",
+]

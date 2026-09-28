@@ -46,6 +46,7 @@ from dlightrag.adapters.postgres.runtime._child import (
     _SELECT_AGENT_TRANSCRIPT,
     _SELECT_PENDING_CHILD_CONTROLS,
     _SELECT_PENDING_PARENT_CONTROLS,
+    PENDING_CONTROL_READ_LIMIT,
     ChildRunStoreMixin,
 )
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
@@ -3323,7 +3324,12 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return None
                 if target_uuid is None:
-                    rows = await conn.fetch(_SELECT_PENDING_PARENT_CONTROLS, owner, run_uuid)
+                    rows = await conn.fetch(
+                        _SELECT_PENDING_PARENT_CONTROLS,
+                        owner,
+                        run_uuid,
+                        PENDING_CONTROL_READ_LIMIT,
+                    )
                 else:
                     child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, target_uuid)
                     if (
@@ -3340,6 +3346,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                         run_uuid,
                         target_uuid,
                         operation_uuid,
+                        PENDING_CONTROL_READ_LIMIT,
                     )
                 return tuple(
                     {
