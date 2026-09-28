@@ -651,7 +651,11 @@ corpus:
 ```
 
 Embedding batches split automatically at provider input-count, token, and
-inline-image limits while preserving order.
+inline-image limits while preserving order. Each embedding request is retried at
+most twice, and only for a failure the durable Run classification also treats
+as transient: a refused, reset, dropped, or timed-out connection, or HTTP 408,
+425, 429, 500, 502, 503, or 504. `Retry-After` wins over exponential backoff
+with jitter.
 
 ## Retrieval
 

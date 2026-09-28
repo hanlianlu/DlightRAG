@@ -36,8 +36,8 @@ from dlightrag.engine.ai.providers.embed_providers import get_embed_provider
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import EmbeddingSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
+from dlightrag.engine.dependencies import is_transient_request_failure
 
-_RETRYABLE_STATUS_CODES = frozenset({408, 409, 429})
 _MAX_RETRIES = 2
 _RETRY_BASE_SECONDS = 0.5
 _RETRY_JITTER_SECONDS = 0.25
@@ -358,13 +358,10 @@ class MultimodalEmbedder:
                 if not isinstance(data, Mapping):
                     raise ValueError("Embedding response JSON must be an object")
                 return data, attempt
-            except httpx.TransportError:
-                if attempt >= _MAX_RETRIES:
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                # The dependency classification that defers a Run decides retries too.
+                if attempt >= _MAX_RETRIES or not is_transient_request_failure(exc):
                     raise
-            except httpx.HTTPStatusError as exc:
-                if attempt >= _MAX_RETRIES or not _retryable_status(exc.response.status_code):
-                    raise
-                response = exc.response
             delay = _retry_delay(response, attempt=attempt)
             await asyncio.sleep(delay)
         raise RuntimeError("Embedding retry loop exhausted")
@@ -400,10 +397,6 @@ class MultimodalEmbedder:
                 f"{self.provider.__class__.__name__} model {self.model!r} does not support "
                 "native fused image embeddings"
             )
-
-
-def _retryable_status(status_code: int) -> bool:
-    return status_code in _RETRYABLE_STATUS_CODES or 500 <= status_code <= 599
 
 
 def _retry_delay(response: httpx.Response | None, *, attempt: int) -> float:

@@ -576,7 +576,10 @@ async def test_probe_checks_image_query_and_fused_document() -> None:
     assert embedder.embed_index_fused.await_args.args[0][0][0] == "DlightRAG fusion probe"  # type: ignore[attr-defined]
 
 
-@pytest.mark.parametrize("failure", [httpx.ConnectError("down"), httpx.ReadError("reset")])
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ConnectError("down"), httpx.ReadError("reset"), httpx.ReadTimeout("slow")],
+)
 async def test_connection_failures_retry_at_most_twice(failure: httpx.TransportError) -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -599,7 +602,7 @@ async def test_connection_failures_retry_at_most_twice(failure: httpx.TransportE
     assert sleep.await_count == 2
 
 
-@pytest.mark.parametrize("status", [408, 409, 429, 500, 503])
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
 async def test_retryable_http_statuses_are_retried(status: int) -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -622,6 +625,48 @@ async def test_retryable_http_statuses_are_retried(status: int) -> None:
         finally:
             await embedder.aclose()
     sleep.assert_awaited_once_with(2.0)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _response(401, {"error": "invalid api key"}),
+        _response(403, {"error": "forbidden"}),
+        _response(409, {"error": "conflict"}),
+        _response(501, {"error": "not implemented"}),
+        _response(505, {"error": "http version"}),
+        httpx.UnsupportedProtocol("missing scheme"),
+    ],
+    ids=["401", "403", "409", "501", "505", "unsupported-protocol"],
+)
+async def test_failures_the_dependency_classification_rejects_are_not_retried(
+    failure: httpx.Response | httpx.TransportError,
+) -> None:
+    # Embedding retries use the same classification that defers a durable Run,
+    # so a failure a Run would not wait out is not retried here either.
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    post = (
+        AsyncMock(return_value=failure)
+        if isinstance(failure, httpx.Response)
+        else AsyncMock(side_effect=failure)
+    )
+    embedder._client.post = post  # pyright: ignore[reportPrivateUsage]
+    with pytest.MonkeyPatch.context() as patch:
+        sleep = AsyncMock()
+        patch.setattr(asyncio, "sleep", sleep)
+        try:
+            with pytest.raises((httpx.HTTPStatusError, httpx.TransportError)):
+                await embedder.embed_texts(["hello"])
+        finally:
+            await embedder.aclose()
+    assert post.await_count == 1
+    sleep.assert_not_awaited()
 
 
 async def test_non_retryable_4xx_and_schema_errors_are_not_retried() -> None:
