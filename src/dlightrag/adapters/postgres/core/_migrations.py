@@ -83,7 +83,7 @@ _TABLE_RELKIND = "SELECT c.relkind::text FROM pg_catalog.pg_class c WHERE c.oid 
 
 _TABLE_TRIGGERS = """SELECT t.tgname AS name
 FROM pg_catalog.pg_trigger t
-WHERE t.tgrelid = $1 AND NOT t.tgisinternal AND t.tgenabled <> 'D'
+WHERE t.tgrelid = $1 AND NOT t.tgisinternal AND t.tgenabled IN ('O', 'A')
 """
 
 _TABLE_FOREIGN_KEYS = """SELECT cf.relname AS referenced,
@@ -143,7 +143,8 @@ class TableRequirement:
     same-named index rebuilt without uniqueness would silently retire that invariant.
 
     ``triggers`` names row triggers that enforce an invariant; each must be
-    present and enabled.
+    present and fire in ordinary sessions (``tgenabled`` 'O' or 'A'): a disabled
+    or replica-only trigger enforces nothing.
 
     ``partitioned_by`` names the LIST partition key columns: the catalog must
     report the table as partitioned on exactly those columns. ``required_child_partitions``

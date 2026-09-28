@@ -143,8 +143,8 @@ _RUNS_SUBMISSION_INDEX = IndexRequirement(
     "(run_kind, submitted_by, submission_key)",
     unique=True,
 )
-# The one uniqueness of a bare run id; a foreign key to dlightrag_runs (run_id)
-# relies on it.
+# The one uniqueness of a bare run id; the Corpus Mutation window table's foreign
+# key to dlightrag_runs (run_id) relies on it (see the baseline below).
 _RUNS_GLOBAL_ID_INDEX = IndexRequirement(
     "idx_dlightrag_runs_global_id", "dlightrag_runs", "(run_id)", unique=True
 )
@@ -252,13 +252,13 @@ _RUN_INDEXES = (
 # Final clean-break baseline schema
 # ─────────────────────────────────────────────────────────────────
 
-# The released 2.0.x Answer store kept its runs in dlightrag_answer_runs. This
-# revision does not migrate that schema in place; development data is reset
-# instead (docs/postgresql.md), so its presence refuses startup with that remedy.
+# Databases created by releases 2.0.0 through 2.0.5 keep their Answer runs in
+# dlightrag_answer_runs. No migration path from them is offered: development data
+# is reset instead (docs/postgresql.md), so that table refuses startup with the remedy.
 _PRE_RUNTIME_ANSWER_SCHEMA = "SELECT to_regclass('dlightrag_answer_runs') IS NOT NULL"
 _PRE_RUNTIME_ANSWER_SCHEMA_ERROR = (
-    "dlightrag_answer_runs holds a pre-RunRuntime Answer schema (release 2.0.x), which "
-    "this revision does not migrate in place; run a full development reset "
+    "dlightrag_answer_runs holds Answer runs from a database created by DlightRAG "
+    "2.0.0-2.0.5, which this revision does not migrate; run a full development reset "
     "(scripts/reset_development.py) and start a writer on the empty database"
 )
 
@@ -940,7 +940,10 @@ RUN_MIGRATIONS = (
             _CREATE_CHILD_OPERATIONS,
             _CREATE_CHILD_GUIDANCE,
             *_CREATE_INDEXES,
-            # References dlightrag_runs (run_id) through its unique global-id index.
+            # Its foreign key to dlightrag_runs (run_id) is backed by the unique global-id
+            # index created above. On databases created before the baseline dropped the
+            # duplicate UNIQUE (run_id), the key is backed by that constraint's index,
+            # dlightrag_runs_run_id_key, instead: repoint the key before dropping it.
             _CREATE_CORPUS_MUTATION_WINDOWS,
             _CREATE_WORKSPACE_INVENTORY,
             _CREATE_ARTIFACT_ATTACHMENT_ORDER,

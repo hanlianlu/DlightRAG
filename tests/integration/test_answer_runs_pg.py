@@ -514,6 +514,19 @@ class TestSchema:
             for declared in RUN_SCHEMA_TABLES:
                 assert await catalog_table(conn, declared.name) == declared_shape(declared)
 
+    @pytest.mark.parametrize("mode", ["DISABLE", "ENABLE REPLICA"])
+    async def test_readers_refuse_an_event_guard_that_does_not_fire(
+        self, store, pool, mode: str
+    ) -> None:
+        """A present but disabled or replica-only guard enforces nothing, so it is missing."""
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"ALTER TABLE dlightrag_run_events {mode} TRIGGER trg_dlightrag_run_events_enforce"
+            )
+
+        with pytest.raises(RunSchemaError, match="trigger trg_dlightrag_run_events_enforce"):
+            await PGRunStore(pool=pool).initialize(validate_only=True)
+
     async def test_fresh_schema_enforces_run_event_parent_contract(self, store, pool) -> None:
         await _assert_run_event_parent_guard(store, pool)
 
