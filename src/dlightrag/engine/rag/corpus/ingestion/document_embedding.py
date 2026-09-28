@@ -16,6 +16,7 @@ from dlightrag.engine.ai.concurrency import bounded_map
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.media import flatten_image_to_rgb
 from dlightrag.engine.ai.telemetry import safe_log_text
+from dlightrag.engine.dependencies import classify_transient_dependency
 from dlightrag.engine.rag.workspace.settings import RagSettings
 
 logger = logging.getLogger(__name__)
@@ -411,7 +412,13 @@ async def resolve_direct_image_embedding_enabled(
     startup_probe: bool,
     require_image_support: bool,
 ) -> bool:
-    """Return whether image-query and fused-document paths are both safe."""
+    """Return whether image-query and fused-document paths are both safe.
+
+    The caller keeps the answer for the runtime's lifetime, so only a
+    definitive probe outcome is returned. A transient provider failure is
+    re-raised instead: settling it as text-only would embed every document
+    this runtime ingests without its image beside the corpus's fused vectors.
+    """
     if not getattr(embedder, "supports_images", False):
         if require_image_support:
             raise ValueError(
@@ -428,6 +435,13 @@ async def resolve_direct_image_embedding_enabled(
     try:
         await embedder.probe_image_embedding()
     except Exception as exc:  # noqa: BLE001
+        if classify_transient_dependency(exc, component_hint="providers") is not None:
+            logger.warning(
+                "Image/fusion embedding probe failed transiently (%s); "
+                "not settling the workspace's embedding mode",
+                type(exc).__name__,
+            )
+            raise
         if require_image_support:
             raise ValueError(
                 "embedding.input_modality='multimodal' requires working image-query and "

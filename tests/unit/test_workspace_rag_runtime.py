@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 
 from dlightrag.application.config import DlightragConfig
@@ -30,6 +31,7 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
     stage_input_file,
 )
 from dlightrag.engine.rag.corpus.sources.base import AsyncDataSource, SourceDocument
+from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavailableError
 from dlightrag.engine.rag.workspace.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 from tests.config_helpers import mutate_config
@@ -773,6 +775,15 @@ class TestBuildRetrievalBackend:
         assert backend._max_total_tokens == 333
 
 
+def _provider_status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://embeddings.test/v1/embeddings")
+    return httpx.HTTPStatusError(
+        f"provider answered {status}",
+        request=request,
+        response=httpx.Response(status, request=request),
+    )
+
+
 class TestDirectImageEmbeddingCapability:
     """Test image embedding capability resolution for the direct-visual leg."""
 
@@ -803,6 +814,77 @@ class TestDirectImageEmbeddingCapability:
 
         assert enabled is False
         embedder.probe_image_embedding.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            httpx.ConnectError("provider unreachable"),
+            httpx.ReadTimeout("provider timed out"),
+            _provider_status_error(503),
+            _provider_status_error(429),
+        ],
+        ids=["connect", "timeout", "503", "429"],
+    )
+    @pytest.mark.parametrize("required", [False, True], ids=["auto", "multimodal"])
+    async def test_transient_probe_failure_is_raised_not_settled(
+        self, failure: Exception, required: bool
+    ) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = True
+        embedder.probe_image_embedding = AsyncMock(side_effect=failure)
+
+        with pytest.raises(type(failure)):
+            await resolve_direct_image_embedding_enabled(
+                embedder,
+                startup_probe=True,
+                require_image_support=required,
+            )
+
+    async def test_definitive_provider_rejection_disables_direct_image_embedding(self) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = True
+        embedder.probe_image_embedding = AsyncMock(side_effect=_provider_status_error(400))
+
+        enabled = await resolve_direct_image_embedding_enabled(
+            embedder,
+            startup_probe=True,
+            require_image_support=False,
+        )
+
+        assert enabled is False
+
+    async def test_transient_probe_failure_backs_off_the_workspace_then_settles_fused(
+        self,
+    ) -> None:
+        now = 0.0
+        embedder = MagicMock()
+        embedder.supports_images = True
+        embedder.probe_image_embedding = AsyncMock(
+            side_effect=[httpx.ConnectError("provider unreachable"), None]
+        )
+        runtime = cast(WorkspaceRag, object())
+        settled: list[bool] = []
+
+        async def build(_workspace: str) -> WorkspaceRag:
+            settled.append(
+                await resolve_direct_image_embedding_enabled(
+                    embedder,
+                    startup_probe=True,
+                    require_image_support=False,
+                )
+            )
+            return runtime
+
+        pool = WorkspacePool(build=build, clock=lambda: now)
+        with pytest.raises(WorkspaceUnavailableError, match="ConnectError"):
+            await pool.acquire("research")
+        with pytest.raises(WorkspaceUnavailableError, match="backoff"):
+            await pool.acquire("research")
+        assert settled == []
+
+        now = 16.0
+        assert await pool.acquire("research") is runtime
+        assert settled == [True]
 
     async def test_required_multimodal_rejects_text_only_embedder(self) -> None:
         embedder = MagicMock()

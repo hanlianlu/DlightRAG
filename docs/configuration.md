@@ -239,6 +239,14 @@ known multimodal models. `text` disables both image paths. `multimodal` requires
 them and makes probe failure fatal. Fused output replaces the canonical chunk
 vector; it never creates a second visual document vector.
 
+Under `auto`, only a definitive probe outcome settles a workspace runtime's
+mode: a provider that rejects the image probe (an unsupported input, a
+non-retryable request error) leaves both image paths off for that runtime. A
+transient failure (connection error, timeout, 429, or 5xx) settles nothing:
+the workspace is reported unavailable and its construction is retried with
+backoff, so a provider blip never makes a runtime embed documents text-only
+beside the corpus's fused vectors.
+
 ```yaml
 models:
   embedding:
