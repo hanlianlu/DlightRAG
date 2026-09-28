@@ -13,6 +13,9 @@ type TerminalStatus = Literal["succeeded", "failed", "cancelled"]
 # and their current Operations are cancelled with origin 'run', and its pending
 # guidance asks retire. These CTEs follow a ``bumped`` CTE that returns the
 # settled Runs' ``owner_id, run_id``, so every terminal statement shares them.
+# Every column read from a CTE is qualified by it: unqualified, a column the CTE
+# stopped returning would resolve to the outer row, match every row, and settle
+# every running Child Session in the table.
 SETTLE_TERMINATED_RUN_CHILDREN = """cancelled_children AS (
     UPDATE dlightrag_answer_child_sessions AS child
     SET status = 'cancelled',
@@ -44,21 +47,25 @@ SETTLE_TERMINATED_RUN_CHILDREN = """cancelled_children AS (
         lease_owner = NULL,
         lease_expires_at = NULL,
         updated_at = NOW()
-    WHERE (child.owner_id, child.run_id) IN (SELECT owner_id, run_id FROM bumped)
+    WHERE (child.owner_id, child.run_id) IN (SELECT bumped.owner_id, bumped.run_id FROM bumped)
       AND child.status = 'running'
     RETURNING child.owner_id, child.run_id, child.child_session_id
 ), cancelled_operations AS (
     UPDATE dlightrag_answer_child_operations AS operation
     SET status = 'cancelled', cancellation_origin = 'run', updated_at = NOW()
     WHERE (operation.owner_id, operation.run_id, operation.child_session_id) IN (
-        SELECT owner_id, run_id, child_session_id FROM cancelled_children
+        SELECT cancelled_children.owner_id, cancelled_children.run_id,
+               cancelled_children.child_session_id
+        FROM cancelled_children
     )
       AND operation.status = 'running'
     RETURNING operation.child_session_id
 ), retired_guidance AS (
     UPDATE dlightrag_answer_child_guidance AS guidance
     SET status = 'cancelled', updated_at = NOW()
-    WHERE (guidance.owner_id, guidance.run_id) IN (SELECT owner_id, run_id FROM bumped)
+    WHERE (guidance.owner_id, guidance.run_id) IN (
+        SELECT bumped.owner_id, bumped.run_id FROM bumped
+    )
       AND guidance.status = 'pending'
     RETURNING guidance.request_id
 )"""

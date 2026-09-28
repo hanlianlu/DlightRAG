@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
@@ -2566,6 +2567,87 @@ def _fetched(
     )
 
 
+@dataclass(frozen=True)
+class _LiveChild:
+    """A claimed research Run with one running Child Session and one pending ask."""
+
+    run_id: str
+    fencing_epoch: int
+    child_session_id: str
+    request_id: str
+
+
+async def _run_with_a_live_child(store: FingerprintingRunStore, query: str) -> _LiveChild:
+    creation = await store.create_run(owner_id=_OWNER, request=_request(query, mode="research"))
+    claim = await _claimed(store)
+    run_id = creation.run.run_id
+    assert claim.run.run_id == run_id
+    parent_id = str(uuid.uuid7())
+    child_id = str(uuid.uuid7())
+    assert await store.upsert_child_session(
+        owner_id=_OWNER,
+        run_id=run_id,
+        child_session_id=child_id,
+        parent_session_id=parent_id,
+        parent_call_id=f"{query}-call",
+        parent_intent_id=str(uuid.uuid7()),
+        objective=f"{query} objective",
+        context_mode="isolated",
+        model_role="query",
+        tools=("search_knowledge_base",),
+        depth=1,
+        context_snapshot={
+            "parent_session_id": parent_id,
+            "parent_entry_id": str(uuid.uuid7()),
+            "depth": 0,
+            "messages": [],
+            "evidence_state": {},
+        },
+        plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+        budget={"provider_attempt_limit": 2},
+        worker_id=_WORKER,
+        fencing_epoch=claim.run.fencing_epoch,
+    )
+    child_epoch = await store.claim_child_session(
+        owner_id=_OWNER,
+        run_id=run_id,
+        child_session_id=child_id,
+        worker_id=_WORKER,
+        fencing_epoch=claim.run.fencing_epoch,
+    )
+    child = await store.load_child_session(
+        owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+    )
+    assert child is not None and child_epoch is not None
+    request_id = str(uuid.uuid7())
+    assert await store.create_child_guidance(
+        owner_id=_OWNER,
+        run_id=run_id,
+        request_id=request_id,
+        child_session_id=child_id,
+        child_operation_id=child["operation_id"],
+        parent_session_id=parent_id,
+        question=f"{query} question",
+        expires_after_seconds=300,
+        worker_id=_WORKER,
+        fencing_epoch=claim.run.fencing_epoch,
+        child_fencing_epoch=child_epoch,
+    )
+    return _LiveChild(run_id, claim.run.fencing_epoch, child_id, request_id)
+
+
+async def _child_states(store: PGRunStore, live: _LiveChild) -> tuple[str, str, str]:
+    """The Child Session, its current Operation, and its ask, by status."""
+    child = await store.load_child_session(
+        owner_id=_OWNER, run_id=live.run_id, child_session_id=live.child_session_id
+    )
+    guidance = await store.load_child_guidance(
+        owner_id=_OWNER, run_id=live.run_id, request_id=live.request_id
+    )
+    assert child is not None and guidance is not None
+    return str(child["status"]), str(child["operation_status"]), str(guidance["status"])
+
+
 class TestAgentControlsAndChildren:
     async def test_controls_are_ordered_and_consumed_under_the_run_lease(self, store) -> None:
         creation = await store.create_run(
@@ -3867,6 +3949,40 @@ class TestAgentControlsAndChildren:
         assert child is not None and child["status"] == "cancelled"
         assert child["cancel_requested_at"] is not None
         assert child["host_state"]["terminal_outcome"]["child_session_id"] == child_id
+
+    @pytest.mark.parametrize("settlement", ["fenced finish", "unleased finalizer"])
+    async def test_settling_one_run_leaves_every_other_runs_children_alone(
+        self, store, settlement: str
+    ) -> None:
+        """The settlement reaches only the Runs its own statement settled."""
+        settled = await _run_with_a_live_child(store, "settled")
+        bystander = await _run_with_a_live_child(store, "bystander")
+
+        if settlement == "fenced finish":
+            terminal = await store.finish_failure(
+                owner_id=_OWNER,
+                run_id=settled.run_id,
+                worker_id=_WORKER,
+                fencing_epoch=settled.fencing_epoch,
+                error_kind="run_execution_failed",
+                error_message="parent failed",
+            )
+            assert terminal.committed is True
+        else:
+            assert (
+                await store.release_for_shutdown(
+                    owner_id=_OWNER,
+                    run_id=settled.run_id,
+                    worker_id=_WORKER,
+                    fencing_epoch=settled.fencing_epoch,
+                )
+                == "requeued"
+            )
+            cancellation = await store.request_cancellation(owner_id=_OWNER, run_id=settled.run_id)
+            assert cancellation.outcome == "cancelled"
+
+        assert await _child_states(store, settled) == ("cancelled", "cancelled", "cancelled")
+        assert await _child_states(store, bystander) == ("running", "running", "pending")
 
     async def test_queued_parent_cancellation_atomically_cancels_accepted_children(
         self, store
