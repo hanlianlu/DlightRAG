@@ -44,6 +44,7 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
+from tests.support.application_double import application_double, delegate
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
 
 pytestmark = [
@@ -205,42 +206,39 @@ def _fingerprint(role: ChatModelSelector) -> ModelInvocationFingerprint:
     )
 
 
-class _StoreBackedApplication:
-    """Application shell with a real AnswerService wired to the real store."""
+def _store_backed_application(
+    store: PGRunStore, config: DlightragConfig, *, bind_research: Any = None
+) -> Any:
+    """The strict Application double over a real RunService and AnswerService on the store.
 
-    def __init__(
-        self, store: PGRunStore, config: DlightragConfig, *, bind_research: Any = None
-    ) -> None:
-        self._store = store
-        self.config = config
-        self.corpora = SimpleNamespace(
-            alist_workspace_records=self._alist_workspace_records,
-        )
-        scheduler = _StoreScheduler(store)
-        self.runs = RunService(store=store, scheduler=scheduler)
-        self.answers = AnswerService(
-            store=store,
-            blob_store=PGRunBlobStore(pool=store._operation_pool),  # noqa: SLF001
-            coordinator=cast(Any, scheduler),
-            retrieval=cast(Any, _Retrieval()),
-            capabilities=cast(Any, _Capabilities()),
-            capability_view=cast(Any, _CapabilityView()),
-            models=cast(
-                Any,
-                SimpleNamespace(
-                    query_image_describer=lambda: MagicMock(),
-                    model_settings=lambda role: ModelSettings(model="test"),
-                ),
+    AnswerService plans through the Application's own autospecced RetrievalService, which
+    delegates to _Retrieval, so its calls still meet the real signatures.
+    """
+    application = application_double(config)
+    application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
+    delegate(application.retrieval, _Retrieval(), "planner_for", "warm", "schema_for")
+    scheduler = _StoreScheduler(store)
+    application.runs = RunService(store=store, scheduler=scheduler)
+    application.answers = AnswerService(
+        store=store,
+        blob_store=PGRunBlobStore(pool=store._operation_pool),  # noqa: SLF001
+        coordinator=cast(Any, scheduler),
+        retrieval=application.retrieval,
+        capabilities=cast(Any, _Capabilities()),
+        capability_view=cast(Any, _CapabilityView()),
+        models=cast(
+            Any,
+            SimpleNamespace(
+                query_image_describer=lambda: MagicMock(),
+                model_settings=lambda role: ModelSettings(model="test"),
             ),
-            resources=cast(Any, _Resources()),
-            model_invocation_fingerprint_for_role=_fingerprint,
-            bind_research=bind_research,
-            child_roster_cursor_secret=b"answer-run-api-child-roster-test",
-        )
-
-    @staticmethod
-    async def _alist_workspace_records() -> list[dict[str, str]]:
-        return [{"workspace": "default"}]
+        ),
+        resources=cast(Any, _Resources()),
+        model_invocation_fingerprint_for_role=_fingerprint,
+        bind_research=bind_research,
+        child_roster_cursor_secret=b"answer-run-api-child-roster-test",
+    )
+    return application
 
 
 @pytest.fixture
@@ -261,7 +259,7 @@ def app(store: PGRunStore, tmp_path) -> Iterator[FastAPI]:
     )
     set_config(config)
     application = create_app(include_web_app=False)
-    application.state.application = _StoreBackedApplication(store, config)
+    application.state.application = _store_backed_application(store, config)
     application.dependency_overrides[get_current_user] = lambda: _ANON
     yield application
     application.dependency_overrides.clear()

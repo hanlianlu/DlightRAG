@@ -352,13 +352,13 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
         _ALICE,
         _ANON,
         _BOB,
-        _StoreBackedApplication,
+        _store_backed_application,
     )
 
     async with isolated_run_runtime("binding_surfaces") as (runs, pool):
         connection_owner = owner_id_from_user(_ANON if identity == "none" else _ALICE)
         connections, _, mcp, _ = await enabled_connection(pool, connection_owner)
-        application = _StoreBackedApplication(
+        application = _store_backed_application(
             runs, test_config, bind_research=connections.bind_research
         )
         user = (
