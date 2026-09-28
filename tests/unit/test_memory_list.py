@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from dlightrag.adapters.http.browser.routes.memory import list_memories as web_list_memories
 from dlightrag.adapters.http.rest.routes.memory import list_memories as rest_list_memories
 from dlightrag.application.access import UserContext, owner_id_from_user
+from dlightrag.application.config import DlightragConfig
 from dlightrag.application.memory import (
     MEMORY_LIST_PAGE_DEFAULT_LIMIT,
     MEMORY_LIST_PAGE_MAX_LIMIT,
@@ -27,6 +28,7 @@ from dlightrag.application.memory import (
     MemoryListPageRequest,
     MemoryService,
 )
+from tests.support.application_double import application_double
 from tests.support.memory import InMemoryMemorySettingsStore
 
 _UTC = datetime.UTC
@@ -305,10 +307,12 @@ async def test_service_rejects_continuation_after_empty_page() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _MemoryFake:
-    def __init__(self, *, secret: bytes) -> None:
-        self.memory_list_cursor_codec = MemoryListCursorCodec(secret)
-        self.list_active_page = AsyncMock()
+@pytest.fixture
+def application(test_config: DlightragConfig) -> Any:
+    """The strict Application double; the routes list through its autospecced MemoryService."""
+    application = application_double(test_config)
+    application.memory.memory_list_cursor_codec = MemoryListCursorCodec(b"memory-list-tests")
+    return application
 
 
 def _request(application: Any) -> Any:
@@ -331,8 +335,8 @@ def list_memories(request):
     )
 
 
-async def test_http_returns_page_with_next_cursor(list_memories) -> None:
-    memory = _MemoryFake(secret=b"memory-list-tests")
+async def test_http_returns_page_with_next_cursor(list_memories, application: Any) -> None:
+    memory = application.memory
     record = _record(owner="deployment")
     cursor = MemoryListCursor(
         updated_at=datetime.datetime(2026, 3, 4, tzinfo=_UTC),
@@ -342,7 +346,6 @@ async def test_http_returns_page_with_next_cursor(list_memories) -> None:
         records=(record,),
         next_cursor=cursor,
     )
-    application = SimpleNamespace(memory=memory)
 
     response = await list_memories(_request(application))
 
@@ -359,14 +362,13 @@ async def test_http_returns_page_with_next_cursor(list_memories) -> None:
     assert forwarded.kwargs["page"].cursor is None
 
 
-async def test_http_decodes_cursor_and_passes_it_through(list_memories) -> None:
-    memory = _MemoryFake(secret=b"memory-list-tests")
+async def test_http_decodes_cursor_and_passes_it_through(list_memories, application: Any) -> None:
+    memory = application.memory
     cursor = MemoryListCursor(
         updated_at=datetime.datetime(2026, 3, 4, tzinfo=_UTC),
         memory_id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
     )
     memory.list_active_page.return_value = MemoryListPage(records=(), next_cursor=None)
-    application = SimpleNamespace(memory=memory)
 
     response = await list_memories(
         _request(application),
@@ -382,9 +384,8 @@ async def test_http_decodes_cursor_and_passes_it_through(list_memories) -> None:
     assert forwarded.cursor == cursor
 
 
-async def test_http_rejects_tampered_cursor_before_service(list_memories) -> None:
-    memory = _MemoryFake(secret=b"memory-list-tests")
-    application = SimpleNamespace(memory=memory)
+async def test_http_rejects_tampered_cursor_before_service(list_memories, application: Any) -> None:
+    memory = application.memory
 
     with pytest.raises(HTTPException) as exc:
         await list_memories(_request(application), cursor="tampered.token")
@@ -392,10 +393,11 @@ async def test_http_rejects_tampered_cursor_before_service(list_memories) -> Non
     memory.list_active_page.assert_not_awaited()
 
 
-async def test_http_leaves_memory_refusals_to_the_shared_error_handlers(list_memories) -> None:
+async def test_http_leaves_memory_refusals_to_the_shared_error_handlers(
+    list_memories, application: Any
+) -> None:
     """Routes no longer translate Memory refusals; `install_error_handlers` answers them."""
-    memory = _MemoryFake(secret=b"memory-list-tests")
-    application = SimpleNamespace(memory=memory)
+    memory = application.memory
 
     memory.list_active_page.side_effect = MemoryDisabledError()
     with pytest.raises(MemoryDisabledError):
