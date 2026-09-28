@@ -1,98 +1,231 @@
 # Answer Resource Reading and Viewing
 
-Status: implemented. `read`/`view` shipped in 2.0.8 and lineage adoption in 2.0.9. The sections below keep the approved implementation brief; the table under *Approved bounded route decision* records the production routes.
+This document owns how an Answer Run reads and views its Resources: the `read` and
+`view` tools, extraction status and visual discovery, conversion routes, conversion
+snapshots, and adoption of an earlier Run's Resources. Public URL admission follows
+[ADR 0005](adr/0005-public-web-resource-acquisition.md), stored bytes share one read
+surface under [ADR 0016](adr/0016-one-run-resource-read-surface.md), and adoption
+follows [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md).
+[Domain Language](domain-language.md) defines Resource Handle, Web Resource, and Blob.
 
-Scope note: [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md) is the accepted decision that revises the run-scoped reach of Resource ids. It is implemented: a named earlier handle is adopted on first use under the consuming Run's fence, and an unauthorized or unusable one fails as a typed refusal.
+## Scope
 
-Scope: Answer Run attachments and Resources only. This change does not replace LightRAG corpus ingestion, expand admitted formats, or add local workspace PDF/Office conversion. The project is in development: remove superseded code and contracts, not compatibility aliases or legacy replay branches. This does not authorize deleting user data or unrelated VLM capabilities.
+- A Resource belongs to one Answer Run: an accepted upload, an earlier upload
+  re-registered for a follow-up, a caller link, a search result link, a public URL the
+  Agent chose, or an earlier Run's Resource adopted by this Run.
+- Corpus ingestion is separate: Answer Resources never invoke MinerU or Docling and
+  never become corpus documents, chunks, vectors, BM25 rows, or graph data. Workspace
+  files are not converted; `read(path)` decodes UTF-8 or BOM-tagged UTF-16 text, and
+  `view(path)` accepts standalone images only.
+- `read` and `view` are Research tools. Fast sends current-turn images to the model
+  directly and cannot represent any other attachment, so an Answer that carries one
+  must resolve to Research. An image attachment in either mode needs a vision-capable
+  query model; there is no text-only fallback.
 
-## Tool responsibilities
+## Tools
 
-- `read` returns bounded text, honest extraction status, and discoverable visual targets. It never attaches image pixels or secretly invokes OCR, document rendering, or a second model to judge whether the text is sufficient.
-- `view` returns verified source images, rendered PDF pages, or extracted embedded images as tool-result attachments to the vision-capable model of the Agent or Child Session that called `view`. Pixels are not automatically forwarded from a Child Session to its parent. It never asks a separate VLM to describe them.
-- Default/query answering profiles support vision. Remove the inspect-based text-only answering fallback; capability validation should fail honestly rather than invent a fallback.
-- Delete the `inspect` tool, its dedicated VLM invocation/prompt/result wrappers, obsolete configuration/setup guidance, allowlist entries, and superseded tests. Do not retain an alias, unused `focus` argument, or legacy output decoder. Keep unrelated retrieval-planning and corpus-sidecar VLM usage.
-- Standalone images use `view`, including workspace images formerly attached by `read(path)`. A mistaken image `read` returns bounded identifying information and actionable `view` guidance, not image bytes. Existing automatic user-upload image input need not take a tool round trip.
-- `view` accepts exactly one of a registered `resource_id`, an admitted anonymous public `url`, or a workspace `path`. Paths in this delivery support standalone images only. Resource locators support physical PDF pages and embedded-image handles; cursors continue bounded overviews. Public URLs share the existing Resource Registry acquisition, anonymous request policy, header allowlist, canonical identity, settled byte snapshot, and owner/security controls with `read`; there is no second downloader. URL continuation uses the returned resource identity. A `view(url)` does not first require successful text conversion.
-- A PDF `view` with no page locator returns a bounded, low-resolution overview with physical page labels and an explicit actual coverage range/continuation. A selected page is rendered for detail. Never render or attach an entire document implicitly, silently skip pages, claim overview coverage is whole-document coverage, or treat thumbnails as reliable small-text transcription.
-- Keep PDF rendering independent of text extraction. Current pypdfium2 rendering is not replaced by AnyDoc. Office embedded-image extraction is not a promise of whole-page/whole-slide screenshots.
+### `read`
 
-## Discovery and evidence
+- Takes exactly one of a workspace `path`, a `resource_id` registered in this Run, or
+  an anonymous public `url`. `offset` and `limit` apply only to paths and `focus` only
+  to Resources. A cursor continues a directory or a Resource; a URL read continues
+  with the `resource_id` it returns. Optional `http.user_agent`, `http.accept`, and
+  `http.accept_language` apply only to the first direct acquisition of a URL.
+- Returns bounded text only. A Resource page starts with
+  `[resource: <id> | lines <a>-<b> | extraction_status=<status>]`, holds one text window
+  whose whole envelope fits the model's remaining text allowance, and ends with notes,
+  visual handles, and a `[more; cursor=…]` continuation. `focus` starts the page order
+  at the most relevant window; the continuation still covers the whole text.
+- Never attaches pixels, runs OCR, renders a document, or calls another model. Reading
+  an image returns its media type and size and points to `view`.
 
-- Resource inventory identifies useful resource types so the model can choose `read` or `view` directly.
-- PDF/Office text results identify themselves as extracted text views, expose bounded visual discovery and valid viewing instructions, and retain normal text continuation.
-- Expose physical PDF page count where available and known embedded-image handles/anchors without making unreliable text-line-to-page or asset-part-to-page/cell mappings. Do not rebuild page-aware PDF Markdown in this delivery merely to provide discovery. Use page overviews when the target page is unknown.
-- Bound and paginate long visual inventories rather than exhausting text windows. Do not hide all remaining visuals behind truncated output.
-- Nonempty Markdown or no parser exception does not prove completeness. Unknown coverage remains unknown. No extracted text is not proof that the document is blank.
-- Distinguish usable text with unverified coverage, known OCR/incomplete extraction (with truthful known pages/omissions), ordinary conversion failure, and admission/safety/resource refusal. Do not fabricate partial text when the converter supplies none.
-- Known OCR/incomplete extraction exposes the original viewing route where independently allowed. The agent chooses whether to view relevant pages; no automatic hosted OCR, whole-document rendering, or fallback that launders known omissions into a complete success.
-- Safety/admission/resource refusals are not permission to retry another parser or renderer around the same restriction.
-- Keep evidence source identity and exact visual provenance (parent resource, physical page or supported image occurrence/anchor) through tool effects, citations, durable settlement and replay. A digest deduplicates bytes, not distinct source occurrences. Embedded assets must belong to the requested resource.
-- Use the actual tool-calling/consuming model's image/context budget across tool calls and replay, not fresh per-call budgets that bypass aggregate safety. Preserve existing image quality floors, bounded work and explicit failures/continuation.
+### `view`
+
+- Takes exactly one of a `resource_id`, an admitted public `url`, or a workspace
+  `path`. `locator` and `cursor` are mutually exclusive, a path takes neither, and a
+  URL view continues with its returned `resource_id`. `view(url)` shares the
+  acquisition of `read(url)` and does not need text conversion to succeed.
+- Attaches pixels as tool-result attachments for the vision-capable model of the Agent
+  or Child Session that called it; no separate VLM describes them. A Child Session's
+  result reaches its parent as text, so pixels are not forwarded.
+
+| Target | Result |
+|---|---|
+| Verified image | The source image; no locator or cursor |
+| PDF with `locator=<n>` | Physical page `n`, rendered at 2× (144 dpi) |
+| PDF without a locator | Thumbnails of up to 8 consecutive physical pages, longest side at most 900 px, labeled by physical page, stating the covered range (`covers physical pages a-b of N only`) and that thumbnails are not reliable small-text transcription, with a `cursor` for the next pages |
+| Converted document with `locator=vis-…` | One embedded image from the adopted conversion |
+| Anything else, including hosted-extraction text | An error naming what can be viewed |
+
+- PDFium renders one page at a time on demand, under a process-wide lock and a
+  40-megapixel limit, independently of text extraction. Office pages and slides are
+  never rendered.
+- Every image is charged to the Run's answering-model image budget (image count, bytes,
+  and pixels), which tool calls and replayed attachments share. An overview stops early
+  when the budget runs out, and a view that can attach nothing fails without pixels. A
+  model without image support cannot view.
+
+## Registration and acquisition
+
+- Resource handles (`res-…`) are opaque and minted with per-Run secrets. Cursors are
+  HMAC-signed and bound to their Resource and focus; a cursor never crosses a Run.
+- Caller attachments and links count against `answer.generation.max_attachments` (6).
+  One Resource's bytes, including a fetched URL body, are capped by
+  `max_attachment_bytes` (100 MiB), and uploads together by
+  `max_total_attachment_bytes` (128 MiB).
+- A public URL is checked for scheme and embedded credentials when it is registered,
+  and for DNS and redirect policy when it is fetched. Within a Run, one normalized URL
+  resolves to its first successfully admitted snapshot. Fetched bytes are persisted
+  before the tool result settles and are never fetched again during recovery.
+- Direct anonymous HTTP runs first. When it fails or yields no text for a textual
+  resource, the configured Extract chain supplies text once. A URL the local policy
+  rejects never reaches an external provider.
+- The model sees an inventory of registered Resources with a kind for each:
+  `image; view`, `PDF; read text or view physical pages`,
+  `DOCX|PPTX|XLSX; read extracted text and embedded-image inventory`, or the MIME type.
+
+## Extraction status and discovery
+
+| `extraction_status` | Meaning |
+|---|---|
+| `text` | Decoded text of an unconverted resource, or text from the Extract chain |
+| `usable_text_unverified_coverage` | The converter produced text; completeness is unverified |
+| `known_incomplete` | The converter reported an omission: OCR required (with the known pages when reported), a source it cannot represent, or external, unsupported, or unmapped images. No partial text is invented |
+| `no_extracted_text` | Conversion produced no text, which does not prove the document is blank |
+| `conversion_failed` | An ordinary conversion failure; no text evidence |
+| `safety_refused` | An archive, resource-limit, deadline, admission, or memory refusal |
+| `image` | The resource is an image; use `view` |
+| `unavailable` | A public URL yielded no citable text from direct HTTP or the Extract chain |
+
+- A converted read says it is an extracted text view. For a PDF it adds the physical
+  page count when PDFium can read it and says that pages are not mapped to text lines;
+  for other formats it says coverage is unverified and that a handle is an embedded
+  image, not a page screenshot.
+- Visual handles are listed up to 8 per read, within a quarter of the text allowance,
+  with a `cursor` to page through the rest as a visual inventory that is not text
+  evidence.
+- Handles are opaque `vis-…` identifiers. A label shows only a supported location: an
+  XLSX `Sheet!Cell` anchor, an image's alt text, or for DOCX
+  `package part <part>; location unknown`. No text-line-to-page or part-to-page mapping
+  is inferred.
+- A refused read returns `extraction_status=safety_refused; no evidence admitted` and
+  tells the model not to retry another parser or renderer around the restriction.
+
+## Conversion routes
+
+Routing uses the filename suffix, then the declared MIME type. The converted formats
+are PDF, DOCX, XLSX, PPTX, CSV, and HTML (`.html`, `.htm`); other non-image resources
+are decoded as text.
+
+| Format | Text | Images | Fallback |
+|---|---|---|---|
+| PDF | AnyDoc | PDFium page rendering, independent of text | MarkItDown once. `NeedsOcr` and `Unsupported` results are terminal `known_incomplete` |
+| DOCX | AnyDoc | AnyDoc's typed image occurrences bound to verified package parts, whether or not the document has images | MarkItDown once, with its images bound to package parts the same way |
+| XLSX | AnyDoc display values; cached formula results, no recalculation | openpyxl images with `Sheet!Cell` anchors; external links are not loaded | MarkItDown once |
+| PPTX | MarkItDown | Embedded data-URI images | None |
+| CSV | MarkItDown | None | None |
+| HTML | MarkItDown | Embedded data-URI images | None |
+
+- AnyDoc is exactly `firecrawl-anydoc` 0.2.4 (import `anydoc`); any other installed
+  version is a configuration error, not a fallback. It runs offline on admitted bytes
+  with OCR rejected. MarkItDown runs with plugins disabled on admitted bytes and an
+  explicit stream type, never fetches, and uses a fresh converter per call.
+- OOXML archives (DOCX, PPTX, XLSX) pass a central-directory preflight before any
+  converter opens them: no duplicate or encrypted entries, at most 10,000 entries,
+  100 MiB per entry, 512 MiB uncompressed in total, and a 100× expansion ratio.
+- One 120-second deadline covers preflight, AnyDoc, and any fallback. It stops new work
+  from starting or being adopted; it cannot interrupt native code that is already
+  running, and neither can cancelling the Python caller.
+- Only an AnyDoc initialization, malformed-input, or missing-part failure falls back:
+  once, after AnyDoc's work has ended, within the same deadline, with the fallback
+  reason recorded. An empty AnyDoc result is `no_extracted_text`, not a fallback
+  trigger. Resource limits, unsafe archives, failed image binding, deadline exhaustion,
+  cancellation, and memory exhaustion are `safety_refused` and never fall back. An
+  encrypted document is `conversion_failed`, and so is an XLSX whose image extraction
+  fails, because text is never adopted without its images.
+
+Why the other formats stay on MarkItDown, and what the AnyDoc routes do not claim:
+
+- HTML: AnyDoc 0.2.4 does not support HTML.
+- PPTX: AnyDoc 0.2.4 can silently drop slides whose parts are missing or have no
+  shapes. Adopting it needs a secure OPC completeness check and typed image binding.
+- CSV: AnyDoc 0.2.4 mis-decodes Shift-JIS without an error, while MarkItDown decodes it
+  but truncates over-wide rows and keeps BOMs and raw cell newlines. Adoption waits for
+  one validated host decoding and normalization policy.
+- PDF: AnyDoc returns `Unsupported`, without page metadata, for some PDFs that do carry
+  text, such as a tested text-plus-raster page. That stays `known_incomplete` rather
+  than adopting partial fallback text, which omits the raster content too;
+  physical-page viewing remains available.
+- DOCX: AnyDoc 0.2.4's Markdown omits image links, so images come from its typed assets.
+- XLSX: qualified display coverage spans percent, date, currency, custom, merged, and
+  empty cells, cached and uncached formulas, and repeated images across sheets; other
+  number formats and drawing types are unverified.
+
+These are current routes, not permanent bans. `scripts/anydoc_pilot.py`,
+`scripts/docx_integration_bench.py`, and `scripts/format_route_bench.py` reproduce the
+per-format evidence offline; their small samples do not establish service latency,
+arbitrary-document completeness, or untested platforms.
 
 ## Conversion snapshots and recovery
 
-- Persist the adopted conversion snapshot: text view, selected assets and source locators, extraction status, converter/version, fallback reason when applicable, and input/output digests.
-- Subsequent reads, cursors, and recovery reuse that adopted snapshot. They do not re-run parser selection, opportunistically switch engines, or silently rebuild a different view after a dependency change.
-- Reuse existing owner-scoped blob/effect settlement and retention mechanisms; no cross-owner cache or second storage platform. Do not persist failed speculative output as evidence.
-- Render PDF pages on demand and settle returned derivative bytes with their source locator and digest, without eagerly pre-rendering every page. Restore those returned bytes honestly on replay.
-- Legacy data/run compatibility is out of scope. Correct atomicity, concurrent access, cancellation, ownership, cleanup and recovery for new runs remain required.
-- Clarification approved during Phase A: new follow-up/fork Runs replay prior-Run image attachments only through exact owner/selected-Session-lineage and originating-Run/blob-reference authorization. Adopt retained references atomically under the consuming Run fence so origin-Run cleanup cannot invalidate replay. Same owner or a shared Session alone is insufficient. Preserve original/derivative provenance and charge the consuming model's aggregate budget; missing, mismatched or unauthorized snapshots fail explicitly. This hydration registers no historical handle as a capability of the new Run by itself: a Run adopts an earlier Run's Resource only when the model names a handle whose durable row carries this same Agent Session, and the adoption then re-materializes those bytes under the consuming Run's fence, keeps the earlier handle readable only as an alias of the new canonical handle, and reuses the stored conversion view instead of reparsing. Cursors remain the consuming Run's own projection state. No legacy schema compatibility is added.
+- A Resource's first conversion in a Run is adopted as its snapshot: text, images with
+  their locators, extraction status, converter and version, fallback reason, known OCR
+  pages and page count, note, input digest (SHA-256 of the source bytes), and output
+  digest (SHA-256 of the text). A failure snapshot records status and converter with
+  empty text.
+- The snapshot settles with the tool result through the existing owner-scoped resource
+  and Blob effect settlement, as `conversion.json` plus one `conversion_asset` per
+  image. There is no cross-owner cache or second store.
+- Later reads, cursors, and recovery reuse the adopted snapshot and never rerun parser
+  selection or switch engines after a dependency change. Recovery checks the output and
+  asset digests, re-reads the source bytes, and checks the input digest before adopting
+  the snapshot again.
+- Concurrent reads of one Resource share one conversion. A cancelled read cannot start
+  a late fallback, and closing the registry waits for native conversion to finish
+  before releasing storage.
+- A rendered page or viewed image settles as a derivative attachment with its source
+  Resource, its exact provenance (physical page and overview flag, or embedded-image
+  handle, anchor, and package part), and its digest. The attachment identity hashes
+  provenance and bytes, so identical bytes at two locations stay two occurrences.
+  Replay restores the settled bytes; nothing is pre-rendered.
 
-## AnyDoc-first adoption
+## Earlier Runs
 
-AnyDoc-first with a qualified MarkItDown fallback is an explicit implementation goal, not merely a hypothetical future plugin. Adoption is gated independently by format and must not block the `read`/`view` simplification if a candidate fails.
-
-User clarification after the paired pilot supersedes image-free-only DOCX routing: adapt text and image assets properly rather than introducing an image/no-image engine-selection branch. This authorizes the DOCX asset adaptation and its additional qualification tests; it does not retroactively claim that the earlier text-only pilot qualified those assets.
-
-- Evaluate and integrate the exact `firecrawl-anydoc` 0.2.4 candidate (Python import `anydoc`), using already-admitted bytes and local OCR rejection. No hosted OCR, provider/model calls, private documents or telemetry-based evaluation.
-- DOCX uses one intended AnyDoc-first text-and-assets route, with or without images. Adapt AnyDoc's structured image assets and distinct occurrences independently of its Markdown image links, which the pilot found missing. Remove the provisional image-free selector and its unused paths; do not substitute another heuristic image-presence router. Qualify the actual integrated contract with both image-bearing and image-free DOCX fixtures before claiming adoption.
-- Preserve real asset membership, bytes/media/digests, repeated occurrences and bounded visual discovery. Expose only supported locators: package-part provenance or a null anchor is not a physical page, slide, or cell. Do not invent inline placement when linkage is unavailable, fetch external image relationships automatically, or silently drop required unmapped/unsupported visual evidence. Text and assets must belong to the same admitted and adopted source snapshot. Measure any extra structured-document parse cost honestly.
-- Further user clarification requires evidence-based reassessment of PDF, PPTX, XLSX, HTML and CSV before final route decisions. Their incumbent routes are current/provisional, not proof that AnyDoc is inferior. Separate official format support, valid-document text fidelity, malformed-input/known-omission handling, missing host image adaptation, and actual combined-path cost. In particular, a partial incumbent result is not automatically better than an explicit candidate refusal, and a missing candidate image adapter does not require retaining its incumbent text engine. Record reproducible per-format evidence and the final primary/fallback recommendation; do not silently enable additional formats before that decision. PDFium page rendering remains independent; whole Office-page rendering and expansion of the admitted-format set remain out of scope.
-- Run a small reproducible paired pilot, approximately 16–20 generated or publicly redistributable fixtures with semantic gold: text/scanned/mixed PDF, text-plus-image regions, figures and repeated images, DOCX numbering/tables, PPTX slides/notes, XLSX display values/anchors, and malformed/empty/safety/error cases. Check critical text/numbers/page or slide coverage/tables/assets/provenance before measuring complete conversion/read latency and process peak memory. The incumbent output is not the gold standard.
-- Verify supported current-platform CPython 3.14 import/conversion and report any platform not actually tested. Do not claim Linux/platform support from wheel metadata alone, widen platform promises, or claim ONNX removal while retaining MarkItDown.
-- Only demonstrated, quality-qualified formats may become AnyDoc-first. A quality failure keeps the direct old route, not success-dependent guessing or a fake fallback. Report enabled and deferred formats and actual evidence. Do not invent performance thresholds or statistically reliable p95 from a small sample. If costs/quality leave adoption ambiguous, ask the supervisor before enabling.
-- At most one MarkItDown fallback for a recoverable ordinary parsing/init failure (or qualified empty result), after the first operation has ended and within remaining total limits. No reverse loop or speculative parallel parsing.
-- Preserve typed terminal classifications: NeedsOcr/known incomplete cannot become complete via fallback; ResourceLimit/UnsafeArchive/admission refusal/total budget exhaustion/OOM do not fall back. Timeout while native work is still running does not launch another parser. Synchronous native work releasing the GIL is not cancellable by cancelling a Python await.
-- Keep candidate resource caps plus current host preflight, not a replacement for host safety. Do not broaden URL/path access or let hosted text extraction masquerade as original visual bytes.
-- MarkItDown is intentional retained functionality, not a legacy compatibility alias. Do not remove pypdfium2/openpyxl on the assumption AnyDoc replaces their responsibilities.
-
-### Approved bounded route decision after per-format reassessment
-
-The supervisor approved PDF and XLSX adoption after the independent 17-fixture
-reassessment. Current production routes are:
-
-| Format | Primary text / independent visuals | Ordinary fallback / pending qualification |
-|---|---|---|
-| DOCX | AnyDoc 0.2.4 text + verified typed occurrences, with or without images | One qualified MarkItDown fallback; no image-presence dispatch |
-| PDF | AnyDoc 0.2.4 text; PDFium physical-page viewing stays independent | One ordinary fallback; NeedsOcr and Unsupported are terminal known-incomplete results, never rescue-parsed |
-| XLSX | AnyDoc 0.2.4 text + existing openpyxl embedded images with actual Sheet!Cell anchors | One ordinary fallback; no formula execution/recalculation or external-link fetch |
-| PPTX | Direct MarkItDown, current bounded deferral | Candidate valid slides/notes/table facts pass, but referenced missing/shape-less slides can silently disappear. Adoption needs separately qualified secure OPC completeness checking and typed occurrence binding/coverage, including unusable Markdown image targets; no prototype regex checker is approved for production |
-| CSV | Direct MarkItDown, current bounded deferral | Candidate preserves over-wide cells and improves BOM/multiline table shape, but silently mojibakes tested Shift-JIS. Incumbent decodes that case but truncates over-wide rows and retains BOM/raw cell newlines. A separately validated uniform host decoding/normalization policy (evaluate existing `resources/text.py::decode_text`) is required before candidate adoption |
-| HTML | Direct MarkItDown | Candidate 0.2.4 does not support HTML; no guaranteed-failing candidate call |
-
-PDF qualification includes valid multipage and local-only embedded-font
-Cyrillic/CJK facts, two scanned pages, and a text-plus-raster page. The latter
-provably has text, yet the candidate returns Unsupported without page metadata:
-adopt no fabricated partial text and do not infer OCR pages from exception prose.
-Keep unknown details unknown; independent physical-page inventory and bounded
-`view` overviews remain available. The incumbent's partial text on this fixture
-also omits raster facts, so it is not proof of superior completeness.
-
-XLSX qualification includes percent/date/currency/custom display values, merged
-and empty cells, authored cached formulas and uncached formulas (empty, not
-recalculated), plus identical image bytes at distinct cells across sheets.
-Candidate text and openpyxl images share the same admitted snapshot. Display
-coverage outside these generated cases is unverified, not a promise of every
-Excel number format, formula or drawing type.
-
-These decisions are not permanent bans or a general AnyDoc-inferiority claim.
-No new formats, whole Office-page renders, corpus changes or image/no-image
-engine selectors are authorized. Integrated tests and measurements must be
-reported separately from the earlier direct-call prototypes; small synthetic
-samples do not prove production latency, arbitrary-document completeness, or
-untested platforms. The route table above is authoritative.
+- A follow-up or fork Run hydrates earlier image attachments only from its selected
+  Session lineage. Before hydration, the executor retains the exact selected
+  occurrences under its own Run lease and fence, then checks each Blob digest; missing,
+  mismatched, or unauthorized bytes fail explicitly. Replayed images are charged
+  to the consuming model's image budget. Hydration alone registers no earlier handle.
+- Earlier uploads re-registered for a follow-up load their bytes only when read or
+  viewed.
+- Lineage adoption is on by default (`answer.generation.lineage_adoption`). When `read`
+  or `view` names an unknown handle, the loader looks in the same owner and Agent
+  Session for a retained row with that handle and an adoptable kind: a fetched Web body,
+  a tool attachment, or a Published Artifact. If its Blob digest matches, the bytes
+  become a Resource of this Run under a new canonical handle, the earlier handle becomes
+  its alias, and the stored conversion snapshot is adopted verbatim. The bytes,
+  snapshot, and images settle as this Run's own Resources under its fence, so cleanup of
+  the origin Run cannot invalidate them.
+- Reading an adopted convertible document requires the earlier Run's snapshot; without
+  one, `read` refuses rather than converting again, while `view` still works. A
+  snapshot that does not match its bytes refuses the adoption.
+- A handle the loader does not admit, or a cursor from another Run, is refused with
+  guidance to re-attach the document or read it again.
 
 ## Verification
 
-Tests cover schema/tool composition/children, images and URL classification, physical page discovery and pagination, conversion/error routing, asset membership and duplicate occurrences, real durable settlement/replay, snapshot reuse, cancellation and aggregate image budgets, and provider attachment projections.
+- `tests/unit/test_resource_tools.py`: the `read` and `view` seams, inventories,
+  identity, and image budgets.
+- `tests/unit/test_resource_converters.py`, `tests/unit/test_docx_conversion.py`:
+  routes, OOXML preflight, fallback and terminal classifications, and DOCX occurrences.
+- `tests/unit/test_resource_visual.py`: bounded PDF rendering independent of text.
+- `tests/unit/test_resource_registry.py`, `tests/unit/test_resource_text.py`,
+  `tests/unit/test_resource_lexical.py`, `tests/unit/test_resource_review_regressions.py`:
+  registration, text windows, focus ordering, cursors, and manifest classification.
+- `tests/unit/test_resource_snapshot_runtime.py`: settled snapshots and located pixels
+  restored through the Answer host and Agent runtime.
+- `tests/unit/test_resource_lineage_adoption.py`,
+  `tests/integration/test_resource_lineage_pg.py`,
+  `tests/integration/test_attachment_replay_pg.py`,
+  `tests/integration/test_resource_review_regressions_pg.py`: adoption, selected-lineage
+  replay, and durable settlement against PostgreSQL.

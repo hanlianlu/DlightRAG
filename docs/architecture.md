@@ -212,7 +212,7 @@ query + attachments
 UTF-8 decodes directly; PDF, DOCX and XLSX text use offline AnyDoc 0.2.4 with a
 qualified one-shot MarkItDown fallback. DOCX typed assets and openpyxl XLSX assets
 are adapted independently of text; HTML, CSV and PPTX retain direct MarkItDown
-routes for the [per-format reasons](resource-reading.md#approved-bounded-route-decision-after-per-format-reassessment).
+routes for the [per-format reasons](resource-reading.md#conversion-routes).
 OOXML archive preflight precedes either parser. `view` attaches verified
 images, bounded physical PDF page renders, or resource-owned embedded images to
 the answering model directly, without a separate VLM call. Workspace paths support

@@ -318,15 +318,15 @@ serializes against blob deletion.
 
 Deleting a run removes only its references. Blob deletion occurs in one
 transaction only when no references survive; the foreign key protects a
-concurrent reuse. Adopted conversion text/status, MarkItDown version and input/output
+concurrent reuse. Adopted conversion text/status, converter and version, input/output
 digests, embedded occurrences, and returned view derivatives use the existing
 resource/blob Effect Settlement path; same-Run recovery reuses the adopted view
 instead of reparsing. Raw image bytes remain separate from typed Session parts.
 New follow-up/fork Runs atomically retain exact selected-lineage attachment
 references under the consuming Run fence before hydration. Missing, mismatched,
-or unauthorized replay bytes fail explicitly; historical source handles do not
-become new-Run capabilities. See [Resource Reading](resource-reading.md) for the
-retention contract and independent-review requirements.
+or unauthorized replay bytes fail explicitly; hydration alone registers no earlier
+handle in the new Run, which reaches an earlier Resource only through lineage
+adoption. See [Resource Reading](resource-reading.md) for the retention contract.
 
 ### `dlightrag_answer_artifact_attachments`
 
