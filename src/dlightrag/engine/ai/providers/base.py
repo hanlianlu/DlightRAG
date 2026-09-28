@@ -2,6 +2,7 @@
 """Abstract base for LLM completion providers."""
 
 import inspect
+import logging
 import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
@@ -16,6 +17,8 @@ from dlightrag.engine.ai.messages import (
     ToolDefinition,
     ToolStopReason,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Provider rejection texts that mean the request exceeded the model's
 #: context window. Kept provider-generic: the classifier walks the full
@@ -330,15 +333,27 @@ async def closing_stream[S](stream: S) -> AsyncIterator[S]:
     read to the end or closed, and a Gemini stream is an async generator. A
     consumer that stops early, fails, or is cancelled would otherwise leave the
     response open until garbage collection happens to finalize it.
+
+    While the stream is already unwinding, a failure to close it is logged and
+    the original exception, cancellation included, keeps propagating.
     """
     try:
         yield stream
-    finally:
-        close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
-        if callable(close):
-            result = close()
-            if inspect.isawaitable(result):
-                await result
+    except BaseException:
+        try:
+            await _close_stream(stream)
+        except Exception:
+            logger.warning("Failed to close a provider stream while unwinding", exc_info=True)
+        raise
+    await _close_stream(stream)
+
+
+async def _close_stream(stream: object) -> None:
+    close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+    if callable(close):
+        result = close()
+        if inspect.isawaitable(result):
+            await result
 
 
 class CompletionOutput(str):

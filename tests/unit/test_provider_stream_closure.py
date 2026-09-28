@@ -27,6 +27,7 @@ class _SdkStream:
         self._sent = False
         self._stalled = asyncio.Event()
         self.closed = False
+        self.close_error: Exception | None = None
         if generator:
             self.aclose = self._close
         else:
@@ -44,6 +45,8 @@ class _SdkStream:
 
     async def _close(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def _openai_chunk() -> Any:
@@ -185,3 +188,82 @@ async def test_an_exhausted_stream_is_closed_too(name: str) -> None:
 
     assert tokens == ["partial"]
     assert stream.closed is True
+
+
+_CLOSE_FAILURE = "Failed to close a provider stream while unwinding"
+
+
+@pytest.mark.parametrize("name", ["openai", "anthropic", "gemini"])
+async def test_a_failed_close_does_not_replace_the_consumer_failure(
+    name: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider, stream, client = _provider_with_stream(name)
+    stream.close_error = OSError("connection already gone")
+
+    async def emit_text(_text: str) -> None:
+        raise RuntimeError("consumer stopped")
+
+    with patch.object(provider, "_get_client", return_value=client):
+        with pytest.raises(RuntimeError, match="consumer stopped"):
+            await provider.complete_tool_turn_streaming(
+                _MESSAGES,
+                "model",
+                tools=[],
+                emit_text=emit_text,
+            )
+
+    assert stream.closed is True
+    assert _CLOSE_FAILURE in caplog.text
+
+
+@pytest.mark.parametrize(("name", "entrypoint"), _TEXT_STREAMS)
+async def test_a_failed_close_does_not_replace_an_early_stop(
+    name: str,
+    entrypoint: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider, stream, client = _provider_with_stream(name)
+    stream.close_error = OSError("connection already gone")
+
+    with patch.object(provider, "_get_client", return_value=client):
+        tokens = _text_stream(provider, entrypoint)
+        assert await anext(tokens) == "partial"
+        await tokens.aclose()
+
+    assert stream.closed is True
+    assert _CLOSE_FAILURE in caplog.text
+
+
+@pytest.mark.parametrize(("name", "entrypoint"), _TEXT_STREAMS)
+async def test_a_failed_close_does_not_replace_a_cancellation(
+    name: str,
+    entrypoint: str,
+) -> None:
+    provider, stream, client = _provider_with_stream(name)
+    stream.close_error = OSError("connection already gone")
+    first_token = asyncio.Event()
+
+    async def consume() -> None:
+        async for _token in _text_stream(provider, entrypoint):
+            first_token.set()
+
+    with patch.object(provider, "_get_client", return_value=client):
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(first_token.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert stream.closed is True
+
+
+async def test_a_failed_close_after_a_complete_stream_is_reported() -> None:
+    # Nothing else is in flight, so the close failure is the error to report.
+    provider, stream, client = _provider_with_stream("openai")
+    stream._stalled.set()  # pyright: ignore[reportPrivateUsage]
+    stream.close_error = OSError("connection already gone")
+
+    with patch.object(provider, "_get_client", return_value=client):
+        with pytest.raises(OSError, match="connection already gone"):
+            [token async for token in _text_stream(provider, "stream")]
