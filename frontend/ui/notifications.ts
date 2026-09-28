@@ -4,6 +4,7 @@
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
+import {readStored, writeStored} from '../lib/storage.ts';
 
 const ASKED_STORAGE_KEY = 'dlightrag-notify-asked';
 
@@ -17,19 +18,11 @@ function supported(): boolean {
 }
 
 function alreadyAsked(): boolean {
-  try {
-    return window.localStorage.getItem(ASKED_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
+  return readStored(ASKED_STORAGE_KEY) === '1';
 }
 
 function rememberAsked(): void {
-  try {
-    window.localStorage.setItem(ASKED_STORAGE_KEY, '1');
-  } catch {
-    // Browser storage is an optional enhancement.
-  }
+  writeStored(ASKED_STORAGE_KEY, '1');
 }
 
 /** Owns missed-answer state, permission intent, and page-presence listeners. */

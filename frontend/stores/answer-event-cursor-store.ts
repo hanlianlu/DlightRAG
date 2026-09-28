@@ -34,5 +34,3 @@ export class AnswerEventCursorStore {
     this.#cursors.delete(conversationId);
   }
 }
-
-export const answerEventCursorStore = new AnswerEventCursorStore();

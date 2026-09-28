@@ -1,14 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Explicit store bag the Shell constructs once and passes to Features.
 
- *  Primitives never receive this. Features do not import store singletons.
+ *  createAppHandles() is the only constructor of the app's shared stores;
+ *  no store module holds an instance. Primitives never receive this bag.
  */
 
-import {answerEventCursorStore, AnswerEventCursorStore} from './answer-event-cursor-store.ts';
-import {attachmentStore, AttachmentStore} from './attachment-store.ts';
-import {conversationStore, ConversationStore} from './conversation-store.ts';
-import {ingestStore, IngestStore} from './ingest-store.ts';
-import {workspaceStore, WorkspaceStore} from './workspace-store.ts';
+import {AnswerEventCursorStore} from './answer-event-cursor-store.ts';
+import {AttachmentStore} from './attachment-store.ts';
+import {ConversationStore} from './conversation-store.ts';
+import {IngestStore} from './ingest-store.ts';
+import {WorkspaceStore} from './workspace-store.ts';
 
 export interface AppHandles {
   readonly conversations: ConversationStore;
@@ -20,21 +21,16 @@ export interface AppHandles {
 
 let produced: AppHandles | null = null;
 
-/** The process-wide bag wrapping today's store instances.
+/** The process-wide bag, constructed on first use.
 
- *  Tests may pass a different bag into a Feature. Production Shell assigns
- *  this object once so every Feature sees the same stores. */
+ *  Every Feature defaults to it, so the Shell and the Features it composes
+ *  share one set of stores; tests may pass a different bag into a Feature. */
 export function productionHandles(): AppHandles {
-  produced ??= {
-    conversations: conversationStore,
-    workspaces: workspaceStore,
-    ingest: ingestStore,
-    attachments: attachmentStore,
-    answerEventCursors: answerEventCursorStore,
-  };
+  produced ??= createAppHandles();
   return produced;
 }
 
+/** Construct a complete bag; an override replaces one store (tests). */
 export function createAppHandles(overrides: Partial<AppHandles> = {}): AppHandles {
   const workspaces = overrides.workspaces ?? new WorkspaceStore();
   return {

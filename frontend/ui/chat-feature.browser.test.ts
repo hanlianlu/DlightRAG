@@ -13,9 +13,7 @@ import type {
 import type {MemoryOperationEvent} from '../api/memory.ts';
 import {AGENT_EFFORT_STORAGE_KEY} from '../lib/agent-effort.ts';
 import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
-import {attachmentStore} from '../stores/attachment-store.ts';
-import {conversationStore} from '../stores/conversation-store.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
+import {productionHandles} from '../stores/app-handles.ts';
 import type {DlChatComposer} from './chat-composer.ts';
 import './chat-composer.ts';
 import type {DlConversationSidebar} from './conversation-sidebar.ts';
@@ -35,6 +33,8 @@ import {
 } from './chat-message-list.ts';
 import {webRouter} from './router.ts';
 import {waitFor} from '../testing/dom.ts';
+
+const {attachments: attachmentStore, conversations: conversationStore, workspaces: workspaceStore} = productionHandles();
 
 const originalFetch = window.fetch;
 const originalRevokeObjectURL = URL.revokeObjectURL;

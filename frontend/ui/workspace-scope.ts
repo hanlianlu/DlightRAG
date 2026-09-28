@@ -144,7 +144,7 @@ export class DlWorkspaceScope extends LightElement {
     const sorted = [...this.handles.workspaces.records]
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
     return html`
-      <div class="dl-popover dl-popover--workspace" id="workspace-popover"
+      <div class="dl-popover dl-popover--workspace dl-anchored" id="workspace-popover"
            role="dialog" aria-label=${msg('Workspaces', {id: 'workspaceScope.workspacesAria'})}
            ?hidden=${!this.open}
            @keydown=${(event: KeyboardEvent) => {

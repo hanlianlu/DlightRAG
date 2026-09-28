@@ -31,8 +31,23 @@ test('answer errors do not expose malformed payload fields', () => {
 });
 
 test('API refusals show the server reason, and the caller localizes everything else', () => {
-  const refused = new ApiError(503, {detail: 'Corpus writes are paused.', errorType: 'unavailable'});
-  assert.equal(apiErrorMessage(refused, 'Upload failed.'), 'Corpus writes are paused.');
+  for (const [status, errorType] of [[422, 'validation'], [409, 'conflict'], [503, 'unavailable']] as const) {
+    const refused = new ApiError(status, {detail: 'Corpus writes are paused.', errorType});
+    assert.equal(apiErrorMessage(refused, 'Upload failed.'), 'Corpus writes are paused.');
+  }
   assert.equal(apiErrorMessage(new ApiError(502), 'Upload failed.'), 'Upload failed.');
   assert.equal(apiErrorMessage(new TypeError('network down'), 'Upload failed.'), 'Upload failed.');
+});
+
+test('an authorization refusal is explained, never echoed', () => {
+  const denied = new ApiError(403, {
+    detail: 'Access denied for action=workspace.create workspace=finance',
+    errorType: 'auth',
+  });
+  assert.equal(apiErrorMessage(denied, 'Failed to create workspace'), 'You do not have permission to do that.');
+  const expired = new ApiError(401, {detail: 'Not authenticated', errorType: 'auth'});
+  assert.equal(
+    apiErrorMessage(expired, 'Failed to create workspace'),
+    'Your session has ended. Sign in again to continue.',
+  );
 });

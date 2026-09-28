@@ -24,6 +24,7 @@ import {requestToast} from './toast-request.ts';
 import './conversation-list.ts';
 import {type FocusRestorer, modalResult } from './modal.ts';
 import {webRouter} from './router.ts';
+import {readStored, writeStored} from '../lib/storage.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 
@@ -254,19 +255,11 @@ export class DlConversationSidebar extends LightElement {
   }
 
   #collapsedPreference(): boolean {
-    try {
-      return window.localStorage.getItem(COLLAPSED_KEY) === 'true';
-    } catch {
-      return false;
-    }
+    return readStored(COLLAPSED_KEY) === 'true';
   }
 
   #setCollapsedPreference(value: boolean): void {
-    try {
-      window.localStorage.setItem(COLLAPSED_KEY, value ? 'true' : 'false');
-    } catch {
-      // Storage may be unavailable under hardened browser settings.
-    }
+    writeStored(COLLAPSED_KEY, value ? 'true' : 'false');
   }
 
   #list(): DlConversationList | null {

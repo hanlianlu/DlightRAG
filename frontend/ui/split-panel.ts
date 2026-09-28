@@ -3,6 +3,7 @@
 
 import {DlSplitLayout} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
+import {readStored, writeStored} from '../lib/storage.ts';
 
 const INSPECTOR_MIN_WIDTH = 320;
 const CONVERSATION_MIN_WIDTH = 240;
@@ -44,24 +45,16 @@ function cssDefault(state: Pick<SplitState, 'widthVar' | 'minWidth'>): number {
 }
 
 function loadPreferred(state: Omit<SplitState, 'split' | 'panel' | 'preferred'>): number {
-  try {
-    const stored = localStorage.getItem(state.storageKey);
-    const value = stored === null ? NaN : Number.parseInt(stored, 10);
-    if (Number.isFinite(value) && value >= state.minWidth) {
-      return Math.min(state.maxWidth, value);
-    }
-  } catch {
-    // Storage is an enhancement; the CSS default remains authoritative.
+  const stored = readStored(state.storageKey);
+  const value = stored === null ? NaN : Number.parseInt(stored, 10);
+  if (Number.isFinite(value) && value >= state.minWidth) {
+    return Math.min(state.maxWidth, value);
   }
   return Math.min(state.maxWidth, cssDefault(state));
 }
 
 function savePreferred(state: SplitState): void {
-  try {
-    localStorage.setItem(state.storageKey, String(state.preferred));
-  } catch {
-    // Resizing remains available when storage is blocked.
-  }
+  writeStored(state.storageKey, String(state.preferred));
 }
 
 function syncRenderedWidthsNow(): void {

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import { Store } from './base.ts';
-import { workspaceStore, type WorkspaceStore } from './workspace-store.ts';
+import type {WorkspaceStore} from './workspace-store.ts';
 
 /** The Files target: an explicit workspace, or else the search scope's primary. */
 export class IngestStore extends Store {
@@ -39,5 +39,3 @@ export class IngestStore extends Store {
     this.changed();
   }
 }
-
-export const ingestStore = new IngestStore(workspaceStore);

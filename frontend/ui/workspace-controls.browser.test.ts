@@ -1,8 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {ingestStore} from '../stores/ingest-store.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
+import {productionHandles} from '../stores/app-handles.ts';
 import type {DlWorkspaceScope} from './workspace-scope.ts';
 import './workspace-scope.ts';
 import './inspector-files.ts';
@@ -11,6 +10,8 @@ import type {DlIngestTarget} from './ingest-target.ts';
 import './ingest-target.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
+
+const {ingest: ingestStore, workspaces: workspaceStore} = productionHandles();
 
 const originalFetch = window.fetch;
 
@@ -217,6 +218,32 @@ it('reports a submitted creation failure after its popover is dismissed', async 
   expect(receipt).to.deep.equal({message: 'Failed to create workspace', duration: 3000});
   expect(scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')?.hidden)
     .to.equal(true);
+});
+
+it('explains a refused workspace command instead of echoing the access rule', async () => {
+  const receipts: ToastRequestDetail[] = [];
+  let status = 403;
+  window.fetch = async () => Response.json(status === 403
+    ? {detail: 'Access denied for action=workspace.create workspace=research', error_type: 'auth'}
+    : {detail: 'Workspace research already exists', error_type: 'conflict'}, {status});
+  const scope = mountScope();
+  scope.addEventListener('dl-toast-request', (event) => { receipts.push(event.detail); });
+  await scope.updateComplete;
+  buttonNamed(scope, 'Choose search workspaces')?.click();
+  await scope.updateComplete;
+  const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
+  const create = scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')!;
+
+  input.value = 'Research';
+  create.click();
+  await waitFor(() => receipts.length === 1);
+  expect(receipts[0]).to.deep.equal({message: 'You do not have permission to do that.', duration: 3000});
+
+  status = 409;
+  await waitFor(() => !create.disabled);
+  create.click();
+  await waitFor(() => receipts.length === 2);
+  expect(receipts[1]?.message).to.equal('Workspace research already exists');
 });
 
 it('keeps a pending reset modal and isolates the next reset operation', async () => {

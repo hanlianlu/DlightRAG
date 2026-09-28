@@ -36,32 +36,28 @@ test('shell querySelector targets are Feature custom elements', () => {
   assert.deepEqual(illegal, []);
 });
 
-const STORE_SINGLETONS = [
-  'conversationStore',
-  'workspaceStore',
-  'ingestStore',
-  'attachmentStore',
-  'answerEventCursorStore',
+const SHARED_STORES = [
+  'ConversationStore',
+  'WorkspaceStore',
+  'IngestStore',
+  'AttachmentStore',
+  'AnswerEventCursorStore',
 ];
 
-test('features do not import store singleton values', () => {
-  const dir = dirname(APP);
+test('createAppHandles is the only constructor of the shared stores', () => {
+  const frontend = join(dirname(APP), '..');
   const offenders: string[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
-    const source = readFileSync(join(dir, name), 'utf8');
-    // Escaped slashes keep this a literal: the pattern is static, and biome
-    // prefers a literal over a constructed RegExp for one.
-    const importRe = /^import[\s\S]*?from '\.\.\/stores\/[^']+';/gm;
-    for (const match of source.matchAll(importRe)) {
-      const block = match[0];
-      if (block.includes(' type ') && !block.includes('{')) continue;
-      for (const singleton of STORE_SINGLETONS) {
-        if (new RegExp(`\\b${singleton}\\b`).test(block) && !block.includes(`type ${singleton}`)) {
-          offenders.push(`${name}: ${singleton}`);
-        }
+  for (const directory of ['api', 'lib', 'stores', 'ui']) {
+    for (const name of readdirSync(join(frontend, directory))) {
+      if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
+      if (directory === 'stores' && name === 'app-handles.ts') continue;
+      const source = readFileSync(join(frontend, directory, name), 'utf8');
+      for (const store of SHARED_STORES) {
+        if (new RegExp(`\\bnew ${store}\\(`).test(source)) offenders.push(`${directory}/${name}: ${store}`);
       }
     }
   }
   assert.deepEqual(offenders, []);
+  const handles = readFileSync(join(frontend, 'stores', 'app-handles.ts'), 'utf8');
+  for (const store of SHARED_STORES) assert.match(handles, new RegExp(`\\bnew ${store}\\(`));
 });

@@ -19,7 +19,19 @@ export function answerErrorMessage(
     return typeof message === 'string' && message.trim() ? message : fallback;
 }
 
-/** The server's public reason for a refused API request, else the caller's localized copy. */
+/** What to tell the reader about a refused API request.
+
+ * An authorization refusal names the action and workspace for operators, so
+ * the reader gets its meaning in their language instead. Any other refusal
+ * shows the server's public reason (a validation, conflict, or availability
+ * remedy); without one the caller's localized copy stands.
+ */
 export function apiErrorMessage(error: unknown, fallback: string): string {
-    return error instanceof ApiError && error.detail ? error.detail : fallback;
+    if (!(error instanceof ApiError)) return fallback;
+    if (error.errorType === 'auth') {
+        return error.status === 401
+            ? msg('Your session has ended. Sign in again to continue.', {id: 'errors.signInRequired'})
+            : msg('You do not have permission to do that.', {id: 'errors.accessDenied'});
+    }
+    return error.detail ?? fallback;
 }

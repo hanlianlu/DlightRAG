@@ -214,3 +214,40 @@ it('rounds and clips rich-content containers without rounding table cells', () =
   expect(getComputedStyle(code).borderRadius).to.equal('16px');
   expect(getComputedStyle(image).borderRadius).to.equal('16px');
 });
+
+it('places popovers and menus from their trigger through one anchored primitive', () => {
+  const px = (value: string): number => Number.parseFloat(value);
+  const token = (name: string): number => {
+    const probe = element('');
+    probe.style.height = `var(${name})`;
+    return probe.getBoundingClientRect().height;
+  };
+  const anchoredIn = (className: string): CSSStyleDeclaration => {
+    const trigger = element('');
+    trigger.style.position = 'relative';
+    trigger.style.height = '40px';
+    const surface = document.createElement('div');
+    surface.className = className;
+    trigger.appendChild(surface);
+    return getComputedStyle(surface);
+  };
+  const gap = token('--space-3xs');
+
+  const below = anchoredIn('dl-popover dl-anchored');
+  expect(below.position).to.equal('absolute');
+  expect(px(below.top)).to.be.closeTo(40 + gap, 0.5);
+  expect(px(below.left)).to.equal(0);
+
+  const theme = anchoredIn('dl-anchored dl-anchored--end');
+  expect(px(theme.right)).to.equal(0);
+  expect(theme.left).to.not.equal('0px');
+
+  const mode = anchoredIn('composer-mode-menu dl-anchored dl-anchored--above dl-anchored--end');
+  expect(px(mode.bottom)).to.be.closeTo(40 + gap, 0.5);
+  expect(px(mode.right)).to.equal(0);
+
+  const skills = anchoredIn('skill-menu dl-anchored dl-anchored--above');
+  expect(px(skills.bottom)).to.be.closeTo(40 + token('--space-2xs'), 0.5);
+  expect(px(skills.left)).to.equal(0);
+  expect(px(skills.right)).to.equal(0);
+});

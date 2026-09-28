@@ -8,6 +8,7 @@ import {
   resolveLocale,
   type LanguagePreference,
 } from '../lib/language.ts';
+import {readStored, writeStored} from '../lib/storage.ts';
 
 export const {getLocale, setLocale} = configureLocalization({
   sourceLocale: 'en',
@@ -22,20 +23,11 @@ export const {getLocale, setLocale} = configureLocalization({
  */
 
 function readPreference(): LanguagePreference {
-  try {
-    return parseLanguagePreference(window.localStorage.getItem(LANGUAGE_STORAGE_KEY));
-  } catch {
-    return 'auto';
-  }
+  return parseLanguagePreference(readStored(LANGUAGE_STORAGE_KEY));
 }
 
 function writePreference(preference: LanguagePreference): void {
-  try {
-    if (preference === 'auto') window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
-    else window.localStorage.setItem(LANGUAGE_STORAGE_KEY, preference);
-  } catch {
-    // The choice remains active for this page when storage is blocked.
-  }
+  writeStored(LANGUAGE_STORAGE_KEY, preference === 'auto' ? null : preference);
 }
 
 function applyDocumentLanguage(locale: string): void {

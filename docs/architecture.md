@@ -323,8 +323,9 @@ domain state. See [ADR 0003](adr/0003-light-composition-shadow-primitives.md).
 
 State is divided by lifetime: the History API owns active conversation routing;
 focused stores own conversations, workspaces, attachments, ingest, and
-answer-event cursors. The Shell constructs those stores once and passes an
-`AppHandles` bag. Chat privately owns answer-run intent, following, and replay
+answer-event cursors. `createAppHandles()` is their only constructor: the Shell
+obtains that `AppHandles` bag once and passes it to its Features, and no store
+module holds an instance. Chat privately owns answer-run intent, following, and replay
 through its `RunController`. Feature components receive properties and raise
 typed events. The Shell may query sibling Feature custom elements, not their
 internals, and does not use module-global notification channels.

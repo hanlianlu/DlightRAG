@@ -84,9 +84,6 @@ html[data-color-mode='light'] .theme-icon-moon {
     color: var(--color-text-secondary);
     min-width: 172px;
     padding: var(--space-tight);
-    position: absolute;
-    right: 0;
-    top: calc(100% + var(--space-3xs));
     z-index: 1000;
 }
 
@@ -428,9 +425,6 @@ body.files-panel-open #files-btn {
 
 .composer-mode-menu,
 .composer-effort-menu {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 0.35rem);
     display: flex;
     flex-direction: column;
     min-width: 7.5rem;
@@ -474,10 +468,9 @@ body.files-panel-open #files-btn {
 }
 
 .skill-menu {
-    position: absolute;
-    left: 0;
+    --anchored-gap: var(--space-2xs);
+
     right: 0;
-    bottom: calc(100% + 0.5rem);
     display: flex;
     flex-direction: column;
     max-height: 16rem;

@@ -13,25 +13,17 @@ import {
 import {LightElement} from '../lib/lit-host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
+import {isLocalStorageEvent, readStored, writeStored} from '../lib/storage.ts';
 
 function readPreference(): ThemePreference {
-  try {
-    const stored = parseThemePreference(window.localStorage.getItem(THEME_STORAGE_KEY));
-    return stored === 'system'
-      ? parseThemePreference(document.documentElement.getAttribute('data-theme'))
-      : stored;
-  } catch {
-    return parseThemePreference(document.documentElement.getAttribute('data-theme'));
-  }
+  const stored = parseThemePreference(readStored(THEME_STORAGE_KEY));
+  return stored === 'system'
+    ? parseThemePreference(document.documentElement.getAttribute('data-theme'))
+    : stored;
 }
 
 function writePreference(preference: ThemePreference): void {
-  try {
-    if (preference === 'system') window.localStorage.removeItem(THEME_STORAGE_KEY);
-    else window.localStorage.setItem(THEME_STORAGE_KEY, preference);
-  } catch {
-    // Theme choice remains active for this page when storage is blocked.
-  }
+  writeStored(THEME_STORAGE_KEY, preference === 'system' ? null : preference);
 }
 
 /** Owns theme preference, menu accessibility, persistence, and system changes. */
@@ -95,7 +87,8 @@ export class DlThemeControl extends LightElement {
         ${icon('moon', {size: 'sm', className: 'theme-icon theme-icon-moon'})}
         ${icon('sun', {size: 'sm', className: 'theme-icon theme-icon-sun'})}
       </button>
-      <div id="theme-menu" role="menu" aria-label=${appearance} ?hidden=${!this.menuOpen}
+      <div id="theme-menu" class="dl-anchored dl-anchored--end" role="menu" aria-label=${appearance}
+           ?hidden=${!this.menuOpen}
            @keydown=${this.#menuKeydown}>
         ${this.#option('system', msg('System', {id: 'theme.system'}), 'system')}
         ${this.#option('light', msg('Light', {id: 'theme.light'}), 'sun')}
@@ -190,13 +183,7 @@ export class DlThemeControl extends LightElement {
   };
 
   #storageChanged = (event: StorageEvent): void => {
-    let storageArea: Storage | null = null;
-    try {
-      storageArea = window.localStorage;
-    } catch {
-      storageArea = null;
-    }
-    if (event.storageArea !== storageArea) return;
+    if (!isLocalStorageEvent(event)) return;
     if (event.key !== null && event.key !== THEME_STORAGE_KEY) return;
     this.preference = parseThemePreference(event.newValue);
   };

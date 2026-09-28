@@ -19,6 +19,12 @@ export const templates: Record<
   'bootstrap.error': 'DlightRAG 加载失败。',
   'bootstrap.retry': '重试',
 
+  // Login
+  'login.title': '登录 · DlightRAG',
+  'login.token': '访问令牌',
+  'login.submit': '登录',
+  'login.failed': '身份验证失败。请检查令牌后重试。',
+
   // Personal Connections
   'connections.title': 'MCP 连接',
   'connections.groupEmpty': '添加一个连接',
@@ -571,6 +577,8 @@ export const templates: Record<
 
   // Errors
   'errors.service': '服务出错，请重试。',
+  'errors.accessDenied': '你没有执行此操作的权限。',
+  'errors.signInRequired': '会话已结束，请重新登录后继续。',
   'errors.kind.MODEL_CAPABILITY_UNAVAILABLE': '所配置的查询模型无法使用该回答请求所需的工具。',
   'errors.kind.unsupported_resource_capability':
     '该请求所需的资源能力没有任何回答模式可以提供。',

@@ -8,6 +8,8 @@
  * with no stored choice omits the field and the deployment default applies.
  */
 
+import {readStored, writeStored} from './storage.ts';
+
 export type AgentEffort = 'low' | 'high' | 'max';
 
 export interface AgentEffortOffer {
@@ -44,22 +46,12 @@ export function offeredLevels(offer: AgentEffortOffer): AgentEffort[] {
  * blocked storage all read as "no override" so a submission stays valid.
  */
 export function storedAgentEffort(offer: AgentEffortOffer): AgentEffort | null {
-    let value: string | null = null;
-    try {
-        value = localStorage.getItem(AGENT_EFFORT_STORAGE_KEY);
-    } catch {
-        return null;
-    }
+    const value = readStored(AGENT_EFFORT_STORAGE_KEY);
     return offeredLevels(offer).includes(value as AgentEffort) ? value as AgentEffort : null;
 }
 
 export function storeAgentEffort(effort: AgentEffort | null): void {
-    try {
-        if (effort === null) localStorage.removeItem(AGENT_EFFORT_STORAGE_KEY);
-        else localStorage.setItem(AGENT_EFFORT_STORAGE_KEY, effort);
-    } catch {
-        // The choice still applies for this page when storage is blocked.
-    }
+    writeStored(AGENT_EFFORT_STORAGE_KEY, effort);
 }
 
 /** The level the composer shows: the stored override, else the deployment default. */

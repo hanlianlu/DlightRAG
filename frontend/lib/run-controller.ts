@@ -10,10 +10,7 @@ import {
   type MemoryOperationEvent,
 } from '../api/memory.ts';
 import {createSSEParser, parseData} from './sse.ts';
-import {
-  answerEventCursorStore,
-  type AnswerEventCursorStore,
-} from '../stores/answer-event-cursor-store.ts';
+import type {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
 
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_DELAY_MS = 500;
@@ -84,7 +81,8 @@ export interface RunControllerOptions {
   onStateChange?: () => void;
   scheduleFrame?: RunFrameScheduler;
   cancelFrame?: RunFrameCanceller;
-  cursorStore?: AnswerEventCursorStore;
+  /** Where replay cursors persist; the Shell's AppHandles owns the shared one. */
+  cursorStore: AnswerEventCursorStore;
 }
 
 /** Owns the transport and lifecycle resources for this tab's one followed run. */
@@ -108,7 +106,7 @@ export class RunController {
   #stopping = false;
   #runId: string | null = null;
 
-  constructor(options: RunControllerOptions = {}) {
+  constructor(options: RunControllerOptions) {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.#getRun = options.getRun ?? getRun;
     this.#cancelRun = options.cancelRun ?? cancelRun;
@@ -120,7 +118,7 @@ export class RunController {
     }
     this.#scheduleFrame = options.scheduleFrame ?? scheduleDefaultFrame;
     this.#cancelFrame = options.cancelFrame ?? cancelDefaultFrame;
-    this.#cursors = options.cursorStore ?? answerEventCursorStore;
+    this.#cursors = options.cursorStore;
   }
 
   get active(): boolean {

@@ -1,13 +1,14 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {workspaceStore} from '../stores/workspace-store.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
+import {productionHandles} from '../stores/app-handles.ts';
 import {setLanguagePreference} from '../i18n/locale.ts';
 import './inspector-files.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import {waitFor} from '../testing/dom.ts';
+
+const {workspaces: workspaceStore, ingest: ingestStore} = productionHandles();
 
 const originalFetch = window.fetch;
 

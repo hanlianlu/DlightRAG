@@ -110,5 +110,3 @@ export class AttachmentStore extends Store {
     }
 
 }
-
-export const attachmentStore = new AttachmentStore();

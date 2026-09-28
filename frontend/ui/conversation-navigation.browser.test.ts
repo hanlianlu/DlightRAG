@@ -4,7 +4,7 @@ import {expect} from '@esm-bundle/chai';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import {conversationRoute, newChatRoute} from '../lib/router.ts';
-import {conversationStore} from '../stores/conversation-store.ts';
+import {productionHandles} from '../stores/app-handles.ts';
 import type {
   ConversationIntentDetail,
   ConversationRenameDetail,
@@ -19,6 +19,8 @@ import type {
 import './conversation-sidebar.ts';
 import {webRouter} from './router.ts';
 import {waitFor} from '../testing/dom.ts';
+
+const {conversations: conversationStore} = productionHandles();
 
 defineDesignSystemElements();
 

@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {ConversationTurn} from '../api/conversations.ts';
 import {RunController, type AnswerRunEvent} from './run-controller.ts';
-import {answerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
+import {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
+
+const answerEventCursorStore = new AnswerEventCursorStore();
 
 function eventResponse(body: string): Response {
   return new Response(body, {
@@ -89,6 +91,7 @@ test('RunController resumes SSE from the last durable sequence without replaying
   ];
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     reconnectDelayMs: 0,
     fetch: (async (_input, init) => {
       headers.push(new Headers(init?.headers).get('Last-Event-ID') ?? '');
@@ -129,6 +132,7 @@ test('RunController frame-batches 2,000 streamed tokens without losing order or 
   );
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
     fetch: (async () => chunkedEventResponse(chunks, (index) => {
@@ -173,6 +177,7 @@ test('RunController preserves token-reset-token and progress/tool boundaries', a
   const frames = new TestFrames();
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
     fetch: (async () => eventResponse([
@@ -214,6 +219,7 @@ test('RunController ignores unknown wire events after durably advancing their se
   ];
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     reconnectDelayMs: 0,
     fetch: (async (_input, init) => {
       headers.push(new Headers(init?.headers).get('Last-Event-ID') ?? '');
@@ -239,6 +245,7 @@ test('RunController settles an exhausted stream from the authoritative run row',
   const runId = 'run-settle';
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     maxReconnectAttempts: 0,
     reconnectDelayMs: 0,
     fetch: (async () => eventResponse('')) as typeof fetch,
@@ -277,6 +284,7 @@ test('RunController flushes a pending frame at stream end and stream failure', a
         }), {status: 200, headers: {'Content-Type': 'text/event-stream'}});
     answerEventCursorStore.trackRun(conversationId, runId);
     const controller = new RunController({
+    cursorStore: answerEventCursorStore,
       maxReconnectAttempts: 0,
       reconnectDelayMs: 0,
       scheduleFrame: frames.schedule,
@@ -309,6 +317,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
   const encoder = new TextEncoder();
   answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
     fetch: (async () => new Response(new ReadableStream<Uint8Array>({
@@ -338,7 +347,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
 });
 
 test('RunController aborts run-owned commands when its lifecycle finishes', () => {
-  const controller = new RunController();
+  const controller = new RunController({cursorStore: answerEventCursorStore});
   controller.beginFollow('run-command', false);
   const signal = controller.signalFor('run-command');
 
@@ -351,7 +360,7 @@ test('RunController aborts run-owned commands when its lifecycle finishes', () =
 });
 
 test('RunController preserves a durable cancellation request when reattaching', () => {
-  const controller = new RunController();
+  const controller = new RunController({cursorStore: answerEventCursorStore});
 
   controller.beginFollow('run-stopping', true);
 
@@ -365,6 +374,7 @@ test('RunController distinguishes explicit cancel from detach and owns both abor
   let cancelAborted = false;
   let releaseCancel!: () => void;
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     cancelRun: async (_runId, signal) => {
       cancelCalls += 1;
       await new Promise<void>((resolve) => {
@@ -397,6 +407,7 @@ test('RunController keeps an earlier durable cancellation independent from a lat
     reject: (reason: Error) => void;
   }>();
   const controller = new RunController({
+    cursorStore: answerEventCursorStore,
     cancelRun: (runId, signal) => new Promise<ConversationTurn>((_resolve, reject) => {
       assert.ok(signal);
       requests.set(runId, {signal, reject});

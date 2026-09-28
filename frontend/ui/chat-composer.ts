@@ -33,6 +33,7 @@ import {
   type AttachmentPolicy,
 } from '../lib/attachment-policy.ts';
 import {detectDropItems, type RelativeFile} from './folder-upload.ts';
+import {readStored, writeStored} from '../lib/storage.ts';
 
 const STORAGE_KEY = 'dlightrag.answerMode';
 const MODES = ['auto', 'fast', 'research'] as const satisfies readonly AnswerMode[];
@@ -82,12 +83,8 @@ function menuStep(key: string, index: number, count: number): number | null {
 }
 
 function storedMode(): AnswerMode | null {
-  try {
-    const value = localStorage.getItem(STORAGE_KEY);
-    return MODES.includes(value as AnswerMode) ? value as AnswerMode : null;
-  } catch {
-    return null;
-  }
+  const value = readStored(STORAGE_KEY);
+  return MODES.includes(value as AnswerMode) ? value as AnswerMode : null;
 }
 
 /** Lit-owned draft, attachment admission, answer mode and effort, and keyboard interaction. */
@@ -241,12 +238,7 @@ export class DlChatComposer extends LightElement {
     this.#requestEffort = requestEffort;
     this.effort = requestEffort ?? this.agentEffortOffer.default;
     storeAgentEffort(requestEffort);
-    try {
-      if (requestMode === null) localStorage.removeItem(STORAGE_KEY);
-      else localStorage.setItem(STORAGE_KEY, requestMode);
-    } catch {
-      // The restored mode still applies for this page when storage is blocked.
-    }
+    writeStored(STORAGE_KEY, requestMode);
     void this.updateComplete.then(() => {
       this.#resize();
       this.#input()?.focus();
@@ -270,7 +262,7 @@ export class DlChatComposer extends LightElement {
       </div>
       <div class="composer" id="composer">
         <div class="composer-inner">
-          <div class="skill-menu" id="skill-menu" role="listbox"
+          <div class="skill-menu dl-anchored dl-anchored--above" id="skill-menu" role="listbox"
                aria-label=${msg('Available skills', {id: 'chatComposer.skillMenuAria'})}
                ?hidden=${!this.skillMenuOpen || this.#skillSuggestions().length === 0}>
             ${repeat(this.#skillSuggestions(), (skill) => skill.name, (skill, index) => html`
@@ -318,7 +310,8 @@ export class DlChatComposer extends LightElement {
                       @click=${this.#toggleModeMenu} @keydown=${this.#modeTriggerKeydown}>
                 ${msg(MODE_LABELS[this.mode], {id: `chatComposer.mode.${this.mode}`})}
               </button>
-              <div class="composer-mode-menu" id="composer-mode-menu" role="menu" aria-label=${msg('Answer mode', {id: 'chatComposer.modeMenuAria'})}
+              <div class="composer-mode-menu dl-anchored dl-anchored--above dl-anchored--end"
+                   id="composer-mode-menu" role="menu" aria-label=${msg('Answer mode', {id: 'chatComposer.modeMenuAria'})}
                    ?hidden=${!this.modeOpen} @keydown=${this.#modeMenuKeydown}>
                 ${MODES.map((mode) => html`
                   <button type="button" role="menuitemradio" data-mode=${mode}
@@ -602,7 +595,8 @@ export class DlChatComposer extends LightElement {
             ? msg(EFFORT_LABELS[displayed], {id: `chatComposer.effort.${displayed}`})
             : msg('Effort', {id: 'chatComposer.effortLabel'})}</span>
         </button>
-        <div class="composer-effort-menu" id="composer-effort-menu" role="menu"
+        <div class="composer-effort-menu dl-anchored dl-anchored--above dl-anchored--end"
+             id="composer-effort-menu" role="menu"
              aria-label=${msg('Agent effort', {id: 'chatComposer.effortMenuAria'})}
              ?hidden=${!this.effortOpen} @keydown=${this.#effortMenuKeydown}>
           ${levels.map((level) => html`
@@ -696,11 +690,7 @@ export class DlChatComposer extends LightElement {
     this.mode = mode;
     this.#requestMode = mode;
     this.modeOpen = false;
-    try {
-      localStorage.setItem(STORAGE_KEY, mode);
-    } catch {
-      // The selected mode still applies for this page when storage is blocked.
-    }
+    writeStored(STORAGE_KEY, mode);
     this.focusInput();
   }
 

@@ -433,5 +433,3 @@ export class ConversationStore extends Store {
     return this.#isMissing(error) || (error instanceof ApiError && error.status === 422);
   }
 }
-
-export const conversationStore = new ConversationStore();

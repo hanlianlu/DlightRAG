@@ -3,13 +3,14 @@
 import {expect} from '@esm-bundle/chai';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
+import {productionHandles} from '../stores/app-handles.ts';
 import './inspector.ts';
 
 defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
+
+const {ingest: ingestStore, workspaces: workspaceStore} = productionHandles();
 
 const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;

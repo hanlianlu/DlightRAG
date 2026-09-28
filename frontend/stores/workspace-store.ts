@@ -210,5 +210,3 @@ export class WorkspaceStore extends Store {
     setCookie(ACTIVE_COOKIE, this.#active.join(','));
   }
 }
-
-export const workspaceStore = new WorkspaceStore();

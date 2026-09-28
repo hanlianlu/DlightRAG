@@ -275,6 +275,28 @@ textarea.dl-dialog-input {
     border-color: var(--color-accent-border);
 }
 
+/* === Anchored placement ===
+   A popover or menu opens from its positioned trigger wrapper: below and
+   start-aligned by default. --end aligns it with the trigger's end edge and
+   --above opens it upward; --anchored-gap sets the distance. Each surface
+   keeps its own look, layer, and hidden state. */
+
+.dl-anchored {
+    left: 0;
+    position: absolute;
+    top: calc(100% + var(--anchored-gap, var(--space-3xs)));
+}
+
+.dl-anchored--end {
+    left: auto;
+    right: 0;
+}
+
+.dl-anchored--above {
+    bottom: calc(100% + var(--anchored-gap, var(--space-3xs)));
+    top: auto;
+}
+
 /* === Shared popovers === */
 
 .dl-popover {
@@ -284,13 +306,10 @@ textarea.dl-dialog-input {
     box-shadow: var(--shadow-popover);
     display: flex;
     flex-direction: column;
-    left: 0;
     max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: var(--space-tight);
-    position: absolute;
-    top: calc(100% + var(--space-3xs));
     z-index: 1000;
 }
 

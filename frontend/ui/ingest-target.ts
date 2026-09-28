@@ -90,7 +90,7 @@ export class DlIngestTarget extends LightElement {
             .sort((left, right) => left.displayName.localeCompare(right.displayName));
         return html`
             <div
-                class="dl-popover dl-popover--ingest"
+                class="dl-popover dl-popover--ingest dl-anchored"
                 id="ingest-target-popover"
                 role="dialog"
                 aria-label=${msg('Select ingest workspace', {id: 'ingestTarget.selectWorkspaceAria'})}

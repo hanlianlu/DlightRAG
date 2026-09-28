@@ -2,7 +2,9 @@
 
 import {expect} from '@esm-bundle/chai';
 import {RunController} from '../lib/run-controller.ts';
-import {answerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
+import {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
+
+const answerEventCursorStore = new AnswerEventCursorStore();
 
 it('uses the browser fetch interface with its required global receiver', async () => {
   const originalFetch = window.fetch;
@@ -18,7 +20,7 @@ it('uses the browser fetch interface with its required global receiver', async (
   } as typeof fetch;
   answerEventCursorStore.trackRun(conversationId, runId);
   try {
-    const controller = new RunController();
+    const controller = new RunController({cursorStore: answerEventCursorStore});
     controller.beginFollow(runId, false);
     const result = await controller.follow(conversationId, runId, () => {});
 
