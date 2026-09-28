@@ -17,8 +17,8 @@ from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
-    normalize_workspace,
     validate_workspace_name,
+    workspace_id_for_name,
 )
 
 from .deps import (
@@ -35,9 +35,9 @@ def _normalize_create_body(body: WorkspaceCreateRequest) -> tuple[str, str]:
     try:
         label = validate_workspace_name(body.workspace)
         display_name = validate_workspace_name(body.display_name or label)
+        return workspace_id_for_name(label), display_name
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return normalize_workspace(label), display_name
 
 
 @router.get("/workspaces", response_model=WorkspacesResponse)
@@ -119,8 +119,7 @@ async def get_workspace_storage(
     """
     application = get_application(request)
     try:
-        label = validate_workspace_name(workspace)
-        normalized = normalize_workspace(label)
+        normalized = workspace_id_for_name(validate_workspace_name(workspace))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await enforce_access(request, user, AccessAction.WORKSPACE_STORAGE_STATUS, workspace=normalized)

@@ -47,11 +47,7 @@ from dlightrag.application.access import (
     request_scope_context,
 )
 from dlightrag.application.config import DlightragConfig, get_config
-from dlightrag.application.corpus_admin import (
-    normalize_workspace,
-    normalize_workspace_ids,
-    require_canonical_workspace_id,
-)
+from dlightrag.application.corpus_admin import workspace_id_for_name, workspace_ids_for_names
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
@@ -320,7 +316,7 @@ def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]
 
     label = validate_workspace_name(args.workspace)
     display_name = validate_workspace_name(args.display_name or label)
-    return _canonical_workspace(label), display_name
+    return workspace_id_for_name(label), display_name
 
 
 async def _enforce_access(
@@ -372,14 +368,7 @@ async def _resolve_authorized_query_workspaces(
         return await _access_gate(application).resolve_query_workspaces(
             application.corpora,
             default_workspace=application.config.deployment.workspace_id,
-            workspaces=(
-                [
-                    _canonical_workspace(workspace)
-                    for workspace in normalize_workspace_ids(workspaces)
-                ]
-                if workspaces is not None
-                else None
-            ),
+            workspaces=workspace_ids_for_names(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
     except NoQueryableWorkspacesError:
@@ -392,17 +381,7 @@ def _workspace_id(application: Application, workspace: str | None) -> str:
     """The canonical id for a workspace argument, or the deployment's own."""
     if not workspace:
         return application.config.deployment.workspace_id
-    return _canonical_workspace(workspace)
-
-
-def _canonical_workspace(name: str) -> str:
-    """One caller-named workspace as a canonical id, refused without echoing it."""
-    try:
-        return require_canonical_workspace_id(normalize_workspace(name))
-    except ValueError:
-        raise ToolRejection(
-            "Invalid workspace name: it must normalize to 1-64 letters, digits, or underscores"
-        ) from None
+    return workspace_id_for_name(workspace)
 
 
 def _register_tools() -> None:

@@ -14,6 +14,7 @@ import pytest
 from dlightrag.application.answer_runs import (
     AnswerHistoryResource,
     AnswerRequest,
+    AnswerRequestError,
     AnswerService,
     ChildRosterCursor,
     ChildRosterPageRequest,
@@ -1179,8 +1180,19 @@ async def test_create_rejects_non_canonical_or_empty_scope(workspaces: tuple[str
     store = _Store()
     service = _service(store=store)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(AnswerRequestError) as refused:
         await service.create(request=_request(workspaces=workspaces), owner_id=_OWNER)
+
+    assert not any(name in str(refused.value) for name in workspaces if name != "finance")
+    assert store.created == []
+
+
+async def test_create_refuses_an_oversized_prepared_input_as_the_callers(monkeypatch) -> None:
+    monkeypatch.setattr("dlightrag.engine.runtime.records.MAX_PREPARED_INPUT_BYTES", 64)
+    store = _Store()
+
+    with pytest.raises(AnswerRequestError, match="prepared_input_too_large"):
+        await _service(store=store).create(request=_request(), owner_id=_OWNER)
 
     assert store.created == []
 

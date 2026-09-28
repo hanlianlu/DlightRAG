@@ -667,8 +667,8 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         workspaces = tuple(
             require_canonical_workspace_id(workspace) for workspace in request.workspaces
         )
-    except ValueError as exc:
-        raise AnswerRequestError(str(exc)) from None
+    except ValueError:
+        raise AnswerRequestError("workspaces must be canonical workspace ids") from None
     links: list[LinkReference] = []
     attachments: list[AttachmentReference] = []
     for resource in request.resources:

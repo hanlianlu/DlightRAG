@@ -16,7 +16,7 @@ from dlightrag.application.access import (
     WorkspaceSelectionConflictError,
     access_control_from_settings,
 )
-from dlightrag.application.corpus_admin import normalize_workspace, normalize_workspace_ids
+from dlightrag.application.corpus_admin import workspace_id_for_name, workspace_ids_for_names
 from dlightrag.application.settings import access_settings
 
 
@@ -28,7 +28,7 @@ def idempotency_key(request: Request) -> str | None:
 
 def resolve_workspace(ws: str | None, request: Request) -> str:
     if ws:
-        return normalize_workspace(ws)
+        return workspace_id_for_name(ws)
     return get_application(request).config.deployment.workspace_id
 
 
@@ -86,7 +86,7 @@ async def resolve_authorized_query_workspaces(
         return await get_access_gate(request, user).resolve_query_workspaces(
             get_application(request).corpora,
             default_workspace=get_application(request).config.deployment.workspace_id,
-            workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
+            workspaces=workspace_ids_for_names(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
     except NoQueryableWorkspacesError:

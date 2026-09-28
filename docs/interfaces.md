@@ -134,6 +134,15 @@ query or fragment is not durable; use `retain_source_file: true` or supply a
 separate queryless locator. S3 uses the standard AWS credential chain. Payloads
 never carry access keys.
 
+A `local` source is copied into the Run's own stage before it is accepted, so
+later edits under `input_dir` never change what the Run ingests. The copy never
+follows a link: a source holding a symlink or anything but regular files and
+folders is refused with 422, even when the link is swapped in while the copy
+runs. A folder is listed before anything is copied; it may hold at most 100
+files that ingestion would read, and entries ingestion skips (dot entries,
+parser sidecars, and staging folders) are neither copied nor counted. A folder
+with nothing to ingest is refused too.
+
 Per-document metadata uses a manifest:
 
 ```json
@@ -325,7 +334,7 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
 | `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 400 without `Idempotency-Key`; 422 for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
-| `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 409 otherwise. |
+| `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 400 without `Idempotency-Key`; 422 for invalid content or key; 404 if the request is unknown; 409 with the outcome otherwise. |
 
 Run status is `queued`, `running`, `succeeded`, `failed`, or `cancelled`. Phase is
 an executor-owned string. Retrieval uses `planning` and `searching`; Answer uses
@@ -787,7 +796,10 @@ memoized for two seconds.
 
 General errors are `{detail, error_type, error_kind?}` where `error_type` is
 `validation`, `auth`, `not_found`, `conflict` (HTTP 409 and 412),
-`unavailable`, `configuration`, or `internal`. REST and MCP Run acceptance
+`unavailable`, `configuration`, or `internal`. A request that fails validation
+answers 422 whose `detail` names each invalid field and why, as
+`body.query: Field required`; submitted values are never
+echoed back. REST and MCP Run acceptance
 answer a reused idempotency key with `Idempotency key was reused with a
 different request` (HTTP 409 on REST); browser commands use their own envelope
 below. Stable answer error kinds are:

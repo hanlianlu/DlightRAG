@@ -75,6 +75,8 @@ from .service import (
     managed_local_ingest_path,
     safe_upload_basename,
     validate_workspace_name,
+    workspace_id_for_name,
+    workspace_ids_for_names,
 )
 from .workspace_catalog import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
@@ -159,4 +161,6 @@ __all__ = [
     "validate_public_web_url",
     "validate_workspace_name",
     "VisualAssetSize",
+    "workspace_id_for_name",
+    "workspace_ids_for_names",
 ]

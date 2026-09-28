@@ -12,11 +12,12 @@ from collections.abc import Mapping
 
 from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from dlightrag.adapters.http.rest.models import ErrorDetail
-from dlightrag.adapters.validation_errors import invalid_fields
+from dlightrag.adapters.validation_errors import describe_invalid_fields, invalid_fields
 from dlightrag.application.access import AccessDeniedError
 from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import (
@@ -93,6 +94,14 @@ def install_error_handlers(app: FastAPI) -> None:
                 headers=exc.headers,
             )
         return error_response(exc.status_code, str(exc.detail), headers=exc.headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(
+        request: Request,  # noqa: ARG001
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        """Name each invalid field and why; a submitted value is never echoed back."""
+        return error_response(422, describe_invalid_fields(exc.errors()))
 
     @app.exception_handler(ApplicationUnavailableError)
     async def unavailable(

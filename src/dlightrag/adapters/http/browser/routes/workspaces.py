@@ -25,6 +25,7 @@ from dlightrag.application.corpus_admin import (
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
     normalize_workspace,
+    workspace_id_for_name,
 )
 from dlightrag.application.errors import ApplicationError
 from dlightrag.engine.answer.client_contracts import ClientContractModel
@@ -185,10 +186,10 @@ async def create_workspace(
 
     try:
         name = validate_workspace_name(workspace_name)
+        ws = workspace_id_for_name(name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
-    ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
 
     # Initialize workspace (creates the WorkspaceRag); the registry keeps it unique.
@@ -228,7 +229,7 @@ async def reset_workspace(
     confirm = confirm_name.strip()
 
     _require_confirmation(name, confirm)
-    ws = normalize_workspace(name)
+    ws = workspace_id_for_name(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_RESET, ws)
 
     try:
@@ -259,7 +260,7 @@ async def delete_workspace(
     confirm = confirm_name.strip()
 
     _require_confirmation(name, confirm)
-    ws = normalize_workspace(name)
+    ws = workspace_id_for_name(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
     try:
         registered = await application.corpora.workspace_exists(ws)

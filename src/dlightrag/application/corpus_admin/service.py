@@ -4,7 +4,7 @@
 import datetime
 import logging
 import re
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -123,6 +123,28 @@ def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
     if _WORKSPACE_FORBIDDEN_RE.search(label):
         raise WorkspaceNameError("Workspace name contains forbidden characters")
     return label
+
+
+_INVALID_WORKSPACE_NAME = (
+    "Invalid workspace name: it must normalize to 1-64 letters, digits, or underscores"
+)
+
+
+def workspace_id_for_name(name: str) -> str:
+    """Return the canonical id one caller-named workspace resolves to.
+
+    A name that normalizes to no canonical id refuses without echoing it: a blank
+    one, or 64 characters starting with a digit, which gains a leading underscore.
+    """
+    try:
+        return require_canonical_workspace_id(normalize_workspace(name))
+    except ValueError:
+        raise WorkspaceNameError(_INVALID_WORKSPACE_NAME) from None
+
+
+def workspace_ids_for_names(names: Iterable[str]) -> list[str]:
+    """Canonical ids for caller-named workspaces, in order and without repeats."""
+    return list(dict.fromkeys(workspace_id_for_name(name) for name in names))
 
 
 class _CorpusContractModel(BaseModel):

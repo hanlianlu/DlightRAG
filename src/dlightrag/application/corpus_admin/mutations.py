@@ -1478,7 +1478,9 @@ def _deferred(
 def _bounded_unique(values: Sequence[str]) -> list[str]:
     normalized = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
     if len(normalized) > _MAX_RESULT_DOCUMENTS:
-        raise ValueError(f"at most {_MAX_RESULT_DOCUMENTS} document identifiers are allowed")
+        raise CorpusMutationInputError(
+            f"at most {_MAX_RESULT_DOCUMENTS} document identifiers are allowed"
+        )
     return normalized
 
 

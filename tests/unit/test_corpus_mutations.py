@@ -849,6 +849,41 @@ async def test_blank_selectors_are_the_callers_to_fix(tmp_path: Path) -> None:
         )
 
 
+async def test_selector_bounds_and_blank_retries_are_the_callers_to_fix(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    service = _service(tmp_path)
+    with pytest.raises(CorpusMutationInputError, match="at most 100 document identifiers"):
+        await service.create_delete(
+            workspace="default",
+            submitted_by="o",
+            document_ids=[f"doc-{index}" for index in range(101)],
+        )
+    with pytest.raises(CorpusMutationInputError, match="provide document_ids"):
+        await service.create_retry(workspace="default", submitted_by="o", document_ids=["  "])
+
+
+async def test_an_oversized_corpus_request_is_the_callers_to_fix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    monkeypatch.setattr("dlightrag.engine.runtime.records.MAX_PREPARED_INPUT_BYTES", 64)
+    store = AsyncMock()
+    service = CorpusMutationService(
+        input_root=tmp_path,
+        store=store,
+        coordinator=cast(Any, SimpleNamespace(is_started=True)),
+        upload_limits=_LIMITS,
+    )
+
+    with pytest.raises(CorpusMutationInputError, match="prepared_input_too_large"):
+        await service.create_delete(
+            workspace="default", submitted_by="o", document_ids=["doc-" + "x" * 80]
+        )
+    store.accept_run.assert_not_awaited()
+
+
 def test_a_local_folder_cannot_link_outside_its_workspace(tmp_path: Path) -> None:
     from dlightrag.application.corpus_admin import CorpusMutationInputError
 

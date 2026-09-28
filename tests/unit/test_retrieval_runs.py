@@ -255,6 +255,19 @@ async def test_create_validates_config_relative_k_limits_before_acceptance(
     assert store.envelope is None
 
 
+async def test_create_refuses_a_non_canonical_workspace_without_echoing_it() -> None:
+    store = _Store()
+
+    with pytest.raises(RetrievalInputError) as refused:
+        await _service(store=store, coordinator=_Coordinator()).create(
+            request=RetrieveRequest(query="q", workspaces=("Finance Reports",)),
+            owner_id=_OWNER,
+        )
+
+    assert "Finance Reports" not in str(refused.value)
+    assert store.envelope is None
+
+
 async def test_create_rejects_oversized_query_images_before_storage() -> None:
     store = _Store()
     image = {

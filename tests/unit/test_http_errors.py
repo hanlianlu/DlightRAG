@@ -156,3 +156,36 @@ def test_a_write_fence_says_when_to_retry() -> None:
     assert response.status_code == 409
     assert response.headers["retry-after"] == "8"
     assert response.json()["error_type"] == "conflict"
+
+
+def test_request_validation_names_fields_without_echoing_values() -> None:
+    """FastAPI's default 422 returns each submitted value; this one never does."""
+    from pydantic import BaseModel, field_validator
+
+    class Body(BaseModel):
+        workspace: str
+        top_k: int
+
+        @field_validator("workspace")
+        @classmethod
+        def _no_secrets(cls, value: str) -> str:
+            raise ValueError("workspace is not allowed here")
+
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.post("/submit")
+    async def submit(body: Body) -> None:  # noqa: ARG001
+        return None
+
+    response = TestClient(app).post(
+        "/submit", json={"workspace": "SECRET-VALUE", "top_k": "SECRET-NUMBER"}
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error_type"] == "validation"
+    assert "SECRET" not in response.text
+    assert "body.workspace: workspace is not allowed here" in body["detail"]
+    assert "body.top_k:" in body["detail"]
+    assert "Value error," not in body["detail"]

@@ -60,7 +60,7 @@ from dlightrag.application.answer_runs.artifacts import (
     artifact_descriptor,
     published_artifact_descriptor,
 )
-from dlightrag.application.corpus_admin import normalize_workspace_ids
+from dlightrag.application.corpus_admin import workspace_ids_for_names
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
@@ -184,7 +184,7 @@ async def _start_answer_run(
         # Skills (load_skill tool + metadata) exist only in Research runs.
         mode = "research"
 
-    target_workspaces = normalize_workspace_ids(body.workspaces or [workspace])
+    target_workspaces = workspace_ids_for_names(body.workspaces or [workspace])
     for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
 

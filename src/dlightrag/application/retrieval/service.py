@@ -465,8 +465,8 @@ class RetrievalService:
             workspaces = tuple(
                 require_canonical_workspace_id(workspace) for workspace in request.workspaces
             )
-        except ValueError as exc:
-            raise RetrievalInputError(str(exc)) from None
+        except ValueError:
+            raise RetrievalInputError("workspaces must be canonical workspace ids") from None
         images = tuple(dict(image) for image in request.query_images)
         if len(images) > self._settings.query_image_limit:
             raise RetrievalInputError(
