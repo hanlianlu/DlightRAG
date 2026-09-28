@@ -179,59 +179,6 @@ class UnifiedIngestionEngine:
                 # unrelated ingest to provide LightRAG's next explicit trigger.
                 await self._lightrag.apipeline_process_enqueue_documents()
 
-    async def aingest_file(
-        self,
-        path: str | Path,
-        *,
-        source_uri: str | None = None,
-        download_locator: str | None = None,
-        display_filename: str | None = None,
-        source_uri_explicit: bool | None = None,
-        download_locator_explicit: bool | None = None,
-        display_filename_explicit: bool | None = None,
-        replace: bool = False,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        track_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Ingest one file through the same locked compensation core as batches."""
-        file_path = Path(path)
-        item = PreparedIngestFile(
-            parser_path=file_path,
-            source_uri=source_uri or _raw_path_source_uri(file_path, workspace=self._workspace),
-            download_locator=download_locator or str(file_path.resolve()),
-            display_filename=display_filename,
-            title=title,
-            author=author,
-            metadata=metadata,
-            source_uri_explicit=(
-                source_uri is not None if source_uri_explicit is None else source_uri_explicit
-            ),
-            download_locator_explicit=(
-                download_locator is not None
-                if download_locator_explicit is None
-                else download_locator_explicit
-            ),
-            display_filename_explicit=(
-                display_filename is not None
-                if display_filename_explicit is None
-                else display_filename_explicit
-            ),
-        )
-        batch = await self.aingest_files(
-            [item], replace=replace, track_id=track_id, _raise_finalization_errors=True
-        )
-        results = batch.get("results")
-        if isinstance(results, list) and results:
-            result = results[0]
-            if isinstance(result, dict):
-                return result
-        errors = batch.get("errors")
-        if isinstance(errors, list) and errors:
-            raise RuntimeError(str(errors[0]))
-        raise RuntimeError("document ingestion produced no result")
-
     async def aingest_files(
         self,
         paths: Sequence[str | Path | PreparedIngestFile],
@@ -241,7 +188,6 @@ class UnifiedIngestionEngine:
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         track_id: str | None = None,
-        _raise_finalization_errors: bool = False,
     ) -> dict[str, Any]:
         """Ingest local files as one LightRAG staged batch.
 
@@ -450,8 +396,6 @@ class UnifiedIngestionEngine:
                             for cleanup_doc_id in entry_snapshots:
                                 cleanup_snapshots.pop(cleanup_doc_id, None)
                             if isinstance(error, asyncio.CancelledError):
-                                raise
-                            if _raise_finalization_errors:
                                 raise
                             filename = safe_source_filename(
                                 str(entry.metadata_record.get("filename") or entry.parser_path.name)

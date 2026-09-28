@@ -194,7 +194,6 @@ class TestWorkspaceRagAingest:
         service = _service(config)
         service._initialized = True
         ingestion = MagicMock()
-        ingestion.aingest_file = AsyncMock(return_value={"status": "success"})
         ingestion.aingest_files = AsyncMock(
             return_value={"processed": 1, "errors": [], "results": [{"status": "success"}]}
         )
@@ -290,7 +289,6 @@ class TestWorkspaceRagAingest:
         result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
 
         assert result["errors"] == ["broken.pdf: document processing failed"]
-        ingestion.aingest_file.assert_not_awaited()
 
     # -- Azure blob lifecycle --
 
@@ -1188,7 +1186,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
         seen_items: list[PreparedIngestFile] = []
 
         async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
@@ -1215,7 +1212,6 @@ class TestWorkspaceRagLightRAGMainPath:
             source=mock_source,
         )
 
-        service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["doc_id"] == "d1"
         item = seen_items[0]
@@ -1232,7 +1228,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
         seen_items: list[PreparedIngestFile] = []
 
         async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
@@ -1265,7 +1260,6 @@ class TestWorkspaceRagLightRAGMainPath:
             source=mock_source,
         )
 
-        service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["processed"] == 2
         assert [item.source_uri for item in seen_items] == [
@@ -1286,7 +1280,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
         service._ingestion_engine.aingest_files = AsyncMock(
             return_value={
                 "processed": 1,
@@ -1311,7 +1304,6 @@ class TestWorkspaceRagLightRAGMainPath:
                 replace=True,
             )
 
-        service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["status"] == "success"
 
@@ -1455,6 +1447,33 @@ class TestWorkspaceRagLightRAGMainPath:
         assert progress.processed_delta == 1
         assert progress.failed_delta == 1
         assert progress.errors == ("b.pdf: remote materialization failed",)
+
+    async def test_failed_remote_download_leaves_no_partial_parser_copy(
+        self, test_config: DlightragConfig
+    ) -> None:
+        class InterruptedSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(key="docs/a.pdf", download_uri="https://cdn.example.com/a.pdf")
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                destination.write_bytes(b"%PDF-partial")
+                raise RuntimeError("connection reset mid-download")
+
+        service = _service(test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock()
+
+        result = await service.aingest_source(
+            InterruptedSource(), source_type="s3", retain_source_file=False
+        )
+
+        assert result["errors"] == ["a.pdf: remote materialization failed"]
+        service._ingestion_engine.aingest_files.assert_not_awaited()
+        root = service._workspace_input_root()
+        assert not root.exists() or not [path for path in root.rglob("*") if path.is_file()]
 
     @pytest.mark.parametrize(
         ("source_type", "source_uri"),
@@ -2332,7 +2351,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
         service._ingestion_engine.aingest_files = AsyncMock(
             side_effect=lambda paths, **kwargs: {
                 "processed": len(paths),
@@ -2349,7 +2367,6 @@ class TestWorkspaceRagLightRAGMainPath:
         assert result["processed"] == 3
         assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
         staged_root = test_config.input_dir_path / test_config.deployment.workspace
-        service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
@@ -2396,7 +2413,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
         service._ingestion_engine.aingest_files = AsyncMock(
             return_value={"processed": 2, "errors": [], "results": []}
         )
@@ -2418,7 +2434,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
         service._ingestion_engine.aingest_files = AsyncMock(
             return_value={"processed": 1, "errors": [], "results": []}
         )
@@ -3919,7 +3934,6 @@ class TestWorkspaceRagLightRAGMainPath:
         )
 
         assert result == {"status": "success"}
-        service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         items = service._ingestion_engine.aingest_files.await_args.args[0]
         assert len(items) == 1

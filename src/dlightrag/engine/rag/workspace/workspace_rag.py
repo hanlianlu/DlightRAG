@@ -738,42 +738,21 @@ class WorkspaceRag:
         track_id: str | None = None,
     ) -> dict[str, Any]:
         """Ingest local files through one LightRAG staged batch."""
-        if self._ingestion_engine is None:
-            raise RuntimeError("Ingestion engine not initialized")
+        engine = self._require_ingestion_engine()
         if not file_paths:
             return {"processed": 0, "errors": [], "results": []}
-
-        staged_paths = [
-            await asyncio.to_thread(
-                stage_input_file,
-                input_root=self._workspace_input_root(),
-                file_path=file_path,
-                relative_to=source_root,
-            )
+        items = [
+            await self._staged_local_item(file_path, relative_to=source_root)
             for file_path in file_paths
         ]
-        prepared_items = [
-            PreparedIngestFile(
-                parser_path=staged,
-                source_uri=local_source_uri(
-                    self.workspace_id,
-                    staged.relative_to(self._workspace_input_root()),
-                ),
-                download_locator=str(staged),
-                source_uri_explicit=False,
-                download_locator_explicit=False,
-            )
-            for staged in staged_paths
-        ]
-        result = await self._ingestion_engine.aingest_files(
-            prepared_items,
+        return await engine.aingest_files(
+            items,
             replace=replace,
             title=title,
             author=author,
             metadata=metadata,
             track_id=track_id,
         )
-        return result
 
     async def _aingest_local_manifest(
         self,
@@ -786,47 +765,64 @@ class WorkspaceRag:
         track_id: str | None = None,
     ) -> dict[str, Any]:
         """Ingest explicitly listed local files with per-document metadata."""
-        if self._ingestion_engine is None:
-            raise RuntimeError("Ingestion engine not initialized")
-        prepared_items: list[PreparedIngestFile] = []
+        engine = self._require_ingestion_engine()
+        items: list[PreparedIngestFile] = []
         for document in documents:
             if document.path is None:
                 raise ValueError("local manifest documents require a path")
             file_path = Path(document.path)
-            relative_to = self._local_manifest_relative_root(file_path)
-            staged = await asyncio.to_thread(
-                stage_input_file,
-                input_root=self._workspace_input_root(),
-                file_path=file_path,
-                relative_to=relative_to,
-            )
-            prepared_items.append(
-                PreparedIngestFile(
-                    parser_path=staged,
-                    source_uri=document.source_uri
-                    or local_source_uri(
-                        self.workspace_id,
-                        staged.relative_to(self._workspace_input_root()),
-                    ),
-                    download_locator=str(staged),
-                    display_filename=document.filename,
-                    title=document.title,
-                    author=document.author,
-                    metadata=document.metadata,
-                    source_uri_explicit=document.source_uri is not None,
-                    download_locator_explicit=False,
-                    display_filename_explicit=document.filename is not None,
+            items.append(
+                await self._staged_local_item(
+                    file_path,
+                    relative_to=self._local_manifest_relative_root(file_path),
+                    document=document,
                 )
             )
-        result = await self._ingestion_engine.aingest_files(
-            prepared_items,
+        return await engine.aingest_files(
+            items,
             replace=replace,
             title=title,
             author=author,
             metadata=metadata,
             track_id=track_id,
         )
-        return result
+
+    async def _staged_local_item(
+        self,
+        file_path: Path,
+        *,
+        relative_to: Path | None,
+        document: IngestDocument | None = None,
+    ) -> PreparedIngestFile:
+        """Stage one local source as parser input carrying its local provenance.
+
+        A manifest ``document`` may name its own stable source URI, display
+        filename and metadata; otherwise the staged path identifies the source.
+        """
+        staged = await asyncio.to_thread(
+            stage_input_file,
+            input_root=self._workspace_input_root(),
+            file_path=file_path,
+            relative_to=relative_to,
+        )
+        source_uri = None if document is None else document.source_uri
+        display_filename = None if document is None else document.filename
+        return PreparedIngestFile(
+            parser_path=staged,
+            source_uri=source_uri
+            or local_source_uri(
+                self.workspace_id,
+                staged.relative_to(self._workspace_input_root()),
+            ),
+            download_locator=str(staged),
+            display_filename=display_filename,
+            title=None if document is None else document.title,
+            author=None if document is None else document.author,
+            metadata=None if document is None else document.metadata,
+            source_uri_explicit=source_uri is not None,
+            download_locator_explicit=False,
+            display_filename_explicit=display_filename is not None,
+        )
 
     def _workspace_input_root(self) -> Path:
         return workspace_input_root(self.settings.input_root, self.workspace_id)
@@ -860,7 +856,14 @@ class WorkspaceRag:
                 key=key,
             )
         parser_path.parent.mkdir(parents=True, exist_ok=True)
-        await source.amaterialize_document(document, parser_path)
+        try:
+            await source.amaterialize_document(document, parser_path)
+        except BaseException:
+            if not retain_source_file:
+                # A transient parser copy is never adopted, so a partial
+                # download must not outlive its failed attempt.
+                parser_path.unlink(missing_ok=True)
+            raise
         return PreparedIngestFile(
             parser_path=parser_path,
             source_uri=source_uri,
@@ -1185,7 +1188,6 @@ class WorkspaceRag:
         uri_for_key = source_uri_for_key or (
             lambda key: self._default_source_uri_for_key(source_type, key)
         )
-        close = getattr(source, "aclose", None)
         try:
             return await self._aingest_remote_documents(
                 source=source,
@@ -1204,10 +1206,7 @@ class WorkspaceRag:
                 source_options=_source_options,
             )
         finally:
-            if close is not None:
-                result = close()
-                if isawaitable(result):
-                    _ = await result
+            await _aclose_source(source)
 
     async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         factory = RemoteSourceFactory(self.settings)
@@ -2349,30 +2348,24 @@ class WorkspaceRag:
                 )
             else:
                 source = factory.azure(str(parts["container_name"]))
-        cleanup.push_async_callback(_aclose_source, source)
-
-        parser_path = (
-            self._workspace_input_root()
-            / remote_parser_input_path(
-                batch_root=Path(), source_uri=stable_source_uri, key=display_filename
-            ).name
-        )
-        parser_path.parent.mkdir(parents=True, exist_ok=True)
-        prepared = PreparedIngestFile(
-            parser_path=parser_path,
+        cleanup.push_async_callback(_aclose_retry_source, source)
+        # Same-ID replay keeps the original parser location: the transient copy
+        # sits directly under the workspace input root.
+        prepared = await self._download_remote_to_prepared_item(
+            source=source,
+            document=source_document,
             source_uri=stable_source_uri,
             download_locator=download_locator,
-            display_filename=display_filename,
-            title=title,
-            author=author,
-            metadata=user_metadata,
+            batch_root=self._workspace_input_root(),
+            retain_source_file=False,
             source_options=source_options,
+        )
+        cleanup.push_async_callback(asyncio.to_thread, _remove_remote_parser_sources, [prepared])
+        return dataclass_replace(
+            prepared,
             replacement_doc_ids=replacement_doc_ids,
             replacement_ownership=replacement_ownership,
         )
-        cleanup.push_async_callback(asyncio.to_thread, _remove_remote_parser_sources, [prepared])
-        await source.amaterialize_document(source_document, parser_path)
-        return prepared
 
     async def adelete_files(
         self,
@@ -2485,14 +2478,18 @@ def _remove_empty_parents(path: Path, stop: Path) -> None:
 
 
 async def _aclose_source(source: object) -> None:
-    """Close one retry source adapter; a failed close never changes an outcome."""
+    """Close one source adapter, whether its ``aclose`` is a coroutine or not."""
     close = getattr(source, "aclose", None)
-    if close is None:
-        return
-    try:
+    if close is not None:
         result = close()
         if isawaitable(result):
             await result
+
+
+async def _aclose_retry_source(source: object) -> None:
+    """Close a retry's source adapter; a failed close never changes an outcome."""
+    try:
+        await _aclose_source(source)
     except Exception as exc:  # noqa: BLE001 - the replay has already settled
         logger.warning("Failed to close a retry source adapter (%s)", type(exc).__name__)
 

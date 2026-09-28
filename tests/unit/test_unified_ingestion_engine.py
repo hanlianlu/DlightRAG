@@ -3,8 +3,10 @@
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,6 +33,52 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 
 def _sha256(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _one_file(
+    path: Path,
+    *,
+    workspace: str = "default",
+    source_uri: str | None = None,
+    download_locator: str | None = None,
+    display_filename: str | None = None,
+    source_uri_explicit: bool | None = None,
+    download_locator_explicit: bool | None = None,
+    title: str | None = None,
+    author: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> PreparedIngestFile:
+    """One raw file; provenance a caller names counts as explicit unless told otherwise."""
+    return PreparedIngestFile(
+        parser_path=path,
+        source_uri=source_uri or _raw_path_source_uri(path, workspace=workspace),
+        download_locator=download_locator or str(path.resolve()),
+        display_filename=display_filename,
+        title=title,
+        author=author,
+        metadata=metadata,
+        source_uri_explicit=(
+            source_uri is not None if source_uri_explicit is None else source_uri_explicit
+        ),
+        download_locator_explicit=(
+            download_locator is not None
+            if download_locator_explicit is None
+            else download_locator_explicit
+        ),
+        display_filename_explicit=display_filename is not None,
+    )
+
+
+async def _ingest_one(
+    engine: UnifiedIngestionEngine, path: Path, *, replace: bool = False, **fields: Any
+) -> dict[str, Any]:
+    """Ingest one file as a one-document batch and return its document result."""
+    batch = await engine.aingest_files(
+        [_one_file(path, workspace=engine._workspace, **fields)], replace=replace
+    )
+    assert not batch["errors"], batch["errors"]
+    (result,) = batch["results"]
+    return result
 
 
 def _make_engine(**overrides):
@@ -91,7 +139,7 @@ async def test_replace_false_keeps_idempotent_skip(tmp_path: Path) -> None:
     }
     deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result["source_kind"] == "skipped"
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
@@ -109,7 +157,7 @@ async def test_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> None:
         {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
     ]
 
-    result = await engine.aingest_file(source, replace=True)
+    result = await _ingest_one(engine, source, replace=True)
 
     assert result["source_kind"] == "document"
     assert result["chunks"] == ["new-chunk"]
@@ -141,7 +189,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
 
-    await engine.aingest_file(source, replace=False)
+    await _ingest_one(engine, source, replace=False)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["docs_format"] == "pending_parse"
@@ -264,13 +312,15 @@ async def test_document_ingest_persists_lightrag_archived_source_locator(
 
     deps["lightrag"].apipeline_process_enqueue_documents.side_effect = archive_source
 
-    await engine.aingest_file(source, replace=False)
+    await _ingest_one(engine, source, replace=False)
 
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["download_locator"] == str(archived.resolve())
 
 
-async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Path) -> None:
+async def test_document_ingest_reports_a_failed_pipeline_per_document(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     source = tmp_path / "report.pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
@@ -285,14 +335,23 @@ async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Pa
         },
     ]
 
-    with pytest.raises(RuntimeError, match="PDF parser failed on page 3"):
-        await engine.aingest_file(source, replace=False)
+    batch = await engine.aingest_files([_one_file(source)], replace=False)
 
+    # A failed document is its own outcome, never an exception for its batch;
+    # the parser's reason stays in the log.
+    assert batch == {
+        "processed": 0,
+        "errors": ["report.pdf: document processing failed"],
+        "results": [],
+    }
+    assert "PDF parser failed on page 3" in caplog.text
     assert deps["metadata_index"].upsert.await_count == 1
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
-async def test_document_ingest_names_a_recorded_parser_outage(tmp_path: Path) -> None:
+async def test_document_ingest_names_a_recorded_parser_outage(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     source = tmp_path / "report.pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
@@ -306,10 +365,19 @@ async def test_document_ingest_names_a_recorded_parser_outage(tmp_path: Path) ->
         {"status": DocStatus.FAILED, "chunks_list": [], **failure_fields},
     ]
 
-    with pytest.raises(ParserUnavailableError) as raised:
-        await engine.aingest_file(source, replace=False)
+    batch = await engine.aingest_files([_one_file(source)], replace=False)
 
-    assert classify_transient_dependency(raised.value) == "parser"
+    # Finalization turns the recorded verdict back into the typed parser error;
+    # a batch still settles it as this document's failure.
+    assert batch["errors"] == ["report.pdf: document processing failed"]
+    (reported,) = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Document finalization failed for report.pdf"
+    ]
+    assert reported.exc_info is not None
+    assert isinstance(reported.exc_info[1], ParserUnavailableError)
+    assert classify_transient_dependency(reported.exc_info[1]) == "parser"
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
@@ -320,7 +388,7 @@ async def test_document_ingest_preserves_lightrag_parser_engine_params(
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
 
-    await engine.aingest_file(source, replace=False)
+    await _ingest_one(engine, source, replace=False)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["parse_engine"] == ["mineru(page_range=1-3)"]
@@ -403,7 +471,7 @@ async def test_document_ingest_labels_bm25_chunk_languages(tmp_path: Path) -> No
         {"id": "chunk-en", "content": "risk factors"},
     ]
 
-    await engine.aingest_file(source, replace=False)
+    await _ingest_one(engine, source, replace=False)
 
     deps["stores"].fetch_chunk_contents.assert_awaited_once_with(["chunk-zh", "chunk-en"])
     deps["stores"].update_chunk_bm25_languages.assert_awaited_once_with(
@@ -567,7 +635,8 @@ async def test_single_file_forwards_explicit_source_contract_to_metadata(
     prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
     monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
 
-    await engine.aingest_file(
+    await _ingest_one(
+        engine,
         source,
         source_uri="local://default/docs/sample.pdf",
         download_locator=str(source),
@@ -593,7 +662,8 @@ async def test_metadata_only_update_forwards_explicit_source_contract(
     prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
     monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
 
-    result = await engine.aingest_file(
+    result = await _ingest_one(
+        engine,
         source,
         source_uri="local://default/docs/sample.pdf",
         download_locator=str(source),
@@ -634,7 +704,7 @@ async def test_single_hash_match_bypasses_parser_directives(
 
     monkeypatch.setattr(engine, "_parser_directives_for", fail_parser_directives)
 
-    result = await engine.aingest_file(source, replace=False, title=title)
+    result = await _ingest_one(engine, source, replace=False, title=title)
 
     assert result["source_kind"] == expected_source_kind
 
@@ -654,7 +724,7 @@ async def test_batch_hash_match_skip_does_not_resolve_invalid_parser_directives(
     deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     result = await engine.aingest_files([source], replace=False)
-    single_result = await engine.aingest_file(source, replace=False)
+    single_result = await _ingest_one(engine, source, replace=False)
 
     assert result == {
         "processed": 1,
@@ -849,8 +919,8 @@ async def test_concurrent_single_file_replacements_serialize_cleanup(
     deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
 
     first, second = await asyncio.gather(
-        engine.aingest_file(source, replace=True),
-        engine.aingest_file(source, replace=True),
+        _ingest_one(engine, source, replace=True),
+        _ingest_one(engine, source, replace=True),
     )
 
     assert first["doc_id"] == doc_id
@@ -1041,7 +1111,8 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
         _FINALIZATION_COMPLETE_KEY: True,
     }
 
-    result = await engine.aingest_file(
+    result = await _ingest_one(
+        engine,
         source,
         source_uri="bynder://asset/new",
         download_locator="https://cdn.example.com/new-sample.pdf",
@@ -1078,7 +1149,7 @@ async def test_single_hash_match_local_noop_checks_finalization_marker(
     }
     deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result == {
         "doc_id": compute_mdhash_id(normalize_document_file_path(source), prefix="doc-"),
@@ -1105,7 +1176,8 @@ async def test_single_hash_match_internal_local_contract_checks_finalization_mar
     }
     deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
-    result = await engine.aingest_file(
+    result = await _ingest_one(
+        engine,
         source,
         source_uri=_raw_path_source_uri(source, workspace="default"),
         download_locator=str(source.resolve()),
@@ -1148,7 +1220,8 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
         _FINALIZATION_COMPLETE_KEY: True,
     }
 
-    result = await engine.aingest_file(
+    result = await _ingest_one(
+        engine,
         source,
         source_uri=_raw_path_source_uri(source, workspace="default"),
         download_locator=str(source.resolve()),
@@ -1233,7 +1306,7 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     expected_doc_id = compute_mdhash_id(
         normalize_document_file_path(source),
@@ -1266,7 +1339,8 @@ async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
     deps["lightrag"].apipeline_enqueue_documents = AsyncMock(side_effect=fail_enqueue)
 
     with pytest.raises(RuntimeError, match="parser enqueue failed"):
-        await engine.aingest_file(
+        await _ingest_one(
+            engine,
             source,
             source_uri="bynder://asset/1",
             download_locator="https://cdn.example.com/assets/1.pdf",
@@ -1427,7 +1501,7 @@ async def test_document_ingest_delegates_non_sidecar_parser_route(tmp_path: Path
         "sidecar_location": None,
     }
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result["doc_id"] is not None
     assert result["parse_engine"] == "native"
@@ -1444,7 +1518,8 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
 
-    await engine.aingest_file(
+    await _ingest_one(
+        engine,
         source,
         replace=False,
         metadata={"reviewer": " Ada Lovelace ", "project": "Analytical Engine"},
@@ -1492,7 +1567,7 @@ async def test_image_file_ingest_delegates_to_lightrag_parser(
     Image.new("RGB", (1, 1), "white").save(source)
     engine, deps = _make_engine()
 
-    result = await engine.aingest_file(source)
+    result = await _ingest_one(engine, source)
 
     assert result["source_kind"] == "document"
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
@@ -1551,7 +1626,7 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
     deps["stores"].get_full_doc = AsyncMock(side_effect=get_full_doc)
     deps["lightrag"].adelete_by_doc_id = AsyncMock(side_effect=delete_doc)
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     # Must have cleaned up the old partial record.
     deps["lightrag"].adelete_by_doc_id.assert_awaited_once_with(doc_id, delete_llm_cache=True)
@@ -1577,7 +1652,7 @@ async def test_document_ingest_replaces_processed_hash_mismatch(tmp_path: Path) 
         "status": "processed",
     }
 
-    await engine.aingest_file(source, replace=False)
+    await _ingest_one(engine, source, replace=False)
 
     deps["lightrag"].adelete_by_doc_id.assert_awaited_once()
     deps["metadata_index"].delete.assert_not_awaited()
@@ -1593,7 +1668,7 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
         {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc", "status": "processed"},
     ]
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
     assert result["doc_id"] is not None
@@ -1657,7 +1732,7 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
         "sidecar_location": artifact_dir.as_uri(),
     }
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result["chunks"] == ["chunk-a", mm_chunk_id]
     deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
@@ -1724,7 +1799,7 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
         "sidecar_location": artifact_dir.as_uri(),
     }
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result["chunks"] == ["chunk-a", mm_chunk_id]
     document_embedder.aembed_documents.assert_not_awaited()
@@ -1781,7 +1856,7 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
     deps["lightrag"].adelete_by_doc_id = AsyncMock(side_effect=slow_delete)
 
     async def ingest() -> dict:
-        return await engine.aingest_file(source, replace=False)
+        return await _ingest_one(engine, source, replace=False)
 
     results = await asyncio.gather(ingest(), ingest())
     assert len(results) == 2
@@ -1804,7 +1879,7 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
     }
     deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result["doc_id"] == doc_id
     assert result["source_kind"] == "skipped"
@@ -1833,7 +1908,7 @@ async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
 
-    await engine.aingest_file(source, replace=False)
+    await _ingest_one(engine, source, replace=False)
 
     assert engine_module._file_sha256 in calls
 
@@ -1859,7 +1934,7 @@ async def test_reingest_proceeds_when_content_hash_differs(tmp_path: Path) -> No
         "status": "processed",
     }
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result.get("source_kind") != "skipped"
     deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
@@ -1883,7 +1958,7 @@ async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
         {"chunks_list": ["chunk-a"], "content_hash": current_hash, "status": "processed"},
     ]
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await _ingest_one(engine, source, replace=False)
 
     assert result.get("source_kind") != "skipped"
     deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
@@ -2440,7 +2515,7 @@ async def test_incomplete_finalization_marker_replays_without_reenqueue(
     engine._overwrite_sidecar_image_vectors = AsyncMock()  # type: ignore[method-assign]
     engine._label_bm25_languages = AsyncMock()  # type: ignore[method-assign]
 
-    result = await engine.aingest_file(source)
+    result = await _ingest_one(engine, source)
 
     assert result["doc_id"] == doc_id
     assert result["source_kind"] == "document"
@@ -2471,11 +2546,13 @@ async def test_finalizer_failure_preserves_upstream_status_and_original_error(
     )
     deps["stores"].doc_status.upsert.side_effect = RuntimeError("status store down")
 
-    expected = (
-        asyncio.CancelledError if isinstance(original, asyncio.CancelledError) else RuntimeError
-    )
-    with pytest.raises(expected):
-        await engine.aingest_file(source)
+    if isinstance(original, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await engine.aingest_files([_one_file(source)])
+    else:
+        batch = await engine.aingest_files([_one_file(source)])
+        assert batch["errors"] == ["report.pdf: document processing failed"]
+        assert batch["results"] == []
 
     assert statuses[doc_id]["status"] == "processed"
     first_metadata = deps["metadata_index"].upsert.await_args_list[0].args[1]
@@ -2900,7 +2977,7 @@ async def test_image_ingest_enqueues_a_padded_parser_input(tmp_path: Path) -> No
     Image.new("RGB", (400, 300), (5, 10, 15)).save(source)
     engine, deps = _make_engine()
 
-    await engine.aingest_file(source)
+    await _ingest_one(engine, source)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     enqueued = Path(kwargs["file_paths"][0])
@@ -2924,7 +3001,7 @@ async def test_padded_parser_input_is_removed_after_the_batch(tmp_path: Path) ->
     Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
     engine, deps = _make_engine()
 
-    await engine.aingest_file(source)
+    await _ingest_one(engine, source)
 
     assert not (tmp_path / PADDED_INPUT_DIR_NAME).exists()
     assert source.exists()
@@ -2941,7 +3018,7 @@ async def test_zero_image_margin_enqueues_the_source_itself(tmp_path: Path) -> N
     Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
     engine, deps = _make_engine(image_margin=0.0)
 
-    await engine.aingest_file(source)
+    await _ingest_one(engine, source)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["file_paths"] == [str(source)]
@@ -3113,7 +3190,8 @@ async def test_metadata_only_update_preserves_routing_for_same_locator(
         _FINALIZATION_COMPLETE_KEY: True,
         SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": "eu-north-1"},
     }
-    result = await engine.aingest_file(
+    result = await _ingest_one(
+        engine,
         source,
         source_uri="s3://bucket/report.pdf",
         download_locator=new_locator,
