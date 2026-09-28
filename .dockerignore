@@ -49,6 +49,10 @@ postgres/
 # Dev/test files
 tests/
 docs/
+.test-results/
+.import_linter_cache/
+# Local parser output from personal documents
+output/
 frontend/node_modules/
 # The image builds its own frontend; a host build must never travel in the context, or the image
 # ends up carrying two bundles and index.html can point at the stale one.
