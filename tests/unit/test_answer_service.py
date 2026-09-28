@@ -1412,6 +1412,46 @@ async def test_published_artifact_is_only_an_available_result_artifact() -> None
     )
 
 
+async def test_artifact_readers_serve_only_published_artifacts_on_every_transport() -> None:
+    """The publication rule lives in the readers, not in each transport's pre-check."""
+    result = {
+        "artifacts": [
+            {"resource_id": "artifact-report", "status": "available"},
+            {"resource_id": "artifact-draft", "status": "unavailable"},
+        ]
+    }
+    service = _service(store=_Store(run=_record(status="succeeded", result=result)))
+
+    async def stream() -> AsyncIterator[bytes]:
+        yield b"report"
+
+    service.open_run_resource = AsyncMock(side_effect=lambda **_: stream())  # type: ignore[method-assign]
+    service.run_resource_size = AsyncMock(return_value=6)  # type: ignore[method-assign]
+
+    for resource_id in ("artifact-draft", "res-upload-0"):
+        assert (
+            await service.read_artifact(owner_id=_OWNER, run_id="run-1", resource_id=resource_id)
+            is None
+        )
+        assert (
+            await service.open_artifact(owner_id=_OWNER, run_id="run-1", resource_id=resource_id)
+            is None
+        )
+        assert (
+            await service.artifact_size(owner_id=_OWNER, run_id="run-1", resource_id=resource_id)
+            is None
+        )
+    service.open_run_resource.assert_not_awaited()
+    service.run_resource_size.assert_not_awaited()
+
+    published = "artifact-report"
+    assert (
+        await service.read_artifact(owner_id=_OWNER, run_id="run-1", resource_id=published)
+        == b"report"
+    )
+    assert await service.artifact_size(owner_id=_OWNER, run_id="run-1", resource_id=published) == 6
+
+
 async def test_read_input_artifact_returns_accepted_input_metadata_and_bytes() -> None:
     store = _Store(
         references=(

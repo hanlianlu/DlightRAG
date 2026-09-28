@@ -3,7 +3,8 @@
 
 A resource is published only when the Run's stored result lists it among its
 artifacts. Input uploads and fetched resources share the resource id space but
-are never artifacts, so every transport asks this one rule before serving bytes.
+are never artifacts, so the Application's artifact readers apply this one rule
+before serving bytes; transports use it only to describe what they serve.
 """
 
 from collections.abc import Mapping

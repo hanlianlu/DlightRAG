@@ -1038,11 +1038,11 @@ async def test_mcp_corpus_mutation_surfaces_caller_refusals(
 async def test_mcp_read_answer_artifact_serves_only_published_artifacts(
     mock_mcp_application,
 ) -> None:
-    """An input upload or fetched resource id is not an artifact, even for its owner."""
-    mock_mcp_application.runs.get.return_value = _run_record(
-        status="succeeded",
-        result={"artifacts": [{"resource_id": "artifact-report", "status": "available"}]},
-    )
+    """An input upload or fetched resource id is not an artifact, even for its owner.
+
+    The Application reader refuses it (see test_answer_service); the tool maps that.
+    """
+    mock_mcp_application.answers.read_artifact.return_value = None
 
     result = await mcp_server.mcp_app.call_tool(
         "read_answer_artifact", {"run_id": _RUN_ID, "resource_id": "res-upload-0"}
@@ -1051,7 +1051,6 @@ async def test_mcp_read_answer_artifact_serves_only_published_artifacts(
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert _tool_text(result) == "Error: artifact not found"
-    mock_mcp_application.answers.read_artifact.assert_not_awaited()
 
 
 async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_application) -> None:

@@ -1064,8 +1064,8 @@ class AnswerService:
     ) -> Mapping[str, Any] | None:
         """Return one owned Answer's available Published Artifact descriptor.
 
-        Bytes readers resolve input uploads and fetched resources too, so a
-        transport must ask this before serving an id as an artifact.
+        Input uploads and fetched resources share the resource id space, so the
+        artifact readers below serve an id only while this names it.
         """
         record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
         if record is None:
@@ -1081,7 +1081,7 @@ class AnswerService:
         offset: int = 0,
         length: int | None = None,
     ) -> bytes | None:
-        """Read a bounded Answer artifact; every other id returns ``None``."""
+        """Read a bounded Published Artifact; every other id returns ``None``."""
         stream = await self.open_artifact(
             owner_id=owner_id,
             run_id=run_id,
@@ -1238,7 +1238,16 @@ class AnswerService:
         offset: int = 0,
         length: int | None = None,
     ) -> AsyncIterator[bytes] | None:
-        """Open one published artifact through the shared run-resource reader."""
+        """Open one Published Artifact through the shared run-resource reader.
+
+        An input upload or fetched resource id is unknown here, as is an artifact
+        not (or no longer) available, whichever transport asks.
+        """
+        if (
+            await self.published_artifact(owner_id=owner_id, run_id=run_id, resource_id=resource_id)
+            is None
+        ):
+            return None
         return await self.open_run_resource(
             owner_id=owner_id,
             run_id=run_id,
@@ -1248,7 +1257,12 @@ class AnswerService:
         )
 
     async def artifact_size(self, *, owner_id: str, run_id: str, resource_id: str) -> int | None:
-        """Return one published artifact size through the shared reader."""
+        """Return one Published Artifact's size; every other id returns ``None``."""
+        if (
+            await self.published_artifact(owner_id=owner_id, run_id=run_id, resource_id=resource_id)
+            is None
+        ):
+            return None
         return await self.run_resource_size(
             owner_id=owner_id, run_id=run_id, resource_id=resource_id
         )
