@@ -254,6 +254,39 @@ def test_malformed_text_artifact_is_rejected_as_media_mismatch(
     assert plan.issues[0].kind == "media_mismatch"
 
 
+def test_pdf_validation_holds_the_process_pdfium_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.engine.answer.resources import visual
+
+    class RecordingLock:
+        def __init__(self) -> None:
+            self.entered = 0
+
+        def __enter__(self) -> None:
+            self.entered += 1
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    lock = RecordingLock()
+    monkeypatch.setattr(visual, "_PDF_LOCK", lock)
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "document.pdf").write_bytes(_pdf_bytes(visual=False))
+
+    plan = _validate(
+        root,
+        answer="[Open PDF](artifact:document.pdf)",
+        attached=("document.pdf",),
+    )
+
+    # Publication runs in a worker thread, and PDFium is not thread-safe even
+    # across documents, so its checks share the resource renderer's lock.
+    assert [item.relative_path for item in plan.artifacts] == ["document.pdf"]
+    assert lock.entered >= 1
+
+
 def test_malformed_pdf_artifact_is_rejected_as_media_mismatch(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()

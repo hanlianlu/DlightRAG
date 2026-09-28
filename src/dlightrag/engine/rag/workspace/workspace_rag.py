@@ -2431,7 +2431,8 @@ class WorkspaceRag:
                 status = "rejected"
             else:
                 try:
-                    removed = remove_deleted_files(
+                    removed = await asyncio.to_thread(
+                        remove_deleted_files,
                         ctx.file_paths,
                         str(self.settings.input_root / self.workspace_id),
                     )

@@ -4081,6 +4081,46 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert results[0]["status"] == "not_found"
 
+    async def test_adelete_files_removes_sources_off_the_event_loop(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import threading
+
+        from dlightrag.engine.rag.corpus.ingestion import cleanup
+        from dlightrag.engine.rag.corpus.ingestion.cleanup import DeletionContext
+
+        service = _service(test_config)
+        service._initialized = True
+        service._lightrag = MagicMock()
+        context = DeletionContext(
+            identifier="report.pdf", doc_ids={"doc-1"}, file_paths={"report.pdf"}
+        )
+        monkeypatch.setattr(cleanup, "collect_deletion_context", AsyncMock(return_value=context))
+        monkeypatch.setattr(
+            cleanup,
+            "cascade_delete",
+            AsyncMock(
+                return_value={
+                    "docs_deleted": 1,
+                    "errors": [],
+                    "outcomes": [{"doc_id": "doc-1", "status": "deleted"}],
+                }
+            ),
+        )
+        threads: list[threading.Thread] = []
+
+        def remove(file_paths: set[str], input_dir: str) -> int:
+            threads.append(threading.current_thread())
+            return len(file_paths)
+
+        monkeypatch.setattr(cleanup, "remove_deleted_files", remove)
+
+        results = await service.adelete_files(filenames=["report.pdf"])
+
+        assert results[0]["status"] == "deleted"
+        assert results[0]["files_removed"] == 1
+        assert threads and threads[0] is not threading.current_thread()
+
 
 async def test_retry_status_read_error_stays_uncertain_then_recovers_processed(
     test_config: DlightragConfig,

@@ -2,7 +2,9 @@
 """Structured root Artifact attachment through the parent Research tool."""
 
 import hashlib
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -45,6 +47,31 @@ async def test_attach_artifact_validates_and_returns_a_structured_receipt(tmp_pa
         "presentation": "markdown",
         "resource_id": "artifact-431b1900963e6cd2f4a1",
     }
+
+
+@pytest.mark.asyncio
+async def test_attach_artifact_validates_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.engine.answer.tools import artifacts
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "analysis.md").write_text("Grounded analysis.", encoding="utf-8")
+    prepare = artifacts.prepare_artifact_attachment
+    threads: list[threading.Thread] = []
+
+    def probe(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.current_thread())
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "prepare_artifact_attachment", probe)
+    tool = attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
+
+    result = await tool.execute(AttachArtifactArgs(path="analysis.md"), tool_runtime())
+
+    assert result.is_error is False
+    assert threads and threads[0] is not threading.current_thread()
 
 
 @pytest.mark.asyncio

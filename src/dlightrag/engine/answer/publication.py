@@ -5,6 +5,11 @@ Agent paths are request-local input. This module is the only publication boundar
 that may read them: structured attachments authorize roots, safe links discover
 dependencies and place outputs. Settlement records document-scoped bindings to
 stable resource ids without rewriting model-authored Markdown or HTML.
+
+Validation scans the Agent Workspace and reads and decodes every candidate file,
+so an event-loop caller runs ``validate_publication`` and
+``prepare_artifact_attachment`` in a worker thread. PDF checks take the process
+PDFium lock for that reason.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import hashlib
 import json
 import re
 import stat
+import threading
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import deque
@@ -23,7 +29,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from urllib.parse import unquote
 
-import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
@@ -39,6 +44,7 @@ from dlightrag.engine.answer.reference import (
 )
 from dlightrag.engine.answer.resources.converters import is_convertible
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
+from dlightrag.engine.answer.resources.visual import ResourceViewError, pdf_page_count
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 PresentationCapability = Literal["image", "video", "markdown", "html", "pdf", "text", "download"]
@@ -115,6 +121,7 @@ _VIDEO_MEDIA = frozenset({"video/mp4", "video/quicktime", "video/webm"})
 # it is built once per process and only when a video Artifact is actually
 # validated.
 _MEDIA_IDENTIFIER: Any = None
+_MEDIA_IDENTIFIER_LOCK = threading.Lock()
 _ANSWER_MARKDOWN = answer_markdown()
 
 
@@ -131,10 +138,11 @@ def _identify_media_type(content: bytes) -> str:
     ``docs/adr/0026-a-video-artifact-plays-and-a-video-link-is-a-card.md``.
     """
     global _MEDIA_IDENTIFIER
-    if _MEDIA_IDENTIFIER is None:
-        import magika
+    with _MEDIA_IDENTIFIER_LOCK:
+        if _MEDIA_IDENTIFIER is None:
+            import magika
 
-        _MEDIA_IDENTIFIER = magika.Magika()
+            _MEDIA_IDENTIFIER = magika.Magika()
     identified = _MEDIA_IDENTIFIER.identify_bytes(content).output.mime_type
     return str(identified)
 
@@ -696,9 +704,8 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         elif media_type == "image/svg+xml":
             content = _sanitize_svg(content)
         elif media_type == "application/pdf":
-            with pdfium.PdfDocument(content) as document:
-                if len(document) == 0:
-                    raise ValueError("PDF has no pages")
+            if pdf_page_count(content) == 0:
+                raise ValueError("PDF has no pages")
         elif media_type.startswith("application/vnd.openxmlformats-officedocument"):
             expected_root = {
                 ".docx": "word/",
@@ -756,7 +763,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         ET.ParseError,
         Image.DecompressionBombError,
         json.JSONDecodeError,
-        pdfium.PdfiumError,
+        ResourceViewError,
     ) as exc:
         raise ArtifactValidationError(
             "media_mismatch", f"Artifact {Path(relative).name} does not match its file extension."

@@ -4,6 +4,7 @@
 import asyncio
 import datetime
 import io
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -248,7 +249,7 @@ def _executor() -> AnswerExecutor:
     return executor
 
 
-def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) -> None:
+async def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / "analysis.md").write_text("Primary fact [1-1].", encoding="utf-8")
@@ -284,7 +285,7 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
         ]
     }
 
-    plan = _publication_plan(
+    plan = await _publication_plan(
         root,
         answer=("[Open analysis](artifact:analysis.md) [Open appendix](artifact:appendix.md)"),
         attachments=(
@@ -1123,7 +1124,7 @@ async def test_durable_child_usage_aggregates_roster_rows() -> None:
     }
 
 
-def test_public_document_citations_are_projected_into_the_published_artifact(
+async def test_public_document_citations_are_projected_into_the_published_artifact(
     tmp_path: Path,
 ) -> None:
     """A published file carries links for citations whose source has a public URL."""
@@ -1165,7 +1166,7 @@ def test_public_document_citations_are_projected_into_the_published_artifact(
         ]
     }
 
-    plan = _publication_plan(
+    plan = await _publication_plan(
         root,
         answer="[Open report](artifact:report.md)",
         attachments=(prepare_artifact_attachment(root, path="report.md"),),
@@ -2149,7 +2150,7 @@ def test_the_reserved_recall_block_mirrors_the_gates_that_allow_recall() -> None
         ("[download][9]\n\n[9]: artifact:data.txt", "data.txt"),
     ],
 )
-def test_citation_preparation_preserves_resource_links_before_staging(
+async def test_citation_preparation_preserves_resource_links_before_staging(
     tmp_path: Path, original: str, filename: str
 ) -> None:
     root = tmp_path / "artifacts"
@@ -2157,7 +2158,7 @@ def test_citation_preparation_preserves_resource_links_before_staging(
     report = root / "report.md"
     report.write_text(original)
     (root / filename).write_text("data")
-    accepted = _publication_plan(
+    accepted = await _publication_plan(
         root,
         answer="Report generated. [Report](artifact:report.md)",
         attachments=(prepare_artifact_attachment(root, path="report.md"),),
@@ -2193,7 +2194,7 @@ def _public_artifact_context() -> dict[str, Any]:
     }
 
 
-def test_citation_preparation_precedes_binding_and_staging_uses_validated_bytes(
+async def test_citation_preparation_precedes_binding_and_staging_uses_validated_bytes(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "artifacts"
@@ -2203,7 +2204,7 @@ def test_citation_preparation_precedes_binding_and_staging_uses_validated_bytes(
     (root / "data.txt").write_text("data")
     attachment = prepare_artifact_attachment(root, path="report.md")
 
-    plan = _publication_plan(
+    plan = await _publication_plan(
         root,
         answer="[Report](artifact:report.md)",
         attachments=(attachment,),
@@ -2233,14 +2234,14 @@ def test_citation_preparation_precedes_binding_and_staging_uses_validated_bytes(
         (PublicationLimits(max_total_bytes=10), "answer_too_large"),
     ],
 )
-def test_publication_budgets_include_projected_citation_bytes(
+async def test_publication_budgets_include_projected_citation_bytes(
     tmp_path: Path, limits: PublicationLimits, issue: str
 ) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / "report.md").write_text("Fact [1].")
 
-    plan = _publication_plan(
+    plan = await _publication_plan(
         root,
         answer="Report generated. [Report](artifact:report.md)",
         attachments=(prepare_artifact_attachment(root, path="report.md"),),
@@ -2256,3 +2257,32 @@ def test_publication_budgets_include_projected_citation_bytes(
     assert publications == []
     assert descriptors[0]["status"] == "unavailable"
     assert sources == {}
+
+
+async def test_publication_plan_validates_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.engine.answer.execution import executor
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.md").write_text("Fact.")
+    validate = executor.validate_publication
+    threads: list[threading.Thread] = []
+
+    def probe(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.current_thread())
+        return validate(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "validate_publication", probe)
+
+    plan = await _publication_plan(
+        root,
+        answer="Report generated. [Report](artifact:report.md)",
+        attachments=(prepare_artifact_attachment(root, path="report.md"),),
+        contexts={},
+        limits=PublicationLimits(),
+    )
+
+    assert [item.relative_path for item in plan.artifacts] == ["report.md"]
+    assert threads and threads[0] is not threading.current_thread()

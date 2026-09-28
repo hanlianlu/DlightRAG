@@ -2261,7 +2261,7 @@ class AnswerExecutor:
                     if artifact_root is not None
                     else ()
                 )
-                publication = _publication_plan(
+                publication = await _publication_plan(
                     artifact_root,
                     answer=finalized.answer,
                     attachments=artifact_attachments,
@@ -2340,7 +2340,7 @@ class AnswerExecutor:
                         if artifact_root is not None
                         else ()
                     )
-                    publication = _publication_plan(
+                    publication = await _publication_plan(
                         artifact_root,
                         answer=finalized.answer,
                         attachments=artifact_attachments,
@@ -3254,7 +3254,7 @@ def _publication_attachments(
     )
 
 
-def _publication_plan(
+async def _publication_plan(
     root: Path | None,
     *,
     answer: str,
@@ -3264,7 +3264,10 @@ def _publication_plan(
 ) -> PublicationPlan:
     if not isinstance(root, Path):
         return PublicationPlan(answer=answer)
-    return validate_publication(
+    # Validation scans the Agent Workspace and decodes every candidate file;
+    # the writer's event loop keeps serving HTTP, SSE and Run leases meanwhile.
+    return await asyncio.to_thread(
+        validate_publication,
         root,
         answer=answer,
         attachments=attachments,

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for workspace reset through the RAG-owned reset module."""
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -288,6 +289,30 @@ class TestAresetPhase4:
         assert result["local_files_removed"] == 1
         assert outside.exists()
         assert not normalized_ws_dir.exists()
+
+    async def test_removes_files_off_the_event_loop(self, tmp_path: Path) -> None:
+        from dlightrag.engine.rag.corpus import reset
+
+        service = _make_service()
+        service.settings = cast(
+            Any,
+            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+        )
+        workspace = tmp_path / "inputs" / service.workspace_id
+        workspace.mkdir(parents=True)
+        (workspace / "staged.txt").write_text("delete")
+        remove = reset._reset_workspace_files
+        threads: list[threading.Thread] = []
+
+        def probe(*args: Any, **kwargs: Any) -> int:
+            threads.append(threading.current_thread())
+            return remove(*args, **kwargs)
+
+        with patch.object(reset, "_reset_workspace_files", probe):
+            result = await service.areset()
+
+        assert result["local_files_removed"] == 1
+        assert threads and threads[0] is not threading.current_thread()
 
 
 class TestAresetErrorHandling:

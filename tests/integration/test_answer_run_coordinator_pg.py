@@ -2148,7 +2148,7 @@ async def test_publication_correction_is_one_linked_agent_operation(
     )
     publication_calls = 0
 
-    def publication_plan(
+    async def publication_plan(
         _root: Any,
         *,
         answer: str,

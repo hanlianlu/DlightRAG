@@ -39,6 +39,7 @@ hashes and metadata keep referring to what the user supplied.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -131,6 +132,29 @@ def padded_parser_path(source: Path, *, margin: float) -> Path | None:
     return target
 
 
+async def apadded_parser_path(source: Path, *, margin: float) -> Path | None:
+    """Run :func:`padded_parser_path` off the event loop.
+
+    Decoding and re-encoding a large image stalls a loop that also serves HTTP
+    and Run leases. A cancelled caller never learns the derived path, so the
+    file is discarded as soon as the worker finishes instead of leaking.
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(padded_parser_path, source, margin=margin))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        task.add_done_callback(_discard_orphaned_padding)
+        raise
+
+
+def _discard_orphaned_padding(task: asyncio.Future[Path | None]) -> None:
+    if task.cancelled() or task.exception() is not None:
+        return
+    padded = task.result()
+    if padded is not None:
+        discard_padded_images([padded])
+
+
 def discard_padded_images(paths: list[Path]) -> None:
     """Remove derived parser inputs written by :func:`padded_parser_path`."""
     directories: set[Path] = set()
@@ -189,6 +213,7 @@ __all__ = [
     "IMAGE_SUFFIXES",
     "MAX_IMAGE_MARGIN",
     "PADDED_INPUT_DIR_NAME",
+    "apadded_parser_path",
     "discard_padded_images",
     "is_image_source",
     "normalize_image_margin",

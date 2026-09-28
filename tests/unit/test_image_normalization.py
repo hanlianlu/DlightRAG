@@ -1,14 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for image page-margin normalization before external parsers."""
 
+import asyncio
+import threading
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from dlightrag.engine.rag.corpus.ingestion import image_normalization
 from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
     DEFAULT_IMAGE_MARGIN,
     PADDED_INPUT_DIR_NAME,
+    apadded_parser_path,
     discard_padded_images,
     is_image_source,
     normalize_image_margin,
@@ -146,4 +150,39 @@ def test_discard_removes_files_and_the_staging_directory(tmp_path: Path) -> None
 
     assert not padded.exists()
     assert not padded.parent.exists()
+    assert source.exists()
+
+
+async def test_cancelled_padding_discards_the_derived_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_solid(tmp_path / "art.png", (10, 10), (0, 0, 0))
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    pad = image_normalization.padded_parser_path
+
+    def slow(path: Path, *, margin: float) -> Path | None:
+        started.set()
+        release.wait(5)
+        try:
+            return pad(path, margin=margin)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(image_normalization, "padded_parser_path", slow)
+    caller = asyncio.create_task(apadded_parser_path(source, margin=0.1))
+    await asyncio.to_thread(started.wait, 5)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    release.set()
+    await asyncio.to_thread(finished.wait, 5)
+    target = tmp_path / PADDED_INPUT_DIR_NAME / source.name
+    for _ in range(200):
+        if not target.exists():
+            break
+        await asyncio.sleep(0.01)
+
+    assert not target.exists()
+    assert not target.parent.exists()
     assert source.exists()

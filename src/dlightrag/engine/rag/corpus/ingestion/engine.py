@@ -31,9 +31,10 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
     DEFAULT_IMAGE_MARGIN,
+    apadded_parser_path,
     discard_padded_images,
+    is_image_source,
     normalize_image_margin,
-    padded_parser_path,
 )
 from dlightrag.engine.rag.corpus.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.engine.rag.corpus.ingestion.parser_transport import parser_unavailable_recorded
@@ -255,13 +256,11 @@ class UnifiedIngestionEngine:
         entries: list[_PendingDocumentIngest] = []
         padded_inputs: list[Path] = []
         try:
-            for index, item in enumerate(
-                self._normalized_parser_item(path, padded_inputs) for path in paths
-            ):
+            for index, path in enumerate(paths):
                 entries.append(
                     self._prepare_pending_document(
                         index=index,
-                        item=item,
+                        item=await self._normalized_parser_item(path, padded_inputs),
                         title=title,
                         author=author,
                         metadata=metadata,
@@ -275,6 +274,7 @@ class UnifiedIngestionEngine:
         doc_ids = [entry.doc_id for entry in entries]
         duplicate_doc_ids = sorted(doc_id for doc_id in set(doc_ids) if doc_ids.count(doc_id) > 1)
         if duplicate_doc_ids:
+            discard_padded_images(padded_inputs)
             raise ValueError(
                 "ingest batch contains duplicate canonical document IDs: "
                 + ", ".join(duplicate_doc_ids)
@@ -484,7 +484,7 @@ class UnifiedIngestionEngine:
             "results": [results_by_index[index] for index in sorted(results_by_index)],
         }
 
-    def _normalized_parser_item(
+    async def _normalized_parser_item(
         self,
         path: str | Path | PreparedIngestFile,
         padded_inputs: list[Path],
@@ -496,9 +496,9 @@ class UnifiedIngestionEngine:
         downloads, hashes and metadata stay attached to the original file.
         """
         item = _prepare_ingest_item(path, workspace=self._workspace)
-        if self._image_margin <= 0:
+        if self._image_margin <= 0 or not is_image_source(item.parser_path):
             return item
-        padded = padded_parser_path(item.parser_path, margin=self._image_margin)
+        padded = await apadded_parser_path(item.parser_path, margin=self._image_margin)
         if padded is None:
             return item
         padded_inputs.append(padded)
@@ -937,8 +937,8 @@ class UnifiedIngestionEngine:
         # Keep source metadata until the replacement record is durably written.
         # A hard process exit after deletion can then reconstruct the same ID.
         artifact_dir = resolve_sidecar_uri(sidecar_uri)
-        if artifact_dir is not None and artifact_dir.exists():
-            shutil.rmtree(artifact_dir, ignore_errors=True)
+        if artifact_dir is not None:
+            await asyncio.to_thread(_remove_sidecar_dir, artifact_dir)
         return (
             dict(status_snapshot),
             dict(metadata_snapshot) if isinstance(metadata_snapshot, Mapping) else None,
@@ -1137,6 +1137,11 @@ class UnifiedIngestionEngine:
         labels = await asyncio.to_thread(_detect)
         if labels:
             await self._stores.update_chunk_bm25_languages(labels)
+
+
+def _remove_sidecar_dir(artifact_dir: Path) -> None:
+    if artifact_dir.exists():
+        shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
 def _file_sha256(path: Path) -> str:

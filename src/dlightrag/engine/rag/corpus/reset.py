@@ -9,6 +9,7 @@
 4. Remove filesystem artifacts
 """
 
+import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -107,12 +108,14 @@ async def areset(
     # Each workspace owns input_dir/<workspace>/; the working_dir root is shared
     # and must never be wiped per-workspace.
     try:
-        input_ws_dir = _workspace_input_dir(input_root, workspace)
-        if input_ws_dir is not None and input_ws_dir.is_dir():
-            stats["local_files_removed"] = _reset_workspace_files(
-                input_ws_dir,
-                preserve_run_sources_after=preserve_run_sources_after,
-            )
+        # A workspace tree can be large; the writer's event loop keeps serving
+        # HTTP, SSE and Run leases while it is removed.
+        stats["local_files_removed"] = await asyncio.to_thread(
+            _reset_workspace_input,
+            input_root,
+            workspace,
+            preserve_run_sources_after=preserve_run_sources_after,
+        )
     except Exception as exc:
         errors.append(f"Phase 4 (filesystem): {exc}")
         logger.warning("areset Phase 4 failed: %s", safe_log_text(exc))
@@ -126,6 +129,22 @@ async def areset(
 
 
 # -- Internal helpers ----------------------------------------------------------
+
+
+def _reset_workspace_input(
+    input_root: Path,
+    workspace: str,
+    *,
+    preserve_run_sources_after: str | None,
+) -> int:
+    """Remove one workspace's input files; return how many files were removed."""
+    input_ws_dir = _workspace_input_dir(input_root, workspace)
+    if input_ws_dir is None or not input_ws_dir.is_dir():
+        return 0
+    return _reset_workspace_files(
+        input_ws_dir,
+        preserve_run_sources_after=preserve_run_sources_after,
+    )
 
 
 def _reset_workspace_files(

@@ -2948,6 +2948,84 @@ async def test_zero_image_margin_enqueues_the_source_itself(tmp_path: Path) -> N
     assert not (tmp_path / PADDED_INPUT_DIR_NAME).exists()
 
 
+async def test_image_padding_runs_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from PIL import Image
+
+    from dlightrag.engine.rag.corpus.ingestion import image_normalization
+
+    source = tmp_path / "plate.png"
+    Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
+    pad = image_normalization.padded_parser_path
+    threads: list[threading.Thread] = []
+
+    def probe(path: Path, *, margin: float) -> Path | None:
+        threads.append(threading.current_thread())
+        return pad(path, margin=margin)
+
+    monkeypatch.setattr(image_normalization, "padded_parser_path", probe)
+    engine, deps = _make_engine()
+
+    await engine.aingest_files([_prepare_ingest_item(source, workspace="default")])
+
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert Path(kwargs["file_paths"][0]).parent.name == image_normalization.PADDED_INPUT_DIR_NAME
+    assert threads and threads[0] is not threading.current_thread()
+
+
+async def test_duplicate_documents_discard_their_padded_inputs(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+        PADDED_INPUT_DIR_NAME,
+    )
+
+    first = tmp_path / "a" / "plate.png"
+    second = tmp_path / "b" / "plate.png"
+    for source in (first, second):
+        source.parent.mkdir()
+        Image.new("RGB", (50, 50), (0, 0, 0)).save(source)
+    engine, _deps = _make_engine()
+
+    with pytest.raises(ValueError, match="duplicate canonical document IDs"):
+        await engine.aingest_files(
+            [_prepare_ingest_item(path, workspace="default") for path in (first, second)]
+        )
+
+    assert not (first.parent / PADDED_INPUT_DIR_NAME).exists()
+    assert not (second.parent / PADDED_INPUT_DIR_NAME).exists()
+
+
+async def test_partial_cleanup_removes_sidecars_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from dlightrag.engine.rag.corpus.ingestion import engine as engine_module
+
+    sidecar = tmp_path / "sample.parsed"
+    sidecar.mkdir()
+    (sidecar / "content.json").write_text("{}")
+    engine, deps = _make_engine()
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": sidecar.as_uri()}
+    remove = engine_module._remove_sidecar_dir
+    threads: list[threading.Thread] = []
+
+    def probe(path: Path) -> None:
+        threads.append(threading.current_thread())
+        remove(path)
+
+    monkeypatch.setattr(engine_module, "_remove_sidecar_dir", probe)
+
+    await engine._cleanup_partial_doc("doc-1")
+
+    assert not sidecar.exists()
+    assert threads and threads[0] is not threading.current_thread()
+
+
 async def test_non_image_sources_are_not_normalized(tmp_path: Path) -> None:
     source = tmp_path / "plain.pdf"
     source.write_bytes(b"%PDF-1.4")
