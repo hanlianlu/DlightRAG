@@ -360,9 +360,10 @@ def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> s
             kind = mime or "resource; type verified on acquisition"
         lines.append(f"- [resource: {entry.resource_id}] {filename} ({kind})")
     lines.append(
-        "Use these opaque resource ids with read for text or view for pixels. They belong to "
-        "this run: a handle or cursor printed by an earlier turn is historical, and that "
-        "document must be attached again before it can be read or viewed here."
+        "Use these opaque resource ids with read for text or view for pixels. A cursor "
+        "printed by an earlier turn is historical; read the resource again for a current "
+        "one. A resource id printed by an earlier turn may still resolve here; only if "
+        "read or view refuses it must that document be attached again."
     )
     return "\n".join(lines)
 

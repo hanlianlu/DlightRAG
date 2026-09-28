@@ -42,6 +42,7 @@ from dlightrag.engine.answer.resources.lineage import (
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
     ResourceCursorError,
+    ResourceNotConvertedError,
     ResourceNotFoundError,
     TextWindowBudget,
 )
@@ -128,6 +129,12 @@ async def _adopt_earlier_then_retry(
         adopted = adopt_lineage_resource(registry, loaded)
     except LineageSnapshotError as exc:
         return ToolResult.text(f"{exc}; the document was not converted again.", is_error=True)
+    except ResourceAdmissionError as exc:
+        # Adoption spends this Run's own attachment allowance, so a spent allowance
+        # refuses the earlier document the way it refuses one more attachment.
+        return ToolResult.text(
+            f"{exc}; the earlier document was not adopted into this run.", is_error=True
+        )
     logger.info(
         "Adopted an earlier Run Resource",
         extra={
@@ -144,6 +151,8 @@ async def _adopt_earlier_then_retry(
         result = await retry()
     except ResourceNotFoundError:
         return ToolResult.text(refusal, is_error=True)
+    except ResourceNotConvertedError as exc:
+        return ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
     return replace(
         result,
         effects=replace(
@@ -226,6 +235,8 @@ def make_resource_reader(
             )
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
+        except ResourceNotConvertedError as exc:
+            return ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
 
     return read
 
@@ -383,6 +394,8 @@ def make_resource_viewer(
             )
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
+        except ResourceNotConvertedError as exc:
+            return ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
 
     return view
 

@@ -1267,6 +1267,56 @@ async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> N
         assert "Adopted text." in read.content
 
 
+@pytest.mark.asyncio
+async def test_recovery_keeps_an_adoption_without_its_view_unconverted(monkeypatch) -> None:
+    """A resumed Run must not convert what the Run before the resume refused to.
+
+    An adoption that came without a stored view reads its text only through a view
+    the earlier Run never had, so after a resume its text still refuses.
+    """
+    import hashlib
+
+    from dlightrag.engine.answer.resources.models import ResourceNotConvertedError
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.runtime.records import RunFetchedResource
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("a restored adoption is never converted")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", forbidden)
+    document = b"%PDF-1.7 adopted earlier, never converted"
+    digest = hashlib.sha256(document).hexdigest()
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(
+        return_value=(
+            RunFetchedResource(
+                resource_id="res-adopted",
+                ordinal=0,
+                digest=digest,
+                filename="earlier.pdf",
+                mime_type="application/pdf",
+                source_locator=b"res-earlier",
+                capabilities={
+                    "resource_kind": "lineage_adoption",
+                    "resource_aliases": ["res-earlier"],
+                },
+            ),
+        )
+    )
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, digest, kwargs
+        yield document
+
+    executor._blob_store.stream = stream
+
+    async with ResourceRegistry() as registry:
+        await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
+
+        with pytest.raises(ResourceNotConvertedError):
+            await registry.read("res-earlier", max_window_tokens=1000)
+
+
 async def test_a_settled_run_records_the_state_it_ended_at() -> None:
     """A Fork branches from a recorded Fork Point, so the settlement has to write one.
 

@@ -15,16 +15,14 @@ refusal in place.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
 from dlightrag.engine.answer.resources.models import ResourceInput
-from dlightrag.engine.answer.resources.registry import (
-    ResourceRegistry,
-    ResourceStateMismatchError,
-)
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 
 LINEAGE_ADOPTION_KIND = "lineage_adoption"
@@ -88,7 +86,17 @@ def adopt_lineage_resource(
 
     The returned id is this Run's canonical handle, and the handle the model used
     stays readable as an alias, so a later call in the same Run needs no second read.
+
+    The stored view is checked before anything is registered. Binding the alias
+    first would let a refused adoption succeed on the next call by converting the
+    bytes afresh; checking first means asking again refuses again. The bytes are
+    registered as stored-view-only for the same reason: a ``view`` may adopt a
+    document the earlier Run never converted, and a later ``read`` of it must
+    refuse rather than build the view that Run never had. Bytes this Run already
+    reads through a view of its own keep that view: adopting a second one would
+    give one Resource two histories, and keeping it converts nothing.
     """
+    snapshot = _restore_snapshot(loaded)
     adopted = registry.register(
         ResourceInput(
             filename=loaded.filename,
@@ -96,15 +104,11 @@ def adopt_lineage_resource(
             content=loaded.content,
         ),
         aliases=(loaded.resource_id,),
+        stored_view_only=True,
     )
-    snapshot = _restore_snapshot(loaded)
-    if snapshot is not None:
-        try:
-            registry.adopt_conversion_snapshot(snapshot)
-        except ResourceStateMismatchError as exc:
-            raise LineageSnapshotError(
-                "the earlier Run's stored conversion view does not belong to these bytes"
-            ) from exc
+    if snapshot is None or registry.has_conversion_snapshot(adopted):
+        return AdoptedLineageResource(adopted)
+    registry.adopt_conversion_snapshot(snapshot)
     return AdoptedLineageResource(adopted, snapshot)
 
 
@@ -118,6 +122,10 @@ def _restore_snapshot(loaded: LineageResourceBytes) -> ConversionSnapshot | None
         raise LineageSnapshotError("the earlier Run's stored conversion view is unusable") from exc
     if snapshot.resource_id != loaded.resource_id:
         raise LineageSnapshotError("conversion snapshot does not belong to this resource")
+    if snapshot.input_digest != hashlib.sha256(loaded.content).hexdigest():
+        raise LineageSnapshotError(
+            "the earlier Run's stored conversion view does not belong to these bytes"
+        )
     return snapshot
 
 

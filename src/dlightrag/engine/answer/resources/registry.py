@@ -47,6 +47,7 @@ from dlightrag.engine.answer.resources.models import (
     ResourceCursorError,
     ResourceInput,
     ResourceManifestEntry,
+    ResourceNotConvertedError,
     ResourceNotFoundError,
     ResourceReadResult,
     TextWindowLocator,
@@ -137,6 +138,7 @@ class _Registered:
     acquisition: str | None = None
     presentation: PublicHttpPresentation = PublicHttpPresentation()
     degradation: str | None = None
+    stored_view_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -234,8 +236,24 @@ class ResourceRegistry:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    def register(self, resource: ResourceInput, *, aliases: tuple[str, ...] = ()) -> str:
-        return self._register(resource, admission_origin="caller", aliases=aliases)
+    def register(
+        self,
+        resource: ResourceInput,
+        *,
+        aliases: tuple[str, ...] = (),
+        stored_view_only: bool = False,
+    ) -> str:
+        """Admit caller bytes; ``stored_view_only`` bytes are never converted here.
+
+        Identical bytes already admitted keep their own state, so an adoption that
+        matches this Run's own attachment stays convertible like that attachment.
+        """
+        return self._register(
+            resource,
+            admission_origin="caller",
+            aliases=aliases,
+            stored_view_only=stored_view_only,
+        )
 
     def register_discovered_link(self, url: str) -> str | None:
         """Register one inert search-discovered public link outside caller count."""
@@ -266,6 +284,7 @@ class ResourceRegistry:
         admission_origin: Literal["caller", "search", "agent"],
         presentation: PublicHttpPresentation = PublicHttpPresentation(),
         aliases: tuple[str, ...] = (),
+        stored_view_only: bool = False,
     ) -> str:
         self._ensure_open()
         filename = resource.filename
@@ -376,6 +395,7 @@ class ResourceRegistry:
             loader=resource.loader,
             admission_origin=admission_origin,
             presentation=presentation,
+            stored_view_only=stored_view_only,
         )
         self._ids_by_dedup[dedup_key] = resource_id
         if byte_size is not None:
@@ -888,6 +908,8 @@ class ResourceRegistry:
         cached = self._converted.get(resource.resource_id)
         if cached is not None:
             return cached
+        if resource.stored_view_only:
+            raise ResourceNotConvertedError(resource.filename or resource.resource_id)
         if content is None:
             content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         task = self._conversion_tasks.get(resource.resource_id)
@@ -999,6 +1021,10 @@ class ResourceRegistry:
         )
         self._converted[resource.resource_id] = entry
         self._text_views[resource.resource_id] = entry
+
+    def has_conversion_snapshot(self, resource_id: str) -> bool:
+        """Whether this Run already reads the Resource through a conversion view."""
+        return self._canonical_resource_id(resource_id) in self._snapshots
 
     def conversion_effects(self, resource_id: str) -> tuple[ResourceAttachmentBytes, ...]:
         snapshot = self._snapshots.get(self._canonical_resource_id(resource_id))

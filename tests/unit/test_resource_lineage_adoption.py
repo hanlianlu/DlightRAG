@@ -6,6 +6,7 @@ import hashlib
 import io
 from dataclasses import replace
 
+import pytest
 from PIL import Image
 
 from dlightrag.engine.agent.environment.access import AccessScheduler
@@ -13,14 +14,20 @@ from dlightrag.engine.agent.tool_content import decode_tool_content, encode_tool
 from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.agent.tools.files import PreparedImageAttachment, read_tool, view_tool
 from dlightrag.engine.ai.media import decode_image_base64
-from dlightrag.engine.answer.resources.converters import ExtractedVisual
+from dlightrag.engine.answer.research.context import _resource_manifest_context
+from dlightrag.engine.answer.resources.converters import ConvertedResource, ExtractedVisual
 from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
     LINEAGE_ADOPTION_KIND,
     SNAPSHOT_KIND,
     LineageResourceBytes,
 )
-from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.resources.models import (
+    ResourceInput,
+    ResourceManifestEntry,
+    ResourceNotFoundError,
+    TextWindowBudget,
+)
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
@@ -255,16 +262,143 @@ async def test_an_unauthorized_handle_keeps_the_typed_refusal() -> None:
         assert lineage.reads == 2
 
 
-async def test_an_unusable_stored_snapshot_refuses_instead_of_repairing(monkeypatch) -> None:
+def _stored_view(loaded: LineageResourceBytes, **changes) -> bytes:
+    """Encode the fixture's stored view with some of its facts replaced."""
+    snapshot = ConversionSnapshot.restore(loaded.conversion_snapshot or b"", dict(loaded.assets))
+    effects = replace(snapshot, **changes).effects()
+    return next(item.content for item in effects if item.resource_kind == SNAPSHOT_KIND)
+
+
+@pytest.mark.parametrize(
+    ("broken", "reason"),
+    [
+        (lambda loaded: b'{"text":"x"}', "is unusable"),
+        (
+            lambda loaded: _stored_view(loaded, input_digest=hashlib.sha256(b"other").hexdigest()),
+            "does not belong to these bytes",
+        ),
+        (
+            lambda loaded: _stored_view(loaded, resource_id="res-another-handle"),
+            "does not belong to this resource",
+        ),
+    ],
+    ids=["undecodable", "other-bytes", "other-resource"],
+)
+async def test_an_unusable_stored_snapshot_keeps_refusing_instead_of_repairing(
+    monkeypatch, broken, reason
+) -> None:
+    """A refused adoption registers nothing, so asking again cannot convert the bytes."""
+
     def forbidden(*_args, **_kwargs):
         raise AssertionError("a broken snapshot must not trigger conversion")
 
     monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", forbidden)
-    broken = adopted_document(with_snapshot=True)
-    corrupt = replace(broken, conversion_snapshot=b'{"text":"x"}')
+    loaded = adopted_document(with_snapshot=True)
+    lineage = Loader(replace(loaded, conversion_snapshot=broken(loaded)))
     async with ResourceRegistry() as registry:
-        read, _ = tools(registry, lineage=Loader(corrupt))
+        read, _ = tools(registry, lineage=lineage)
+        for _attempt in range(2):
+            result = await call(read, resource_id=EARLIER_HANDLE)
+
+            assert result.is_error is True
+            assert reason in result.text_content
+            assert "was not converted again" in result.text_content
+        assert lineage.reads == 2, "each attempt asks the lineage rule again"
+        assert registry.manifest() == ()
+        with pytest.raises(ResourceNotFoundError):
+            registry.canonical_resource_id(EARLIER_HANDLE)
+
+
+async def test_adoption_past_the_attachment_allowance_refuses_as_a_tool_error() -> None:
+    """Adoption spends this Run's allowance, and a spent one refuses rather than raising."""
+    async with ResourceRegistry(max_attachments=1) as registry:
+        registry.register(
+            ResourceInput(filename="own.txt", declared_mime="text/plain", content=b"own")
+        )
+        read, view = tools(registry, lineage=Loader(adopted_document(with_snapshot=True)))
+        for result in (
+            await call(read, resource_id=EARLIER_HANDLE),
+            await call(view, resource_id=EARLIER_HANDLE),
+        ):
+            assert result.is_error is True
+            assert "too many attachments" in result.text_content
+            assert "was not adopted" in result.text_content
+        with pytest.raises(ResourceNotFoundError):
+            registry.canonical_resource_id(EARLIER_HANDLE)
+
+
+async def test_bytes_this_run_already_reads_keep_this_runs_view(monkeypatch) -> None:
+    """The same document attached again is one Resource with one conversion history."""
+    conversions: list[str] = []
+
+    async def convert(_content, *, filename, declared_mime):
+        conversions.append(filename)
+        return ConvertedResource(
+            text="This Run's own extraction.", visuals=(), converter="own", converter_version="1"
+        )
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", convert)
+    loaded = adopted_document(with_snapshot=True)
+    async with ResourceRegistry() as registry:
+        own = registry.register(
+            ResourceInput(
+                filename=loaded.filename, declared_mime=loaded.media_type, content=loaded.content
+            )
+        )
+        read, _ = tools(registry, lineage=Loader(loaded))
+        assert (await call(read, resource_id=own)).is_error is False
+
         result = await call(read, resource_id=EARLIER_HANDLE)
 
-        assert result.is_error is True
-        assert "was not converted again" in result.text_content
+        assert result.is_error is False
+        assert "This Run's own extraction." in result.text_content
+        assert _ADOPTED_TEXT not in result.text_content
+        assert registry.canonical_resource_id(EARLIER_HANDLE) == own
+        assert conversions == [loaded.filename], "nothing is converted a second time"
+
+
+def pdf(pages: int = 2) -> bytes:
+    images = [Image.new("RGB", (120, 160), (index * 40, 10, 10)) for index in range(pages)]
+    buffer = io.BytesIO()
+    images[0].save(buffer, "PDF", save_all=True, append_images=images[1:])
+    return buffer.getvalue()
+
+
+async def test_viewing_an_unconverted_adoption_never_opens_it_to_conversion(monkeypatch) -> None:
+    """``view`` adopts pixels only; a later ``read`` still refuses to build the text view."""
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("an adopted document without a stored view is never converted")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", forbidden)
+    lineage = Loader(
+        LineageResourceBytes(
+            resource_id=EARLIER_HANDLE,
+            origin_run_id="01a0a737-e1d3-7421-8e25-27ca8abd3dad",
+            filename="scan.pdf",
+            media_type="application/pdf",
+            content=pdf(),
+        )
+    )
+    async with ResourceRegistry() as registry:
+        read, view = tools(registry, lineage=lineage)
+        viewed = await call(view, resource_id=EARLIER_HANDLE)
+        assert viewed.is_error is False
+        adopted = registry.canonical_resource_id(EARLIER_HANDLE)
+
+        for handle in (EARLIER_HANDLE, adopted):
+            refused = await call(read, resource_id=handle)
+
+            assert refused.is_error is True
+            assert "never extracted text from scan.pdf" in refused.text_content
+        assert lineage.reads == 1, "the alias answers the later calls"
+
+
+def test_the_manifest_leaves_an_earlier_resource_id_to_adoption() -> None:
+    """The manifest must not forbid the read lineage adoption exists to serve (ADR 0013)."""
+    text = _resource_manifest_context(
+        (ResourceManifestEntry("res-now", "report.pdf", "application/pdf", "bytes", 20),)
+    )
+
+    assert "resource id printed by an earlier turn may still resolve" in text
+    assert "cursor printed by an earlier turn is historical" in text

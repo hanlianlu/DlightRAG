@@ -34,6 +34,18 @@ class ResourceDecodeError(ResourceRegistryError):
     """Raised when resource bytes are not decodable, mismatched text."""
 
 
+class ResourceNotConvertedError(ResourceRegistryError):
+    """Raised when text needs a conversion view this Run may not build.
+
+    An adopted Resource reads text only through the view stored with it:
+    converting it here would record a view the Run that registered it never had.
+    """
+
+    def __init__(self, filename: str) -> None:
+        super().__init__(f"{filename} has no stored conversion view")
+        self.filename = filename
+
+
 @dataclass(slots=True)
 class TextWindowBudget:
     """Mutable formatted resource-read allowance updated before each tool batch."""
@@ -151,6 +163,7 @@ __all__ = [
     "ResourceDecodeError",
     "ResourceInput",
     "ResourceManifestEntry",
+    "ResourceNotConvertedError",
     "ResourceNotFoundError",
     "ResourceReadResult",
     "ResourceRegistryError",

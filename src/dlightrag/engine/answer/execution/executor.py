@@ -2789,7 +2789,8 @@ class AnswerExecutor:
             if kind == "lineage_adoption":
                 # An adopted Resource: this Run's own fetch of an earlier Run's bytes.
                 # The minted handle and the recorded one both stay resolvable, because
-                # the model may be holding either after a resume.
+                # the model may be holding either after a resume, and its text still
+                # reads only through the view restored with it.
                 registry.register(
                     ResourceInput(
                         filename=resource.filename,
@@ -2797,6 +2798,7 @@ class AnswerExecutor:
                         content=content,
                     ),
                     aliases=(resource.resource_id, *raw_aliases),
+                    stored_view_only=True,
                 )
                 continue
             origin = str(capabilities.get("admission_origin") or "")
