@@ -4,7 +4,8 @@
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -14,6 +15,7 @@ from dlightrag_memory import Memory, MemoryOperation, MemoryProvenance, MemoryRe
 from dlightrag_memory._storage.pg_bm25 import index_name
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.normalize import normalized_body
+from dlightrag_memory.ports import NullEmbedder, TextEmbedder
 from dlightrag_memory.postgres import PostgresMemoryStore
 from dlightrag_memory.store import operation_change_id, operation_record_id
 
@@ -29,8 +31,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 _PG: dict[str, Any] = PG_CONN_KWARGS
 
 
-@pytest.fixture
-async def store() -> AsyncIterator[PostgresMemoryStore]:
+@asynccontextmanager
+async def _scratch_store(
+    embedder: TextEmbedder = NullEmbedder(),
+) -> AsyncIterator[PostgresMemoryStore]:
     await skip_without_postgres()
     db_name = f"dlightrag_mem_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**_PG)
@@ -39,14 +43,58 @@ async def store() -> AsyncIterator[PostgresMemoryStore]:
     finally:
         await admin.close()
     pool = await asyncpg.create_pool(**{**_PG, "database": db_name}, min_size=1, max_size=4)
-    created = PostgresMemoryStore(pool=pool)
-    await created.initialize()
     try:
-        yield created
+        if not isinstance(embedder, NullEmbedder):
+            # The host schema owns pgvector; a scratch database has to add it.
+            async with pool.acquire() as conn:
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        created = PostgresMemoryStore(pool=pool, embedder=embedder)
+        await created.initialize()
+        try:
+            yield created
+        finally:
+            await created.aclose()
     finally:
-        await created.aclose()
         await pool.close()
         await drop_database(db_name)
+
+
+@pytest.fixture
+async def store() -> AsyncIterator[PostgresMemoryStore]:
+    async with _scratch_store() as created:
+        yield created
+
+
+class _TopicEmbedder:
+    """Deterministic vectors with one axis per topic word, recording document calls."""
+
+    dim = 3
+    _TOPICS = ("tea", "coffee", "train")
+
+    def __init__(self) -> None:
+        self.document_calls: list[tuple[str, ...]] = []
+
+    @property
+    def embedding_fingerprint(self) -> str:
+        return "test:topic@local"
+
+    def _vector(self, text: str) -> list[float]:
+        lowered = text.lower()
+        return [1.0 if topic in lowered else 0.01 for topic in self._TOPICS]
+
+    async def embed_documents(self, texts: Sequence[str]) -> Sequence[list[float]]:
+        self.document_calls.append(tuple(texts))
+        return [self._vector(text) for text in texts]
+
+    async def embed_query(self, text: str) -> list[float]:
+        return self._vector(text)
+
+
+@pytest.fixture
+async def dense_store() -> AsyncIterator[tuple[PostgresMemoryStore, _TopicEmbedder]]:
+    embedder = _TopicEmbedder()
+    async with _scratch_store(embedder) as created:
+        yield created, embedder
 
 
 def _provenance(run: str = "run-1") -> MemoryProvenance:
@@ -853,7 +901,7 @@ async def test_pg_multi_row_forget_undo_db_calls_are_constant(
         insert = record_inserts[0]
         assert insert[0] == "fetch" and "RETURNING" in insert[2].upper()
         assert "jsonb_array_elements" in insert[2]  # one recordset, not N rows of params
-        assert len(json.loads(insert[3][5])) == size  # the $6::jsonb recordset holds the batch
+        assert len(json.loads(insert[3][4])) == size  # the $5::jsonb recordset holds the batch
         record_executes = [
             call for call in calls if call[0] == "execute" and "dlightrag_memory_records" in call[2]
         ]
@@ -920,6 +968,146 @@ async def test_pg_concurrent_multi_row_undo_has_one_winner(store: PostgresMemory
     # A later repeated undo still conflicts via the undone_by mark.
     third = await _undo(memory, forgotten.change_id, key="undo-c")
     assert third.outcome == "conflict"
+
+
+async def _dense_ids(store: PostgresMemoryStore, query: str) -> list[str]:
+    candidates = await store.search_candidates(owner_id="alpha", query=query, limit=10)
+    return [candidate.record.memory_id for candidate in candidates if candidate.leg == "dense"]
+
+
+async def _dense_state(store: PostgresMemoryStore, memory_id: str | None) -> tuple[Any, Any]:
+    assert memory_id is not None
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        row = await conn.fetchrow(
+            "SELECT embedding_fingerprint, embedding::text AS embedding "
+            "FROM dlightrag_memory_records WHERE owner_id = 'alpha' AND memory_id = $1",
+            uuid.UUID(memory_id),
+        )
+    assert row is not None
+    return row["embedding_fingerprint"], row["embedding"]
+
+
+async def test_pg_dense_undo_of_forget_restores_the_forgotten_vector(
+    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder],
+) -> None:
+    store, embedder = dense_store
+    memory = Memory(store)
+    remembered = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Prefers green tea.",
+        provenance=_provenance(),
+        idempotency_key="remember-1",
+    )
+    assert await _dense_ids(store, "tea") == [remembered.memory_id]
+    forgotten = await memory.forget(
+        owner_id="alpha",
+        memory_id=remembered.memory_id,
+        provenance=_provenance(),
+        idempotency_key="forget-1",
+    )
+    assert await _dense_ids(store, "tea") == []
+    document_calls = len(embedder.document_calls)
+
+    undone = await _undo(memory, forgotten.change_id, key="undo-1")
+
+    assert undone.outcome == "changed"
+    assert await _dense_ids(store, "tea") == [undone.memory_id]
+    fingerprint, vector = await _dense_state(store, undone.memory_id)
+    assert fingerprint == embedder.embedding_fingerprint
+    assert vector is not None
+    assert (fingerprint, vector) == await _dense_state(store, remembered.memory_id)
+    # The vector is inherited inside the settlement, not re-embedded.
+    assert len(embedder.document_calls) == document_calls
+
+
+async def test_pg_dense_undo_of_supersede_restores_the_original_vector(
+    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder],
+) -> None:
+    store, embedder = dense_store
+    memory = Memory(store)
+    original = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Drinks tea.",
+        provenance=_provenance(),
+        idempotency_key="remember-1",
+    )
+    replacement = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Drinks coffee.",
+        provenance=_provenance(),
+        idempotency_key="remember-2",
+        supersedes_id=original.memory_id,
+    )
+    assert await _dense_ids(store, "coffee") == [replacement.memory_id]
+    document_calls = len(embedder.document_calls)
+
+    undone = await _undo(memory, replacement.change_id, key="undo-1")
+
+    assert undone.outcome == "changed"
+    assert await _dense_ids(store, "tea") == [undone.memory_id]
+    assert await _dense_state(store, undone.memory_id) == await _dense_state(
+        store, original.memory_id
+    )
+    assert len(embedder.document_calls) == document_calls
+
+
+async def test_pg_dense_undo_keeps_each_restored_vector_in_its_own_space(
+    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder],
+) -> None:
+    store, embedder = dense_store
+    memory = Memory(store)
+    current = _record(body="Prefers tea.")
+    retired = _record(body="  prefers tea.  ")
+    unembedded = _record(body="PREFERS TEA.")
+    # A row labelled with the current space but carrying no vector, as earlier
+    # undo settlements wrote them.
+    unlabelled = _record(body="Prefers  tea.")
+    for record in (current, retired, unembedded, unlabelled):
+        await store.insert(record)
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            "UPDATE dlightrag_memory_records SET embedding_fingerprint = 'test:retired@local' "
+            "WHERE memory_id = $1",
+            uuid.UUID(retired.memory_id),
+        )
+        await conn.execute(
+            "UPDATE dlightrag_memory_records SET embedding_fingerprint = NULL, embedding = NULL "
+            "WHERE memory_id = $1",
+            uuid.UUID(unembedded.memory_id),
+        )
+        await conn.execute(
+            "UPDATE dlightrag_memory_records SET embedding = NULL WHERE memory_id = $1",
+            uuid.UUID(unlabelled.memory_id),
+        )
+    forgotten = await memory.forget(
+        owner_id="alpha",
+        body="prefers tea.",
+        provenance=_provenance(),
+        idempotency_key="forget-1",
+    )
+    assert len(forgotten.memory_ids) == 4
+    sources = {
+        memory_id: await _dense_state(store, memory_id) for memory_id in forgotten.memory_ids
+    }
+
+    undone = await _undo(memory, forgotten.change_id, key="undo-1")
+
+    assert undone.outcome == "changed"
+    restored = dict(zip(forgotten.memory_ids, undone.memory_ids, strict=True))
+    for source_id, restored_id in restored.items():
+        fingerprint, vector = await _dense_state(store, restored_id)
+        source_fingerprint, source_vector = sources[source_id]
+        assert vector == source_vector
+        assert fingerprint == (source_fingerprint if source_vector is not None else None)
+    assert await _dense_state(store, restored[retired.memory_id]) == (
+        "test:retired@local",
+        sources[retired.memory_id][1],
+    )
+    # Only the row embedded in the bound space reaches the dense leg.
+    assert await _dense_ids(store, "tea") == [restored[current.memory_id]]
 
 
 async def test_pg_list_active_page_traverses_ties_and_over_hundred_rows(

@@ -13,7 +13,10 @@ implemented here behind the neutral ports:
 
 Dense is opt-in: with the NullEmbedder the adapter runs exact + sparse only.
 A changed embedder fingerprint leaves old rows out of the dense leg (exact and
-sparse still reach them); rows are not re-embedded automatically.
+sparse still reach them); rows are not re-embedded automatically. Undo copies
+the restored record's vector and fingerprint from the row it restores inside
+the settlement transaction, so a restored record is exactly as reachable by
+the dense leg as the original was, without an embedding call.
 """
 
 from __future__ import annotations
@@ -551,7 +554,12 @@ class PostgresMemoryStore:
                     created_at=now,
                     updated_at=now,
                 )
-                await _insert_record(self, conn, record=restored, embedding=None)
+                await self._insert_restored(
+                    conn,
+                    operation=operation,
+                    restorations=((restored, before[0].memory_id),),
+                    now=now,
+                )
                 return (
                     operation_receipt(
                         operation,
@@ -655,21 +663,15 @@ class PostgresMemoryStore:
                     updated_at=now,
                 )
             )
-        if restored_records:
-            restored_rows = await conn.fetch(
-                _INSERT_RESTORED_BATCH,
-                operation.owner_id,
-                operation.provenance.origin_kind,
-                operation.provenance.origin_id,
-                self._embedder_fingerprint() if self._dense else None,
-                now,
-                _restore_batch_json(restored_records),
-            )
-            restored_ids = {str(row["memory_id"]) for row in restored_rows}
-            if len(restored_rows) != len(restored_records) or restored_ids != {
-                record.memory_id for record in restored_records
-            }:
-                raise ValueError("memory id already exists with different content")
+        await self._insert_restored(
+            conn,
+            operation=operation,
+            restorations=tuple(
+                (record, old.memory_id)
+                for record, old in zip(restored_records, before, strict=True)
+            ),
+            now=now,
+        )
         first = restored_records[0] if restored_records else None
         return (
             operation_receipt(
@@ -684,6 +686,37 @@ class PostgresMemoryStore:
             ),
             before,
         )
+
+    async def _insert_restored(
+        self,
+        conn: PGConnection,
+        *,
+        operation: MemoryOperation,
+        restorations: tuple[tuple[MemoryRecord, str], ...],
+        now: datetime,
+    ) -> None:
+        """Insert undo-restored records in one set-wise statement.
+
+        Each restoration pairs the new record with the id of the row it
+        restores; with the dense leg on, the new row inherits that row's
+        vector and fingerprint so Undo needs no embedding call and a restored
+        record is recalled through the same legs as the original.
+        """
+        if not restorations:
+            return
+        restored_rows = await conn.fetch(
+            _INSERT_RESTORED_BATCH_WITH_EMBEDDING if self._dense else _INSERT_RESTORED_BATCH,
+            operation.owner_id,
+            operation.provenance.origin_kind,
+            operation.provenance.origin_id,
+            now,
+            _restore_batch_json(restorations),
+        )
+        restored_ids = {str(row["memory_id"]) for row in restored_rows}
+        if len(restored_rows) != len(restorations) or restored_ids != {
+            record.memory_id for record, _source_id in restorations
+        }:
+            raise ValueError("memory id already exists with different content")
 
     async def clear_owner(
         self,
@@ -1019,7 +1052,7 @@ def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple
     )
 
 
-def _restore_batch_json(records: list[MemoryRecord]) -> str:
+def _restore_batch_json(restorations: tuple[tuple[MemoryRecord, str], ...]) -> str:
     """Encode one undo restoration batch as a single JSONB recordset parameter."""
     return json.dumps(
         [
@@ -1030,9 +1063,10 @@ def _restore_batch_json(records: list[MemoryRecord]) -> str:
                 "normalized_body": normalized_body(record.body),
                 "run_id": record.provenance.run_id,
                 "session_id": record.provenance.session_id,
+                "source_id": source_id,
                 "supersedes_id": record.supersedes_id,
             }
-            for record in records
+            for record, source_id in restorations
         ],
         ensure_ascii=False,
     )
@@ -1160,10 +1194,41 @@ SELECT
     record->>'session_id',
     'active',
     NULLIF(record->>'supersedes_id', '')::uuid,
+    NULL,
     $4,
-    $5,
-    $5
-FROM jsonb_array_elements($6::jsonb) AS record
+    $4
+FROM jsonb_array_elements($5::jsonb) AS record
+ON CONFLICT (owner_id, memory_id) DO NOTHING
+RETURNING memory_id
+"""
+
+# The dense variant inherits the restored row's vector with the fingerprint of
+# the space it was embedded in; a source without a vector yields neither, so a
+# fingerprint never claims a vector the row does not carry.
+_INSERT_RESTORED_BATCH_WITH_EMBEDDING = """
+INSERT INTO dlightrag_memory_records (
+    owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
+    session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at
+)
+SELECT
+    $1,
+    (record->>'memory_id')::uuid,
+    record->>'kind',
+    record->>'body',
+    record->>'normalized_body',
+    $2,
+    $3,
+    record->>'run_id',
+    record->>'session_id',
+    'active',
+    NULLIF(record->>'supersedes_id', '')::uuid,
+    CASE WHEN source.embedding IS NOT NULL THEN source.embedding_fingerprint END,
+    source.embedding,
+    $4,
+    $4
+FROM jsonb_array_elements($5::jsonb) AS record
+LEFT JOIN dlightrag_memory_records AS source
+    ON source.owner_id = $1 AND source.memory_id = (record->>'source_id')::uuid
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
 """
