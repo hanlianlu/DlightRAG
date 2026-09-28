@@ -1,19 +1,16 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Abort, generation, and poll bookkeeping for failed-document recovery.
+/** Abort and generation bookkeeping for failed-document recovery.
 
- *  The Feature still owns page/recovery rendering and toasts. This session is
- *  the single in-flight list/mutation/poll loop.
+ *  The Feature still owns page/recovery rendering and toasts, and
+ *  CorpusRunTracker follows the accepted recovery Run. This session is the
+ *  single in-flight list/mutation request.
  */
-
-const RECOVERY_POLL_INTERVAL_MS = 2000;
 
 export class FailedFileRecoverySession {
   #list: AbortController | null = null;
   #loadMore: AbortController | null = null;
   #mutation: AbortController | null = null;
   #modal: AbortController | null = null;
-  #poll: AbortController | null = null;
-  #pollTimer: number | null = null;
   #contextGeneration = 0;
   #listGeneration = 0;
 
@@ -28,7 +25,6 @@ export class FailedFileRecoverySession {
   startList(): {controller: AbortController; generation: number} {
     this.#list?.abort();
     this.#loadMore?.abort();
-    this.stopPolling();
     const generation = ++this.#listGeneration;
     const controller = new AbortController();
     this.#list = controller;
@@ -110,39 +106,6 @@ export class FailedFileRecoverySession {
     return true;
   }
 
-  schedulePoll(
-    workspace: string,
-    statusUrl: string,
-    tick: (workspace: string, statusUrl: string) => void,
-  ): void {
-    this.stopPolling();
-    this.#pollTimer = window.setTimeout(() => {
-      this.#pollTimer = null;
-      tick(workspace, statusUrl);
-    }, RECOVERY_POLL_INTERVAL_MS);
-  }
-
-  startPollRequest(): AbortController {
-    const controller = new AbortController();
-    this.#poll = controller;
-    return controller;
-  }
-
-  isPollCurrent(controller: AbortController): boolean {
-    return this.#poll === controller;
-  }
-
-  finishPollRequest(controller: AbortController): void {
-    if (this.#poll === controller) this.#poll = null;
-  }
-
-  stopPolling(): void {
-    if (this.#pollTimer !== null) window.clearTimeout(this.#pollTimer);
-    this.#pollTimer = null;
-    this.#poll?.abort();
-    this.#poll = null;
-  }
-
   cancelContext(): void {
     this.#contextGeneration += 1;
     this.#listGeneration += 1;
@@ -154,6 +117,5 @@ export class FailedFileRecoverySession {
     this.#mutation = null;
     this.#modal?.abort();
     this.#modal = null;
-    this.stopPolling();
   }
 }

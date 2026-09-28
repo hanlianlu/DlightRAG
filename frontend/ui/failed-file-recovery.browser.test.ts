@@ -158,54 +158,93 @@ it('stops polling a status the Corpus Run API refuses', async () => {
   expect(recovery.error).to.equal('Document recovery status is no longer available.');
 });
 
+function waitingRun() {
+  return {
+    ...receipt(),
+    status: 'running',
+    phase: 'waiting_for_repair',
+    repair_reason: 'Inspect upstream state.',
+    repair_remedy: 'Repair it, then resume.',
+  };
+}
+
+async function confirmRetryAll(recovery: DlFailedFileRecovery): Promise<void> {
+  recovery.querySelector<HTMLButtonElement>('.failed-file-retry')?.click();
+  const dialog = recovery.querySelector<HTMLDialogElement>('#retry-failed-files-dialog')!;
+  await waitFor(() => dialog.open);
+  dialog.returnValue = 'retry';
+  dialog.close();
+}
+
 it('offers explicit same-Run resume while waiting for operator repair', async () => {
   const requests: Array<{url: string; method: string}> = [];
+  const toasts: string[] = [];
+  let resumed = false;
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
   window.fetch = async (input, init) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     requests.push({url, method});
-    if (method === 'POST') {
-      return new Response(JSON.stringify({...receipt(), status: 'queued'}), {
-        status: 202,
-        headers: {'Content-Type': 'application/json'},
-      });
+    if (url === '/web/api/files/retry?workspace=personel') {
+      return Response.json(receipt(), {status: 202});
     }
-    return new Response(JSON.stringify(failedPage()), {
-      headers: {'Content-Type': 'application/json'},
-    });
+    if (url === '/web/api/corpus-runs/run-retry-1/resume') {
+      resumed = true;
+      return Response.json({...receipt(), status: 'queued'}, {status: 202});
+    }
+    if (url === '/web/api/corpus-runs/run-retry-1') {
+      return Response.json(resumed ? terminalRun() : waitingRun());
+    }
+    return Response.json(failedPage());
   };
 
   const recovery = mount();
+  recovery.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
   await waitFor(() => recovery.page?.failed.length === 1);
-  recovery.recovery = {
-    runId: 'run-retry-1',
-    runKind: 'corpus_mutation',
-    lane: 'corpus_mutation',
-    status: 'running',
-    statusUrl: '/web/api/corpus-runs/run-retry-1',
-    eventsUrl: '/web/api/corpus-runs/run-retry-1/events',
-    cancelUrl: '/web/api/corpus-runs/run-retry-1',
-    resumeUrl: '/web/api/corpus-runs/run-retry-1/resume',
-    workspace: 'personel',
-    fileCount: null,
-    result: null,
-    phase: 'waiting_for_repair',
-    errorKind: null,
-    errorMessage: null,
-    repairReason: 'Inspect upstream state.',
-    repairRemedy: 'Repair it, then resume.',
-  };
-  await recovery.updateComplete;
+  await confirmRetryAll(recovery);
+  await waitFor(() => recovery.textContent?.includes('Inspect upstream state.') ?? false);
 
   const resume = recovery.querySelector<HTMLButtonElement>('.failed-file-retry')!;
   expect(resume.textContent?.trim()).to.equal('Resume after repair');
-  expect(recovery.textContent).to.contain('Inspect upstream state.');
+  expect(resume.disabled).to.equal(false);
+  expect(recovery.textContent).to.contain('Repair it, then resume.');
+  const reads = requests.filter(({url}) => url === '/web/api/corpus-runs/run-retry-1').length;
   resume.click();
 
-  await waitFor(() => requests.some(({url, method}) => (
-    url === '/web/api/corpus-runs/run-retry-1/resume' && method === 'POST'
-  )));
-  expect(recovery.recovery?.runId).to.equal('run-retry-1');
+  await waitFor(() => toasts.includes('Document recovery finished.'));
+  expect(requests).to.deep.include({url: '/web/api/corpus-runs/run-retry-1/resume', method: 'POST'});
+  expect(toasts.indexOf('Corpus repair resume accepted.'))
+    .to.be.lessThan(toasts.indexOf('Document recovery finished.'));
+  expect(requests.filter(({url}) => url === '/web/api/corpus-runs/run-retry-1').length)
+    .to.equal(reads + 1);
+  expect(recovery.recovery?.status).to.equal('succeeded');
+});
+
+it('offers Retry all again once a recovery Run settles with documents still failed', async () => {
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  let completed = false;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url === '/web/api/files/retry?workspace=personel') {
+      return Response.json(receipt(), {status: 202});
+    }
+    if (url === '/web/api/corpus-runs/run-retry-1') {
+      return Response.json({...terminalRun(), status: 'failed'});
+    }
+    return Response.json(failedPage());
+  };
+
+  const recovery = mount();
+  recovery.addEventListener('dl-failed-file-recovery-complete', () => { completed = true; });
+  await waitFor(() => recovery.page?.failed.length === 1);
+  await confirmRetryAll(recovery);
+  await waitFor(() => completed);
+  await recovery.updateComplete;
+
+  const retry = recovery.querySelector<HTMLButtonElement>('.failed-file-retry')!;
+  expect(recovery.recovery?.status).to.equal('failed');
+  expect(retry.textContent?.trim()).to.equal('Retry all');
+  expect(retry.disabled).to.equal(false);
 });
 
 it('clears workspace-scoped state before loading the next workspace', async () => {

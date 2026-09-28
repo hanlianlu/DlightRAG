@@ -394,6 +394,13 @@ export const templates: Record<
   'inspector.collapseAll': '全部收起',
   'inspector.closePanel': '关闭面板',
 
+  // Corpus repair
+  'corpusRepair.reason': '语料库结果需要操作员修复。',
+  'corpusRepair.remedy': '修复语料库后恢复此同一运行。',
+  'corpusRepair.resume': '修复后恢复',
+  'corpusRepair.resumeAccepted': '语料库修复恢复请求已接受。',
+  'corpusRepair.resumeFailed': '语料库修复恢复失败。',
+
   // Inspector files
   'inspectorFiles.loadFailed': '文件加载失败。',
   'inspectorFiles.loadingOlder': '正在加载更早的文件…',
@@ -408,11 +415,6 @@ export const templates: Record<
   'inspectorFiles.corpusUpdateFinished': '语料库更新已完成。',
   'inspectorFiles.corpusUpdateFailed': '语料库更新未能完成。',
   'inspectorFiles.corpusRunStatusUnavailable': '语料库更新状态已不可用。',
-  'inspectorFiles.corpusResumeAccepted': '语料库修复恢复请求已接受。',
-  'inspectorFiles.corpusResumeFailed': '语料库修复恢复失败。',
-  'inspectorFiles.corpusRepairRequired': '语料库结果需要操作员修复。',
-  'inspectorFiles.corpusRepairRemedy': '修复后恢复此同一运行。',
-  'inspectorFiles.corpusResumeRepair': '修复后恢复',
   'inspectorFiles.deleteNotice': str`${0} 将从该工作区永久移除。`,
   'inspectorFiles.fileDeleted': '文件已删除。',
   'inspectorFiles.deletionFailed': '删除失败。',
@@ -437,11 +439,6 @@ export const templates: Record<
   'inspectorFiles.recovery.tryAgain': '重试',
   'inspectorFiles.recovery.inProgress': '文档恢复正在进行',
   'inspectorFiles.recovery.repairRequired': '需要确认语料库修复',
-  'inspectorFiles.recovery.repairReasonFallback': '需要检查上游语料库结果。',
-  'inspectorFiles.recovery.repairRemedyFallback': '修复语料库后恢复此同一运行。',
-  'inspectorFiles.recovery.resumeRepair': '修复后恢复',
-  'inspectorFiles.recovery.resumeAccepted': '语料库修复恢复请求已接受。',
-  'inspectorFiles.recovery.resumeFailed': '语料库修复恢复失败。',
   'inspectorFiles.recovery.oneNeedsAttention': '1 个文档需要处理',
   'inspectorFiles.recovery.nNeedsAttention': str`${0} 个文档需要处理`,
   'inspectorFiles.recovery.continues': '关闭此面板不会中断恢复。',

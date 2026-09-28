@@ -310,6 +310,8 @@ it('stops polling a deletion whose status the Corpus Run API refuses', async () 
     });
   };
   const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+  const toasts: string[] = [];
+  panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
   panel.active = true;
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
@@ -331,6 +333,9 @@ it('stops polling a deletion whose status the Corpus Run API refuses', async () 
   expect(statusReads).to.equal(reads);
   expect(panel.mutationRun).to.equal(null);
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/keep']);
+  expect(toasts.at(-1)).to.equal('Corpus update status is no longer available.');
+  await panel.updateComplete;
+  expect(panel.querySelector('#ingest-progress')).to.equal(null);
 });
 
 it('cancelling the delete dialog keeps the file and restores trigger focus', async () => {
@@ -669,5 +674,58 @@ it('a refused upload without a server reason shows the panel copy in the reader 
     expect(toasts.at(-1)).to.equal('上传失败。');
   } finally {
     await setLanguagePreference('auto');
+  }
+});
+
+it('parks an upload Run for operator repair and resumes that same Run', async () => {
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  const toasts: string[] = [];
+  let statusReads = 0;
+  let resumed = false;
+  window.fetch = async (input, init) => {
+    const url = new URL(String(input), window.location.origin);
+    if (url.pathname.endsWith('/files/upload')) {
+      return Response.json(corpusReceipt('run-upload'), {status: 202});
+    }
+    if (url.pathname === '/web/api/corpus-runs/run-upload/resume' && init?.method === 'POST') {
+      resumed = true;
+      return Response.json(corpusReceipt('run-upload', 'queued'), {status: 202});
+    }
+    if (url.pathname === '/web/api/corpus-runs/run-upload') {
+      statusReads += 1;
+      return Response.json(resumed
+        ? corpusReceipt('run-upload', 'succeeded')
+        : {...corpusReceipt('run-upload', 'running'), phase: 'waiting_for_repair'});
+    }
+    if (url.pathname.endsWith('/files/failed')) {
+      return Response.json({workspace: 'default', failed: [], next_cursor: null});
+    }
+    return Response.json(snapshot([], null));
+  };
+  try {
+    const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+    panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+    document.body.appendChild(panel);
+    panel.active = true;
+    await waitFor(() => panel.loading === false);
+
+    await panel.upload([new File(['report'], 'report.pdf', {type: 'application/pdf'})]);
+    await waitFor(() => panel.mutationRun?.phase === 'waiting_for_repair');
+    await panel.updateComplete;
+    const progress = panel.querySelector<HTMLElement>('#ingest-progress')!;
+    expect(progress.getAttribute('role')).to.equal('status');
+    expect(progress.textContent).to.contain('The Corpus outcome needs operator repair.');
+    expect(progress.textContent).to.contain('Repair the Corpus, then resume this same Run.');
+    expect(statusReads).to.equal(1);
+
+    progress.querySelector<HTMLButtonElement>('button')!.click();
+    await waitFor(() => toasts.includes('Corpus update finished.'));
+    expect(toasts.indexOf('Corpus repair resume accepted.'))
+      .to.be.lessThan(toasts.indexOf('Corpus update finished.'));
+    expect(statusReads).to.equal(2);
+    expect(panel.mutationRun?.status).to.equal('succeeded');
+  } finally {
+    window.setTimeout = originalSetTimeout;
   }
 });

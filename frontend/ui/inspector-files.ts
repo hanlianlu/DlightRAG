@@ -4,20 +4,13 @@ import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
-  corpusRunActive,
-  corpusRunStatusRefused,
-  getCorpusRunStatus,
-  resumeCorpusRun,
-  type WebCorpusRunReceipt,
-  type WebCorpusRunStatus,
-} from '../api/corpus-runs.ts';
-import {
   deleteFileRequest,
   getFilePanel,
   uploadFileBatch,
   type WebFilePanelSnapshot,
 } from '../api/files.ts';
 import {icon} from '../design-system/index.ts';
+import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
 import {apiErrorMessage, isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
@@ -25,23 +18,11 @@ import {withRelativePath} from './folder-upload.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
 import {deleteWorkspaceRequest, resetWorkspaceRequest} from '../api/workspaces.ts';
 import {requestToast} from './toast-request.ts';
+import {corpusRepairNotice, resumeRepairLabel, resumeRepairResult} from './corpus-repair.ts';
 import './failed-file-recovery.ts';
 import fileStyles from '../styles/inspector-files.module.css';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import {InspectorFilesSession} from './inspector-files-session.ts';
-
-type MutationRun = WebCorpusRunReceipt | (
-  WebCorpusRunStatus & Pick<WebCorpusRunReceipt, 'workspace' | 'fileCount'>
-);
-
-function waitingForRepair(
-  run: MutationRun | null | undefined,
-): run is WebCorpusRunStatus & Pick<WebCorpusRunReceipt, 'workspace' | 'fileCount'> {
-  return run !== null
-    && run !== undefined
-    && 'phase' in run
-    && run.phase === 'waiting_for_repair';
-}
 
 /** One destructive Workspace action awaiting typed confirmation. */
 interface WorkspaceActionIntent {
@@ -66,7 +47,6 @@ export class DlInspectorFiles extends LightElement {
     error: {state: true},
     uploading: {state: true},
     acceptedFiles: {state: true},
-    mutationRun: {state: true},
     filesLoadMoreState: {state: true},
     actionIntent: {state: true},
     actionPending: {state: true},
@@ -80,7 +60,6 @@ export class DlInspectorFiles extends LightElement {
   declare error: string | null;
   declare uploading: boolean;
   declare acceptedFiles: number;
-  declare mutationRun: MutationRun | null;
   declare filesLoadMoreState: 'idle' | 'loading' | 'error';
 
   declare actionIntent: WorkspaceActionIntent | null;
@@ -93,6 +72,11 @@ export class DlInspectorFiles extends LightElement {
   #workspace = '';
   #requestGeneration = 0;
   readonly #session = new InspectorFilesSession();
+  readonly #tracker = new CorpusRunTracker({
+    onChange: () => { this.requestUpdate(); },
+    onSettled: (run) => { void this.#mutationSettled(run); },
+    onLost: () => { void this.#mutationLost(); },
+  });
   #olderFilesFlight: Promise<void> | null = null;
   #olderFilesAnnouncement = '';
   #restoreOlderFocus = false;
@@ -108,7 +92,6 @@ export class DlInspectorFiles extends LightElement {
     this.error = null;
     this.uploading = false;
     this.acceptedFiles = 0;
-    this.mutationRun = null;
     this.filesLoadMoreState = 'idle';
     this.actionIntent = null;
     this.actionPending = false;
@@ -140,13 +123,18 @@ export class DlInspectorFiles extends LightElement {
   }
 
   get hasActiveMutation(): boolean {
-    return this.#session.mutating;
+    return this.#session.mutating || this.#tracker.resuming;
+  }
+
+  /** The accepted Corpus Mutation this panel follows, kept after it settles. */
+  get mutationRun(): TrackedCorpusRun | null {
+    return this.#tracker.run;
   }
 
   get #deletingWorkspace(): boolean {
     return this.#deleteRunId !== null
       && this.mutationRun?.runId === this.#deleteRunId
-      && corpusRunActive(this.mutationRun);
+      && this.#tracker.active;
   }
 
   async reload(showLoading = true): Promise<void> {
@@ -158,14 +146,12 @@ export class DlInspectorFiles extends LightElement {
       this.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.close();
       this.snapshot = null;
       this.acceptedFiles = 0;
-      this.mutationRun = null;
+      this.#tracker.clear();
       this.#deleteRunId = null;
-      this.#stopPolling();
     }
     this.#workspace = workspace;
     this.uploading = false;
     const {controller, generation} = this.#startRequest();
-    this.#stopPolling();
     if (showLoading) this.loading = true;
     this.error = null;
     try {
@@ -175,7 +161,7 @@ export class DlInspectorFiles extends LightElement {
         throw new Error('file panel response changed workspace identity');
       }
       this.snapshot = snapshot;
-      if (!corpusRunActive(this.mutationRun)) this.acceptedFiles = 0;
+      if (!this.#tracker.active) this.acceptedFiles = 0;
     } catch (error) {
       if (
         isAbortError(error)
@@ -191,8 +177,7 @@ export class DlInspectorFiles extends LightElement {
     } finally {
       if (this.#session.finishRequest(controller)) {
         this.loading = false;
-        if (this.active && this.isConnected && corpusRunActive(this.mutationRun)
-            && !waitingForRepair(this.mutationRun)) void this.#poll(workspace);
+        if (this.active && this.isConnected) this.#tracker.wake();
       }
     }
   }
@@ -289,7 +274,6 @@ export class DlInspectorFiles extends LightElement {
     this.#invalidateOlderFiles();
     this.#workspace = workspace;
     const {controller, generation} = this.#startRequest();
-    this.#stopPolling();
     this.#beginMutation();
     this.uploading = true;
     this.error = null;
@@ -298,13 +282,12 @@ export class DlInspectorFiles extends LightElement {
     try {
       const receipt = await uploadFileBatch(workspace, files, controller.signal);
       if (!this.#isCurrent(controller, workspace, generation)) return;
-      this.mutationRun = receipt;
       this.acceptedFiles = receipt.fileCount ?? files.length;
       requestToast(this, {
         message: msg('Files received — Corpus update accepted', {id: 'inspectorFiles.filesReceived'}),
         duration: 3000,
       });
-      void this.#poll(workspace);
+      this.#tracker.follow(receipt);
     } catch (error) {
       if (
         isAbortError(error)
@@ -330,6 +313,7 @@ export class DlInspectorFiles extends LightElement {
     this.#actionClosed();
     this.#invalidateOlderFiles();
     this.#session.pause();
+    this.#tracker.pause();
     this.uploading = false;
   }
 
@@ -346,19 +330,17 @@ export class DlInspectorFiles extends LightElement {
     if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger()) !== 'confirm') return;
     const workspace = this.handles.ingest.workspace;
     this.#invalidateOlderFiles();
-    this.#stopPolling();
     const {controller, generation} = this.#startRequest();
     this.#beginMutation();
     this.error = null;
     try {
       const receipt = await deleteFileRequest(workspace, filePath, controller.signal);
       if (!this.#isCurrent(controller, workspace, generation)) return;
-      this.mutationRun = receipt;
       requestToast(this, {
         message: msg('File deletion accepted.', {id: 'inspectorFiles.fileDeleted'}),
         duration: 3000,
       });
-      void this.#poll(workspace);
+      this.#tracker.follow(receipt);
     } catch (error) {
       if (
         isAbortError(error)
@@ -376,104 +358,44 @@ export class DlInspectorFiles extends LightElement {
     }
   }
 
-  async #poll(workspace: string): Promise<void> {
-    const receipt = this.mutationRun;
-    if (!receipt) return;
-    const controller = this.#session.startPollRequest();
-    try {
-      const status = await getCorpusRunStatus(receipt.statusUrl, controller.signal);
-      if (controller.signal.aborted || workspace !== this.handles.ingest.workspace
-          || !this.active || !this.isConnected) return;
-      if (this.mutationRun?.runId !== receipt.runId) return;
-      this.mutationRun = {
-        ...status,
-        workspace: receipt.workspace,
-        fileCount: receipt.fileCount,
-      };
-      if (waitingForRepair(this.mutationRun)) return;
-      if (corpusRunActive(status)) {
-        this.#schedulePoll(workspace);
-        return;
-      }
-      this.acceptedFiles = 0;
-      if (receipt.runId === this.#deleteRunId) {
-        this.#deleteRunId = null;
-        await this.#settleWorkspaceDelete(workspace, status.status === 'succeeded');
-        return;
-      }
-      requestToast(this, {
-        message: status.status === 'succeeded'
-          ? msg('Corpus update finished.', {id: 'inspectorFiles.corpusUpdateFinished'})
-          : msg('Corpus update did not finish.', {id: 'inspectorFiles.corpusUpdateFailed'}),
-        duration: 3000,
-      });
-      await this.reload(false);
-      const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
-      await recovery?.refresh(false);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      if (workspace !== this.handles.ingest.workspace || !this.active || !this.isConnected) return;
-      if (!corpusRunStatusRefused(error)) {
-        this.#schedulePoll(workspace);
-        return;
-      }
-      if (this.mutationRun?.runId !== receipt.runId) return;
-      this.mutationRun = null;
-      this.acceptedFiles = 0;
-      if (receipt.runId === this.#deleteRunId) this.#deleteRunId = null;
-      requestToast(this, {
-        message: msg('Corpus update status is no longer available.', {
-          id: 'inspectorFiles.corpusRunStatusUnavailable',
-        }),
-        duration: 3000,
-      });
-      await this.reload(false);
-    } finally {
-      this.#session.finishPollRequest(controller);
-    }
-  }
-
-  async #resumeMutation(): Promise<void> {
-    const waiting = this.mutationRun;
+  async #mutationSettled(run: TrackedCorpusRun): Promise<void> {
     const workspace = this.handles.ingest.workspace;
-    if (!waitingForRepair(waiting) || this.#session.mutating) return;
-    const {controller, generation} = this.#startRequest();
-    this.#beginMutation();
-    try {
-      const status = await resumeCorpusRun(waiting.resumeUrl, controller.signal);
-      if (!this.#isCurrent(controller, workspace, generation)) return;
-      this.mutationRun = {
-        ...status,
-        workspace: waiting.workspace,
-        fileCount: waiting.fileCount,
-      };
-      requestToast(this, {
-        message: msg('Corpus repair resume accepted.', {
-          id: 'inspectorFiles.corpusResumeAccepted',
-        }),
-        duration: 3000,
-      });
-      if (corpusRunActive(status) && !waitingForRepair(this.mutationRun)) {
-        this.#schedulePoll(workspace);
-      }
-    } catch (error) {
-      if (
-        isAbortError(error)
-        || !this.#isCurrent(controller, workspace, generation)
-      ) return;
-      const message = msg('Corpus repair resume failed.', {
-        id: 'inspectorFiles.corpusResumeFailed',
-      });
-      this.error = message;
-      requestToast(this, {message, duration: 3000});
-    } finally {
-      this.#finishMutation();
-      this.#session.finishRequest(controller);
+    this.acceptedFiles = 0;
+    if (run.runId === this.#deleteRunId) {
+      this.#deleteRunId = null;
+      await this.#settleWorkspaceDelete(workspace, run.status === 'succeeded');
+      return;
     }
+    requestToast(this, {
+      message: run.status === 'succeeded'
+        ? msg('Corpus update finished.', {id: 'inspectorFiles.corpusUpdateFinished'})
+        : msg('Corpus update did not finish.', {id: 'inspectorFiles.corpusUpdateFailed'}),
+      duration: 3000,
+    });
+    await this.reload(false);
+    const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
+    await recovery?.refresh(false);
   }
 
-  #schedulePoll(workspace: string): void {
-    this.#session.schedulePoll(workspace, (next) => { void this.#poll(next); });
+  /** The accepted Run's status is refused now; show the Corpus as it is. */
+  async #mutationLost(): Promise<void> {
+    this.acceptedFiles = 0;
+    this.#deleteRunId = null;
+    requestToast(this, {
+      message: msg('Corpus update status is no longer available.', {
+        id: 'inspectorFiles.corpusRunStatusUnavailable',
+      }),
+      duration: 3000,
+    });
+    await this.reload(false);
+  }
+
+  async #resumeRepair(): Promise<void> {
+    const outcome = await this.#tracker.resume();
+    if (outcome === 'stale') return;
+    const message = resumeRepairResult(outcome);
+    if (outcome === 'failed') this.error = message;
+    requestToast(this, {message, duration: 3000});
   }
 
   #invalidateOlderFiles(): void {
@@ -482,10 +404,6 @@ export class DlInspectorFiles extends LightElement {
     this.filesLoadMoreState = 'idle';
     this.#olderFilesAnnouncement = '';
     this.#restoreOlderFocus = false;
-  }
-
-  #stopPolling(): void {
-    this.#session.stopPolling();
   }
 
   #startRequest(): {controller: AbortController; generation: number} {
@@ -559,7 +477,7 @@ export class DlInspectorFiles extends LightElement {
     kind: WorkspaceActionIntent['kind'],
     trigger: HTMLElement,
   ): Promise<void> {
-    if (!this.active || this.loading || this.hasActiveMutation || corpusRunActive(this.mutationRun)) return;
+    if (!this.active || this.loading || this.hasActiveMutation || this.#tracker.active) return;
     const workspace = this.handles.ingest.workspace;
     this.#actionReturnFocus = trigger;
     this.actionIntent = {kind, workspace};
@@ -641,9 +559,8 @@ export class DlInspectorFiles extends LightElement {
     if (!intent || this.actionPending || !this.actionConfirmed) return;
     const {kind, workspace} = intent;
     if (workspace !== this.handles.ingest.workspace || !this.active || this.hasActiveMutation
-        || corpusRunActive(this.mutationRun)) return;
+        || this.#tracker.active) return;
     this.#invalidateOlderFiles();
-    this.#stopPolling();
     const {controller, generation} = this.#startRequest();
     this.#beginMutation();
     this.actionPending = true;
@@ -652,15 +569,14 @@ export class DlInspectorFiles extends LightElement {
         ? await deleteWorkspaceRequest(workspace, controller.signal)
         : await resetWorkspaceRequest(workspace, controller.signal);
       if (!this.#isCurrent(controller, workspace, generation)) return;
-      this.mutationRun = receipt;
       this.#deleteRunId = kind === 'delete' ? receipt.runId : null;
+      this.#tracker.follow(receipt);
       this.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.close();
       requestToast(this, {
         message: kind === 'delete'
           ? msg(str`Workspace deletion accepted for ${workspace}.`, {id: 'inspectorFiles.deleteWorkspaceAccepted'})
           : msg(str`Corpus reset accepted for ${workspace}.`, {id: 'inspectorFiles.resetAccepted'}),
       });
-      void this.#poll(workspace);
     } catch (error) {
       if (!isAbortError(error) && this.#isCurrent(controller, workspace, generation)) {
         requestToast(this, {
@@ -735,28 +651,23 @@ export class DlInspectorFiles extends LightElement {
     `;
   }
 
-  #progress(run: MutationRun | null): TemplateResult | typeof nothing {
-    if (waitingForRepair(run)) {
+  #progress(): TemplateResult | typeof nothing {
+    const run = this.#tracker.run;
+    if (run && this.#tracker.waitingForRepair) {
       return html`
         <div id="ingest-progress" role="status">
           <div class=${fileStyles['file-status']}>
-            <span>
-              ${run.repairReason ?? msg('The corpus outcome needs operator repair.', {
-                id: 'inspectorFiles.corpusRepairRequired',
-              })}
-              ${run.repairRemedy ?? msg('Repair it, then resume this same Run.', {
-                id: 'inspectorFiles.corpusRepairRemedy',
-              })}
-            </span>
+            <span>${corpusRepairNotice(run)}</span>
             <button type="button" ?disabled=${this.hasActiveMutation}
-                    @click=${() => { void this.#resumeMutation(); }}>
-              ${msg('Resume after repair', {id: 'inspectorFiles.corpusResumeRepair'})}
+                    aria-busy=${this.#tracker.resuming ? 'true' : 'false'}
+                    @click=${() => { void this.#resumeRepair(); }}>
+              ${resumeRepairLabel()}
             </button>
           </div>
         </div>
       `;
     }
-    if (!corpusRunActive(run)) return nothing;
+    if (!this.#tracker.active) return nothing;
     return html`
       <div id="ingest-progress">
         <div class=${fileStyles['file-status']}>
@@ -772,9 +683,9 @@ export class DlInspectorFiles extends LightElement {
   protected override render(): TemplateResult {
     const snapshot = this.snapshot;
     const files = snapshot?.files ?? [];
-    const actionsBusy = this.loading || this.hasActiveMutation || corpusRunActive(this.mutationRun);
+    const actionsBusy = this.loading || this.hasActiveMutation || this.#tracker.active;
     return html`
-      ${this.#progress(this.mutationRun)}
+      ${this.#progress()}
       ${this.error ? html`<div class="file-error" role="alert">${this.error}</div>` : nothing}
       <div class=${`${fileStyles['upload-zone']}${this.uploading ? ` ${fileStyles['is-uploading']}` : ''}`} id="upload-zone">
         <button type="button" class=${fileStyles['upload-zone-file-action']}
@@ -835,10 +746,10 @@ export class DlInspectorFiles extends LightElement {
           ${this.#olderFilesAnnouncement}
         </span>
       ` : nothing}
-      ${!this.loading && !this.error && files.length === 0 && !corpusRunActive(this.mutationRun) ? html`
+      ${!this.loading && !this.error && files.length === 0 && !this.#tracker.active ? html`
         <div class="empty-state">${msg(str`No files ingested in workspace “${this.#workspace}”.`, {id: 'inspectorFiles.emptyState'})}</div>
       ` : nothing}
-      ${this.acceptedFiles > 0 && corpusRunActive(this.mutationRun) ? html`
+      ${this.acceptedFiles > 0 && this.#tracker.active ? html`
         <div class=${`${fileStyles['ingest-queue-notice']} ${fileStyles['ingest-queue-notice--inline']}`}>
           ${msg(str`${this.acceptedFiles} new file(s) accepted for ingest`, {id: 'inspectorFiles.acceptedForIngest'})}
         </div>

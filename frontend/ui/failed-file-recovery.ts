@@ -4,38 +4,23 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
-import {
-  corpusRunActive,
-  corpusRunStatusRefused,
-  getCorpusRunStatus,
-  resumeCorpusRun,
-  type WebCorpusRunReceipt,
-  type WebCorpusRunStatus,
-} from '../api/corpus-runs.ts';
+import {corpusRunActive} from '../api/corpus-runs.ts';
 import {
   getFailedFiles,
   startFailedFileRetry,
   type WebFailedFilesPage,
 } from '../api/files.ts';
 import {ApiError} from '../api/wire.ts';
+import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {corpusRepairNotice, resumeRepairLabel, resumeRepairResult} from './corpus-repair.ts';
 import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import recoveryStyles from '../styles/failed-file-recovery.module.css';
 import {FailedFileRecoverySession} from './failed-file-recovery-session.ts';
 
 type PageLoadState = 'idle' | 'loading' | 'error';
-type RecoveryRun = WebCorpusRunReceipt | (WebCorpusRunStatus & {workspace: string});
-
-function waitingForRepair(
-  run: RecoveryRun | null | undefined,
-): run is WebCorpusRunStatus & {workspace: string} {
-  return run !== null
-    && run !== undefined
-    && 'phase' in run
-    && run.phase === 'waiting_for_repair';
-}
 
 function normalizePage(page: WebFailedFilesPage): WebFailedFilesPage {
   return {
@@ -84,7 +69,6 @@ export class DlFailedFileRecovery extends LightElement {
     loading: {state: true},
     error: {state: true},
     loadMoreState: {state: true},
-    recovery: {state: true},
     recoveryPending: {state: true},
   };
 
@@ -94,10 +78,22 @@ export class DlFailedFileRecovery extends LightElement {
   declare loading: boolean;
   declare error: string | null;
   declare loadMoreState: PageLoadState;
-  declare recovery: RecoveryRun | null;
   declare recoveryPending: boolean;
 
   readonly #session = new FailedFileRecoverySession();
+  readonly #tracker = new CorpusRunTracker({
+    onChange: () => { this.requestUpdate(); },
+    onSettled: (run) => { void this.#settleRecovery(run); },
+    onLost: (error) => {
+      this.page = null;
+      this.error = recoveryRequestError(
+        error,
+        msg('Document recovery status is no longer available.', {
+          id: 'inspectorFiles.recovery.statusUnavailable',
+        }),
+      );
+    },
+  });
   #retryTrigger: HTMLElement | null = null;
 
   constructor() {
@@ -109,7 +105,6 @@ export class DlFailedFileRecovery extends LightElement {
     this.loading = false;
     this.error = null;
     this.loadMoreState = 'idle';
-    this.recovery = null;
     this.recoveryPending = false;
   }
 
@@ -118,14 +113,19 @@ export class DlFailedFileRecovery extends LightElement {
     super.disconnectedCallback();
   }
 
+  /** The accepted recovery Run, kept after it settles. */
+  get recovery(): TrackedCorpusRun | null {
+    return this.#tracker.run;
+  }
+
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has('workspace')) {
       this.#session.cancelContext();
+      this.#tracker.clear();
       this.loading = false;
       this.recoveryPending = false;
       this.#retryTrigger = null;
       this.page = null;
-      this.recovery = null;
       this.error = null;
       this.loadMoreState = 'idle';
     }
@@ -149,10 +149,6 @@ export class DlFailedFileRecovery extends LightElement {
       const response = await getFailedFiles(workspace, null, controller.signal);
       if (!this.#session.isListCurrent(controller, workspace, this.workspace, generation, this.active)) return;
       this.page = normalizePage(response);
-      const recovery = this.recovery;
-      if (corpusRunActive(recovery) && !waitingForRepair(recovery)) {
-        this.#schedulePoll(workspace, recovery.statusUrl);
-      }
     } catch (error) {
       if (isAbortError(error) || !this.#session.isListCurrent(controller, workspace, this.workspace, generation, this.active)) return;
       this.page = null;
@@ -162,17 +158,17 @@ export class DlFailedFileRecovery extends LightElement {
           id: 'inspectorFiles.recovery.loadFailed',
         }),
       );
-      const recovery = this.recovery;
-      if (corpusRunActive(recovery) && !waitingForRepair(recovery)) {
-        this.#schedulePoll(workspace, recovery.statusUrl);
-      }
     } finally {
-      if (this.#session.finishList(controller)) this.loading = false;
+      if (this.#session.finishList(controller)) {
+        this.loading = false;
+        if (this.active && this.isConnected) this.#tracker.wake();
+      }
     }
   }
 
   pause(): void {
     this.#session.cancelContext();
+    this.#tracker.pause();
     this.loading = false;
     this.recoveryPending = false;
     this.#retryTrigger = null;
@@ -198,10 +194,10 @@ export class DlFailedFileRecovery extends LightElement {
     }
 
     const failed = this.page?.failed ?? [];
-    const repairRun = waitingForRepair(this.recovery) ? this.recovery : null;
+    const repairRun = this.#tracker.waitingForRepair ? this.recovery : null;
     const repairWaiting = repairRun !== null;
-    const recoveryActive = corpusRunActive(this.recovery) && !repairWaiting;
-    const recoveryBusy = this.recovery !== null && !repairWaiting;
+    const recoveryActive = this.#tracker.active && !repairWaiting;
+    const pending = this.recoveryPending || this.#tracker.resuming;
     if (failed.length === 0 && !recoveryActive && !repairWaiting) return nothing;
     const count = `${failed.length}${this.page?.nextCursor ? '+' : ''}`;
     const heading = repairWaiting
@@ -280,14 +276,9 @@ export class DlFailedFileRecovery extends LightElement {
                 </button>
               </div>
             ` : nothing}
-            ${repairWaiting ? html`
+            ${repairRun ? html`
               <div class=${recoveryStyles['failed-file-recovery-note']} role="status">
-                <strong>${repairRun?.repairReason ?? msg('The upstream corpus outcome needs inspection.', {
-                  id: 'inspectorFiles.recovery.repairReasonFallback',
-                })}</strong>
-                <span>${repairRun?.repairRemedy ?? msg('Repair the corpus, then resume this same Run.', {
-                  id: 'inspectorFiles.recovery.repairRemedyFallback',
-                })}</span>
+                ${corpusRepairNotice(repairRun)}
               </div>
             ` : html`
               <div class=${recoveryStyles['failed-file-recovery-note']}>
@@ -299,11 +290,11 @@ export class DlFailedFileRecovery extends LightElement {
           </div>
         </details>
         <button class=${`dl-btn ${recoveryStyles['failed-file-retry']}`} type="button"
-                ?disabled=${recoveryBusy || this.recoveryPending || failed.length === 0}
-                aria-busy=${this.recoveryPending ? 'true' : 'false'}
+                ?disabled=${recoveryActive || pending || (!repairWaiting && failed.length === 0)}
+                aria-busy=${pending ? 'true' : 'false'}
                 @click=${this.#confirmRetry}>
           ${repairWaiting
-            ? msg('Resume after repair', {id: 'inspectorFiles.recovery.resumeRepair'})
+            ? resumeRepairLabel()
             : recoveryActive
               ? msg('Running…', {id: 'inspectorFiles.recovery.running'})
               : msg('Retry all', {id: 'inspectorFiles.recovery.retryAll'})}
@@ -341,9 +332,8 @@ export class DlFailedFileRecovery extends LightElement {
       if (isAbortError(error) || !this.#session.isLoadMoreCurrent(controller, generation)) return;
       const status = refusalStatus(error);
       if (status !== null && [401, 403, 409].includes(status)) {
-        this.#stopPolling();
+        this.#tracker.clear();
         this.page = null;
-        this.recovery = null;
         this.error = recoveryRequestError(
           error,
           msg('Document status is temporarily unavailable.', {
@@ -361,12 +351,12 @@ export class DlFailedFileRecovery extends LightElement {
 
   #confirmRetry = async (event: Event): Promise<void> => {
     const trigger = event.currentTarget as HTMLButtonElement;
-    if (waitingForRepair(this.recovery)) {
+    if (this.#tracker.waitingForRepair) {
       await this.#resumeRepair();
       return;
     }
     const dialog = this.querySelector<HTMLDialogElement>('#retry-failed-files-dialog');
-    if (!dialog || this.recoveryPending || corpusRunActive(this.recovery)) return;
+    if (!dialog || this.recoveryPending || this.#tracker.active) return;
     this.#retryTrigger = trigger;
     const controller = this.#session.startModal();
     const result = await modalResult(
@@ -382,22 +372,19 @@ export class DlFailedFileRecovery extends LightElement {
 
   async #startRetry(): Promise<void> {
     const workspace = this.workspace;
-    if (!workspace || this.recoveryPending || this.recovery !== null) return;
+    if (!workspace || this.recoveryPending || this.#tracker.active) return;
     const controller = this.#session.startMutation();
     const generation = this.#session.contextGeneration;
     this.recoveryPending = true;
     try {
       const run = await startFailedFileRetry(workspace, controller.signal);
       if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
-      this.recovery = run;
+      this.#tracker.follow(run);
       if (corpusRunActive(run)) {
         requestToast(this, {
           message: msg('Document recovery started.', {id: 'inspectorFiles.recovery.started'}),
           duration: 3000,
         });
-        this.#schedulePoll(workspace, run.statusUrl);
-      } else {
-        await this.#settleRecovery(run);
       }
     } catch (error) {
       if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
@@ -416,91 +403,14 @@ export class DlFailedFileRecovery extends LightElement {
   }
 
   async #resumeRepair(): Promise<void> {
-    const waiting = this.recovery;
-    const workspace = this.workspace;
-    if (!waitingForRepair(waiting) || this.recoveryPending || !workspace) return;
-    const controller = this.#session.startMutation();
-    const generation = this.#session.contextGeneration;
-    this.recoveryPending = true;
-    try {
-      const resumed = await resumeCorpusRun(waiting.resumeUrl, controller.signal);
-      if (!this.#session.isMutationCurrent(
-        controller, workspace, this.workspace, generation, this.active,
-      )) return;
-      this.recovery = {...resumed, workspace};
-      requestToast(this, {
-        message: msg('Corpus repair resume accepted.', {
-          id: 'inspectorFiles.recovery.resumeAccepted',
-        }),
-        duration: 3000,
-      });
-      if (corpusRunActive(resumed) && !waitingForRepair(this.recovery)) {
-        this.#schedulePoll(workspace, resumed.statusUrl);
-      } else if (!waitingForRepair(this.recovery)) {
-        await this.#settleRecovery(this.recovery);
-      }
-    } catch (error) {
-      if (isAbortError(error) || !this.#session.isMutationCurrent(
-        controller, workspace, this.workspace, generation, this.active,
-      )) return;
-      requestToast(this, {
-        message: msg('Corpus repair resume failed.', {
-          id: 'inspectorFiles.recovery.resumeFailed',
-        }),
-        duration: 3000,
-      });
-    } finally {
-      if (this.#session.finishMutation(controller)) this.recoveryPending = false;
-    }
+    const outcome = await this.#tracker.resume();
+    if (outcome === 'stale') return;
+    requestToast(this, {message: resumeRepairResult(outcome), duration: 3000});
   }
 
-  async #poll(workspace: string, statusUrl: string): Promise<void> {
-    const controller = this.#session.startPollRequest();
-    try {
-      const status = await getCorpusRunStatus(statusUrl, controller.signal);
-      if (
-        !this.#session.isPollCurrent(controller)
-        || workspace !== this.workspace
-        || !this.active
-        || !this.isConnected
-      ) return;
-      const run = {...status, workspace};
-      this.recovery = run;
-      if (waitingForRepair(run)) return;
-      if (corpusRunActive(run)) {
-        this.#schedulePoll(workspace, statusUrl);
-        return;
-      }
-      await this.#settleRecovery(run);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      if (
-        !this.#session.isPollCurrent(controller)
-        || workspace !== this.workspace
-        || !this.active
-        || !this.isConnected
-      ) return;
-      if (corpusRunStatusRefused(error)) {
-        this.page = null;
-        this.recovery = null;
-        this.error = recoveryRequestError(
-          error,
-          msg('Document recovery status is no longer available.', {
-            id: 'inspectorFiles.recovery.statusUnavailable',
-          }),
-        );
-        return;
-      }
-      this.#schedulePoll(workspace, statusUrl);
-    } finally {
-      this.#session.finishPollRequest(controller);
-    }
-  }
-
-  async #settleRecovery(run: RecoveryRun): Promise<void> {
+  async #settleRecovery(run: TrackedCorpusRun): Promise<void> {
     const workspace = this.workspace;
     const generation = this.#session.contextGeneration;
-    this.recovery = run;
     await this.refresh(false);
     if (
       workspace !== this.workspace
@@ -512,27 +422,12 @@ export class DlFailedFileRecovery extends LightElement {
       bubbles: true,
       composed: true,
     }));
-    if (run.status === 'succeeded') {
-      requestToast(this, {
-        message: msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'}),
-        duration: 3000,
-      });
-      return;
-    }
     requestToast(this, {
-      message: msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
+      message: run.status === 'succeeded'
+        ? msg('Document recovery finished.', {id: 'inspectorFiles.recovery.finished'})
+        : msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
       duration: 3000,
     });
-  }
-
-  #schedulePoll(workspace: string, statusUrl: string): void {
-    this.#session.schedulePoll(workspace, statusUrl, (nextWorkspace, nextStatusUrl) => {
-      void this.#poll(nextWorkspace, nextStatusUrl);
-    });
-  }
-
-  #stopPolling(): void {
-    this.#session.stopPolling();
   }
 
   #restoreRetryFocus(): void {
