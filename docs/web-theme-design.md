@@ -80,19 +80,22 @@ The popover uses:
 - synchronized `aria-checked` and a visual checkmark;
 - `Monitor System`, `Sun Light`, and `Moon Dark` rows.
 
-Interaction behavior:
+Interaction behavior (the product-wide menu contract):
 
-- click, Enter, or Space opens the menu;
-- ArrowDown opens and focuses the active choice;
-- ArrowUp, ArrowDown, Home, and End provide roving navigation;
+- click, ArrowDown, Enter, or Space opens the menu on the first choice;
+  ArrowUp opens it on the last;
+- ArrowUp and ArrowDown move with wrapping, Home and End jump to the ends, and
+  a typed letter moves to the next choice whose label starts with it;
 - Enter or Space applies a choice and closes the menu;
 - Escape closes and restores trigger focus;
 - outside pointer click closes while preserving the clicked target's natural focus;
 - a choice applies immediately without reload or a server request.
 
-The generic popover dismissal helper owns the menu lifecycle. The shared
-`installRovingArrowNavigation` helper accepts a role selector and provides the
-same keyboard model to theme, workspace, and file menus.
+The generic popover dismissal helper owns the menu lifecycle. The design
+system's `dl-menu` element applies the in-menu keys, and its
+`menuButtonFocus()` maps the button's keys, so the theme, answer mode, agent
+effort, and conversation actions menus behave identically. The workspace and
+file pickers are dialogs, but reuse the same `rovingFocusKeydown()` step.
 
 Semantic icon geometry is generated from the pinned, generation-only `lucide-static` package into the checked-in design-system registry. Production bundles retain only selected geometry rendered with `currentColor`; controls own accessible names and the repository NOTICE records the Lucide license. No runtime icon dependency is loaded.
 

@@ -3,8 +3,7 @@
 import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
-import {icon} from '../design-system/index.ts';
-import {rovingArrowKeydown} from '../lib/listbox.ts';
+import {icon, rovingFocusKeydown} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import type {PageLoadState} from '../lib/paged.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
@@ -148,7 +147,8 @@ export class DlWorkspaceScope extends LightElement {
            role="dialog" aria-label=${msg('Workspaces', {id: 'workspaceScope.workspacesAria'})}
            ?hidden=${!this.open}
            @keydown=${(event: KeyboardEvent) => {
-             rovingArrowKeydown(event, '[data-workspace-choice]');
+             const popover = event.currentTarget as HTMLElement;
+             rovingFocusKeydown(event, [...popover.querySelectorAll<HTMLElement>('[data-workspace-choice]')]);
            }}
            @dl-workspace-created=${this.#workspaceCreated}>
         ${this.#allOption()}

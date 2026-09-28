@@ -2,7 +2,15 @@
 
 import {expect} from '@esm-bundle/chai';
 import {render} from 'lit';
-import {DlIconButton, DlMenu, DlSplitLayout, defineDesignSystemElements, icon} from '../index.ts';
+import {
+  DlIconButton,
+  DlMenu,
+  DlSplitLayout,
+  defineDesignSystemElements,
+  icon,
+  menuButtonFocus,
+  rovingFocusKeydown,
+} from '../index.ts';
 
 defineDesignSystemElements();
 
@@ -77,6 +85,70 @@ it('moves focus among slotted menuitems and dismisses on Escape', () => {
   expect(document.activeElement).to.equal(items[1]);
   menu.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
   expect(dismissed).to.deep.equal(['yes']);
+});
+
+it('keeps one menu contract across item roles, disabled items, and typeahead', () => {
+  const menu = document.createElement('dl-menu') as DlMenu;
+  menu.innerHTML = '<button type="button" role="menuitemradio" aria-checked="true">Auto</button>'
+    + '<button type="button" role="menuitemradio" disabled>Archive</button>'
+    + '<button type="button" role="menuitemcheckbox" aria-label="Fast answers">Fast</button>'
+    + '<button type="button" role="menuitem" aria-disabled="true">Finance</button>'
+    + '<button type="button" role="menuitem">Research</button>';
+  document.body.append(menu);
+  const [auto, , fast, , research] = [...menu.querySelectorAll<HTMLButtonElement>('button')];
+  const key = (name: string, init: KeyboardEventInit = {}): boolean => {
+    const event = new KeyboardEvent('keydown', {key: name, bubbles: true, cancelable: true, ...init});
+    (document.activeElement as HTMLElement).dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  menu.focusItem('last');
+  expect(document.activeElement).to.equal(research);
+  menu.focusItem('first');
+  expect(document.activeElement).to.equal(auto);
+  key('ArrowDown');
+  expect(document.activeElement, 'disabled items are skipped').to.equal(fast);
+  key('ArrowUp');
+  key('ArrowUp');
+  expect(document.activeElement, 'ArrowUp wraps').to.equal(research);
+  key('a');
+  expect(document.activeElement, 'typeahead searches on from the current item').to.equal(auto);
+  key('f');
+  expect(document.activeElement, 'typeahead reads the accessible label').to.equal(fast);
+  key('f');
+  expect(document.activeElement, 'with no other match, the item keeps focus').to.equal(fast);
+  expect(key('r', {ctrlKey: true}), 'a shortcut is not typeahead').to.equal(false);
+  expect(document.activeElement).to.equal(fast);
+  expect(key(' '), 'Space stays with the item').to.equal(false);
+  expect(key('Enter'), 'Enter stays with the item').to.equal(false);
+});
+
+it('opens menus from their button with one key map', () => {
+  const focus = (key: string) => menuButtonFocus(new KeyboardEvent('keydown', {key}));
+  expect(['ArrowDown', 'Enter', ' ', 'ArrowUp', 'Escape', 'a'].map(focus))
+    .to.deep.equal(['first', 'first', 'first', 'last', null, null]);
+});
+
+it('lets a picker field keep its caret keys and typing', () => {
+  const picker = document.createElement('div');
+  picker.innerHTML = '<button type="button">Alpha</button><button type="button">Beta</button>'
+    + '<input type="text" aria-label="New workspace name">';
+  document.body.append(picker);
+  const [alpha, beta] = [...picker.querySelectorAll<HTMLButtonElement>('button')];
+  const input = picker.querySelector('input')!;
+  const roam = (name: string): boolean => {
+    const event = new KeyboardEvent('keydown', {key: name, bubbles: true, cancelable: true});
+    input.focus();
+    input.dispatchEvent(event);
+    return rovingFocusKeydown(event, [alpha!, beta!]);
+  };
+
+  expect(roam('Home')).to.equal(false);
+  expect(document.activeElement).to.equal(input);
+  expect(roam('b')).to.equal(false);
+  expect(document.activeElement).to.equal(input);
+  expect(roam('ArrowDown')).to.equal(true);
+  expect(document.activeElement, 'the arrows leave the field for the choices').to.equal(alpha);
 });
 
 it('emits normalized input and commit events for keyboard resizing', () => {

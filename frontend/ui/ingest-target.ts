@@ -3,8 +3,7 @@
 import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
-import {icon} from '../design-system/index.ts';
-import {rovingArrowKeydown} from '../lib/listbox.ts';
+import {icon, rovingFocusKeydown} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
@@ -96,7 +95,11 @@ export class DlIngestTarget extends LightElement {
                 aria-label=${msg('Select ingest workspace', {id: 'ingestTarget.selectWorkspaceAria'})}
                 ?hidden=${!this.active || !this.open}
                 @keydown=${(event: KeyboardEvent) => {
-                    rovingArrowKeydown(event, '[data-ingest-workspace-choice]');
+                    const popover = event.currentTarget as HTMLElement;
+                    rovingFocusKeydown(
+                        event,
+                        [...popover.querySelectorAll<HTMLElement>('[data-ingest-workspace-choice]')],
+                    );
                 }}
             >
                 ${repeat(sorted, (record) => record.workspace, (record) => this.#renderOption(record))}

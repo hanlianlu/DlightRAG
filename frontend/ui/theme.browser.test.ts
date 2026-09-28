@@ -1,10 +1,13 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import {THEME_STORAGE_KEY} from '../lib/theme.ts';
 import type {DlThemeControl} from './theme.ts';
 import './theme.ts';
 import {buttonNamed} from '../testing/dom.ts';
+
+defineDesignSystemElements();
 
 const originalMatchMedia = window.matchMedia;
 

@@ -4,6 +4,7 @@ import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
+import {menuButtonFocus} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {loadOlderControl} from './load-older.ts';
@@ -282,9 +283,10 @@ export class DlConversationList extends LightElement {
             else this.#openMenu(conversationId);
           }}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            const focus = menuButtonFocus(event);
+            if (!focus) return;
             event.preventDefault();
-            this.#openMenu(conversationId, event.key === 'ArrowUp');
+            this.#openMenu(conversationId, focus === 'last');
           }}
         >•••</button>
         ${expanded ? this.#renderMenu(conversation) : nothing}

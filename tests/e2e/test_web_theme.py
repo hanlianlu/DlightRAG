@@ -79,11 +79,13 @@ def test_theme_menu_keyboard_navigation_and_escape_focus_restore(page: Page) -> 
     expect(trigger).to_have_attribute("aria-expanded", "false")
     expect(menu).to_be_hidden()
 
+    # A click opens on the first choice, exactly as the keys do.
     _open_theme_menu(page)
-    expect(trigger).to_be_focused()
+    expect(menu.locator("[data-theme-value='system']")).to_be_focused()
     page.keyboard.press("ArrowDown")
-    expect(checked).to_be_focused()
+    expect(menu.locator("[data-theme-value='light']")).to_be_focused()
     page.keyboard.press("Escape")
+    expect(trigger).to_be_focused()
 
     _open_theme_menu(page)
     files_button = page.locator("#files-btn")

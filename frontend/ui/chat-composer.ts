@@ -3,7 +3,13 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
-import {icon, type IconName} from '../design-system/index.ts';
+import {
+  type DlMenu,
+  icon,
+  type IconName,
+  menuButtonFocus,
+  type MenuFocus,
+} from '../design-system/index.ts';
 import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer-request.ts';
 import {formatFileSize} from '../lib/file-size.ts';
@@ -71,15 +77,6 @@ export interface ComposerSteerDetail {
 export interface ComposerWorkspaceDropDetail {
   files: readonly RelativeFile[];
   folderName: string | null;
-}
-
-/** The radio-menu row one Arrow/Home/End key moves to; null when the key is not ours. */
-function menuStep(key: string, index: number, count: number): number | null {
-  if (key === 'Home') return 0;
-  if (key === 'End') return count - 1;
-  if (key === 'ArrowDown') return (index + 1) % count;
-  if (key === 'ArrowUp') return (index - 1 + count) % count;
-  return null;
 }
 
 function storedMode(): AnswerMode | null {
@@ -310,15 +307,15 @@ export class DlChatComposer extends LightElement {
                       @click=${this.#toggleModeMenu} @keydown=${this.#modeTriggerKeydown}>
                 ${msg(MODE_LABELS[this.mode], {id: `chatComposer.mode.${this.mode}`})}
               </button>
-              <div class="composer-mode-menu dl-anchored dl-anchored--above dl-anchored--end"
+              <dl-menu class="composer-mode-menu dl-anchored dl-anchored--above dl-anchored--end"
                    id="composer-mode-menu" role="menu" aria-label=${msg('Answer mode', {id: 'chatComposer.modeMenuAria'})}
-                   ?hidden=${!this.modeOpen} @keydown=${this.#modeMenuKeydown}>
+                   ?hidden=${!this.modeOpen} @dl-menu-dismiss=${this.#modeDismissed}>
                 ${MODES.map((mode) => html`
                   <button type="button" role="menuitemradio" data-mode=${mode}
                           aria-checked=${String(this.mode === mode)} tabindex="-1"
                           @click=${() => this.#selectMode(mode)}>${msg(MODE_LABELS[mode], {id: `chatComposer.mode.${mode}`})}</button>
                 `)}
-              </div>
+              </dl-menu>
             </div>
             ${this.#effortControl()}
             <button type="submit"
@@ -595,10 +592,10 @@ export class DlChatComposer extends LightElement {
             ? msg(EFFORT_LABELS[displayed], {id: `chatComposer.effort.${displayed}`})
             : msg('Effort', {id: 'chatComposer.effortLabel'})}</span>
         </button>
-        <div class="composer-effort-menu dl-anchored dl-anchored--above dl-anchored--end"
+        <dl-menu class="composer-effort-menu dl-anchored dl-anchored--above dl-anchored--end"
              id="composer-effort-menu" role="menu"
              aria-label=${msg('Agent effort', {id: 'chatComposer.effortMenuAria'})}
-             ?hidden=${!this.effortOpen} @keydown=${this.#effortMenuKeydown}>
+             ?hidden=${!this.effortOpen} @dl-menu-dismiss=${this.#effortDismissed}>
           ${levels.map((level) => html`
             <button type="button" role="menuitemradio" data-effort=${level}
                     aria-checked=${String(displayed === level)} tabindex="-1"
@@ -610,7 +607,7 @@ export class DlChatComposer extends LightElement {
                 : nothing}
             </button>
           `)}
-        </div>
+        </dl-menu>
       </div>
     `;
   }
@@ -622,13 +619,8 @@ export class DlChatComposer extends LightElement {
 
   #toggleEffortMenu = (event: Event): void => {
     event.stopPropagation();
-    const open = !this.effortOpen;
-    this.#closePickers(open ? 'effort' : null);
-    this.effortOpen = open;
-    if (!open) return;
-    const levels = offeredLevels(this.agentEffortOffer);
-    const displayed = this.#displayedEffort(levels);
-    void this.updateComplete.then(() => this.#focusEffort(displayed ?? levels[0]));
+    if (this.effortOpen) this.#closePickers(null);
+    else this.#openPicker('effort', 'first');
   };
 
   #selectEffort(level: AgentEffort): void {
@@ -641,40 +633,32 @@ export class DlChatComposer extends LightElement {
   }
 
   #effortTriggerKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    const focus = menuButtonFocus(event);
+    if (!focus) return;
     event.preventDefault();
-    const levels = offeredLevels(this.agentEffortOffer);
-    this.effortOpen = true;
-    const level = event.key === 'ArrowUp' ? levels[levels.length - 1] : levels[0];
-    void this.updateComplete.then(() => this.#focusEffort(level));
+    this.#openPicker('effort', focus);
   };
 
-  #effortMenuKeydown = (event: KeyboardEvent): void => {
-    const levels = offeredLevels(this.agentEffortOffer);
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      this.effortOpen = false;
-      this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
-      return;
-    }
-    const target = event.target as HTMLButtonElement;
-    const next = menuStep(event.key, levels.indexOf(target.dataset.effort as AgentEffort), levels.length);
-    if (next === null) return;
-    event.preventDefault();
-    this.#focusEffort(levels[next]);
+  #effortDismissed = (): void => {
+    this.effortOpen = false;
+    this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
   };
-
-  #focusEffort(level: AgentEffort): void {
-    this.querySelector<HTMLButtonElement>(`[data-effort="${level}"]`)?.focus();
-  }
 
   #toggleModeMenu = (event: Event): void => {
     event.stopPropagation();
-    const open = !this.modeOpen;
-    this.#closePickers(open ? 'mode' : null);
-    this.modeOpen = open;
-    if (open) void this.updateComplete.then(() => this.#focusMode(this.mode));
+    if (this.modeOpen) this.#closePickers(null);
+    else this.#openPicker('mode', 'first');
   };
+
+  /** Open one picker menu, closing the others, with focus where its button asked. */
+  #openPicker(picker: 'mode' | 'effort', focus: MenuFocus): void {
+    this.#closePickers(picker);
+    if (picker === 'mode') this.modeOpen = true;
+    else this.effortOpen = true;
+    void this.updateComplete.then(() => {
+      this.querySelector<DlMenu>(`#composer-${picker}-menu`)?.focusItem(focus);
+    });
+  }
 
   /** One composer popup at a time: opening or closing one settles the others. */
   #closePickers(keep: 'mode' | 'effort' | 'skill' | null): void {
@@ -695,30 +679,16 @@ export class DlChatComposer extends LightElement {
   }
 
   #modeTriggerKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    const focus = menuButtonFocus(event);
+    if (!focus) return;
     event.preventDefault();
-    this.modeOpen = true;
-    const mode = event.key === 'ArrowUp' ? MODES[MODES.length - 1] : MODES[0];
-    void this.updateComplete.then(() => this.#focusMode(mode));
+    this.#openPicker('mode', focus);
   };
 
-  #modeMenuKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      this.modeOpen = false;
-      this.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.focus();
-      return;
-    }
-    const target = event.target as HTMLButtonElement;
-    const next = menuStep(event.key, MODES.indexOf(target.dataset.mode as AnswerMode), MODES.length);
-    if (next === null) return;
-    event.preventDefault();
-    this.#focusMode(MODES[next]);
+  #modeDismissed = (): void => {
+    this.modeOpen = false;
+    this.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.focus();
   };
-
-  #focusMode(mode: AnswerMode): void {
-    this.querySelector<HTMLButtonElement>(`[data-mode="${mode}"]`)?.focus();
-  }
 
   #closeMenus = (): void => {
     this.#closePickers(null);

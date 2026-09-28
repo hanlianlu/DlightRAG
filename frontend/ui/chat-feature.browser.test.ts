@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import type {
   AcceptedAnswer,
   AnswerArtifact,
@@ -35,6 +36,8 @@ import {webRouter} from './router.ts';
 import {waitFor} from '../testing/dom.ts';
 
 const {attachments: attachmentStore, conversations: conversationStore, workspaces: workspaceStore} = productionHandles();
+
+defineDesignSystemElements();
 
 const originalFetch = window.fetch;
 const originalRevokeObjectURL = URL.revokeObjectURL;

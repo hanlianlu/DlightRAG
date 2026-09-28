@@ -3,7 +3,13 @@
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
-import {icon, type IconName} from '../design-system/index.ts';
+import {
+  type DlMenu,
+  icon,
+  type IconName,
+  menuButtonFocus,
+  type MenuFocus,
+} from '../design-system/index.ts';
 import {
   parseThemePreference,
   resolveColorMode,
@@ -11,7 +17,6 @@ import {
   type ThemePreference,
 } from '../lib/theme.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {isLocalStorageEvent, readStored, writeStored} from '../lib/storage.ts';
 
@@ -87,13 +92,12 @@ export class DlThemeControl extends LightElement {
         ${icon('moon', {size: 'sm', className: 'theme-icon theme-icon-moon'})}
         ${icon('sun', {size: 'sm', className: 'theme-icon theme-icon-sun'})}
       </button>
-      <div id="theme-menu" class="dl-anchored dl-anchored--end" role="menu" aria-label=${appearance}
-           ?hidden=${!this.menuOpen}
-           @keydown=${this.#menuKeydown}>
+      <dl-menu id="theme-menu" class="dl-anchored dl-anchored--end" role="menu" aria-label=${appearance}
+           ?hidden=${!this.menuOpen} @dl-menu-dismiss=${this.#menuDismissed}>
         ${this.#option('system', msg('System', {id: 'theme.system'}), 'system')}
         ${this.#option('light', msg('Light', {id: 'theme.light'}), 'sun')}
         ${this.#option('dark', msg('Dark', {id: 'theme.dark'}), 'moon')}
-      </div>
+      </dl-menu>
     `;
   }
 
@@ -119,15 +123,11 @@ export class DlThemeControl extends LightElement {
     root.style.colorScheme = colorMode;
   }
 
-  #open(focusCurrent: boolean): void {
+  #open(focus: MenuFocus): void {
     this.menuOpen = true;
-    if (focusCurrent) {
-      void this.updateComplete.then(() => {
-        this.querySelector<HTMLButtonElement>(
-          `[data-theme-value="${this.preference}"]`,
-        )?.focus();
-      });
-    }
+    void this.updateComplete.then(() => {
+      this.querySelector<DlMenu>('#theme-menu')?.focusItem(focus);
+    });
   }
 
   #close(restoreFocus: boolean): void {
@@ -146,36 +146,18 @@ export class DlThemeControl extends LightElement {
 
   #triggerClick = (): void => {
     if (this.menuOpen) this.#close(false);
-    else this.#open(false);
+    else this.#open('first');
   };
 
   #triggerKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      this.#open(true);
-      return;
-    }
-    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const focus = menuButtonFocus(event);
+    if (!focus) return;
     event.preventDefault();
-    if (this.menuOpen) this.#close(false);
-    else this.#open(true);
+    this.#open(focus);
   };
 
-  #menuKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      this.#close(true);
-      return;
-    }
-    const active = document.activeElement;
-    if (active instanceof HTMLButtonElement && active.getAttribute('role') === 'menuitemradio'
-        && (event.key === 'Enter' || event.key === ' ')) {
-      event.preventDefault();
-      this.#select(parseThemePreference(active.dataset.themeValue || null));
-      return;
-    }
-    rovingArrowKeydown(event, '[role="menuitemradio"]');
+  #menuDismissed = (): void => {
+    this.#close(true);
   };
 
   #mediaChanged = (): void => {

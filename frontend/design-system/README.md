@@ -48,6 +48,8 @@ The pinned `lucide-static` package is generation-only. Production bundles contai
 
 Prefer native `button`, `input`, `radio`, `checkbox`, and `dialog` with `.dl-*` classes. Add a custom `dl-*` element only when behavior and accessibility state justify it. Classes have no compatibility aliases.
 
+`dl-menu` owns the one menu keyboard contract: ArrowDown and ArrowUp move with wrapping, Home and End jump to the ends, a typed letter moves to the next item whose label starts with it, Escape raises `dl-menu-dismiss` so the owner restores focus, and Enter and Space stay with each item. Its `focusItem('first' | 'last')` pairs with `menuButtonFocus(event)`, which maps a menu button's ArrowDown, Enter, and Space to the first item and ArrowUp to the last. Pickers that are not menus reuse the roving step through `rovingFocusKeydown(event, items)`.
+
 Every popover and menu that opens from a trigger takes its placement from `.dl-anchored`: below and start-aligned inside the positioned trigger wrapper, `.dl-anchored--end` for end alignment, `.dl-anchored--above` to open upward, and `--anchored-gap` for the distance. The surface keeps its own look, layer, and `[hidden]` rule.
 
 `dl-split-layout` owns axis layout, pointer/keyboard resizing, and separator ARIA. Its pixel interface is `size`, `min`, `max`, `primary=start|end`, and `orientation=horizontal|vertical`. It emits `dl-split-input` while resizing and `dl-split-change` when committed, both with `{position}` in normalized pixels. Product adapters own breakpoints, open/close meaning, and persistence. When a product overlay is trapped by the split's isolated panes, the owning adapter may raise that pane with `--split-start-layer` or `--split-end-layer`; the default for both is `0`.
