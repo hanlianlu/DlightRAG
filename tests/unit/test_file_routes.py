@@ -4,7 +4,7 @@
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -20,6 +20,7 @@ from dlightrag.application.corpus_admin import (
     SourceDownloadUnavailableError,
 )
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
+from tests.support.application_double import application_double
 
 
 def _embedding_config() -> EmbeddingSettings:
@@ -39,7 +40,7 @@ def tmp_working_dir(tmp_path: Path) -> Path:
 @pytest.fixture()
 async def route_client(
     tmp_working_dir: Path,
-) -> AsyncIterator[tuple[AsyncClient, AsyncMock]]:
+) -> AsyncIterator[tuple[AsyncClient, Any]]:
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         # type: ignore[call-arg]
         deployment={"working_dir": str(tmp_working_dir)},
@@ -49,27 +50,26 @@ async def route_client(
         },
     )
     set_config(config)
-    application_double = AsyncMock()
-    application_double.config = config
+    application = application_double(config)
     app = create_app(include_web_app=False)
-    app.state.application = application_double
+    app.state.application = application
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
         follow_redirects=False,
     ) as client:
-        yield client, application_double
+        yield client, application
 
 
 async def test_local_markdown_download_is_attachment(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
     tmp_working_dir: Path,
 ) -> None:
-    client, application_double = route_client
+    client, application = route_client
     source = tmp_working_dir / "inputs" / "default" / "notes.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# Notes", encoding="utf-8")
-    application_double.corpora.prepare_source_download.return_value = LocalDownloadTarget(
+    application.corpora.prepare_source_download.return_value = LocalDownloadTarget(
         path=source.resolve(),
         media_type="text/markdown",
         filename="notes.md",
@@ -84,16 +84,14 @@ async def test_local_markdown_download_is_attachment(
     assert response.content == b"# Notes"
     assert response.headers["content-type"].startswith("text/markdown")
     assert 'attachment; filename="notes.md"' in response.headers["content-disposition"]
-    application_double.corpora.prepare_source_download.assert_awaited_once_with(
-        "default", "doc-notes"
-    )
+    application.corpora.prepare_source_download.assert_awaited_once_with("default", "doc-notes")
 
 
 async def test_document_download_normalizes_workspace(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
 ) -> None:
-    client, application_double = route_client
-    application_double.corpora.prepare_source_download.side_effect = SourceDownloadNotFoundError(
+    client, application = route_client
+    application.corpora.prepare_source_download.side_effect = SourceDownloadNotFoundError(
         "Source not found"
     )
 
@@ -103,16 +101,16 @@ async def test_document_download_normalizes_workspace(
     )
 
     assert response.status_code == 404
-    application_double.corpora.prepare_source_download.assert_awaited_once_with(
+    application.corpora.prepare_source_download.assert_awaited_once_with(
         "finance_team", "doc-report"
     )
 
 
 async def test_remote_download_redirects_to_prepared_target(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
 ) -> None:
-    client, application_double = route_client
-    application_double.corpora.prepare_source_download.return_value = RedirectDownloadTarget(
+    client, application = route_client
+    application.corpora.prepare_source_download.return_value = RedirectDownloadTarget(
         url="https://cdn.example.com/report.pdf?signature=ephemeral"
     )
 
@@ -136,12 +134,12 @@ async def test_remote_download_redirects_to_prepared_target(
     ],
 )
 async def test_source_download_maps_core_errors(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
     error: Exception,
     status_code: int,
 ) -> None:
-    client, application_double = route_client
-    application_double.corpora.prepare_source_download.side_effect = error
+    client, application = route_client
+    application.corpora.prepare_source_download.side_effect = error
 
     response = await client.get("/files/raw/doc-report")
 
@@ -170,11 +168,10 @@ async def test_download_authorization_precedes_metadata_lookup(
         },
     )
     set_config(config)
-    application_double = AsyncMock()
-    application_double.config = config
+    application = application_double(config)
     with caplog.at_level(logging.INFO, logger="dlightrag.adapters.http.rest.routes.files"):
         app = create_app(include_web_app=False)
-        app.state.application = application_double
+        app.state.application = application
         app.state.access_control = DenyFinanceWorkspace()
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -187,7 +184,7 @@ async def test_download_authorization_precedes_metadata_lookup(
             )
 
     assert response.status_code == 403
-    application_double.corpora.prepare_source_download.assert_not_awaited()
+    application.corpora.prepare_source_download.assert_not_awaited()
     record = next(
         record
         for record in caplog.records
