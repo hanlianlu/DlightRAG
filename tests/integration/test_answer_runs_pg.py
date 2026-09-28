@@ -50,7 +50,12 @@ from dlightrag.engine.runtime.records import (
 )
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, HandoffCommit
 from tests.conftest import FingerprintingRunStore
-from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
+from tests.support.pg import (
+    PG_CONN_KWARGS,
+    delete_runs,
+    drop_database,
+    skip_without_postgres,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -2130,7 +2135,7 @@ class TestArtifacts:
         assert await _blob_store(store).read(owner_id="ghost", digest=artifact.digest) is None
         assert first.run.run_id is not None
 
-    async def test_deleting_one_run_keeps_bytes_another_run_still_links(self, store) -> None:
+    async def test_deleting_one_run_keeps_bytes_another_run_still_links(self, store, pool) -> None:
         artifact = PendingArtifact(content=b"shared bytes")
         first = await store.create_run(
             owner_id=_OWNER,
@@ -2144,12 +2149,12 @@ class TestArtifacts:
             artifacts=[artifact],
             references=[_reference(artifact.digest)],
         )
-        deletion = await store.delete_runs(owner_id=_OWNER, run_ids=[first.run.run_id])
+        deletion = await delete_runs(pool, store, owner_id=_OWNER, run_ids=[first.run.run_id])
         assert deletion.runs == 1
         assert deletion.artifacts == 0
         assert await _blob_store(store).read(owner_id=_OWNER, digest=artifact.digest) is not None
 
-        final = await store.delete_runs(owner_id=_OWNER, run_ids=[second.run.run_id])
+        final = await delete_runs(pool, store, owner_id=_OWNER, run_ids=[second.run.run_id])
         assert final.runs == 1
         assert final.artifacts == 1
         assert await _blob_store(store).read(owner_id=_OWNER, digest=artifact.digest) is None
@@ -2158,15 +2163,17 @@ class TestArtifacts:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         digest = await _write_fetched_blob(pool, creation.run.run_id, b"fetched delete bytes")
 
-        deletion = await store.delete_runs(owner_id=_OWNER, run_ids=[creation.run.run_id])
+        deletion = await delete_runs(pool, store, owner_id=_OWNER, run_ids=[creation.run.run_id])
 
         assert deletion.runs == 1
         assert deletion.artifacts == 1
         assert await _blob_store(store).read(owner_id=_OWNER, digest=digest) is None
 
-    async def test_deletion_is_owner_scoped(self, store) -> None:
+    async def test_deletion_is_owner_scoped(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
-        deletion = await store.delete_runs(owner_id=_OTHER_OWNER, run_ids=[creation.run.run_id])
+        deletion = await delete_runs(
+            pool, store, owner_id=_OTHER_OWNER, run_ids=[creation.run.run_id]
+        )
         assert deletion.runs == 0
         assert await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id) is not None
 
@@ -2204,7 +2211,9 @@ class TestArtifacts:
             ),
         )
 
-        assert (await store.delete_runs(owner_id=_OWNER, run_ids=[first.run.run_id])).runs == 1
+        assert (
+            await delete_runs(pool, store, owner_id=_OWNER, run_ids=[first.run.run_id])
+        ).runs == 1
         async with pool.acquire() as conn:
             assert await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM dlightrag_agent_sessions"
@@ -2213,7 +2222,9 @@ class TestArtifacts:
                 uuid.UUID(session_id),
             )
 
-        assert (await store.delete_runs(owner_id=_OWNER, run_ids=[second.run.run_id])).runs == 1
+        assert (
+            await delete_runs(pool, store, owner_id=_OWNER, run_ids=[second.run.run_id])
+        ).runs == 1
         async with pool.acquire() as conn:
             assert not await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM dlightrag_agent_sessions"
@@ -2248,7 +2259,7 @@ class TestArtifacts:
                 artifact.digest,
             )
             deletion = await asyncio.wait_for(
-                store.delete_runs(owner_id=_OWNER, run_ids=[first.run.run_id]), timeout=10
+                delete_runs(pool, store, owner_id=_OWNER, run_ids=[first.run.run_id]), timeout=10
             )
         finally:
             await transaction.commit()
@@ -2429,7 +2440,7 @@ class TestBlobCleanupFailureIsolation:
         )
         await _force_blob_delete_restrict(pool)
 
-        deletion = await store.delete_runs(owner_id=_OWNER, run_ids=[creation.run.run_id])
+        deletion = await delete_runs(pool, store, owner_id=_OWNER, run_ids=[creation.run.run_id])
 
         assert deletion.runs == 1
         assert deletion.artifacts == 0

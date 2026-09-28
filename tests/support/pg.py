@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Sequence
 from typing import Any, Protocol
 
 import asyncpg
@@ -87,6 +88,25 @@ async def drop_scratch_database(admin: DropAdmin, database: str) -> None:
         database,
     )
     raise RuntimeError(f"cannot drop {database}: backends still attached: {attached}")
+
+
+class RunDeleter(Protocol):
+    """The run store's caller-owned-transaction deletion seam."""
+
+    async def delete_runs_in(self, conn: Any, *, owner_id: str, run_ids: Sequence[str]) -> Any: ...
+
+
+async def delete_runs(
+    pool: Any, store: RunDeleter, *, owner_id: str, run_ids: Sequence[str]
+) -> Any:
+    """Delete runs in a transaction of their own.
+
+    Production deletes runs only inside the transaction of the owner that links them (a Web
+    conversation), so the store exposes that seam alone; a suite exercising run deletion by
+    itself supplies the transaction here.
+    """
+    async with pool.acquire() as conn, conn.transaction():
+        return await store.delete_runs_in(conn, owner_id=owner_id, run_ids=run_ids)
 
 
 async def drop_database(database: str) -> None:

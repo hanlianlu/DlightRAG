@@ -26,6 +26,7 @@ from tests.e2e.pg18_harness import (
     pg_conn_kwargs_from_env,
     stable_vector,
 )
+from tests.support.pg import delete_runs
 
 pytestmark = [
     pytest.mark.e2e_pg18,
@@ -642,7 +643,9 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     finally:
         try:
             if created_run_id is not None:
-                deletion = await store.delete_runs(
+                deletion = await delete_runs(
+                    await pg_pool.get(),
+                    store,
                     owner_id=run_owner,
                     run_ids=[created_run_id],
                 )

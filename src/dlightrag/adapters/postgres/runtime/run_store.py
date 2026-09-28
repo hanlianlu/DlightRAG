@@ -3570,15 +3570,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 raise RuntimeError("active-run requirement cursor did not advance")
             position = next_position
 
-    async def delete_runs(self, *, owner_id: str, run_ids: Sequence[str]) -> RunDeletion:
-        """Delete owned runs and orphaned blobs in one dedicated transaction."""
-
-        async def _operation(conn: Any) -> RunDeletion:
-            async with conn.transaction():
-                return await self.delete_runs_in(conn, owner_id=owner_id, run_ids=run_ids)
-
-        return await self._run_write(_operation)
-
     # -- reads --------------------------------------------------------
     async def get_run(self, *, owner_id: str, run_id: str) -> RunRecord | None:
         owner = _require_owner(owner_id)

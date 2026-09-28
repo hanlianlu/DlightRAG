@@ -48,7 +48,12 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
-from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
+from tests.support.pg import (
+    PG_CONN_KWARGS,
+    delete_runs,
+    drop_database,
+    skip_without_postgres,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -1575,7 +1580,7 @@ async def test_deleting_a_run_row_cascades_its_conversation_turn(
     creation = await _submit(store, conversation_id)
     assert creation is not None
 
-    await runs.delete_runs(owner_id=_OWNER, run_ids=[creation.turn.answer_run_id])
+    await delete_runs(pool, runs, owner_id=_OWNER, run_ids=[creation.turn.answer_run_id])
 
     assert await _count(pool, "web_conversation_turns") == 0
 
