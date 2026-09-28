@@ -8,7 +8,9 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.adapters.http.browser.routes.workspaces import _default_workspace
+from dlightrag.application.config import DlightragConfig
 from dlightrag.application.config.sections import DeploymentSettings
+from tests.support.application_double import application_double
 
 
 def test_the_configured_display_name_yields_one_canonical_id() -> None:
@@ -26,16 +28,19 @@ def test_a_default_that_names_no_workspace_is_rejected_at_load(name: str) -> Non
         DeploymentSettings(workspace=name)
 
 
-def _request(workspace: str) -> Any:
-    config = SimpleNamespace(deployment=DeploymentSettings(workspace=workspace))
-    application = SimpleNamespace(config=config)
+def _request(config: DlightragConfig, workspace: str) -> Any:
+    application = application_double(
+        config.model_copy(update={"deployment": DeploymentSettings(workspace=workspace)})
+    )
     return cast(
         Any, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(application=application)))
     )
 
 
-def test_the_web_fallback_prefers_the_configured_default_over_a_literal() -> None:
-    request = _request("Finance")
+def test_the_web_fallback_prefers_the_configured_default_over_a_literal(
+    test_config: DlightragConfig,
+) -> None:
+    request = _request(test_config, "Finance")
 
     assert _default_workspace(request, ["default", "finance"]) == "finance"
     assert _default_workspace(request, ["default", "legal"]) == "default"
