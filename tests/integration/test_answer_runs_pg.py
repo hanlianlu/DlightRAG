@@ -55,6 +55,7 @@ from dlightrag.engine.runtime.records import (
     RunAdmissionLimitExceededError,
     run_request_fingerprint,
 )
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, HandoffCommit
 from tests.conftest import FingerprintingRunStore
 from tests.support.pg import (
@@ -1174,6 +1175,51 @@ class TestClaiming:
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None
         assert record.agent_workspace_epoch == claim.run.fencing_epoch
+
+    async def test_handoff_and_replace_write_the_whole_inventory(self, store, pool) -> None:
+        """A handoff carries the copied inventory; a replace makes a new one exactly."""
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        workspace = PGWorkspaceStore(
+            pool=pool,
+            owner_id=_OWNER,
+            run_id=uuid.UUID(creation.run.run_id),
+            worker_id=_WORKER,
+            lease_owner=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        def record(path: str, size: int, digest: str | None = None) -> InventoryPathRecord:
+            return InventoryPathRecord(
+                relative_path=path,
+                entry_type="file",
+                size_bytes=size,
+                mode=0o100644,
+                content_digest=digest,
+            )
+
+        def observed(records: Any) -> list[tuple[str, int, str | None]]:
+            return [(item.relative_path, item.size_bytes, item.content_digest) for item in records]
+
+        handed_off = (record("notes/a.md", 1, "a" * 64), record("src/b.py", 2), record("c.txt", 3))
+        outcome = await workspace.handoff_epoch(
+            expected_epoch=None,
+            destination_epoch=claim.run.fencing_epoch,
+            inventory=handed_off,
+        )
+        assert isinstance(outcome, HandoffCommit)
+        assert observed(await workspace.load_inventory()) == [
+            ("c.txt", 3, None),
+            ("notes/a.md", 1, "a" * 64),
+            ("src/b.py", 2, None),
+        ]
+
+        replaced = (record("notes/a.md", 10, "b" * 64), record("d.md", 4))
+        assert await workspace.replace_inventory(replaced) == "committed"
+        assert observed(await workspace.load_inventory()) == [
+            ("d.md", 4, None),
+            ("notes/a.md", 10, "b" * 64),
+        ]
 
     async def test_recent_spills_are_newest_first_by_producing_intent(self, store, pool) -> None:
         """A summary's spill handles come from the row, ordered by its intent.

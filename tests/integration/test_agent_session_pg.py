@@ -1452,6 +1452,44 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     assert all(item.content_digest == "c" * 64 for item in spills)
 
 
+def _files(*files: tuple[str, int]) -> tuple[InventoryPathRecord, ...]:
+    return tuple(
+        InventoryPathRecord(relative_path=path, entry_type="file", size_bytes=size, mode=0o100644)
+        for path, size in files
+    )
+
+
+async def _settle_inventory(
+    store: Any, session_id: SessionId, epoch: int, update: WorkspaceInventoryUpdate
+) -> None:
+    """Settle one tool result whose Host update carries ``update``."""
+    intent_id = IntentId.new()
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, intent_id),
+        fencing_epoch=epoch,
+        intent_id=intent_id,
+        host_delta=EffectHostUpdate(workspace_inventory=update),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+
+async def _inventory_rows(pool: Any, run_id: str) -> dict[str, tuple[int, str]]:
+    """Each inventory path's size and row version (xmin)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT relative_path, size_bytes, xmin::text AS row_version"
+            " FROM dlightrag_answer_workspace_inventory"
+            " WHERE owner_id = $1 AND run_id = $2",
+            _OWNER,
+            uuid.UUID(run_id),
+        )
+    return {
+        str(row["relative_path"]): (int(row["size_bytes"]), str(row["row_version"])) for row in rows
+    }
+
+
 async def test_a_workspace_rescan_rewrites_only_what_changed(pool) -> None:
     """A bash rescan replaces the inventory by difference under the Run lock.
 
@@ -1464,55 +1502,52 @@ async def test_a_workspace_rescan_rewrites_only_what_changed(pool) -> None:
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
 
-    async def settle_rescan(*files: tuple[str, int]) -> None:
-        intent_id = IntentId.new()
-        outcome = await _append_transaction_entry(
-            store,
-            session_id,
-            _tool_result(session_id, intent_id),
-            fencing_epoch=epoch,
-            intent_id=intent_id,
-            host_delta=EffectHostUpdate(
-                workspace_inventory=WorkspaceInventoryUpdate(
-                    upserts=tuple(
-                        InventoryPathRecord(
-                            relative_path=path,
-                            entry_type="file",
-                            size_bytes=size,
-                            mode=0o100644,
-                        )
-                        for path, size in files
-                    ),
-                    replace_all=True,
-                )
-            ),
-        )
-        assert isinstance(outcome, TransactionCommit)
-
-    async def inventory_rows() -> dict[str, tuple[int, str]]:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT relative_path, size_bytes, xmin::text AS row_version"
-                " FROM dlightrag_answer_workspace_inventory"
-                " WHERE owner_id = $1 AND run_id = $2",
-                _OWNER,
-                uuid.UUID(claimed.run.run_id),
-            )
-        return {
-            str(row["relative_path"]): (int(row["size_bytes"]), str(row["row_version"]))
-            for row in rows
-        }
-
-    await settle_rescan(("kept.md", 1), ("grown.md", 2), ("removed.md", 3))
-    before = await inventory_rows()
-    await settle_rescan(("kept.md", 1), ("grown.md", 20), ("added.md", 4))
-    after = await inventory_rows()
+    rescan = _files(("kept.md", 1), ("grown.md", 2), ("removed.md", 3))
+    await _settle_inventory(
+        store, session_id, epoch, WorkspaceInventoryUpdate(upserts=rescan, replace_all=True)
+    )
+    before = await _inventory_rows(pool, claimed.run.run_id)
+    rescan = _files(("kept.md", 1), ("grown.md", 20), ("added.md", 4))
+    await _settle_inventory(
+        store, session_id, epoch, WorkspaceInventoryUpdate(upserts=rescan, replace_all=True)
+    )
+    after = await _inventory_rows(pool, claimed.run.run_id)
 
     assert set(after) == {"kept.md", "grown.md", "added.md"}
     assert after["kept.md"] == before["kept.md"]
     assert after["grown.md"][0] == 20
     assert after["grown.md"][1] != before["grown.md"][1]
     assert after["added.md"][0] == 4
+
+
+async def test_an_inventory_delta_deletes_its_paths_before_its_observations(pool) -> None:
+    """A delta removes only the paths it names; a path it also observes stays, as observed."""
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    initial = _files(("gone.md", 1), ("moved.md", 2), ("kept.md", 3))
+    await _settle_inventory(
+        store, session_id, epoch, WorkspaceInventoryUpdate(upserts=initial, replace_all=True)
+    )
+    before = await _inventory_rows(pool, claimed.run.run_id)
+
+    await _settle_inventory(
+        store,
+        session_id,
+        epoch,
+        WorkspaceInventoryUpdate(
+            upserts=_files(("moved.md", 9), ("new.md", 4)),
+            deletes=("gone.md", "moved.md", "never-there.md"),
+        ),
+    )
+    after = await _inventory_rows(pool, claimed.run.run_id)
+
+    assert set(after) == {"moved.md", "kept.md", "new.md"}
+    assert after["kept.md"] == before["kept.md"]
+    assert after["moved.md"][0] == 9
+    assert after["new.md"][0] == 4
 
 
 async def test_session_notes_are_owned_by_the_session_and_outlive_the_run(pool) -> None:
