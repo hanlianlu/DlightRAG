@@ -31,11 +31,6 @@ def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def json_headers() -> dict[str, str]:
-    """Return JSON content and optional bearer headers."""
-    return {"Content-Type": "application/json", **auth_headers()}
-
-
 __all__ = [
     "CLIENT_TIMEOUT_ENV",
     "DEFAULT_API_URL",
@@ -44,5 +39,4 @@ __all__ = [
     "auth_headers",
     "auth_token",
     "client_timeout",
-    "json_headers",
 ]

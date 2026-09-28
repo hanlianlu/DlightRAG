@@ -14,8 +14,6 @@ from dlightrag.adapters.http.client.client import (
     AnswerStreamEvent,
     ArtifactOutcome,
     EvidenceImage,
-    ProfileMemoryReceipt,
-    ProfileMemorySettings,
     RetrievalResult,
     RunDescriptor,
     parse_sse_frames,
@@ -28,7 +26,6 @@ from dlightrag.adapters.http.client.http import (
     auth_headers,
     auth_token,
     client_timeout,
-    json_headers,
 )
 from dlightrag.adapters.http.client.requests import query_image_blocks_from_urls
 from dlightrag.application.runs import RunCancelledError, RunFailedError
@@ -52,14 +49,11 @@ __all__ = [
     "RunFailedError",
     "ArtifactOutcome",
     "EvidenceImage",
-    "ProfileMemoryReceipt",
-    "ProfileMemorySettings",
     "RetrievalResult",
     "api_url",
     "auth_headers",
     "auth_token",
     "client_timeout",
-    "json_headers",
     "parse_sse_frames",
     "query_image_blocks_from_urls",
 ]

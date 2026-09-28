@@ -1089,19 +1089,9 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed HTTP client did not expose the durable Answer client")
     if not all(
         hasattr(AnswerRunClient, name)
-        for name in (
-            "create",
-            "status",
-            "events",
-            "cancel",
-            "list_runs",
-            "steer",
-            "follow_up",
-            "fork",
-            "children",
-        )
+        for name in ("answer", "retrieve", "ingest", "create", "status", "events")
     ):
-        raise ValueError("installed HTTP client is missing the Agent 3.0 Answer controls")
+        raise ValueError("installed HTTP client is missing the CLI and evaluation surface")
     if AgentSessionRuntime.__module__ != "dlightrag.engine.agent.session.runtime":
         raise ValueError("installed Agent kernel did not expose AgentSessionRuntime")
     answer_identities = {
