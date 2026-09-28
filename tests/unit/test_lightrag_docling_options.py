@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from dlightrag.adapters.postgres.corpus.lightrag_environment import lightrag_sidecar_env
 from dlightrag.engine.rag.corpus.ingestion.docling_options import apply_docling_request_options
 
 
@@ -105,7 +106,7 @@ def test_do_formula_enrichment_reaches_lightrag_env() -> None:
             ),
         },
     )
-    assert config._lightrag_sidecar_env_map()["DOCLING_DO_FORMULA_ENRICHMENT"] == "true"
+    assert lightrag_sidecar_env(config)["DOCLING_DO_FORMULA_ENRICHMENT"] == "true"
 
 
 def test_force_ocr_reaches_lightrag_env() -> None:
@@ -122,4 +123,4 @@ def test_force_ocr_reaches_lightrag_env() -> None:
             ),
         },
     )
-    assert config._lightrag_sidecar_env_map()["DOCLING_FORCE_OCR"] == "false"
+    assert lightrag_sidecar_env(config)["DOCLING_FORCE_OCR"] == "false"

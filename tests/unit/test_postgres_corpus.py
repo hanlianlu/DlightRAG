@@ -3,12 +3,17 @@
 
 import datetime
 import logging
+import os
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+from dlightrag.adapters.postgres.core._session_settings import (
+    domain_pool_server_settings,
+    lightrag_pool_server_settings,
+)
 from dlightrag.adapters.postgres.corpus import corpus as corpus_module
 from dlightrag.adapters.postgres.corpus.corpus import (
     PGCorpusCoordination,
@@ -17,8 +22,27 @@ from dlightrag.adapters.postgres.corpus.corpus import (
     build_pg_corpus_backend,
     verify_lightrag_storage_configuration,
 )
-from dlightrag.application.config import DlightragConfig, LightRAGStorageSettings, StorageSettings
+from dlightrag.adapters.postgres.corpus.lightrag_environment import (
+    apply_lightrag_environment,
+    lightrag_backend_env,
+    lightrag_runtime_env,
+    lightrag_sidecar_env,
+)
+from dlightrag.application.config import (
+    DeploymentSettings,
+    DlightragConfig,
+    LightRAGStorageSettings,
+    PostgresSettings,
+    StorageSettings,
+)
 from dlightrag.engine.rag.retrieval.bm25 import BM25Profile
+from dlightrag.engine.rag.workspace.settings import (
+    CorpusSettings,
+    DoclingSidecarSettings,
+    MinerUSidecarSettings,
+    ParserSidecarsSettings,
+    VLMSidecarSettings,
+)
 from tests.config_helpers import clone_config, mutate_config
 
 
@@ -61,31 +85,128 @@ def test_backend_factory_applies_lightrag_environment_on_create(
     test_config: DlightragConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    apply_backend = MagicMock()
-    apply_sidecar = MagicMock()
-    apply_runtime = MagicMock()
-    monkeypatch.setattr(
-        DlightragConfig,
-        "apply_lightrag_backend_env",
-        lambda _self, *, force=False: apply_backend(force=force),
-    )
-    monkeypatch.setattr(
-        DlightragConfig,
-        "apply_lightrag_sidecar_env",
-        lambda _self: apply_sidecar(),
-    )
-    monkeypatch.setattr(
-        DlightragConfig,
-        "apply_lightrag_runtime_env",
-        lambda _self, *, force=False: apply_runtime(force=force),
-    )
+    apply_environment = MagicMock()
+    monkeypatch.setattr(corpus_module, "apply_lightrag_environment", apply_environment)
 
     backend = build_pg_corpus_backend(test_config)
 
     assert backend.workspace_id == test_config.deployment.workspace
-    apply_backend.assert_called_once_with(force=True)
-    apply_sidecar.assert_called_once_with()
-    apply_runtime.assert_called_once_with(force=True)
+    apply_environment.assert_called_once_with(test_config)
+
+
+def test_configuration_alone_never_writes_the_lightrag_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the corpus adapter bridges settings into LightRAG's environment."""
+    environment = {"POSTGRES_WORKSPACE": "inherited-workspace"}
+    monkeypatch.setattr(os, "environ", environment)
+
+    config = DlightragConfig(deployment=DeploymentSettings(workspace="resolved-workspace"))
+    assert environment == {"POSTGRES_WORKSPACE": "inherited-workspace"}
+
+    apply_lightrag_environment(config)
+
+    assert environment["POSTGRES_WORKSPACE"] == ""
+    assert environment["LIGHTRAG_PARSER"] == config.parser_rules
+    assert environment["INPUT_DIR"] == str(config.input_dir_path)
+    assert environment["POSTGRES_HOST"] == config.storage.postgres.host
+
+
+def test_vector_and_pool_defaults_reach_the_lightrag_environment() -> None:
+    config = DlightragConfig()
+
+    environment = lightrag_backend_env(config)
+
+    assert config.storage.lightrag.hnsw_ef_construction == 256
+    assert config.storage.lightrag.hnsw_ef_search == 256
+    assert domain_pool_server_settings(config)["hnsw.ef_search"] == "256"
+    assert environment["POSTGRES_HNSW_EF"] == "256"
+    assert environment["POSTGRES_VECTOR_INDEX_TYPE"] == "HNSW_HALFVEC"
+    assert environment["POSTGRES_MAX_CONNECTIONS"] == "16"
+    assert environment["POSTGRES_WORKSPACE"] == ""
+
+
+def test_milvus_environment_overrides_only_resolved_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = {
+        "MILVUS_URI": "inherited-uri",
+        "MILVUS_TOKEN": "inherited-token",
+        "MILVUS_DB_NAME": "inherited-db",
+    }
+    monkeypatch.setattr(os, "environ", environment)
+    config = DlightragConfig(
+        storage=StorageSettings(
+            lightrag=LightRAGStorageSettings(
+                vector_storage="MilvusVectorDBStorage",
+                milvus_uri="resolved-uri",
+                milvus_db_name="resolved-db",
+            )
+        )
+    )
+
+    apply_lightrag_environment(config)
+
+    assert environment["MILVUS_URI"] == "resolved-uri"
+    assert environment["MILVUS_DB_NAME"] == "resolved-db"
+    assert environment["MILVUS_TOKEN"] == "inherited-token"
+
+
+def test_postgres_session_settings_merge_hnsw_and_reader_policy() -> None:
+    config = DlightragConfig(
+        deployment=DeploymentSettings(service_role="reader"),
+        storage=StorageSettings(
+            postgres=PostgresSettings(
+                session_settings={"application_name": "test", "hnsw.ef_search": 999}
+            ),
+            lightrag=LightRAGStorageSettings(hnsw_ef_search=256),
+        ),
+    )
+
+    assert domain_pool_server_settings(config) == {
+        "hnsw.ef_search": "999",
+        "application_name": "test",
+    }
+    assert lightrag_pool_server_settings(config)["default_transaction_read_only"] == "on"
+    assert (
+        "default_transaction_read_only=on"
+        in (lightrag_backend_env(config)["POSTGRES_SERVER_SETTINGS"])
+    )
+
+
+def test_docling_only_selection_and_sidecar_environment() -> None:
+    config = DlightragConfig(
+        corpus=CorpusSettings(
+            sidecars=ParserSidecarsSettings(
+                docling=DoclingSidecarSettings(endpoint="http://docling:5001")
+            )
+        )
+    )
+
+    environment = lightrag_sidecar_env(config)
+
+    assert config.parser_rules == "*:docling-iteP"
+    assert environment["DOCLING_ENDPOINT"] == "http://docling:5001"
+    # Unset optional DlightRAG bindings leave upstream environment behavior untouched.
+    assert "MINERU_LOCAL_ENDPOINT" not in environment
+
+
+def test_mineru_backend_and_vlm_environment_are_canonical() -> None:
+    config = DlightragConfig(
+        corpus=CorpusSettings(
+            sidecars=ParserSidecarsSettings(
+                vlm=VLMSidecarSettings(min_image_pixel=80),
+                mineru=MinerUSidecarSettings(backend="hybrid-engine"),
+            )
+        )
+    )
+
+    sidecars = lightrag_sidecar_env(config)
+
+    assert sidecars["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
+    assert sidecars["VLM_MIN_IMAGE_PIXEL"] == "80"
+    assert "LIGHTRAG_PARSER" not in sidecars
+    assert lightrag_runtime_env(config)["LIGHTRAG_PARSER"] == "*:mineru-iteP"
 
 
 def test_all_four_default_storage_names_use_upstream_public_verification(

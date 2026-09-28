@@ -11,6 +11,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
+from dlightrag.adapters.postgres.core._session_settings import (
+    domain_pool_server_settings,
+    lightrag_pool_server_settings,
+)
+from dlightrag.adapters.postgres.corpus.lightrag_environment import lightrag_backend_env
 from dlightrag.application.config import (
     DeploymentSettings,
     DlightragConfig,
@@ -72,18 +77,21 @@ class TestReaderPoolSessionModes:
 
     def test_reader_domain_pool_stays_writable(self) -> None:
         cfg = _config(service_role="reader")
-        assert "default_transaction_read_only" not in cfg.domain_pool_server_settings()
+        assert "default_transaction_read_only" not in domain_pool_server_settings(cfg)
         assert "server_settings" not in cfg.pg_connection_kwargs()
 
     def test_reader_corpus_pool_is_read_only(self) -> None:
         cfg = _config(service_role="reader")
-        assert cfg.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
-        assert "default_transaction_read_only=on" in cfg.postgres_server_settings_env_value()
+        assert lightrag_pool_server_settings(cfg)["default_transaction_read_only"] == "on"
+        assert (
+            "default_transaction_read_only=on"
+            in (lightrag_backend_env(cfg)["POSTGRES_SERVER_SETTINGS"])
+        )
 
     def test_writer_has_no_read_only_guc_on_either_pool(self) -> None:
         cfg = _config()
-        assert "default_transaction_read_only" not in cfg.domain_pool_server_settings()
-        assert "default_transaction_read_only" not in cfg.lightrag_pool_server_settings()
+        assert "default_transaction_read_only" not in domain_pool_server_settings(cfg)
+        assert "default_transaction_read_only" not in lightrag_pool_server_settings(cfg)
         assert "server_settings" not in cfg.pg_connection_kwargs()
 
     def test_reader_corpus_read_only_cannot_be_overridden_by_session_setting(self) -> None:
@@ -92,7 +100,7 @@ class TestReaderPoolSessionModes:
             postgres_session_settings={"default_transaction_read_only": "off"},
         )
         # Reader invariant is applied last and wins on the corpus pool.
-        assert cfg.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
+        assert lightrag_pool_server_settings(cfg)["default_transaction_read_only"] == "on"
 
 
 class TestPgPoolBinding:

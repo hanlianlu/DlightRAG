@@ -31,6 +31,7 @@ from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSe
 from dlightrag.adapters.postgres.corpus.doc_status_lookup import PGDocStatusLookup
 from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
 from dlightrag.adapters.postgres.corpus.lightrag_contract import PGLightRAGContractGuard
+from dlightrag.adapters.postgres.corpus.lightrag_environment import apply_lightrag_environment
 from dlightrag.adapters.postgres.corpus.lightrag_readonly import (
     attach_lightrag_storages_read_only,
 )
@@ -610,13 +611,6 @@ class PGCorpusRuntimeBinder:
         )
 
 
-def apply_lightrag_environment(config: DlightragConfig) -> None:
-    """Bridge typed host settings to LightRAG's environment interface."""
-    config.apply_lightrag_backend_env(force=True)
-    config.apply_lightrag_sidecar_env()
-    config.apply_lightrag_runtime_env(force=True)
-
-
 def build_pg_corpus_backend(config: DlightragConfig) -> WorkspaceCorpusBackend:
     """Translate one root config into one coherent PostgreSQL corpus backend."""
     apply_lightrag_environment(config)
@@ -697,6 +691,5 @@ __all__ = [
     "PGCorpusMaintenanceStore",
     "PGCorpusRuntimeBinder",
     "PGReadinessProbe",
-    "apply_lightrag_environment",
     "verify_lightrag_storage_configuration",
 ]

@@ -23,6 +23,7 @@ from typing import Any, TypeVar
 import asyncpg
 
 from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
+from dlightrag.adapters.postgres.core._session_settings import domain_pool_server_settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class PGPool:
             config.storage.postgres.database,
             config.deployment.service_role,
             config.storage.postgres.ssl_mode,
-            tuple(sorted(config.domain_pool_server_settings().items())),
+            tuple(sorted(domain_pool_server_settings(config).items())),
         )
 
     def bind(self, config: Any) -> None:
@@ -105,7 +106,7 @@ class PGPool:
                 pool_kwargs["statement_cache_size"] = int(statement_cache_size)
             if config.storage.postgres.command_timeout is not None:
                 pool_kwargs["command_timeout"] = config.storage.postgres.command_timeout
-            server_settings = config.domain_pool_server_settings()
+            server_settings = domain_pool_server_settings(config)
             if server_settings:
                 pool_kwargs["server_settings"] = server_settings
             pool = await asyncpg.create_pool(**pool_kwargs)

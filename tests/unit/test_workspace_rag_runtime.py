@@ -894,19 +894,8 @@ class TestWorkspaceRagLightRAGMainPath:
     ) -> None:
         events: list[str] = []
         monkeypatch.setattr(
-            DlightragConfig,
-            "apply_lightrag_backend_env",
-            lambda self, *, force=False: events.append("backend"),
-        )
-        monkeypatch.setattr(
-            DlightragConfig,
-            "apply_lightrag_sidecar_env",
-            lambda self: events.append("sidecar"),
-        )
-        monkeypatch.setattr(
-            DlightragConfig,
-            "apply_lightrag_runtime_env",
-            lambda self, *, force=False: events.append("runtime"),
+            "dlightrag.adapters.postgres.corpus.corpus.apply_lightrag_environment",
+            lambda config: events.append("environment"),
         )
         monkeypatch.setattr(
             "dlightrag.engine.rag.lightrag.patches.apply",
@@ -925,9 +914,7 @@ class TestWorkspaceRagLightRAGMainPath:
         await service._do_initialize()
 
         assert events == [
-            "backend",
-            "sidecar",
-            "runtime",
+            "environment",
             f"validate:{test_config.parser_rules}",
             "patches",
         ]

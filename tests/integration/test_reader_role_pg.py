@@ -30,6 +30,10 @@ from dlightrag.adapters.postgres.core._migrations import (
 from dlightrag.adapters.postgres.core._migrations import (
     verify_migrations as _verify_migrations,
 )
+from dlightrag.adapters.postgres.core._session_settings import (
+    domain_pool_server_settings,
+    lightrag_pool_server_settings,
+)
 from dlightrag.adapters.postgres.corpus import pg_metadata_index, workspaces
 from dlightrag.adapters.postgres.runtime.run_store import (
     RUN_MIGRATION_SCOPE,
@@ -134,7 +138,7 @@ async def _pool(config: DlightragConfig, settings: dict[str, str]) -> Any:
 
 async def test_reader_domain_pool_accepts_operational_writes(database: str) -> None:
     config = _config(database, service_role="reader")
-    pool = await _pool(config, config.domain_pool_server_settings())
+    pool = await _pool(config, domain_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
             assert str(await conn.fetchval("SHOW transaction_read_only")).lower() == "off"
@@ -154,7 +158,7 @@ async def test_reader_corpus_pool_rejects_writes_in_postgres(database: str) -> N
     config = _config(database, service_role="reader")
     writer_pool = await _pool(
         _config(database, service_role="writer"),
-        _config(database, service_role="writer").domain_pool_server_settings(),
+        domain_pool_server_settings(_config(database, service_role="writer")),
     )
     try:
         async with writer_pool.acquire() as conn:
@@ -162,7 +166,7 @@ async def test_reader_corpus_pool_rejects_writes_in_postgres(database: str) -> N
     finally:
         await writer_pool.close()
 
-    pool = await _pool(config, config.lightrag_pool_server_settings())
+    pool = await _pool(config, lightrag_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
             assert str(await conn.fetchval("SHOW transaction_read_only")).lower() == "on"
@@ -175,7 +179,7 @@ async def test_reader_corpus_pool_rejects_writes_in_postgres(database: str) -> N
 
 async def test_writer_corpus_pool_stays_writable(database: str) -> None:
     config = _config(database, service_role="writer")
-    pool = await _pool(config, config.lightrag_pool_server_settings())
+    pool = await _pool(config, lightrag_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
             assert str(await conn.fetchval("SHOW transaction_read_only")).lower() == "off"
@@ -190,7 +194,7 @@ async def test_writer_corpus_pool_stays_writable(database: str) -> None:
 
 async def test_reader_startup_fails_before_the_writer_migrates(database: str) -> None:
     config = _config(database, service_role="reader")
-    pool = await _pool(config, config.domain_pool_server_settings())
+    pool = await _pool(config, domain_pool_server_settings(config))
     try:
         store = PGRunStore(pool=pool)
         with pytest.raises(RuntimeError, match="dlightrag_schema_migrations"):
@@ -204,14 +208,14 @@ async def test_reader_startup_fails_before_the_writer_migrates(database: str) ->
 
 async def test_reader_startup_validates_a_migrated_schema_without_ddl(database: str) -> None:
     writer_config = _config(database, service_role="writer")
-    writer_pool = await _pool(writer_config, writer_config.domain_pool_server_settings())
+    writer_pool = await _pool(writer_config, domain_pool_server_settings(writer_config))
     try:
         await PGRunStore(pool=writer_pool).initialize()
     finally:
         await writer_pool.close()
 
     reader_config = _config(database, service_role="reader")
-    reader_pool = await _pool(reader_config, reader_config.lightrag_pool_server_settings())
+    reader_pool = await _pool(reader_config, lightrag_pool_server_settings(reader_config))
     try:
         # A read-only session proves validation issues no DDL and no ledger write.
         await PGRunStore(pool=reader_pool).initialize(validate_only=True)
@@ -221,7 +225,7 @@ async def test_reader_startup_validates_a_migrated_schema_without_ddl(database: 
 
 async def test_reader_startup_fails_when_a_declared_version_is_missing(database: str) -> None:
     config = _config(database, service_role="writer")
-    pool = await _pool(config, config.domain_pool_server_settings())
+    pool = await _pool(config, domain_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
             await apply_migrations(
@@ -249,7 +253,7 @@ async def test_metadata_field_stats_migration_backfills_only_published_rows(
     database: str,
 ) -> None:
     config = _config(database, service_role="writer")
-    pool = await _pool(config, config.domain_pool_server_settings())
+    pool = await _pool(config, domain_pool_server_settings(config))
     pre_stats = tuple(
         migration
         for migration in pg_metadata_index._SCHEMA_MIGRATIONS
@@ -426,7 +430,7 @@ async def _ledger_snapshot(conn: Any) -> list[tuple[str, str]]:
 async def test_writer_migrations_satisfy_every_declared_schema_requirement(database: str) -> None:
     """The writer's DDL and the reader's requirement descriptors must not drift."""
     config = _config(database, service_role="writer")
-    pool = await _pool(config, config.domain_pool_server_settings())
+    pool = await _pool(config, domain_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
             await _migrate_every_scope(conn)
@@ -437,7 +441,7 @@ async def test_writer_migrations_satisfy_every_declared_schema_requirement(datab
 
     reader_config = _config(database, service_role="reader")
     # A read-only session proves validation issues no DDL and no ledger write.
-    reader_pool = await _pool(reader_config, reader_config.lightrag_pool_server_settings())
+    reader_pool = await _pool(reader_config, lightrag_pool_server_settings(reader_config))
     try:
         async with reader_pool.acquire() as conn:
             for scope in _SCOPES:
@@ -457,7 +461,7 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
 ) -> None:
     scope = next(candidate for candidate in _SCOPES if candidate.name == scope_name)
     writer_config = _config(database, service_role="writer")
-    writer_pool = await _pool(writer_config, writer_config.domain_pool_server_settings())
+    writer_pool = await _pool(writer_config, domain_pool_server_settings(writer_config))
     try:
         async with writer_pool.acquire() as conn:
             await _migrate_every_scope(conn)
@@ -467,7 +471,7 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
         await writer_pool.close()
 
     reader_config = _config(database, service_role="reader")
-    reader_pool = await _pool(reader_config, reader_config.lightrag_pool_server_settings())
+    reader_pool = await _pool(reader_config, lightrag_pool_server_settings(reader_config))
     try:
         async with reader_pool.acquire() as conn:
             with pytest.raises(CorpusSchemaError) as excinfo:
@@ -485,7 +489,7 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
         await reader_pool.close()
 
     verify_config = _config(database, service_role="writer")
-    verify_pool = await _pool(verify_config, verify_config.domain_pool_server_settings())
+    verify_pool = await _pool(verify_config, domain_pool_server_settings(verify_config))
     try:
         async with verify_pool.acquire() as conn:
             assert await _ledger_snapshot(conn) == before
@@ -495,7 +499,7 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
 
 async def test_reader_rejects_an_undeclared_migration_version(database: str) -> None:
     config = _config(database, service_role="writer")
-    pool = await _pool(config, config.domain_pool_server_settings())
+    pool = await _pool(config, domain_pool_server_settings(config))
     try:
         async with pool.acquire() as conn:
             await _migrate_every_scope(conn)

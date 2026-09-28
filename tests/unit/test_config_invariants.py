@@ -48,7 +48,6 @@ from dlightrag.engine.rag.workspace.settings import (
     RetrievalSettings,
     SourceSettings,
     VisualAssetSettings,
-    VLMSidecarSettings,
 )
 from tests.support.settings_models import settings_models
 
@@ -250,54 +249,6 @@ def test_storage_defaults_and_only_explicit_milvus_vector_alternative() -> None:
             LightRAGStorageSettings(**values)  # type: ignore[arg-type]
 
 
-def test_vector_and_pool_defaults_export_lightrag_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = DlightragConfig()
-    config.apply_lightrag_backend_env(force=True)
-
-    assert config.storage.lightrag.hnsw_ef_construction == 256
-    assert config.storage.lightrag.hnsw_ef_search == 256
-    assert config.domain_pool_server_settings()["hnsw.ef_search"] == "256"
-    assert os.environ["POSTGRES_HNSW_EF"] == "256"
-    assert os.environ["POSTGRES_VECTOR_INDEX_TYPE"] == "HNSW_HALFVEC"
-    assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
-
-
-def test_backend_env_disables_global_lightrag_workspace_binding(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("POSTGRES_WORKSPACE", "inherited-workspace")
-    config = DlightragConfig(deployment=DeploymentSettings(workspace="resolved-workspace"))
-
-    config.apply_lightrag_backend_env(force=True)
-
-    assert os.environ["POSTGRES_WORKSPACE"] == ""
-
-
-def test_milvus_environment_overrides_only_resolved_bindings(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MILVUS_URI", "inherited-uri")
-    monkeypatch.setenv("MILVUS_TOKEN", "inherited-token")
-    monkeypatch.setenv("MILVUS_DB_NAME", "inherited-db")
-    config = DlightragConfig(
-        storage=StorageSettings(
-            lightrag=LightRAGStorageSettings(
-                vector_storage="MilvusVectorDBStorage",
-                milvus_uri="resolved-uri",
-                milvus_db_name="resolved-db",
-            )
-        )
-    )
-
-    config.apply_lightrag_backend_env(force=True)
-
-    assert os.environ["MILVUS_URI"] == "resolved-uri"
-    assert os.environ["MILVUS_DB_NAME"] == "resolved-db"
-    assert os.environ["MILVUS_TOKEN"] == "inherited-token"
-
-
 def test_milvus_reader_and_pg_only_options_are_rejected_without_secret_echo() -> None:
     secret = "never-echo-this-milvus-token"
     storage = StorageSettings(
@@ -364,23 +315,6 @@ def test_postgres_ssl_modes_project_to_asyncpg() -> None:
     assert context.check_hostname is True
 
 
-def test_postgres_session_settings_merge_hnsw_and_reader_policy() -> None:
-    config = DlightragConfig(
-        deployment=DeploymentSettings(service_role="reader"),
-        storage=StorageSettings(
-            postgres=PostgresSettings(
-                session_settings={"application_name": "test", "hnsw.ef_search": 999}
-            ),
-            lightrag=LightRAGStorageSettings(hnsw_ef_search=256),
-        ),
-    )
-    assert config.domain_pool_server_settings() == {
-        "hnsw.ef_search": "999",
-        "application_name": "test",
-    }
-    assert config.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
-
-
 def test_bm25_defaults_cover_languages_and_one_fallback() -> None:
     profiles = RetrievalSettings().bm25_profiles
     assert {profile.languages[0] for profile in profiles if profile.languages} >= {"zh", "en"}
@@ -421,39 +355,6 @@ def test_parser_defaults_to_self_hosted_mineru() -> None:
         docling=DoclingSidecarSettings(),
     )
     assert both.active_parser == "mineru"
-
-
-def test_docling_only_selection_and_sidecar_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", "stale")
-    config = DlightragConfig(
-        corpus=CorpusSettings(
-            sidecars=ParserSidecarsSettings(
-                docling=DoclingSidecarSettings(endpoint="http://docling:5001")
-            )
-        )
-    )
-    config.apply_lightrag_sidecar_env()
-    assert config.parser_rules == "*:docling-iteP"
-    assert os.environ["DOCLING_ENDPOINT"] == "http://docling:5001"
-    # Unset optional DlightRAG bindings leave upstream environment behavior untouched.
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "stale"
-
-
-def test_mineru_backend_and_vlm_environment_are_canonical(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = DlightragConfig(
-        corpus=CorpusSettings(
-            sidecars=ParserSidecarsSettings(
-                vlm=VLMSidecarSettings(min_image_pixel=80),
-                mineru=MinerUSidecarSettings(backend="hybrid-engine"),
-            )
-        )
-    )
-    config.apply_lightrag_sidecar_env()
-    assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
-    assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
-    assert "LIGHTRAG_PARSER" not in os.environ
-    config.apply_lightrag_runtime_env()
-    assert os.environ["LIGHTRAG_PARSER"] == "*:mineru-iteP"
 
 
 def test_entity_type_prompt_file_is_one_yaml_filename() -> None:

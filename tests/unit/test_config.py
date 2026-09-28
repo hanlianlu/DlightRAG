@@ -226,6 +226,10 @@ def test_models_accept_complete_startup_catalogue_entries() -> None:
 
 
 def test_postgres_projection_and_reader_settings() -> None:
+    from dlightrag.adapters.postgres.core._session_settings import (
+        lightrag_pool_server_settings,
+    )
+
     config = DlightragConfig(
         deployment=DeploymentSettings(service_role="reader"),
         storage=StorageSettings(
@@ -239,7 +243,7 @@ def test_postgres_projection_and_reader_settings() -> None:
         "password": "p",
         "database": "d",
     }
-    assert config.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
+    assert lightrag_pool_server_settings(config)["default_transaction_read_only"] == "on"
 
 
 def test_dump_redacts_nested_secrets() -> None:

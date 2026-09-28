@@ -16,10 +16,8 @@ from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
 from dlightrag.adapters.observability import LangfuseTelemetry
-from dlightrag.adapters.postgres.corpus.corpus import (
-    apply_lightrag_environment,
-    verify_lightrag_storage_configuration,
-)
+from dlightrag.adapters.postgres.corpus.corpus import verify_lightrag_storage_configuration
+from dlightrag.adapters.postgres.corpus.lightrag_environment import apply_lightrag_environment
 from dlightrag.adapters.postgres.rebuild_bm25 import canonical_workspace_config, run_rebuild_bm25
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.application.settings import rag_settings

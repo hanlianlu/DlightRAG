@@ -106,8 +106,10 @@ storage:
 SSL belongs with the endpoint in `.env`
 (`DLIGHTRAG_STORAGE__POSTGRES__SSL_MODE`, `__SSL_ROOT_CERT`, `__SSL_CERT`,
 `__SSL_KEY`, `__SSL_CRL`). It is bridged to LightRAG's `POSTGRES_SSL_*` environment
-contract once, when the root PostgreSQL corpus adapter is constructed.
-DlightRAG's domain-store pool, maintenance adapter, and readiness adapter use the
+contract once, when the root PostgreSQL corpus adapter is constructed; that
+adapter owns the whole LightRAG environment bridge (PostgreSQL, Milvus, parser
+sidecars, parser rules, input directory) and the session settings both pools
+use. DlightRAG's domain-store pool, maintenance adapter, and readiness adapter use the
 same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do not
 need a second SSL configuration surface. Constructing configuration alone does
 not mutate LightRAG's process environment.

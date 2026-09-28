@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -43,12 +43,7 @@ from dlightrag.engine.ai.settings import (
     thaw_settings_value,
 )
 from dlightrag.engine.ai.telemetry import hides_secret_value, is_secret_key
-from dlightrag.engine.rag.workspace.settings import (
-    CorpusSettings,
-    DoclingSidecarSettings,
-    MinerUSidecarSettings,
-    VLMSidecarSettings,
-)
+from dlightrag.engine.rag.workspace.settings import CorpusSettings
 from dlightrag.engine.rag.workspace.workspaces import (
     normalize_workspace,
     require_canonical_workspace_id,
@@ -1112,92 +1107,3 @@ class DlightragConfig(BaseSettings):
         if (ssl_value := self._pg_ssl_value()) is not None:
             kwargs["ssl"] = ssl_value
         return kwargs
-
-    @staticmethod
-    def _env_value(value: str | int | float | bool | None) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        return str(value).strip() or None
-
-    def domain_pool_server_settings(self) -> dict[str, str]:
-        pg, vector = self.storage.postgres, self.storage.lightrag
-        settings = {"hnsw.ef_search": str(vector.hnsw_ef_search)}
-        for key, value in pg.session_settings.items():
-            if (rendered := self._env_value(value)) is not None:
-                settings[str(key)] = rendered
-        return settings
-
-    def lightrag_pool_server_settings(self) -> dict[str, str]:
-        settings = self.domain_pool_server_settings()
-        if self.is_reader:
-            settings["default_transaction_read_only"] = "on"
-        return settings
-
-    def postgres_server_settings_env_value(self) -> str:
-        return urlencode(self.lightrag_pool_server_settings())
-
-    def _lightrag_sidecar_env_map(self) -> dict[str, str]:
-        sidecars = self.corpus.sidecars
-        objects: list[VLMSidecarSettings | MinerUSidecarSettings | DoclingSidecarSettings] = [
-            sidecars.vlm
-        ]
-        objects.append(sidecars.mineru if sidecars.mineru is not None else sidecars.docling)  # type: ignore[arg-type]
-        raw = {env: getattr(obj, field) for obj in objects for field, env in obj._ENV_MAP.items()}
-        return {
-            key: text for key, value in raw.items() if (text := self._env_value(value)) is not None
-        }
-
-    def apply_lightrag_sidecar_env(self) -> None:
-        # Resolved bindings win. Optional fields that are absent deliberately do
-        # not erase inherited LightRAG behavior.
-        os.environ.update(self._lightrag_sidecar_env_map())
-
-    def apply_lightrag_backend_env(self, *, force: bool = False) -> None:
-        pg, vector = self.storage.postgres, self.storage.lightrag
-        active = self.pg_connection_kwargs()
-        # DlightRAG multiplexes WorkspaceRag instances in one process. Disable
-        # LightRAG's process-global PostgreSQL workspace override so each
-        # storage instance keeps the workspace supplied by WorkspaceRag.
-        os.environ["POSTGRES_WORKSPACE"] = ""
-        values: dict[str, Any] = {
-            "POSTGRES_HOST": active["host"],
-            "POSTGRES_PORT": active["port"],
-            "POSTGRES_USER": active["user"],
-            "POSTGRES_PASSWORD": active["password"],
-            "POSTGRES_DATABASE": active["database"],
-            "POSTGRES_VECTOR_INDEX_TYPE": vector.vector_index_type,
-            "POSTGRES_HNSW_M": vector.hnsw_m,
-            "POSTGRES_HNSW_EF": vector.hnsw_ef_construction,
-            "POSTGRES_MAX_CONNECTIONS": pg.lightrag_pool_max_size,
-            "POSTGRES_CONNECTION_RETRIES": pg.connection_retries,
-            "POSTGRES_CONNECTION_RETRY_BACKOFF": pg.connection_retry_backoff,
-            "POSTGRES_CONNECTION_RETRY_BACKOFF_MAX": pg.connection_retry_backoff_max,
-            "POSTGRES_POOL_CLOSE_TIMEOUT": pg.pool_close_timeout,
-        }
-        if pg.statement_cache_size is not None:
-            values["POSTGRES_STATEMENT_CACHE_SIZE"] = pg.statement_cache_size
-        for key, value in {
-            "POSTGRES_SSL_MODE": pg.ssl_mode,
-            "POSTGRES_SSL_CERT": pg.ssl_cert,
-            "POSTGRES_SSL_KEY": pg.ssl_key,
-            "POSTGRES_SSL_ROOT_CERT": pg.ssl_root_cert,
-            "POSTGRES_SSL_CRL": pg.ssl_crl,
-            "MILVUS_URI": vector.milvus_uri,
-            "MILVUS_TOKEN": vector.milvus_token,
-            "MILVUS_DB_NAME": vector.milvus_db_name,
-        }.items():
-            if (rendered := self._env_value(value)) is not None:
-                values[key] = rendered
-        for key, value in values.items():
-            if force or key not in os.environ:
-                os.environ[key] = str(value)
-        if force or "POSTGRES_SERVER_SETTINGS" not in os.environ:
-            os.environ["POSTGRES_SERVER_SETTINGS"] = self.postgres_server_settings_env_value()
-
-    def apply_lightrag_runtime_env(self, *, force: bool = False) -> None:
-        if force or "LIGHTRAG_PARSER" not in os.environ:
-            os.environ["LIGHTRAG_PARSER"] = self.parser_rules
-        if force or "INPUT_DIR" not in os.environ:
-            os.environ["INPUT_DIR"] = str(self.input_dir_path)
