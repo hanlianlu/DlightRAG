@@ -2,8 +2,10 @@
 """Tests for API and web visual image routes."""
 
 from dataclasses import dataclass
+from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -11,6 +13,8 @@ from dlightrag.adapters.http.browser.routes.images import router as web_images_r
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.routes.images import router as api_images_router
 from dlightrag.application.access import AccessAction, UserContext
+from dlightrag.application.config import DlightragConfig
+from tests.support.application_double import application_double
 
 
 @dataclass(frozen=True)
@@ -19,9 +23,14 @@ class _Asset:
     media_type: str
 
 
-def _api_client(application_double: object) -> AsyncClient:
+@pytest.fixture
+def application(test_config: DlightragConfig) -> Any:
+    return application_double(test_config)
+
+
+def _api_client(application: object) -> AsyncClient:
     app = FastAPI()
-    app.state.application = application_double
+    app.state.application = application
     app.include_router(api_images_router)
     app.dependency_overrides[get_current_user] = lambda: UserContext(
         user_id="test", auth_mode="none"
@@ -29,22 +38,19 @@ def _api_client(application_double: object) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _web_client(application_double: object, access_control: object | None = None) -> AsyncClient:
+def _web_client(application: object, access_control: object | None = None) -> AsyncClient:
     app = FastAPI()
-    app.state.application = application_double
+    app.state.application = application
     if access_control is not None:
         app.state.access_control = access_control
     app.include_router(web_images_router)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-async def test_api_image_route_serves_asset() -> None:
-    application_double = AsyncMock()
-    application_double.corpora.get_visual_asset.return_value = _Asset(
-        data=b"png", media_type="image/png"
-    )
+async def test_api_image_route_serves_asset(application: Any) -> None:
+    application.corpora.get_visual_asset.return_value = _Asset(data=b"png", media_type="image/png")
 
-    async with _api_client(application_double) as client:
+    async with _api_client(application) as client:
         response = await client.get("/images/default/chunk_1?size=thumb")
 
     assert response.status_code == 200
@@ -53,28 +59,26 @@ async def test_api_image_route_serves_asset() -> None:
     # Authorized bytes: no shared cache may replay them to another caller.
     assert response.headers["cache-control"] == "private, no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
-    application_double.corpora.get_visual_asset.assert_awaited_once_with(
+    application.corpora.get_visual_asset.assert_awaited_once_with(
         "default", "chunk_1", size="thumb"
     )
 
 
-async def test_api_image_route_returns_404_for_missing_asset() -> None:
-    application_double = AsyncMock()
-    application_double.corpora.get_visual_asset.return_value = None
+async def test_api_image_route_returns_404_for_missing_asset(application: Any) -> None:
+    application.corpora.get_visual_asset.return_value = None
 
-    async with _api_client(application_double) as client:
+    async with _api_client(application) as client:
         response = await client.get("/images/default/missing")
 
     assert response.status_code == 404
 
 
-async def test_web_image_route_serves_same_origin_asset() -> None:
-    application_double = AsyncMock()
-    application_double.corpora.get_visual_asset.return_value = _Asset(
+async def test_web_image_route_serves_same_origin_asset(application: Any) -> None:
+    application.corpora.get_visual_asset.return_value = _Asset(
         data=b"jpeg", media_type="image/jpeg"
     )
 
-    async with _web_client(application_double) as client:
+    async with _web_client(application) as client:
         response = await client.get("/images/default/chunk_1?size=full")
 
     assert response.status_code == 200
@@ -82,19 +86,16 @@ async def test_web_image_route_serves_same_origin_asset() -> None:
     assert response.headers["content-type"] == "image/jpeg"
     assert response.headers["cache-control"] == "private, no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
-    application_double.corpora.get_visual_asset.assert_awaited_once_with(
-        "default", "chunk_1", size="full"
-    )
+    application.corpora.get_visual_asset.assert_awaited_once_with("default", "chunk_1", size="full")
 
 
-async def test_web_image_route_canonicalizes_scope_before_access_and_read() -> None:
-    application_double = AsyncMock()
-    application_double.corpora.get_visual_asset.return_value = _Asset(
+async def test_web_image_route_canonicalizes_scope_before_access_and_read(application: Any) -> None:
+    application.corpora.get_visual_asset.return_value = _Asset(
         data=b"jpeg", media_type="image/jpeg"
     )
     access_control = AsyncMock()
 
-    async with _web_client(application_double, access_control) as client:
+    async with _web_client(application, access_control) as client:
         response = await client.get("/images/Finance%20Reports/chunk_1?size=full")
 
     assert response.status_code == 200
@@ -103,7 +104,7 @@ async def test_web_image_route_canonicalizes_scope_before_access_and_read() -> N
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
         workspace="finance_reports",
     )
-    application_double.corpora.get_visual_asset.assert_awaited_once_with(
+    application.corpora.get_visual_asset.assert_awaited_once_with(
         "finance_reports",
         "chunk_1",
         size="full",

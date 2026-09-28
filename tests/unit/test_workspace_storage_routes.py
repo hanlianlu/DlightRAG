@@ -3,7 +3,7 @@
 
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +12,7 @@ from dlightrag.adapters.http.server import create_app
 from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.errors import WorkspaceWriteFencedError
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
+from tests.support.application_double import application_double
 
 
 def _embedding_config() -> EmbeddingSettings:
@@ -26,7 +27,7 @@ def _embedding_config() -> EmbeddingSettings:
 @pytest.fixture()
 async def route_client(
     tmp_path: Path,
-) -> AsyncIterator[tuple[AsyncClient, AsyncMock]]:
+) -> AsyncIterator[tuple[AsyncClient, Any]]:
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         # type: ignore[call-arg]
         deployment={"working_dir": str(tmp_path)},
@@ -36,23 +37,22 @@ async def route_client(
         },
     )
     set_config(config)
-    application_double = AsyncMock()
-    application_double.config = config
+    application = application_double(config)
     app = create_app(include_web_app=False)
-    app.state.application = application_double
+    app.state.application = application
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
         follow_redirects=False,
     ) as client:
-        yield client, application_double
+        yield client, application
 
 
 async def test_storage_status_route_returns_admin_facts(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
 ) -> None:
-    client, application_double = route_client
-    application_double.corpora.get_workspace_storage_status.return_value = {
+    client, application = route_client
+    application.corpora.get_workspace_storage_status.return_value = {
         "workspace": "finance",
         "storage_tier": "hot",
         "promotion_state": "none",
@@ -69,14 +69,14 @@ async def test_storage_status_route_returns_admin_facts(
 
     assert response.status_code == 200
     assert response.json()["storage_tier"] == "hot"
-    application_double.corpora.get_workspace_storage_status.assert_awaited_once_with("finance")
+    application.corpora.get_workspace_storage_status.assert_awaited_once_with("finance")
 
 
 async def test_storage_status_route_404_for_unknown_workspace(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
 ) -> None:
-    client, application_double = route_client
-    application_double.corpora.get_workspace_storage_status.return_value = None
+    client, application = route_client
+    application.corpora.get_workspace_storage_status.return_value = None
 
     response = await client.get("/workspaces/missing/storage")
 
@@ -84,10 +84,10 @@ async def test_storage_status_route_404_for_unknown_workspace(
 
 
 async def test_update_metadata_under_fence_maps_to_409_with_retry_after(
-    route_client: tuple[AsyncClient, AsyncMock],
+    route_client: tuple[AsyncClient, Any],
 ) -> None:
-    client, application_double = route_client
-    application_double.corpora.update_metadata.side_effect = WorkspaceWriteFencedError(
+    client, application = route_client
+    application.corpora.update_metadata.side_effect = WorkspaceWriteFencedError(
         workspace="finance", retry_after_seconds=8.0
     )
 
