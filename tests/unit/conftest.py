@@ -50,12 +50,16 @@ def answer_model_profile(**overrides: int | bool | None) -> ModelProfile:
     return ModelProfile(**(fields | overrides))  # type: ignore[arg-type]
 
 
+def answer_capabilities(answer: AnswerImageCapability | None = None) -> AnswerCapabilities:
+    """The capability snapshot a transport test's answers double reports."""
+    return AnswerCapabilities(answer=answer, vlm_status="unknown")
+
+
 def answer_capability_view(
     answer: AnswerImageCapability | None = None,
 ) -> SimpleNamespace:
     """Read-only capability-view double for transport tests."""
-    snapshot = AnswerCapabilities(answer=answer, vlm_status="unknown")
-    return SimpleNamespace(read=AsyncMock(return_value=snapshot))
+    return SimpleNamespace(read=AsyncMock(return_value=answer_capabilities(answer)))
 
 
 async def prepare_test_answer_run_input(

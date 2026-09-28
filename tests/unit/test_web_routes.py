@@ -4,8 +4,8 @@
 import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock
 
 import jwt
 import pytest
@@ -21,6 +21,7 @@ from dlightrag.application.corpus_admin import (
     FilePanelCursorCodec,
     FilePanelPageRequest,
     UploadLimits,
+    WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
     WorkspaceNotFoundError,
@@ -29,15 +30,8 @@ from dlightrag.application.runs import RunAdmissionLimitExceededError
 from dlightrag.engine.agent.skills import owner_skill_root
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
-from tests.unit.conftest import answer_capability_view
-
-if TYPE_CHECKING:
-    from dlightrag.application import Application
-
-
-def _fake_application(**attrs: object) -> Application:
-    return cast("Application", SimpleNamespace(**attrs))
-
+from tests.support.application_double import application_double
+from tests.unit.conftest import answer_capabilities
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
 SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
@@ -68,10 +62,10 @@ BUILTIN_SKILL_CREATOR = {
 
 
 @pytest.fixture
-def mock_application():
+def mock_application(test_config: DlightragConfig):
     """Create an Application-shaped Web route test double."""
-    application_double = AsyncMock()
-    capability_view = answer_capability_view(
+    application = application_double(test_config)
+    application.answers.capabilities.return_value = answer_capabilities(
         AnswerImageCapability(
             status="supported",
             configured_ceiling=8,
@@ -82,102 +76,88 @@ def mock_application():
             failure_kind=None,
         )
     )
-    application_double.answers = SimpleNamespace(
-        capabilities=capability_view.read,
-        # The bootstrap offers exactly what this deployment can apply.
-        agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
+    # The bootstrap offers exactly what this deployment can apply.
+    application.answers.agent_effort_offer.return_value = AgentEffortOffer(
+        ("low", "high", "max"), None
     )
-    corpora = SimpleNamespace()
-    corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
-    corpora.workspace_exists = AsyncMock(return_value=True)
+    corpora = application.corpora
+    corpora.list_workspaces.return_value = ["default", "test_ws"]
+    corpora.workspace_exists.return_value = True
     corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"web-file-panel-test-secret")
-    corpora.alist_workspace_records = AsyncMock(
-        return_value=[
+    corpora.alist_workspace_records.return_value = [
+        {
+            "workspace": "default",
+            "display_name": "Default",
+            "embedding_model": "voyage-multimodal-3.5",
+        },
+        {
+            "workspace": "test_ws",
+            "display_name": "Test Workspace",
+            "embedding_model": "voyage-multimodal-3.5",
+        },
+    ]
+    corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(
             {
                 "workspace": "default",
                 "display_name": "Default",
                 "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
             },
             {
                 "workspace": "test_ws",
                 "display_name": "Test Workspace",
                 "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
             },
-        ]
-    )
-    corpora.list_workspace_records_page = AsyncMock(
-        return_value=WorkspaceCatalogPage(
-            items=(
-                {
-                    "workspace": "default",
-                    "display_name": "Default",
-                    "embedding_model": "voyage-multimodal-3.5",
-                    "created_at": None,
-                    "updated_at": None,
-                },
-                {
-                    "workspace": "test_ws",
-                    "display_name": "Test Workspace",
-                    "embedding_model": "voyage-multimodal-3.5",
-                    "created_at": None,
-                    "updated_at": None,
-                },
-            ),
-            next_cursor=None,
-            fetched_rows=2,
-        )
+        ),
+        next_cursor=None,
+        fetched_rows=2,
     )
     corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
         b"web-workspace-catalog-test-secret"
     )
-    corpora.file_panel_snapshot = AsyncMock(
-        return_value={
-            "files": [{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}],
-            "next_cursor": None,
-            "fetched_rows": 1,
-        }
-    )
-    corpora.failed_file_snapshot = AsyncMock(
-        return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
-    )
-    corpora.prepare_source_download = AsyncMock()
-    corpora.get_visual_asset = AsyncMock()
-    corpora.create_workspace = AsyncMock()
-    application_double.corpora = corpora
+    corpora.file_panel_snapshot.return_value = {
+        "files": [{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}],
+        "next_cursor": None,
+        "fetched_rows": 1,
+    }
+    corpora.failed_file_snapshot.return_value = {
+        "failed": [],
+        "next_cursor": None,
+        "fetched_rows": 0,
+    }
     corpus_run = SimpleNamespace(
         run_id="0199a0a0-0000-7000-8000-0000000000bb",
         run_kind="corpus_mutation",
         lane="corpus_mutation",
         status="queued",
     )
-    application_double.corpus_mutations = SimpleNamespace(
-        create_retry=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
-        create_staged_batch=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
-        create_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
-        create_reset=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
-        create_workspace_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run)),
-        stage_uploads=AsyncMock(),
-        upload_limits=UploadLimits(file_bytes=100 * 1024 * 1024, request_bytes=512 * 1024 * 1024),
-        discard_staged_run=AsyncMock(),
+    corpus_mutations = application.corpus_mutations
+    for accept in (
+        corpus_mutations.create_retry,
+        corpus_mutations.create_staged_batch,
+        corpus_mutations.create_delete,
+        corpus_mutations.create_reset,
+        corpus_mutations.create_workspace_delete,
+    ):
+        accept.return_value = SimpleNamespace(run=corpus_run)
+    corpus_mutations.upload_limits = UploadLimits(
+        file_bytes=100 * 1024 * 1024, request_bytes=512 * 1024 * 1024
     )
-    application_double.runs = SimpleNamespace(
-        get=AsyncMock(return_value=None),
-        get_global=AsyncMock(return_value=None),
-        cancel=AsyncMock(),
-        resume_repair=AsyncMock(return_value=True),
-        subscribe=MagicMock(),
-    )
-    return application_double
+    application.runs.get.return_value = None
+    application.runs.get_global.return_value = None
+    application.runs.resume_repair.return_value = True
+    return application
 
 
 @pytest.fixture
-def web_app(mock_application, test_config: DlightragConfig):
+def web_app(mock_application):
     """Create the FastAPI app with its Application-shaped double installed."""
     application = create_app(include_web_app=True)
-    mock_application.config = test_config
     application.state.application = mock_application
-    conversation_service = AsyncMock()
-    mock_application.web_conversations = conversation_service
     return application
 
 
@@ -195,26 +175,24 @@ async def client(web_app):
 
 
 async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, test_config: DlightragConfig
 ) -> None:
     from dlightrag.adapters.http import server as api_server
 
-    application_double = AsyncMock()
-    conversation_service = AsyncMock()
-    application = create_app(include_web_app=True)
-    application_double.health = MagicMock()
-    application_double.web_conversations = conversation_service
+    application = application_double(test_config)
+    conversation_service = application.web_conversations
+    app = create_app(include_web_app=True)
     monkeypatch.setattr(
         api_server,
         "create_application",
-        AsyncMock(return_value=application_double),
+        AsyncMock(return_value=application),
     )
 
-    async with application.router.lifespan_context(application):
-        assert application.state.application.web_conversations is conversation_service
+    async with app.router.lifespan_context(app):
+        assert app.state.application.web_conversations is conversation_service
 
     conversation_service.aclose.assert_not_awaited()
-    application_double.aclose.assert_awaited_once_with()
+    application.aclose.assert_awaited_once_with()
 
 
 async def test_skills_endpoint_merges_owner_skills(
@@ -630,6 +608,7 @@ class TestWebIndex:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
         assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+        assert "DlightRAG" in response.text
         assert "<dl-app>" in response.text
         assert "/static/app/assets/app-" in response.text
         assert "__THEME_INIT__" not in response.text
@@ -919,13 +898,9 @@ class TestWebFiles:
     async def test_file_list_derives_display_name_from_path(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.file_panel_snapshot = AsyncMock(
-            return_value={
-                "files": [
-                    {"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}
-                ],
-            }
-        )
+        mock_application.corpora.file_panel_snapshot.return_value = {
+            "files": [{"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}],
+        }
 
         resp = await client.get("/web/api/files")
 
@@ -935,14 +910,10 @@ class TestWebFiles:
     async def test_file_list_uses_file_panel_snapshot_for_cold_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=True)
-        mock_application.corpora.file_panel_snapshot = AsyncMock(
-            return_value={
-                "files": [
-                    {"doc_id": "d1", "file_path": "/tmp/cold/report.pdf", "status": "processed"}
-                ],
-            }
-        )
+        mock_application.corpora.workspace_exists.return_value = True
+        mock_application.corpora.file_panel_snapshot.return_value = {
+            "files": [{"doc_id": "d1", "file_path": "/tmp/cold/report.pdf", "status": "processed"}],
+        }
 
         resp = await client.get("/web/api/files", params={"workspace": "cold-ws"})
 
@@ -957,7 +928,7 @@ class TestWebFiles:
     async def test_file_list_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+        mock_application.corpora.workspace_exists.return_value = False
 
         resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
@@ -968,7 +939,7 @@ class TestWebFiles:
     async def test_file_list_rejects_stale_workspace_even_with_registered_cookie(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+        mock_application.corpora.workspace_exists.return_value = False
         client.cookies.set("dlightrag_workspace", "test_ws")
 
         resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
@@ -980,7 +951,7 @@ class TestWebFiles:
     async def test_file_list_canonicalizes_requested_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=True)
+        mock_application.corpora.workspace_exists.return_value = True
 
         resp = await client.get("/web/api/files", params={"workspace": "test-fallback-ws"})
 
@@ -992,7 +963,7 @@ class TestWebFiles:
     async def test_file_list_rejects_stale_workspace_without_default(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+        mock_application.corpora.workspace_exists.return_value = False
 
         resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
@@ -1289,7 +1260,7 @@ class TestWebFiles:
     async def test_upload_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+        mock_application.corpora.workspace_exists.return_value = False
 
         resp = await client.post(
             "/web/api/files/upload",
@@ -1364,7 +1335,7 @@ class TestWebFiles:
     async def test_delete_files_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+        mock_application.corpora.workspace_exists.return_value = False
 
         resp = await client.request(
             "DELETE",
@@ -1388,11 +1359,12 @@ class TestWebWorkspaceCreate:
     async def test_create_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.create_workspace = AsyncMock()
         # The registry owns uniqueness; the catalog is read once, for the cookies.
-        mock_application.corpora.list_workspaces = AsyncMock(
-            return_value=["default", "test_ws", "new_workspace"]
-        )
+        mock_application.corpora.list_workspaces.return_value = [
+            "default",
+            "test_ws",
+            "new_workspace",
+        ]
         resp = await client.post(
             "/web/api/workspaces/create",
             data={"workspace_name": "new workspace"},
@@ -1416,8 +1388,8 @@ class TestWebWorkspaceCreate:
     ) -> None:
         from dlightrag.application.corpus_admin import WorkspaceExistsError
 
-        mock_application.corpora.create_workspace = AsyncMock(
-            side_effect=WorkspaceExistsError("Workspace 'default' already exists")
+        mock_application.corpora.create_workspace.side_effect = WorkspaceExistsError(
+            "Workspace 'default' already exists"
         )
         resp = await client.post(
             "/web/api/workspaces/create",
@@ -1464,6 +1436,98 @@ async def test_bootstrap_falls_back_to_the_configured_default_workspace(
     assert stale["primary_workspace"] == "test_ws"
 
 
+async def test_bootstrap_bounds_the_visible_array_but_keeps_full_authorization_inputs(
+    client: AsyncClient, mock_application
+) -> None:
+    mock_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(
+            {
+                "workspace": "default",
+                "display_name": "Default",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
+            },
+        ),
+        next_cursor=WorkspaceCatalogCursor(after_workspace="default"),
+        fetched_rows=2,
+    )
+    mock_application.corpora.alist_workspace_records.return_value = [
+        {
+            "workspace": "default",
+            "display_name": "Default",
+            "embedding_model": "voyage-multimodal-3.5",
+        },
+        {
+            "workspace": "finance",
+            "display_name": "Finance",
+            "embedding_model": "voyage-multimodal-3.5",
+        },
+        {
+            "workspace": "research",
+            "display_name": "Research",
+            "embedding_model": "voyage-multimodal-3.5",
+        },
+    ]
+    client.cookies.delete("dlightrag_workspace")
+
+    resp = await client.get("/web/api/bootstrap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["workspace"] for item in body["workspaces"]] == ["default"]
+    assert body["workspaces_next_cursor"] is not None
+    # The full catalog still powers the authorization inputs: without cookies,
+    # every visible workspace is active, not just the bounded display page.
+    assert body["active_workspaces"] == ["default", "finance", "research"]
+    assert body["known_workspaces"] == ["default", "finance", "research"]
+    assert body["primary_workspace"] == "default"
+
+
+async def test_web_workspaces_page_roundtrips_an_opaque_cursor(
+    client: AsyncClient, mock_application
+) -> None:
+    mock_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(
+            {
+                "workspace": "finance",
+                "display_name": "Finance",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
+            },
+        ),
+        next_cursor=WorkspaceCatalogCursor(after_workspace="finance"),
+        fetched_rows=2,
+    )
+
+    resp = await client.get("/web/api/workspaces")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["workspaces"] == [
+        {
+            "workspace": "finance",
+            "display_name": "Finance",
+            "embedding_model": "voyage-multimodal-3.5",
+        }
+    ]
+    assert body["next_cursor"] is not None
+
+    second = await client.get("/web/api/workspaces", params={"cursor": body["next_cursor"]})
+    assert second.status_code == 200
+    assert second.json()["workspaces"][0]["workspace"] == "finance"
+
+
+async def test_web_workspaces_page_rejects_tampered_cursor_before_storage(
+    client: AsyncClient, mock_application
+) -> None:
+    resp = await client.get("/web/api/workspaces", params={"cursor": "AAAA.tampered"})
+
+    assert resp.status_code == 422
+    mock_application.corpora.list_workspace_records_page.assert_not_awaited()
+
+
 async def test_reset_workspace_accepts_a_durable_corpus_run(
     client: AsyncClient, mock_application
 ) -> None:
@@ -1492,7 +1556,7 @@ async def test_workspace_commands_on_a_read_only_replica_pass_the_refusal_throug
     from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
 
     refusal = CorpusMutationUnavailableError(request="the request")
-    mock_application.corpora.create_workspace = AsyncMock(side_effect=refusal)
+    mock_application.corpora.create_workspace.side_effect = refusal
     mock_application.corpus_mutations.create_reset.side_effect = refusal
     mock_application.corpus_mutations.create_workspace_delete.side_effect = refusal
 
@@ -1542,10 +1606,12 @@ async def test_workspace_commands_hide_untyped_failures_behind_logged_advice(
     logged: str,
 ) -> None:
     failure = RuntimeError("socket closed at 10.0.0.7")
-    if failing in {"create_workspace", "workspace_exists"}:
-        setattr(mock_application.corpora, failing, AsyncMock(side_effect=failure))
-    else:
-        getattr(mock_application.corpus_mutations, failing).side_effect = failure
+    service = (
+        mock_application.corpora
+        if failing in {"create_workspace", "workspace_exists"}
+        else mock_application.corpus_mutations
+    )
+    getattr(service, failing).side_effect = failure
 
     with caplog.at_level("ERROR"):
         response = await client.post(
@@ -1697,7 +1763,7 @@ class TestSourcePresentation:
     ) -> None:
         """The control renders the deployment's own offer, never a fixed three levels."""
         application = web_app.state.application
-        application.answers.agent_effort_offer = lambda: AgentEffortOffer(("low",), None)
+        application.answers.agent_effort_offer.return_value = AgentEffortOffer(("low",), None)
 
         response = await client.get("/web/api/bootstrap")
 
