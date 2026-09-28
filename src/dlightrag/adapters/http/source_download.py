@@ -10,7 +10,6 @@ from dlightrag.application.corpus_admin import (
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
     SourceDownloadNotFoundError,
-    SourceDownloadUnavailableError,
 )
 
 
@@ -27,8 +26,6 @@ async def source_download_response(
         raise HTTPException(400, str(exc)) from exc
     except SourceDownloadNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except SourceDownloadUnavailableError as exc:
-        raise HTTPException(503, str(exc)) from exc
 
     if isinstance(target, LocalDownloadTarget):
         return FileResponse(

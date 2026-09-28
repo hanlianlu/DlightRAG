@@ -100,7 +100,8 @@ async def _acquire_workspace(pool: WorkspacePool, workspace: str) -> WorkspaceRa
     except CorpusSchemaError as exc:
         raise StorageSchemaError(str(exc)) from exc
     except _EngineCorpusUnavailableError as exc:
-        raise CorpusUnavailableError(str(exc)) from exc
+        # The Engine's text names internals; it stays in the cause.
+        raise CorpusUnavailableError() from exc
 
 
 def validate_workspace_name(name: str, *, max_length: int = 64) -> str:

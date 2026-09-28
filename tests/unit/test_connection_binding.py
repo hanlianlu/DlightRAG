@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.application.connections import BoundResearchConnections, ConnectionsError
+from dlightrag.application.answer_runs import AnswerConnectionsChangedError
+from dlightrag.application.connections import BoundResearchConnections
 from dlightrag.engine.agent.tools import ToolDeclaration
 from dlightrag.engine.answer.execution.connection_binding import (
     RunConnectionBinding,
@@ -106,9 +107,9 @@ async def test_stale_binding_rebuild_is_bounded_and_does_not_repeat_resource_pre
     binder = AsyncMock(side_effect=[bound(1), bound(2)])
     service = _service(store=store, resources=resources, retrieval=retrieval, bind_research=binder)
     if churn:
-        with pytest.raises(ConnectionsError, match="changed repeatedly") as error:
+        with pytest.raises(AnswerConnectionsChangedError):
             await service.create(request=_request(mode="research"), owner_id="owner-1")
-        assert error.value.status == 409 and not store.created
+        assert not store.created
     else:
         await service.create(request=_request(mode="research"), owner_id="owner-1")
         accepted = store.created[0]

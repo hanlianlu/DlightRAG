@@ -4,12 +4,14 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+
 
 class UnsafeUploadNameError(ValueError):
     """An upload filename is unsafe or not a single basename."""
 
 
-class WorkspaceExistsError(ValueError):
+class WorkspaceExistsError(ApplicationConflictError):
     """A workspace with this canonical identity is already registered."""
 
 
@@ -29,11 +31,11 @@ class SourceDownloadNotFoundError(RuntimeError):
     """The requested document or retained bytes do not exist."""
 
 
-class SourceDownloadUnavailableError(RuntimeError):
+class SourceDownloadUnavailableError(ApplicationUnavailableError):
     """A remote source adapter cannot currently sign a download."""
 
 
-class CorpusMutationUnavailableError(RuntimeError):
+class CorpusMutationUnavailableError(ApplicationUnavailableError):
     """This deployment cannot accept corpus writes, because it is a read-only replica.
 
     A `reader` process registers no corpus-mutation executor, so accepting a write would

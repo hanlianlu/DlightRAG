@@ -27,6 +27,7 @@ from dlightrag.adapters.http.server import create_app
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
 from dlightrag.application.access import owner_id_from_user
 from dlightrag.application.answer_runs import (
+    AnswerConnectionsChangedError,
     ChildRosterCursor,
     ChildRosterCursorCodec,
     ChildRosterPage,
@@ -162,7 +163,7 @@ async def client(service: AsyncMock, application_double: AsyncMock, test_config)
 async def test_submission_admission_limit_is_typed_and_precedes_202(
     client: AsyncClient, service: AsyncMock
 ) -> None:
-    service.start_answer.side_effect = RunAdmissionLimitExceededError("limit reached")
+    service.start_answer.side_effect = RunAdmissionLimitExceededError()
 
     response = await client.post("/web/api/answer", json=_BODY)
 
@@ -317,7 +318,7 @@ async def test_submission_lookup_rejects_a_malformed_id_before_storage() -> None
 async def test_submission_lookup_returns_typed_service_unavailable(
     client: AsyncClient, service: AsyncMock
 ) -> None:
-    service.submission.side_effect = WebConversationUnavailableError("database unavailable")
+    service.submission.side_effect = WebConversationUnavailableError()
 
     response = await client.get(f"/web/api/answer-submissions/{SUBMISSION_ID}")
 
@@ -591,7 +592,7 @@ async def test_replaying_first_submission_returns_its_created_conversation_befor
     "error",
     [
         ConversationSubmissionConflict("reused"),
-        IdempotencyKeyConflict("reused"),
+        IdempotencyKeyConflict(),
     ],
     ids=["different-conversation", "different-input"],
 )
@@ -604,6 +605,20 @@ async def test_reusing_a_submission_with_different_input_is_409(
 
     assert response.status_code == 409
     assert response.json()["kind"] == "submission_conflict"
+
+
+async def test_changed_connections_ask_for_a_new_submission(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.start_answer.side_effect = AnswerConnectionsChangedError()
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "kind": "submission_conflict",
+        "message": "Connections changed; submit the Answer again",
+    }
 
 
 async def test_submission_to_an_unknown_conversation_is_404(
@@ -655,7 +670,7 @@ async def test_a_rejection_while_parsing_the_request_says_why_with_its_stable_ki
 async def test_an_unavailable_fork_is_a_typed_service_failure(
     client: AsyncClient, service: AsyncMock
 ) -> None:
-    service.fork_answer.side_effect = WebConversationUnavailableError("database unavailable")
+    service.fork_answer.side_effect = WebConversationUnavailableError()
 
     response = await client.post(
         f"/web/api/answer/{RUN_ID}/fork",

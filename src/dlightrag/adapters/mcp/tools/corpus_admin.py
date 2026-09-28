@@ -33,15 +33,12 @@ from dlightrag.application.corpus_admin import (
     managed_local_ingest_path,
     normalize_workspace,
 )
-from dlightrag.application.runs import RunAdmissionLimitExceededError, RunCreation
+from dlightrag.application.runs import RunCreation
 from dlightrag.engine.answer.image_capability import answer_image_capability_summary
 
 
 async def _accepted_corpus_mutation(operation: Awaitable[RunCreation]) -> dict[str, Any]:
-    try:
-        creation = await operation
-    except RunAdmissionLimitExceededError:
-        raise ValueError("Deployment-wide nonterminal admission limit reached") from None
+    creation = await operation
     return mcp_server._run_descriptor(creation.run)
 
 
@@ -122,7 +119,7 @@ async def create_workspace_tool(
         normalized_workspace,
         application=application,
     )
-    # WorkspaceExistsError is a ValueError, so a duplicate surfaces as a refusal.
+    # A duplicate is a WorkspaceExistsError conflict, which surfaces as a refusal.
     await application.corpora.create_workspace(
         normalized_workspace,
         display_name=normalized_display_name,

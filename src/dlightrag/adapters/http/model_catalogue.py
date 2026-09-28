@@ -11,7 +11,6 @@ from dlightrag.application.model_catalogue import (
     ModelCatalogueEntryNotFoundError,
     ModelCatalogueReadOnlyError,
     ModelCatalogueRevisionConflict,
-    ModelCatalogueUnavailableError,
     ModelCatalogueValidationError,
     ModelCatalogueView,
 )
@@ -66,11 +65,7 @@ class ModelCatalogueResponse(BaseModel):
 
 def read_catalogue(catalogue: ModelCatalogueAdmin, response: Response) -> ModelCatalogueResponse:
     """Read and project the effective catalogue."""
-    try:
-        view = catalogue.read()
-    except ModelCatalogueUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-    return _response(response, view)
+    return _response(response, catalogue.read())
 
 
 async def mutate_catalogue(
@@ -90,8 +85,6 @@ async def mutate_catalogue(
         raise HTTPException(status_code=404, detail=str(exc.args[0])) from None
     except ModelCatalogueReadOnlyError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from None
-    except ModelCatalogueUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
     except ModelCatalogueValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     return _response(response, view)

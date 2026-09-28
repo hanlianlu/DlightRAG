@@ -20,7 +20,6 @@ from dlightrag.adapters.mcp.server import (
 )
 from dlightrag.application.retrieval import MetadataFilter
 from dlightrag.application.retrieval import RetrieveRequest as ServiceRequest
-from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 
 
 @mcp_app.tool(
@@ -78,27 +77,20 @@ async def retrieve_tool(
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
-    try:
-        creation = await application.retrieval.create(
-            request=ServiceRequest(
-                query=args.query,
-                workspaces=tuple(resolved_workspaces),
-                top_k=args.top_k,
-                chunk_top_k=args.chunk_top_k,
-                federated_rerank=args.federated_rerank,
-                bm25_query=args.bm25_query,
-                filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
-                query_images=tuple(
-                    image.model_dump(exclude_none=True) for image in args.query_images or ()
-                ),
+    creation = await application.retrieval.create(
+        request=ServiceRequest(
+            query=args.query,
+            workspaces=tuple(resolved_workspaces),
+            top_k=args.top_k,
+            chunk_top_k=args.chunk_top_k,
+            federated_rerank=args.federated_rerank,
+            bm25_query=args.bm25_query,
+            filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
+            query_images=tuple(
+                image.model_dump(exclude_none=True) for image in args.query_images or ()
             ),
-            owner_id=mcp_server._owner_id(),
-            idempotency_key=args.idempotency_key,
-        )
-    except IdempotencyKeyConflict:
-        raise ValueError(
-            "idempotency_key was already used for a different retrieval request"
-        ) from None
-    except RunAdmissionLimitExceededError:
-        raise ValueError("Deployment-wide nonterminal admission limit reached") from None
+        ),
+        owner_id=mcp_server._owner_id(),
+        idempotency_key=args.idempotency_key,
+    )
     return mcp_server._run_descriptor(creation.run)

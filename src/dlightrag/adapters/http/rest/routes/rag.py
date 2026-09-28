@@ -3,14 +3,13 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import RetrieveRequest, RunDescriptor
 from dlightrag.adapters.http.rest.payloads import metadata_filter_from_payload
 from dlightrag.application.access import UserContext, owner_id_from_user
 from dlightrag.application.retrieval import RetrieveRequest as ServiceRequest
-from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 
 from .deps import (
     get_application,
@@ -33,32 +32,22 @@ async def retrieve(
         workspaces=body.workspaces,
         all_workspaces=body.all_workspaces,
     )
-    try:
-        creation = await application.retrieval.create(
-            request=ServiceRequest(
-                query=body.query,
-                workspaces=tuple(resolved_workspaces),
-                top_k=body.top_k,
-                chunk_top_k=body.chunk_top_k,
-                federated_rerank=body.federated_rerank,
-                bm25_query=body.bm25_query,
-                filters=metadata_filter_from_payload(body.filters),
-                query_images=tuple(
-                    image.model_dump(exclude_none=True) for image in body.query_images or ()
-                ),
+    creation = await application.retrieval.create(
+        request=ServiceRequest(
+            query=body.query,
+            workspaces=tuple(resolved_workspaces),
+            top_k=body.top_k,
+            chunk_top_k=body.chunk_top_k,
+            federated_rerank=body.federated_rerank,
+            bm25_query=body.bm25_query,
+            filters=metadata_filter_from_payload(body.filters),
+            query_images=tuple(
+                image.model_dump(exclude_none=True) for image in body.query_images or ()
             ),
-            owner_id=owner_id_from_user(user),
-            idempotency_key=idempotency_key(request),
-        )
-    except IdempotencyKeyConflict:
-        raise HTTPException(
-            status_code=409,
-            detail="Idempotency-Key was reused with a different retrieval request",
-        ) from None
-    except RunAdmissionLimitExceededError:
-        raise HTTPException(
-            status_code=503, detail="Deployment-wide nonterminal admission limit reached"
-        ) from None
+        ),
+        owner_id=owner_id_from_user(user),
+        idempotency_key=idempotency_key(request),
+    )
     from .runs import run_descriptor
 
     return run_descriptor(creation.run)

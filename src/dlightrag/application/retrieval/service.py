@@ -262,7 +262,8 @@ class RetrievalService:
         try:
             return await self._pool.acquire(workspace)
         except _EngineCorpusUnavailableError as exc:
-            raise CorpusUnavailableError(str(exc)) from exc
+            # The Engine's text names internals; it stays in the cause.
+            raise CorpusUnavailableError() from exc
 
     def planner_for(self, model_profile: ModelProfile | None = None) -> RetrievalPlanner:
         if self._closed:
@@ -448,9 +449,9 @@ class RetrievalService:
                 )
                 coordinator.wake()
         except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict(str(exc)) from exc
+            raise IdempotencyKeyConflict() from exc
         except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError(str(exc)) from exc
+            raise RunAdmissionLimitExceededError() from exc
         return RunCreation.from_runtime(creation)
 
     def _normalized_run_input(

@@ -273,14 +273,19 @@ async def test_create_rejects_oversized_query_images_before_storage() -> None:
 
 async def test_create_translates_atomic_changed_input_conflict() -> None:
     store = _Store()
-    store.replay_run = AsyncMock(side_effect=RuntimeIdempotencyKeyConflict("changed"))
+    store_text = "owner 5f2c reused idempotency key key-1 with different normalized input"
+    store.replay_run = AsyncMock(side_effect=RuntimeIdempotencyKeyConflict(store_text))
 
-    with pytest.raises(IdempotencyKeyConflict):
+    with pytest.raises(IdempotencyKeyConflict) as raised:
         await _service(store=store, coordinator=_Coordinator()).create(
             request=RetrieveRequest(query="changed", workspaces=("finance",)),
             owner_id=_OWNER,
             idempotency_key="key-1",
         )
+
+    # The store names the owner and key; the caller sees only the public text.
+    assert str(raised.value) == "Idempotency key was reused with a different request"
+    assert str(raised.value.__cause__) == store_text
 
 
 class _Session:

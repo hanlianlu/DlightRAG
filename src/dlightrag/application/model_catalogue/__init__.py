@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from dlightrag.application.errors import ApplicationUnavailableError
 from dlightrag.engine.ai.catalog import (
     MODEL_CATALOGUE,
     CatalogueEntry,
@@ -28,7 +29,7 @@ class ModelCatalogueSchemaError(RuntimeError):
     """The durable runtime catalogue schema is incompatible."""
 
 
-class ModelCatalogueUnavailableError(RuntimeError):
+class ModelCatalogueUnavailableError(ApplicationUnavailableError):
     """The runtime catalogue has not completed PostgreSQL synchronization."""
 
 

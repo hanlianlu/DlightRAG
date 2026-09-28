@@ -459,9 +459,10 @@ control/reply methods. There is no separate public Python SDK for remote callers
 
 MCP `retrieve` and `answer` return only durable descriptors; poll `get_run` for
 the canonical result. A tool result puts typed JSON in `structuredContent` and
-formatted equivalent JSON in its first text block. Expected validation or
-authorization failures set `isError: true`; protocol failures remain JSON-RPC
-errors.
+formatted equivalent JSON in its first text block. Expected validation,
+authorization, conflict, and temporary-unavailability failures set
+`isError: true` with their public text; other failures report only an internal
+tool failure. Protocol failures remain JSON-RPC errors.
 
 The 18 public tools form one fixed task interface. `answer(mode="research")`
 retains autonomous research, including its internal tools, child agents, and
@@ -780,8 +781,11 @@ that authority is unavailable. Readiness checks are single-flighted and
 memoized for two seconds.
 
 General errors are `{detail, error_type, error_kind?}` where `error_type` is
-`validation`, `auth`, `unavailable`, `configuration`, or `internal`. Stable
-answer error kinds are:
+`validation`, `auth`, `not_found`, `conflict` (HTTP 409 and 412),
+`unavailable`, `configuration`, or `internal`. REST and MCP Run acceptance
+answer a reused idempotency key with `Idempotency key was reused with a
+different request` (HTTP 409 on REST); browser commands use their own envelope
+below. Stable answer error kinds are:
 
 - `CURRENT_IMAGES_UNSUPPORTED`, `CURRENT_IMAGE_LIMIT_EXCEEDED`,
   `ANSWER_IMAGE_CAPABILITY_UNKNOWN`, `ANSWER_INPUT_OVERFLOW`,

@@ -1062,8 +1062,8 @@ class TestWebFiles:
     async def test_failed_file_retry_projects_the_admission_limit(
         self, client: AsyncClient, mock_application
     ) -> None:
-        mock_application.corpus_mutations.create_retry.side_effect = RunAdmissionLimitExceededError(
-            "limit reached"
+        mock_application.corpus_mutations.create_retry.side_effect = (
+            RunAdmissionLimitExceededError()
         )
 
         response = await client.post("/web/api/files/retry")
@@ -1249,7 +1249,7 @@ class TestWebFiles:
             )
         ]
         mock_application.corpus_mutations.create_staged_batch.side_effect = (
-            RunAdmissionLimitExceededError("limit reached")
+            RunAdmissionLimitExceededError()
         )
 
         response = await client.post(
@@ -1281,6 +1281,8 @@ class TestWebFiles:
         )
 
         assert response.status_code == 503
+        # An untyped failure never shows its own text.
+        assert response.json()["detail"] == "Upload could not be accepted. Please retry."
         mock_application.corpus_mutations.discard_staged_run.assert_awaited_once()
 
     async def test_upload_rejects_stale_workspace(
@@ -1346,7 +1348,7 @@ class TestWebFiles:
         self, client: AsyncClient, mock_application
     ) -> None:
         mock_application.corpus_mutations.create_delete.side_effect = (
-            RunAdmissionLimitExceededError("limit reached")
+            RunAdmissionLimitExceededError()
         )
 
         response = await client.request(
@@ -1481,9 +1483,7 @@ async def test_reset_workspace_accepts_a_durable_corpus_run(
 async def test_reset_workspace_projects_the_admission_limit(
     client: AsyncClient, mock_application
 ) -> None:
-    mock_application.corpus_mutations.create_reset.side_effect = RunAdmissionLimitExceededError(
-        "limit reached"
-    )
+    mock_application.corpus_mutations.create_reset.side_effect = RunAdmissionLimitExceededError()
 
     response = await client.post(
         "/web/api/workspaces/reset",

@@ -846,8 +846,8 @@ async def test_mcp_create_workspace_uses_corpus_catalog(mock_mcp_application) ->
 async def test_mcp_corpus_mutation_projects_the_admission_limit(mock_mcp_application) -> None:
     from dlightrag.application.runs import RunAdmissionLimitExceededError
 
-    mock_mcp_application.corpus_mutations.create_retry.side_effect = RunAdmissionLimitExceededError(
-        "limit reached"
+    mock_mcp_application.corpus_mutations.create_retry.side_effect = (
+        RunAdmissionLimitExceededError()
     )
 
     result = await mcp_server.mcp_app.call_tool(
@@ -880,7 +880,7 @@ async def test_mcp_corpus_mutation_surfaces_caller_refusals(
         "CorpusMutationUnavailableError": CorpusMutationUnavailableError(
             "This deployment is a read-only replica of the knowledge base."
         ),
-        "IdempotencyKeyConflict": IdempotencyKeyConflict("key reused with different input"),
+        "IdempotencyKeyConflict": IdempotencyKeyConflict(),
     }[refusal]
     mock_mcp_application.corpus_mutations.create_retry.side_effect = error
 
@@ -1056,12 +1056,26 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
     assert resources[0].content is None
 
 
+async def test_mcp_answer_reports_changed_connections(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    from dlightrag.application.answer_runs import AnswerConnectionsChangedError
+
+    mock_mcp_application.answers.create.side_effect = AnswerConnectionsChangedError()
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == "Error: Connections changed; submit the Answer again"
+
+
 async def test_mcp_answer_reports_a_reused_key_with_different_input(
     mock_mcp_application: AsyncMock,
 ) -> None:
     from dlightrag.application.runs import IdempotencyKeyConflict
 
-    mock_mcp_application.answers.create.side_effect = IdempotencyKeyConflict("reused")
+    mock_mcp_application.answers.create.side_effect = IdempotencyKeyConflict()
 
     result = await mcp_server.mcp_app.call_tool(
         "answer", {"query": "x", "idempotency_key": "key-1"}
@@ -1069,7 +1083,7 @@ async def test_mcp_answer_reports_a_reused_key_with_different_input(
 
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
-    assert "idempotency_key" in _tool_text(result)
+    assert _tool_text(result) == "Error: Idempotency key was reused with a different request"
 
 
 async def test_mcp_answer_projects_the_deployment_wide_admission_limit(
@@ -1077,9 +1091,7 @@ async def test_mcp_answer_projects_the_deployment_wide_admission_limit(
 ) -> None:
     from dlightrag.application.runs import RunAdmissionLimitExceededError
 
-    mock_mcp_application.answers.create.side_effect = RunAdmissionLimitExceededError(
-        "limit reached"
-    )
+    mock_mcp_application.answers.create.side_effect = RunAdmissionLimitExceededError()
 
     result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
 

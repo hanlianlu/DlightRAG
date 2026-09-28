@@ -11,34 +11,19 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from dlightrag import create_application
+from dlightrag.adapters.http.errors import install_error_handlers
 from dlightrag.adapters.http.rest.middleware import (
     RequestBodyLimitMiddleware,
     RequestIdMiddleware,
     install_request_id_log_record_factory,
 )
-from dlightrag.adapters.http.rest.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
+from dlightrag.adapters.http.rest.models import ANSWER_REQUEST_PART_MAX_BYTES
 from dlightrag.adapters.http.rest.routes import router
-from dlightrag.application import ApplicationClosedError
-from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
-from dlightrag.application.corpus_admin import (
-    CorpusMutationUnavailableError,
-    MetadataValidationError,
-)
-from dlightrag.application.errors import RunSchemaError, StorageSchemaError
-from dlightrag.application.model_catalogue import (
-    ModelCatalogueSchemaError,
-    ModelCatalogueUnavailableError,
-)
-from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalInputError
-from dlightrag.application.runs import RunRuntimeUnavailableError
-from dlightrag.application.web_conversations import WebConversationSchemaError
 from dlightrag.engine.answer.client_contracts import MAX_QUERY_IMAGES
-from dlightrag.engine.answer.errors import AnswerInputError, InvalidToolConfigurationError
 
 if TYPE_CHECKING:
     from dlightrag.application.config import DlightragConfig
@@ -153,125 +138,7 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # -- Exception handlers --
-
-    @application.exception_handler(HTTPException)
-    async def http_exception_handler(
-        request: Request,  # noqa: ARG001
-        exc: HTTPException,
-    ) -> JSONResponse:
-        """Wrap HTTP errors, preserving explicit typed browser command envelopes."""
-        status = exc.status_code
-        if (
-            isinstance(exc.detail, dict)
-            and isinstance(exc.detail.get("kind"), str)
-            and isinstance(exc.detail.get("message"), str)
-        ):
-            return JSONResponse(
-                status_code=status,
-                content=exc.detail,
-                headers=exc.headers,
-            )
-        if status == 503:
-            error_type = "unavailable"
-        elif 400 <= status < 500:
-            error_type = "validation" if status in {400, 413, 422} else "auth"
-        else:
-            error_type = "internal"
-        body = ErrorDetail(detail=str(exc.detail), error_type=error_type)
-        return JSONResponse(
-            status_code=status,
-            content=body.model_dump(),
-            headers=exc.headers,
-        )
-
-    @application.exception_handler(CorpusMutationUnavailableError)
-    @application.exception_handler(ApplicationClosedError)
-    @application.exception_handler(CorpusUnavailableError)
-    @application.exception_handler(AnswerRuntimeUnavailableError)
-    @application.exception_handler(RunRuntimeUnavailableError)
-    @application.exception_handler(ModelCatalogueUnavailableError)
-    async def rag_unavailable_handler(
-        request: Request,  # noqa: ARG001
-        exc: (
-            CorpusMutationUnavailableError
-            | ApplicationClosedError
-            | CorpusUnavailableError
-            | AnswerRuntimeUnavailableError
-            | RunRuntimeUnavailableError
-            | ModelCatalogueUnavailableError
-        ),
-    ) -> JSONResponse:
-        body = ErrorDetail(detail=str(exc), error_type="unavailable")
-        return JSONResponse(status_code=503, content=body.model_dump())
-
-    @application.exception_handler(RetrievalInputError)
-    async def retrieval_input_handler(
-        request: Request,  # noqa: ARG001
-        exc: RetrievalInputError,
-    ) -> JSONResponse:
-        body = ErrorDetail(detail=str(exc), error_type="validation")
-        return JSONResponse(status_code=422, content=body.model_dump())
-
-    @application.exception_handler(PermissionError)
-    async def permission_error_handler(
-        request: Request,  # noqa: ARG001
-        exc: PermissionError,
-    ) -> JSONResponse:
-        body = ErrorDetail(detail=str(exc), error_type="auth")
-        return JSONResponse(status_code=403, content=body.model_dump())
-
-    @application.exception_handler(AnswerInputError)
-    async def answer_input_error_handler(
-        request: Request,  # noqa: ARG001
-        exc: AnswerInputError,
-    ) -> JSONResponse:
-        """Answer input rejection -> 422 with a stable error kind."""
-        body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
-        return JSONResponse(status_code=422, content=body.model_dump())
-
-    @application.exception_handler(InvalidToolConfigurationError)
-    async def invalid_tool_configuration_handler(
-        request: Request,  # noqa: ARG001
-        exc: InvalidToolConfigurationError,
-    ) -> JSONResponse:
-        """Server tool-composition failure -> 500; the colliding names stay in the log."""
-        logger.error("Answer tool composition is invalid", exc_info=exc)
-        body = ErrorDetail(
-            detail=exc.public_message,
-            error_type="configuration",
-            error_kind=exc.error_kind,
-        )
-        return JSONResponse(status_code=500, content=body.model_dump())
-
-    @application.exception_handler(MetadataValidationError)
-    async def metadata_validation_error_handler(
-        request: Request,  # noqa: ARG001
-        exc: MetadataValidationError,
-    ) -> JSONResponse:
-        """Metadata is validated below the request model, so it needs its own mapping."""
-        body = ErrorDetail(detail=str(exc), error_type="validation")
-        return JSONResponse(status_code=400, content=body.model_dump())
-
-    async def schema_validation_error_handler(
-        request: Request,  # noqa: ARG001
-        exc: Exception,
-    ) -> JSONResponse:
-        """An incompatible schema is an operator fault; callers see no schema detail."""
-        logger.error("Durable schema is incompatible with this revision", exc_info=exc)
-        body = ErrorDetail(
-            detail="Durable storage is unavailable on this deployment",
-            error_type="unavailable",
-        )
-        return JSONResponse(status_code=503, content=body.model_dump())
-
-    for schema_error in (
-        StorageSchemaError,
-        RunSchemaError,
-        WebConversationSchemaError,
-        ModelCatalogueSchemaError,
-    ):
-        application.add_exception_handler(schema_error, schema_validation_error_handler)
+    install_error_handlers(application)
 
     # -- API routes --
     application.include_router(router)
@@ -281,17 +148,8 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
         from dlightrag.adapters.http.browser.routes import router as web_router
         from dlightrag.adapters.http.browser.static_files import STATIC_DIR, WebStaticFiles
-        from dlightrag.application.web_conversations import WebConversationUnavailableError
 
         application.state.web_enabled = True
-
-        @application.exception_handler(WebConversationUnavailableError)
-        async def web_conversation_unavailable_handler(
-            request: Request,  # noqa: ARG001
-            exc: WebConversationUnavailableError,
-        ) -> JSONResponse:
-            body = ErrorDetail(detail=exc.detail, error_type="unavailable")
-            return JSONResponse(status_code=503, content=body.model_dump())
 
         application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
         application.include_router(web_router)

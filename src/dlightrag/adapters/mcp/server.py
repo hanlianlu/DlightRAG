@@ -43,17 +43,13 @@ from dlightrag.application.access import (
     owner_id_from_principal,
     request_scope_context,
 )
-from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.corpus_admin import (
-    CorpusMutationUnavailableError,
     normalize_workspace,
     normalize_workspace_ids,
 )
-from dlightrag.application.retrieval import CorpusUnavailableError
+from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
 from dlightrag.application.runs import (
-    IdempotencyKeyConflict,
-    RunRuntimeUnavailableError,
     RunView,
 )
 from dlightrag.application.settings import access_settings
@@ -151,12 +147,8 @@ def _run_descriptor(record: RunView) -> dict[str, Any]:
 _REJECTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     PermissionError,
-    ApplicationClosedError,
-    CorpusUnavailableError,
-    AnswerRuntimeUnavailableError,
-    RunRuntimeUnavailableError,
-    CorpusMutationUnavailableError,
-    IdempotencyKeyConflict,
+    ApplicationUnavailableError,
+    ApplicationConflictError,
 )
 
 

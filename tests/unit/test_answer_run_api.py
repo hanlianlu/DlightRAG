@@ -15,7 +15,11 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import UserContext, owner_id_from_user
-from dlightrag.application.answer_runs import ChildRosterCursorCodec, ChildRosterPage
+from dlightrag.application.answer_runs import (
+    AnswerConnectionsChangedError,
+    ChildRosterCursorCodec,
+    ChildRosterPage,
+)
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.runs import IdempotencyKeyConflict, RunCancellation, RunView
 from dlightrag.engine.runtime.records import (
@@ -92,7 +96,7 @@ class _RunApplication:
         self.subscriptions: list[dict[str, Any]] = []
         self.record: RunRecord | None = _record()
         self.events: list[RunEvent] = []
-        self.conflict = False
+        self.acceptance_error: Exception | None = None
         self.replayed = False
         self.replay_record: RunRecord | None = None
         self.cancellation = RunCancellation(
@@ -154,8 +158,8 @@ class _RunApplication:
         auth_mode: str = "none",
     ) -> RunCreation:
         del auth_mode
-        if self.conflict:
-            raise IdempotencyKeyConflict("reused")
+        if self.acceptance_error is not None:
+            raise self.acceptance_error
         if self.replay_record is not None:
             return RunCreation(run=self.replay_record, replayed=True)
         self.created.append(
@@ -426,16 +430,29 @@ class TestCreate:
         assert response.json()["status"] == "running"
         assert run_application.created == []
 
-    async def test_idempotency_conflict_is_409(
-        self, client: AsyncClient, run_application: _RunApplication
+    @pytest.mark.parametrize(
+        ("error", "detail"),
+        [
+            (IdempotencyKeyConflict(), "Idempotency key was reused with a different request"),
+            (AnswerConnectionsChangedError(), "Connections changed; submit the Answer again"),
+        ],
+        ids=["reused-key", "connections-changed"],
+    )
+    async def test_acceptance_conflicts_are_409(
+        self,
+        client: AsyncClient,
+        run_application: _RunApplication,
+        error: Exception,
+        detail: str,
     ) -> None:
-        run_application.conflict = True
+        run_application.acceptance_error = error
 
         response = await client.post(
             "/answer", json={"query": "hello"}, headers={"Idempotency-Key": "key-1"}
         )
 
         assert response.status_code == 409
+        assert response.json() == {"detail": detail, "error_type": "conflict"}
 
     @pytest.mark.parametrize("key", ["", "   "])
     async def test_a_blank_idempotency_key_is_no_key(

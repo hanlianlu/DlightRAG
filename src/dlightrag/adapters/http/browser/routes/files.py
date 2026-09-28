@@ -23,14 +23,13 @@ from dlightrag.application.access import AccessAction, owner_id_from_user
 from dlightrag.application.corpus_admin import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
     FILE_PANEL_PAGE_MAX_LIMIT,
-    CorpusMutationUnavailableError,
     FilePanelCursorError,
     FilePanelPageRequest,
     UnsafeUploadNameError,
     UploadTooLargeError,
     safe_log_text,
 )
-from dlightrag.application.runs import RunAdmissionLimitExceededError
+from dlightrag.application.errors import ApplicationError
 
 logger = logging.getLogger(__name__)
 
@@ -273,14 +272,9 @@ async def start_failed_file_retry(
             selector="all_retryable",
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
-    except RunAdmissionLimitExceededError:
-        raise HTTPException(
-            status_code=503,
-            detail="Deployment-wide nonterminal admission limit reached",
-        ) from None
-    except CorpusMutationUnavailableError:
-        # A read-only replica refuses before staging anything; report the role rather
-        # than a generic acceptance failure.
+    except ApplicationError:
+        # A typed refusal (a read-only replica, the admission limit) answers as itself
+        # rather than as a generic acceptance failure.
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -337,12 +331,7 @@ async def upload_files(
                 staged=staged,
                 submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
             )
-        except RunAdmissionLimitExceededError:
-            raise HTTPException(
-                status_code=503,
-                detail="Deployment-wide nonterminal admission limit reached",
-            ) from None
-        except CorpusMutationUnavailableError:
+        except ApplicationError:
             raise
         except Exception:
             logger.exception(
@@ -372,9 +361,7 @@ async def upload_files(
         ) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-    except HTTPException:
-        raise
-    except CorpusMutationUnavailableError:
+    except HTTPException, ApplicationError:
         raise
     except Exception:
         logger.exception("Upload staging failed")
@@ -417,12 +404,7 @@ async def delete_files(
             file_paths=file_paths,
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
-    except RunAdmissionLimitExceededError:
-        raise HTTPException(
-            status_code=503,
-            detail="Deployment-wide nonterminal admission limit reached",
-        ) from None
-    except CorpusMutationUnavailableError:
+    except ApplicationError:
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

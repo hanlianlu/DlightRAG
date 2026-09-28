@@ -50,7 +50,7 @@ from dlightrag.application.access import AccessAction, auth_mode_for_owner, owne
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
-    AnswerRuntimeUnavailableError,
+    AnswerConnectionsChangedError,
     ChildRosterCursorError,
     ChildRosterPageRequest,
     child_control_receipt_payload,
@@ -60,9 +60,12 @@ from dlightrag.application.answer_runs.artifacts import (
     artifact_descriptor,
     published_artifact_descriptor,
 )
-from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.corpus_admin import normalize_workspace_ids
-from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
+from dlightrag.application.runs import (
+    IdempotencyKeyConflict,
+    RunAdmissionLimitExceededError,
+    RunRuntimeUnavailableError,
+)
 from dlightrag.application.web_conversations import (
     ConversationSubmissionConflict,
     LinkedTurn,
@@ -207,7 +210,7 @@ async def start_answer_run(
             "submission_conflict",
             "This submission id was already used for a different request",
         ) from None
-    except ConnectionsError:
+    except AnswerConnectionsChangedError:
         raise _command_error(
             409, "submission_conflict", "Connections changed; submit the Answer again"
         ) from None
@@ -217,7 +220,7 @@ async def start_answer_run(
             "service_unavailable",
             "Deployment-wide nonterminal admission limit reached",
         ) from None
-    except AnswerRuntimeUnavailableError, WebConversationUnavailableError:
+    except RunRuntimeUnavailableError, WebConversationUnavailableError:
         raise _command_error(
             503, "service_unavailable", "Answer submission is temporarily unavailable"
         ) from None
@@ -452,7 +455,7 @@ async def _fork_answer_run(
             "submission_conflict",
             "This submission id was already used for a different continuation",
         ) from None
-    except ConnectionsError:
+    except AnswerConnectionsChangedError:
         raise _command_error(
             409, "submission_conflict", "Connections changed; submit the Answer again"
         ) from None
@@ -462,7 +465,7 @@ async def _fork_answer_run(
             "service_unavailable",
             "Deployment-wide nonterminal admission limit reached",
         ) from None
-    except AnswerRuntimeUnavailableError, WebConversationUnavailableError:
+    except RunRuntimeUnavailableError, WebConversationUnavailableError:
         raise _command_error(
             503, "service_unavailable", "Answer submission is temporarily unavailable"
         ) from None

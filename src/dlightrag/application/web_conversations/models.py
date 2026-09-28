@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.application.runs import RunView
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
@@ -292,14 +293,15 @@ class AnswerTurnCreation:
     replayed: bool
 
 
-class ConversationSubmissionConflict(RuntimeError):
+class ConversationSubmissionConflict(ApplicationConflictError):
     """One principal reused a submission id for different accepted input."""
 
 
-class WebConversationUnavailableError(RuntimeError):
+class WebConversationUnavailableError(ApplicationUnavailableError):
     """Durable Web Conversation storage cannot currently be reached."""
 
-    detail = "Web conversation storage is unavailable"
+    def __init__(self) -> None:
+        super().__init__("Web conversation storage is unavailable")
 
 
 class WebConversationSchemaError(RuntimeError):

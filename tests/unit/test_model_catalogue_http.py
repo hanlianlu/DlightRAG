@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from dlightrag.adapters.http.errors import install_error_handlers
 from dlightrag.adapters.http.rest.routes import model_catalogue as routes
 from dlightrag.application.access import UserContext
 from dlightrag.application.model_catalogue import (
@@ -45,6 +46,7 @@ def _view(revision: str = _REVISION) -> ModelCatalogueView:
 
 def _client(catalogue: object) -> TestClient:
     app = FastAPI()
+    install_error_handlers(app)
     app.include_router(routes.router)
     app.state.application = SimpleNamespace(model_catalogue=catalogue)
     app.dependency_overrides[routes.get_current_user] = lambda: UserContext(
@@ -87,6 +89,7 @@ def test_get_maps_unsynchronized_catalogue_to_service_unavailable() -> None:
     response = _client(catalogue).get("/models/catalogue")
 
     assert response.status_code == 503
+    assert response.json() == {"detail": "not ready", "error_type": "unavailable"}
 
 
 def test_put_forwards_normalized_if_match_and_authenticated_actor(monkeypatch) -> None:

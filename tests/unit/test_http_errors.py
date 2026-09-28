@@ -1,0 +1,121 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""One HTTP projection for every typed failure family."""
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+from dlightrag.adapters.http.errors import error_type_for_status, install_error_handlers
+from dlightrag.application.errors import (
+    ApplicationClosedError,
+    CorpusUnavailableError,
+    StorageSchemaError,
+    WorkspaceWriteFencedError,
+)
+from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [
+        (400, "validation"),
+        (401, "auth"),
+        (403, "auth"),
+        (404, "not_found"),
+        (409, "conflict"),
+        (412, "conflict"),
+        (413, "validation"),
+        (416, "validation"),
+        (422, "validation"),
+        (429, "unavailable"),
+        (500, "internal"),
+        (503, "unavailable"),
+    ],
+)
+def test_statuses_classify_into_the_public_vocabulary(status: int, error_type: str) -> None:
+    assert error_type_for_status(status) == error_type
+
+
+def _client(failure: BaseException) -> TestClient:
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.get("/fail")
+    async def fail() -> None:
+        raise failure
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "body"),
+    [
+        (
+            IdempotencyKeyConflict(),
+            409,
+            {
+                "detail": "Idempotency key was reused with a different request",
+                "error_type": "conflict",
+            },
+        ),
+        (
+            RunAdmissionLimitExceededError(),
+            503,
+            {
+                "detail": "Deployment-wide nonterminal admission limit reached",
+                "error_type": "unavailable",
+            },
+        ),
+        (
+            ApplicationClosedError(),
+            503,
+            {"detail": "Application is shutting down", "error_type": "unavailable"},
+        ),
+        (
+            # Also an Engine TransientDependencyError: the Application family still wins.
+            CorpusUnavailableError(),
+            503,
+            {"detail": "Corpus storage is temporarily unavailable", "error_type": "unavailable"},
+        ),
+        (
+            StorageSchemaError("column gone: secret detail"),
+            503,
+            {
+                "detail": "Durable storage is unavailable on this deployment",
+                "error_type": "unavailable",
+            },
+        ),
+        (
+            HTTPException(404, "Run not found"),
+            404,
+            {"detail": "Run not found", "error_type": "not_found"},
+        ),
+        (
+            HTTPException(409, {"kind": "submission_conflict", "message": "Used"}),
+            409,
+            {"kind": "submission_conflict", "message": "Used"},
+        ),
+    ],
+)
+def test_each_family_answers_one_way(failure: BaseException, status: int, body: object) -> None:
+    response = _client(failure).get("/fail")
+
+    assert response.status_code == status
+    assert response.json() == body
+
+
+def test_routing_failures_use_the_same_envelope() -> None:
+    response = _client(RuntimeError("unused")).get("/no-such-route")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found", "error_type": "not_found"}
+
+
+def test_a_write_fence_says_when_to_retry() -> None:
+    response = _client(WorkspaceWriteFencedError(workspace="finance", retry_after_seconds=7.2)).get(
+        "/fail"
+    )
+
+    assert response.status_code == 409
+    assert response.headers["retry-after"] == "8"
+    assert response.json()["error_type"] == "conflict"

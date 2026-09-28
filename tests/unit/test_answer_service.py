@@ -14,7 +14,6 @@ import pytest
 from dlightrag.application.answer_runs import (
     AnswerHistoryResource,
     AnswerRequest,
-    AnswerRuntimeUnavailableError,
     AnswerService,
     ChildRosterCursor,
     ChildRosterPageRequest,
@@ -23,6 +22,7 @@ from dlightrag.application.answer_runs import (
 from dlightrag.application.runs import (
     RunCancelledError,
     RunFailedError,
+    RunRuntimeUnavailableError,
 )
 from dlightrag.application.runs import (
     RunEvent as ApplicationRunEvent,
@@ -1203,7 +1203,7 @@ async def test_create_rejects_an_unstarted_runtime_before_persisting_a_run() -> 
     coordinator.is_started = False
     service = _service(store=store, coordinator=coordinator)
 
-    with pytest.raises(AnswerRuntimeUnavailableError, match="runtime is unavailable"):
+    with pytest.raises(RunRuntimeUnavailableError, match="runtime is unavailable"):
         await service.create(request=_request(), owner_id=_OWNER, idempotency_key="key-1")
 
     assert store.replay_calls == 1
@@ -1235,7 +1235,7 @@ async def test_runtime_stopping_during_preparation_prevents_persistence() -> Non
     await coordinator.stop()
     release_preparation.set()
 
-    with pytest.raises(AnswerRuntimeUnavailableError, match="runtime is unavailable"):
+    with pytest.raises(RunRuntimeUnavailableError, match="runtime is unavailable"):
         await acceptance
     assert store.created == []
     assert coordinator.wakes == 0

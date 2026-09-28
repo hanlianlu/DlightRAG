@@ -15,10 +15,10 @@ from typing import Any
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from dlightrag.adapters.http.rest.models import ErrorDetail
+from dlightrag.adapters.http.errors import error_response
 
 # Per-request ID (accessible from any async code in the request scope)
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
@@ -116,8 +116,7 @@ class RequestBodyLimitMiddleware:
 
     @staticmethod
     async def _send_too_large(scope: Scope, receive: Receive, send: Send) -> None:
-        body = ErrorDetail(detail="Request body is too large", error_type="validation")
-        await JSONResponse(status_code=413, content=body.model_dump())(scope, receive, send)
+        await error_response(413, "Request body is too large")(scope, receive, send)
 
     @staticmethod
     def _strictly_capped(

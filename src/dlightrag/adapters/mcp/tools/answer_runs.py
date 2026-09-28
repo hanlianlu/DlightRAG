@@ -26,7 +26,6 @@ from dlightrag.application.access import (
     current_request_scope,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
-from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.retrieval import (
     MetadataFilter,
     RetrievalOptions,
@@ -34,8 +33,6 @@ from dlightrag.application.retrieval import (
     retrieval_response_payload,
 )
 from dlightrag.application.runs import (
-    IdempotencyKeyConflict,
-    RunAdmissionLimitExceededError,
     RunView,
 )
 from dlightrag.engine.answer.client_contracts import conversation_history_as_dicts
@@ -114,35 +111,26 @@ async def answer_tool(
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
-    try:
-        creation = await application.answers.create(
-            request=ServiceAnswerRequest(
-                query=args.query,
-                effort=args.effort,
-                workspaces=tuple(resolved_workspaces),
-                retrieval=RetrievalOptions(
-                    top_k=args.top_k,
-                    chunk_top_k=args.chunk_top_k,
-                    federated_rerank=args.federated_rerank,
-                ),
-                filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
-                semantic_highlights=args.semantic_highlights,
-                history=tuple(conversation_history_as_dicts(args.history) or ()),
-                resources=tuple(answer_link_resources(args.attachments)),
-                mode=args.mode,
+    creation = await application.answers.create(
+        request=ServiceAnswerRequest(
+            query=args.query,
+            effort=args.effort,
+            workspaces=tuple(resolved_workspaces),
+            retrieval=RetrievalOptions(
+                top_k=args.top_k,
+                chunk_top_k=args.chunk_top_k,
+                federated_rerank=args.federated_rerank,
             ),
-            idempotency_key=args.idempotency_key,
-            owner_id=mcp_server._owner_id(),
-            auth_mode=current_request_scope().auth_mode,
-        )
-    except IdempotencyKeyConflict:
-        raise ValueError(
-            "idempotency_key was already used for a different answer request"
-        ) from None
-    except ConnectionsError:
-        raise ValueError("Connections changed; submit the Answer again") from None
-    except RunAdmissionLimitExceededError:
-        raise ValueError("Deployment-wide nonterminal admission limit reached") from None
+            filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
+            semantic_highlights=args.semantic_highlights,
+            history=tuple(conversation_history_as_dicts(args.history) or ()),
+            resources=tuple(answer_link_resources(args.attachments)),
+            mode=args.mode,
+        ),
+        idempotency_key=args.idempotency_key,
+        owner_id=mcp_server._owner_id(),
+        auth_mode=current_request_scope().auth_mode,
+    )
     return mcp_server._run_descriptor(creation.run)
 
 
@@ -295,21 +283,14 @@ async def _mcp_continuation(
             all_workspaces=False,
         )
     method = application.answers.fork if fork else application.answers.follow_up
-    try:
-        creation = await method(
-            owner_id=owner_id,
-            run_id=run_id,
-            query=query,
-            idempotency_key=idempotency_key,
-            auth_mode=current_request_scope().auth_mode,
-            authorized_workspaces=authorized_workspaces,
-        )
-    except IdempotencyKeyConflict:
-        raise ValueError("idempotency_key was already used for a different continuation") from None
-    except ConnectionsError:
-        raise ValueError("Connections changed; submit the Answer again") from None
-    except RunAdmissionLimitExceededError:
-        raise ValueError("Deployment-wide nonterminal admission limit reached") from None
+    creation = await method(
+        owner_id=owner_id,
+        run_id=run_id,
+        query=query,
+        idempotency_key=idempotency_key,
+        auth_mode=current_request_scope().auth_mode,
+        authorized_workspaces=authorized_workspaces,
+    )
     if creation is None:
         raise ValueError("Continuation requires a terminal owned run")
     return mcp_server._run_descriptor(creation.run)

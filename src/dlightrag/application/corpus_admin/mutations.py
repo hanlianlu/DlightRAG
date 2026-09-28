@@ -177,7 +177,7 @@ class CorpusMutationService:
                 run_kind="corpus_mutation",
             )
         except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict(str(exc)) from exc
+            raise IdempotencyKeyConflict() from exc
         return RunCreation.from_runtime(replay) if replay is not None else None
 
     async def create_ingest(
@@ -531,9 +531,9 @@ class CorpusMutationService:
                 creation = await self._store.accept_run(envelope=envelope, run_id=run_id)
                 coordinator.wake()
         except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict(str(exc)) from exc
+            raise IdempotencyKeyConflict() from exc
         except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError(str(exc)) from exc
+            raise RunAdmissionLimitExceededError() from exc
         return RunCreation.from_runtime(creation)
 
     @property

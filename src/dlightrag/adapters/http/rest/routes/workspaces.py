@@ -17,7 +17,6 @@ from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
-    WorkspaceExistsError,
     normalize_workspace,
     validate_workspace_name,
 )
@@ -98,12 +97,7 @@ async def create_workspace(
     application = get_application(request)
     workspace, display_name = _normalize_create_body(body)
     await enforce_access(request, user, AccessAction.WORKSPACE_CREATE, workspace=workspace)
-    try:
-        await application.corpora.create_workspace(workspace, display_name=display_name)
-    except WorkspaceExistsError:
-        raise HTTPException(
-            status_code=409, detail=f"Workspace '{display_name}' already exists"
-        ) from None
+    await application.corpora.create_workspace(workspace, display_name=display_name)
     return {
         "workspace": workspace,
         "display_name": display_name,

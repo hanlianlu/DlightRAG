@@ -47,10 +47,8 @@ from dlightrag.application.answer_runs.artifacts import (
     published_artifact_descriptor,
 )
 from dlightrag.application.config import AnswerConfig
-from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.corpus_admin import safe_source_filename
 from dlightrag.application.retrieval import RetrievalOptions
-from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.client_contracts import conversation_history_as_dicts
 from dlightrag.engine.answer.execution.input import ResourceInput
@@ -423,27 +421,12 @@ async def create_answer_run(
         workspaces=body.workspaces,
         all_workspaces=body.all_workspaces,
     )
-    try:
-        creation = await application.answers.create(
-            request=_service_request(body, uploads, workspaces=workspaces),
-            owner_id=owner_id_from_user(user),
-            idempotency_key=idempotency_key(request),
-            auth_mode=user.auth_mode,
-        )
-    except IdempotencyKeyConflict:
-        raise HTTPException(
-            status_code=409,
-            detail="Idempotency-Key was reused with a different answer request",
-        ) from None
-    except ConnectionsError:
-        raise HTTPException(
-            status_code=409, detail="Connections changed; submit the Answer again"
-        ) from None
-    except RunAdmissionLimitExceededError:
-        raise HTTPException(
-            status_code=503,
-            detail="Deployment-wide nonterminal admission limit reached",
-        ) from None
+    creation = await application.answers.create(
+        request=_service_request(body, uploads, workspaces=workspaces),
+        owner_id=owner_id_from_user(user),
+        idempotency_key=idempotency_key(request),
+        auth_mode=user.auth_mode,
+    )
     return run_descriptor(creation.run)
 
 
@@ -549,29 +532,14 @@ async def _continue_answer_run(
             all_workspaces=False,
         )
     method = answers.follow_up if operation == "follow-up" else answers.fork
-    try:
-        creation = await method(
-            owner_id=owner_id,
-            run_id=run_id,
-            query=body.content,
-            idempotency_key=idempotency_key(request),
-            auth_mode=user.auth_mode,
-            authorized_workspaces=authorized_workspaces,
-        )
-    except IdempotencyKeyConflict:
-        raise HTTPException(
-            status_code=409,
-            detail="Idempotency-Key was reused with a different continuation",
-        ) from None
-    except ConnectionsError:
-        raise HTTPException(
-            status_code=409, detail="Connections changed; submit the Answer again"
-        ) from None
-    except RunAdmissionLimitExceededError:
-        raise HTTPException(
-            status_code=503,
-            detail="Deployment-wide nonterminal admission limit reached",
-        ) from None
+    creation = await method(
+        owner_id=owner_id,
+        run_id=run_id,
+        query=body.content,
+        idempotency_key=idempotency_key(request),
+        auth_mode=user.auth_mode,
+        authorized_workspaces=authorized_workspaces,
+    )
     if creation is None:
         raise HTTPException(status_code=409, detail="Continuation requires a terminal owned run")
     return run_descriptor(creation.run)

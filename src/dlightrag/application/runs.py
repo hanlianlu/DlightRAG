@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
 
+from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase, RunStatus
 from dlightrag.engine.runtime.records import CancellationOutcome as RuntimeCancellationOutcome
 from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
@@ -27,15 +28,24 @@ def _repair_text(record: RuntimeRunRecord, key: str) -> str | None:
     return str(value)[:_MAX_REPAIR_TEXT_CHARS] if isinstance(value, str) and value else None
 
 
-class IdempotencyKeyConflict(RuntimeError):
-    """A caller reused a submission key with different normalized input."""
+class IdempotencyKeyConflict(ApplicationConflictError):
+    """A caller reused a submission key with different normalized input.
+
+    The store's own text names the owner and key, so it stays in the cause.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("Idempotency key was reused with a different request")
 
 
-class RunAdmissionLimitExceededError(RuntimeError):
+class RunAdmissionLimitExceededError(ApplicationUnavailableError):
     """The deployment-wide nonterminal admission limit was reached."""
 
+    def __init__(self) -> None:
+        super().__init__("Deployment-wide nonterminal admission limit reached")
 
-class RunRuntimeUnavailableError(RuntimeError):
+
+class RunRuntimeUnavailableError(ApplicationUnavailableError):
     """No local common Run scheduler can safely accept new work."""
 
 

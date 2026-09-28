@@ -283,7 +283,8 @@ class MetadataUpdateResponse(ClientContractModel):
 
 class ErrorDetail(ClientContractModel):
     detail: str
-    error_type: str  # "unavailable", "validation", "auth", "configuration", "internal"
+    # "validation", "auth", "not_found", "conflict", "unavailable", "configuration", "internal"
+    error_type: str
     error_kind: str | None = None  # stable answer-image error kind, if applicable
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:

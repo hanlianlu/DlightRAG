@@ -8,7 +8,8 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, Protocol, cast
 from uuid import UUID, uuid7
 
-from dlightrag.application.connections import BoundResearchConnections, ConnectionsError
+from dlightrag.application.connections import BoundResearchConnections
+from dlightrag.application.errors import ApplicationConflictError
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -376,8 +377,11 @@ class ChildObservation:
         }
 
 
-class AnswerRuntimeUnavailableError(RunRuntimeUnavailableError):
-    """Answer-specific compatibility name for common runtime unavailability."""
+class AnswerConnectionsChangedError(ApplicationConflictError):
+    """The owner's Connections kept changing while an Answer was being accepted."""
+
+    def __init__(self) -> None:
+        super().__init__("Connections changed; submit the Answer again")
 
 
 class AnswerRunAcceptor[T](Protocol):
@@ -819,9 +823,9 @@ class AnswerService:
                 auth_mode=auth_mode,
             )
         except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict(str(exc)) from exc
+            raise IdempotencyKeyConflict() from exc
         except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError(str(exc)) from exc
+            raise RunAdmissionLimitExceededError() from exc
         if creation is None:
             raise RuntimeError("Answer run acceptance returned no descriptor")
         return RunCreation.from_runtime(creation)
@@ -847,9 +851,9 @@ class AnswerService:
                 auth_mode=auth_mode,
             )
         except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict(str(exc)) from exc
+            raise IdempotencyKeyConflict() from exc
         except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError(str(exc)) from exc
+            raise RunAdmissionLimitExceededError() from exc
 
     async def _accept[T](
         self,
@@ -877,7 +881,7 @@ class AnswerService:
             if replay is not None:
                 return replay
         if not self._coordinator.is_started:
-            raise AnswerRuntimeUnavailableError("Answer runtime is unavailable")
+            raise RunRuntimeUnavailableError("Answer runtime is unavailable")
         run_request, attachment_bytes = await self._resources.pin_current_image_links(
             run_request,
             _attachment_bytes(request.resources),
@@ -934,7 +938,7 @@ class AnswerService:
                 try:
                     async with self._coordinator.admission() as runtime_available:
                         if not runtime_available:
-                            raise AnswerRuntimeUnavailableError("Answer runtime is unavailable")
+                            raise RunRuntimeUnavailableError("Answer runtime is unavailable")
                         run_id = str(uuid7())
                         accepted = await acceptor.create_run(
                             envelope=PreparedRunEnvelope(
@@ -981,9 +985,7 @@ class AnswerService:
                         if replay is not None:
                             return replay
                     if attempt == 1:
-                        raise ConnectionsError(
-                            "Connections changed repeatedly; submit the Answer again"
-                        ) from exc
+                        raise AnswerConnectionsChangedError() from exc
                     continue
                 return accepted
         raise RuntimeError("Answer acceptance exhausted its bounded attempts")
@@ -1028,7 +1030,7 @@ class AnswerService:
                 reference_kind=resource.reference_kind,
             )
             if artifact is None:
-                raise AnswerRuntimeUnavailableError("Accepted answer input artifact is unavailable")
+                raise RunRuntimeUnavailableError("Accepted answer input artifact is unavailable")
             return artifact.content
 
         return ResourceInput(
@@ -2132,10 +2134,10 @@ class AnswerService:
 
 
 __all__ = [
+    "AnswerConnectionsChangedError",
     "AnswerHistoryResource",
     "AnswerInputArtifact",
     "AnswerRequest",
     "AnswerRunAcceptor",
-    "AnswerRuntimeUnavailableError",
     "AnswerService",
 ]

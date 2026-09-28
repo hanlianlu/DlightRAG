@@ -26,7 +26,6 @@ from dlightrag.application.access import (
 )
 from dlightrag.application.access import authentication as authentication_module
 from dlightrag.application.answer_runs import (
-    AnswerRuntimeUnavailableError,
     ChildRosterCursor,
     ChildRosterCursorCodec,
     ChildRosterPage,
@@ -60,6 +59,7 @@ from dlightrag.application.retrieval._answer_projection import project_answer_re
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
+    RunRuntimeUnavailableError,
     RunView,
 )
 from dlightrag.application.settings import authentication_settings
@@ -543,7 +543,10 @@ class TestWorkspaceLifecycleAPI:
 
         # The registry refuses the duplicate; nothing renames the existing workspace.
         assert resp.status_code == 409
-        assert resp.json()["detail"] == "Workspace 'default' already exists"
+        assert resp.json() == {
+            "detail": "Workspace 'default' already exists",
+            "error_type": "conflict",
+        }
 
     @pytest.mark.usefixtures("_patch_application")
     async def test_simple_wrong_scheme_401(
@@ -1166,7 +1169,7 @@ class TestRetrieveEndpoint:
     async def test_retrieve_changed_idempotent_input_is_409(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.retrieval.create.side_effect = IdempotencyKeyConflict("changed")
+        mock_application.retrieval.create.side_effect = IdempotencyKeyConflict()
         app.state.application = mock_application
 
         response = await client.post(
@@ -1176,6 +1179,10 @@ class TestRetrieveEndpoint:
         )
 
         assert response.status_code == 409
+        assert response.json() == {
+            "detail": "Idempotency key was reused with a different request",
+            "error_type": "conflict",
+        }
 
     async def test_retrieve_projects_terminal_result_with_current_permissions(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
@@ -1875,9 +1882,7 @@ class TestAnswerEndpoint:
     async def test_answer_admission_limit_is_rejected_before_acceptance(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.answers.create = AsyncMock(
-            side_effect=RunAdmissionLimitExceededError("limit reached")
-        )
+        mock_application.answers.create = AsyncMock(side_effect=RunAdmissionLimitExceededError())
         app.state.application = mock_application
 
         response = await client.post("/answer", json={"query": "hello"})
@@ -1889,7 +1894,7 @@ class TestAnswerEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         mock_application.answers.create = AsyncMock(
-            side_effect=AnswerRuntimeUnavailableError("Answer runtime is unavailable")
+            side_effect=RunRuntimeUnavailableError("Answer runtime is unavailable")
         )
         app.state.application = mock_application
 

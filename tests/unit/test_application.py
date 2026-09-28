@@ -811,7 +811,7 @@ async def test_a_closed_application_refuses_services_but_stays_diagnosable(
     for name in ("answers", "retrieval", "corpora"):
         with pytest.raises(ApplicationClosedError) as closed:
             getattr(application, name)
-        assert closed.value.detail == "Application is shutting down"
+        assert str(closed.value) == "Application is shutting down"
     assert application.config is test_config
     assert application.health.is_closed is True
 
