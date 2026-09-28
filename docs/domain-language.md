@@ -113,7 +113,8 @@ _Avoid_: failed replacement Run, automatic destructive replay, new retry job
 An authorized full Corpus Reset may explicitly supersede one
 `waiting_for_repair` mutation. The old Run becomes terminal with its superseding
 Run identity; reset preserves Corpus Workspace identity and history rather than
-recreating the Workspace.
+recreating the Workspace. A Workspace Delete is a full reset too and may
+supersede the same way before it removes the Workspace.
 _Avoid_: Workspace Delete, hidden repair abandonment
 
 **Workspace Delete**:

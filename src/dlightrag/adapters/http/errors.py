@@ -23,6 +23,7 @@ from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
+    ApplicationNotFoundError,
     ApplicationUnavailableError,
     RunSchemaError,
     StorageSchemaError,
@@ -125,6 +126,13 @@ def install_error_handlers(app: FastAPI) -> None:
         exc: ApplicationConflictError,
     ) -> JSONResponse:
         return error_response(409, str(exc))
+
+    @app.exception_handler(ApplicationNotFoundError)
+    async def not_found(
+        request: Request,  # noqa: ARG001
+        exc: ApplicationNotFoundError,
+    ) -> JSONResponse:
+        return error_response(404, str(exc))
 
     @app.exception_handler(ApplicationInputError)
     async def invalid_input(

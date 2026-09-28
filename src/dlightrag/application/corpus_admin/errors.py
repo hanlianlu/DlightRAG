@@ -7,6 +7,7 @@ from pathlib import Path
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
+    ApplicationNotFoundError,
     ApplicationUnavailableError,
 )
 
@@ -25,6 +26,10 @@ class LocalIngestPathError(ApplicationInputError):
 
 class WorkspaceNameError(ApplicationInputError):
     """A user-facing workspace name is empty, too long, or has forbidden characters."""
+
+
+class WorkspaceNotFoundError(ApplicationNotFoundError):
+    """The named Workspace is not registered, or no longer is."""
 
 
 class WorkspaceExistsError(ApplicationConflictError):
@@ -97,4 +102,5 @@ __all__ = [
     "UnsafeUploadNameError",
     "UploadTooLargeError",
     "WorkspaceExistsError",
+    "WorkspaceNotFoundError",
 ]

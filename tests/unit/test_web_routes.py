@@ -23,6 +23,7 @@ from dlightrag.application.corpus_admin import (
     UploadLimits,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
+    WorkspaceNotFoundError,
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
 from dlightrag.engine.agent.skills import owner_skill_root
@@ -1522,20 +1523,13 @@ async def test_workspace_commands_on_a_read_only_replica_pass_the_refusal_throug
         ),
         (
             "/web/api/workspaces/delete",
-            "workspace_exists",
-            503,
-            "Workspace catalog is temporarily unavailable",
-            "Workspace catalog lookup failed before Workspace Delete",
-        ),
-        (
-            "/web/api/workspaces/delete",
             "create_workspace_delete",
             503,
             "Failed to accept Workspace Delete; see server logs for details.",
             "Workspace Delete Run acceptance failed",
         ),
     ],
-    ids=["create", "reset", "delete-lookup", "delete"],
+    ids=["create", "reset", "delete"],
 )
 async def test_workspace_commands_hide_untyped_failures_behind_logged_advice(
     client: AsyncClient,
@@ -1632,7 +1626,10 @@ async def test_delete_workspace_requires_a_matching_confirmation(
 async def test_delete_workspace_reports_a_workspace_that_is_already_gone(
     client: AsyncClient, mock_application
 ) -> None:
-    mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
+    # Corpus Mutation acceptance owns the existence check; the route only maps it.
+    mock_application.corpus_mutations.create_workspace_delete.side_effect = WorkspaceNotFoundError(
+        "Workspace no longer exists"
+    )
 
     response = await client.post(
         "/web/api/workspaces/delete",
@@ -1640,8 +1637,7 @@ async def test_delete_workspace_reports_a_workspace_that_is_already_gone(
     )
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Workspace no longer exists"
-    mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
+    assert response.json() == {"detail": "Workspace no longer exists", "error_type": "not_found"}
 
 
 async def test_delete_workspace_explains_why_the_default_is_kept(

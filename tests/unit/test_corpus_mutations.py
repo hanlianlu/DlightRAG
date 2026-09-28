@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 
-from dlightrag.application.corpus_admin import IngestSpec, UploadTooLargeError
+from dlightrag.application.corpus_admin import (
+    IngestSpec,
+    UploadTooLargeError,
+    WorkspaceNotFoundError,
+)
 from dlightrag.application.corpus_admin.mutations import (
     CorpusMutationExecutor,
     CorpusMutationService,
@@ -22,12 +26,14 @@ from dlightrag.application.corpus_admin.mutations import (
     _result,
     validate_corpus_mutation_prepared_input,
 )
+from dlightrag.application.errors import ApplicationUnavailableError
 from dlightrag.engine.dependencies import TransientDependencyError
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.runtime.records import (
     Deferred,
     Succeeded,
     WaitingForRepair,
+    run_request_fingerprint,
 )
 
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
@@ -44,12 +50,17 @@ class _Reader:
         return content
 
 
+async def _registered(_workspace: str) -> bool:
+    return True
+
+
 def _service(tmp_path: Path) -> CorpusMutationService:
     return CorpusMutationService(
         input_root=tmp_path,
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
         upload_limits=_LIMITS,
+        workspace_exists=_registered,
     )
 
 
@@ -69,6 +80,7 @@ async def test_reset_exposes_supersession_as_a_typed_run_envelope_field(
         store=store,
         coordinator=cast(Any, coordinator),
         upload_limits=_LIMITS,
+        workspace_exists=_registered,
     )
     superseded = "0199a0a0-0000-7000-8000-000000000002"
 
@@ -81,6 +93,111 @@ async def test_reset_exposes_supersession_as_a_typed_run_envelope_field(
 
     envelope = store.accept_run.await_args.kwargs["envelope"]
     assert envelope.supersedes_run_id == superseded
+
+
+def _accepting_service(
+    tmp_path: Path, store: AsyncMock, *, workspace_exists: Any = _registered
+) -> CorpusMutationService:
+    @asynccontextmanager
+    async def admission():
+        yield True
+
+    coordinator = SimpleNamespace(is_started=True, admission=admission, wake=lambda: None)
+    return CorpusMutationService(
+        input_root=tmp_path,
+        store=store,
+        coordinator=cast(Any, coordinator),
+        upload_limits=_LIMITS,
+        workspace_exists=workspace_exists,
+    )
+
+
+async def test_workspace_delete_may_supersede_the_waiting_mutation(tmp_path: Path) -> None:
+    """A mutation waiting for repair would otherwise hold the FIFO lane ahead of it."""
+    store = AsyncMock()
+    store.accept_run.side_effect = RuntimeError("captured envelope")
+    service = _accepting_service(tmp_path, store)
+    superseded = "0199a0a0-0000-7000-8000-000000000002"
+
+    with pytest.raises(RuntimeError, match="captured envelope"):
+        await service.create_workspace_delete(
+            workspace="research", submitted_by="operator", supersedes_run_id=superseded
+        )
+
+    envelope = store.accept_run.await_args.kwargs["envelope"]
+    assert envelope.supersedes_run_id == superseded
+    assert envelope.payload["supersedes_run_id"] == superseded
+    action, workspace = validate_corpus_mutation_prepared_input(envelope.payload)
+    assert (action, workspace) == ("delete_workspace", "research")
+
+
+async def test_plain_workspace_delete_keeps_its_prepared_input_and_fingerprint(
+    tmp_path: Path,
+) -> None:
+    store = AsyncMock()
+    store.accept_run.side_effect = RuntimeError("captured envelope")
+    service = _accepting_service(tmp_path, store)
+
+    with pytest.raises(RuntimeError, match="captured envelope"):
+        await service.create_workspace_delete(workspace="research", submitted_by="operator")
+
+    envelope = store.accept_run.await_args.kwargs["envelope"]
+    assert envelope.supersedes_run_id is None
+    assert "supersedes_run_id" not in envelope.payload
+    assert envelope.request_fingerprint == run_request_fingerprint(
+        {"action": "delete_workspace", "workspace": "research"}
+    )
+
+
+async def test_workspace_delete_refuses_a_workspace_that_is_gone(tmp_path: Path) -> None:
+    store = AsyncMock()
+
+    async def gone(_workspace: str) -> bool:
+        return False
+
+    service = _accepting_service(tmp_path, store, workspace_exists=gone)
+
+    with pytest.raises(WorkspaceNotFoundError, match="no longer exists"):
+        await service.create_workspace_delete(workspace="research", submitted_by="operator")
+    store.accept_run.assert_not_awaited()
+
+
+async def test_workspace_delete_replays_its_receipt_after_the_workspace_is_gone(
+    tmp_path: Path,
+) -> None:
+    """The existence check follows replay, so a retried key still gets its Run."""
+    store = AsyncMock()
+    lookups: list[str] = []
+
+    async def gone(workspace: str) -> bool:
+        lookups.append(workspace)
+        return False
+
+    service = _accepting_service(tmp_path, store, workspace_exists=gone)
+    service.replay = AsyncMock(return_value="receipt")  # type: ignore[method-assign]
+
+    assert (
+        await service.create_workspace_delete(
+            workspace="research", submitted_by="operator", idempotency_key="key"
+        )
+        == "receipt"
+    )
+    assert lookups == []
+
+
+async def test_workspace_delete_fails_closed_when_the_catalog_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    store = AsyncMock()
+
+    async def unreadable(_workspace: str) -> bool:
+        raise RuntimeError("registry down")
+
+    service = _accepting_service(tmp_path, store, workspace_exists=unreadable)
+
+    with pytest.raises(ApplicationUnavailableError, match="temporarily unavailable"):
+        await service.create_workspace_delete(workspace="research", submitted_by="operator")
+    store.accept_run.assert_not_awaited()
 
 
 async def test_stage_upload_digest_mismatch_removes_the_run_exclusive_stage(
@@ -229,9 +346,13 @@ async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> N
                 "action": "delete_workspace",
                 "workspace": "research",
                 "track_id": _TRACK_ID,
-                "supersedes_run_id": None,
+                "supersedes_run_id": "",
             },
-            id="workspace-delete-carries-no-selector",
+            id="workspace-delete-supersedes-a-blank-run",
+        ),
+        pytest.param(
+            {"action": "reset", "workspace": "research", "track_id": _TRACK_ID},
+            id="reset-omits-its-supersession-field",
         ),
     ],
 )
@@ -659,6 +780,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
         upload_limits=_LIMITS,
+        workspace_exists=_registered,
         writable=False,
     )
 
@@ -740,7 +862,7 @@ async def test_workspace_delete_resets_everything_then_retires_identity_and_succ
     assert isinstance(outcome, Succeeded)
     assert outcome.result["action"] == "delete_workspace"
     # No source is preserved: every queued successor is cancelled, never replayed.
-    runtime.areset.assert_awaited_once_with()
+    runtime.areset.assert_awaited_once_with(preserve_run_sources_after=None)
     assert session.handoff_started is True
     assert session.phases == ["resetting_corpus", "removing_workspace"]
     assert maintenance.unregistered == ["research"]
@@ -801,6 +923,7 @@ async def test_workspace_delete_refuses_the_deployment_default(tmp_path: Path) -
         store=store,
         coordinator=cast(Any, SimpleNamespace()),
         upload_limits=_LIMITS,
+        workspace_exists=_registered,
         default_workspace="research",
     )
 
@@ -825,6 +948,7 @@ async def test_workspace_delete_is_accepted_as_a_workspace_scoped_mutation(
         store=store,
         coordinator=cast(Any, coordinator),
         upload_limits=_LIMITS,
+        workspace_exists=_registered,
     )
 
     with pytest.raises(RuntimeError, match="captured envelope"):
@@ -875,6 +999,7 @@ async def test_an_oversized_corpus_request_is_the_callers_to_fix(
         store=store,
         coordinator=cast(Any, SimpleNamespace(is_started=True)),
         upload_limits=_LIMITS,
+        workspace_exists=_registered,
     )
 
     with pytest.raises(CorpusMutationInputError, match="prepared_input_too_large"):

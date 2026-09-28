@@ -100,6 +100,7 @@ class WorkspaceDeleteRequest(ClientContractModel):
     """Request to delete one explicitly named workspace."""
 
     workspace: str
+    supersedes_run_id: str | None = None
 
 
 class MetadataUpdateRequest(ClientContractModel):

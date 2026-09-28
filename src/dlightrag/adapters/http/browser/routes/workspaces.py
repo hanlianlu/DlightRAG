@@ -263,18 +263,6 @@ async def delete_workspace(
     ws = workspace_id_for_name(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
     try:
-        registered = await application.corpora.workspace_exists(ws)
-    except ApplicationError:
-        raise
-    except Exception:
-        logger.exception("Workspace catalog lookup failed before Workspace Delete")
-        raise HTTPException(
-            status_code=503, detail="Workspace catalog is temporarily unavailable"
-        ) from None
-    if not registered:
-        raise HTTPException(status_code=404, detail="Workspace no longer exists")
-
-    try:
         creation = await application.corpus_mutations.create_workspace_delete(
             workspace=ws,
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),

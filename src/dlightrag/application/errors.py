@@ -30,6 +30,10 @@ class ApplicationInputError(ApplicationError, ValueError):
     """The request itself is invalid; the caller must change it before retrying."""
 
 
+class ApplicationNotFoundError(ApplicationError, LookupError):
+    """The named thing does not exist, or no longer does."""
+
+
 class ApplicationClosedError(ApplicationUnavailableError):
     """Raised when a closed Application is asked for one of its services."""
 
@@ -68,6 +72,7 @@ __all__ = [
     "ApplicationConflictError",
     "ApplicationError",
     "ApplicationInputError",
+    "ApplicationNotFoundError",
     "ApplicationUnavailableError",
     "CorpusUnavailableError",
     "RunSchemaError",

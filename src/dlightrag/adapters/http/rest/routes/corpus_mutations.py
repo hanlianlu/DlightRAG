@@ -215,6 +215,7 @@ async def delete_workspace(
         lambda: application.corpus_mutations.create_workspace_delete(
             workspace=workspace,
             submitted_by=submitted_by,
+            supersedes_run_id=body.supersedes_run_id,
             idempotency_key=key,
         )
     )

@@ -243,8 +243,10 @@ curl -X POST http://127.0.0.1:8100/runs/$RUN_ID/resume
 The caller must still hold the action permission implied by that Run. Resume
 keeps the same Run ID and `track_id` and returns the Run to its Workspace FIFO.
 If repair is inappropriate and a full corpus reset is required, accept one reset
-naming `supersedes_run_id`; only reset may terminally supersede a waiting
-mutation while preserving Workspace identity and history.
+naming `supersedes_run_id`; reset terminally supersedes a waiting mutation while
+preserving Workspace identity and history. A Workspace Delete, itself a full
+reset, may name the waiting mutation the same way; without it, the delete waits
+behind that mutation in the Workspace FIFO.
 
 ## Workspace BM25 Rebuild
 

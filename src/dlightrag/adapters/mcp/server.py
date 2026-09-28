@@ -51,6 +51,7 @@ from dlightrag.application.corpus_admin import workspace_id_for_name, workspace_
 from dlightrag.application.errors import (
     ApplicationConflictError,
     ApplicationInputError,
+    ApplicationNotFoundError,
     ApplicationUnavailableError,
 )
 from dlightrag.application.runs import (
@@ -153,6 +154,7 @@ _REJECTIONS: tuple[type[BaseException], ...] = (
     ToolRejection,
     AccessDeniedError,
     ApplicationInputError,
+    ApplicationNotFoundError,
     ApplicationConflictError,
     ApplicationUnavailableError,
 )

@@ -715,7 +715,7 @@ validation failure), and the Run trace's `agent_effort` records the level that r
 | `POST /workspaces` | Create an empty workspace (201; duplicate 409). |
 | `GET /workspaces/{workspace}/storage` | Read operator storage/promotion state. |
 | `POST /runs/corpus/reset` | Accept Corpus Reset while retaining Workspace identity and history. |
-| `POST /runs/corpus/delete-workspace` | Accept Workspace Delete for an explicitly named non-default workspace. |
+| `POST /runs/corpus/delete-workspace` | Accept Workspace Delete for an explicitly named, registered, non-default workspace (404 once it is gone). Like reset, it may name the Workspace's waiting mutation as `supersedes_run_id`. |
 | `GET /files` | Page processed files for one workspace. |
 | `POST /runs/corpus/delete` | Accept durable deletion by exact path, name, or document ID. |
 | `GET /files/failed` | Page failed documents. |

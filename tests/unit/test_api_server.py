@@ -1714,6 +1714,7 @@ class TestDeleteEndpoint:
         mock_application.corpus_mutations.create_workspace_delete.assert_awaited_once_with(
             workspace="research",
             submitted_by=ANY,
+            supersedes_run_id=None,
             idempotency_key="delete-research",
         )
 

@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol, assert_never, cast
 from uuid import UUID, uuid7
 
+from dlightrag.application.errors import ApplicationError, ApplicationUnavailableError
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -60,6 +61,7 @@ from .errors import (
     CorpusMutationUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
+    WorkspaceNotFoundError,
 )
 from .service import IngestSpec, safe_upload_basename
 
@@ -94,7 +96,7 @@ _ACTIONS: Mapping[CorpusMutationAction, _ActionSpec] = MappingProxyType(
         ),
         "retry": _ActionSpec(frozenset({"document_ids", "selector"}), False, True, True),
         "reset": _ActionSpec(frozenset({"supersedes_run_id"}), False, True, False),
-        "delete_workspace": _ActionSpec(frozenset(), False, True, False),
+        "delete_workspace": _ActionSpec(frozenset({"supersedes_run_id"}), False, True, False),
     }
 )
 
@@ -174,10 +176,12 @@ class CorpusMutationService:
         store: CorpusMutationStore,
         coordinator: CorpusMutationScheduler,
         upload_limits: UploadLimits,
+        workspace_exists: Callable[[str], Awaitable[bool]],
         writable: bool = True,
         default_workspace: str = "default",
     ) -> None:
         self._input_root = Path(input_root)
+        self._workspace_exists = workspace_exists
         self._store = store
         self._coordinator = coordinator
         self._upload_limits = upload_limits
@@ -478,9 +482,14 @@ class CorpusMutationService:
         *,
         workspace: str,
         submitted_by: str,
+        supersedes_run_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> RunCreation:
-        """Accept the Workspace's final mutation: a full reset, then identity removal."""
+        """Accept the Workspace's final mutation: a full reset, then identity removal.
+
+        Like a Corpus Reset it may supersede the Workspace's mutation waiting for
+        repair, which would otherwise hold the FIFO lane ahead of it for good.
+        """
         self._require_writable("the Workspace Delete")
         if require_canonical_workspace_id(workspace) == self._default_workspace:
             raise CorpusMutationInputError(
@@ -491,7 +500,8 @@ class CorpusMutationService:
             workspace=workspace,
             submitted_by=submitted_by,
             idempotency_key=idempotency_key,
-            fields={},
+            # Omitted when absent, so a plain delete keeps its request fingerprint.
+            fields={"supersedes_run_id": supersedes_run_id} if supersedes_run_id else {},
         )
 
     async def _create_action(
@@ -512,6 +522,8 @@ class CorpusMutationService:
         )
         if replay is not None:
             return replay
+        if action == "delete_workspace" and not await self._require_registered(canonical):
+            raise WorkspaceNotFoundError("Workspace no longer exists")
         run_id = str(uuid7())
         return await self._accept(
             run_id=run_id,
@@ -521,6 +533,17 @@ class CorpusMutationService:
             normalized_request=request,
             payload={**request, "track_id": _track_id(run_id)},
         )
+
+    async def _require_registered(self, workspace: str) -> bool:
+        """Whether the catalog lists the Workspace; an unreadable catalog refuses."""
+        try:
+            return await self._workspace_exists(workspace)
+        except ApplicationError:
+            raise
+        except Exception as exc:
+            raise ApplicationUnavailableError(
+                "Workspace catalog is temporarily unavailable"
+            ) from exc
 
     async def _accept(
         self,
@@ -747,7 +770,7 @@ _TRACKED_PIPELINE_ACTIVE_STATUSES = {
 
 
 class CorpusMutationExecutor(RunExecutor):
-    """Recoverable five-action executor using public Workspace/LightRAG operations."""
+    """Recoverable executor for every Corpus Mutation action, via public LightRAG operations."""
 
     def __init__(
         self,
@@ -1078,19 +1101,11 @@ class CorpusMutationExecutor(RunExecutor):
         runtime: Any,
         checkpoint: dict[str, Any],
     ) -> RunExecutionOutcome:
-        if checkpoint.get("operation_settled") is not True:
-            if not session.handoff_started:
-                await session.begin_handoff({**checkpoint, "phase": "handoff_started"})
-            await session.enter_phase("resetting_corpus")
-            async with self._maintenance.workspace_write_gate(session.owner_id):
-                result = await _join_public_operation(
-                    runtime.areset(preserve_run_sources_after=session.run_id)
-                )
-            documents = [dict(result)] if isinstance(result, Mapping) else []
-            if not isinstance(result, Mapping) or result.get("errors"):
-                return WaitingForRepair(_repair_checkpoint(checkpoint, documents))
-            checkpoint.update(document_outcomes=documents, operation_settled=True)
-            await session.checkpoint_state(checkpoint, phase="reset_settled")
+        waiting = await self._settle_full_reset(
+            session, runtime, checkpoint, preserve_run_sources_after=session.run_id
+        )
+        if waiting is not None:
+            return waiting
         await self._pool.evict(session.owner_id)
         return Succeeded(_result("reset", _checkpoint_documents(checkpoint), checkpoint))
 
@@ -1108,23 +1123,46 @@ class CorpusMutationExecutor(RunExecutor):
         Both are idempotent, so recovery after the settled reset repeats them.
         """
         workspace = session.owner_id
-        if checkpoint.get("operation_settled") is not True:
-            if not session.handoff_started:
-                await session.begin_handoff({**checkpoint, "phase": "handoff_started"})
-            await session.enter_phase("resetting_corpus")
-            async with self._maintenance.workspace_write_gate(workspace):
-                # No later source survives: every queued successor is cancelled below.
-                result = await _join_public_operation(runtime.areset())
-            documents = [dict(result)] if isinstance(result, Mapping) else []
-            if not isinstance(result, Mapping) or result.get("errors"):
-                return WaitingForRepair(_repair_checkpoint(checkpoint, documents))
-            checkpoint.update(document_outcomes=documents, operation_settled=True)
-            await session.checkpoint_state(checkpoint, phase="reset_settled")
+        # No later source survives: every queued successor is cancelled below.
+        waiting = await self._settle_full_reset(
+            session, runtime, checkpoint, preserve_run_sources_after=None
+        )
+        if waiting is not None:
+            return waiting
         await session.enter_phase("removing_workspace")
         await self._maintenance.unregister_workspace(workspace)
         await self._cancel_successors(workspace, session.run_id)
         await self._pool.evict(workspace)
         return Succeeded(_result("delete_workspace", _checkpoint_documents(checkpoint), checkpoint))
+
+    async def _settle_full_reset(
+        self,
+        session: RunSession,
+        runtime: Any,
+        checkpoint: dict[str, Any],
+        *,
+        preserve_run_sources_after: str | None,
+    ) -> WaitingForRepair | None:
+        """Reset the whole corpus once, or say why it needs repair.
+
+        Corpus Reset keeps the sources of Runs queued after it; Workspace Delete
+        keeps none. A settled reset is checkpointed, so recovery never repeats it.
+        """
+        if checkpoint.get("operation_settled") is True:
+            return None
+        if not session.handoff_started:
+            await session.begin_handoff({**checkpoint, "phase": "handoff_started"})
+        await session.enter_phase("resetting_corpus")
+        async with self._maintenance.workspace_write_gate(session.owner_id):
+            result = await _join_public_operation(
+                runtime.areset(preserve_run_sources_after=preserve_run_sources_after)
+            )
+        documents = [dict(result)] if isinstance(result, Mapping) else []
+        if not isinstance(result, Mapping) or result.get("errors"):
+            return WaitingForRepair(_repair_checkpoint(checkpoint, documents))
+        checkpoint.update(document_outcomes=documents, operation_settled=True)
+        await session.checkpoint_state(checkpoint, phase="reset_settled")
+        return None
 
     async def _cancel_successors(self, workspace: str, run_id: str) -> None:
         """Cancel every Corpus Mutation queued behind this one in its Workspace."""
@@ -1315,6 +1353,9 @@ def validate_corpus_mutation_prepared_input(
         raise ValueError("Corpus Mutation track_id is invalid") from None
     expected_fields = frozenset({"action", "workspace", "track_id"}) | action_spec.fields
     allowed_field_sets = {expected_fields}
+    if action == "delete_workspace":
+        # Its supersession is omitted when absent (see create_workspace_delete).
+        allowed_field_sets.add(expected_fields - {"supersedes_run_id"})
     if action_spec.source_based:
         allowed_field_sets.add(expected_fields | {"sources"})
     if frozenset(raw) not in allowed_field_sets:

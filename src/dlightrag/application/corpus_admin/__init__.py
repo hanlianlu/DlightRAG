@@ -26,6 +26,7 @@ from .errors import (
     UploadTooLargeError,
     WorkspaceExistsError,
     WorkspaceNameError,
+    WorkspaceNotFoundError,
 )
 from .file_panel import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
@@ -138,6 +139,7 @@ __all__ = [
     "UploadLimits",
     "UploadTooLargeError",
     "WorkspaceExistsError",
+    "WorkspaceNotFoundError",
     "WorkspaceNameError",
     "WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT",
     "WORKSPACE_CATALOG_PAGE_MAX_LIMIT",
