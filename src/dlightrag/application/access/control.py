@@ -3,6 +3,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Literal, Protocol
 
 
@@ -72,19 +73,26 @@ ACTION_PRESETS: dict[str, tuple[str, ...]] = {
 }
 
 
-def corpus_mutation_access_action(action: object) -> str:
-    """Map one mutation's accepted action to its authorization boundary.
-
-    Unknown values fail closed to the strongest corpus mutation permission.
-    """
-    return {
+# Keyed by Corpus Mutation action; a test keeps it in step with that action list,
+# which this package may not import.
+CORPUS_MUTATION_ACCESS_ACTIONS: Mapping[str, str] = MappingProxyType(
+    {
         "ingest": AccessAction.WORKSPACE_INGEST,
         "replace": AccessAction.WORKSPACE_INGEST,
         "retry": AccessAction.WORKSPACE_INGEST,
         "delete": AccessAction.WORKSPACE_DELETE_FILES,
         "reset": AccessAction.WORKSPACE_RESET,
         "delete_workspace": AccessAction.WORKSPACE_DELETE,
-    }.get(str(action or ""), AccessAction.WORKSPACE_DELETE)
+    }
+)
+
+
+def corpus_mutation_access_action(action: object) -> str:
+    """Map one mutation's accepted action to its authorization boundary.
+
+    Unknown values fail closed to the strongest corpus mutation permission.
+    """
+    return CORPUS_MUTATION_ACCESS_ACTIONS.get(str(action or ""), AccessAction.WORKSPACE_DELETE)
 
 
 class AccessDeniedError(PermissionError):

@@ -11,6 +11,7 @@ import shutil
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
 from uuid import UUID, uuid7
 
@@ -63,11 +64,35 @@ type CorpusMutationAction = Literal[
 ]
 type RetrySelector = Literal["all_retryable"]
 
+
+@dataclass(frozen=True, slots=True)
+class _ActionSpec:
+    """What one Corpus Mutation action accepts and how its recovery behaves."""
+
+    # Prepared-input fields beside action, workspace, and track_id.
+    fields: frozenset[str]
+    # Reads a source (ingest/replace) rather than selecting existing documents.
+    source_based: bool
+    # A recovered handoff is never repeated without repair evidence.
+    destructive: bool
+
+
+# The one list of actions; validation, recovery, and projections derive from it.
+_ACTIONS: Mapping[CorpusMutationAction, _ActionSpec] = MappingProxyType(
+    {
+        "ingest": _ActionSpec(frozenset({"source", "staged_sources"}), True, False),
+        "replace": _ActionSpec(frozenset({"source", "staged_sources"}), True, True),
+        "delete": _ActionSpec(frozenset({"file_paths", "filenames", "document_ids"}), False, True),
+        "retry": _ActionSpec(frozenset({"document_ids", "selector"}), False, True),
+        "reset": _ActionSpec(frozenset({"supersedes_run_id"}), False, True),
+        "delete_workspace": _ActionSpec(frozenset(), False, True),
+    }
+)
+
 _REPAIR_REASON = "The upstream corpus outcome is not safe to repeat automatically."
 _REPAIR_REMEDY = "Inspect the public LightRAG state, repair it, then resume this Run."
 _MAX_RESULT_DOCUMENTS = 100
-# A recovered handoff of these actions is never repeated without repair evidence.
-_DESTRUCTIVE_ACTIONS = frozenset({"replace", "delete", "retry", "reset", "delete_workspace"})
+_DESTRUCTIVE_ACTIONS = frozenset(action for action, spec in _ACTIONS.items() if spec.destructive)
 _SUCCESSOR_PAGE_LIMIT = 100
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _DEFER_BASE_SECONDS = 2
@@ -1123,8 +1148,9 @@ def validate_corpus_mutation_prepared_input(
     raw: Mapping[str, Any],
 ) -> tuple[CorpusMutationAction, str]:
     """Validate the closed durable action schema used for recovery compatibility."""
-    action = str(raw.get("action") or "")
-    if action not in {"ingest", "replace", "delete", "retry", "reset", "delete_workspace"}:
+    action = cast(CorpusMutationAction, str(raw.get("action") or ""))
+    action_spec = _ACTIONS.get(action)
+    if action_spec is None:
         raise ValueError("unknown Corpus Mutation action")
     workspace = require_canonical_workspace_id(str(raw.get("workspace") or ""))
     track_id = str(raw.get("track_id") or "")
@@ -1136,22 +1162,13 @@ def validate_corpus_mutation_prepared_input(
             raise ValueError
     except ValueError:
         raise ValueError("Corpus Mutation track_id is invalid") from None
-    common = {"action", "workspace", "track_id"}
-    action_fields = {
-        "ingest": {"source", "staged_sources"},
-        "replace": {"source", "staged_sources"},
-        "delete": {"file_paths", "filenames", "document_ids"},
-        "retry": {"document_ids", "selector"},
-        "reset": {"supersedes_run_id"},
-        "delete_workspace": set(),
-    }
-    expected_fields = common | action_fields[action]
-    allowed_field_sets = {frozenset(expected_fields)}
-    if action in {"ingest", "replace"}:
-        allowed_field_sets.add(frozenset(expected_fields | {"sources"}))
+    expected_fields = frozenset({"action", "workspace", "track_id"}) | action_spec.fields
+    allowed_field_sets = {expected_fields}
+    if action_spec.source_based:
+        allowed_field_sets.add(expected_fields | {"sources"})
     if frozenset(raw) not in allowed_field_sets:
         raise ValueError("Corpus Mutation input fields do not match its action")
-    if action in {"ingest", "replace"}:
+    if action_spec.source_based:
         source = raw.get("source")
         if not isinstance(source, Mapping):
             raise ValueError("Corpus Mutation source is unavailable")
@@ -1315,20 +1332,10 @@ def _bounded_unique(values: Sequence[str]) -> list[str]:
 
 
 def _accepted_selector(payload: Mapping[str, Any]) -> dict[str, Any]:
-    action = str(payload.get("action") or "")
-    if action in {"delete", "retry", "reset", "delete_workspace"}:
+    spec = _ACTIONS.get(cast(CorpusMutationAction, str(payload.get("action") or "")))
+    if spec is not None and not spec.source_based:
         return {
-            key: value
-            for key, value in payload.items()
-            if key
-            in {
-                "file_paths",
-                "filenames",
-                "document_ids",
-                "selector",
-                "supersedes_run_id",
-            }
-            and value is not None
+            key: value for key, value in payload.items() if key in spec.fields and value is not None
         }
     source = payload.get("source")
     return {
