@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Real Web authentication/CSRF and real PostgreSQL owner lifecycle, fake MCP."""
 
-from types import SimpleNamespace
-
 import jwt
 import pytest
 from fastapi import FastAPI
@@ -15,6 +13,7 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.application.connections import Connections
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp
+from tests.support.application_double import application_double
 
 
 @pytest.mark.asyncio
@@ -42,7 +41,9 @@ async def test_web_owner_lifecycle_and_csrf(mode, tmp_path, monkeypatch):
         await store.initialize(validate_only=False)
         app = FastAPI()
         app.include_router(router, prefix="/web/api")
-        app.state.application = SimpleNamespace(connections=Connections(store=store, mcp=FakeMcp()))
+        app.state.application = application_double(
+            config, connections=Connections(store=store, mcp=FakeMcp())
+        )
         app.add_middleware(WebAuthMiddleware, config_getter=lambda: config)
 
         def auth(subject):
@@ -167,7 +168,7 @@ async def test_web_sdk_oauth_authenticated_callback_strips_query_and_returns_fix
         app = FastAPI()
         app.include_router(router, prefix="/web/api")
         app.include_router(callback_router, prefix="/web")
-        app.state.application = SimpleNamespace(connections=service)
+        app.state.application = application_double(config, connections=service)
         app.add_middleware(WebAuthMiddleware, config_getter=lambda: config)
         scopes = []
 
@@ -273,7 +274,7 @@ async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path
     def app_for(service):
         app = FastAPI()
         app.include_router(callback_router, prefix="/web")
-        app.state.application = SimpleNamespace(connections=service)
+        app.state.application = application_double(config, connections=service)
         app.add_middleware(WebAuthMiddleware, config_getter=lambda: config)
         return app
 
