@@ -5,6 +5,7 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
   corpusRunActive,
+  corpusRunStatusRefused,
   getCorpusRunStatus,
   resumeCorpusRun,
   type WebCorpusRunReceipt,
@@ -413,9 +414,22 @@ export class DlInspectorFiles extends LightElement {
       await recovery?.refresh(false);
     } catch (error) {
       if (isAbortError(error)) return;
-      if (workspace === this.handles.ingest.workspace && this.active && this.isConnected) {
+      if (workspace !== this.handles.ingest.workspace || !this.active || !this.isConnected) return;
+      if (!corpusRunStatusRefused(error)) {
         this.#schedulePoll(workspace);
+        return;
       }
+      if (this.mutationRun?.runId !== receipt.runId) return;
+      this.mutationRun = null;
+      this.acceptedFiles = 0;
+      if (receipt.runId === this.#deleteRunId) this.#deleteRunId = null;
+      requestToast(this, {
+        message: msg('Corpus update status is no longer available.', {
+          id: 'inspectorFiles.corpusRunStatusUnavailable',
+        }),
+        duration: 3000,
+      });
+      await this.reload(false);
     } finally {
       this.#session.finishPollRequest(controller);
     }

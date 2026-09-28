@@ -407,6 +407,7 @@ export const templates: Record<
   'inspectorFiles.corpusUpdateRunning': '语料库更新正在进行…',
   'inspectorFiles.corpusUpdateFinished': '语料库更新已完成。',
   'inspectorFiles.corpusUpdateFailed': '语料库更新未能完成。',
+  'inspectorFiles.corpusRunStatusUnavailable': '语料库更新状态已不可用。',
   'inspectorFiles.corpusResumeAccepted': '语料库修复恢复请求已接受。',
   'inspectorFiles.corpusResumeFailed': '语料库修复恢复失败。',
   'inspectorFiles.corpusRepairRequired': '语料库结果需要操作员修复。',

@@ -7,6 +7,7 @@ import {repeat} from 'lit/directives/repeat.js';
 import {
   CorpusRunApiError,
   corpusRunActive,
+  corpusRunStatusRefused,
   getCorpusRunStatus,
   resumeCorpusRun,
   type WebCorpusRunReceipt,
@@ -481,9 +482,7 @@ export class DlFailedFileRecovery extends LightElement {
         || !this.active
         || !this.isConnected
       ) return;
-      // The status poll speaks the Corpus Run API; a refusal ends polling for good.
-      const status = refusalStatus(error);
-      if (status !== null && [401, 403, 404, 409].includes(status)) {
+      if (corpusRunStatusRefused(error)) {
         this.page = null;
         this.recovery = null;
         this.error = recoveryRequestError(

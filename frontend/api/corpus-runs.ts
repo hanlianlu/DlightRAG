@@ -98,6 +98,14 @@ function makeError(status: number, message: string): Error {
   return new CorpusRunApiError(status, message);
 }
 
+// A status the Corpus Run API refuses to report ends polling for good: the Run
+// is gone, no longer the caller's, or its reader lost access.
+const REFUSED_STATUS_CODES: ReadonlySet<number> = new Set([401, 403, 404, 409]);
+
+export function corpusRunStatusRefused(error: unknown): boolean {
+  return error instanceof CorpusRunApiError && REFUSED_STATUS_CODES.has(error.status);
+}
+
 export class CorpusRunApiError extends Error {
   readonly status: number;
 

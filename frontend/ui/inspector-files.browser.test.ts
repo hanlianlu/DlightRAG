@@ -278,6 +278,60 @@ it('deletion reloads the first page after its durable Run succeeds', async () =>
   expect(panel.querySelector('[data-load-older-files]')).not.to.equal(null);
 });
 
+it('stops polling a deletion whose status the Corpus Run API refuses', async () => {
+  let statusReads = 0;
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  window.fetch = async (input, init) => {
+    const url = new URL(String(input), window.location.origin);
+    if (init?.method === 'DELETE') {
+      // Only this panel's deletion names the refused Run.
+      const runId = url.searchParams.get('file_path') === '/keep' ? 'run-gone' : 'run-other';
+      return new Response(JSON.stringify(corpusReceipt(runId)), {
+        status: 202,
+        headers: {'Content-Type': 'application/json'},
+      });
+    }
+    if (url.pathname === '/web/api/corpus-runs/run-gone') {
+      statusReads += 1;
+      return new Response(JSON.stringify({detail: 'Corpus Mutation Run not found'}), {
+        status: 404,
+        headers: {'Content-Type': 'application/json'},
+      });
+    }
+    if (url.pathname.endsWith('/files')) {
+      return new Response(JSON.stringify(snapshot([{file_name: 'Keep', file_path: '/keep'}], null)), {
+        headers: {'Content-Type': 'application/json'},
+      });
+    }
+    return new Response(JSON.stringify({workspace: 'default', failed: [], next_cursor: null}), {
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+  const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+  panel.active = true;
+  document.body.appendChild(panel);
+  await waitFor(() => panel.loading === false);
+
+  panel.querySelector<HTMLButtonElement>('[data-file-delete]')!.click();
+  await panel.updateComplete;
+  confirmDeleteDialog(panel, 'confirm');
+  let reads = 0;
+  try {
+    await waitFor(() => statusReads > 0 && panel.mutationRun === null);
+    reads = statusReads;
+    for (let tick = 0; tick < 20; tick += 1) {
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+    }
+  } finally {
+    window.setTimeout = originalSetTimeout;
+  }
+
+  expect(statusReads).to.equal(reads);
+  expect(panel.mutationRun).to.equal(null);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/keep']);
+});
+
 it('cancelling the delete dialog keeps the file and restores trigger focus', async () => {
   window.fetch = async (_input, init) => {
     if (init?.method === 'DELETE') {
