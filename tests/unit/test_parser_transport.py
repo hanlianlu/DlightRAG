@@ -2,6 +2,8 @@
 """A parser service outage is named at LightRAG's parser transport boundary."""
 
 import inspect
+import socket
+import ssl
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -77,6 +79,15 @@ def _status(status: int) -> Handler:
     return lambda _request: httpx.Response(status, json={"detail": "parser says no"})
 
 
+def _connect_failure(cause: Callable[[], BaseException]) -> Handler:
+    """Fail to connect as httpx does, with the socket or TLS error as the cause."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(str(cause()), request=request) from cause()
+
+    return handler
+
+
 @pytest.mark.parametrize("parser", ["mineru", "docling"])
 @pytest.mark.parametrize(
     "handler",
@@ -141,6 +152,54 @@ async def test_misconfigured_parser_url_is_not_an_outage(
         await _download(parser, tmp_path)
 
     assert not isinstance(raised.value, ParserUnavailableError)
+
+
+@pytest.mark.parametrize("parser", ["mineru", "docling"])
+@pytest.mark.parametrize(
+    "cause",
+    [
+        lambda: socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided"),
+        lambda: ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED]"),
+        lambda: ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number"),
+    ],
+    ids=["dns-no-such-name", "tls-certificate", "https-to-plain-http"],
+)
+async def test_misconfigured_parser_endpoint_is_not_an_outage(
+    parser_service: list[Handler],
+    tmp_path: Path,
+    parser: str,
+    cause: Callable[[], BaseException],
+) -> None:
+    parser_service.append(_connect_failure(cause))
+    apply_parser_outage_reporting(docling_active=parser == "docling")
+
+    with pytest.raises((RuntimeError, httpx.ConnectError)) as raised:
+        await _download(parser, tmp_path)
+
+    assert not isinstance(raised.value, ParserUnavailableError)
+
+
+@pytest.mark.parametrize("parser", ["mineru", "docling"])
+@pytest.mark.parametrize(
+    "cause",
+    [
+        lambda: socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
+        lambda: ssl.SSLEOFError(8, "EOF occurred in violation of protocol"),
+        lambda: ConnectionRefusedError(61, "Connection refused"),
+    ],
+    ids=["dns-temporary-failure", "tls-dropped-mid-handshake", "refused"],
+)
+async def test_unreachable_parser_endpoint_is_an_outage(
+    parser_service: list[Handler],
+    tmp_path: Path,
+    parser: str,
+    cause: Callable[[], BaseException],
+) -> None:
+    parser_service.append(_connect_failure(cause))
+    apply_parser_outage_reporting(docling_active=parser == "docling")
+
+    with pytest.raises(ParserUnavailableError):
+        await _download(parser, tmp_path)
 
 
 async def test_exhausted_polling_budget_is_not_an_outage(

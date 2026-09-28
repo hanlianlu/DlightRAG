@@ -3,6 +3,7 @@
 
 import asyncio
 import io
+import socket
 import threading
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
@@ -99,6 +100,12 @@ def _response(
         headers=headers,
         request=httpx.Request("POST", "https://example.test/embeddings"),
     )
+
+
+def _dns_failure() -> httpx.ConnectError:
+    error = httpx.ConnectError("[Errno 8] nodename nor servname provided, or not known")
+    error.__cause__ = socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided")
+    return error
 
 
 class RecordingTelemetry:
@@ -636,8 +643,9 @@ async def test_retryable_http_statuses_are_retried(status: int) -> None:
         _response(501, {"error": "not implemented"}),
         _response(505, {"error": "http version"}),
         httpx.UnsupportedProtocol("missing scheme"),
+        _dns_failure(),
     ],
-    ids=["401", "403", "409", "501", "505", "unsupported-protocol"],
+    ids=["401", "403", "409", "501", "505", "unsupported-protocol", "dns-no-such-name"],
 )
 async def test_failures_the_dependency_classification_rejects_are_not_retried(
     failure: httpx.Response | httpx.TransportError,

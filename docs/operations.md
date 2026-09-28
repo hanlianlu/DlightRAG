@@ -189,7 +189,9 @@ or 504, the document is recorded with the fixed error `Document parser is
 temporarily unavailable` and the underlying client error is logged as a warning.
 Every other parser failure keeps LightRAG's own message: a 4xx rejection, a
 conversion the parser reports as failed, an exhausted polling budget or download
-deadline, and an oversized or malformed result bundle.
+deadline, an oversized or malformed result bundle, and a misconfigured endpoint
+(a host name that does not resolve, a TLS certificate that fails verification,
+or an https URL for a plain-HTTP service).
 
 ## Product Document Finalization And Failed Ingestion Cleanup
 

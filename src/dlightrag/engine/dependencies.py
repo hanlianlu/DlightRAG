@@ -9,6 +9,8 @@ non-retryable.
 
 from __future__ import annotations
 
+import socket
+import ssl
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -113,12 +115,18 @@ def classify_transient_dependency(
     chain = tuple(_exception_chain(exc))
     if any(_is_non_retryable(item) for item in chain):
         return None
+    # A client transport or provider connection failure caused by a
+    # misconfigured endpoint is not an outage. Typed boundaries decide for
+    # themselves, so a wrapper such as CorpusUnavailableError still defers.
+    misconfigured = any(_is_misconfigured_endpoint(item) for item in chain)
     for item in chain:
         if isinstance(item, TransientDependencyError):
             return item.component
         if isinstance(item, TimeoutError | ConnectionError) and component_hint is not None:
             return component_hint
         if isinstance(item, _TRANSIENT_HTTPX_ERRORS):
+            if misconfigured:
+                continue
             return component_hint or "providers"
         if isinstance(item, httpx.HTTPStatusError):
             if _status_code(item) in _RETRYABLE_STATUS_CODES:
@@ -127,7 +135,7 @@ def classify_transient_dependency(
         module = type(item).__module__
         name = type(item).__name__
         status = _status_code(item)
-        if module.startswith(_PROVIDER_MODULE_PREFIXES):
+        if module.startswith(_PROVIDER_MODULE_PREFIXES) and not misconfigured:
             if status in _RETRYABLE_STATUS_CODES or name in _TRANSIENT_PROVIDER_CLASS_NAMES:
                 return "providers"
         if module.startswith(_STORAGE_MODULE_PREFIXES):
@@ -145,11 +153,11 @@ def is_transient_request_failure(exc: BaseException) -> bool:
     code that retries or names a failed request itself (the embedding client and
     the document-parser transport boundary), so it agrees with durable deferral:
     a transient transport error or retryable status anywhere in the cause chain,
-    and no non-retryable marker anywhere in it.
+    and no non-retryable marker or misconfigured endpoint anywhere in it.
     """
 
     chain = tuple(_exception_chain(exc))
-    if any(_is_non_retryable(item) for item in chain):
+    if any(_is_non_retryable(item) or _is_misconfigured_endpoint(item) for item in chain):
         return False
     return any(
         isinstance(item, _TRANSIENT_HTTPX_ERRORS) or _status_code(item) in _RETRYABLE_STATUS_CODES
@@ -220,6 +228,22 @@ def _is_non_retryable(exc: BaseException) -> bool:
         return True
     text = str(exc).lower()
     return any(marker in text for marker in _NON_RETRYABLE_TEXT)
+
+
+def _is_misconfigured_endpoint(exc: BaseException) -> bool:
+    """A DNS name that does not resolve, or a TLS handshake the endpoint rejects.
+
+    Both surface as a connection failure, yet resending cannot help: a wrong
+    host name, a certificate that fails verification, or an https URL for a
+    plain-HTTP service. A resolver's explicit temporary failure (EAI_AGAIN) and
+    a connection dropped mid-handshake remain transient.
+    """
+
+    if isinstance(exc, socket.gaierror):
+        return exc.errno != socket.EAI_AGAIN
+    return isinstance(exc, ssl.SSLError) and not isinstance(
+        exc, ssl.SSLEOFError | ssl.SSLZeroReturnError
+    )
 
 
 def _status_code(exc: BaseException) -> int | None:

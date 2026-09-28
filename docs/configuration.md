@@ -654,8 +654,9 @@ Embedding batches split automatically at provider input-count, token, and
 inline-image limits while preserving order. Each embedding request is retried at
 most twice, and only for a failure the durable Run classification also treats
 as transient: a refused, reset, dropped, or timed-out connection, or HTTP 408,
-425, 429, 500, 502, 503, or 504. `Retry-After` wins over exponential backoff
-with jitter.
+425, 429, 500, 502, 503, or 504. A host name that does not resolve or a TLS
+handshake the endpoint rejects is configuration and is not retried.
+`Retry-After` wins over exponential backoff with jitter.
 
 ## Retrieval
 

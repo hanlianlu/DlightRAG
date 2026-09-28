@@ -1,7 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Closed transient dependency classification for durable execution."""
 
+import socket
+import ssl
+
 import httpx
+import httpx2
+import openai
 import pytest
 
 from dlightrag.application.errors import CorpusUnavailableError
@@ -131,3 +136,63 @@ def test_a_named_parser_outage_is_not_attributed_to_the_providers() -> None:
         outage.__cause__ = transport
 
     assert classify_transient_dependency(outage) == "parser"
+
+
+def _caused[E: BaseException](error: E, cause: BaseException) -> E:
+    error.__cause__ = cause
+    return error
+
+
+def _misconfigured_causes() -> list[BaseException]:
+    return [
+        socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known"),
+        ssl.SSLCertVerificationError(
+            1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+        ),
+        ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "cause",
+    _misconfigured_causes(),
+    ids=["dns-no-such-name", "tls-certificate", "https-to-plain-http"],
+)
+def test_a_misconfigured_endpoint_is_not_an_outage(cause: BaseException) -> None:
+    # httpx and the SDKs' own client raise these connect failures with the DNS
+    # or TLS error as the cause; resending the request cannot fix either.
+    transport = _caused(httpx.ConnectError("connect failed", request=_REQUEST), cause)
+    sdk_request = httpx2.Request("POST", "https://provider.example/v1")
+    sdk = _caused(
+        openai.APIConnectionError(request=sdk_request),
+        _caused(httpx2.ConnectError("connect failed", request=sdk_request), cause),
+    )
+
+    assert is_transient_request_failure(transport) is False
+    assert classify_transient_dependency(transport) is None
+    assert classify_transient_dependency(transport, component_hint="providers") is None
+    assert classify_transient_dependency(sdk, component_hint="providers") is None
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
+        ssl.SSLEOFError(8, "EOF occurred in violation of protocol"),
+        ConnectionRefusedError(61, "Connection refused"),
+    ],
+    ids=["dns-temporary-failure", "tls-dropped-mid-handshake", "refused"],
+)
+def test_a_temporarily_unreachable_endpoint_stays_transient(cause: BaseException) -> None:
+    transport = _caused(httpx.ConnectError("connect failed", request=_REQUEST), cause)
+
+    assert is_transient_request_failure(transport) is True
+    assert classify_transient_dependency(transport) == "providers"
+
+
+def test_a_typed_boundary_still_decides_for_a_misconfigured_cause() -> None:
+    # Corpus storage wraps its own connection failures; scoping the rule to
+    # client transports keeps that deferral (and startup degradation) intact.
+    for cause in _misconfigured_causes():
+        wrapper = _caused(CorpusUnavailableError(), cause)
+        assert classify_transient_dependency(wrapper) == "corpus_storage"
