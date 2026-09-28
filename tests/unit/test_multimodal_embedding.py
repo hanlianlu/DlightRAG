@@ -3,9 +3,7 @@
 
 import asyncio
 import io
-import socket
 import ssl
-import struct
 import threading
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
@@ -34,6 +32,7 @@ from dlightrag.engine.ai.providers.embed_providers import (
     VoyageEmbedProvider as _VoyageEmbedProvider,
 )
 from dlightrag.engine.ai.scheduler import ModelScheduler
+from tests.support.loopback import loopback_server, reset_on_accept
 
 _TEST_FINGERPRINT = ModelEndpointFingerprint(
     provider="test",
@@ -644,30 +643,25 @@ async def test_a_real_handshake_reset_is_retried(monkeypatch: pytest.MonkeyPatch
 
     connections = 0
 
-    async def reset(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def counted_reset(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonlocal connections
         connections += 1
-        connection = writer.get_extra_info("socket")
-        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        writer.transport.abort()
+        await reset_on_accept(reader, writer)
 
     monkeypatch.setattr(embedding, "_retry_delay", lambda *_args, **_kwargs: 0.0)
-    server = await asyncio.start_server(reset, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    embedder = MultimodalEmbedder(
-        model="voyage-multimodal-3.5",
-        base_url=f"https://127.0.0.1:{port}/v1",
-        api_key="key",
-        dim=3,
-        provider=VoyageEmbedProvider(),
-    )
-    try:
-        with pytest.raises(httpx.ConnectError):
-            await embedder.embed_texts(["hello"])
-    finally:
-        await embedder.aclose()
-        server.close()
-        await server.wait_closed()
+    async with loopback_server(counted_reset) as port:
+        embedder = MultimodalEmbedder(
+            model="voyage-multimodal-3.5",
+            base_url=f"https://127.0.0.1:{port}/v1",
+            api_key="key",
+            dim=3,
+            provider=VoyageEmbedProvider(),
+        )
+        try:
+            with pytest.raises(httpx.ConnectError):
+                await embedder.embed_texts(["hello"])
+        finally:
+            await embedder.aclose()
 
     assert connections == 3
 

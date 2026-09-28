@@ -1,11 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """A parser service outage is named at LightRAG's parser transport boundary."""
 
-import asyncio
 import inspect
 import socket
 import ssl
-import struct
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -21,6 +19,7 @@ from dlightrag.engine.rag.corpus.ingestion.parser_transport import (
     apply_parser_outage_reporting,
     parser_unavailable_recorded,
 )
+from tests.support.loopback import loopback_server, reset_on_accept, tls_error
 
 type Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -85,13 +84,6 @@ def _raising(error: type[httpx.TransportError]) -> Handler:
 
 def _status(status: int, detail: str = "parser says no") -> Handler:
     return lambda _request: httpx.Response(status, json={"detail": detail})
-
-
-def _tls_error(reason: str) -> ssl.SSLError:
-    # OpenSSL sets ``reason`` on the errors it raises; a constructed one has none.
-    error = ssl.SSLError(1, f"[SSL: {reason}]")
-    error.reason = reason
-    return error
 
 
 def _connect_failure(cause: Callable[[], BaseException]) -> Handler:
@@ -227,7 +219,7 @@ async def test_misconfigured_parser_url_is_not_an_outage(
     "cause",
     [
         lambda: ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED]"),
-        lambda: _tls_error("WRONG_VERSION_NUMBER"),
+        lambda: tls_error("WRONG_VERSION_NUMBER"),
     ],
     ids=["tls-certificate", "https-to-plain-http"],
 )
@@ -281,23 +273,15 @@ async def test_a_real_tls_handshake_reset_is_an_outage(
 ) -> None:
     # The real httpcore chain for a peer resetting the handshake carries an
     # implicit SSLWantReadError context; it is a dropped connection.
-    async def reset(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        connection = writer.get_extra_info("socket")
-        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        writer.transport.abort()
-
-    server = await asyncio.start_server(reset, "127.0.0.1", 0)
-    endpoint = f"https://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-    monkeypatch.setenv("MINERU_API_MODE", "local")
-    monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", endpoint)
-    monkeypatch.setenv("DOCLING_ENDPOINT", endpoint)
     apply_parser_outage_reporting()
-    try:
+    async with loopback_server(reset_on_accept) as port:
+        endpoint = f"https://127.0.0.1:{port}"
+        monkeypatch.setenv("MINERU_API_MODE", "local")
+        monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", endpoint)
+        monkeypatch.setenv("DOCLING_ENDPOINT", endpoint)
+
         with pytest.raises(ParserUnavailableError):
             await _download(parser, tmp_path)
-    finally:
-        server.close()
-        await server.wait_closed()
 
 
 async def test_exhausted_polling_budget_is_not_an_outage(

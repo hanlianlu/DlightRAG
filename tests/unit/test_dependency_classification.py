@@ -2,14 +2,10 @@
 """Closed transient dependency classification for durable execution."""
 
 import asyncio
-import datetime
-import ipaddress
 import socket
 import ssl
-import struct
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
 from pathlib import Path
+from types import ModuleType
 
 import anthropic
 import httpx
@@ -23,6 +19,12 @@ from dlightrag.engine.dependencies import (
     ProviderUnavailableError,
     classify_transient_dependency,
     is_transient_request_failure,
+)
+from tests.support.loopback import (
+    loopback_certificate,
+    loopback_server,
+    reset_on_accept,
+    tls_error,
 )
 
 
@@ -157,19 +159,12 @@ def _caused[E: BaseException](error: E, cause: BaseException) -> E:
     return error
 
 
-def _tls_error(reason: str) -> ssl.SSLError:
-    # OpenSSL sets ``reason`` on the errors it raises; a constructed one has none.
-    error = ssl.SSLError(1, f"[SSL: {reason}] {reason.lower().replace('_', ' ')}")
-    error.reason = reason
-    return error
-
-
 def _misconfigured_causes() -> list[BaseException]:
     return [
         ssl.SSLCertVerificationError(
             1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
         ),
-        _tls_error("WRONG_VERSION_NUMBER"),
+        tls_error("WRONG_VERSION_NUMBER"),
     ]
 
 
@@ -373,28 +368,6 @@ def test_ignoring_text_keeps_the_status_type_and_endpoint_vetoes() -> None:
 # Real loopback endpoints, so the chains below are the ones httpcore and anyio
 # build (implicit exception context included), not constructed stand-ins.
 
-type _ConnectionHandler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
-
-
-@asynccontextmanager
-async def _loopback(
-    handler: _ConnectionHandler,
-    *,
-    tls: ssl.SSLContext | None = None,
-) -> AsyncIterator[int]:
-    server = await asyncio.start_server(handler, "127.0.0.1", 0, ssl=tls)
-    try:
-        yield server.sockets[0].getsockname()[1]
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
-async def _reset_on_accept(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    connection = writer.get_extra_info("socket")
-    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-    writer.transport.abort()
-
 
 async def _plain_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     await reader.read(1024)
@@ -408,48 +381,8 @@ async def _hold_open(reader: asyncio.StreamReader, writer: asyncio.StreamWriter)
     writer.close()
 
 
-@pytest.fixture
-def self_signed_tls(tmp_path: Path) -> ssl.SSLContext:
-    """A server context whose certificate no client trusts."""
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = datetime.datetime.now(datetime.UTC)
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=1))
-        .not_valid_after(now + datetime.timedelta(hours=1))
-        .add_extension(
-            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
-            critical=False,
-        )
-        .sign(key, hashes.SHA256())
-    )
-    certificate_path = tmp_path / "certificate.pem"
-    key_path = tmp_path / "key.pem"
-    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
-    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    context.load_cert_chain(certificate_path, key_path)
-    return context
-
-
-async def _get_failure(client_module: object, url: str) -> BaseException:
-    async with getattr(client_module, "AsyncClient")(timeout=5) as client:  # noqa: B009
+async def _get_failure(client_module: ModuleType, url: str) -> BaseException:
+    async with client_module.AsyncClient(timeout=5) as client:
         try:
             await client.get(url)
         except Exception as exc:  # noqa: BLE001 - the failure is the subject
@@ -458,8 +391,8 @@ async def _get_failure(client_module: object, url: str) -> BaseException:
 
 
 @pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
-async def test_a_real_handshake_reset_is_transient(client_module: object) -> None:
-    async with _loopback(_reset_on_accept) as port:
+async def test_a_real_handshake_reset_is_transient(client_module: ModuleType) -> None:
+    async with loopback_server(reset_on_accept) as port:
         for _ in range(3):
             failure = await _get_failure(client_module, f"https://127.0.0.1:{port}/")
 
@@ -468,7 +401,7 @@ async def test_a_real_handshake_reset_is_transient(client_module: object) -> Non
 
 
 async def test_a_real_handshake_reset_through_the_sdk_is_a_provider_interruption() -> None:
-    async with _loopback(_reset_on_accept) as port:
+    async with loopback_server(reset_on_accept) as port:
         client = openai.AsyncOpenAI(
             api_key="test-key",
             base_url=f"https://127.0.0.1:{port}/v1",
@@ -489,10 +422,11 @@ async def test_a_real_handshake_reset_through_the_sdk_is_a_provider_interruption
 
 @pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
 async def test_a_real_untrusted_certificate_is_misconfiguration(
-    client_module: object,
-    self_signed_tls: ssl.SSLContext,
+    client_module: ModuleType,
+    tmp_path: Path,
 ) -> None:
-    async with _loopback(_hold_open, tls=self_signed_tls) as port:
+    server_tls = loopback_certificate(tmp_path).server_context()
+    async with loopback_server(_hold_open, tls=server_tls) as port:
         failure = await _get_failure(client_module, f"https://127.0.0.1:{port}/")
 
     assert is_transient_request_failure(failure) is False
@@ -500,8 +434,10 @@ async def test_a_real_untrusted_certificate_is_misconfiguration(
 
 
 @pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
-async def test_a_real_https_url_for_plain_http_is_misconfiguration(client_module: object) -> None:
-    async with _loopback(_plain_http) as port:
+async def test_a_real_https_url_for_plain_http_is_misconfiguration(
+    client_module: ModuleType,
+) -> None:
+    async with loopback_server(_plain_http) as port:
         failure = await _get_failure(client_module, f"https://127.0.0.1:{port}/")
 
     assert is_transient_request_failure(failure) is False
