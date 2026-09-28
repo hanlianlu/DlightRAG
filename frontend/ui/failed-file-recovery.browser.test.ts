@@ -3,17 +3,10 @@
 import {expect} from '@esm-bundle/chai';
 import './failed-file-recovery.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
+import {waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
 const originalSetTimeout = window.setTimeout;
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => originalSetTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
-}
 
 function failedPage(workspace = 'personel', failed = true) {
   return {

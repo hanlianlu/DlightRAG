@@ -18,6 +18,7 @@ import type {
 } from './conversation-sidebar.ts';
 import './conversation-sidebar.ts';
 import {webRouter} from './router.ts';
+import {waitFor} from '../testing/dom.ts';
 
 defineDesignSystemElements();
 
@@ -86,14 +87,6 @@ function conversationsOpenButton(): HTMLButtonElement {
   const match = document.querySelector<HTMLButtonElement>('#conversation-sidebar-open');
   if (!match) throw new Error('open conversations button not found');
   return match;
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
 }
 
 beforeEach(() => {

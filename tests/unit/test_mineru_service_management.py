@@ -524,6 +524,7 @@ def test_mineru_launcher_uses_default_port_and_passes_args(tmp_path: Path) -> No
     )
 
     env = os.environ.copy()
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
     env["MINERU_CAPTURE"] = str(capture)
     env["MINERU_SERVICE_VENV"] = str(service_env)
     env.pop("MINERU_API_HOST", None)
@@ -559,6 +560,7 @@ def test_mineru_launcher_allows_host_and_port_override(tmp_path: Path) -> None:
     )
 
     env = os.environ.copy()
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
     env["MINERU_CAPTURE"] = str(capture)
     env["MINERU_SERVICE_VENV"] = str(service_env)
     env["MINERU_API_HOST"] = "0.0.0.0"
@@ -701,6 +703,7 @@ def test_mineru_launch_agent_stop_unloads_by_label(tmp_path: Path) -> None:
     )
 
     env = os.environ.copy()
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["MINERU_CAPTURE"] = str(capture)
     env["MINERU_LAUNCHD_HOME"] = str(home)

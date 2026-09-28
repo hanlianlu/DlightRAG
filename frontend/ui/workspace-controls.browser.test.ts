@@ -10,22 +10,9 @@ import type {DlInspectorFiles} from './inspector-files.ts';
 import type {DlIngestTarget} from './ingest-target.ts';
 import './ingest-target.ts';
 import type {ToastRequestDetail} from './toast.ts';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
-
-function buttonNamed(root: ParentNode, name: string): HTMLButtonElement | null {
-  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
-    .find((button) => (button.getAttribute('aria-label') || button.textContent?.trim()) === name)
-    ?? null;
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
-}
 
 function corpusReceipt(runId: string, workspace: string) {
   return {
@@ -136,7 +123,7 @@ it('preserves typed confirmation and focus after a failed corpus reset', async (
   input.value = 'Default';
   input.dispatchEvent(new Event('input'));
   await scope.updateComplete;
-  const submit = buttonNamed(scope, 'Reset Corpus')!;
+  const submit = buttonNamed<HTMLButtonElement>(scope, 'Reset Corpus')!;
   expect(submit.disabled).to.equal(false);
 
   submit.click();
@@ -249,10 +236,10 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   await scope.updateComplete;
   buttonNamed(scope, 'Reset Corpus')?.click();
   await waitFor(() => requests.length === 1
-    && buttonNamed(scope, 'Accepting reset…')?.disabled === true);
+    && buttonNamed<HTMLButtonElement>(scope, 'Accepting reset…')?.disabled === true);
 
   let dialog = scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')!;
-  const cancel = buttonNamed(dialog, 'Cancel')!;
+  const cancel = buttonNamed<HTMLButtonElement>(dialog, 'Cancel')!;
   expect(cancel.disabled).to.equal(true);
   cancel.click();
   const cancelEvent = new Event('cancel', {cancelable: true});
@@ -264,7 +251,7 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
     status: 500,
     headers: {'Content-Type': 'application/json'},
   }));
-  await waitFor(() => buttonNamed(scope.querySelector('#workspace-action-dialog')!, 'Cancel')?.disabled === false
+  await waitFor(() => buttonNamed<HTMLButtonElement>(scope.querySelector('#workspace-action-dialog')!, 'Cancel')?.disabled === false
     && input.readOnly === false);
   buttonNamed(scope.querySelector('#workspace-action-dialog')!, 'Cancel')?.click();
   await waitFor(() => !scope.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.open
@@ -283,7 +270,7 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   input.value = 'Research';
   input.dispatchEvent(new Event('input'));
   await scope.updateComplete;
-  const submit = buttonNamed(scope, 'Reset Corpus')!;
+  const submit = buttonNamed<HTMLButtonElement>(scope, 'Reset Corpus')!;
   expect(submit.disabled).to.equal(false);
   submit.click();
   await waitFor(() => requests.length === 2);

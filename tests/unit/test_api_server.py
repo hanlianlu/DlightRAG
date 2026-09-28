@@ -65,8 +65,6 @@ from dlightrag.application.runs import (
 from dlightrag.application.settings import authentication_settings
 from dlightrag.engine.answer.citations.contracts import SourceReference
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
-from dlightrag.engine.answer.results import AnswerResult
-from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunCreation,
@@ -202,20 +200,7 @@ def mock_config_no_auth_override(test_config: DlightragConfig):
 
 
 @pytest.fixture
-def mock_service():
-    """Create a mock WorkspaceRag."""
-    service = AsyncMock()
-    service.aingest = AsyncMock(return_value={"status": "success", "processed": 1})
-    service.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
-    service.aanswer = AsyncMock(
-        return_value=AnswerResult(answer="The answer is 42", contexts={"chunks": []})
-    )
-    service.adelete_files = AsyncMock(return_value=[{"status": "deleted"}])
-    return service
-
-
-@pytest.fixture
-def mock_application(_api_app: FastAPI, mock_service, test_config):
+def mock_application(_api_app: FastAPI, test_config):
     """Create an Application-shaped test double with explicit services."""
     application = AsyncMock()
     application.config = test_config
@@ -281,7 +266,6 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         ),
         child_roster_cursor_codec=ChildRosterCursorCodec(b"api-server-children"),
     )
-    corpora.delete_files = mock_service.adelete_files
     corpora.list_workspaces = AsyncMock(return_value=["default"])
     corpora.alist_workspace_records = AsyncMock(
         return_value=[
@@ -295,21 +279,9 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         ]
     )
     corpora.create_workspace = AsyncMock()
-    corpora.reset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
     corpora.failed_file_snapshot = AsyncMock(
         return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
     )
-    corpora.get_active_retry_failed_docs = AsyncMock(return_value=None)
-    corpora.start_retry_failed_docs = AsyncMock(
-        return_value={
-            "job_id": "retry-1",
-            "workspace": "default",
-            "source_type": "retry_failed",
-            "status": "queued",
-            "result": {},
-        }
-    )
-    corpora.retry_failed_docs = AsyncMock(return_value={})
     corpora.prepare_source_download = AsyncMock()
     corpora.get_visual_asset = AsyncMock()
     corpora.get_metadata = AsyncMock(return_value={})
@@ -328,11 +300,6 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         }
     )
     application.corpora = corpora
-    application.get_error_info = lambda: {
-        "last_error": None,
-        "timestamp": None,
-        "retry_after": 30.0,
-    }
     from dlightrag.engine.answer.image_capability import AnswerImageCapability
 
     answer_image_capability = AnswerImageCapability(

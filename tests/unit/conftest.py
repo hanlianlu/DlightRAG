@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Unit-test fixtures — isolate from the operator's .env and config.yaml.
+"""Unit-test fixtures — isolate from the operator's .env, config.yaml and home.
 
-Both are deployment inputs, not product contracts: a unit test that reads them
+These are deployment inputs, not product contracts: a unit test that reads them
 asserts whatever this checkout happens to be tuned to, so retuning config.yaml
 breaks CI. Tests that mean to exercise a YAML config build their own file.
 """
@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.application import config as config_module
 from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config import sections as config_sections
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
@@ -32,17 +32,44 @@ from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
 from dlightrag.engine.answer.resources.models import ResourceInput
 
-_REPO_CONFIG_YAML = Path(__file__).resolve().parents[2] / "config.yaml"
-# Bound before the fixture patches the name, otherwise the wrapper recurses.
-_FIND_YAML_CONFIG = config_module._find_yaml_config
+# The config.yaml files present when the run starts: this checkout's and the
+# invocation directory's. Tests that mean to load YAML write their own.
+_STARTUP_CONFIG_YAMLS = frozenset(
+    (directory / "config.yaml").resolve()
+    for directory in (Path(__file__).resolve().parents[2], Path.cwd())
+)
+# Bound before the isolation patches the name, otherwise the wrapper recurses.
+_FIND_YAML_CONFIG = config_sections._find_yaml_config
 
 
-def _yaml_config_ignoring_repo_file() -> Path | None:
-    """Resolve config.yaml as production does, minus this checkout's own file."""
+def _yaml_config_ignoring_startup_files() -> Path | None:
+    """Resolve config.yaml as production does, minus the files present at startup."""
     found = _FIND_YAML_CONFIG()
-    if found is not None and found.resolve() == _REPO_CONFIG_YAML:
+    if found is not None and found.resolve() in _STARTUP_CONFIG_YAMLS:
         return None
     return found
+
+
+def _hide_operator_inputs(patch: pytest.MonkeyPatch) -> None:
+    """Hide the checkout's .env and config.yaml and the shell's DLIGHTRAG_* names."""
+    patch.setenv("PYTHON_DOTENV_DISABLED", "1")  # LightRAG load_dotenv()s .env on import
+    patch.setitem(DlightragConfig.model_config, "env_file", None)
+    patch.setattr(config_sections, "_find_yaml_config", _yaml_config_ignoring_startup_files)
+    for key in list(os.environ):
+        if key.upper().startswith("DLIGHTRAG_"):
+            patch.delenv(key, raising=False)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector: pytest.Collector) -> Generator[None, Any, Any]:
+    """Import test modules under the same isolation as the tests themselves.
+
+    Some modules read config while they are imported (the MCP server builds
+    its HTTP auth from it), before any fixture runs.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        _hide_operator_inputs(patch)
+        return (yield)
 
 
 def answer_image_policy(**overrides: int) -> AnswerImagePolicy:
@@ -111,14 +138,17 @@ async def prepare_test_answer_run_input(
     )
 
 
+@pytest.fixture(scope="session")
+def _unit_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("home")
+
+
 @pytest.fixture(autouse=True)
-def _no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent .env and the repo's config.yaml from polluting unit tests."""
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
-    monkeypatch.setattr(config_module, "_find_yaml_config", _yaml_config_ignoring_repo_file)
-    for key in list(os.environ):
-        if key.upper().startswith("DLIGHTRAG_"):
-            monkeypatch.delenv(key, raising=False)
+def _isolated_from_operator(monkeypatch: pytest.MonkeyPatch, _unit_home: Path) -> None:
+    """Keep the operator's .env, config.yaml and home directory out of unit tests."""
+    _hide_operator_inputs(monkeypatch)
+    # Defaults such as the Agent Workspace and Skills roots live under ~.
+    monkeypatch.setenv("HOME", str(_unit_home))
 
 
 @pytest.fixture(autouse=True)

@@ -136,14 +136,12 @@ def mock_application():
             "fetched_rows": 1,
         }
     )
-    corpora.delete_files = AsyncMock(return_value=[])
     corpora.failed_file_snapshot = AsyncMock(
         return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
     )
     corpora.prepare_source_download = AsyncMock()
     corpora.get_visual_asset = AsyncMock()
     corpora.create_workspace = AsyncMock()
-    corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
     application_double.corpora = corpora
     corpus_run = SimpleNamespace(
         run_id="0199a0a0-0000-7000-8000-0000000000bb",
@@ -1478,7 +1476,6 @@ async def test_reset_workspace_accepts_a_durable_corpus_run(
         workspace="test_ws",
         submitted_by=DEPLOYMENT_OWNER_ID,
     )
-    mock_application.corpora.reset.assert_not_awaited()
 
 
 async def test_reset_workspace_projects_the_admission_limit(

@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {waitFor} from '../testing/dom.ts';
 type Axe = {
   run: (
     root: HTMLElement,
@@ -106,9 +107,9 @@ it('Settings MCP consent and credential forms have no serious accessible-name or
   try {
     const feature = document.createElement('dl-settings-connections');
     document.body.append(feature);
-    for (let attempt = 0; attempt < 50 && !feature.view; attempt++) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitFor(() => Boolean(feature.view));
     await feature.updateComplete;
-    for (let attempt = 0; attempt < 50 && !feature.view; attempt++) await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitFor(() => Boolean(feature.view));
     feature.querySelector<HTMLButtonElement>('[data-connections-root]')!.click();
     await feature.updateComplete;
     feature.querySelector<HTMLButtonElement>('[data-switch="a"]')!.click();

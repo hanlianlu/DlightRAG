@@ -18,6 +18,7 @@ import type {ImageOpenDetail} from './image-lightbox.ts';
 import type {DlContinuationDialog} from './run-dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
+import {waitFor} from '../testing/dom.ts';
 
 const bootstrap = {
   contract_version: 3,
@@ -96,14 +97,6 @@ function dialogNamed(root: ParentNode, name: string): HTMLDialogElement | null {
       ? root.querySelector<HTMLElement>(`#${labelledBy}`)?.textContent?.trim() === name
       : dialog.getAttribute('aria-label') === name;
   }) ?? null;
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
 }
 
 beforeEach(() => {

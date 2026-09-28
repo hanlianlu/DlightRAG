@@ -323,42 +323,6 @@ async def preview_or_spill(
     return rendered, receipt
 
 
-def path_tools(
-    environment: ExecutionEnvironment,
-    *,
-    scheduler: AccessScheduler,
-    fd: str = "fd",
-    ripgrep: str = "rg",
-    search_toolchain: SearchToolchain | None = None,
-    image_preparer: ImagePreparer | None = None,
-    resource_reader: ResourceReader | None = None,
-    spill: SpillWriter | None = None,
-    output_stage_factory: OutputStageFactory | None = None,
-) -> list[AgentTool]:
-    """Return Pi-shaped path tools bound to one rooted environment."""
-    toolchain = search_toolchain or SearchToolchain(fd=fd, ripgrep=ripgrep)
-    return [
-        read_tool(
-            environment,
-            scheduler,
-            resource_reader=resource_reader,
-            spill=spill,
-        ),
-        view_tool(environment, scheduler, image_preparer=image_preparer),
-        bash_tool(environment, scheduler, output_stage_factory=output_stage_factory),
-        edit_tool(environment, scheduler, spill=spill),
-        write_tool(environment, scheduler),
-        grep_tool(
-            environment,
-            scheduler,
-            search_toolchain=toolchain,
-            output_stage_factory=output_stage_factory,
-        ),
-        find_tool(environment, scheduler, search_toolchain=toolchain, spill=spill),
-        ls_tool(environment, scheduler),
-    ]
-
-
 def read_declaration(*, public_url: bool) -> ToolDeclaration:
     url_enabled = public_url
     description = (
@@ -1640,7 +1604,6 @@ __all__ = [
     "find_tool",
     "grep_tool",
     "ls_tool",
-    "path_tools",
     "preview_or_spill",
     "read_tool",
     "write_tool",

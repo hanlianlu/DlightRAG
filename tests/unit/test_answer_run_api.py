@@ -277,10 +277,6 @@ class _RunApplication:
             }
         )
 
-    async def resume(self, *, owner_id: str, run_id: str) -> RunRecord | None:
-        del owner_id, run_id
-        return self.record
-
     async def cancel(self, *, owner_id: str, run_id: str) -> RunCancellation:
         del owner_id
         self.cancelled.append(run_id)

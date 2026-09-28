@@ -30,12 +30,12 @@ from dlightrag.engine.agent.tools.files import (
     find_tool,
     grep_tool,
     ls_tool,
-    path_tools,
     preview_or_spill,
     read_tool,
     view_tool,
     write_tool,
 )
+from tests.support.path_tools import path_tools
 from tests.tool_helpers import recording_tool_runtime, tool_runtime
 
 

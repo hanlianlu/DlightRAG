@@ -9,6 +9,7 @@ import './inspector.ts';
 
 defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;
@@ -46,20 +47,6 @@ const presentation: AnswerPresentation = {
   artifacts: [],
   artifactOutcome: {status: 'complete', issues: []},
 };
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
-}
-
-function buttonNamed(root: ParentNode, name: string): HTMLElement | null {
-  return Array.from(root.querySelectorAll<HTMLElement>('button, dl-icon-button'))
-    .find((button) => button.getAttribute('aria-label') === name || button.textContent?.trim() === name)
-    ?? null;
-}
 
 beforeEach(() => {
   workspaceStore.init(

@@ -3,14 +3,10 @@
 import {expect} from '@esm-bundle/chai';
 import type {DlNotificationOffer} from './notifications.ts';
 import './notifications.ts';
+import {buttonNamed} from '../testing/dom.ts';
 
 const notificationDescriptor = Object.getOwnPropertyDescriptor(window, 'Notification');
 const originalHasFocus = document.hasFocus;
-
-function buttonNamed(root: ParentNode, name: string): HTMLButtonElement | null {
-  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
-    .find((button) => button.textContent?.trim() === name) ?? null;
-}
 
 function installNotification(permission: NotificationPermission, calls: string[]): void {
   class FakeNotification {

@@ -3,14 +3,17 @@
 
 DlightRAG adds direct pixel view beside the Pi-shaped read, bash, edit, write,
 grep, find and ls tools. This matrix owns their current argument surfaces,
-persistence, cursor and safety contracts.
+persistence, cursor and safety contracts, as an Answer run composes them: rooted
+in an Agent Workspace and backed by the resource reader and viewer.
 """
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
-from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-from dlightrag.engine.agent.tools.files import path_tools
+from dlightrag.engine.agent.tools.contracts import AgentTool
+from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.tools.composition import compose_research_tools
 
 # tool name -> (required params, optional params with defaults, replay policy, contract)
 MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {
@@ -19,13 +22,15 @@ MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {
         {
             "path": None,
             "resource_id": None,
+            "url": None,
+            "http": None,
             "offset": None,
             "limit": None,
             "focus": None,
             "cursor": None,
         },
         "replayable",
-        3,
+        4,
     ),
     "view": (
         (),
@@ -66,9 +71,19 @@ MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {
 }
 
 
-def _tools(tmp_path: Path):
-    environment = LocalExecutionEnvironment(tmp_path)
-    return path_tools(environment, scheduler=AccessScheduler())
+def _tools(tmp_path: Path) -> list[AgentTool]:
+    composed = compose_research_tools(
+        evidence=EvidenceLedger(),
+        trace={},
+        retrieve_knowledge_base=AsyncMock(),
+        search_web=None,
+        injected_tools=[],
+        register_web_source=None,
+        resource_reader=AsyncMock(),
+        resource_viewer=AsyncMock(),
+        environment=LocalExecutionEnvironment(tmp_path),
+    )
+    return [tool for tool in composed if tool.name in MATRIX]
 
 
 def test_tool_names_and_order_match_the_current_contract(tmp_path: Path) -> None:

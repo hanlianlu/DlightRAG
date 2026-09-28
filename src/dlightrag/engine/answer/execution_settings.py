@@ -8,12 +8,10 @@ from pathlib import Path
 
 from dlightrag.engine.agent.environment import WORKSPACE_MAX_BYTES, ExecutionMode
 
-DEFAULT_LOCAL_WORKSPACE_ROOT = Path.home() / ".dlightrag" / "agent_workspaces"
-
 
 def default_local_workspace_root() -> Path:
     """Single-machine default: outside the repo, never the corpus working_dir."""
-    return DEFAULT_LOCAL_WORKSPACE_ROOT.expanduser().resolve()
+    return (Path.home() / ".dlightrag" / "agent_workspaces").resolve()
 
 
 def validate_agent_execution(
@@ -46,7 +44,6 @@ def validate_agent_execution(
 
 
 __all__ = [
-    "DEFAULT_LOCAL_WORKSPACE_ROOT",
     "default_local_workspace_root",
     "validate_agent_execution",
 ]

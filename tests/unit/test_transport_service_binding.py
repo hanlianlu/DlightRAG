@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Transport modules stay inert until their lifespan binds an Application."""
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,7 +16,9 @@ from dlightrag.adapters.mcp import server as mcp_server
 from dlightrag.application import ApplicationClosedError
 
 
-def test_transport_and_tool_modules_import_without_composing_an_application() -> None:
+def test_transport_and_tool_modules_import_without_composing_an_application(
+    tmp_path: Path,
+) -> None:
     script = """
 import importlib
 import dlightrag
@@ -41,12 +45,15 @@ for name in (
 assert calls == 0
 """
 
+    # Importing the MCP server reads config; keep this checkout's out of it.
     completed = subprocess.run(
         [sys.executable, "-c", script],
         check=False,
         capture_output=True,
         text=True,
         timeout=30,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHON_DOTENV_DISABLED": "1"},
     )
 
     assert completed.returncode == 0, completed.stderr

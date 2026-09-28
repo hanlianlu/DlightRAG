@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 import {expect} from '@esm-bundle/chai';
 import './settings-connections.ts';
+import {waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
 
@@ -44,14 +45,6 @@ function probeReplies(connections: () => Record<string, unknown>[], recorded?: W
       presets: [],
     });
   };
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
 }
 
 function mount(): Feature {

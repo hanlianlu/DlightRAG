@@ -11,6 +11,7 @@ import {
   setLanguagePreference,
 } from '../i18n/locale.ts';
 import {LANGUAGE_STORAGE_KEY} from '../lib/language.ts';
+import {waitFor} from '../testing/dom.ts';
 
 class LocaleProbe extends LitElement {
   constructor() {
@@ -28,14 +29,6 @@ customElements.define('dl-locale-probe', LocaleProbe);
 beforeEach(() => {
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
 });
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
-}
 
 afterEach(async () => {
   await setLanguagePreference('auto');

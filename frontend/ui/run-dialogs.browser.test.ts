@@ -4,6 +4,7 @@ import {expect} from '@esm-bundle/chai';
 import './run-dialogs.ts';
 import type {ChildControlReceipt, ChildObservation} from '../api/conversations.ts';
 import type {ChildRosterEntry, DlChildrenRoster} from './run-dialogs.ts';
+import {waitFor} from '../testing/dom.ts';
 
 function entry(id: string, status = 'succeeded'): ChildRosterEntry {
   return {childSessionId: id, status, objective: `objective ${id}`};
@@ -15,14 +16,6 @@ function deferredPage() {
     (done) => { resolve = done; },
   );
   return {promise, resolve};
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
 }
 
 function roster(): DlChildrenRoster {
@@ -256,14 +249,6 @@ it('rejected terminal steer stays explicit and does not look like success', asyn
   await waitFor(() => (panel.textContent || '').includes('already terminal'));
 });
 
-async function until(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error('condition did not become true');
-}
-
 function observationFor(id: string, status = 'running'): ChildObservation {
   return {
     runId: 'run-1',
@@ -309,9 +294,9 @@ async function openInteractive(
       reply,
     },
   );
-  await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="a"]')));
   panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-  await until(() => Boolean(panel.querySelector('[name="instruction"]')));
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
   return panel;
 }
 
@@ -329,9 +314,9 @@ it('preserves steer draft and focus across an SSE observation refresh', async ()
       control: async () => ({outcome: 'queued'} as never),
     },
   );
-  await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="a"]')));
   panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-  await until(() => Boolean(panel.querySelector('[name="instruction"]')));
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
   const afterSelect = observes;
 
   const before = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!;
@@ -340,7 +325,7 @@ it('preserves steer draft and focus across an SSE observation refresh', async ()
   expect(document.activeElement).to.equal(before);
 
   panel.refreshIfFollowing('run-1');
-  await until(() => observes > afterSelect);
+  await waitFor(() => observes > afterSelect);
   await panel.updateComplete;
 
   const after = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]');
@@ -367,9 +352,9 @@ it('does not restore a stale capture over text typed during an in-flight refresh
       control: async () => ({outcome: 'queued'} as never),
     },
   );
-  await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="a"]')));
   panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-  await until(() => Boolean(panel.querySelector('[name="instruction"]')));
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
 
   const input = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!;
   input.value = 'hello';
@@ -379,10 +364,10 @@ it('does not restore a stale capture over text typed during an in-flight refresh
   panel.refreshIfFollowing('run-1');
   panel.refreshIfFollowing('run-1');
   panel.refreshIfFollowing('run-1');
-  await until(() => observes === afterSelect + 1);
+  await waitFor(() => observes === afterSelect + 1);
   input.value = 'hello world';
   release();
-  await until(() => observes >= afterSelect + 1);
+  await waitFor(() => observes >= afterSelect + 1);
   await panel.updateComplete;
   await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -408,10 +393,10 @@ it('keeps child B free of child A\'s late steer receipt and busy state', async (
   const input = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!;
   input.value = 'only child A';
   input.closest('form')!.requestSubmit();
-  await until(() => calls.length === 1);
+  await waitFor(() => calls.length === 1);
 
   panel.querySelector<HTMLButtonElement>('[data-child-session="b"]')!.click();
-  await until(() => {
+  await waitFor(() => {
     const current = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]');
     return Boolean(current && current !== input);
   });
@@ -446,10 +431,10 @@ it('does not attach a late receipt to a closed and reopened roster dialog', asyn
   const input = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!;
   input.value = 'only child A';
   input.closest('form')!.requestSubmit();
-  await until(() => Boolean(panel.querySelector('textarea[name="instruction"][disabled], textarea[name="instruction"][aria-disabled]')));
+  await waitFor(() => Boolean(panel.querySelector('textarea[name="instruction"][disabled], textarea[name="instruction"][aria-disabled]')));
 
   panel.querySelector<HTMLDialogElement>('dialog')!.close();
-  await until(() => panel.querySelectorAll('li[role="listitem"]').length === 0);
+  await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 0);
 
   panel.open(
     async () => ({children: [entry('a', 'running'), entry('b', 'running')], nextCursor: null}),
@@ -459,9 +444,9 @@ it('does not attach a late receipt to a closed and reopened roster dialog', asyn
       control: async () => pending,
     },
   );
-  await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="a"]')));
   panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-  await until(() => Boolean(panel.querySelector('[name="instruction"]')));
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
 
   resolve({
     runId: 'run-1', childSessionId: 'a', action: 'steer', outcome: 'queued',
@@ -494,11 +479,11 @@ it('keeps a late guidance reply correlated to the requesting child', async () =>
   const reply = panel.querySelector<HTMLTextAreaElement>('[name="reply"]')!;
   reply.value = 'use the report';
   reply.closest('form')!.requestSubmit();
-  await until(() => replies.length === 1);
+  await waitFor(() => replies.length === 1);
   expect(replies[0]).to.equal('req-a');
 
   panel.querySelector<HTMLButtonElement>('[data-child-session="b"]')!.click();
-  await until(() => {
+  await waitFor(() => {
     const current = panel.querySelector<HTMLTextAreaElement>('[name="reply"]');
     return Boolean(current && current !== reply);
   });
@@ -522,14 +507,14 @@ it('does not leak a steer draft from child A onto child B', async () => {
   aInput.value = 'only for A';
 
   panel.querySelector<HTMLButtonElement>('[data-child-session="b"]')!.click();
-  await until(() => {
+  await waitFor(() => {
     const current = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]');
     return Boolean(current && current !== aInput);
   });
   expect(panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')?.value).to.equal('');
 
   panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-  await until(() => {
+  await waitFor(() => {
     const current = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]');
     return Boolean(current && current.value === 'only for A');
   });
@@ -546,9 +531,9 @@ async function changingObservation(
   panel.open(async () => ({children: [current.child], nextCursor: null}), {
     runId: 'run-1', observe: async () => current, control, reply,
   });
-  await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="a"]')));
   panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-  await until(() => Boolean(panel.querySelector('[name="instruction"]')));
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
   return {
     panel,
     async set(operationId: string, requestId = 'req-a', nextStatus = status, previousRequestStatus?: string) {
@@ -619,12 +604,12 @@ for (const action of ['steer', 'continue', 'cancel', 'reply'] as const) {
       form().requestSubmit();
     };
     submit('A command');
-    await until(() => pending.length === 1);
+    await waitFor(() => pending.length === 1);
     await state.set(action === 'reply' ? 'op-a' : 'op-b', 'req-b');
     expect(form().querySelector<HTMLButtonElement>('button')!.disabled).to.equal(false);
     if (input()) expect(input()!.value).to.equal('');
     submit('B command');
-    await until(() => pending.length === 2);
+    await waitFor(() => pending.length === 2);
     pending[0]!.resolve(commandReceipt(action));
     await new Promise((resolve) => setTimeout(resolve, 20));
     await panel.updateComplete;
@@ -632,7 +617,7 @@ for (const action of ['steer', 'continue', 'cancel', 'reply'] as const) {
     if (input()) expect(input()!.value).to.equal('B command');
     expect(panel.textContent).to.not.contain(action === 'reply' ? 'Reply sent.' : action === 'continue' ? 'Continuation accepted' : 'has not necessarily followed');
     pending[1]!.resolve(commandReceipt(action, 'op-b', 'req-b'));
-    await until(() => !form().querySelector<HTMLButtonElement>('button')!.disabled);
+    await waitFor(() => !form().querySelector<HTMLButtonElement>('button')!.disabled);
     if (input()) expect(input()!.value).to.equal('');
     expect(panel.textContent).to.contain(action === 'reply' ? 'Reply sent.' : action === 'continue' ? 'Continuation accepted' : 'has not necessarily followed');
   });
@@ -652,7 +637,7 @@ it('resets the current identity editor after switching away and back during a co
   expect(restored.value).to.equal('A command');
   expect(restored.disabled).to.equal(true);
   resolve(commandReceipt('steer'));
-  await until(() => !restored.disabled);
+  await waitFor(() => !restored.disabled);
   expect(restored.value).to.equal('');
   await state.set('op-b');
   expect(state.panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!.value).to.equal('B draft');
@@ -676,13 +661,13 @@ for (const action of ['continue', 'reply'] as const) {
     panel.open(async () => ({children: [current.child], nextCursor: null}), {
       runId: 'run-1', observe: async () => current, control: send, reply: send,
     });
-    await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
+    await waitFor(() => Boolean(panel.querySelector('[data-child-session="a"]')));
     panel.querySelector<HTMLButtonElement>('[data-child-session="a"]')!.click();
-    await until(() => Boolean(panel.querySelector(`[data-editor="${action}"] textarea`)));
+    await waitFor(() => Boolean(panel.querySelector(`[data-editor="${action}"] textarea`)));
     const input = panel.querySelector<HTMLTextAreaElement>(`[data-editor="${action}"] textarea`)!;
     input.value = 'answer';
     input.closest('form')!.requestSubmit();
-    await until(() => !panel.contains(input));
+    await waitFor(() => !panel.contains(input));
     const expected = action === 'continue' ? 'Continuation accepted as a new operation.' : 'Reply sent.';
     expect(panel.querySelector('.roster-observation')?.textContent).to.contain(expected);
     expect(panel.querySelector('[data-roster-status]')?.textContent).to.contain(expected);

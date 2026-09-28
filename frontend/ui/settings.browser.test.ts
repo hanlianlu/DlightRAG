@@ -6,22 +6,9 @@ import type {DlSettingsDialog} from './settings.ts';
 import './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 import './toast.ts';
+import {buttonNamed, waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
-}
-
-function buttonNamed(root: ParentNode, name: string): HTMLButtonElement | null {
-  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
-    .find((button) => (button.getAttribute('aria-label') || button.textContent?.trim()) === name)
-    ?? null;
-}
 
 function mount(): DlSettingsDialog {
   const shell = document.createElement('div');

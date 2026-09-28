@@ -107,3 +107,13 @@ test('design-system elements have no import-time registration side effect', () =
   }
   assert.match(source(join(frontend, 'design-system/elements/define.ts')), /registry\.define/);
 });
+
+test('shipped sources never import the browser-test helpers', () => {
+  const shipped = ['api', 'design-system', 'i18n', 'lib', 'stores', 'ui']
+    .flatMap((directory) => filesUnder(join(frontend, directory), ['.ts']))
+    .filter((path) => !path.endsWith('.test.ts'));
+  for (const path of shipped) {
+    assert.doesNotMatch(source(path), /from\s+['"][^'"]*\/testing\//,
+      `${relative(frontend, path)} imports a test helper`);
+  }
+});

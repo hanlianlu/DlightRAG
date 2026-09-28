@@ -1,12 +1,19 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """YAML precedence for the canonical nested configuration."""
 
+import operator
+from collections.abc import Iterator
+from functools import reduce
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 from ruamel.yaml.constructor import DuplicateKeyError
 
 from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, _find_yaml_config
+from dlightrag.application.config import sections as config_sections
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_nested_yaml_loads_and_environment_wins(
@@ -206,8 +213,41 @@ def test_yaml_discovery_and_no_yaml_defaults(
     assert DlightragConfig(_env_file=None).deployment.workspace == "found"
 
 
+def _yaml_leaves(
+    node: object, path: tuple[str, ...] = ()
+) -> Iterator[tuple[tuple[str, ...], object]]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _yaml_leaves(value, (*path, key))
+    else:
+        yield path, node
+
+
+def test_shipped_config_yaml_validates_and_applies_every_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shipped = _REPO_ROOT / "config.yaml"
+    monkeypatch.setattr(config_sections, "_find_yaml_config", lambda: shipped)
+    loaded = DlightragConfig().model_dump(mode="json")
+
+    for path, value in _yaml_leaves(YAML(typ="safe").load(shipped.read_text(encoding="utf-8"))):
+        if path == ("deployment", "working_dir"):
+            value = str(Path(str(value)).resolve())
+        assert reduce(operator.getitem, path, loaded) == value, path
+
+
+def test_unit_runs_ignore_the_checkout_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The unit isolation hides this checkout's .env and config.yaml."""
+    monkeypatch.chdir(tmp_path)
+    isolated = DlightragConfig().model_dump()
+    monkeypatch.chdir(_REPO_ROOT)
+    assert DlightragConfig().model_dump() == isolated
+
+
 def test_shipped_config_and_env_example_use_canonical_sections() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = _REPO_ROOT
     config_text = (root / "config.yaml").read_text(encoding="utf-8")
     env_text = (root / ".env.example").read_text(encoding="utf-8")
 

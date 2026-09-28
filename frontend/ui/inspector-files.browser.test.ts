@@ -6,16 +6,9 @@ import {ingestStore} from '../stores/ingest-store.ts';
 import './inspector-files.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
+import {waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('condition did not become true');
-}
 
 function confirmDeleteDialog(panel: DlInspectorFiles, value: string): void {
   const dialog = panel.querySelector<HTMLDialogElement>('#delete-file-dialog')!;

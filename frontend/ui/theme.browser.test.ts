@@ -4,6 +4,7 @@ import {expect} from '@esm-bundle/chai';
 import {THEME_STORAGE_KEY} from '../lib/theme.ts';
 import type {DlThemeControl} from './theme.ts';
 import './theme.ts';
+import {buttonNamed} from '../testing/dom.ts';
 
 const originalMatchMedia = window.matchMedia;
 
@@ -18,12 +19,6 @@ function media(): MediaQueryList {
     removeEventListener() {},
     dispatchEvent: () => true,
   };
-}
-
-function buttonNamed(root: ParentNode, name: string): HTMLButtonElement | null {
-  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
-    .find((button) => (button.getAttribute('aria-label') || button.textContent?.trim()) === name)
-    ?? null;
 }
 
 afterEach(() => {
