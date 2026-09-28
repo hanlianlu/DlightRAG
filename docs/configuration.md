@@ -734,6 +734,7 @@ answer:
     max_attachments: 6
     max_attachment_bytes: 104857600
     max_total_attachment_bytes: 134217728
+    lineage_adoption: true
     image_max_bytes: 3000000
     image_max_total_bytes: 24000000
     image_max_px: 1536
@@ -747,6 +748,12 @@ Attachments are run-scoped Resources. Full bytes do not enter model context;
 text is decoded/converted by `read` and image pixels are attached by `view` on demand. `query_images`
 is a separate retrieve-only path limited to three current images. The final
 answer image count is clamped to the query model's discovered capability.
+
+`lineage_adoption` lets a Run adopt a Resource that an earlier Run on the same
+Agent Session registered, when the model names its handle. Newly adopted bytes
+take an attachment slot, and their text reads only through the conversion view
+stored with them; the adopting Run never converts them. See
+[Resource Reading](resource-reading.md#earlier-runs).
 
 ## Research Agent
 

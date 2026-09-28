@@ -220,21 +220,35 @@ completeness, or untested platforms.
 - Lineage adoption is on by default (`answer.generation.lineage_adoption`). When
   `read` or `view` names an unknown handle, the loader looks in the same owner
   and Agent Session for a retained row with that handle and an adoptable kind: a
-  fetched Web body, a tool attachment, or a Published Artifact. If its Blob
-  digest matches, the bytes become a Resource of this Run under a new canonical
-  handle, the earlier handle becomes its alias, and the stored conversion
-  snapshot is adopted verbatim. The bytes, snapshot, and images settle as this
-  Run's own Resources under its fence, so cleanup of the origin Run cannot
-  invalidate them.
-- Two refusals apply when a handle is first adopted: `read` refuses a
-  convertible document whose earlier Run left no snapshot rather than converting
-  it again, and a snapshot that does not match its bytes refuses the adoption.
-  `view` adopts a document that has no snapshot.
-- An adopted Resource registers like a caller upload: it takes one
-  `answer.generation.max_attachments` slot and counts toward the upload byte
-  limits.
-- A handle the loader does not admit, or a cursor from another Run, is refused
-  with guidance to re-attach the document or read it again.
+  fetched Web body, a tool attachment, or a Published Artifact. Its Blob digest
+  must match.
+- A stored conversion view is checked before anything is registered: it must
+  decode, name the same handle, and match the input digest of the bytes. A view
+  that fails any check refuses the adoption ("the document was not converted
+  again"), and because nothing was registered, asking again refuses again.
+- The bytes then become a Resource of this Run under a new canonical handle, the
+  earlier handle becomes its alias, and the stored view is adopted verbatim. The
+  bytes, view, and images settle as this Run's own Resources under its fence, so
+  cleanup of the origin Run cannot invalidate them.
+- Adopted bytes are registered stored-view-only: their text reads only through
+  the view adopted or restored with them, and this Run never converts them.
+  `read` of a convertible document whose earlier Run never extracted text
+  refuses with the remedy to view its pages or re-read it from its URL or a
+  fresh attachment. `view` can still adopt such a document for pixels that need
+  no conversion, such as PDF pages, but a later `read` through the earlier
+  handle or this Run's handle refuses the same way, and recovery keeps it so.
+- Bytes identical to a Resource this Run already holds, such as the same file
+  attached again, keep that Resource's own state: a view it already has stays,
+  no second view is adopted, and the adoption converts nothing.
+- Newly adopted bytes take one `answer.generation.max_attachments` slot and
+  count toward the upload byte limits. An adoption past the allowance refuses as
+  a tool error: "too many attachments; the earlier document was not adopted into
+  this run".
+- The Resource manifest tells the model that a resource id printed by an earlier
+  turn may still resolve, and that only a refusal means attaching the document
+  again. A handle the loader does not admit is refused with that remedy. Cursors
+  stay per Run: an earlier turn's cursor is refused, and reading again returns a
+  current one.
 
 ## Verification
 
@@ -251,8 +265,10 @@ completeness, or untested platforms.
   focus ordering, cursors, and manifest classification.
 - `tests/unit/test_resource_snapshot_runtime.py`: settled snapshots and located
   pixels restored through the Answer host and Agent runtime.
-- `tests/unit/test_resource_lineage_adoption.py`,
-  `tests/integration/test_resource_lineage_pg.py`,
+- `tests/unit/test_resource_lineage_adoption.py` and the recovery test in
+  `tests/unit/test_answer_executor.py`: adoption checks, stored-view-only
+  adopted bytes, the attachment allowance, and the manifest wording.
+- `tests/integration/test_resource_lineage_pg.py`,
   `tests/integration/test_attachment_replay_pg.py`,
   `tests/integration/test_resource_review_regressions_pg.py`: adoption,
   selected-lineage replay, and durable settlement against PostgreSQL.

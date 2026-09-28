@@ -544,7 +544,9 @@ Text, assets, status, converter/version, fallback reason, known OCR pages and
 input/output digests settle as one adopted Resource view. Same-Run reads, cursors
 and recovery reuse it without reparsing. Selected-lineage follow-up/fork retention
 and pinned Child Session hydration preserve original occurrence identity and
-charge the actual consuming model; they do not grant historical resource handles.
+charge the actual consuming model; they register no earlier resource handle. An
+earlier handle becomes usable only through lineage adoption, whose adopted bytes
+read text only through the conversion view stored with them.
 
 The post-pilot assessment approved PDF and XLSX alongside unified DOCX:
 

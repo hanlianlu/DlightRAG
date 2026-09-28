@@ -313,7 +313,7 @@ A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Age
 _Avoid_: Web Search result, URL attachment, raw URL, Bash output
 
 **Resource Handle**:
-An owner/run-scoped identity through which prepared, fetched, evidence-backed, spilled, or published content remains addressable across recovery; it is opaque except for a Published Artifact's deterministic address (`artifact-<hash of its Artifact path>`), which is derived on purpose so the Tool can name it before the publication exists. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle and the earlier handle stays readable only as its alias. What a later Run may adopt is declared once, as (capability, resource kind) pairs, so a new re-readable kind is added where it is written rather than in each reader.
+An owner/run-scoped identity through which prepared, fetched, evidence-backed, spilled, or published content remains addressable across recovery; it is opaque except for a Published Artifact's deterministic address (`artifact-<hash of its Artifact path>`), which is derived on purpose so the Tool can name it before the publication exists. A later Run on the same Agent Session may adopt an earlier Run's Resource on first use; the adopting Run then holds the canonical handle, the earlier handle stays readable only as its alias, and the adopted Resource reads text only through the conversion view stored with it, never through a new conversion. What a later Run may adopt is declared once, as (capability, resource kind) pairs, so a new re-readable kind is added where it is written rather than in each reader.
 _Avoid_: File path, URL, blob id
 
 **Blob**:
