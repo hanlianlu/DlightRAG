@@ -148,6 +148,8 @@ WHERE job_id = $1
   AND $4::timestamptz > NOW()
 """
 
+# The fenced failure and completion transitions. The worker runs these same
+# statements inside its own transactions, so one definition fences both.
 _MARK_FAILED = """
 UPDATE dlightrag_promotion_jobs
 SET state = 'failed',
@@ -161,6 +163,7 @@ WHERE job_id = $1
   AND lease_owner = $2
   AND lease_generation = $3
   AND lease_until > NOW()
+RETURNING 1
 """
 
 _MARK_DONE = """

@@ -9,39 +9,11 @@ from dlightrag.engine.runtime.records import TerminalOutcome
 
 type TerminalStatus = Literal["succeeded", "failed", "cancelled"]
 
-# One fenced terminal transition that also appends the run's single terminal
-# event. Prepared input is cleared on every terminal transition.
-_FINISH_RUN_SQL = """
-WITH bumped AS (
-    UPDATE dlightrag_runs
-    SET status = $5::text,
-        stop_reason = $6::text,
-        result_json = $7::jsonb,
-        error_kind = $8::text,
-        error_message = $9::text,
-        phase = NULL,
-        prepared_input_json = NULL,
-        lease_owner = NULL,
-        lease_expires_at = NULL,
-        finished_at = NOW(),
-        purge_after = NOW() + make_interval(secs => retention_seconds::double precision),
-        updated_at = NOW(),
-        next_event_sequence = next_event_sequence + 1
-    WHERE owner_id = $1 AND run_id = $2
-      AND lease_owner = $3 AND fencing_epoch = $4
-      AND status = 'running' AND lease_expires_at > NOW()
-      AND (NOT $12::boolean OR cancel_requested_at IS NULL)
-      AND (
-          $5::text <> 'succeeded'
-          OR NOT EXISTS (
-              SELECT 1
-              FROM dlightrag_answer_child_sessions AS child
-              WHERE child.owner_id = $1 AND child.run_id = $2
-                AND child.status = 'running'
-          )
-      )
-    RETURNING next_event_sequence - 1 AS event_sequence
-), cancelled_children AS (
+# Settling a parent Run settles what it still owned: its running Child Sessions
+# and their current Operations are cancelled with origin 'run', and its pending
+# guidance asks retire. These CTEs follow a ``bumped`` CTE that returns the
+# settled Runs' ``owner_id, run_id``, so every terminal statement shares them.
+SETTLE_TERMINATED_RUN_CHILDREN = """cancelled_children AS (
     UPDATE dlightrag_answer_child_sessions AS child
     SET status = 'cancelled',
         cancel_requested_at = COALESCE(child.cancel_requested_at, NOW()),
@@ -72,9 +44,8 @@ WITH bumped AS (
         lease_owner = NULL,
         lease_expires_at = NULL,
         updated_at = NOW()
-    WHERE child.owner_id = $1 AND child.run_id = $2
+    WHERE (child.owner_id, child.run_id) IN (SELECT owner_id, run_id FROM bumped)
       AND child.status = 'running'
-      AND EXISTS (SELECT 1 FROM bumped)
     RETURNING child.owner_id, child.run_id, child.child_session_id
 ), cancelled_operations AS (
     UPDATE dlightrag_answer_child_operations AS operation
@@ -87,11 +58,44 @@ WITH bumped AS (
 ), retired_guidance AS (
     UPDATE dlightrag_answer_child_guidance AS guidance
     SET status = 'cancelled', updated_at = NOW()
-    WHERE guidance.owner_id = $1 AND guidance.run_id = $2
+    WHERE (guidance.owner_id, guidance.run_id) IN (SELECT owner_id, run_id FROM bumped)
       AND guidance.status = 'pending'
-      AND EXISTS (SELECT 1 FROM bumped)
     RETURNING guidance.request_id
-), inserted AS (
+)"""
+
+# One fenced terminal transition that also appends the run's single terminal
+# event. Prepared input is cleared on every terminal transition.
+_FINISH_RUN_SQL = f"""
+WITH bumped AS (
+    UPDATE dlightrag_runs
+    SET status = $5::text,
+        stop_reason = $6::text,
+        result_json = $7::jsonb,
+        error_kind = $8::text,
+        error_message = $9::text,
+        phase = NULL,
+        prepared_input_json = NULL,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        finished_at = NOW(),
+        purge_after = NOW() + make_interval(secs => retention_seconds::double precision),
+        updated_at = NOW(),
+        next_event_sequence = next_event_sequence + 1
+    WHERE owner_id = $1 AND run_id = $2
+      AND lease_owner = $3 AND fencing_epoch = $4
+      AND status = 'running' AND lease_expires_at > NOW()
+      AND (NOT $12::boolean OR cancel_requested_at IS NULL)
+      AND (
+          $5::text <> 'succeeded'
+          OR NOT EXISTS (
+              SELECT 1
+              FROM dlightrag_answer_child_sessions AS child
+              WHERE child.owner_id = $1 AND child.run_id = $2
+                AND child.status = 'running'
+          )
+      )
+    RETURNING owner_id, run_id, next_event_sequence - 1 AS event_sequence
+), {SETTLE_TERMINATED_RUN_CHILDREN}, inserted AS (
     INSERT INTO dlightrag_run_events (
         owner_id, run_id, event_sequence, event_type, payload
     )
@@ -99,7 +103,7 @@ WITH bumped AS (
     RETURNING event_sequence
 )
 SELECT event_sequence FROM inserted
-"""
+"""  # noqa: S608 - interpolates only the trusted SETTLE_TERMINATED_RUN_CHILDREN constant
 
 _SELECT_CANCELLATION = """
 SELECT cancel_requested_at IS NOT NULL
@@ -219,4 +223,4 @@ async def finish_fenced_run(
     )
 
 
-__all__ = ["TerminalStatus", "finish_fenced_run"]
+__all__ = ["SETTLE_TERMINATED_RUN_CHILDREN", "TerminalStatus", "finish_fenced_run"]

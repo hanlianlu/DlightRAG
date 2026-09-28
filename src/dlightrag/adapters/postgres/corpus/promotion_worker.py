@@ -42,7 +42,11 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     rebuild_metadata_field_stats_for_workspace,
 )
-from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
+from dlightrag.adapters.postgres.corpus.promotion_jobs import (
+    _MARK_DONE,
+    _MARK_FAILED,
+    PGPromotionJobStore,
+)
 from dlightrag.adapters.postgres.corpus.workspace_write_gate import workspace_write_gate
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 
@@ -59,24 +63,9 @@ _PROMOTION_ERROR_PREFIX = "promotion failed"
 
 _LEASE_RENEW_INTERVAL_DIVISOR = 3  # renew when one third of the lease remains
 
-# Guarded failure transition: the job row proves the attempt still owns its
-# unexpired lease; the registry update additionally proves the fence owner.
-_FAIL_JOB_GUARDED = """
-UPDATE dlightrag_promotion_jobs
-SET state = 'failed',
-    last_error = $4,
-    next_retry_at = $5::timestamptz,
-    lease_owner = NULL,
-    lease_until = NULL,
-    updated_at = NOW()
-WHERE job_id = $1
-  AND state = 'promoting'
-  AND lease_owner = $2
-  AND lease_generation = $3
-  AND lease_until > NOW()
-RETURNING 1
-"""
-
+# Guarded failure transition: the job row (the job store's _MARK_FAILED) proves
+# the attempt still owns its unexpired lease; the registry update additionally
+# proves the fence owner.
 _FAIL_REGISTRY_GUARDED = """
 UPDATE dlightrag_workspace_meta
 SET promotion_state = 'failed',
@@ -91,8 +80,9 @@ WHERE workspace = $1
 RETURNING 1
 """
 
-# Guarded success flips: both must affect exactly one row or the cutover
-# transaction rolls back (stale attempts can never flip a newer state).
+# Guarded success flips: the registry flip and the job store's _MARK_DONE must
+# each affect exactly one row or the cutover transaction rolls back (stale
+# attempts can never flip a newer state).
 _FLIP_HOT_GUARDED = """
 UPDATE dlightrag_workspace_meta
 SET storage_tier = 'hot',
@@ -105,22 +95,6 @@ SET storage_tier = 'hot',
 WHERE workspace = $1
   AND write_fence_owner = $2
   AND write_fence_until > NOW()
-"""
-
-_DONE_GUARDED = """
-UPDATE dlightrag_promotion_jobs
-SET state = 'done',
-    promoted_at = NOW(),
-    last_error = NULL,
-    next_retry_at = NULL,
-    lease_owner = NULL,
-    lease_until = NULL,
-    updated_at = NOW()
-WHERE job_id = $1
-  AND state = 'promoting'
-  AND lease_owner = $2
-  AND lease_generation = $3
-  AND lease_until > NOW()
 """
 
 
@@ -475,7 +449,7 @@ class PGPromotionWorker:
             if flipped == "UPDATE 0":
                 raise StalePromotionAttempt("registry flip refused: fence not current")
             done = await conn.execute(
-                _DONE_GUARDED,
+                _MARK_DONE,
                 claim.job_id,
                 claim.owner,
                 claim.lease_generation,
@@ -555,7 +529,7 @@ class PGPromotionWorker:
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
                 job_guard = await conn.fetchval(
-                    _FAIL_JOB_GUARDED,
+                    _MARK_FAILED,
                     claim.job_id,
                     claim.owner,
                     claim.lease_generation,

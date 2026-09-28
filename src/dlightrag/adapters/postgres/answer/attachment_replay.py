@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.engine.agent.session.entries import SessionEntry, ToolResultMessageEntry
 from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, encode_tool_content
 from dlightrag.engine.answer.attachment_replay import (
@@ -43,16 +44,7 @@ FOR SHARE
 async def _lock_consuming_run(
     conn: Any, owner_id: str, run_id: uuid.UUID, worker_id: str, fencing_epoch: int
 ) -> None:
-    held = await conn.fetchval(
-        "SELECT 1 FROM dlightrag_runs WHERE owner_id=$1 AND run_id=$2"
-        " AND lease_owner=$3 AND fencing_epoch=$4 AND status='running'"
-        " AND lease_expires_at > NOW() FOR UPDATE",
-        owner_id,
-        run_id,
-        worker_id,
-        fencing_epoch,
-    )
-    if held is None:
+    if not await hold_run_lease(conn, owner_id, run_id, worker_id, fencing_epoch):
         raise LeaseLostError
 
 

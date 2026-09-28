@@ -29,6 +29,7 @@ from typing import Any
 from dlightrag.adapters.postgres.core._errors import guard_payload
 from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.adapters.postgres.runtime._terminal import finish_fenced_run
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_complete_blob
 from dlightrag.engine.agent.session.effects import JsonValue
@@ -81,15 +82,6 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
 )
-
-_LEASE_PREDICATE = """
-SELECT 1
-FROM dlightrag_runs
-WHERE owner_id = $1 AND run_id = $2
-  AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
-FOR UPDATE
-"""
 
 _LOCK_PROGRESS_RUN = """
 SELECT durable_progress_version,
@@ -645,7 +637,7 @@ class PGAgentSessionRepository:
             return TransactionLeaseLost()
         async with self._connection() as conn:
             async with conn.transaction():
-                if await self._hold_lease(conn) is None:
+                if not await self._hold_lease(conn):
                     return TransactionLeaseLost()
                 await conn.execute(
                     _CREATE_SESSION,
@@ -991,24 +983,23 @@ class PGAgentSessionRepository:
                 [write.ref.key for write in deletes],
             )
 
-    async def _hold_lease(self, conn: Any) -> Any:
+    async def _hold_lease(self, conn: Any) -> bool:
         if self._child_session_id is not None:
             # Lock the parent Run before the Child row. Child settlements can
             # insert Evidence (taking an FK key-share lock) and then advance
             # parent progress; one lock order prevents sibling lock-upgrade
             # deadlocks and keeps the parent lease as the final authority.
             if self._parent_fencing_epoch is None:
-                return None
-            parent_held = await conn.fetchval(
-                _LEASE_PREDICATE,
+                return False
+            if not await hold_run_lease(
+                conn,
                 self._owner_id,
                 self._run_id,
                 self._lease_owner,
                 self._parent_fencing_epoch,
-            )
-            if parent_held is None:
-                return None
-            return await conn.fetchval(
+            ):
+                return False
+            child_held = await conn.fetchval(
                 _CHILD_LEASE_PREDICATE,
                 self._owner_id,
                 self._run_id,
@@ -1016,12 +1007,9 @@ class PGAgentSessionRepository:
                 self._lease_owner,
                 self._fencing_epoch,
             )
-        return await conn.fetchval(
-            _LEASE_PREDICATE,
-            self._owner_id,
-            self._run_id,
-            self._lease_owner,
-            self._fencing_epoch,
+            return child_held is not None
+        return await hold_run_lease(
+            conn, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
         )
 
     async def load_latest_evidence(self, session_id: SessionId) -> OpaqueEvidenceWrite | None:

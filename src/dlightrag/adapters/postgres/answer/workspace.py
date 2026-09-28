@@ -10,6 +10,7 @@ from typing import Any
 
 from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
     DEFAULT_SESSION_NOTES_LIMITS,
@@ -44,15 +45,6 @@ WHERE owner_id = $1 AND session_id = $2::text::uuid
 FOR UPDATE
 """
 
-_LEASE = """
-SELECT 1
-FROM dlightrag_runs
-WHERE owner_id = $1 AND run_id = $2
-  AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
-FOR UPDATE
-"""
-
 
 class PGWorkspaceStore:
     """Fenced workspace metadata for one claimed run."""
@@ -80,6 +72,11 @@ class PGWorkspaceStore:
         async with pool.acquire() as conn:
             yield conn
 
+    async def _hold_lease(self, conn: Any) -> bool:
+        return await hold_run_lease(
+            conn, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
+        )
+
     async def handoff_epoch(
         self,
         *,
@@ -91,12 +88,7 @@ class PGWorkspaceStore:
             raise ValueError("destination epoch must be positive")
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
-                    )
-                    is None
-                ):
+                if not await self._hold_lease(conn):
                     return HandoffLeaseLost()
                 current = await conn.fetchval(
                     "SELECT agent_workspace_epoch FROM dlightrag_runs"
@@ -134,12 +126,7 @@ class PGWorkspaceStore:
     ) -> InventoryReplaceResult:
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
-                    )
-                    is None
-                ):
+                if not await self._hold_lease(conn):
                     return "lease_lost"
                 await self._replace_inventory_locked(conn, records)
                 return "committed"
@@ -186,12 +173,7 @@ class PGWorkspaceStore:
         admissible = tuple(note for note in upserts if validate_note_path(note.relative_path))
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
-                    )
-                    is None
-                ):
+                if not await self._hold_lease(conn):
                     return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
                 await conn.fetchval(_LOCK_SESSION_FOR_NOTES, self._owner_id, session_id)
                 rows = await conn.fetch(
@@ -251,12 +233,7 @@ class PGWorkspaceStore:
     async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult:
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
-                    )
-                    is None
-                ):
+                if not await self._hold_lease(conn):
                     return "lease_lost"
                 await _upsert_spill(conn, self._owner_id, self._run_id, spill)
                 return "committed"
@@ -324,12 +301,7 @@ class PGWorkspaceStore:
     async def clear_spills(self) -> InventoryReplaceResult:
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
-                    )
-                    is None
-                ):
+                if not await self._hold_lease(conn):
                     return "lease_lost"
                 await conn.execute(
                     "DELETE FROM dlightrag_answer_committed_spills"

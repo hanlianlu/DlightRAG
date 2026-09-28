@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import asyncpg
 
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.application.answer_runs import ChildRosterPageRequest, ChildRosterRowPage
 from dlightrag.engine.agent.session.ids import OperationId
 from dlightrag.engine.runtime.cancellation import cancellation_notify_key
@@ -26,15 +27,6 @@ _RUN_ACTIVITY_CHANNEL = "dlightrag_run_activity"
 _MAX_PENDING_CHILD_CONTROLS = 100
 _MAX_PENDING_CHILD_GUIDANCE = 8
 _GUIDANCE_HINT_POLL_SECONDS = 1.0
-
-_HOLD_RUN_LEASE = """
-SELECT 1
-FROM dlightrag_runs
-WHERE owner_id = $1 AND run_id = $2
-  AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
-FOR UPDATE
-"""
 
 _UPSERT_CHILD_SESSION = """
 INSERT INTO dlightrag_answer_child_sessions (
@@ -664,10 +656,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 await conn.execute(
                     _UPSERT_CHILD_SESSION,
@@ -733,10 +722,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> int | None:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return None
                 value = await conn.fetchval(
                     _CLAIM_CHILD_SESSION,
@@ -771,10 +757,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
                 if child is None or str(child["status"]) != "running":
@@ -820,10 +803,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 await conn.execute(
                     _RELEASE_CHILD_SESSION_LEASES,
@@ -854,10 +834,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 renewed = await conn.fetchval(
                     _RENEW_CHILD_SESSION_LEASE,
@@ -1556,10 +1533,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> dict[str, Any] | None:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return None
                 child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
                 if (
@@ -1720,10 +1694,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
                 if (
@@ -1788,10 +1759,7 @@ class ChildRunStoreMixin:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
                 if child is None or str(child["status"]) != "running":

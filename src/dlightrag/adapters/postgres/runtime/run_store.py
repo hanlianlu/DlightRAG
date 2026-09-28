@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import asyncpg
@@ -47,7 +48,12 @@ from dlightrag.adapters.postgres.runtime._child import (
     _SELECT_PENDING_PARENT_CONTROLS,
     ChildRunStoreMixin,
 )
-from dlightrag.adapters.postgres.runtime._terminal import TerminalStatus, finish_fenced_run
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
+from dlightrag.adapters.postgres.runtime._terminal import (
+    SETTLE_TERMINATED_RUN_CHILDREN,
+    TerminalStatus,
+    finish_fenced_run,
+)
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_blob_content
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
@@ -2016,15 +2022,6 @@ WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
 RETURNING rt.resolved_mode
 """
 
-_HOLD_RUN_LEASE = """
-SELECT 1
-FROM dlightrag_runs
-WHERE owner_id = $1 AND run_id = $2
-  AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
-FOR UPDATE
-"""
-
 _CLAIM_RUN = f"""
 UPDATE dlightrag_runs
 SET status = 'running',
@@ -2099,7 +2096,7 @@ WITH bumped AS (
 SELECT event_sequence FROM inserted
 """
 
-_FINALIZE_UNLEASED = """
+_FINALIZE_UNLEASED = f"""
 WITH bumped AS (
     UPDATE dlightrag_runs AS r
     SET status = $3::text,
@@ -2122,59 +2119,7 @@ WITH bumped AS (
       AND r.status IN ('queued', 'running')
       AND (r.lease_expires_at IS NULL OR r.lease_expires_at < NOW())
     RETURNING r.owner_id, r.run_id, r.next_event_sequence - 1 AS event_sequence
-), cancelled_children AS (
-    UPDATE dlightrag_answer_child_sessions AS child
-    SET status = 'cancelled',
-        cancel_requested_at = COALESCE(child.cancel_requested_at, NOW()),
-        summary = 'Child session cancelled because its parent Run terminated.',
-        usage_json = NULL,
-        host_state_json = jsonb_set(
-            child.host_state_json,
-            '{terminal_outcome}',
-            jsonb_build_object(
-                'status', 'cancelled',
-                'summary', 'Child session cancelled because its parent Run terminated.',
-                'handles', jsonb_build_array(),
-                'usage', jsonb_build_object(),
-                'child_session_id', child.child_session_id::text,
-                'operation_id', COALESCE((
-                    SELECT operation.operation_id::text
-                    FROM dlightrag_answer_child_operations AS operation
-                    WHERE operation.owner_id = child.owner_id
-                      AND operation.run_id = child.run_id
-                      AND operation.child_session_id = child.child_session_id
-                    ORDER BY operation.operation_sequence DESC
-                    LIMIT 1
-                ), ''),
-                'evidence_state', NULL
-            ),
-            true
-        ),
-        lease_owner = NULL,
-        lease_expires_at = NULL,
-        updated_at = NOW()
-    WHERE (child.owner_id, child.run_id) IN (
-        SELECT owner_id, run_id FROM bumped
-    )
-      AND child.status = 'running'
-    RETURNING child.owner_id, child.run_id, child.child_session_id
-), cancelled_operations AS (
-    UPDATE dlightrag_answer_child_operations AS operation
-    SET status = 'cancelled', cancellation_origin = 'run', updated_at = NOW()
-    WHERE (operation.owner_id, operation.run_id, operation.child_session_id) IN (
-        SELECT owner_id, run_id, child_session_id FROM cancelled_children
-    )
-      AND operation.status = 'running'
-    RETURNING operation.child_session_id
-), retired_guidance AS (
-    UPDATE dlightrag_answer_child_guidance AS guidance
-    SET status = 'cancelled', updated_at = NOW()
-    WHERE (guidance.owner_id, guidance.run_id) IN (
-        SELECT owner_id, run_id FROM bumped
-    )
-      AND guidance.status = 'pending'
-    RETURNING guidance.request_id
-), inserted AS (
+), {SETTLE_TERMINATED_RUN_CHILDREN}, inserted AS (
     INSERT INTO dlightrag_run_events (
         owner_id, run_id, event_sequence, event_type, payload
     )
@@ -2182,7 +2127,7 @@ WITH bumped AS (
     RETURNING event_sequence
 )
 SELECT count(*)::int FROM inserted
-"""
+"""  # noqa: S608 - interpolates only the trusted SETTLE_TERMINATED_RUN_CHILDREN constant
 
 _SUPERSEDE_WAITING_MUTATION = """
 WITH updated AS (
@@ -2562,6 +2507,71 @@ def _require_owner(owner_id: str) -> str:
     return owner
 
 
+@dataclass(frozen=True, slots=True)
+class _AcceptedRun:
+    """What validation derived from one envelope before a connection is taken."""
+
+    owner: str
+    run_uuid: uuid.UUID
+    prepared_json: str
+    accepted_json: str
+    superseded_uuid: uuid.UUID | None
+
+
+def _validate_acceptance(
+    envelope: PreparedRunEnvelope,
+    run_id: str,
+    *,
+    carries_answer_projections: bool,
+    references: Sequence[PendingArtifactReference],
+) -> _AcceptedRun:
+    if envelope.run_kind in {"answer", "retrieval"} and envelope.lane != "query":
+        raise ValueError("Answer and Retrieval runs execute on the query lane")
+    if envelope.run_kind == "corpus_mutation" and envelope.lane != "corpus_mutation":
+        raise ValueError("Corpus Mutation runs execute on the corpus_mutation lane")
+    if envelope.run_kind == "corpus_mutation" and envelope.access_scope.kind != "workspace":
+        raise ValueError("Corpus Mutation runs require workspace access scope")
+    if envelope.supersedes_run_id is not None and envelope.run_kind != "corpus_mutation":
+        raise ValueError("only Corpus Mutation runs may supersede a waiting mutation")
+    superseded_uuid = (
+        parse_run_id(envelope.supersedes_run_id) if envelope.supersedes_run_id is not None else None
+    )
+    if envelope.supersedes_run_id is not None and superseded_uuid is None:
+        raise ValueError("supersedes_run_id is invalid")
+    if envelope.run_kind != "answer" and carries_answer_projections:
+        raise ValueError("non-Answer runs cannot carry Answer-owned projections")
+    if any(reference.reference_kind == "fetched_resource" for reference in references):
+        # A fetched resource is worker-fenced run state, never accepted input.
+        raise ValueError("fetched_resource references cannot be run creation inputs")
+    owner, run_uuid, prepared_json, accepted_json = _validate_envelope(envelope, run_id)
+    return _AcceptedRun(
+        owner=owner,
+        run_uuid=run_uuid,
+        prepared_json=prepared_json,
+        accepted_json=accepted_json,
+        superseded_uuid=superseded_uuid,
+    )
+
+
+async def _replay_in(conn: Any, envelope: PreparedRunEnvelope, owner: str) -> RunCreation | None:
+    """Return the run this submission key already accepted; changed input conflicts."""
+    row = await conn.fetchrow(
+        _SELECT_RUN_BY_KEY,
+        envelope.run_kind,
+        envelope.submitted_by,
+        envelope.submission_key,
+    )
+    if row is None:
+        return None
+    return _require_replay_match(
+        owner=owner,
+        key=envelope.submission_key,
+        stored_fingerprint=str(row["request_fingerprint"]),
+        fingerprint=envelope.request_fingerprint,
+        row=row,
+    )
+
+
 def _validate_envelope(
     envelope: PreparedRunEnvelope, run_id: str
 ) -> tuple[str, uuid.UUID, str, str]:
@@ -2791,160 +2801,142 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         """Atomically accept one operation input and its generic run row."""
-        if envelope.run_kind in {"answer", "retrieval"} and envelope.lane != "query":
-            raise ValueError("Answer and Retrieval runs execute on the query lane")
-        if envelope.run_kind == "corpus_mutation" and envelope.lane != "corpus_mutation":
-            raise ValueError("Corpus Mutation runs execute on the corpus_mutation lane")
-        if envelope.run_kind == "corpus_mutation" and envelope.access_scope.kind != "workspace":
-            raise ValueError("Corpus Mutation runs require workspace access scope")
-        if envelope.supersedes_run_id is not None and envelope.run_kind != "corpus_mutation":
-            raise ValueError("only Corpus Mutation runs may supersede a waiting mutation")
-        superseded_uuid = (
-            parse_run_id(envelope.supersedes_run_id)
-            if envelope.supersedes_run_id is not None
-            else None
+        accepted = _validate_acceptance(
+            envelope,
+            run_id,
+            carries_answer_projections=bool(
+                resources or blobs or references or routing or connection_bindings
+            ),
+            references=references,
         )
-        if envelope.supersedes_run_id is not None and superseded_uuid is None:
-            raise ValueError("supersedes_run_id is invalid")
-        if envelope.run_kind != "answer" and (
-            resources or blobs or references or routing or connection_bindings
-        ):
-            raise ValueError("non-Answer runs cannot carry Answer-owned projections")
-        if any(reference.reference_kind == "fetched_resource" for reference in references):
-            raise ValueError("fetched_resource references cannot be run creation inputs")
-        owner, run_uuid, prepared_json, accepted_json = _validate_envelope(envelope, run_id)
 
         async def _operation(conn: Any) -> RunCreation:
             async with conn.transaction():
-                replayed = await conn.fetchrow(
-                    _SELECT_RUN_BY_KEY,
-                    envelope.run_kind,
-                    envelope.submitted_by,
-                    envelope.submission_key,
+                return await self._accept_in(
+                    conn,
+                    envelope,
+                    accepted,
+                    resources=resources,
+                    blobs=blobs,
+                    references=references,
+                    routing=routing,
+                    connection_bindings=connection_bindings,
                 )
-                if replayed is not None:
-                    return _require_replay_match(
-                        owner=owner,
-                        key=envelope.submission_key,
-                        stored_fingerprint=str(replayed["request_fingerprint"]),
-                        fingerprint=envelope.request_fingerprint,
-                        row=replayed,
-                    )
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    f"dlightrag:run-accept:{envelope.lane}",
-                )
-                replayed = await conn.fetchrow(
-                    _SELECT_RUN_BY_KEY,
-                    envelope.run_kind,
-                    envelope.submitted_by,
-                    envelope.submission_key,
-                )
-                if replayed is not None:
-                    return _require_replay_match(
-                        owner=owner,
-                        key=envelope.submission_key,
-                        stored_fingerprint=str(replayed["request_fingerprint"]),
-                        fingerprint=envelope.request_fingerprint,
-                        row=replayed,
-                    )
-                if superseded_uuid is not None:
-                    superseded = await conn.fetchval(
-                        _SUPERSEDE_WAITING_MUTATION,
-                        owner,
-                        superseded_uuid,
-                        run_uuid,
-                    )
-                    if int(superseded or 0) != 1:
-                        raise ValueError(
-                            "supersedes_run_id is not this Workspace's waiting mutation"
-                        )
-                nonterminal = int(await conn.fetchval(_COUNT_NONTERMINAL_LANE, envelope.lane) or 0)
-                max_nonterminal = (
-                    self._query_max_nonterminal_runs
-                    if envelope.lane == "query"
-                    else self._corpus_mutation_max_nonterminal_runs
-                )
-                if nonterminal >= max_nonterminal:
-                    raise RunAdmissionLimitExceededError(
-                        "Deployment-wide nonterminal admission limit reached"
-                    )
-                if envelope.run_kind == "answer":
-                    await PGConnectionPinWriter.validate_in(
-                        conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
-                    )
-                await self._write_blobs(conn, owner, blobs)
-                row = await conn.fetchrow(
-                    _INSERT_RUN,
-                    owner,
-                    run_uuid,
-                    envelope.run_kind,
-                    envelope.lane,
-                    envelope.submitted_by,
-                    envelope.access_scope.kind,
-                    envelope.submission_key,
-                    prepared_json,
-                    accepted_json,
-                    envelope.request_fingerprint,
-                    envelope.retention_seconds,
-                )
-                if row is None:
-                    replayed = await conn.fetchrow(
-                        _SELECT_RUN_BY_KEY,
-                        envelope.run_kind,
-                        envelope.submitted_by,
-                        envelope.submission_key,
-                    )
-                    if replayed is None:
-                        raise RuntimeError("run insert reported a vanished conflict")
-                    return _require_replay_match(
-                        owner=owner,
-                        key=envelope.submission_key,
-                        stored_fingerprint=str(replayed["request_fingerprint"]),
-                        fingerprint=envelope.request_fingerprint,
-                        row=replayed,
-                    )
-                for resource in resources:
-                    await conn.execute(
-                        _INSERT_RESOURCE,
-                        owner,
-                        run_uuid,
-                        str(resource["resource_id"]),
-                        "accepted_blob",
-                        str(resource["safe_name"]),
-                        str(resource["media_type"]),
-                        json.dumps(resource.get("capabilities") or {}, ensure_ascii=False),
-                        int(str(resource["ordinal"])),
-                        str(resource["blob_digest"]),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                for reference in references:
-                    await conn.execute(
-                        _INSERT_RUN_ARTIFACT,
-                        owner,
-                        run_uuid,
-                        reference.resource_id,
-                        reference.reference_kind,
-                        reference.ordinal,
-                        reference.digest,
-                        reference.filename,
-                        reference.mime_type,
-                        json.dumps(dict(reference.transform_locator), ensure_ascii=False),
-                    )
-                if envelope.run_kind == "answer":
-                    await PGConnectionPinWriter.insert_in(
-                        conn, owner_id=owner, run_id=run_uuid, bindings=connection_bindings
-                    )
-                    await self._insert_routing(
-                        conn, owner, run_uuid, routing, prepared_input=envelope.payload
-                    )
-                return RunCreation(run=run_record(row), replayed=False)
 
         return await self._run_write(_operation)
+
+    async def _accept_in(
+        self,
+        conn: Any,
+        envelope: PreparedRunEnvelope,
+        accepted: _AcceptedRun,
+        *,
+        resources: Sequence[Mapping[str, object]],
+        blobs: Sequence[PendingArtifact],
+        references: Sequence[PendingArtifactReference],
+        routing: RoutingAcceptance | None,
+        connection_bindings: tuple[RunConnectionBinding, ...],
+    ) -> RunCreation:
+        """Replay or insert one validated run inside the caller's transaction.
+
+        The one acceptance body both entry points share: an idempotent replay is
+        answered before and after the lane's acceptance lock, admission is
+        counted under that lock, and a key conflict the insert still meets is
+        answered exactly as a replay is.
+        """
+        owner, run_uuid = accepted.owner, accepted.run_uuid
+        replayed = await _replay_in(conn, envelope, owner)
+        if replayed is not None:
+            return replayed
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext($1))",
+            f"dlightrag:run-accept:{envelope.lane}",
+        )
+        replayed = await _replay_in(conn, envelope, owner)
+        if replayed is not None:
+            return replayed
+        if accepted.superseded_uuid is not None:
+            superseded = await conn.fetchval(
+                _SUPERSEDE_WAITING_MUTATION,
+                owner,
+                accepted.superseded_uuid,
+                run_uuid,
+            )
+            if int(superseded or 0) != 1:
+                raise ValueError("supersedes_run_id is not this Workspace's waiting mutation")
+        nonterminal = int(await conn.fetchval(_COUNT_NONTERMINAL_LANE, envelope.lane) or 0)
+        max_nonterminal = (
+            self._query_max_nonterminal_runs
+            if envelope.lane == "query"
+            else self._corpus_mutation_max_nonterminal_runs
+        )
+        if nonterminal >= max_nonterminal:
+            raise RunAdmissionLimitExceededError(
+                "Deployment-wide nonterminal admission limit reached"
+            )
+        if envelope.run_kind == "answer":
+            await PGConnectionPinWriter.validate_in(
+                conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
+            )
+        await self._write_blobs(conn, owner, blobs)
+        row = await conn.fetchrow(
+            _INSERT_RUN,
+            owner,
+            run_uuid,
+            envelope.run_kind,
+            envelope.lane,
+            envelope.submitted_by,
+            envelope.access_scope.kind,
+            envelope.submission_key,
+            accepted.prepared_json,
+            accepted.accepted_json,
+            envelope.request_fingerprint,
+            envelope.retention_seconds,
+        )
+        if row is None:
+            replayed = await _replay_in(conn, envelope, owner)
+            if replayed is None:
+                raise RuntimeError("run insert reported a vanished conflict")
+            return replayed
+        for resource in resources:
+            await conn.execute(
+                _INSERT_RESOURCE,
+                owner,
+                run_uuid,
+                str(resource["resource_id"]),
+                "accepted_blob",
+                str(resource["safe_name"]),
+                str(resource["media_type"]),
+                json.dumps(resource.get("capabilities") or {}, ensure_ascii=False),
+                int(str(resource["ordinal"])),
+                str(resource["blob_digest"]),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        for reference in references:
+            await conn.execute(
+                _INSERT_RUN_ARTIFACT,
+                owner,
+                run_uuid,
+                reference.resource_id,
+                reference.reference_kind,
+                reference.ordinal,
+                reference.digest,
+                reference.filename,
+                reference.mime_type,
+                json.dumps(dict(reference.transform_locator), ensure_ascii=False),
+            )
+        if envelope.run_kind == "answer":
+            await PGConnectionPinWriter.insert_in(
+                conn, owner_id=owner, run_id=run_uuid, bindings=connection_bindings
+            )
+            await self._insert_routing(
+                conn, owner, run_uuid, routing, prepared_input=envelope.payload
+            )
+        return RunCreation(run=run_record(row), replayed=False)
 
     async def record_corpus_window(
         self,
@@ -3065,97 +3057,24 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             raise ValueError("Web Answer runs require owner access scope")
         if envelope.supersedes_run_id is not None:
             raise ValueError("Web Answer runs cannot supersede another run")
-        owner, run_uuid, payload, envelope_json = _validate_envelope(envelope, run_id)
-        if any(reference.reference_kind == "fetched_resource" for reference in references):
-            # A fetched resource is worker-fenced run state, never accepted input.
-            raise ValueError("fetched_resource references cannot be run creation inputs")
-        existing = await conn.fetchrow(
-            _SELECT_RUN_BY_KEY,
-            envelope.run_kind,
-            envelope.submitted_by,
-            envelope.submission_key,
+        accepted = _validate_acceptance(
+            envelope,
+            run_id,
+            carries_answer_projections=bool(
+                artifacts or references or routing or connection_bindings
+            ),
+            references=references,
         )
-        if existing is not None:
-            return _require_replay_match(
-                owner=owner,
-                key=envelope.submission_key,
-                stored_fingerprint=str(existing["request_fingerprint"]),
-                fingerprint=envelope.request_fingerprint,
-                row=existing,
-            )
-        await conn.execute(
-            "SELECT pg_advisory_xact_lock(hashtext($1))",
-            f"dlightrag:run-accept:{envelope.lane}",
+        return await self._accept_in(
+            conn,
+            envelope,
+            accepted,
+            resources=(),
+            blobs=artifacts,
+            references=references,
+            routing=routing,
+            connection_bindings=connection_bindings,
         )
-        existing = await conn.fetchrow(
-            _SELECT_RUN_BY_KEY,
-            envelope.run_kind,
-            envelope.submitted_by,
-            envelope.submission_key,
-        )
-        if existing is not None:
-            return _require_replay_match(
-                owner=owner,
-                key=envelope.submission_key,
-                stored_fingerprint=str(existing["request_fingerprint"]),
-                fingerprint=envelope.request_fingerprint,
-                row=existing,
-            )
-        nonterminal = int(await conn.fetchval(_COUNT_NONTERMINAL_LANE, envelope.lane) or 0)
-        if nonterminal >= self._query_max_nonterminal_runs:
-            raise RunAdmissionLimitExceededError(
-                "Deployment-wide nonterminal admission limit reached"
-            )
-        await PGConnectionPinWriter.validate_in(
-            conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
-        )
-        await self._write_blobs(conn, owner, artifacts)
-        row = await conn.fetchrow(
-            _INSERT_RUN,
-            owner,
-            run_uuid,
-            envelope.run_kind,
-            envelope.lane,
-            envelope.submitted_by,
-            envelope.access_scope.kind,
-            envelope.submission_key,
-            payload,
-            envelope_json,
-            envelope.request_fingerprint,
-            envelope.retention_seconds,
-        )
-        if row is None:
-            existing = await conn.fetchrow(
-                _SELECT_RUN_BY_KEY,
-                envelope.run_kind,
-                envelope.submitted_by,
-                envelope.submission_key,
-            )
-            if existing is None:
-                raise RuntimeError("answer run insert reported a vanished conflict")
-            if str(existing["request_fingerprint"]) != envelope.request_fingerprint:
-                raise IdempotencyKeyConflict(
-                    "idempotency key was reused with different request input"
-                )
-            return RunCreation(run=run_record(existing), replayed=True)
-        for reference in references:
-            await conn.execute(
-                _INSERT_RUN_ARTIFACT,
-                owner,
-                run_uuid,
-                reference.resource_id,
-                reference.reference_kind,
-                reference.ordinal,
-                reference.digest,
-                reference.filename,
-                reference.mime_type,
-                json.dumps(dict(reference.transform_locator), ensure_ascii=False),
-            )
-        await PGConnectionPinWriter.insert_in(
-            conn, owner_id=owner, run_id=run_uuid, bindings=connection_bindings
-        )
-        await self._insert_routing(conn, owner, run_uuid, routing, prepared_input=envelope.payload)
-        return RunCreation(run=run_record(row), replayed=False)
 
     async def _insert_routing(
         self,
@@ -3401,10 +3320,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
 
         async def _operation(conn: Any) -> tuple[dict[str, Any], ...] | None:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return None
                 if target_uuid is None:
                     rows = await conn.fetch(_SELECT_PENDING_PARENT_CONTROLS, owner, run_uuid)
@@ -3461,10 +3377,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                held = await conn.fetchval(
-                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
-                )
-                if held is None:
+                if not await hold_run_lease(conn, owner, run_uuid, worker_id, fencing_epoch):
                     return False
                 values = [int(value) for value in control_sequences]
                 if target_uuid is None:

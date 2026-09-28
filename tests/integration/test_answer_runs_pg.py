@@ -860,6 +860,42 @@ class TestCreation:
         with pytest.raises(IdempotencyKeyConflict):
             await store.create_run(owner_id=_OWNER, request=_request("other"), idempotency_key="k1")
 
+    async def test_linked_and_direct_acceptance_replay_and_conflict_alike(
+        self, store, pool
+    ) -> None:
+        """Both entry points are one acceptance: each replays or refuses the other's run."""
+        async with pool.acquire() as conn, conn.transaction():
+            linked = await store.create_run_in(
+                conn, owner_id=_OWNER, request=_request(), idempotency_key="k1"
+            )
+        assert linked.replayed is False
+
+        direct = await store.create_run(owner_id=_OWNER, request=_request(), idempotency_key="k1")
+        assert direct.replayed is True
+        assert direct.run.run_id == linked.run.run_id
+        with pytest.raises(IdempotencyKeyConflict):
+            await store.create_run(owner_id=_OWNER, request=_request("other"), idempotency_key="k1")
+
+        async with pool.acquire() as conn, conn.transaction():
+            relinked = await store.create_run_in(
+                conn, owner_id=_OWNER, request=_request(), idempotency_key="k1"
+            )
+            assert relinked.replayed is True
+            assert relinked.run.run_id == linked.run.run_id
+            with pytest.raises(IdempotencyKeyConflict):
+                await store.create_run_in(
+                    conn, owner_id=_OWNER, request=_request("other"), idempotency_key="k1"
+                )
+
+    async def test_linked_acceptance_honours_the_lane_admission_limit(self, pool) -> None:
+        limited = FingerprintingRunStore(pool=pool, query_max_nonterminal_runs=1)
+        await limited.initialize()
+        await limited.create_run(owner_id=_OWNER, request=_request("first"))
+
+        async with pool.acquire() as conn, conn.transaction():
+            with pytest.raises(RunAdmissionLimitExceededError):
+                await limited.create_run_in(conn, owner_id=_OWNER, request=_request("second"))
+
     async def test_replay_normalizes_key_order_but_not_list_order(self, store) -> None:
         first = await store.create_run(
             owner_id=_OWNER,
