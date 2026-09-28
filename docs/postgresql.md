@@ -358,4 +358,4 @@ and is outside this design.
 A domain session forced read-only fails `/ready` for both roles because both
 write operational state. Migration order, probes, shared mounts, homogeneous
 worker requirements, and rollout commands are in
-[Operations](operations.md#durable-answer-runs).
+[Operations](operations.md#runruntime-and-durable-query-and-corpus-mutation-runs).
