@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -87,6 +87,7 @@ from dlightrag.engine.answer.execution.input import (
 )
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
+from tests.support.application_double import application_double, delegate
 
 MOCK_WORKSPACES = [
     {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"},
@@ -184,7 +185,9 @@ class E2EConversationService:
     """Resettable in-memory Web conversation service for browser-only tests.
 
     Mirrors the durable contract: one submission becomes one run plus its linked
-    turn, and every read projects that turn from the run's recorded state.
+    turn, and every read projects that turn from the run's recorded state. The
+    server reaches it through the autospecced WebConversationService, so each
+    call still meets the real signature.
     """
 
     def __init__(self) -> None:
@@ -197,9 +200,6 @@ class E2EConversationService:
         with self._lock:
             self._conversations: dict[str, dict[str, Any]] = {}
             self._runs: dict[str, dict[str, Any]] = {}
-
-    async def initialize(self) -> None:
-        return None
 
     @staticmethod
     def _summary(value: dict[str, Any]) -> ApplicationConversationSummary:
@@ -656,8 +656,7 @@ def e2e_base_url(
         128 * 1024 * 1024,
     )
     set_config(application_config)
-    application_double = AsyncMock()
-    application_double.config = application_config
+    application = application_double(application_config)
 
     def _events(*, owner_id: str, run_id: str, after_sequence: int = 0) -> Any:
         """Replay this run's durable events from the caller's cursor.
@@ -702,20 +701,14 @@ def e2e_base_url(
         model="test-model",
         failure_kind=None,
     )
-    application_double.runs = SimpleNamespace(
-        cancel=AsyncMock(),
-        get_global=AsyncMock(return_value=None),
-        subscribe=MagicMock(side_effect=_events),
+    application.runs.subscribe.side_effect = _events
+    application.answers.capabilities.return_value = AnswerCapabilities(
+        answer=answer_image_capability,
+        vlm_status="unknown",
     )
-    application_double.answers = SimpleNamespace(
-        capabilities=AsyncMock(
-            return_value=AnswerCapabilities(
-                answer=answer_image_capability,
-                vlm_status="unknown",
-            )
-        ),
-        # The bootstrap offers exactly what this deployment can apply.
-        agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
+    # The bootstrap offers exactly what this deployment can apply.
+    application.answers.agent_effort_offer.return_value = AgentEffortOffer(
+        ("low", "high", "max"), None
     )
     workspace_records = [dict(record) for record in MOCK_WORKSPACES]
 
@@ -811,40 +804,53 @@ def e2e_base_url(
     async def _get_corpus_run(*, run_id: str) -> RunView | None:
         return corpus_runs.get(run_id)
 
-    application_double.corpus_mutations = SimpleNamespace(
-        create_reset=AsyncMock(side_effect=_create_reset_run),
-        create_workspace_delete=AsyncMock(side_effect=_create_workspace_delete_run),
-    )
-    application_double.runs.get_global.side_effect = _get_corpus_run
-    application_double.corpora.list_workspaces.side_effect = _list_workspaces
-    application_double.corpora.alist_workspace_records.side_effect = _list_workspace_records
-    application_double.corpora.list_workspace_records_page.side_effect = (
-        _list_workspace_records_page
-    )
-    application_double.corpora.workspace_exists.side_effect = _workspace_exists
-    application_double.corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"e2e-files")
-    application_double.corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
-        b"e2e-workspaces"
-    )
-    application_double.corpora.create_workspace.side_effect = _create_workspace
-    application_double.corpora.file_panel_snapshot.return_value = {
+    application.corpus_mutations.create_reset.side_effect = _create_reset_run
+    application.corpus_mutations.create_workspace_delete.side_effect = _create_workspace_delete_run
+    application.runs.get_global.side_effect = _get_corpus_run
+    corpora = application.corpora
+    corpora.list_workspaces.side_effect = _list_workspaces
+    corpora.alist_workspace_records.side_effect = _list_workspace_records
+    corpora.list_workspace_records_page.side_effect = _list_workspace_records_page
+    corpora.workspace_exists.side_effect = _workspace_exists
+    corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"e2e-files")
+    corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(b"e2e-workspaces")
+    corpora.create_workspace.side_effect = _create_workspace
+    corpora.file_panel_snapshot.return_value = {
         "files": [],
         "next_cursor": None,
         "fetched_rows": 0,
     }
-    application_double.corpora.failed_file_snapshot.return_value = {
+    corpora.failed_file_snapshot.return_value = {
         "failed": [],
         "next_cursor": None,
         "fetched_rows": 0,
     }
-    application_double.web_conversations = e2e_conversation_service
+    conversations = application.web_conversations
+    conversations.cursor_codec = e2e_conversation_service.cursor_codec
+    conversations.history_cursor_codec = e2e_conversation_service.history_cursor_codec
+    delegate(
+        conversations,
+        e2e_conversation_service,
+        "create",
+        "list",
+        "history",
+        "rename",
+        "delete",
+        "delete_all",
+        "submission",
+        "run_external_sources",
+        "start_answer",
+        "turn_for_run",
+        "run_resource",
+        "thumbnail",
+    )
 
     port = _free_port()
     import uvicorn
 
     with patch(
         "dlightrag.adapters.http.server.create_application",
-        AsyncMock(return_value=application_double),
+        AsyncMock(return_value=application),
     ):
         app = create_app(include_web_app=True)
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
