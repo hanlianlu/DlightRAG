@@ -351,6 +351,17 @@ canonical drawing vectors with fused VLM-description+image vectors when direct
 multimodal embedding is active. Skip alignment only for diagnosis or intentional
 text-only deployments.
 
+With alignment on, `chunks`/`all` settle whether direct multimodal embedding is
+active before writing any vector, running the same image/fusion probe as the
+service when `startup_probe` is on. When the probe cannot settle it — the
+embedding provider fails transiently, or `input_modality: multimodal` cannot be
+honored — the command prints `Nothing was rebuilt: …` and exits 1 with every
+vector untouched; run it again once the provider is reachable or the
+configuration is fixed. A failure after writing began (a reported rebuild error,
+or restoration interrupted by the provider) also exits nonzero, possibly
+leaving drawing vectors text-only; rerun the same target, which rewrites the
+chunk vectors and restores alignment again.
+
 Before destructive production rebuilds: back up PostgreSQL, use the service's
 same `.env`/`config.yaml`/workspace/model, and do not change dimensions without
 a migrated/recreated vector schema. Inspect any nonzero exit before restart.

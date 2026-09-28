@@ -272,7 +272,7 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     embedder = AsyncMock()
     monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
     monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
-    resolve_mock = AsyncMock()
+    resolve_mock = AsyncMock(return_value=True)
     restore_mock = AsyncMock()
     rebuild_mock = AsyncMock()
     monkeypatch.setattr(module, "resolve_direct_image_embedding_enabled", resolve_mock)
@@ -300,7 +300,7 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     exit_code = await module.run_rebuild(config=cast(Any, config), target="chunks", assume_yes=True)
 
     assert exit_code == 1
-    resolve_mock.assert_not_awaited()
+    resolve_mock.assert_awaited_once()
     restore_mock.assert_not_awaited()
     rebuild_mock.assert_not_awaited()
 
@@ -396,6 +396,7 @@ async def test_runner_addresses_the_workspace_by_its_canonical_id(
         AsyncMock(return_value=[{"label": "chunks", "errors": []}]),
     )
     monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
+
     exit_code = await module.run_rebuild(config=config, target="chunks", assume_yes=True)
 
     assert exit_code == 0
@@ -408,8 +409,17 @@ async def test_runner_addresses_the_workspace_by_its_canonical_id(
     assert bm25_args.kwargs["config"].deployment.workspace == "my_space"
 
 
-async def test_chunks_rebuild_restores_fused_vectors_through_the_storage_surface(
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("chunks", ["probe", "chunks", "restore"]),
+        ("all", ["probe", "graph", "chunks", "restore"]),
+    ],
+)
+async def test_rebuild_settles_the_embedding_mode_before_rewriting_any_vector(
     monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    expected: list[str],
 ) -> None:
     from dlightrag.adapters.postgres import rebuild_vdb as module
 
@@ -417,12 +427,106 @@ async def test_chunks_rebuild_restores_fused_vectors_through_the_storage_surface
     embedder = _stub_rebuild(monkeypatch, module, events)
 
     exit_code = await module.run_rebuild(
-        config=cast(Any, _fake_config()), target="chunks", assume_yes=True
+        config=cast(Any, _fake_config()), target=cast(Any, target), assume_yes=True
     )
 
     assert exit_code == 0
-    assert events == ["chunks", "probe", "restore"]
+    assert events == expected
     embedder.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("target", ["chunks", "all"])
+async def test_transient_embedding_probe_failure_rebuilds_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+) -> None:
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    config = _fake_config()
+    mutate_config(config, "models.embedding.startup_probe", True)
+    events: list[str] = []
+    embedder = _stub_rebuild(
+        monkeypatch,
+        module,
+        events,
+        probe=module.resolve_direct_image_embedding_enabled,
+    )
+    embedder.supports_images = True
+    embedder.probe_image_embedding.side_effect = ConnectionError("provider refused")
+    storages: list[Any] = []
+    setup = module.DlightRAGRebuildTool.setup_storages
+
+    async def recording_setup(self) -> bool:
+        ready = await setup(self)
+        storages.extend(self.all_storages())
+        return ready
+
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", recording_setup)
+
+    exit_code = await module.run_rebuild(
+        config=cast(Any, config), target=cast(Any, target), assume_yes=True
+    )
+
+    assert exit_code == 1
+    assert events == []
+    embedder.probe_image_embedding.assert_awaited_once()
+    error = capsys.readouterr().err
+    assert "Nothing was rebuilt" in error
+    assert "Run the same command again" in error
+    assert "ConnectionError" not in error
+    assert "provider refused" not in error
+    assert storages and all(storage.finalize.await_count == 1 for storage in storages)
+    embedder.aclose.assert_awaited_once()
+
+
+async def test_definitive_embedding_probe_failure_rebuilds_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    events: list[str] = []
+    _stub_rebuild(
+        monkeypatch,
+        module,
+        events,
+        probe=AsyncMock(
+            side_effect=ValueError(
+                "embedding.input_modality='multimodal' requires working image-query and "
+                "fused-document embeddings, but the startup probe failed"
+            )
+        ),
+    )
+
+    exit_code = await module.run_rebuild(
+        config=cast(Any, _fake_config()), target="chunks", assume_yes=True
+    )
+
+    assert exit_code == 1
+    assert events == []
+    assert capsys.readouterr().err.startswith(
+        "Nothing was rebuilt: embedding.input_modality='multimodal' requires"
+    )
+
+
+async def test_non_transient_probe_error_is_not_reported_as_an_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    events: list[str] = []
+    _stub_rebuild(
+        monkeypatch,
+        module,
+        events,
+        probe=AsyncMock(side_effect=RuntimeError("embedder bug")),
+    )
+
+    with pytest.raises(RuntimeError, match="embedder bug"):
+        await module.run_rebuild(config=cast(Any, _fake_config()), target="chunks", assume_yes=True)
+
+    assert events == []
 
 
 async def test_restoration_names_a_drifted_doc_status_read(
@@ -441,7 +545,7 @@ async def test_restoration_names_a_drifted_doc_status_read(
     with pytest.raises(RuntimeError, match="'get_docs_by_statuses_page'"):
         await module.run_rebuild(config=cast(Any, _fake_config()), target="chunks", assume_yes=True)
 
-    assert "restore" not in events
+    assert events == ["probe"]
 
 
 def _stub_rebuild(
@@ -450,13 +554,14 @@ def _stub_rebuild(
     events: list[str],
     *,
     doc_status: Any | None = None,
+    probe: Any | None = None,
 ) -> AsyncMock:
     """Stub every rebuild step and record the order they run in."""
     embedder = AsyncMock()
     monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
     monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
 
-    async def probe(*_args: Any, **_kwargs: Any) -> bool:
+    async def recording_probe(*_args: Any, **_kwargs: Any) -> bool:
         events.append("probe")
         return True
 
@@ -478,7 +583,7 @@ def _stub_rebuild(
         self.doc_status = doc_status if doc_status is not None else AsyncMock()
         return True
 
-    monkeypatch.setattr(module, "resolve_direct_image_embedding_enabled", probe)
+    monkeypatch.setattr(module, "resolve_direct_image_embedding_enabled", probe or recording_probe)
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore)
     monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
     monkeypatch.setattr(

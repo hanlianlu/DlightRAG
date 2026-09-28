@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import logging
 import os
+import sys
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -24,6 +25,7 @@ from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.embedding import create_embedding_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.dependencies import classify_transient_dependency
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
@@ -36,6 +38,12 @@ from dlightrag.engine.rag.workspace.settings import RagSettings
 logger = logging.getLogger(__name__)
 
 RebuildTarget = Literal["check", "graph", "chunks", "all"]
+
+_PROVIDER_UNAVAILABLE_EXIT = (
+    "Nothing was rebuilt: the embedding provider failed transiently while confirming "
+    "the image/fusion embedding that fused visual vectors need. Run the same command "
+    "again once the provider is reachable."
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -336,6 +344,28 @@ async def run_rebuild(
             await tool.run_check()
             return 0
 
+        # Settle everything fused-vector restoration depends on before the
+        # first write: once the chunk vectors are rewritten text-only, only a
+        # completed restoration puts the fused visual vectors back.
+        restore_fused_vectors = False
+        if restore_sidecar_alignment and target in {"chunks", "all"}:
+            try:
+                restore_fused_vectors = await resolve_direct_image_embedding_enabled(
+                    multimodal_embedder,
+                    startup_probe=resolved_embedding.startup_probe,
+                    require_image_support=resolved_embedding.input_modality == "multimodal",
+                )
+            except ValueError as exc:
+                print(f"Nothing was rebuilt: {exc}", file=sys.stderr)
+                return 1
+            except Exception as exc:
+                if classify_transient_dependency(exc, component_hint="providers") is None:
+                    raise
+                print(_PROVIDER_UNAVAILABLE_EXIT, file=sys.stderr)
+                return 1
+            if restore_fused_vectors:
+                _verify_restoration_surface(_lightrag_surface(tool))
+
         all_stats: list[dict[str, Any]] = []
         if target in {"graph", "all"}:
             graph_stats = await tool.run_rebuild_entities_relations()
@@ -360,33 +390,25 @@ async def run_rebuild(
                     f"{bm25_stats['updated_chunks']} updated"
                 )
 
-            if restore_sidecar_alignment:
-                lightrag_surface = _lightrag_surface(tool)
+            if restore_fused_vectors:
                 from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
 
-                _verify_restoration_surface(lightrag_surface)
-                stores = LightRAGStores(
-                    lightrag_surface,
-                    chunk_store=PGCorpusChunkStore(lightrag_surface),
+                lightrag_surface = _lightrag_surface(tool)
+                stats = await restore_sidecar_image_vectors(
+                    workspace_id=resolved_config.deployment.workspace,
+                    settings=rag_settings(resolved_config),
+                    lightrag=lightrag_surface,
+                    stores=LightRAGStores(
+                        lightrag_surface,
+                        chunk_store=PGCorpusChunkStore(lightrag_surface),
+                    ),
+                    multimodal_embedder=multimodal_embedder,
+                    telemetry=LangfuseTelemetry(),
                 )
-                direct_enabled = await resolve_direct_image_embedding_enabled(
-                    multimodal_embedder,
-                    startup_probe=resolved_embedding.startup_probe,
-                    require_image_support=resolved_embedding.input_modality == "multimodal",
+                print(
+                    "Sidecar fused visual-vector alignment: "
+                    f"{stats['processed_docs']} processed, {stats['skipped_docs']} skipped"
                 )
-                if direct_enabled:
-                    stats = await restore_sidecar_image_vectors(
-                        workspace_id=resolved_config.deployment.workspace,
-                        settings=rag_settings(resolved_config),
-                        lightrag=lightrag_surface,
-                        stores=stores,
-                        multimodal_embedder=multimodal_embedder,
-                        telemetry=LangfuseTelemetry(),
-                    )
-                    print(
-                        "Sidecar fused visual-vector alignment: "
-                        f"{stats['processed_docs']} processed, {stats['skipped_docs']} skipped"
-                    )
     finally:
         for storage in tool.all_storages():
             if storage is not None:
