@@ -489,11 +489,13 @@ async def test_mcp_a_stored_record_that_fails_its_model_is_internal(
     def read_stored(**_kwargs: object) -> None:
         Stored.model_validate({"future_field": 1})
 
-    mock_mcp_application.runs.get_global = AsyncMock(side_effect=read_stored)
+    mock_mcp_application.runs.get_global.side_effect = read_stored
 
     result = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
 
     assert _tool_text(result) == "Error: internal tool failure"
+    # The failure is the stored record's, not a call the real signature refused.
+    mock_mcp_application.runs.get_global.assert_awaited_once_with(run_id=_RUN_ID)
 
 
 async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: AsyncMock) -> None:

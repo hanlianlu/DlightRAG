@@ -676,7 +676,7 @@ async def test_an_unavailable_fork_is_a_typed_service_failure(
 async def test_an_answer_runtime_outage_before_acceptance_is_a_typed_failure(
     client: AsyncClient, application_double: AsyncMock, service: AsyncMock
 ) -> None:
-    application_double.answers.capabilities = AsyncMock(side_effect=ApplicationClosedError())
+    application_double.answers.capabilities.side_effect = ApplicationClosedError()
 
     response = await client.post("/web/api/answer", json=_BODY)
 
@@ -685,6 +685,8 @@ async def test_an_answer_runtime_outage_before_acceptance_is_a_typed_failure(
         "kind": "service_unavailable",
         "message": "Answer submission is temporarily unavailable",
     }
+    # The outage is the runtime's, not a call the real signature refused.
+    application_double.answers.capabilities.assert_awaited_once_with()
     service.start_answer.assert_not_awaited()
 
 
