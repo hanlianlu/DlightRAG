@@ -183,18 +183,19 @@ publishes only `127.0.0.1:5001`; do not run it beside a host Docling service on
 the same port. Independently managed Docling endpoints are also supported.
 
 LightRAG's MinerU or Docling client makes every parser request, whichever parser
-a document is routed to. When the parser service or a proxy in front of it
-refuses or resets the connection, a connect/read/write timeout expires, the
-connection drops, or the service answers HTTP 408, 425, 429, 500, 502, 503, 504,
-520-524, or 529, the document is recorded with the fixed error `Document parser
-is temporarily unavailable` and the underlying client error is logged as a
-warning. Only the response status and the kind of transport failure decide
+a document is routed to. When the parser's host name does not resolve (Compose
+stops answering for a stopped or restarting service), the parser service or a
+proxy in front of it refuses or resets the connection, a connect/read/write
+timeout expires, the connection drops, or the service answers HTTP 408, 425,
+429, 500, 502, 503, 504, 520-524, or 529, the document is recorded with the
+fixed error `Document parser is temporarily unavailable` and the underlying
+client error is logged as a warning. Only the response status and the kind of transport failure decide
 this, never error text, so a file or endpoint name cannot turn an outage into a
 rejection. Every other parser failure keeps LightRAG's own message: a 4xx
 rejection, a conversion the parser reports as failed, an exhausted polling
 budget or download deadline, an oversized or malformed result bundle, and a
-misconfigured endpoint (a host name that does not resolve, a TLS certificate
-that fails verification, or an https URL for a plain-HTTP service).
+misconfigured endpoint (a TLS certificate that fails verification, or a TLS
+protocol mismatch such as an https URL for a plain-HTTP service).
 
 Either way the document stays failed: a parser outage does not yet defer its
 Corpus Mutation, so retry failed documents as below once the parser is back.

@@ -9,7 +9,6 @@ non-retryable.
 
 from __future__ import annotations
 
-import socket
 import ssl
 from collections.abc import Mapping
 from types import ModuleType
@@ -84,6 +83,17 @@ _TRANSIENT_HTTPX_ERRORS = tuple(
     )
 )
 _HTTP_STATUS_ERRORS = tuple(client.HTTPStatusError for client in _HTTP_CLIENTS)
+# OpenSSL reasons for a TLS protocol mismatch, such as an https URL for a
+# plain-HTTP service (WRONG_VERSION_NUMBER) or no TLS version both sides accept.
+_TLS_PROTOCOL_MISMATCH_REASONS = frozenset(
+    {
+        "NO_PROTOCOLS_AVAILABLE",
+        "TLSV1_ALERT_PROTOCOL_VERSION",
+        "UNKNOWN_PROTOCOL",
+        "UNSUPPORTED_PROTOCOL",
+        "WRONG_VERSION_NUMBER",
+    }
+)
 _PROVIDER_MODULE_PREFIXES = ("openai", "anthropic", "google.genai", "google.api_core")
 _STORAGE_MODULE_PREFIXES = ("asyncpg", "pymilvus", "grpc")
 _AUTH_NAME_MARKERS = ("authentication", "unauthorized", "permissiondenied", "forbidden")
@@ -282,18 +292,20 @@ def _is_non_retryable(exc: BaseException, *, text: bool = True) -> bool:
 
 
 def _is_misconfigured_endpoint(exc: BaseException) -> bool:
-    """A DNS name that does not resolve, or a TLS handshake the endpoint rejects.
+    """A TLS certificate that fails verification, or a TLS protocol mismatch.
 
-    Both surface as a connection failure, yet resending cannot help: a wrong
-    host name, a certificate that fails verification, or an https URL for a
-    plain-HTTP service. A resolver's explicit temporary failure (EAI_AGAIN) and
-    a connection dropped mid-handshake remain transient.
+    Both surface as a connection failure, yet resending cannot help. Only these
+    named failures count: any other TLS error in a chain, such as the
+    SSLWantReadError a peer resetting the handshake leaves behind, and any DNS
+    failure (a stopped Compose service does not resolve until it restarts)
+    stay transient.
     """
 
-    if isinstance(exc, socket.gaierror):
-        return exc.errno != socket.EAI_AGAIN
-    return isinstance(exc, ssl.SSLError) and not isinstance(
-        exc, ssl.SSLEOFError | ssl.SSLZeroReturnError
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+    return (
+        isinstance(exc, ssl.SSLError)
+        and getattr(exc, "reason", None) in _TLS_PROTOCOL_MISMATCH_REASONS
     )
 
 

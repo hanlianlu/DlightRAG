@@ -1,9 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """A parser service outage is named at LightRAG's parser transport boundary."""
 
+import asyncio
 import inspect
 import socket
 import ssl
+import struct
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -29,11 +31,8 @@ _CLIENTS = {
 
 
 @pytest.fixture
-def parser_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Handler]]:
-    """Serve both parser clients from one in-test handler on unpatched clients.
-
-    Teardown restores whatever client methods were installed before the test.
-    """
+def unpatched_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start from LightRAG's own client methods; teardown restores the patched ones."""
     for module, client_class in _CLIENTS.values():
         monkeypatch.setattr(
             client_class, "download_into", inspect.unwrap(client_class.download_into)
@@ -43,6 +42,15 @@ def parser_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Handler]]:
             "raise_for_status_with_detail",
             inspect.unwrap(module.raise_for_status_with_detail),
         )
+
+
+@pytest.fixture
+def parser_service(
+    unpatched_clients: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[list[Handler]]:
+    """Serve both parser clients from one in-test handler."""
+    del unpatched_clients
     monkeypatch.setenv("MINERU_API_MODE", "local")
     monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", "http://mineru.test")
     monkeypatch.setenv("MINERU_POLL_INTERVAL_SECONDS", "0")
@@ -77,6 +85,13 @@ def _raising(error: type[httpx.TransportError]) -> Handler:
 
 def _status(status: int, detail: str = "parser says no") -> Handler:
     return lambda _request: httpx.Response(status, json={"detail": detail})
+
+
+def _tls_error(reason: str) -> ssl.SSLError:
+    # OpenSSL sets ``reason`` on the errors it raises; a constructed one has none.
+    error = ssl.SSLError(1, f"[SSL: {reason}]")
+    error.reason = reason
+    return error
 
 
 def _connect_failure(cause: Callable[[], BaseException]) -> Handler:
@@ -211,11 +226,10 @@ async def test_misconfigured_parser_url_is_not_an_outage(
 @pytest.mark.parametrize(
     "cause",
     [
-        lambda: socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided"),
         lambda: ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED]"),
-        lambda: ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number"),
+        lambda: _tls_error("WRONG_VERSION_NUMBER"),
     ],
-    ids=["dns-no-such-name", "tls-certificate", "https-to-plain-http"],
+    ids=["tls-certificate", "https-to-plain-http"],
 )
 async def test_misconfigured_parser_endpoint_is_not_an_outage(
     parser_service: list[Handler],
@@ -236,11 +250,14 @@ async def test_misconfigured_parser_endpoint_is_not_an_outage(
 @pytest.mark.parametrize(
     "cause",
     [
+        # Compose's DNS answers NXDOMAIN for a parser service that is stopped or
+        # restarting, which is exactly how a parser killed by a document looks.
+        lambda: socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided"),
         lambda: socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
         lambda: ssl.SSLEOFError(8, "EOF occurred in violation of protocol"),
         lambda: ConnectionRefusedError(61, "Connection refused"),
     ],
-    ids=["dns-temporary-failure", "tls-dropped-mid-handshake", "refused"],
+    ids=["dns-no-such-name", "dns-temporary-failure", "tls-dropped-mid-handshake", "refused"],
 )
 async def test_unreachable_parser_endpoint_is_an_outage(
     parser_service: list[Handler],
@@ -253,6 +270,34 @@ async def test_unreachable_parser_endpoint_is_an_outage(
 
     with pytest.raises(ParserUnavailableError):
         await _download(parser, tmp_path)
+
+
+@pytest.mark.usefixtures("unpatched_clients")
+@pytest.mark.parametrize("parser", ["mineru", "docling"])
+async def test_a_real_tls_handshake_reset_is_an_outage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parser: str,
+) -> None:
+    # The real httpcore chain for a peer resetting the handshake carries an
+    # implicit SSLWantReadError context; it is a dropped connection.
+    async def reset(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connection = writer.get_extra_info("socket")
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        writer.transport.abort()
+
+    server = await asyncio.start_server(reset, "127.0.0.1", 0)
+    endpoint = f"https://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    monkeypatch.setenv("MINERU_API_MODE", "local")
+    monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", endpoint)
+    monkeypatch.setenv("DOCLING_ENDPOINT", endpoint)
+    apply_parser_outage_reporting()
+    try:
+        with pytest.raises(ParserUnavailableError):
+            await _download(parser, tmp_path)
+    finally:
+        server.close()
+        await server.wait_closed()
 
 
 async def test_exhausted_polling_budget_is_not_an_outage(

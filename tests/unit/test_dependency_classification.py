@@ -1,8 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Closed transient dependency classification for durable execution."""
 
+import asyncio
+import datetime
+import ipaddress
 import socket
 import ssl
+import struct
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import anthropic
 import httpx
@@ -150,24 +157,30 @@ def _caused[E: BaseException](error: E, cause: BaseException) -> E:
     return error
 
 
+def _tls_error(reason: str) -> ssl.SSLError:
+    # OpenSSL sets ``reason`` on the errors it raises; a constructed one has none.
+    error = ssl.SSLError(1, f"[SSL: {reason}] {reason.lower().replace('_', ' ')}")
+    error.reason = reason
+    return error
+
+
 def _misconfigured_causes() -> list[BaseException]:
     return [
-        socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known"),
         ssl.SSLCertVerificationError(
             1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
         ),
-        ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number"),
+        _tls_error("WRONG_VERSION_NUMBER"),
     ]
 
 
 @pytest.mark.parametrize(
     "cause",
     _misconfigured_causes(),
-    ids=["dns-no-such-name", "tls-certificate", "https-to-plain-http"],
+    ids=["tls-certificate", "https-to-plain-http"],
 )
 def test_a_misconfigured_endpoint_is_not_an_outage(cause: BaseException) -> None:
-    # httpx and the SDKs' own client raise these connect failures with the DNS
-    # or TLS error as the cause; resending the request cannot fix either.
+    # httpx and the SDKs' own client raise these connect failures with the TLS
+    # error as the cause; resending the request cannot fix either.
     transport = _caused(httpx.ConnectError("connect failed", request=_REQUEST), cause)
     sdk_request = httpx2.Request("POST", "https://provider.example/v1")
     sdk = _caused(
@@ -181,14 +194,36 @@ def test_a_misconfigured_endpoint_is_not_an_outage(cause: BaseException) -> None
     assert classify_transient_dependency(sdk, component_hint="providers") is None
 
 
+def _reset_during_handshake() -> BaseException:
+    # A peer resetting the TLS handshake leaves the SSLWantReadError the
+    # handshake was waiting on as the reset's implicit context.
+    try:
+        raise ssl.SSLWantReadError(2, "The operation did not complete (read)")
+    except ssl.SSLWantReadError:
+        try:
+            raise BrokenPipeError(32, "Broken pipe")
+        except BrokenPipeError as reset:
+            return reset
+
+
 @pytest.mark.parametrize(
     "cause",
     [
+        # macOS answers EAI_NONAME while offline, and Compose's DNS does for a
+        # service that is stopped or restarting.
+        socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known"),
         socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
         ssl.SSLEOFError(8, "EOF occurred in violation of protocol"),
+        _reset_during_handshake(),
         ConnectionRefusedError(61, "Connection refused"),
     ],
-    ids=["dns-temporary-failure", "tls-dropped-mid-handshake", "refused"],
+    ids=[
+        "dns-no-such-name",
+        "dns-temporary-failure",
+        "tls-dropped-mid-handshake",
+        "tls-handshake-reset",
+        "refused",
+    ],
 )
 def test_a_temporarily_unreachable_endpoint_stays_transient(cause: BaseException) -> None:
     transport = _caused(httpx.ConnectError("connect failed", request=_REQUEST), cause)
@@ -323,7 +358,7 @@ def test_ignoring_text_keeps_the_status_type_and_endpoint_vetoes() -> None:
 
     misconfigured = _caused(
         httpx.ConnectError("connect failed", request=_REQUEST),
-        socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided"),
+        ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED]"),
     )
     for rejected in (
         _stamped("upload for 'report.pdf' failed: HTTP 401", 401),
@@ -332,3 +367,141 @@ def test_ignoring_text_keeps_the_status_type_and_endpoint_vetoes() -> None:
         misconfigured,
     ):
         assert is_transient_request_failure(rejected, text_vetoes=False) is False
+
+
+# Real loopback endpoints, so the chains below are the ones httpcore and anyio
+# build (implicit exception context included), not constructed stand-ins.
+
+type _ConnectionHandler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
+
+
+@asynccontextmanager
+async def _loopback(
+    handler: _ConnectionHandler,
+    *,
+    tls: ssl.SSLContext | None = None,
+) -> AsyncIterator[int]:
+    server = await asyncio.start_server(handler, "127.0.0.1", 0, ssl=tls)
+    try:
+        yield server.sockets[0].getsockname()[1]
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def _reset_on_accept(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    connection = writer.get_extra_info("socket")
+    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    writer.transport.abort()
+
+
+async def _plain_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    await reader.read(1024)
+    writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    await writer.drain()
+    writer.close()
+
+
+async def _hold_open(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    await reader.read(1024)
+    writer.close()
+
+
+@pytest.fixture
+def self_signed_tls(tmp_path: Path) -> ssl.SSLContext:
+    """A server context whose certificate no client trusts."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    certificate_path = tmp_path / "certificate.pem"
+    key_path = tmp_path / "key.pem"
+    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.load_cert_chain(certificate_path, key_path)
+    return context
+
+
+async def _get_failure(client_module: object, url: str) -> BaseException:
+    async with getattr(client_module, "AsyncClient")(timeout=5) as client:  # noqa: B009
+        try:
+            await client.get(url)
+        except Exception as exc:  # noqa: BLE001 - the failure is the subject
+            return exc
+    raise AssertionError("the request did not fail")
+
+
+@pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
+async def test_a_real_handshake_reset_is_transient(client_module: object) -> None:
+    async with _loopback(_reset_on_accept) as port:
+        for _ in range(3):
+            failure = await _get_failure(client_module, f"https://127.0.0.1:{port}/")
+
+            assert is_transient_request_failure(failure) is True
+            assert classify_transient_dependency(failure) == "providers"
+
+
+async def test_a_real_handshake_reset_through_the_sdk_is_a_provider_interruption() -> None:
+    async with _loopback(_reset_on_accept) as port:
+        client = openai.AsyncOpenAI(
+            api_key="test-key",
+            base_url=f"https://127.0.0.1:{port}/v1",
+            max_retries=0,
+            http_client=httpx2.AsyncClient(timeout=5),
+        )
+        try:
+            with pytest.raises(openai.APIConnectionError) as raised:
+                await client.chat.completions.create(
+                    model="model", messages=[{"role": "user", "content": "hi"}]
+                )
+        finally:
+            await client.close()
+
+    assert classify_transient_dependency(raised.value, component_hint="providers") == "providers"
+    assert classify_transient_dependency(raised.value) == "providers"
+
+
+@pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
+async def test_a_real_untrusted_certificate_is_misconfiguration(
+    client_module: object,
+    self_signed_tls: ssl.SSLContext,
+) -> None:
+    async with _loopback(_hold_open, tls=self_signed_tls) as port:
+        failure = await _get_failure(client_module, f"https://127.0.0.1:{port}/")
+
+    assert is_transient_request_failure(failure) is False
+    assert classify_transient_dependency(failure, component_hint="providers") is None
+
+
+@pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
+async def test_a_real_https_url_for_plain_http_is_misconfiguration(client_module: object) -> None:
+    async with _loopback(_plain_http) as port:
+        failure = await _get_failure(client_module, f"https://127.0.0.1:{port}/")
+
+    assert is_transient_request_failure(failure) is False
+    assert classify_transient_dependency(failure, component_hint="providers") is None

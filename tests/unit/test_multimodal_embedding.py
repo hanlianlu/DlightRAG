@@ -4,6 +4,8 @@
 import asyncio
 import io
 import socket
+import ssl
+import struct
 import threading
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
@@ -102,9 +104,9 @@ def _response(
     )
 
 
-def _dns_failure() -> httpx.ConnectError:
-    error = httpx.ConnectError("[Errno 8] nodename nor servname provided, or not known")
-    error.__cause__ = socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided")
+def _untrusted_certificate() -> httpx.ConnectError:
+    error = httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+    error.__cause__ = ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED]")
     return error
 
 
@@ -634,6 +636,42 @@ async def test_retryable_http_statuses_are_retried(status: int) -> None:
     sleep.assert_awaited_once_with(2.0)
 
 
+async def test_a_real_handshake_reset_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A TLS endpoint that resets each connection right after accepting it: the
+    # real httpcore chain carries an implicit SSLWantReadError context, which is
+    # a dropped connection rather than a misconfigured endpoint.
+    from dlightrag.engine.ai import embedding
+
+    connections = 0
+
+    async def reset(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        nonlocal connections
+        connections += 1
+        connection = writer.get_extra_info("socket")
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        writer.transport.abort()
+
+    monkeypatch.setattr(embedding, "_retry_delay", lambda *_args, **_kwargs: 0.0)
+    server = await asyncio.start_server(reset, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url=f"https://127.0.0.1:{port}/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await embedder.embed_texts(["hello"])
+    finally:
+        await embedder.aclose()
+        server.close()
+        await server.wait_closed()
+
+    assert connections == 3
+
+
 @pytest.mark.parametrize(
     "failure",
     [
@@ -643,9 +681,9 @@ async def test_retryable_http_statuses_are_retried(status: int) -> None:
         _response(501, {"error": "not implemented"}),
         _response(505, {"error": "http version"}),
         httpx.UnsupportedProtocol("missing scheme"),
-        _dns_failure(),
+        _untrusted_certificate(),
     ],
-    ids=["401", "403", "409", "501", "505", "unsupported-protocol", "dns-no-such-name"],
+    ids=["401", "403", "409", "501", "505", "unsupported-protocol", "tls-certificate"],
 )
 async def test_failures_the_dependency_classification_rejects_are_not_retried(
     failure: httpx.Response | httpx.TransportError,

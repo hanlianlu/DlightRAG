@@ -657,9 +657,11 @@ as transient: a refused, reset, dropped, or timed-out connection, or HTTP 408,
 425, 429, 500, 502, 503, 504, 520-524 (an edge proxy reporting its origin
 failed), or 529 (overloaded). HTTP 409 is not retried: it reports a conflict
 with the target's state, and a Run would otherwise defer on a conflict that
-resending cannot resolve. A host name that does not resolve or a TLS handshake
-the endpoint rejects is configuration and is not retried either. `Retry-After`
-wins over exponential backoff with jitter.
+resending cannot resolve. A TLS certificate that fails verification or a TLS
+protocol mismatch, such as an https URL for a plain-HTTP service, is
+configuration and is not retried either. A host name that does not resolve is
+retried: a stopped or restarting service stops resolving until it is back.
+`Retry-After` wins over exponential backoff with jitter.
 
 ## Retrieval
 
