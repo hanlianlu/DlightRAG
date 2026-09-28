@@ -61,7 +61,11 @@ from dlightrag.application.answer_runs.artifacts import (
     published_artifact_descriptor,
 )
 from dlightrag.application.corpus_admin import normalize_workspace_ids
-from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+from dlightrag.application.errors import (
+    ApplicationConflictError,
+    ApplicationInputError,
+    ApplicationUnavailableError,
+)
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 from dlightrag.application.web_conversations import (
     ConversationSubmissionConflict,
@@ -715,6 +719,8 @@ def _answer_command(*, unavailable: str, reuse: str = "request") -> Iterator[Non
         raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
     except AnswerInputError as exc:
         raise _rejected_input(exc) from None
+    except ApplicationInputError as exc:
+        raise _command_error(422, "invalid_request", str(exc)) from None
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise _command_error(
             409,

@@ -18,7 +18,7 @@ from dlightrag.adapters.http.browser.attachment_models import (
     validate_web_attachments,
 )
 from dlightrag.adapters.http.browser.requests import WebAnswerRequest
-from dlightrag.adapters.http.errors import invalid_fields
+from dlightrag.adapters.validation_errors import invalid_fields
 from dlightrag.engine.answer.client_contracts import AnswerEffort, normalize_answer_effort
 from dlightrag.engine.answer.errors import UnsupportedAnswerModeError
 from dlightrag.engine.answer.image_capability import (

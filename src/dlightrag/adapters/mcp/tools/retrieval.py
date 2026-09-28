@@ -70,7 +70,7 @@ async def retrieve_tool(
     query_images: QueryImagesParam = Field(default_factory=list),
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict[str, Any]:
-    args = RetrieveInput.model_validate(locals())
+    args = mcp_server._parse_args(RetrieveInput, locals())
     application = await mcp_server._ensure_application()
     resolved_workspaces = await mcp_server._resolve_authorized_query_workspaces(
         application,
@@ -85,7 +85,9 @@ async def retrieve_tool(
             chunk_top_k=args.chunk_top_k,
             federated_rerank=args.federated_rerank,
             bm25_query=args.bm25_query,
-            filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
+            filters=mcp_server._parse_args(MetadataFilter, args.filters, within="filters")
+            if args.filters
+            else None,
             query_images=tuple(
                 image.model_dump(exclude_none=True) for image in args.query_images or ()
             ),

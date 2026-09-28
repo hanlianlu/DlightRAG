@@ -453,6 +453,94 @@ async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: Asyn
     assert _tool_text(result) == "Error: steer instruction exceeds 20000 characters"
 
 
+async def test_mcp_corpus_input_errors_are_refusals(mock_mcp_application: AsyncMock) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    mock_mcp_application.corpus_mutations.create_delete.side_effect = CorpusMutationInputError(
+        "at least one exact document identifier is required"
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "delete_files", {"workspace": "default", "filenames": ["report.pdf"]}
+    )
+
+    assert _tool_text(result) == "Error: at least one exact document identifier is required"
+
+
+async def test_mcp_refuses_a_workspace_it_cannot_name_without_echoing_it(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "retrieve", {"query": "q", "workspaces": ["x" * 60 + "-SECRET-VALUE"]}
+    )
+
+    text = _tool_text(result)
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert text.startswith("Error: ")
+    assert "SECRET-VALUE" not in text
+    mock_mcp_application.retrieval.create.assert_not_awaited()
+
+
+async def test_mcp_names_a_mistyped_argument_without_echoing_it(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    result = await mcp_server.mcp_app.call_tool("list_files", {"limit": "many-SECRET"})
+
+    text = _tool_text(result)
+    assert text.startswith("Error: limit: ")
+    assert "SECRET" not in text
+
+
+async def test_mcp_a_stored_record_that_fails_its_model_is_internal(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    from pydantic import BaseModel, ConfigDict
+
+    class Stored(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    def read_stored(**_kwargs: object) -> None:
+        Stored.model_validate({"future_field": 1})
+
+    mock_mcp_application.runs.get_global = AsyncMock(side_effect=read_stored)
+
+    result = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
+
+    assert _tool_text(result) == "Error: internal tool failure"
+
+
+async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: AsyncMock) -> None:
+    from dlightrag.application.access import AccessDeniedError
+
+    mock_mcp_application.answers.create.side_effect = AccessDeniedError(
+        "Access denied for action=workspace.query workspace=finance"
+    )
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert _tool_text(result) == "Error: Access denied for action=workspace.query workspace=finance"
+
+
+async def test_mcp_workspace_run_lookup_hides_a_denial_but_not_an_outage(
+    mock_mcp_application: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.adapters.mcp.errors import ToolRejection
+
+    mock_mcp_application.runs.get.return_value = _run_record(run_kind="corpus_mutation")
+    monkeypatch.setattr(
+        mcp_server, "_enforce_access", AsyncMock(side_effect=ToolRejection("Access denied"))
+    )
+    denied = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
+    monkeypatch.setattr(
+        mcp_server, "_enforce_access", AsyncMock(side_effect=RuntimeError("gate store down"))
+    )
+    outage = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
+
+    assert _tool_text(denied) == f"Error: Run not found: {_RUN_ID}"
+    assert _tool_text(outage) == "Error: internal tool failure"
+
+
 async def test_mcp_protocol_errors_remain_protocol_errors() -> None:
     app = mcp_server.DlightRAGMCPServer("probe")
 

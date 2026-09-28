@@ -18,8 +18,9 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, InputRequiredResult, TextContent
-from pydantic import Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp
 
@@ -31,6 +32,7 @@ from dlightrag.adapters.mcp.contracts import (
     CreateWorkspaceInput,
 )
 from dlightrag.adapters.mcp.errors import ToolRejection
+from dlightrag.adapters.validation_errors import invalid_fields
 from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.application.access import (
     AccessAction,
@@ -160,12 +162,21 @@ _REJECTIONS: tuple[type[BaseException], ...] = (
 )
 
 
-def _invalid_arguments(exc: ValidationError) -> str:
-    """Name each invalid argument without echoing its value."""
-    return "; ".join(
-        f"{'.'.join(str(part) for part in error['loc']) or 'arguments'}: {error['msg']}"
-        for error in exc.errors(include_input=False, include_url=False)
-    )
+def _parse_args[M: BaseModel](model: type[M], values: object, *, within: str | None = None) -> M:
+    """Validate a tool's own arguments, refusing them by field and never by value.
+
+    Only a caller's arguments go through here; a stored record that fails its model
+    is a server fault and stays behind the internal-failure text.
+    """
+    try:
+        return model.model_validate(values)
+    except ValidationError as exc:
+        raise ToolRejection(invalid_fields(exc, within=within)) from None
+
+
+def _is_argument_validation(exc: BaseException) -> bool:
+    """The SDK's own argument check raises ToolError; a crash inside a tool does not."""
+    return isinstance(exc, ToolError) and not isinstance(exc, UnexpectedToolError)
 
 
 class DlightRAGMCPServer(MCPServer):
@@ -187,14 +198,14 @@ class DlightRAGMCPServer(MCPServer):
             # inspect __cause__ as well. Server misconfiguration is a server failure;
             # user-facing validation/authorization messages are surfaced as rejections;
             # unexpected internals hide behind a generic message.
-            surfaced = (InvalidToolConfigurationError, ValidationError, *_REJECTIONS)
+            surfaced = (InvalidToolConfigurationError, *_REJECTIONS)
             inner = exc if isinstance(exc, surfaced) else exc.__cause__
             if isinstance(inner, InvalidToolConfigurationError):
                 logger.exception("MCP tool '%s' failed: %s", name, inner)
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
-            elif isinstance(inner, ValidationError):
+            elif isinstance(inner, ValidationError) and _is_argument_validation(exc):
                 logger.warning("MCP tool '%s' rejected its arguments", name)
-                text = f"Error: {_invalid_arguments(inner)}"
+                text = f"Error: {invalid_fields(inner)}"
             elif isinstance(inner, AnswerInputError):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
@@ -309,7 +320,7 @@ def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]
 
     label = validate_workspace_name(args.workspace)
     display_name = validate_workspace_name(args.display_name or label)
-    return normalize_workspace(label), display_name
+    return _canonical_workspace(label), display_name
 
 
 async def _enforce_access(
@@ -361,7 +372,14 @@ async def _resolve_authorized_query_workspaces(
         return await _access_gate(application).resolve_query_workspaces(
             application.corpora,
             default_workspace=application.config.deployment.workspace_id,
-            workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
+            workspaces=(
+                [
+                    _canonical_workspace(workspace)
+                    for workspace in normalize_workspace_ids(workspaces)
+                ]
+                if workspaces is not None
+                else None
+            ),
             all_workspaces=all_workspaces,
         )
     except NoQueryableWorkspacesError:
@@ -374,11 +392,17 @@ def _workspace_id(application: Application, workspace: str | None) -> str:
     """The canonical id for a workspace argument, or the deployment's own."""
     if not workspace:
         return application.config.deployment.workspace_id
-    workspace_id = normalize_workspace(workspace)
+    return _canonical_workspace(workspace)
+
+
+def _canonical_workspace(name: str) -> str:
+    """One caller-named workspace as a canonical id, refused without echoing it."""
     try:
-        return require_canonical_workspace_id(workspace_id)
+        return require_canonical_workspace_id(normalize_workspace(name))
     except ValueError:
-        raise ToolRejection(f"Invalid workspace name: {workspace!r}") from None
+        raise ToolRejection(
+            "Invalid workspace name: it must normalize to 1-64 letters, digits, or underscores"
+        ) from None
 
 
 def _register_tools() -> None:

@@ -461,9 +461,12 @@ class RetrievalService:
             raise CorpusUnavailableError("Retrieval service is closed")
         if not request.workspaces:
             raise RetrievalInputError("At least one canonical workspace is required")
-        workspaces = tuple(
-            require_canonical_workspace_id(workspace) for workspace in request.workspaces
-        )
+        try:
+            workspaces = tuple(
+                require_canonical_workspace_id(workspace) for workspace in request.workspaces
+            )
+        except ValueError as exc:
+            raise RetrievalInputError(str(exc)) from None
         images = tuple(dict(image) for image in request.query_images)
         if len(images) > self._settings.query_image_limit:
             raise RetrievalInputError(

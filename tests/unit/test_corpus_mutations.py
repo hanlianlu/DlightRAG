@@ -4,6 +4,7 @@
 import asyncio
 import datetime
 import hashlib
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 
-from dlightrag.application.corpus_admin import UploadTooLargeError
+from dlightrag.application.corpus_admin import IngestSpec, UploadTooLargeError
 from dlightrag.application.corpus_admin.mutations import (
     CorpusMutationExecutor,
     CorpusMutationService,
@@ -833,3 +834,62 @@ async def test_workspace_delete_is_accepted_as_a_workspace_scoped_mutation(
     assert envelope.access_scope.scope_id == "research"
     assert envelope.payload["action"] == "delete_workspace"
     assert envelope.accepted_input == {"action": "delete_workspace", "workspace": "research"}
+
+
+def _local_spec(path: Path) -> IngestSpec:
+    return IngestSpec(source_type="local", path=str(path))
+
+
+async def test_blank_selectors_are_the_callers_to_fix(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    with pytest.raises(CorpusMutationInputError, match="at least one exact document identifier"):
+        await _service(tmp_path).create_delete(
+            workspace="default", submitted_by="o", filenames=["  "]
+        )
+
+
+def test_a_local_folder_cannot_link_outside_its_workspace(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    folder = tmp_path / "default" / "docs"
+    folder.mkdir(parents=True)
+    (folder / "ok.txt").write_text("ok", encoding="utf-8")
+    (folder / "leak.txt").symlink_to(outside / "secret.txt")
+
+    with pytest.raises(CorpusMutationInputError, match="cannot contain symlinks"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+
+    # Nothing was staged, least of all the linked file's bytes.
+    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+
+
+def test_a_local_folder_may_hold_only_files_and_folders(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    folder = tmp_path / "default" / "docs"
+    folder.mkdir(parents=True)
+    os.mkfifo(folder / "pipe")
+
+    with pytest.raises(CorpusMutationInputError, match="only regular files and folders"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+
+
+def test_a_missing_or_oversized_local_source_is_the_callers_to_fix(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    service = _service(tmp_path)
+    with pytest.raises(CorpusMutationInputError, match="does not exist"):
+        service._snapshot_local_spec(
+            _RUN_ID, "default", _local_spec(tmp_path / "default" / "missing.pdf")
+        )
+
+    folder = tmp_path / "default" / "many"
+    folder.mkdir(parents=True)
+    for index in range(101):
+        (folder / f"{index}.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(CorpusMutationInputError, match="more than 100 files"):
+        service._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))

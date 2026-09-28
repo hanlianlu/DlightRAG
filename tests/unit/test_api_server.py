@@ -2287,9 +2287,12 @@ class TestMetadataAPI:
         """A dropped filter name would match every document instead of failing."""
         app.state.application = mock_application
 
-        resp = await client.post("/metadata/search", json={"nonsense": "x"})
+        resp = await client.post("/metadata/search", json={"nonsense": "SECRET-VALUE"})
 
         assert resp.status_code == 422
+        # The field is named; the submitted value is not echoed back.
+        assert resp.json()["detail"].startswith("Invalid metadata filter: nonsense: ")
+        assert "SECRET-VALUE" not in resp.text
         mock_application.corpora.search_metadata.assert_not_awaited()
 
     @pytest.mark.usefixtures("_patch_application")

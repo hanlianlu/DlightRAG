@@ -93,6 +93,7 @@ from dlightrag.engine.runtime.records import (
     ArtifactReferenceKind,
     PendingArtifact,
     PendingArtifactReference,
+    PreparedInputTooLargeError,
     PreparedRunEnvelope,
     RunAccessScope,
     RunArtifactReference,
@@ -661,10 +662,13 @@ def _accepted_resource_payloads(
 def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
     """Project one public request into durable acceptance input, without I/O."""
     if not request.workspaces:
-        raise ValueError("at least one canonical workspace is required")
-    workspaces = tuple(
-        require_canonical_workspace_id(workspace) for workspace in request.workspaces
-    )
+        raise AnswerRequestError("at least one canonical workspace is required")
+    try:
+        workspaces = tuple(
+            require_canonical_workspace_id(workspace) for workspace in request.workspaces
+        )
+    except ValueError as exc:
+        raise AnswerRequestError(str(exc)) from None
     links: list[LinkReference] = []
     attachments: list[AttachmentReference] = []
     for resource in request.resources:
@@ -936,7 +940,10 @@ class AnswerService:
                 )
                 prepared_input["profile_memory_enabled"] = memory_enabled
                 prepared_input["profile_memory_epoch"] = memory_epoch
-                require_prepared_input_bounds(prepared_input)
+                try:
+                    require_prepared_input_bounds(prepared_input)
+                except PreparedInputTooLargeError as exc:
+                    raise AnswerRequestError(str(exc)) from exc
                 resources_payload = _accepted_resource_payloads(
                     run_input, attachment_bytes=attachment_bytes
                 )

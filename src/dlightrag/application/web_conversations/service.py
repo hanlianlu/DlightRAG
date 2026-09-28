@@ -37,6 +37,7 @@ from .models import (
     AnswerTurnCreation,
     ConversationCursor,
     ConversationCursorCodec,
+    ConversationCursorError,
     ConversationHead,
     ConversationHistoryCursor,
     ConversationHistoryCursorCodec,
@@ -278,7 +279,9 @@ class WebConversationService:
             requested.cursor is not None
             and str(requested.cursor.conversation_id) != conversation_id
         ):
-            raise ValueError("conversation history cursor belongs to another conversation")
+            raise ConversationCursorError(
+                "conversation history cursor belongs to another conversation"
+            )
         result = await self._store_call(
             self._store.history_page(
                 principal_id,

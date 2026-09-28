@@ -324,7 +324,7 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
-| `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
+| `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 400 without `Idempotency-Key`; 422 for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
 | `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 409 otherwise. |
 
 Run status is `queued`, `running`, `succeeded`, `failed`, or `cancelled`. Phase is
@@ -461,8 +461,10 @@ MCP `retrieve` and `answer` return only durable descriptors; poll `get_run` for
 the canonical result. A tool result puts typed JSON in `structuredContent` and
 formatted equivalent JSON in its first text block. Expected validation,
 authorization, conflict, and temporary-unavailability failures set
-`isError: true` with their public text; other failures report only an internal
-tool failure. Protocol failures remain JSON-RPC errors.
+`isError: true` with their public text; an invalid argument is named with the
+reason, never echoed. A Run the caller may not see reads as not found. Other
+failures report only an internal tool failure. Protocol failures remain
+JSON-RPC errors.
 
 The 18 public tools form one fixed task interface. `answer(mode="research")`
 retains autonomous research, including its internal tools, child agents, and

@@ -53,6 +53,7 @@ from dlightrag.engine.runtime.records import (
 )
 
 from .errors import (
+    CorpusMutationInputError,
     CorpusMutationUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
@@ -413,7 +414,7 @@ class CorpusMutationService:
             "document_ids": _bounded_unique(document_ids),
         }
         if not any(selectors.values()):
-            raise ValueError("at least one exact document identifier is required")
+            raise CorpusMutationInputError("at least one exact document identifier is required")
         return await self._create_action(
             action="delete",
             workspace=workspace,
@@ -434,9 +435,11 @@ class CorpusMutationService:
         self._require_writable("the retry")
         ids = _bounded_unique(document_ids)
         if bool(ids) == bool(selector):
-            raise ValueError("provide document_ids or selector='all_retryable', but not both")
+            raise CorpusMutationInputError(
+                "provide document_ids or selector='all_retryable', but not both"
+            )
         if selector not in {None, "all_retryable"}:
-            raise ValueError("unknown retry selector")
+            raise CorpusMutationInputError("unknown retry selector")
         return await self._create_action(
             action="retry",
             workspace=workspace,
@@ -472,7 +475,9 @@ class CorpusMutationService:
         """Accept the Workspace's final mutation: a full reset, then identity removal."""
         self._require_writable("the Workspace Delete")
         if require_canonical_workspace_id(workspace) == self._default_workspace:
-            raise ValueError("The default workspace cannot be deleted; reset its corpus instead.")
+            raise CorpusMutationInputError(
+                "The default workspace cannot be deleted; reset its corpus instead."
+            )
         return await self._create_action(
             action="delete_workspace",
             workspace=workspace,
@@ -522,7 +527,7 @@ class CorpusMutationService:
         try:
             require_prepared_input_bounds(payload)
         except PreparedInputTooLargeError as exc:
-            raise ValueError(str(exc)) from exc
+            raise CorpusMutationInputError(str(exc)) from exc
         coordinator = self._coordinator
         if not coordinator.is_started:
             raise RunRuntimeUnavailableError("Corpus Mutation runtime is unavailable")
@@ -578,11 +583,11 @@ class CorpusMutationService:
         """
         limits = self._upload_limits
         if not uploads:
-            raise ValueError("at least one upload is required")
+            raise CorpusMutationInputError("at least one upload is required")
         if len(uploads) > limits.request_files:
             raise UploadTooLargeError(f"upload contains more than {limits.request_files} files")
         if content_sha256 is not None and len(uploads) != 1:
-            raise ValueError("content_sha256 is supported only for a single upload")
+            raise CorpusMutationInputError("content_sha256 is supported only for a single upload")
         staged: list[StagedCorpusSource] = []
         remaining = limits.request_bytes
         for filename, reader in uploads:
@@ -622,7 +627,9 @@ class CorpusMutationService:
         if expected is not None and (
             len(expected) != 64 or any(ch not in "0123456789abcdef" for ch in expected)
         ):
-            raise ValueError("content_sha256 must be a lowercase or uppercase SHA-256 hex digest")
+            raise CorpusMutationInputError(
+                "content_sha256 must be a lowercase or uppercase SHA-256 hex digest"
+            )
 
         run_root = self._input_root / canonical / ".runs" / run_id
         source_root = run_root / "sources"
@@ -632,7 +639,7 @@ class CorpusMutationService:
         temporary = staging_root / f"{run_id}.part"
         target = source_root / safe_path
         if target.exists():
-            raise ValueError("upload contains duplicate source filenames")
+            raise CorpusMutationInputError("upload contains duplicate source filenames")
         target.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
         size = 0
@@ -651,7 +658,7 @@ class CorpusMutationService:
                 os.fsync(stream.fileno())
             actual = digest.hexdigest()
             if expected is not None and actual != expected:
-                raise ValueError("content_sha256 does not match the uploaded bytes")
+                raise CorpusMutationInputError("content_sha256 does not match the uploaded bytes")
             os.replace(temporary, target)
             return StagedCorpusSource(
                 path=target,
@@ -683,7 +690,7 @@ class CorpusMutationService:
 
         def record_file(path: Path) -> None:
             if len(manifest) >= _MAX_RESULT_DOCUMENTS:
-                raise ValueError(
+                raise CorpusMutationInputError(
                     f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
                 )
             manifest.append(
@@ -695,24 +702,38 @@ class CorpusMutationService:
             )
 
         def copy_source(raw: str, ordinal: int) -> str:
-            source = Path(raw).resolve(strict=True)
-            source.relative_to(workspace_root)
-            if source.is_symlink():
-                raise ValueError("local corpus sources cannot be symlinks")
-            name = f"{ordinal:04d}-{safe_upload_basename(source.name)}"
+            try:
+                source = Path(raw).resolve(strict=True)
+            except FileNotFoundError:
+                raise CorpusMutationInputError("local corpus source does not exist") from None
+            if not source.is_relative_to(workspace_root):
+                raise CorpusMutationInputError(
+                    "local corpus sources must stay under input_dir/<workspace>"
+                )
+            try:
+                name = f"{ordinal:04d}-{safe_upload_basename(source.name)}"
+            except ValueError:
+                raise UnsafeUploadNameError(f"Unsafe filename: {source.name!r}") from None
             target = source_root / name
             if source.is_dir():
-                shutil.copytree(source, target, symlinks=False)
+                # Refuse links and special files before copying anything: a followed
+                # link would stage bytes from outside the workspace input root.
+                _refuse_unsafe_entries(source)
+                shutil.copytree(source, target, symlinks=True)
                 for child in sorted(target.rglob("*")):
-                    if child.is_symlink():
-                        raise ValueError("local corpus sources cannot contain symlinks")
+                    if child.is_symlink():  # appeared after the scan
+                        raise CorpusMutationInputError(
+                            "local corpus sources cannot contain symlinks"
+                        )
                     if child.is_file():
                         record_file(child)
             elif source.is_file():
                 shutil.copy2(source, target)
                 record_file(target)
             else:
-                raise ValueError("local corpus source is not a regular file or directory")
+                raise CorpusMutationInputError(
+                    "local corpus source is not a regular file or directory"
+                )
             return str(target)
 
         try:
@@ -1142,6 +1163,17 @@ async def _join_public_operation[T](operation: Awaitable[T]) -> T:
         # Finish and classify the authoritative outcome instead of labelling a
         # completed destructive effect as cancelled.
         return await asyncio.shield(task)
+
+
+def _refuse_unsafe_entries(root: Path) -> None:
+    """Refuse a local source tree holding links or anything but files and folders."""
+    for entry in root.rglob("*"):
+        if entry.is_symlink():
+            raise CorpusMutationInputError("local corpus sources cannot contain symlinks")
+        if not (entry.is_dir() or entry.is_file()):
+            raise CorpusMutationInputError(
+                "local corpus sources may contain only regular files and folders"
+            )
 
 
 def validate_corpus_mutation_prepared_input(

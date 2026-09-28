@@ -12,6 +12,7 @@ from dlightrag.adapters.http.rest.models import (
     MetadataUpdateResponse,
     SearchMetadataResponse,
 )
+from dlightrag.adapters.validation_errors import invalid_fields
 from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.corpus_admin import (
     METADATA_SEARCH_PAGE_DEFAULT_LIMIT,
@@ -52,7 +53,9 @@ async def search_metadata(
     try:
         validated = MetadataFilter.model_validate(filters)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid metadata filter: {exc}") from exc
+        raise HTTPException(
+            status_code=422, detail=f"Invalid metadata filter: {invalid_fields(exc)}"
+        ) from None
 
     try:
         decoded_cursor = (

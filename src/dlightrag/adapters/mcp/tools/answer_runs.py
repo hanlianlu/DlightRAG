@@ -102,7 +102,7 @@ async def answer_tool(
     ] = None,
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict[str, Any]:
-    args = AnswerInput.model_validate(locals())
+    args = mcp_server._parse_args(AnswerInput, locals())
     application = await mcp_server._ensure_application()
     max_attachments = application.config.answer.generation.max_attachments
     if len(args.attachments) > max_attachments:
@@ -122,7 +122,9 @@ async def answer_tool(
                 chunk_top_k=args.chunk_top_k,
                 federated_rerank=args.federated_rerank,
             ),
-            filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
+            filters=mcp_server._parse_args(MetadataFilter, args.filters, within="filters")
+            if args.filters
+            else None,
             semantic_highlights=args.semantic_highlights,
             history=tuple(conversation_history_as_dicts(args.history) or ()),
             resources=tuple(answer_link_resources(args.attachments)),
@@ -149,7 +151,7 @@ async def answer_tool(
 async def get_run_tool(
     run_id: Annotated[str, Field(description="Run id returned by a creation tool.")],
 ) -> dict[str, Any]:
-    args = AnswerRunInput.model_validate(locals())
+    args = mcp_server._parse_args(AnswerRunInput, locals())
     application = await mcp_server._ensure_application()
     record = await _authorized_run(application, args.run_id, cancel=False)
     result: dict[str, Any] | None = None
@@ -214,7 +216,7 @@ async def get_run_tool(
 async def cancel_run_tool(
     run_id: Annotated[str, Field(description="Run id returned by a creation tool.")],
 ) -> dict[str, Any]:
-    args = AnswerRunInput.model_validate(locals())
+    args = mcp_server._parse_args(AnswerRunInput, locals())
     application = await mcp_server._ensure_application()
     record = await _authorized_run(application, args.run_id, cancel=True)
     outcome = await application.runs.cancel(owner_id=record.access_scope_id, run_id=args.run_id)

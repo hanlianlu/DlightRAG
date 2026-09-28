@@ -25,7 +25,6 @@ from dlightrag.adapters.http.artifact_delivery import (
     artifact_range,
     artifact_response,
 )
-from dlightrag.adapters.http.errors import invalid_fields
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
@@ -33,6 +32,7 @@ from dlightrag.adapters.http.rest.models import (
     AnswerResponse,
     RunDescriptor,
 )
+from dlightrag.adapters.validation_errors import invalid_fields
 from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,

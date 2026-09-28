@@ -15,6 +15,10 @@ class UnsafeUploadNameError(ApplicationInputError):
     """An upload filename is unsafe or not a single basename."""
 
 
+class CorpusMutationInputError(ApplicationInputError):
+    """A Corpus Mutation request the caller must change before it can be accepted."""
+
+
 class LocalIngestPathError(ApplicationInputError):
     """A caller-supplied local ingest path is absolute or escapes its workspace input root."""
 
@@ -35,7 +39,7 @@ class MetadataValidationError(ApplicationInputError):
     """Caller-supplied document metadata is invalid."""
 
 
-class SourceDownloadInvalidError(ApplicationInputError):
+class SourceDownloadInvalidError(ValueError):
     """Stored source metadata cannot produce a safe download."""
 
 

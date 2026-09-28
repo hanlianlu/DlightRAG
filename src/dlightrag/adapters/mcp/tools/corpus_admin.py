@@ -111,7 +111,7 @@ async def create_workspace_tool(
         Field(default=None, description="Optional user-facing display name."),
     ] = None,
 ) -> dict[str, Any]:
-    args = CreateWorkspaceInput.model_validate(locals())
+    args = mcp_server._parse_args(CreateWorkspaceInput, locals())
     application = await mcp_server._ensure_application()
     normalized_workspace, normalized_display_name = mcp_server._normalize_workspace_argument(args)
     await mcp_server._enforce_access(
@@ -275,7 +275,7 @@ async def ingest_tool(
         Field(default=None, max_length=255, description="Stable caller replay key."),
     ] = None,
 ) -> dict[str, Any]:
-    args = IngestInput.model_validate(locals())
+    args = mcp_server._parse_args(IngestInput, locals())
     application = await mcp_server._ensure_application()
     workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
@@ -334,7 +334,7 @@ async def list_files_tool(
         Field(default=None, min_length=1, max_length=1024, description="Opaque next cursor."),
     ] = None,
 ) -> dict[str, Any]:
-    args = ListFilesInput.model_validate(locals())
+    args = mcp_server._parse_args(ListFilesInput, locals())
     application = await mcp_server._ensure_application()
     workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
@@ -397,7 +397,7 @@ async def retry_files_tool(
         Field(default=None, max_length=255, description="Stable caller replay key."),
     ] = None,
 ) -> dict[str, Any]:
-    args = RetryFilesInput.model_validate(locals())
+    args = mcp_server._parse_args(RetryFilesInput, locals())
     application = await mcp_server._ensure_application()
     workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
@@ -446,7 +446,7 @@ async def delete_files_tool(
         Field(default=None, max_length=255, description="Stable caller replay key."),
     ] = None,
 ) -> dict[str, Any]:
-    args = DeleteFilesInput.model_validate(locals())
+    args = mcp_server._parse_args(DeleteFilesInput, locals())
     application = await mcp_server._ensure_application()
     workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(

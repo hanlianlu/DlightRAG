@@ -841,6 +841,24 @@ async def test_a_fork_at_the_admission_limit_says_so(
     }
 
 
+async def test_an_invalid_request_is_an_editable_command_failure(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    from dlightrag.application.answer_runs import AnswerRequestError
+
+    service.start_answer.side_effect = AnswerRequestError(
+        "at least one canonical workspace is required"
+    )
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "kind": "invalid_request",
+        "message": "at least one canonical workspace is required",
+    }
+
+
 async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
     client: AsyncClient, service: AsyncMock
 ) -> None:
