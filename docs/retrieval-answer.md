@@ -548,39 +548,41 @@ charge the actual consuming model; they register no earlier resource handle. An
 earlier handle becomes usable only through lineage adoption, whose adopted bytes
 read text only through the conversion view stored with them.
 
-The post-pilot assessment approved PDF and XLSX alongside unified DOCX:
+Each route has known limits:
 
-- PDF multipage/non-Latin text facts passed. Scanned pages return truthful known
-  OCR pages; Unsupported returns known-incomplete without inventing page metadata
-  or parsing exception prose. A tested text-plus-raster page is refused despite
-  having text; the incumbent also omits its raster facts. Use the independent
-  physical-page inventory/overview when the desired page is unknown, not fallback
-  to turn a known omission into an apparently complete result.
-- XLSX candidate display text passed percent/date/merged/empty and sampled
-  currency/custom-format gold. Authored formula caches are read; an uncached
-  formula cell stays empty. Existing openpyxl extraction preserves repeated image
-  occurrences across cells/sheets. Arbitrary Excel display/drawing coverage is
-  not established by those fixtures.
-- PPTX stays MarkItDown: candidate normal slides/notes/tables passed, but missing
-  or shape-less slide parts silently drop content. Candidate adoption needs
-  separately qualified secure OPC completeness checks and typed asset binding,
-  including absent usable Markdown image links; no regex prototype is deployed.
-- CSV stays MarkItDown provisionally: candidate silently mojibakes Shift-JIS,
-  whereas incumbent handles that encoding but truncates over-wide rows and has
-  BOM/multiline Markdown-table defects. Adoption requires a uniform validated
-  host decoding/normalization policy; neither engine has complete fidelity.
-- HTML stays MarkItDown because AnyDoc 0.2.4 has no HTML support, not because a
-  quality comparison declared it inferior.
+- PDF text uses AnyDoc, and physical-page viewing uses PDFium independently of
+  it. A scanned PDF returns `known_incomplete` with the pages AnyDoc reports as
+  needing OCR. A PDF that AnyDoc cannot represent returns `known_incomplete`
+  without page metadata, even when it carries text, as a text-plus-raster page
+  does. The fallback does not rescue such a result, because its partial text
+  would still omit the raster content; the physical-page overview of `view`
+  locates the relevant page instead.
+- XLSX text uses AnyDoc display values: authored formula caches are read, an
+  uncached formula cell stays empty, and nothing is recalculated. Images come
+  from openpyxl with `Sheet!Cell` anchors, one handle per occurrence. The
+  generated fixtures cover percent, date, currency, custom, and merged cells;
+  other display formats and drawing types are unverified.
+- PPTX uses MarkItDown. AnyDoc 0.2.4 drops a slide whose part is missing from
+  the package without an error, and there is no OPC completeness check or typed
+  image binding for PPTX that would detect the loss.
+- CSV uses MarkItDown, and neither engine is complete: AnyDoc 0.2.4 mis-decodes
+  Shift-JIS without an error, while MarkItDown decodes it but truncates
+  over-wide rows and keeps BOMs and raw cell newlines in its Markdown table.
+  There is no host decoding and normalization step for CSV.
+- HTML uses MarkItDown; AnyDoc 0.2.4 does not accept HTML.
 
-These are bounded evidence-based decisions, not permanent format bans. PDFium
-rendering and corpus ingestion are unchanged. Actual adapter/tool/snapshot and
-Host/PG replay tests are separate evidence from the historical direct-call pilot.
-`scripts/docx_integration_bench.py` includes the second DOCX structured parse and
-asset audit; `scripts/format_route_bench.py` measures the unmodified PDF/XLSX
-conversion and Registry/effect/recovery paths. These offline small-sample costs
-are not live service, Host/PG latency or platform-wide promises. Non-Latin font
-qualification is optional local-only evidence; no proprietary font/PDF is bundled.
-See [the resource-reading contract](resource-reading.md).
+These are current routes, not permanent format bans, and neither PDFium
+rendering nor corpus ingestion depends on them. `scripts/anydoc_pilot.py`,
+`scripts/docx_integration_bench.py`, and `scripts/format_route_bench.py` rerun
+the PDF, DOCX, XLSX, and PPTX comparisons offline on generated fixtures.
+`docx_integration_bench.py` includes the second DOCX structured parse and the
+asset audit, and `format_route_bench.py` measures the production PDF and XLSX
+conversion with the Registry, effect, and recovery paths. No fixture there
+covers the CSV findings beyond a UTF-8 control. These offline small-sample costs
+are not service or Host/PG latency figures or platform-wide promises. A
+non-Latin PDF font sample is optional local-only input, and no proprietary font
+or PDF is bundled. See
+[the resource-reading contract](resource-reading.md#conversion-routes).
 
 When Exa or Tavily is configured, Research can search Web passages as peer
 evidence through one provider-neutral tool. Search and Extract use independently

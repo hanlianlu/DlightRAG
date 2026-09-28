@@ -159,9 +159,9 @@ Why the other formats stay on MarkItDown, and what the AnyDoc routes do not
 claim:
 
 - HTML: AnyDoc 0.2.4 does not support HTML.
-- PPTX: AnyDoc 0.2.4 can silently drop slides whose parts are missing or have no
-  shapes, and DlightRAG has no OPC completeness check or typed image binding for
-  PPTX that would detect the loss.
+- PPTX: AnyDoc 0.2.4 drops a slide whose part is missing from the package
+  without an error, and DlightRAG has no OPC completeness check or typed image
+  binding for PPTX that would detect the loss.
 - CSV: neither engine is complete. AnyDoc 0.2.4 mis-decodes Shift-JIS without an
   error; MarkItDown decodes it but truncates over-wide rows and keeps BOMs and
   raw cell newlines. DlightRAG has no host decoding and normalization step for
