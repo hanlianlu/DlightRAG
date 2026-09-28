@@ -96,7 +96,7 @@ SDK sessions; product policy can deny authority but never grant it.
 
 ```python
 class Connections:
-    # Settings; an ineligible auth mode raises ConnectionsError(status=403)
+    # Settings; an ineligible auth mode raises ConnectionsError (status 403)
     async def read(self, *, owner_id, auth_mode) -> ConnectionsView
     async def change(self, *, owner_id, auth_mode, expected_revision,
                      command) -> ConnectionsView
@@ -232,12 +232,13 @@ Grants, and removes the old key only after its counts reach zero; see
   worker cannot overwrite a newer edit, disable, or credential change.
 - A successful refresh publishes a new generation, even when the catalogue is
   unchanged, sets `ready`, and schedules the next refresh `refresh_seconds`
-  later. A failed refresh publishes nothing and keeps the last-good generation.
-  It records `needs-auth` for an authentication failure and `degraded`
-  otherwise, then backs off `min(refresh_seconds, 2^n)` seconds times a random
-  factor from 0.8 to 1.0, where `n` counts consecutive failures up to 10. If a
-  new catalogue would push an enabled Connection past `max_enabled_tools`, the
-  refresh records a `quota` error instead of publishing.
+  later. A failed refresh publishes no generation and keeps the last-good one.
+  Either outcome increments the head revision. A failed refresh records
+  `needs-auth` for an authentication failure and `degraded` otherwise, then
+  backs off `min(refresh_seconds, 2^n)` seconds times a random factor from 0.8
+  to 1.0, where `n` counts consecutive failures up to 10. If a new catalogue
+  would push an enabled Connection past `max_enabled_tools`, the refresh records
+  a `quota` error instead of publishing.
 - `NOTIFY dlightrag_connections_changed` wakes refresh loops and in-flight
   watchers. Loops also wake at least once a second, and every listener
   (re)connect triggers a scan, so a missed notification only delays work.
@@ -347,11 +348,12 @@ A call proceeds in this order:
      `(execution_scope, intent_id)`, and its tool name, call id, `never` replay
      policy, contract version, schema digest, argument digest, and stored
      arguments match the call.
-4. The endpoint is checked against network policy again. An expired OAuth access
-   token goes through the refresh preflight, after which the whole gate runs
-   again.
-5. The worker refuses a second call for the same owner, Run, execution scope,
-   and intent, then calls the tool on a fresh SDK session.
+4. The endpoint is checked against network policy again. For a Connection with a
+   Grant, the credential is decrypted, an expired OAuth access token goes
+   through the refresh preflight, and the whole gate then runs a second time,
+   whether or not a refresh happened.
+5. The worker checks cancellation, refuses a second call for the same owner,
+   Run, execution scope, and intent, and calls the tool on a fresh SDK session.
 
 Revoke, disable, and delete lock the same head and Grant rows as the gate:
 
@@ -486,7 +488,7 @@ Connection `needs-auth`.
 - The request goes to the first admitted address with the original `Host` header
   and TLS SNI. Transport retries, HTTP/2, keep-alive, compression, and proxy
   settings from the environment are off; a compressed response is rejected, and
-  each response body is capped at `max_response_bytes`.
+  a response body larger than `max_response_bytes` fails the request.
 - A non-OAuth session accepts only requests to the endpoint's own scheme, host,
   and port. With an HTTPS endpoint or `require_https`, every hop must use HTTPS.
   An OAuth session may reach other admitted origins, but a bearer
@@ -503,21 +505,24 @@ Connection `needs-auth`.
   a redirect nor a stream resumption can resend an effect.
 - A result may hold at most `max_result_parts` parts. Only text parts are
   accepted; image, audio, and resource parts fail the call. Structured content
-  is appended as JSON, the bearer value is redacted, and the text is capped at
-  `max_result_bytes`. A remote error result becomes a failed call without its
-  remote text. Accepted text goes through the preview-or-spill step shared by
-  injected tools: an oversized result is previewed, and the full text stays
-  readable as a Resource.
+  is appended as JSON and the bearer value is redacted; a result whose text is
+  larger than `max_result_bytes` fails the call instead of being truncated. A
+  remote error result becomes a failed call without its remote text. Accepted
+  text goes through the preview-or-spill step shared by injected tools: text
+  over the shared tool-result byte or line limit is previewed and spilled to a
+  readable Resource. With Agent execution `disabled` there is no Agent Workspace
+  to spill to, so such a call reports its full output as unavailable.
 - SDK and HTTP-library log records are suppressed inside these sessions. Logs
   and Run events carry redacted categories, never remote text or secrets.
 
 `answer.agent.connections` holds the non-secret policy. Operators tune it within
-these hard limits:
+these hard limits. Exceeding a size or count limit fails the request, call, or
+discovery candidate; nothing is truncated.
 
 | Field | Default | Range | Bounds |
 |---|---|---|---|
 | `oauth_callback_url` | unset | ≤ 2048 characters | Public callback URL; OAuth is unavailable while unset |
-| `oauth_timeout` | 300 s | 30–600 | Lifetime of one authorization flow |
+| `oauth_timeout` | 300 s | 30–600 | Lifetime of one authorization flow, including its discovery |
 | `max_connections` | 20 | 1–100 | Connections per owner, not counting deleted ones |
 | `max_enabled_tools` | 256 | 1–1024 | Tools across one owner's enabled Connections |
 | `max_tools` | 128 | 1–256 | Tools in one catalogue |
@@ -527,7 +532,7 @@ these hard limits:
 | `max_catalogue_bytes` | 524288 | 1–1048576 | One whole catalogue |
 | `discovery_concurrency` | 4 | 1–16 | Refresh loops and concurrent discoveries or token refreshes per worker |
 | `refresh_seconds` | 300 | 1–3600 | Refresh interval and backoff ceiling |
-| `discovery_timeout` | 30 s | 1–120 | One discovery, token refresh, or wait for an authorization URL |
+| `discovery_timeout` | 30 s | 1–120 | One discovery outside an authorization flow, one token refresh, or the wait for an authorization URL |
 | `call_timeout` | 60 s | 1–120 | One tool call, gate included |
 | `call_concurrency` | 8 | 1–32 | Concurrent tool calls per worker |
 | `max_call_argument_bytes` | 65536 | 1–262144 | Encoded arguments of one call |
@@ -556,10 +561,14 @@ Management is a Web projection only:
 | `GET /web/oauth/connections/mcp/callback` | State-bound callback deposit; not a management interface |
 | `GET /web/oauth/connections/mcp/client-metadata` | Public Client ID Metadata Document |
 
-- Every command carries `expected_revision`; a stale revision returns 409.
-  Mutations need the Web session plus the CSRF double-submit header and
-  same-origin checks, in `none` mode as well. Validation errors return a generic
-  422 that echoes no input, and another owner's `connection_id` returns 404. An
+- Every command carries `expected_revision`; a stale revision returns 409. The
+  revision covers all of the owner's heads, and every change to a head
+  increments it, including each background refresh, successful or failed. While
+  a refresh keeps failing, its backoff starts at a few seconds, so a command can
+  get 409 between the 5-second polls; Settings then asks for a reload. Mutations
+  need the Web session plus the CSRF double-submit header and same-origin
+  checks, in `none` mode as well. Validation errors return a generic 422 that
+  echoes no input, and another owner's `connection_id` returns 404. An
   ineligible auth mode gets 403, and the bootstrap capability
   `personal_mcp_connections` is false, which hides the feature; the projection
   carries no eligibility flag of its own.
@@ -613,20 +622,30 @@ row.
 
 ## Fault behavior
 
-- An authentication failure on a call (HTTP 401 or 403) marks the Connection
-  `needs-auth`, and any other call failure marks it `degraded`: transport,
-  protocol, timeout, an oversized or unsupported result, a remote tool error, or
-  a missing remote tool. Either status is recorded only when the call used the
-  current head generation and Grant version. The call returns a failed result,
-  pinned definitions stay, and other Connection and built-in tools stay
-  callable.
-- A gate denial or an oversized argument sends nothing, changes no status, and
-  reports that no call was sent.
-- The failed result names the local tool, says whether no call was sent or the
-  outcome may be unknown, forbids automatic retry, and tells the final Answer to
-  identify the unfinished part.
-- A failed refresh publishes nothing and keeps the last-good generation. A
-  Connection without a published catalogue cannot be enabled.
+- An oversized argument, or a denial by the first gate, sends nothing, records
+  no status, and returns a failed result saying that no call was sent.
+- Any failure after the first gate returns a failed result saying that the
+  outcome may be unknown: the endpoint recheck, credential decryption, a token
+  refresh, a denial by the second gate, the call itself, a timeout, or a
+  cancellation of the call by the in-flight watcher or by shutdown. If the Run's
+  own cancellation or lease check fires first, the Run stops without receiving a
+  result.
+- Every exit after the first gate records an observation: `ready` after a
+  successful call, `needs-auth` after an authentication failure (HTTP 401 or
+  403, or a failed token refresh), and `degraded` after anything else. That
+  includes transport and protocol faults, an oversized or unsupported result, a
+  remote tool error, a missing remote tool, and Run cancellation, lease loss, or
+  shutdown.
+- An observation is recorded only while the call's generation is still the head
+  generation, the head is still enabled at the same activation epoch, and the
+  Grant is still active at the same secret version. A call stopped by revoke,
+  disable, delete, or a replaced credential therefore records nothing.
+- A failed call leaves pinned definitions in place, and other Connection and
+  built-in tools stay callable. The failed result names the local tool, says
+  whether no call was sent or the outcome may be unknown, forbids automatic
+  retry, and tells the final Answer to identify the unfinished part.
+- A failed catalogue refresh publishes nothing and keeps the last-good
+  generation. A Connection without a published catalogue cannot be enabled.
 - Store failures and pin or digest inconsistencies are internal errors and can
   fail the Run; an ordinary remote fault does not.
 - A remote rejection of an older pinned schema is reported as a failed call; the
@@ -663,8 +682,12 @@ row.
   leases, so a zero re-encryption count during a live lease does not prove that
   no old-key ciphertext remains. The rotation guide verifies counts before
   removing a key.
-- Callback query strings must also stay out of upstream proxy and tracing logs,
-  which are outside this application.
+- Re-encryption runs before collection in each pass. If a live Grant names a key
+  that is no longer in the ring, every pass fails at that Grant and only logs a
+  warning, so GC stops for every owner until the key is back in the ring.
+- The Web middleware keeps callback query strings out of the application's own
+  logs. Upstream proxies and external tracing sit outside the application and
+  record those query strings unless the deployment redacts them there.
 - Shutdown stops refresh, maintenance, notifications, and pending authorizations
   before the Run coordinator drains, then cancels outstanding MCP calls. A
   possibly sent effect is never replayed.

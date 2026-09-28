@@ -75,9 +75,9 @@ Blob.
   are HMAC-signed and bound to their Resource and focus; a cursor never crosses
   a Run.
 - Caller attachments and links count against `answer.generation.max_attachments`
-  (6). One Resource's bytes, including a fetched URL body, are capped by
-  `max_attachment_bytes` (100 MiB), and uploads together by
-  `max_total_attachment_bytes` (128 MiB).
+  (6). An upload larger than `max_attachment_bytes` (100 MiB) is refused, and a
+  fetched URL body larger than it fails the direct fetch; uploads together may
+  not exceed `max_total_attachment_bytes` (128 MiB).
 - A public URL is checked for scheme and embedded credentials when it is
   registered, and for DNS and redirect policy when it is fetched. Within a Run,
   one normalized URL resolves to its first successfully admitted snapshot.
@@ -160,25 +160,28 @@ claim:
 
 - HTML: AnyDoc 0.2.4 does not support HTML.
 - PPTX: AnyDoc 0.2.4 can silently drop slides whose parts are missing or have no
-  shapes. Adopting it needs a secure OPC completeness check and typed image
-  binding.
-- CSV: AnyDoc 0.2.4 mis-decodes Shift-JIS without an error, while MarkItDown
-  decodes it but truncates over-wide rows and keeps BOMs and raw cell newlines.
-  Adoption waits for one validated host decoding and normalization policy.
+  shapes, and DlightRAG has no OPC completeness check or typed image binding for
+  PPTX that would detect the loss.
+- CSV: neither engine is complete. AnyDoc 0.2.4 mis-decodes Shift-JIS without an
+  error; MarkItDown decodes it but truncates over-wide rows and keeps BOMs and
+  raw cell newlines. DlightRAG has no host decoding and normalization step for
+  CSV.
 - PDF: AnyDoc returns `Unsupported`, without page metadata, for some PDFs that
   do carry text, such as a tested text-plus-raster page. That stays
   `known_incomplete` rather than adopting partial fallback text, which omits the
   raster content too; physical-page viewing remains available.
 - DOCX: AnyDoc 0.2.4's Markdown omits image links, so images come from its typed
   assets.
-- XLSX: qualified display coverage spans percent, date, currency, custom,
-  merged, and empty cells, cached and uncached formulas, and repeated images
-  across sheets; other number formats and drawing types are unverified.
+- XLSX: the generated fixtures cover percent, date, currency, custom, and merged
+  cells, cached and uncached formulas, and one image repeated across cells and
+  sheets; other number formats and drawing types are unverified.
 
 These are current routes, not permanent bans. `scripts/anydoc_pilot.py`,
-`scripts/docx_integration_bench.py`, and `scripts/format_route_bench.py`
-reproduce the per-format evidence offline; their small samples do not establish
-service latency, arbitrary-document completeness, or untested platforms.
+`scripts/docx_integration_bench.py`, and `scripts/format_route_bench.py` rerun
+the PDF, DOCX, XLSX, and PPTX comparisons offline on generated fixtures. They
+carry only a UTF-8 CSV control, so the CSV findings above have no fixture there.
+Their small samples do not establish service latency, arbitrary-document
+completeness, or untested platforms.
 
 ## Conversion snapshots and recovery
 
@@ -223,9 +226,13 @@ service latency, arbitrary-document completeness, or untested platforms.
   snapshot is adopted verbatim. The bytes, snapshot, and images settle as this
   Run's own Resources under its fence, so cleanup of the origin Run cannot
   invalidate them.
-- Reading an adopted convertible document requires the earlier Run's snapshot;
-  without one, `read` refuses rather than converting again, while `view` still
-  works. A snapshot that does not match its bytes refuses the adoption.
+- Two refusals apply when a handle is first adopted: `read` refuses a
+  convertible document whose earlier Run left no snapshot rather than converting
+  it again, and a snapshot that does not match its bytes refuses the adoption.
+  `view` adopts a document that has no snapshot.
+- An adopted Resource registers like a caller upload: it takes one
+  `answer.generation.max_attachments` slot and counts toward the upload byte
+  limits.
 - A handle the loader does not admit, or a cursor from another Run, is refused
   with guidance to re-attach the document or read it again.
 
