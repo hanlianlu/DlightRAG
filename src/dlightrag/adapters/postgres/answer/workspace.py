@@ -32,12 +32,6 @@ from dlightrag.engine.runtime.workspace import (
     validate_note_path,
 )
 
-#: Serializes same-Session promotions. The row locks below cover the notes that
-#: exist, not the notes that do not, so two Runs of one Session could each admit a note
-#: against a plane neither had seen the other's: the Session row is the one lock they
-#: share. A Session with no row yet (a bind-time migration into a brand-new Session)
-#: has nothing to serialize against, and its write is refused by the note table's own
-#: foreign key instead.
 # An inventory write is two statements whatever the file count. A bash settlement
 # rescans the whole workspace and writes it while the Run and Session rows are
 # locked, so the write deletes only the paths that went away and rewrites only the
@@ -74,6 +68,12 @@ WHERE (inventory.entry_type, inventory.mode, inventory.size_bytes, inventory.con
     (EXCLUDED.entry_type, EXCLUDED.mode, EXCLUDED.size_bytes, EXCLUDED.content_digest)
 """
 
+#: Serializes same-Session promotions. The row locks below cover the notes that
+#: exist, not the notes that do not, so two Runs of one Session could each admit a note
+#: against a plane neither had seen the other's: the Session row is the one lock they
+#: share. A Session with no row yet (a bind-time migration into a brand-new Session)
+#: has nothing to serialize against, and its write is refused by the note table's own
+#: foreign key instead.
 _LOCK_SESSION_FOR_NOTES = """
 SELECT 1
 FROM dlightrag_agent_sessions

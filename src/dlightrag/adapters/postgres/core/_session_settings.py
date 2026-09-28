@@ -1,7 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL session settings derived from the typed configuration."""
 
-from dlightrag.application.config import DlightragConfig
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dlightrag.application.config import DlightragConfig
 
 
 def setting_text(value: str | int | float | bool | None) -> str | None:
