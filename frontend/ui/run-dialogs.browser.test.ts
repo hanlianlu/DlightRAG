@@ -377,6 +377,39 @@ it('does not restore a stale capture over text typed during an in-flight refresh
   expect(document.activeElement).to.equal(after);
 });
 
+it('refetches a followed roster at most once per interval with one trailing refresh', async () => {
+  const originalSetTimeout = window.setTimeout;
+  const timers: Array<{handler: () => void; delay: number}> = [];
+  window.setTimeout = ((handler: TimerHandler, delay?: number) => {
+    timers.push({handler: handler as () => void, delay: delay ?? 0});
+    return timers.length;
+  }) as typeof window.setTimeout;
+  let pages = 0;
+  try {
+    const panel = roster();
+    panel.open(async () => {
+      pages += 1;
+      return {children: [entry('a', 'running')], nextCursor: null};
+    }, {runId: 'run-1'} as NonNullable<Parameters<DlChildrenRoster['open']>[1]>);
+    await waitFor(() => pages === 1);
+
+    panel.refreshIfFollowing('run-1');
+    await waitFor(() => pages === 2);
+    for (let activity = 0; activity < 30; activity += 1) panel.refreshIfFollowing('run-1');
+    panel.refreshIfFollowing('another-run');
+    await new Promise<void>((resolve) => { originalSetTimeout(resolve, 20); });
+
+    expect(pages).to.equal(2, 'activity inside the interval waits for one trailing refresh');
+    const trailing = timers.filter(({delay}) => delay > 0);
+    expect(trailing).to.have.length(1);
+    expect(trailing[0]!.delay).to.be.at.most(1000);
+    trailing[0]!.handler();
+    await waitFor(() => pages === 3);
+  } finally {
+    window.setTimeout = originalSetTimeout;
+  }
+});
+
 it('keeps child B free of child A\'s late steer receipt and busy state', async () => {
   let resolve!: (receipt: {
     runId: string; childSessionId: string; action: string; outcome: string;

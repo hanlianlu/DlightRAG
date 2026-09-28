@@ -1401,6 +1401,89 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
   }
 });
 
+it('announces child activity for child-tool events and the run end, not for every streamed frame', async () => {
+  const originalRequestFrame = window.requestAnimationFrame;
+  const originalCancelFrame = window.cancelAnimationFrame;
+  let nextFrame = 1;
+  const frames = new Map<number, FrameRequestCallback>();
+  window.requestAnimationFrame = (callback: FrameRequestCallback): number => {
+    const id = nextFrame;
+    nextFrame += 1;
+    frames.set(id, callback);
+    return id;
+  };
+  window.cancelAnimationFrame = (id: number): void => { frames.delete(id); };
+  const runFrames = (): void => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((callback) => { callback(performance.now()); });
+  };
+  const conversationId = 'conversation-child-activity';
+  const runId = 'run-child-activity';
+  const chunks = [
+    'id: 1\nevent: tool_start\ndata: {"tool_name":"spawn_agent","call_id":"child-1"}\n\n',
+    'id: 2\nevent: token\ndata: "Deleg"\n\n',
+    'id: 3\nevent: token\ndata: "ated"\n\n',
+    'id: 4\nevent: tool_start\ndata: {"tool_name":"search_corpus","call_id":"search-1"}\n\n',
+    'id: 5\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
+  ];
+  const encoder = new TextEncoder();
+  let chunkIndex = 0;
+  window.fetch = ((input: RequestInfo | URL) => {
+    if (!String(input).endsWith('/events')) return Promise.resolve(new Response('{}', {status: 503}));
+    return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        // Each chunk lands in its own frame batch.
+        runFrames();
+        if (chunkIndex === chunks.length) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(chunks[chunkIndex]));
+        chunkIndex += 1;
+      },
+    }), {status: 200, headers: {'Content-Type': 'text/event-stream'}}));
+  }) as typeof fetch;
+  conversationStore.adoptCreatedConversation({
+    conversationId,
+    title: 'Child activity',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  });
+
+  try {
+    const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+    const activity: string[] = [];
+    feature.addEventListener('dl-child-activity', (event) => {
+      activity.push((event as CustomEvent<{runId: string}>).detail.runId);
+    });
+    feature.view = {
+      kind: 'ready',
+      conversationId,
+      lineage: null,
+      history: [{
+        ...storedTurn(),
+        answerRunId: runId,
+        turnId: 'turn-child-activity',
+        status: 'running',
+        presentation: null,
+      }],
+    };
+    document.body.appendChild(feature);
+
+    await waitFor(() => feature.turns[0]?.state === 'cancelled');
+    runFrames();
+
+    expect(feature.turns[0].streamText).to.equal('Delegated');
+    expect(activity).to.deep.equal([runId, runId]);
+  } finally {
+    window.requestAnimationFrame = originalRequestFrame;
+    window.cancelAnimationFrame = originalCancelFrame;
+  }
+});
+
 it('Message List anchors the completed turn at its latest user question', async () => {
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const earlier: ChatTurnView = {

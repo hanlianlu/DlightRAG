@@ -26,6 +26,13 @@ const CHILD_TOOL_NAMES = new Set([
   'subagent_status',
 ]);
 
+/** An event about a child agent: the only kind that can change the child roster. */
+export function isChildToolEvent(event: AnswerRunEvent): boolean {
+  if (event.kind !== 'tool') return false;
+  const name = (event.payload as {tool_name?: unknown} | null)?.tool_name;
+  return typeof name === 'string' && CHILD_TOOL_NAMES.has(name);
+}
+
 type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 
 export const ANSWER_PHASE_LABELS = {
@@ -105,7 +112,7 @@ export function applyAnswerEvent(
         toolRows,
         progress: text,
         liveStatus: text,
-        sawChildren: turn.sawChildren || CHILD_TOOL_NAMES.has(info.tool_name),
+        sawChildren: turn.sawChildren || isChildToolEvent(event),
         error: '',
       };
     }

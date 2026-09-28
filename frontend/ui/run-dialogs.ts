@@ -15,6 +15,9 @@ import {KeysetPager} from '../lib/paged.ts';
 import {loadOlderControl} from './load-older.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 
+/** A followed roster refetches at most this often while its run streams child activity. */
+const FOLLOW_REFRESH_INTERVAL_MS = 1000;
+
 export interface ContinuationResult {
   query: string | null;
 }
@@ -190,6 +193,8 @@ export class DlChildrenRoster extends LightElement {
   #focusKey: string | null = null;
   #refreshing = false;
   #refreshQueued = false;
+  #lastFollowRefresh = Number.NEGATIVE_INFINITY;
+  #followTimer: ReturnType<typeof setTimeout> | null = null;
   #appendedChildren = 0;
   #pager = new KeysetPager<ChildRosterPage>(
     (cursor, signal) => this.#pageFetcher!(cursor, signal),
@@ -207,11 +212,40 @@ export class DlChildrenRoster extends LightElement {
     });
   }
 
+  override disconnectedCallback(): void {
+    this.#cancelFollowRefresh();
+    super.disconnectedCallback();
+  }
+
+  /** Refresh for child activity of the followed run: at once, then at most once per interval. */
   refreshIfFollowing(runId: string): void {
-    const dialog = this.querySelector<HTMLDialogElement>('dialog');
-    if (!dialog?.open || this.#actions?.runId !== runId) return;
+    if (!this.#following(runId) || this.#followTimer !== null) return;
+    const wait = this.#lastFollowRefresh + FOLLOW_REFRESH_INTERVAL_MS - performance.now();
+    if (wait <= 0) {
+      this.#followRefresh();
+      return;
+    }
+    // One trailing refresh carries every activity inside the interval.
+    this.#followTimer = setTimeout(() => {
+      this.#followTimer = null;
+      if (this.#following(runId)) this.#followRefresh();
+    }, wait);
+  }
+
+  #following(runId: string): boolean {
+    return Boolean(this.querySelector<HTMLDialogElement>('dialog')?.open)
+      && this.#actions?.runId === runId;
+  }
+
+  #followRefresh(): void {
+    this.#lastFollowRefresh = performance.now();
     this.#refreshQueued = true;
     void this.#flushRefresh();
+  }
+
+  #cancelFollowRefresh(): void {
+    if (this.#followTimer !== null) clearTimeout(this.#followTimer);
+    this.#followTimer = null;
   }
 
   async #flushRefresh(): Promise<void> {
@@ -635,6 +669,7 @@ export class DlChildrenRoster extends LightElement {
     this.#actions = null;
     this.#pageFetcher = null;
     this.#refreshQueued = false;
+    this.#cancelFollowRefresh();
     this.#entries = [];
     this.#empty = true;
     this.#failed = false;

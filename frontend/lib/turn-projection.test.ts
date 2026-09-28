@@ -4,7 +4,12 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
 import type {ChatTurnView} from './chat-views.ts';
-import {ANSWER_PHASE_LABELS, answerPhaseLabel, applyAnswerEvent} from './turn-projection.ts';
+import {
+  ANSWER_PHASE_LABELS,
+  answerPhaseLabel,
+  applyAnswerEvent,
+  isChildToolEvent,
+} from './turn-projection.ts';
 
 function turn(overrides: Partial<ChatTurnView> = {}): ChatTurnView {
   return {
@@ -123,4 +128,14 @@ test('done settles succeeded, cancelled, and malformed payloads', () => {
 
   const malformed = applyAnswerEvent(turn(), {kind: 'done', payload: {status: 'running'}}, 1000);
   assert.equal(malformed.state, 'failed');
+});
+
+test('only child-agent tool events count as child activity', () => {
+  const tool = (name: unknown) => ({kind: 'tool' as const, eventType: 'tool_progress' as const, payload: {tool_name: name}});
+  assert.equal(isChildToolEvent(tool('wait_subagent')), true);
+  assert.equal(isChildToolEvent(tool('spawn_agent')), true);
+  assert.equal(isChildToolEvent(tool('search_corpus')), false);
+  assert.equal(isChildToolEvent(tool(42)), false);
+  assert.equal(isChildToolEvent({kind: 'token', text: 'spawn_agent'}), false);
+  assert.equal(isChildToolEvent({kind: 'tool', eventType: 'tool_end', payload: null}), false);
 });

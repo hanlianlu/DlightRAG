@@ -20,7 +20,7 @@ import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {localizedErrorKind} from '../lib/run-errors.ts';
-import {applyAnswerEvent} from '../lib/turn-projection.ts';
+import {applyAnswerEvent, isChildToolEvent} from '../lib/turn-projection.ts';
 import {
   RunController,
   type AnswerRunEvent,
@@ -797,7 +797,10 @@ export class DlChatFeature extends LightElement {
     const nextTurns = [...this.turns];
     nextTurns[turnIndex] = projected;
     this.turns = nextTurns;
-    if (projected.sawChildren && projected.runId) {
+    // Tokens stream every frame; only child-tool events and the run's end move the roster.
+    const childActivity = events.some((event) => isChildToolEvent(event)
+      || (projected.sawChildren && (event.kind === 'done' || event.kind === 'error')));
+    if (projected.runId && childActivity) {
       this.dispatchEvent(new CustomEvent<ChatChildActivityDetail>('dl-child-activity', {
         bubbles: true,
         composed: true,
