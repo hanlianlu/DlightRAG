@@ -6,7 +6,7 @@ import datetime
 import hashlib
 import hmac
 import json
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -29,7 +29,8 @@ from dlightrag.application.web_conversations import (
     ConversationSummary,
 )
 from tests.config_helpers import mutate_config
-from tests.unit.conftest import answer_capability_view
+from tests.support.application_double import application_double
+from tests.unit.conftest import answer_capabilities
 from tests.unit.web.answer_run_fixtures import FakeAnswers, web_answer_submission
 
 _CID = "00000000-0000-0000-0000-000000000001"
@@ -41,8 +42,16 @@ _CID = "00000000-0000-0000-0000-000000000001"
 
 
 @pytest.fixture
-def conversation_service() -> AsyncMock:
-    service = AsyncMock()
+def application(test_config: DlightragConfig) -> Any:
+    application = application_double(test_config)
+    application.answers.capabilities.return_value = answer_capabilities()
+    return application
+
+
+@pytest.fixture
+def conversation_service(application: Any) -> Any:
+    """The Application's autospecced WebConversationService, as the routes reach it."""
+    service = application.web_conversations
     now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
     summary = {
         "conversation_id": _CID,
@@ -91,16 +100,11 @@ def conversation_service() -> AsyncMock:
 
 
 @pytest.fixture
-async def conversation_client(conversation_service: AsyncMock):
-    application = create_app(include_web_app=True)
-    application.state.application = AsyncMock()
-    application.state.application.web_conversations = conversation_service
-    application.state.application.config = DlightragConfig()
-    application.state.application.answers.capabilities = answer_capability_view().read
-    application.state.application.corpora.alist_workspace_records.return_value = [
-        {"workspace": "default"}
-    ]
-    transport = ASGITransport(app=application)
+async def conversation_client(application: Any, conversation_service: AsyncMock):
+    application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
+    app = create_app(include_web_app=True)
+    app.state.application = application
+    transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
@@ -108,15 +112,14 @@ async def conversation_client(conversation_service: AsyncMock):
 @pytest.fixture
 async def cookie_conversation_client(
     test_config: DlightragConfig,
+    application: Any,
     conversation_service: AsyncMock,
 ):
     mutate_config(test_config, "access.auth_mode", "simple")
     mutate_config(test_config, "access.api_token", "secret-token")
-    application = create_app(include_web_app=True)
-    application.state.application = AsyncMock(config=test_config)
-    application.state.application.web_conversations = conversation_service
-    application.state.application.answers.capabilities = answer_capability_view().read
-    transport = ASGITransport(app=application)
+    app = create_app(include_web_app=True)
+    app.state.application = application
+    transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport,
         base_url="https://app.example.com",
@@ -556,6 +559,7 @@ async def test_cookie_web_mutations_reject_missing_origin(
     ),
 )
 async def test_store_unavailability_returns_retryable_503(
+    test_config: DlightragConfig,
     method: str,
     path: str,
     store_method: str,
@@ -574,7 +578,7 @@ async def test_store_unavailability_returns_retryable_503(
         max_attachments=6,
         cursor_secret=b"unit-test-cursor-secret",
     )
-    application.state.application = SimpleNamespace(web_conversations=service)
+    application.state.application = application_double(test_config, web_conversations=service)
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.request(method, path)
@@ -634,6 +638,7 @@ async def test_postgres_adapter_translates_shutdown_errors(shutdown_error: Excep
     ),
 )
 async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailability(
+    test_config: DlightragConfig,
     store_error: Exception,
 ) -> None:
     from dlightrag.application.web_conversations import WebConversationService
@@ -647,7 +652,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
         max_attachments=6,
         cursor_secret=b"unit-test-cursor-secret",
     )
-    application.state.application = SimpleNamespace(web_conversations=service)
+    application.state.application = application_double(test_config, web_conversations=service)
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         with pytest.raises(type(store_error), match=str(store_error)):
