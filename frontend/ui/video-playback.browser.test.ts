@@ -11,7 +11,7 @@ defineDesignSystemElements();
 const url = 'https://www.youtube.com/watch?v=abcdefghijk';
 const wire = {
   answer_text: `Watch ${url}`,
-  parts: [{type: 'markdown', text: '', html: `<p><a href="${url}" target="_blank">Watch this</a></p>`, artifact: null, evidence_image: null, card: null, inline: false}],
+  parts: [{type: 'markdown', text: '', html: `<p><a href="${url}" target="_blank">Watch this</a></p>`, artifact: null, evidence_image: null, inline: false}],
   video_links: [{url, provider: 'YouTube', player_domains: ['www.youtube-nocookie.com', 'youtube.com']}],
   sources: [], evidence_images: [], link_cards: [], artifacts: [],
   artifact_outcome: {status: 'complete', issues: []},

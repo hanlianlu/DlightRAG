@@ -511,7 +511,6 @@ export class DlApp extends LightElement {
     if (event.detail.action === 'children') {
       const runId = event.detail.runId;
       this.querySelector<DlChildrenRoster>('dl-children-roster')?.open(
-        () => chat.loadRunChildren(runId),
         (cursor, signal) => chat.loadRunChildrenPage(runId, cursor, signal),
         {
           runId,

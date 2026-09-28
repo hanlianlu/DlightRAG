@@ -35,9 +35,9 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it('legacy fetcher renders every child without a paging control', async () => {
+it('a single page renders every child without a paging control', async () => {
   const panel = roster();
-  panel.open(async () => [entry('a'), entry('b')]);
+  panel.open(async () => ({children: [entry('a'), entry('b')], nextCursor: null}));
   await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 2);
 
   expect([...panel.querySelectorAll('li[role="listitem"]')].map((li) => li.textContent?.trim()))
@@ -50,7 +50,6 @@ it('paged roster renders the newest page and appends older pages with dedup', as
   let olderRequests = 0;
   const panel = roster();
   panel.open(
-    async () => [entry('newest')],
     async (cursor) => {
       if (cursor === null) {
         return {children: [entry('newest')], nextCursor: 'older-1'};
@@ -91,7 +90,6 @@ it('older-page failure keeps loaded rows and stays retryable', async () => {
   let attempts = 0;
   const panel = roster();
   panel.open(
-    async () => [entry('newest')],
     async (cursor) => {
       if (cursor === null) {
         return {children: [entry('newest')], nextCursor: 'older-1'};
@@ -121,7 +119,6 @@ it('refresh resets the traversal and rejects a late older response', async () =>
   let firstPage = 0;
   const panel = roster();
   panel.open(
-    async () => [entry('fresh')],
     async (cursor) => {
       if (cursor === null) {
         firstPage += 1;
@@ -150,7 +147,6 @@ it('closing the dialog aborts in-flight pages and resets paging state', async ()
   const older = deferredPage();
   const panel = roster();
   panel.open(
-    async () => [entry('newest')],
     async (cursor) => (cursor === null
       ? {children: [entry('newest')], nextCursor: 'older-1'}
       : older.promise),
@@ -206,7 +202,6 @@ it('selecting a child shows lineage and posts a queued steer', async () => {
   const steered: string[] = [];
   const panel = roster();
   panel.open(
-    async () => [entry('newest', 'running')],
     async () => ({children: [entry('newest', 'running')], nextCursor: null}),
     {
       runId: 'run-1',
@@ -240,7 +235,6 @@ it('selecting a child shows lineage and posts a queued steer', async () => {
 it('rejected terminal steer stays explicit and does not look like success', async () => {
   const panel = roster();
   panel.open(
-    async () => [entry('newest', 'running')],
     async () => ({children: [entry('newest', 'running')], nextCursor: null}),
     {
       runId: 'run-1',
@@ -302,12 +296,11 @@ function observationFor(id: string, status = 'running'): ChildObservation {
 }
 
 async function openInteractive(
-  control: NonNullable<Parameters<DlChildrenRoster['open']>[2]>['control'],
-  reply?: NonNullable<Parameters<DlChildrenRoster['open']>[2]>['reply'],
+  control: NonNullable<Parameters<DlChildrenRoster['open']>[1]>['control'],
+  reply?: NonNullable<Parameters<DlChildrenRoster['open']>[1]>['reply'],
 ): Promise<DlChildrenRoster> {
   const panel = roster();
   panel.open(
-    async () => [entry('a', 'running'), entry('b', 'running')],
     async () => ({children: [entry('a', 'running'), entry('b', 'running')], nextCursor: null}),
     {
       runId: 'run-1',
@@ -326,7 +319,6 @@ it('preserves steer draft and focus across an SSE observation refresh', async ()
   let observes = 0;
   const panel = roster();
   panel.open(
-    async () => [entry('a', 'running'), entry('b', 'running')],
     async () => ({children: [entry('a', 'running'), entry('b', 'running')], nextCursor: null}),
     {
       runId: 'run-1',
@@ -364,7 +356,6 @@ it('does not restore a stale capture over text typed during an in-flight refresh
   let block = false;
   const panel = roster();
   panel.open(
-    async () => [entry('a', 'running')],
     async () => ({children: [entry('a', 'running')], nextCursor: null}),
     {
       runId: 'run-1',
@@ -461,7 +452,6 @@ it('does not attach a late receipt to a closed and reopened roster dialog', asyn
   await until(() => panel.querySelectorAll('li[role="listitem"]').length === 0);
 
   panel.open(
-    async () => [entry('a', 'running'), entry('b', 'running')],
     async () => ({children: [entry('a', 'running'), entry('b', 'running')], nextCursor: null}),
     {
       runId: 'run-1',
@@ -547,13 +537,13 @@ it('does not leak a steer draft from child A onto child B', async () => {
 });
 
 async function changingObservation(
-  control: NonNullable<Parameters<DlChildrenRoster['open']>[2]>['control'],
-  reply?: NonNullable<Parameters<DlChildrenRoster['open']>[2]>['reply'],
+  control: NonNullable<Parameters<DlChildrenRoster['open']>[1]>['control'],
+  reply?: NonNullable<Parameters<DlChildrenRoster['open']>[1]>['reply'],
   status = 'running',
 ) {
   let current = observationFor('a', status);
   const panel = roster();
-  panel.open(async () => [current.child], undefined, {
+  panel.open(async () => ({children: [current.child], nextCursor: null}), {
     runId: 'run-1', observe: async () => current, control, reply,
   });
   await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
@@ -683,7 +673,7 @@ for (const action of ['continue', 'reply'] as const) {
       }
       return commandReceipt(action, action === 'continue' ? 'op-b' : 'op-a', action === 'reply' ? 'req-a' : null);
     };
-    panel.open(async () => [current.child], undefined, {
+    panel.open(async () => ({children: [current.child], nextCursor: null}), {
       runId: 'run-1', observe: async () => current, control: send, reply: send,
     });
     await until(() => Boolean(panel.querySelector('[data-child-session="a"]')));
@@ -734,4 +724,39 @@ it('late request rejection cannot replace the current request outcome or draft',
   expect(b.value).to.equal('B');
   expect(b.disabled).to.equal(false);
   expect(state.panel.textContent).to.not.contain('parent run is terminal');
+});
+
+it('a failed first page says the children could not be loaded', async () => {
+  const panel = roster();
+  panel.open(async () => { throw new Error('unavailable'); });
+  await waitFor(() => Boolean(panel.querySelector('.roster-error')));
+
+  expect(panel.querySelector('.roster-error')?.textContent?.trim())
+    .to.equal('Child agents could not be loaded.');
+  expect(panel.querySelectorAll('li[role="listitem"]').length).to.equal(0);
+});
+
+it('closing forgets the run so a queued refresh never reloads it', async () => {
+  type Page = {children: ChildRosterEntry[]; nextCursor: string | null};
+  const calls: Array<{resolve: (page: Page) => void}> = [];
+  const fetchA = (_cursor: string | null, signal?: AbortSignal): Promise<Page> =>
+    new Promise<Page>((resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      calls.push({resolve});
+    });
+  const panel = roster();
+  // Only the followed run id matters here; the dialog never observes a child.
+  panel.open(fetchA, {runId: 'run-a'} as NonNullable<Parameters<DlChildrenRoster['open']>[1]>);
+  await waitFor(() => calls.length === 1);
+  calls[0].resolve({children: [entry('a1')], nextCursor: null});
+  await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 1);
+
+  panel.refreshIfFollowing('run-a');
+  await waitFor(() => calls.length === 2);
+  panel.refreshIfFollowing('run-a');
+  panel.querySelector('dialog')!.close();
+  for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(calls.length).to.equal(2);
+  expect(panel.querySelectorAll('li[role="listitem"]').length).to.equal(0);
 });

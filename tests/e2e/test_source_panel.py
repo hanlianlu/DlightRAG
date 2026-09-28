@@ -55,7 +55,6 @@ def _source_presentation_domain(
                 "html": _CITED_HTML,
                 "artifact": None,
                 "evidenceImage": None,
-                "card": None,
                 "inline": False,
             }
         ],
@@ -97,7 +96,6 @@ def _source_presentation_wire(
                 "html": _CITED_HTML,
                 "artifact": None,
                 "evidence_image": None,
-                "card": None,
                 "inline": False,
             }
         ],
@@ -298,7 +296,6 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
                             "user_attachments": [],
                             "presentation": presentation_wire,
                             "usage": {},
-                            "evidence": {},
                             "error_kind": None,
                             "error_message": None,
                             "created_at": timestamp,

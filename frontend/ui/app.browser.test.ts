@@ -379,7 +379,7 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
     answerText: 'Stored answer.',
     parts: [{
       type: 'markdown', text: 'Stored answer.', html: '<p>Stored answer.</p>',
-      artifact: null, evidenceImage: null, card: null, inline: false,
+      artifact: null, evidenceImage: null, inline: false,
     }],
     sources: [], evidenceImages: [], linkCards: [], artifacts: [],
     artifactOutcome: {status: 'complete', issues: []},
@@ -412,7 +412,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
     parts: [{
       type: 'markdown', text: 'See [1].',
       html: '<p>See <cite class="citation-badge" data-ref="1">1</cite>.</p>',
-      artifact: null, evidence_image: null, card: null, inline: false,
+      artifact: null, evidence_image: null, inline: false,
     }],
     sources: [{
       id: '1', title: 'Source', source_url: null, download_url: null, chunks: [],
@@ -426,7 +426,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
     parts: [{
       type: 'markdown', text: 'See [1].',
       html: '<p>See <cite class="citation-badge" data-ref="1">1</cite>.</p>',
-      artifact: null, evidenceImage: null, card: null, inline: false,
+      artifact: null, evidenceImage: null, inline: false,
     }],
     sources: [{
       id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
@@ -485,7 +485,7 @@ it('preserves a wide desktop Canvas when Sources opens and restores its citation
     parts: [{
       type: 'markdown', text: 'See [1].',
       html: '<p>See <cite class="citation-badge" data-ref="1" tabindex="0">1</cite>.</p>',
-      artifact: null, evidence_image: null, card: null, inline: false,
+      artifact: null, evidence_image: null, inline: false,
     }],
     sources: [{
       id: '1', title: 'Source', source_url: null, download_url: null, chunks: [],
@@ -499,7 +499,7 @@ it('preserves a wide desktop Canvas when Sources opens and restores its citation
     parts: [{
       type: 'markdown', text: 'See [1].',
       html: '<p>See <cite class="citation-badge" data-ref="1" tabindex="0">1</cite>.</p>',
-      artifact: null, evidenceImage: null, card: null, inline: false,
+      artifact: null, evidenceImage: null, inline: false,
     }],
     sources: [{
       id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],

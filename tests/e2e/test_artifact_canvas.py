@@ -76,7 +76,6 @@ def _presentation_wire(artifact: dict[str, object]) -> dict[str, object]:
                 "html": "<p>Delivery note.</p>",
                 "artifact": None,
                 "evidence_image": None,
-                "card": None,
                 "inline": False,
             },
             {
@@ -85,7 +84,6 @@ def _presentation_wire(artifact: dict[str, object]) -> dict[str, object]:
                 "html": "",
                 "artifact": artifact,
                 "evidence_image": None,
-                "card": None,
                 "inline": False,
             },
         ],
@@ -109,7 +107,6 @@ def _turn(presentation: dict[str, object]) -> dict[str, object]:
         "user_attachments": [],
         "presentation": presentation,
         "usage": {},
-        "evidence": {},
         "error_kind": None,
         "error_message": None,
         "created_at": _TIMESTAMP,
@@ -264,7 +261,6 @@ def test_markdown_artifact_uses_the_general_artifact_canvas(page: Page) -> None:
                         "html": "<h1>Quarterly review</h1><p>Long body.</p>",
                         "artifact": None,
                         "evidence_image": None,
-                        "card": None,
                         "inline": False,
                     }
                 ],
@@ -323,7 +319,6 @@ def test_mobile_artifact_canvas_is_full_bleed_and_restores_focus(
                         "html": "<h1>Quarterly review</h1><p>Long body.</p>",
                         "artifact": None,
                         "evidence_image": None,
-                        "card": None,
                         "inline": False,
                     }
                 ],
@@ -404,7 +399,6 @@ def test_markdown_artifact_citation_opens_its_source_beside_the_canvas(page: Pag
                         ),
                         "artifact": None,
                         "evidence_image": None,
-                        "card": None,
                         "inline": False,
                     }
                 ],
@@ -473,7 +467,6 @@ def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) 
                         "html": "<p>Report body.</p>",
                         "artifact": None,
                         "evidence_image": None,
-                        "card": None,
                         "inline": False,
                     }
                 ],

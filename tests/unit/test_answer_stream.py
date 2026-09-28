@@ -204,9 +204,9 @@ def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() 
     assert set(canonical) == {"status", "result"}
     presentation = browser["presentation"]
     assert canonical["result"]["answer"] == presentation["answer_text"]
-    assert set(browser) == {"status", "presentation", "usage", "evidence"}
+    # Retrieval counts stay on the canonical result; the browser shows published sources.
+    assert set(browser) == {"status", "presentation", "usage"}
     assert browser["usage"] == canonical["result"].get("usage", {})
-    assert browser["evidence"] == canonical["result"].get("evidence", {})
     assert "<" in presentation["parts"][0]["html"]
     assert set(presentation) == {
         "answer_text",

@@ -66,7 +66,6 @@ it('chat message list has no new serious axe violations', async () => {
         html: '<p>Retrieval finds passages.</p>',
         artifact: null,
         evidenceImage: null,
-        card: null,
         inline: false,
       }],
       sources: [],

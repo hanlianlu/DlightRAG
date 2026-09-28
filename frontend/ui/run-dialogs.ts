@@ -160,12 +160,8 @@ function editorKind(form: HTMLFormElement): ChildEditorKind | null {
 }
 
 export class DlChildrenRoster extends LightElement {
-  static override properties = {fetcher: {state: true}};
-  declare fetcher: (() => Promise<ChildRosterEntry[]>) | null;
-
   constructor() {
     super();
-    this.fetcher = null;
     updateWhenLocaleChanges(this);
   }
 
@@ -195,14 +191,9 @@ export class DlChildrenRoster extends LightElement {
     () => this.requestUpdate(),
   );
 
-  open(
-    fetcher: () => Promise<ChildRosterEntry[]>,
-    pageFetcher?: ChildRosterPageFetcher,
-    actions?: ChildRosterActions,
-  ): void {
+  open(pageFetcher: ChildRosterPageFetcher, actions?: ChildRosterActions): void {
     this.#dialogGeneration += 1;
-    this.fetcher = fetcher;
-    this.#pageFetcher = pageFetcher ?? null;
+    this.#pageFetcher = pageFetcher;
     this.#actions = actions ?? null;
     void this.updateComplete.then(() => {
       const dialog = this.querySelector<HTMLDialogElement>('dialog');
@@ -241,23 +232,9 @@ export class DlChildrenRoster extends LightElement {
     this.#failed = false;
     this.#pager.reset(null);
     this.#selectedId = selected;
-    if (this.#pageFetcher) {
-      await this.#loadFirstPage();
-      await this.#restoreSelection(true);
-      return;
-    }
-    let children: ChildRosterEntry[] = [];
-    if (this.fetcher) {
-      try {
-        children = await this.fetcher();
-      } catch {
-        children = [];
-      }
-    }
-    this.#entries = children;
-    this.#empty = children.length === 0;
+    if (!this.#pageFetcher) return;
+    await this.#loadFirstPage();
     await this.#restoreSelection(true);
-    this.requestUpdate();
   }
 
   async #loadFirstPage(): Promise<void> {
@@ -684,6 +661,8 @@ export class DlChildrenRoster extends LightElement {
     this.#invalidate();
     this.#selectedId = null;
     this.#actions = null;
+    this.#pageFetcher = null;
+    this.#refreshQueued = false;
     this.#entries = [];
     this.#empty = true;
     this.#failed = false;

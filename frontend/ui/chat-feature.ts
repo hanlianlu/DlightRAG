@@ -12,7 +12,6 @@ import {
   forkAnswerRun,
   controlAnswerChild,
   getAnswerRunChild,
-  getAnswerRunChildren,
   getAnswerRunChildrenPage,
   replyAnswerChild,
   steerAnswerRun,
@@ -213,14 +212,6 @@ export class DlChatFeature extends LightElement {
 
   focusComposer(): void {
     this.#composer()?.focusInput();
-  }
-
-  async loadRunChildren(runId: string) {
-    try {
-      return await getAnswerRunChildren(runId);
-    } catch {
-      return [];
-    }
   }
 
   async loadRunChildrenPage(runId: string, cursor: string | null, signal?: AbortSignal) {

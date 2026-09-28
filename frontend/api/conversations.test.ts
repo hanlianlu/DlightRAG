@@ -8,7 +8,6 @@ import {
   forkAnswerRun,
   controlAnswerChild,
   getAnswerRunChild,
-  getAnswerRunChildren,
   getAnswerRunChildrenPage,
   getConversationHistory,
   listConversations,
@@ -123,7 +122,6 @@ test('continuation posts one submission id to the selected branch operation', as
         user_attachments: [],
         presentation: null,
         usage: {},
-        evidence: {},
         error_kind: null,
         error_message: null,
         created_at: '2026-08-23T00:00:00Z',
@@ -152,13 +150,13 @@ test('steer and child roster use their Answer-specific routes', async () => {
   };
 
   await steerAnswerRun('run-1', 'focus');
-  const children = await getAnswerRunChildren('run-1');
+  const page = await getAnswerRunChildrenPage('run-1');
 
   assert.deepEqual(paths, [
     '/web/api/answer/run-1/steer',
     '/web/api/answer/run-1/children',
   ]);
-  assert.equal(children[0]?.status, 'running');
+  assert.equal(page.children[0]?.status, 'running');
 });
 
 test('child controls and replies carry durable submission identity', async () => {

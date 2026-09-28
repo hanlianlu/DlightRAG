@@ -136,12 +136,11 @@ class PresentationLinkCard(ClientContractModel):
 
 
 class PresentationPart(ClientContractModel):
-    type: Literal["markdown", "artifact", "evidence_image", "link_card"]
+    type: Literal["markdown", "artifact", "evidence_image"]
     text: str = ""
     html: str = ""
     artifact: PresentationArtifact | None = None
     evidence_image: PresentationImage | None = None
-    card: PresentationLinkCard | None = None
     inline: bool = False
     # Server-created placeholder in the full Markdown HTML, not a source offset.
     slot: int | None = Field(default=None, ge=0)

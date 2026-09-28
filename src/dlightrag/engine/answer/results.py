@@ -84,11 +84,10 @@ class EvidenceImage:
 
 @dataclass(frozen=True, slots=True)
 class AnswerPart:
-    type: Literal["markdown", "artifact", "evidence_image", "link_card"]
+    type: Literal["markdown", "artifact", "evidence_image"]
     text: str = ""
     artifact: AnswerArtifact | None = None
     evidence_image: EvidenceImage | None = None
-    card: dict[str, Any] | None = None
     inline: bool = False
     target: str = ""
     slot: int | None = None
@@ -495,7 +494,6 @@ def _part_models(values: Sequence[Mapping[str, Any]]) -> list[AnswerPart]:
                     if isinstance(value.get("evidence_image"), Mapping)
                     else None
                 ),
-                card=(dict(value["card"]) if isinstance(value.get("card"), Mapping) else None),
                 inline=bool(value.get("inline")),
                 target=str(value.get("target") or ""),
                 slot=int(value["slot"]) if value.get("slot") is not None else None,

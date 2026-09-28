@@ -174,8 +174,10 @@ This does not bypass a platform's refusal: an HTTP 412 remains an ordinary link.
   authorize rewriting code or title text: only that DOM anchor is replaced.
   Repeated links share one page read but can each display a card. Citation controls
   retain their source-opening action; source chunks never run this upgrade. A
-  matching source URL does not exclude a prose recommendation. Older explicit
-  `link_card` parts remain readable, and metadata-free answers remain plain links.
+  matching source URL does not exclude a prose recommendation. Parts are derived
+  when an answer is read and never stored, so the explicit `link_card` part type
+  (briefly produced before v2.0.12) is gone; stored card metadata still renders
+  through this upgrade, and metadata-free answers remain plain links.
 - **Typed resources do not split the grammar.** The browser parses the complete
   answer once, placing Artifact and Evidence Image tokens through server-created
   span placeholders. Typed parts carry a nonnegative `slot` identity; Lit mounts

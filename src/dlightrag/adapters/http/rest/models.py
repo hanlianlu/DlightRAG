@@ -176,11 +176,10 @@ class LinkCardResponse(ClientContractModel):
 class AnswerPartResponse(ClientContractModel):
     """Whole Markdown followed by resource placements, identified by target and slot."""
 
-    type: Literal["markdown", "artifact", "evidence_image", "link_card"]
+    type: Literal["markdown", "artifact", "evidence_image"]
     text: str = ""
     artifact: AnswerArtifactResponse | None = None
     evidence_image: EvidenceImageResponse | None = None
-    card: LinkCardResponse | None = None
     inline: bool = False
     target: str = ""
     slot: int | None = Field(default=None, ge=0)

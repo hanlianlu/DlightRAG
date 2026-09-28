@@ -13,7 +13,7 @@ const cards = [card('https://example.com/x'), card('https://example.com/y'), car
 function presentation(text: string, html: string): AnswerPresentation {
   return {
     answerText: text,
-    parts: [{type: 'markdown', text, html, artifact: null, evidenceImage: null, card: null, inline: false}],
+    parts: [{type: 'markdown', text, html, artifact: null, evidenceImage: null, inline: false}],
     linkCards: cards, sources: [], evidenceImages: [], artifacts: [],
     artifactOutcome: {status: 'complete', issues: []},
   };
@@ -117,7 +117,7 @@ it('isolates typed thumbnails and cards from prose image and link styles', async
     }
     const image = {id: 'shot', chunkId: '', sourceRef: '', url: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', thumbnailUrl: '', label: 'Shot', answerImageSent: true};
     const value = presentation('Photo', '<p><span class="answer-resource-slot-0"></span> <a href="https://example.com/x">film</a></p>');
-    value.parts.push({type: 'evidence_image', text: '', html: '', artifact: null, evidenceImage: image, card: null, inline: true, slot: 0});
+    value.parts.push({type: 'evidence_image', text: '', html: '', artifact: null, evidenceImage: image, inline: true, slot: 0});
     value.linkCards = [{...cards[0], image: 'https://example.com/cover.png'}];
     const element = await mount(value);
     const thumbnail = element.querySelector<HTMLImageElement>('[data-answer-image] img')!;

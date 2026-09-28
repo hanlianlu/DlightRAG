@@ -45,7 +45,6 @@
         "html": "<p><code>before [quoted](artifact:clip.mp4) https://example.com/x after</code></p>\n<p><span class=\"answer-resource-slot-0\"></span> and <a href=\"https://example.com/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com/x</a>.</p>\n<p><span class=\"answer-resource-slot-1\"></span></p>\n<ul>\n<li><span class=\"answer-resource-slot-2\"></span></li>\n</ul>\n<blockquote>\n<p><code>https://example.com/x</code> <a href=\"https://example.com/y\" title=\"`https://example.com/x`\" target=\"_blank\" rel=\"noopener noreferrer\">ordinary</a></p>\n</blockquote>\n",
         "artifact": null,
         "evidence_image": null,
-        "card": null,
         "inline": false,
         "slot": null
       },
@@ -71,7 +70,6 @@
           "issue": null
         },
         "evidence_image": null,
-        "card": null,
         "inline": false,
         "slot": 0
       },
@@ -97,7 +95,6 @@
           "issue": null
         },
         "evidence_image": null,
-        "card": null,
         "inline": true,
         "slot": 1
       },
@@ -115,7 +112,6 @@
           "label": "Evidence",
           "answer_image_sent": true
         },
-        "card": null,
         "inline": true,
         "slot": 2
       }

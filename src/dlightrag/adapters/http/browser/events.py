@@ -23,7 +23,6 @@ class AnswerDoneEvent(ClientContractModel):
     status: Literal["succeeded", "cancelled"]
     presentation: AnswerPresentation | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
-    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerErrorEvent(ClientContractModel):

@@ -153,12 +153,11 @@ export type LinkCard = v.InferOutput<typeof linkCard>;
 
 const presentationPart = v.pipe(
   v.object({
-    type: v.picklist(['markdown', 'artifact', 'evidence_image', 'link_card']),
+    type: v.picklist(['markdown', 'artifact', 'evidence_image']),
     text: v.string(),
     html: v.string(),
     artifact: v.nullable(answerArtifact),
     evidence_image: v.nullable(presentationImage),
-    card: v.nullable(linkCard),
     inline: v.boolean(),
     slot: v.optional(v.nullable(v.pipe(v.number(), v.integer(), v.minValue(0)))),
   }),
@@ -168,7 +167,6 @@ const presentationPart = v.pipe(
     html: w.html,
     artifact: w.artifact,
     evidenceImage: w.evidence_image,
-    card: w.card,
     inline: w.inline,
     ...(w.slot == null ? {} : {slot: w.slot}),
   })),
@@ -589,14 +587,6 @@ export async function steerAnswerRun(
   });
   const schema = v.record(v.string(), v.unknown());
   return parseWire(response, schema, makeError, 'Failed to steer the answer');
-}
-
-export async function getAnswerRunChildren(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<AgentChildStatus[]> {
-  const page = await getAnswerRunChildrenPage(runId, null, signal);
-  return page.children;
 }
 
 export async function getAnswerRunChildrenPage(

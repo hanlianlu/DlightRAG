@@ -31,7 +31,6 @@ def _presentation_wire() -> dict[str, object]:
                 "html": f'<p><a href="{_VIDEO_URL}" target="_blank">Watch this</a></p>',
                 "artifact": None,
                 "evidence_image": None,
-                "card": None,
                 "inline": False,
             }
         ],
@@ -63,7 +62,6 @@ def _turn(presentation: dict[str, object]) -> dict[str, object]:
         "user_attachments": [],
         "presentation": presentation,
         "usage": {},
-        "evidence": {},
         "error_kind": None,
         "error_message": None,
         "created_at": _TIMESTAMP,

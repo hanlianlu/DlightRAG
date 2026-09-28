@@ -133,7 +133,6 @@ def project_conversation_turn(
         ],
         presentation=presentation,
         usage=dict((run.result or {}).get("usage") or {}),
-        evidence=dict((run.result or {}).get("evidence") or {}),
         error_kind=run.error_kind,
         error_message=run.error_message,
         created_at=turn.created_at,

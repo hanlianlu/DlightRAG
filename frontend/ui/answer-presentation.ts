@@ -153,16 +153,6 @@ export class AnswerPresentationElement extends LightElement {
       return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidenceImage)}</div>`;
     }
     if (part.type === 'artifact' && part.artifact) return this.#artifact(part.artifact, part.inline);
-    if (part.type === 'link_card' && part.card) {
-      const video = this.presentation?.videoLinks?.some(
-        (item) => safeExternalHttpHref(item.url) === safeExternalHttpHref(part.card!.url),
-      );
-      return this.#videoLink(
-        part.card.url,
-        video ? this.#videoCardLabel(part.card) : this.#linkCard(part.card),
-        video ? part.card.image || '' : '',
-      );
-    }
     return nothing;
   }
 

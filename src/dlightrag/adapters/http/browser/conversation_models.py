@@ -49,7 +49,6 @@ class ConversationTurn(ClientContractModel):
     user_attachments: list[ConversationAttachmentReference] = Field(default_factory=list)
     presentation: AnswerPresentation | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
-    evidence: dict[str, Any] = Field(default_factory=dict)
     error_kind: str | None = None
     error_message: str | None = None
     created_at: datetime.datetime
