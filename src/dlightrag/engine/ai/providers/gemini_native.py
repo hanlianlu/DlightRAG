@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 from typing import Any
 
 from google import genai
@@ -21,6 +22,7 @@ from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
     capture_stream_usage,
+    closing_stream,
     usage_to_dict,
 )
 from dlightrag.engine.ai.structured import json_schema_from_response_format
@@ -402,37 +404,38 @@ class GeminiProvider(CompletionProvider):
         calls: list[ToolCall] = []
         usage: dict[str, int] | None = None
         finish_reason: Any = None
-        async for chunk in response:
-            parsed_usage = _gemini_usage(chunk)
-            if parsed_usage is not None:
-                usage = parsed_usage
-            candidates = getattr(chunk, "candidates", None) or ()
-            if not candidates:
-                continue
-            candidate = candidates[0]
-            if getattr(candidate, "finish_reason", None) is not None:
-                finish_reason = candidate.finish_reason
-            parts = getattr(getattr(candidate, "content", None), "parts", None) or ()
-            for part in parts:
-                text = getattr(part, "text", None)
-                if isinstance(text, str) and text:
-                    if getattr(part, "thought", False):
-                        reasoning_parts.append(text)
-                    else:
-                        text_parts.append(text)
-                        await emit_text(text)
-                function_call = getattr(part, "function_call", None)
-                if function_call is None:
+        async with closing_stream(response):
+            async for chunk in response:
+                parsed_usage = _gemini_usage(chunk)
+                if parsed_usage is not None:
+                    usage = parsed_usage
+                candidates = getattr(chunk, "candidates", None) or ()
+                if not candidates:
                     continue
-                index = len(calls)
-                calls.append(
-                    ToolCall(
-                        id=str(getattr(function_call, "id", None) or f"gemini-{index}"),
-                        name=str(getattr(function_call, "name", "") or ""),
-                        arguments=dict(getattr(function_call, "args", None) or {}),
-                        thought_signature=getattr(part, "thought_signature", None),
+                candidate = candidates[0]
+                if getattr(candidate, "finish_reason", None) is not None:
+                    finish_reason = candidate.finish_reason
+                parts = getattr(getattr(candidate, "content", None), "parts", None) or ()
+                for part in parts:
+                    text = getattr(part, "text", None)
+                    if isinstance(text, str) and text:
+                        if getattr(part, "thought", False):
+                            reasoning_parts.append(text)
+                        else:
+                            text_parts.append(text)
+                            await emit_text(text)
+                    function_call = getattr(part, "function_call", None)
+                    if function_call is None:
+                        continue
+                    index = len(calls)
+                    calls.append(
+                        ToolCall(
+                            id=str(getattr(function_call, "id", None) or f"gemini-{index}"),
+                            name=str(getattr(function_call, "name", "") or ""),
+                            arguments=dict(getattr(function_call, "args", None) or {}),
+                            thought_signature=getattr(part, "thought_signature", None),
+                        )
                     )
-                )
         reasoning = "".join(reasoning_parts)
         self.last_reasoning = reasoning
         return AssistantTurn(
@@ -462,13 +465,15 @@ class GeminiProvider(CompletionProvider):
             response_format=response_format,
             model_kwargs=model_kwargs,
         )
-        async for token in self._stream_generated(
+        stream = self._stream_generated(
             model_id,
             contents,
             config,
             usage_holder=usage_holder,
-        ):
-            yield token
+        )
+        async with aclosing(stream):
+            async for token in stream:
+                yield token
 
     async def stream_tool_text(
         self,
@@ -488,13 +493,15 @@ class GeminiProvider(CompletionProvider):
             response_format=None,
             model_kwargs=model_kwargs,
         )
-        async for token in self._stream_generated(
+        stream = self._stream_generated(
             model_id,
             contents,
             config,
             usage_holder=usage_holder,
-        ):
-            yield token
+        )
+        async with aclosing(stream):
+            async for token in stream:
+                yield token
 
     async def _stream_generated(
         self,
@@ -510,12 +517,13 @@ class GeminiProvider(CompletionProvider):
             config=config,
         )
         usage: Any = None
-        async for chunk in response:
-            chunk_usage = getattr(chunk, "usage_metadata", None)
-            if chunk_usage is not None:
-                usage = chunk_usage
-            if chunk.text:
-                yield chunk.text
+        async with closing_stream(response):
+            async for chunk in response:
+                chunk_usage = getattr(chunk, "usage_metadata", None)
+                if chunk_usage is not None:
+                    usage = chunk_usage
+                if chunk.text:
+                    yield chunk.text
         capture_stream_usage(usage_holder, usage)
 
 

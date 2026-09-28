@@ -1,9 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Abstract base for LLM completion providers."""
 
+import inspect
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from typing import Any
 
 from dlightrag.engine.ai.contracts import ApiFamily
@@ -320,6 +322,25 @@ def capture_stream_usage(
         holder["cost_details"] = cost
 
 
+@asynccontextmanager
+async def closing_stream[S](stream: S) -> AsyncIterator[S]:
+    """Close one SDK response stream however its consumer leaves it.
+
+    The OpenAI and Anthropic SDK streams release their HTTP response only when
+    read to the end or closed, and a Gemini stream is an async generator. A
+    consumer that stops early, fails, or is cancelled would otherwise leave the
+    response open until garbage collection happens to finalize it.
+    """
+    try:
+        yield stream
+    finally:
+        close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+
 class CompletionOutput(str):
     """Completion text with optional observability metadata.
 
@@ -479,6 +500,7 @@ __all__ = [
     "CompletionOutput",
     "CompletionProvider",
     "capture_stream_usage",
+    "closing_stream",
     "is_provider_context_overflow",
     "is_provider_reasoning_rejection",
     "provider_cache_hit_tokens",

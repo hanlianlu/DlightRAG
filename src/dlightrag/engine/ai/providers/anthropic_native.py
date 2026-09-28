@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from contextlib import aclosing
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -16,7 +17,12 @@ from dlightrag.engine.ai.messages import (
     ToolDefinition,
     ToolStopReason,
 )
-from dlightrag.engine.ai.providers.base import CompletionOutput, CompletionProvider, usage_to_dict
+from dlightrag.engine.ai.providers.base import (
+    CompletionOutput,
+    CompletionProvider,
+    closing_stream,
+    usage_to_dict,
+)
 from dlightrag.engine.ai.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
@@ -400,63 +406,64 @@ class AnthropicProvider(CompletionProvider):
         block_parts: dict[int, dict[str, Any]] = {}
         usage_parts: list[Any] = []
         stop_reason: Any = None
-        async for event in response:
-            event_type = getattr(event, "type", None)
-            if event_type == "message_start":
-                usage_parts.append(getattr(getattr(event, "message", None), "usage", None))
-                continue
-            if event_type == "message_delta":
-                usage_parts.append(getattr(event, "usage", None))
-                delta = getattr(event, "delta", None)
-                delta_stop_reason = getattr(delta, "stop_reason", None)
-                if delta_stop_reason is not None:
-                    stop_reason = delta_stop_reason
-                continue
-            if event_type == "content_block_start":
+        async with closing_stream(response):
+            async for event in response:
+                event_type = getattr(event, "type", None)
+                if event_type == "message_start":
+                    usage_parts.append(getattr(getattr(event, "message", None), "usage", None))
+                    continue
+                if event_type == "message_delta":
+                    usage_parts.append(getattr(event, "usage", None))
+                    delta = getattr(event, "delta", None)
+                    delta_stop_reason = getattr(delta, "stop_reason", None)
+                    if delta_stop_reason is not None:
+                        stop_reason = delta_stop_reason
+                    continue
+                if event_type == "content_block_start":
+                    index = int(getattr(event, "index", 0))
+                    block = getattr(event, "content_block", None)
+                    block_type = str(getattr(block, "type", "") or "")
+                    parts = block_parts.setdefault(index, {"type": block_type})
+                    if block_type == "text":
+                        text = str(getattr(block, "text", "") or "")
+                        if text:
+                            text_parts.append(text)
+                            await emit_text(text)
+                    elif block_type == "thinking":
+                        parts["thinking"] = str(getattr(block, "thinking", "") or "")
+                        parts["signature"] = str(getattr(block, "signature", "") or "")
+                    elif block_type == "redacted_thinking":
+                        parts["data"] = str(getattr(block, "data", "") or "")
+                    elif block_type == "tool_use":
+                        parts["id"] = str(getattr(block, "id", "") or "")
+                        parts["name"] = str(getattr(block, "name", "") or "")
+                        initial = getattr(block, "input", None)
+                        parts["input"] = dict(initial) if isinstance(initial, Mapping) else {}
+                        parts["input_json"] = ""
+                    continue
+                if event_type != "content_block_delta":
+                    continue
                 index = int(getattr(event, "index", 0))
-                block = getattr(event, "content_block", None)
-                block_type = str(getattr(block, "type", "") or "")
-                parts = block_parts.setdefault(index, {"type": block_type})
-                if block_type == "text":
-                    text = str(getattr(block, "text", "") or "")
+                delta = getattr(event, "delta", None)
+                delta_type = getattr(delta, "type", None)
+                parts = block_parts.setdefault(index, {"type": ""})
+                if delta_type == "text_delta":
+                    text = str(getattr(delta, "text", "") or "")
                     if text:
                         text_parts.append(text)
                         await emit_text(text)
-                elif block_type == "thinking":
-                    parts["thinking"] = str(getattr(block, "thinking", "") or "")
-                    parts["signature"] = str(getattr(block, "signature", "") or "")
-                elif block_type == "redacted_thinking":
-                    parts["data"] = str(getattr(block, "data", "") or "")
-                elif block_type == "tool_use":
-                    parts["id"] = str(getattr(block, "id", "") or "")
-                    parts["name"] = str(getattr(block, "name", "") or "")
-                    initial = getattr(block, "input", None)
-                    parts["input"] = dict(initial) if isinstance(initial, Mapping) else {}
-                    parts["input_json"] = ""
-                continue
-            if event_type != "content_block_delta":
-                continue
-            index = int(getattr(event, "index", 0))
-            delta = getattr(event, "delta", None)
-            delta_type = getattr(delta, "type", None)
-            parts = block_parts.setdefault(index, {"type": ""})
-            if delta_type == "text_delta":
-                text = str(getattr(delta, "text", "") or "")
-                if text:
-                    text_parts.append(text)
-                    await emit_text(text)
-            elif delta_type == "thinking_delta":
-                parts["thinking"] = str(parts.get("thinking") or "") + str(
-                    getattr(delta, "thinking", "") or ""
-                )
-            elif delta_type == "signature_delta":
-                parts["signature"] = str(parts.get("signature") or "") + str(
-                    getattr(delta, "signature", "") or ""
-                )
-            elif delta_type == "input_json_delta":
-                parts["input_json"] = str(parts.get("input_json") or "") + str(
-                    getattr(delta, "partial_json", "") or ""
-                )
+                elif delta_type == "thinking_delta":
+                    parts["thinking"] = str(parts.get("thinking") or "") + str(
+                        getattr(delta, "thinking", "") or ""
+                    )
+                elif delta_type == "signature_delta":
+                    parts["signature"] = str(parts.get("signature") or "") + str(
+                        getattr(delta, "signature", "") or ""
+                    )
+                elif delta_type == "input_json_delta":
+                    parts["input_json"] = str(parts.get("input_json") or "") + str(
+                        getattr(delta, "partial_json", "") or ""
+                    )
 
         thinking_blocks: list[dict[str, Any]] = []
         reasoning_parts: list[str] = []
@@ -526,15 +533,17 @@ class AnthropicProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[override]
-        async for token in self.stream(
+        stream = self.stream(
             messages,
             model,
             temperature=temperature,
             max_tokens=max_tokens,
             model_kwargs=model_kwargs,
             usage_holder=usage_holder,
-        ):
-            yield token
+        )
+        async with aclosing(stream):
+            async for token in stream:
+                yield token
 
     async def stream(
         self,
@@ -568,21 +577,22 @@ class AnthropicProvider(CompletionProvider):
         reasoning_parts: list[str] = []
         usage_start: Any = None
         usage_delta: Any = None
-        async for event in response:
-            etype = getattr(event, "type", None)
-            if etype == "message_start":
-                usage_start = getattr(getattr(event, "message", None), "usage", None)
-            elif etype == "message_delta":
-                event_usage = getattr(event, "usage", None)
-                if event_usage is not None:
-                    usage_delta = event_usage
-            if etype != "content_block_delta":
-                continue
-            delta = event.delta
-            if delta.type == "text_delta":
-                yield delta.text
-            elif delta.type == "thinking_delta":
-                reasoning_parts.append(delta.thinking)
+        async with closing_stream(response):
+            async for event in response:
+                etype = getattr(event, "type", None)
+                if etype == "message_start":
+                    usage_start = getattr(getattr(event, "message", None), "usage", None)
+                elif etype == "message_delta":
+                    event_usage = getattr(event, "usage", None)
+                    if event_usage is not None:
+                        usage_delta = event_usage
+                if etype != "content_block_delta":
+                    continue
+                delta = event.delta
+                if delta.type == "text_delta":
+                    yield delta.text
+                elif delta.type == "thinking_delta":
+                    reasoning_parts.append(delta.thinking)
         self.last_reasoning = "".join(reasoning_parts)
         if usage_holder is not None:
             merged: dict[str, int] = {}

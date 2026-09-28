@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import aclosing
@@ -18,6 +17,7 @@ from dlightrag.engine.ai.messages import (
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     capture_stream_usage,
+    closing_stream,
     usage_mapping,
     usage_to_dict,
 )
@@ -694,29 +694,18 @@ class _ResponseStreamAccumulator:
         return self._terminal
 
 
-async def _close_response_stream(stream: Any) -> None:
-    close = getattr(stream, "close", None)
-    if not callable(close):
-        return
-    result = close()
-    if inspect.isawaitable(result):
-        await result
-
-
 async def _response_events(
     client: Any,
     call_kwargs: dict[str, Any],
     accumulator: _ResponseStreamAccumulator,
 ) -> AsyncGenerator[str]:
     stream = await client.responses.create(**call_kwargs, stream=True)
-    try:
+    async with closing_stream(stream):
         async for event in stream:
             delta = accumulator.accept(event)
             if delta is not None:
                 yield delta
         accumulator.response()
-    finally:
-        await _close_response_stream(stream)
 
 
 async def complete_response(

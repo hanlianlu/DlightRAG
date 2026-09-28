@@ -20,6 +20,7 @@ from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
     capture_stream_usage,
+    closing_stream,
     usage_mapping,
     usage_to_dict,
 )
@@ -354,46 +355,47 @@ class OpenAICompatibleProvider(CompletionProvider):
         call_parts: dict[int, dict[str, str]] = {}
         finish_reason: Any = None
         usage: Any = None
-        async for chunk in response:
-            chunk_usage = getattr(chunk, "usage", None)
-            if chunk_usage is not None:
-                usage = chunk_usage
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                continue
-            choice = choices[0]
-            if getattr(choice, "finish_reason", None) is not None:
-                finish_reason = choice.finish_reason
-            delta = choice.delta
-            extras = getattr(delta, "model_extra", None) or {}
-            reasoning = extras.get("reasoning_content")
-            if isinstance(reasoning, str) and reasoning:
-                reasoning_parts.append(reasoning)
-            details = extras.get("reasoning_details")
-            if isinstance(details, list):
-                reasoning_details.extend(details)
-            content = getattr(delta, "content", None)
-            if isinstance(content, str) and content:
-                text_parts.append(content)
-                await emit_text(content)
-            for position, raw_call in enumerate(getattr(delta, "tool_calls", None) or ()):
-                index = getattr(raw_call, "index", None)
-                if not isinstance(index, int):
-                    index = position
-                parts = call_parts.setdefault(
-                    index,
-                    {"id": "", "name": "", "arguments": ""},
-                )
-                call_id = getattr(raw_call, "id", None)
-                if isinstance(call_id, str):
-                    parts["id"] += call_id
-                function = getattr(raw_call, "function", None)
-                name = getattr(function, "name", None)
-                if isinstance(name, str):
-                    parts["name"] += name
-                arguments = getattr(function, "arguments", None)
-                if isinstance(arguments, str):
-                    parts["arguments"] += arguments
+        async with closing_stream(response):
+            async for chunk in response:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = chunk_usage
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                choice = choices[0]
+                if getattr(choice, "finish_reason", None) is not None:
+                    finish_reason = choice.finish_reason
+                delta = choice.delta
+                extras = getattr(delta, "model_extra", None) or {}
+                reasoning = extras.get("reasoning_content")
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
+                details = extras.get("reasoning_details")
+                if isinstance(details, list):
+                    reasoning_details.extend(details)
+                content = getattr(delta, "content", None)
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                    await emit_text(content)
+                for position, raw_call in enumerate(getattr(delta, "tool_calls", None) or ()):
+                    index = getattr(raw_call, "index", None)
+                    if not isinstance(index, int):
+                        index = position
+                    parts = call_parts.setdefault(
+                        index,
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    call_id = getattr(raw_call, "id", None)
+                    if isinstance(call_id, str):
+                        parts["id"] += call_id
+                    function = getattr(raw_call, "function", None)
+                    name = getattr(function, "name", None)
+                    if isinstance(name, str):
+                        parts["name"] += name
+                    arguments = getattr(function, "arguments", None)
+                    if isinstance(arguments, str):
+                        parts["arguments"] += arguments
 
         reasoning = "".join(reasoning_parts)
         self.last_reasoning = reasoning
@@ -504,20 +506,21 @@ class OpenAICompatibleProvider(CompletionProvider):
         response = await self._open_stream(call_kwargs)
         reasoning_parts: list[str] = []
         usage: Any = None
-        async for chunk in response:
-            chunk_usage = getattr(chunk, "usage", None)
-            if chunk_usage is not None:
-                usage = chunk_usage
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                continue
-            delta = choices[0].delta
-            extras = getattr(delta, "model_extra", None) or {}
-            rc = extras.get("reasoning_content")
-            if isinstance(rc, str) and rc:
-                reasoning_parts.append(rc)
-            if delta.content is not None:
-                yield delta.content
+        async with closing_stream(response):
+            async for chunk in response:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = chunk_usage
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta = choices[0].delta
+                extras = getattr(delta, "model_extra", None) or {}
+                rc = extras.get("reasoning_content")
+                if isinstance(rc, str) and rc:
+                    reasoning_parts.append(rc)
+                if delta.content is not None:
+                    yield delta.content
         self.last_reasoning = "".join(reasoning_parts)
         capture_stream_usage(usage_holder, usage, cost_fn=_cost_to_dict)
 
