@@ -345,10 +345,11 @@ def test_both_parser_clients_are_patched_once() -> None:
     assert apply_parser_outage_reporting() is True
     assert apply_parser_outage_reporting() is False
 
-    for _module, client_class in _CLIENTS.values():
-        download = client_class.download_into
-        assert inspect.unwrap(download) is not download
-        assert inspect.unwrap(inspect.unwrap(download)) is inspect.unwrap(download)
+    for module, client_class in _CLIENTS.values():
+        for patched in (client_class.download_into, module.raise_for_status_with_detail):
+            assert hasattr(patched, "__wrapped__")
+            # Wrapped exactly once: the second apply left the wrapper alone.
+            assert not hasattr(patched.__wrapped__, "__wrapped__")
 
 
 @pytest.mark.usefixtures("parser_service")
