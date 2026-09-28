@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock
 
 import jwt
 import pytest
@@ -71,6 +71,7 @@ from dlightrag.engine.runtime.records import (
     RunRecord,
 )
 from tests.config_helpers import clone_config, mutate_config, replace_config
+from tests.support.application_double import application_double
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -202,105 +203,11 @@ def mock_config_no_auth_override(test_config: DlightragConfig):
 @pytest.fixture
 def mock_application(_api_app: FastAPI, test_config):
     """Create an Application-shaped test double with explicit services."""
-    application = AsyncMock()
-    application.config = test_config
-    corpora = SimpleNamespace()
-    application.corpus_mutations = SimpleNamespace(
-        create_ingest=AsyncMock(
-            return_value=RunCreation(
-                run=_queued_run_record(run_kind="corpus_mutation"),
-                replayed=False,
-            )
-        ),
-        create_delete=AsyncMock(),
-        create_retry=AsyncMock(),
-        create_reset=AsyncMock(),
-        create_workspace_delete=AsyncMock(),
-        stage_uploads=AsyncMock(),
-        upload_limits=UploadLimits(file_bytes=100 * 1024 * 1024, request_bytes=512 * 1024 * 1024),
-        discard_staged_run=AsyncMock(),
-        create_staged_ingest=AsyncMock(),
-        create_staged_batch=AsyncMock(),
+    from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
+    from dlightrag.engine.answer.image_capability import (
+        AnswerImageCapability,
+        answer_image_capability_summary,
     )
-    application.retrieval = SimpleNamespace(
-        create=AsyncMock(
-            return_value=RunCreation(run=_queued_run_record(run_kind="retrieval"), replayed=False)
-        ),
-        project_stored=MagicMock(side_effect=_project_stored_retrieval),
-    )
-    corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(b"api-test")
-    corpora.list_workspace_records_page = AsyncMock(
-        return_value=WorkspaceCatalogPage(
-            items=(
-                {
-                    "workspace": "default",
-                    "display_name": "default",
-                    "embedding_model": "voyage-multimodal-3.5",
-                    "created_at": None,
-                    "updated_at": None,
-                },
-            ),
-            next_cursor=None,
-            fetched_rows=1,
-        )
-    )
-    run_get = AsyncMock(return_value=_queued_run_record())
-    application.runs = SimpleNamespace(
-        get=run_get,
-        get_global=AsyncMock(
-            side_effect=lambda **_kwargs: (
-                RunView.from_runtime(run_get.return_value)
-                if run_get.return_value is not None
-                else None
-            )
-        ),
-        list=AsyncMock(return_value=(_queued_run_record(),)),
-        cancel=AsyncMock(),
-        subscribe=MagicMock(),
-    )
-    application.answers = SimpleNamespace(
-        create=AsyncMock(return_value=RunCreation(run=_queued_run_record(), replayed=False)),
-        list_artifacts=AsyncMock(return_value=()),
-        children=AsyncMock(
-            return_value=ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
-        ),
-        child_roster_cursor_codec=ChildRosterCursorCodec(b"api-server-children"),
-    )
-    corpora.list_workspaces = AsyncMock(return_value=["default"])
-    corpora.alist_workspace_records = AsyncMock(
-        return_value=[
-            {
-                "workspace": "default",
-                "display_name": "default",
-                "embedding_model": "voyage-multimodal-3.5",
-                "created_at": None,
-                "updated_at": None,
-            }
-        ]
-    )
-    corpora.create_workspace = AsyncMock()
-    corpora.failed_file_snapshot = AsyncMock(
-        return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
-    )
-    corpora.prepare_source_download = AsyncMock()
-    corpora.get_visual_asset = AsyncMock()
-    corpora.get_metadata = AsyncMock(return_value={})
-    corpora.update_metadata = AsyncMock()
-    corpora.search_metadata = AsyncMock(
-        return_value=MetadataSearchPage(document_ids=(), next_cursor=None, fetched_rows=0)
-    )
-    corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"api-server-test")
-    corpora.metadata_search_cursor_codec = MetadataSearchCursorCodec(b"api-server-test")
-    corpora.workspace_exists = AsyncMock(return_value=True)
-    corpora.file_panel_snapshot = AsyncMock(
-        return_value={
-            "files": [],
-            "next_cursor": None,
-            "fetched_rows": 0,
-        }
-    )
-    application.corpora = corpora
-    from dlightrag.engine.answer.image_capability import AnswerImageCapability
 
     answer_image_capability = AnswerImageCapability(
         status="supported",
@@ -311,18 +218,76 @@ def mock_application(_api_app: FastAPI, test_config):
         model="test-model",
         failure_kind=None,
     )
-    from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
-    from dlightrag.engine.answer.image_capability import answer_image_capability_summary
-
-    application.health = ApplicationHealth(
-        readiness_probe=PGReadinessProbe(),
+    health = ApplicationHealth(readiness_probe=PGReadinessProbe())
+    health.mark_ready()
+    health.set_answer_image_capability(answer_image_capability_summary(answer_image_capability))
+    application = application_double(test_config, health=health)
+    corpora = application.corpora
+    corpus_mutations = application.corpus_mutations
+    corpus_mutations.create_ingest.return_value = RunCreation(
+        run=_queued_run_record(run_kind="corpus_mutation"),
+        replayed=False,
     )
-    application.health.mark_ready()
-    application.health.set_answer_image_capability(
-        answer_image_capability_summary(answer_image_capability)
+    corpus_mutations.upload_limits = UploadLimits(
+        file_bytes=100 * 1024 * 1024, request_bytes=512 * 1024 * 1024
     )
+    application.retrieval.create.return_value = RunCreation(
+        run=_queued_run_record(run_kind="retrieval"), replayed=False
+    )
+    application.retrieval.project_stored.side_effect = _project_stored_retrieval
+    corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(b"api-test")
+    corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(
+            {
+                "workspace": "default",
+                "display_name": "default",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
+            },
+        ),
+        next_cursor=None,
+        fetched_rows=1,
+    )
+    run_get = application.runs.get
+    run_get.return_value = _queued_run_record()
+    application.runs.get_global.side_effect = lambda **_kwargs: (
+        RunView.from_runtime(run_get.return_value) if run_get.return_value is not None else None
+    )
+    application.runs.list.return_value = (_queued_run_record(),)
+    answers = application.answers
+    answers.create.return_value = RunCreation(run=_queued_run_record(), replayed=False)
+    answers.list_artifacts.return_value = ()
+    answers.children.return_value = ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
+    answers.child_roster_cursor_codec = ChildRosterCursorCodec(b"api-server-children")
+    corpora.list_workspaces.return_value = ["default"]
+    corpora.alist_workspace_records.return_value = [
+        {
+            "workspace": "default",
+            "display_name": "default",
+            "embedding_model": "voyage-multimodal-3.5",
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+    corpora.failed_file_snapshot.return_value = {
+        "failed": [],
+        "next_cursor": None,
+        "fetched_rows": 0,
+    }
+    corpora.get_metadata.return_value = {}
+    corpora.search_metadata.return_value = MetadataSearchPage(
+        document_ids=(), next_cursor=None, fetched_rows=0
+    )
+    corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"api-server-test")
+    corpora.metadata_search_cursor_codec = MetadataSearchCursorCodec(b"api-server-test")
+    corpora.workspace_exists.return_value = True
+    corpora.file_panel_snapshot.return_value = {
+        "files": [],
+        "next_cursor": None,
+        "fetched_rows": 0,
+    }
     _api_app.state.health = application.health
-    application.close = AsyncMock()
     return application
 
 
@@ -420,20 +385,18 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         app.state.application = mock_application
-        mock_application.corpora.list_workspace_records_page = AsyncMock(
-            return_value=WorkspaceCatalogPage(
-                items=(
-                    {
-                        "workspace": "finance",
-                        "display_name": "Finance",
-                        "embedding_model": "voyage-multimodal-3.5",
-                        "created_at": None,
-                        "updated_at": None,
-                    },
-                ),
-                next_cursor=WorkspaceCatalogCursor(after_workspace="finance"),
-                fetched_rows=2,
-            )
+        mock_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "finance",
+                    "display_name": "Finance",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=WorkspaceCatalogCursor(after_workspace="finance"),
+            fetched_rows=2,
         )
 
         resp = await client.get("/workspaces")
@@ -451,7 +414,6 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         app.state.application = mock_application
-        mock_application.corpora.list_workspace_records_page = AsyncMock()
 
         resp = await client.get("/workspaces", params={"cursor": "AAAA.tampered"})
 
@@ -467,7 +429,6 @@ class TestWorkspaceLifecycleAPI:
         limit: str,
     ) -> None:
         app.state.application = mock_application
-        mock_application.corpora.list_workspace_records_page = AsyncMock()
 
         resp = await client.get("/workspaces", params={"limit": limit})
 
@@ -478,27 +439,25 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         app.state.application = mock_application
-        mock_application.corpora.list_workspace_records_page = AsyncMock(
-            return_value=WorkspaceCatalogPage(
-                items=(
-                    {
-                        "workspace": "default",
-                        "display_name": "default",
-                        "embedding_model": "voyage-multimodal-3.5",
-                        "created_at": None,
-                        "updated_at": None,
-                    },
-                    {
-                        "workspace": "finance",
-                        "display_name": "Finance",
-                        "embedding_model": "voyage-multimodal-3.5",
-                        "created_at": None,
-                        "updated_at": None,
-                    },
-                ),
-                next_cursor=None,
-                fetched_rows=2,
-            )
+        mock_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "default",
+                    "display_name": "default",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+                {
+                    "workspace": "finance",
+                    "display_name": "Finance",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=None,
+            fetched_rows=2,
         )
 
         resp = await client.get("/workspaces", params={"limit": "1"})
@@ -535,8 +494,8 @@ class TestWorkspaceLifecycleAPI:
         from dlightrag.application.corpus_admin import WorkspaceExistsError
 
         app.state.application = mock_application
-        mock_application.corpora.create_workspace = AsyncMock(
-            side_effect=WorkspaceExistsError("Workspace 'default' already exists")
+        mock_application.corpora.create_workspace.side_effect = WorkspaceExistsError(
+            "Workspace 'default' already exists"
         )
 
         resp = await client.post("/workspaces", json={"workspace": "default"})
@@ -1873,9 +1832,7 @@ class TestAnswerEndpoint:
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.answers.create = AsyncMock(
-            side_effect=ApplicationClosedError("RAG not ready")
-        )
+        mock_application.answers.create.side_effect = ApplicationClosedError("RAG not ready")
         app.state.application = mock_application
         resp = await client.post("/answer", json={"query": "hello"})
         assert resp.status_code == 503
@@ -1883,7 +1840,7 @@ class TestAnswerEndpoint:
     async def test_answer_admission_limit_is_rejected_before_acceptance(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.answers.create = AsyncMock(side_effect=RunAdmissionLimitExceededError())
+        mock_application.answers.create.side_effect = RunAdmissionLimitExceededError()
         app.state.application = mock_application
 
         response = await client.post("/answer", json={"query": "hello"})
@@ -1894,8 +1851,8 @@ class TestAnswerEndpoint:
     async def test_answer_runtime_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.answers.create = AsyncMock(
-            side_effect=RunRuntimeUnavailableError("Answer runtime is unavailable")
+        mock_application.answers.create.side_effect = RunRuntimeUnavailableError(
+            "Answer runtime is unavailable"
         )
         app.state.application = mock_application
 
@@ -1907,8 +1864,8 @@ class TestAnswerEndpoint:
     async def test_answer_input_rejection_uses_unprocessable_entity(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.answers.create = AsyncMock(
-            side_effect=AnswerInputOverflowError("The answer input is too large.")
+        mock_application.answers.create.side_effect = AnswerInputOverflowError(
+            "The answer input is too large."
         )
         app.state.application = mock_application
 
@@ -2202,8 +2159,8 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         """Metadata validation happens below the request model, so it needs its own mapping."""
-        mock_application.corpora.update_metadata = AsyncMock(
-            side_effect=MetadataValidationError("title is a built-in metadata field")
+        mock_application.corpora.update_metadata.side_effect = MetadataValidationError(
+            "title is a built-in metadata field"
         )
         app.state.application = mock_application
         resp = await client.post("/metadata/doc-1", json={"metadata": {"title": "X"}})
@@ -2264,12 +2221,10 @@ class TestMetadataAPI:
         mock_application,
     ) -> None:
         """`/metadata/search` is a literal path, so it must be declared first."""
-        mock_application.corpora.search_metadata = AsyncMock(
-            return_value=MetadataSearchPage(
-                document_ids=("doc-1",),
-                next_cursor=None,
-                fetched_rows=1,
-            )
+        mock_application.corpora.search_metadata.return_value = MetadataSearchPage(
+            document_ids=("doc-1",),
+            next_cursor=None,
+            fetched_rows=1,
         )
         app.state.application = mock_application
 
@@ -2319,7 +2274,7 @@ class TestMetadataAPI:
             )
 
         captured = []
-        mock_application.corpora.search_metadata = AsyncMock(side_effect=search_side_effect)
+        mock_application.corpora.search_metadata.side_effect = search_side_effect
         app.state.application = mock_application
 
         first = await client.post("/metadata/search", json={"filename": "Report"})
@@ -2447,7 +2402,7 @@ class TestAnswerRunChildren:
                 fetched_rows=2,
             )
 
-        mock_application.answers.children = AsyncMock(side_effect=children_side_effect)
+        mock_application.answers.children.side_effect = children_side_effect
         app.state.application = mock_application
 
         first = await client.get(f"/answer/{run_id}/children")
@@ -2518,7 +2473,7 @@ class TestAnswerRunChildren:
         mock_application,
     ) -> None:
         run_id = "0199a0a0-0000-7000-8000-000000000077"
-        mock_application.answers.children = AsyncMock(return_value=None)
+        mock_application.answers.children.return_value = None
         app.state.application = mock_application
 
         resp = await client.get(f"/answer/{run_id}/children")
@@ -2651,9 +2606,7 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
         yield b"\r\n--test--\r\n"
 
     application = create_app(include_web_app=False)
-    application_double = AsyncMock()
-    application_double.config = mock_config
-    application.state.application = application_double
+    application.state.application = application_double(mock_config)
     response = await _post(
         application,
         "/answer",
@@ -2690,9 +2643,7 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
         yield b"\r\n--test--\r\n"
 
     application = create_app(include_web_app=False)
-    application_double = AsyncMock()
-    application_double.config = mock_config
-    application.state.application = application_double
+    application.state.application = application_double(mock_config)
     response = await _post(
         application,
         "/runs/corpus/ingest/upload",
@@ -2713,7 +2664,7 @@ async def test_corpus_upload_authenticates_before_parsing_multipart(
     mutate_config(mock_config, "access.api_token", "secret-token")
     set_config(mock_config)
     application = create_app(include_web_app=False)
-    application.state.application = AsyncMock()
+    application.state.application = application_double(mock_config)
 
     response = await _post(
         application,
@@ -2740,7 +2691,7 @@ async def test_multipart_header_does_not_raise_json_route_body_cap(
         yield b"\r\n--test--\r\n"
 
     application = create_app(include_web_app=False)
-    application.state.application = AsyncMock()
+    application.state.application = application_double(mock_config)
     response = await _post(
         application,
         "/retrieve",
