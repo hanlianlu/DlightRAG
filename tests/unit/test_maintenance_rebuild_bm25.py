@@ -119,3 +119,53 @@ async def test_bm25_rebuild_provisions_indexes_then_relabels(
     assert events[3] == "prerequisites:exit"
     fake_pool.bind.assert_called_once_with(config)
     fake_pool.close.assert_awaited_once()
+
+
+async def test_bm25_rebuild_addresses_the_workspace_by_its_canonical_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A display label rebuilds the workspace the service stored under its canonical id."""
+    from dlightrag.adapters.postgres import rebuild_bm25 as module
+    from dlightrag.application.config import DlightragConfig
+
+    config = DlightragConfig.model_validate(
+        {
+            "deployment": {"workspace": "Research Team"},
+            "corpus": {"retrieval": {"bm25_enabled": True}},
+        }
+    )
+    backend_workspaces: list[str] = []
+    rebuilt_workspaces: list[str] = []
+
+    class Coordination:
+        @asynccontextmanager
+        async def workspace_initialization(self):
+            yield
+
+    def build_backend(resolved_config: Any) -> SimpleNamespace:
+        backend_workspaces.append(resolved_config.deployment.workspace)
+        return SimpleNamespace(coordination=Coordination())
+
+    async def rebuild(resolved_config: Any, **_kwargs: Any) -> dict[str, int]:
+        rebuilt_workspaces.append(resolved_config.deployment.workspace)
+        return {"processed_chunks": 0, "updated_chunks": 0}
+
+    monkeypatch.setattr(module, "build_pg_corpus_backend", build_backend)
+    monkeypatch.setattr(module, "rebuild_postgres_bm25", rebuild)
+    monkeypatch.setattr(module, "pg_pool", SimpleNamespace(bind=MagicMock(), close=AsyncMock()))
+
+    await module.run_rebuild_bm25(config=config, assume_yes=True)
+
+    assert backend_workspaces == ["research_team"]
+    assert rebuilt_workspaces == ["research_team"]
+    assert config.deployment.workspace == "Research Team"
+
+
+async def test_bm25_rebuild_refuses_a_label_without_a_canonical_id() -> None:
+    from dlightrag.adapters.postgres.rebuild_bm25 import run_rebuild_bm25
+
+    config = _config()
+    config.deployment.workspace = " "
+
+    with pytest.raises(SystemExit, match="does not normalize to a workspace id"):
+        await run_rebuild_bm25(config=cast(Any, config), assume_yes=True)

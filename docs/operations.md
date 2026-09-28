@@ -269,6 +269,11 @@ The configured role must be `writer` and BM25 must be enabled. Restart services
 only after completion. `--batch-size N` bounds language-label transactions.
 Vector rebuild targets `chunks` and `all` already run this maintenance.
 
+`dlightrag-rebuild-bm25` and `dlightrag-rebuild-vdb` address
+`deployment.workspace` by the canonical id the service stores that workspace
+under, so the label `My Space` rebuilds `my_space`. A label with no canonical id (empty, or longer than 64 characters
+once normalized) is refused before any storage is opened.
+
 ## Offline Vector Storage Rebuild
 
 `dlightrag-rebuild-vdb` rebuilds LightRAG vectors from existing graph/chunk rows

@@ -11,6 +11,10 @@ from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     rebuild_postgres_bm25,
 )
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.engine.rag.workspace.workspaces import (
+    normalize_workspace,
+    require_canonical_workspace_id,
+)
 
 DEFAULT_BATCH_SIZE = 500
 
@@ -44,6 +48,28 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--yes is required; stop DlightRAG writers first")
 
 
+def canonical_workspace_config(config: DlightragConfig) -> DlightragConfig:
+    """Address the configured workspace by the canonical id the service stores it under.
+
+    The service reaches a workspace only through the id ``normalize_workspace``
+    derives from its label, so an offline command given ``My Space`` must address
+    ``my_space`` rather than rows no service ever wrote. A label that yields no
+    canonical id is refused before any storage is opened.
+    """
+    label = config.deployment.workspace
+    try:
+        workspace_id = require_canonical_workspace_id(normalize_workspace(label))
+    except ValueError:
+        raise SystemExit(
+            f"deployment.workspace {label!r} does not normalize to a workspace id "
+            "(1-64 letters, digits, or underscores)"
+        ) from None
+    if workspace_id == label:
+        return config
+    deployment = config.deployment.model_copy(update={"workspace": workspace_id})
+    return config.model_copy(update={"deployment": deployment})
+
+
 async def run_rebuild_bm25(
     *,
     config: DlightragConfig | None = None,
@@ -56,7 +82,7 @@ async def run_rebuild_bm25(
     if batch_size < 1:
         raise SystemExit("--batch-size must be >= 1")
 
-    resolved_config = config or get_config()
+    resolved_config = canonical_workspace_config(config or get_config())
     if not resolved_config.corpus.retrieval.bm25_enabled:
         raise SystemExit("Set bm25_enabled=true before rebuilding workspace BM25")
     if resolved_config.is_reader:
@@ -100,6 +126,7 @@ def main() -> None:
 
 __all__ = [
     "build_parser",
+    "canonical_workspace_config",
     "main",
     "run_rebuild_bm25",
     "validate_args",

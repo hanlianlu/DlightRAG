@@ -357,6 +357,80 @@ async def test_chunks_rebuild_delegates_bm25_before_embedder_close_fails(
     )
 
 
+async def test_runner_addresses_the_workspace_by_its_canonical_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A display label addresses the id the service stored the workspace under."""
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    config = _fake_config()
+    mutate_config(config, "deployment.workspace", "My Space")
+    mutate_config(config, "corpus.retrieval.bm25_enabled", True)
+    embedder = AsyncMock()
+    monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
+    monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
+    rebuild_bm25 = AsyncMock(return_value={"processed_chunks": 0, "updated_chunks": 0})
+    monkeypatch.setattr(module, "run_rebuild_bm25", rebuild_bm25)
+    monkeypatch.setattr(
+        module, "resolve_direct_image_embedding_enabled", AsyncMock(return_value=True)
+    )
+    restore = AsyncMock(return_value={"processed_docs": 0, "skipped_docs": 0})
+    monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore)
+    setup_workspaces: list[str] = []
+
+    async def fake_setup(self) -> bool:
+        setup_workspaces.append(self.workspace)
+        self.graph = AsyncMock()
+        self.entities_vdb = AsyncMock()
+        self.relationships_vdb = AsyncMock()
+        self.chunks_vdb = AsyncMock()
+        self.text_chunks = AsyncMock()
+        self.full_docs = AsyncMock()
+        self.doc_status = AsyncMock()
+        return True
+
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
+    monkeypatch.setattr(
+        module.DlightRAGRebuildTool,
+        "run_rebuild_chunks",
+        AsyncMock(return_value=[{"label": "chunks", "errors": []}]),
+    )
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
+    from dlightrag.adapters.postgres.corpus import lightrag_contract
+
+    monkeypatch.setattr(
+        lightrag_contract.PGLightRAGContractGuard, "verify_surface", lambda self: None
+    )
+
+    exit_code = await module.run_rebuild(config=config, target="chunks", assume_yes=True)
+
+    assert exit_code == 0
+    assert setup_workspaces == ["my_space"]
+    restore_args = restore.await_args
+    assert restore_args is not None
+    assert restore_args.kwargs["workspace_id"] == "my_space"
+    bm25_args = rebuild_bm25.await_args
+    assert bm25_args is not None
+    assert bm25_args.kwargs["config"].deployment.workspace == "my_space"
+
+
+@pytest.mark.parametrize("label", ["   ", "w" * 65])
+async def test_runner_refuses_a_label_without_a_canonical_id(
+    monkeypatch: pytest.MonkeyPatch, label: str
+) -> None:
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    config = _fake_config()
+    mutate_config(config, "deployment.workspace", label)
+    create_embedding_model = MagicMock()
+    monkeypatch.setattr(module, "create_embedding_model", create_embedding_model)
+
+    with pytest.raises(SystemExit, match="does not normalize to a workspace id"):
+        await module.run_rebuild(config=config, target="check")
+
+    create_embedding_model.assert_not_called()
+
+
 def _fake_config():
     from dlightrag.application.config import DlightragConfig
 
