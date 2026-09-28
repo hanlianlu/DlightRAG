@@ -582,7 +582,7 @@ for an external vector adapter.
 | Field | Default | Meaning |
 |---|---|---|
 | `deployment.service_role` | `writer` | `writer` or `reader` |
-| `deployment.workspace` | `default` | Default workspace's display name; it must normalize to a canonical id (at most 64 lowercase letters, digits, or underscores), which every surface uses |
+| `deployment.workspace` | `default` | Default workspace's display name. Its canonical id lowercases it, turns every other character into `_`, and prefixes a leading digit with `_`; the id must be 1-64 characters, or startup fails |
 | `deployment.working_dir` | `./dlightrag_storage` | Corpus/input/artifact root; resolved absolute |
 | `storage.lightrag.vector_storage` | `PGVectorStorage` | `PGVectorStorage` or explicit `MilvusVectorDBStorage` |
 | `storage.lightrag.milvus_uri` | unset | Optional `MILVUS_URI` bridge; may be a Milvus-compatible Zilliz URI |
