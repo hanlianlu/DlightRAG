@@ -301,3 +301,34 @@ async def test_an_anthropic_stream_error_is_classified_by_its_error_type(
 
     assert getattr(error, "status_code", None) == 200
     assert classify_transient_dependency(error, component_hint="providers") == verdict
+
+
+def _stamped(message: str, status: int) -> RuntimeError:
+    error = RuntimeError(message)
+    error.status_code = status  # type: ignore[attr-defined]
+    return error
+
+
+def test_a_boundary_can_ignore_caller_controlled_text() -> None:
+    # A parser operation label names the user's file; its words are not a verdict.
+    outage = _stamped("Docling upload for 'db_schema.pdf' failed: HTTP 503 unsupported", 503)
+
+    assert is_transient_request_failure(outage) is False
+    assert is_transient_request_failure(outage, text_vetoes=False) is True
+
+
+def test_ignoring_text_keeps_the_status_type_and_endpoint_vetoes() -> None:
+    class AuthenticationError(Exception):
+        pass
+
+    misconfigured = _caused(
+        httpx.ConnectError("connect failed", request=_REQUEST),
+        socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided"),
+    )
+    for rejected in (
+        _stamped("upload for 'report.pdf' failed: HTTP 401", 401),
+        _stamped("upload for 'report.pdf' failed: HTTP 404", 404),
+        _caused(AuthenticationError("denied"), _http_error(503)),
+        misconfigured,
+    ):
+        assert is_transient_request_failure(rejected, text_vetoes=False) is False

@@ -16,8 +16,9 @@ installed only when Docling is the active parser.
 
 Parser outage reporting: LightRAG records whatever its MinerU or Docling client
 raises as the document's failure, so a parser service outage looked like a
-rejected document. The active client names a transient transport failure
-``ParserUnavailableError`` instead.
+rejected document. Both clients name a transient transport failure
+``ParserUnavailableError`` instead, since a per-file parser directive can route a
+document to either engine.
 
 Keep this module small and delete patches as upstream covers them.
 """
@@ -54,7 +55,7 @@ def apply(
 
         if apply_mineru_content_list_hygiene():
             applied.append("mineru_content_list_hygiene")
-    if apply_parser_outage_reporting(docling_active=docling_active):
+    if apply_parser_outage_reporting():
         applied.append("parser_outage_reporting")
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))

@@ -58,8 +58,8 @@ def parser_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Handler]]:
     yield handlers
 
 
-async def _download(parser: str, tmp_path: Path) -> None:
-    source = tmp_path / "report.pdf"
+async def _download(parser: str, tmp_path: Path, filename: str = "report.pdf") -> None:
+    source = tmp_path / filename
     source.write_bytes(b"%PDF-1.4")
     raw_dir = tmp_path / "raw"
     if parser == "mineru":
@@ -75,8 +75,8 @@ def _raising(error: type[httpx.TransportError]) -> Handler:
     return handler
 
 
-def _status(status: int) -> Handler:
-    return lambda _request: httpx.Response(status, json={"detail": "parser says no"})
+def _status(status: int, detail: str = "parser says no") -> Handler:
+    return lambda _request: httpx.Response(status, json={"detail": detail})
 
 
 def _connect_failure(cause: Callable[[], BaseException]) -> Handler:
@@ -97,11 +97,24 @@ def _connect_failure(cause: Callable[[], BaseException]) -> Handler:
         _raising(httpx.ReadTimeout),
         _raising(httpx.ConnectTimeout),
         _raising(httpx.RemoteProtocolError),
+        _raising(httpx.ProxyError),
         _status(429),
         _status(502),
         _status(503),
+        _status(522),
     ],
-    ids=["refused", "reset", "read-timeout", "connect-timeout", "disconnect", "429", "502", "503"],
+    ids=[
+        "refused",
+        "reset",
+        "read-timeout",
+        "connect-timeout",
+        "disconnect",
+        "proxy",
+        "429",
+        "502",
+        "503",
+        "522",
+    ],
 )
 async def test_transient_parser_failures_name_the_parser_unavailable(
     parser_service: list[Handler],
@@ -110,18 +123,58 @@ async def test_transient_parser_failures_name_the_parser_unavailable(
     handler: Handler,
 ) -> None:
     parser_service.append(handler)
-    assert apply_parser_outage_reporting(docling_active=parser == "docling") is True
+    assert apply_parser_outage_reporting() is True
 
     with pytest.raises(ParserUnavailableError) as raised:
         await _download(parser, tmp_path)
 
     assert str(raised.value) == "Document parser is temporarily unavailable"
-    assert raised.value.__cause__ is not None
+    # The verdict carries no cause, so classifying it never reads client text.
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
     assert classify_transient_dependency(raised.value) == "parser"
 
 
 @pytest.mark.parametrize("parser", ["mineru", "docling"])
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 413, 422, 501])
+@pytest.mark.parametrize(
+    "filename",
+    ["db_schema.pdf", "unsupported-formats.pdf", "credentials-policy.pdf"],
+)
+async def test_an_outage_is_named_whatever_the_file_or_response_text_says(
+    parser_service: list[Handler],
+    tmp_path: Path,
+    parser: str,
+    filename: str,
+) -> None:
+    # LightRAG's error text names the uploaded file and quotes the response
+    # body, so words the provider classification reads as a rejection
+    # ("schema", "unsupported", "credential") must not decide a parser outage.
+    parser_service.append(_status(503, detail="worker pool unsupported state; retry later"))
+    apply_parser_outage_reporting()
+
+    with pytest.raises(ParserUnavailableError):
+        await _download(parser, tmp_path, filename)
+
+
+@pytest.mark.parametrize("parser", ["mineru", "docling"])
+async def test_an_outage_is_named_whatever_the_endpoint_is_called(
+    parser_service: list[Handler],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parser: str,
+) -> None:
+    # MinerU's transport error text quotes the configured endpoint.
+    monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", "http://credential-schema-parser.test")
+    monkeypatch.setenv("DOCLING_ENDPOINT", "http://credential-schema-parser.test")
+    parser_service.append(_raising(httpx.ConnectError))
+    apply_parser_outage_reporting()
+
+    with pytest.raises(ParserUnavailableError):
+        await _download(parser, tmp_path, "unsupported_schema.pdf")
+
+
+@pytest.mark.parametrize("parser", ["mineru", "docling"])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 413, 422, 501])
 async def test_parser_rejections_stay_document_failures_with_their_status(
     parser_service: list[Handler],
     tmp_path: Path,
@@ -129,7 +182,7 @@ async def test_parser_rejections_stay_document_failures_with_their_status(
     status: int,
 ) -> None:
     parser_service.append(_status(status))
-    apply_parser_outage_reporting(docling_active=parser == "docling")
+    apply_parser_outage_reporting()
 
     with pytest.raises(RuntimeError, match=f"HTTP {status}") as raised:
         await _download(parser, tmp_path)
@@ -146,7 +199,7 @@ async def test_misconfigured_parser_url_is_not_an_outage(
     parser: str,
 ) -> None:
     parser_service.append(_raising(httpx.UnsupportedProtocol))
-    apply_parser_outage_reporting(docling_active=parser == "docling")
+    apply_parser_outage_reporting()
 
     with pytest.raises((RuntimeError, httpx.UnsupportedProtocol)) as raised:
         await _download(parser, tmp_path)
@@ -171,7 +224,7 @@ async def test_misconfigured_parser_endpoint_is_not_an_outage(
     cause: Callable[[], BaseException],
 ) -> None:
     parser_service.append(_connect_failure(cause))
-    apply_parser_outage_reporting(docling_active=parser == "docling")
+    apply_parser_outage_reporting()
 
     with pytest.raises((RuntimeError, httpx.ConnectError)) as raised:
         await _download(parser, tmp_path)
@@ -196,7 +249,7 @@ async def test_unreachable_parser_endpoint_is_an_outage(
     cause: Callable[[], BaseException],
 ) -> None:
     parser_service.append(_connect_failure(cause))
-    apply_parser_outage_reporting(docling_active=parser == "docling")
+    apply_parser_outage_reporting()
 
     with pytest.raises(ParserUnavailableError):
         await _download(parser, tmp_path)
@@ -217,7 +270,7 @@ async def test_exhausted_polling_budget_is_not_an_outage(
         return httpx.Response(200, json={"status": "processing"})
 
     parser_service.append(handler)
-    apply_parser_outage_reporting(docling_active=False)
+    apply_parser_outage_reporting()
 
     with pytest.raises(TimeoutError, match="polling timeout"):
         await _download("mineru", tmp_path)
@@ -233,7 +286,7 @@ async def test_parser_reported_conversion_failure_is_not_an_outage(
         return httpx.Response(200, json={"status": "failed", "error": "encrypted PDF"})
 
     parser_service.append(handler)
-    apply_parser_outage_reporting(docling_active=False)
+    apply_parser_outage_reporting()
 
     with pytest.raises(RuntimeError, match="encrypted PDF") as raised:
         await _download("mineru", tmp_path)
@@ -242,14 +295,43 @@ async def test_parser_reported_conversion_failure_is_not_an_outage(
 
 
 @pytest.mark.usefixtures("parser_service")
-def test_patch_installs_only_on_the_active_parser_and_is_idempotent() -> None:
-    assert apply_parser_outage_reporting(docling_active=False) is True
-    assert apply_parser_outage_reporting(docling_active=False) is False
+def test_both_parser_clients_are_patched_once() -> None:
+    # A per-file parser directive can route a document to either engine.
+    assert apply_parser_outage_reporting() is True
+    assert apply_parser_outage_reporting() is False
 
-    mineru_download = mineru_client.MinerURawClient.download_into
-    docling_download = docling_client.DoclingRawClient.download_into
-    assert inspect.unwrap(mineru_download) is not mineru_download
-    assert inspect.unwrap(docling_download) is docling_download
+    for _module, client_class in _CLIENTS.values():
+        download = client_class.download_into
+        assert inspect.unwrap(download) is not download
+        assert inspect.unwrap(inspect.unwrap(download)) is inspect.unwrap(download)
+
+
+@pytest.mark.usefixtures("parser_service")
+@pytest.mark.parametrize("parser", ["mineru", "docling"])
+def test_the_status_stamp_passes_every_argument_through(
+    monkeypatch: pytest.MonkeyPatch,
+    parser: str,
+) -> None:
+    # An upstream call site gaining an argument must reach LightRAG unchanged
+    # rather than fail every parse inside the stamping wrapper.
+    module, _client_class = _CLIENTS[parser]
+    received: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def upstream(*args: Any, **kwargs: Any) -> None:
+        received.append((args, kwargs))
+        raise RuntimeError("parser upload failed: HTTP 503 busy")
+
+    monkeypatch.setattr(module, "raise_for_status_with_detail", upstream)
+    apply_parser_outage_reporting()
+    response = httpx.Response(503)
+
+    with pytest.raises(RuntimeError) as raised:
+        module.raise_for_status_with_detail(
+            response, "parser upload", body=b"busy", detail_limit=200
+        )
+
+    assert received == [((response, "parser upload"), {"body": b"busy", "detail_limit": 200})]
+    assert getattr(raised.value, "status_code", None) == 503
 
 
 def test_lightrag_records_the_verdict_that_is_recognized_afterwards() -> None:

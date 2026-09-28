@@ -47,7 +47,13 @@ class ProviderUnavailableError(TransientDependencyError):
 
 
 class ParserUnavailableError(TransientDependencyError):
-    """The configured document parser is temporarily unavailable."""
+    """The configured document parser is temporarily unavailable.
+
+    A durable deferral on this error must be bounded. The verdict comes from the
+    parser's connection or status alone, so a document that crashes or exhausts
+    the parser service (an out-of-memory kill, for example) reads as a refused
+    connection or a 5xx on every attempt.
+    """
 
     def __init__(self) -> None:
         super().__init__("parser", "Document parser is temporarily unavailable")
@@ -182,7 +188,7 @@ def classify_transient_dependency(
     return None
 
 
-def is_transient_request_failure(exc: BaseException) -> bool:
+def is_transient_request_failure(exc: BaseException, *, text_vetoes: bool = True) -> bool:
     """Return whether one HTTP request failed for an explicitly transient reason.
 
     This is the request-level half of :func:`classify_transient_dependency` for
@@ -190,10 +196,17 @@ def is_transient_request_failure(exc: BaseException) -> bool:
     the document-parser transport boundary), so it agrees with durable deferral:
     a transient transport error or retryable status anywhere in the cause chain,
     and no non-retryable marker or misconfigured endpoint anywhere in it.
+
+    ``text_vetoes=False`` skips the message-text markers and keeps only the
+    status, exception-type, and endpoint vetoes, for a boundary whose error
+    text carries caller-controlled content (a parser names the user's file).
     """
 
     chain = tuple(_exception_chain(exc))
-    if any(_is_non_retryable(item) or _is_misconfigured_endpoint(item) for item in chain):
+    if any(
+        _is_non_retryable(item, text=text_vetoes) or _is_misconfigured_endpoint(item)
+        for item in chain
+    ):
         return False
     return any(
         isinstance(item, _TRANSIENT_HTTPX_ERRORS) or _status_code(item) in _RETRYABLE_STATUS_CODES
@@ -253,7 +266,7 @@ def _exception_chain(exc: BaseException):
         current = current.__cause__ or current.__context__
 
 
-def _is_non_retryable(exc: BaseException) -> bool:
+def _is_non_retryable(exc: BaseException, *, text: bool = True) -> bool:
     status = _status_code(exc)
     if status in _AUTH_STATUS_CODES or (
         status is not None and 400 <= status < 500 and status not in _RETRYABLE_STATUS_CODES
@@ -262,8 +275,10 @@ def _is_non_retryable(exc: BaseException) -> bool:
     name = type(exc).__name__.lower()
     if any(marker in name for marker in _AUTH_NAME_MARKERS):
         return True
-    text = str(exc).lower()
-    return any(marker in text for marker in _NON_RETRYABLE_TEXT)
+    if not text:
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _NON_RETRYABLE_TEXT)
 
 
 def _is_misconfigured_endpoint(exc: BaseException) -> bool:

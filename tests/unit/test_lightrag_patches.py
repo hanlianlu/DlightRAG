@@ -19,7 +19,7 @@ def installed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     )
     monkeypatch.setattr(
         "dlightrag.engine.rag.corpus.ingestion.parser_transport.apply_parser_outage_reporting",
-        lambda *, docling_active: installed.append(f"outage:docling={docling_active}") or True,
+        lambda: installed.append("outage") or True,
     )
     return installed
 
@@ -27,10 +27,10 @@ def installed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_docling_mode_does_not_install_the_mineru_patch(installed: list[str]) -> None:
     _lightrag_patches.apply(docling_active=True)
 
-    assert installed == ["docling", "outage:docling=True"]
+    assert installed == ["docling", "outage"]
 
 
-def test_mineru_mode_reports_outages_of_the_mineru_client(installed: list[str]) -> None:
+def test_either_mode_reports_parser_outages(installed: list[str]) -> None:
     _lightrag_patches.apply(docling_active=False)
 
-    assert installed == ["mineru", "outage:docling=False"]
+    assert installed == ["mineru", "outage"]
