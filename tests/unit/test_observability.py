@@ -42,6 +42,21 @@ def test_langfuse_masking_redacts_nested_secrets_and_binary_media() -> None:
     }
 
 
+def test_langfuse_masking_shares_the_settings_secret_names() -> None:
+    """A hyphenated header is a secret; a token count is not."""
+    assert mask_langfuse_payload(
+        {
+            "headers": {"x-api-key": "sk-live", "X-Goog-Api-Key": "g"},
+            "verification_key": "k",
+            "usage": {"max_tokens": 128, "prompt_tokens": 7, "include_token": False},
+        }
+    ) == {
+        "headers": {"x-api-key": "[redacted]", "X-Goog-Api-Key": "[redacted]"},
+        "verification_key": "[redacted]",
+        "usage": {"max_tokens": 128, "prompt_tokens": 7, "include_token": False},
+    }
+
+
 def test_langfuse_masking_bounds_large_text() -> None:
     masked = mask_langfuse_payload("x" * 5000)
 

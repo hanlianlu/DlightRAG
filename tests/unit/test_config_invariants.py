@@ -30,13 +30,13 @@ from dlightrag.application.config import (
     WebSourcesConfig,
     load_config,
 )
-from dlightrag.application.config.sections import _SECRET_FIELD_PATTERNS
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelSettings,
     ModelsSettings,
     RerankSettings,
 )
+from dlightrag.engine.ai.telemetry import is_secret_key
 from dlightrag.engine.answer.model_runtime import WebSourceRuntimeSettings
 from dlightrag.engine.rag.workspace.settings import (
     BM25ProfileSettings,
@@ -601,7 +601,7 @@ def _holds_text(annotation: Any) -> bool:
 
 
 def _secret_named(name: str) -> bool:
-    return any(pattern in name for pattern in _SECRET_FIELD_PATTERNS)
+    return is_secret_key(name)
 
 
 def test_every_secret_named_setting_is_hidden_from_repr() -> None:

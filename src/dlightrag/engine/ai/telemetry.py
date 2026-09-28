@@ -71,6 +71,41 @@ SPAN_TYPES: Final[Mapping[SpanName, SpanType]] = MappingProxyType(
 )
 
 
+#: Name fragments whose values are secrets, in settings fields, provider options
+#: such as request headers, and telemetry payloads. One list, so a secret hidden
+#: from a settings dump is hidden from an exported trace too.
+SECRET_KEY_PATTERNS: tuple[str, ...] = (
+    "api_key",
+    "api-key",
+    "api_secret",
+    "api_token",
+    "authorization",
+    "secret",
+    "verification_key",
+    "password",
+    "connection_string",
+    "milvus_uri",
+    "account_key",
+    "sas_token",
+    "token",
+)
+
+
+def is_secret_key(key: object) -> bool:
+    """Whether a field or header name holds a secret."""
+    normalized = str(key).lower()
+    return any(pattern in normalized for pattern in SECRET_KEY_PATTERNS)
+
+
+def hides_secret_value(value: object) -> bool:
+    """Whether a value under a secret name must be hidden.
+
+    Non-empty text and containers can carry the secret; numbers and flags (for
+    example ``max_tokens``) stay readable.
+    """
+    return bool(value) and isinstance(value, str | bytes | dict | list | tuple)
+
+
 def safe_log_text(value: object, *, max_length: int = 240) -> str:
     """Return a bounded single-line string for telemetry and log fields."""
     text = str(value).replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\r")
@@ -190,6 +225,7 @@ NOOP_TELEMETRY = NoopTelemetry()
 
 __all__ = [
     "NOOP_TELEMETRY",
+    "SECRET_KEY_PATTERNS",
     "SPAN_TYPES",
     "NoopTelemetry",
     "Observation",
@@ -197,6 +233,8 @@ __all__ = [
     "SpanType",
     "Telemetry",
     "bounded_telemetry_text",
+    "hides_secret_value",
+    "is_secret_key",
     "safe_log_text",
     "telemetry_error_message",
     "telemetry_messages",

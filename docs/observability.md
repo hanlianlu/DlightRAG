@@ -66,7 +66,7 @@ no call site can leak after the fact. Call sites that would have to *build* a pa
 - An observation that names its own level keeps it: the adapter maps an exception that escapes the body to `ERROR`, but a Run that reported a cancelled or fenced outcome first is not re-labelled a failure.
 - Error observations carry `level=ERROR` and, only when capture is enabled, the provider's message; otherwise the literal `error`.
 - Structural metadata is not content and stays: counts, workspaces, model and provider identity, Run and Tool identifiers. A redacted trace must still be diagnosable, and none of those values is user text.
-- `mask` replaces secrets and image bytes in every exported payload, and inline image bytes are removed from message telemetry before it leaves the process.
+- `mask` replaces secrets and image bytes in every exported payload. A secret is named by the same fragments that hide it from a settings dump (`api_key`, `api-key`, `authorization`, `token`, …); text and containers under such a name are replaced, while counts and flags such as `max_tokens` stay readable, and inline image bytes are removed from message telemetry before it leaves the process.
 - Only DlightRAG's own observations are exported (`langfuse_export_external_spans` is off by default), so HTTP client and database spans do not pollute the tree.
 
 ## Deployment

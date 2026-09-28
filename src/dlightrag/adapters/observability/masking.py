@@ -3,23 +3,11 @@
 
 from typing import Any
 
-from dlightrag.engine.ai.telemetry import bounded_telemetry_text
-
-_SENSITIVE_KEY_PARTS = (
-    "api_key",
-    "secret",
-    "password",
-    "token",
-    "authorization",
-    "connection_string",
-    "account_key",
-    "sas_token",
+from dlightrag.engine.ai.telemetry import (
+    bounded_telemetry_text,
+    hides_secret_value,
+    is_secret_key,
 )
-
-
-def _is_sensitive_key(key: str) -> bool:
-    normalized = key.lower()
-    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
 
 
 def mask_langfuse_payload(data: Any, **kwargs: Any) -> Any:  # noqa: ARG001
@@ -28,7 +16,9 @@ def mask_langfuse_payload(data: Any, **kwargs: Any) -> Any:  # noqa: ARG001
         if data.get("type") == "image_url":
             return {"type": "image_url", "image_url": "[image omitted]"}
         return {
-            key: "[redacted]" if _is_sensitive_key(str(key)) else mask_langfuse_payload(value)
+            key: "[redacted]"
+            if is_secret_key(key) and hides_secret_value(value)
+            else mask_langfuse_payload(value)
             for key, value in data.items()
         }
     if isinstance(data, list):

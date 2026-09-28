@@ -42,6 +42,7 @@ from dlightrag.engine.ai.settings import (
     freeze_settings_value,
     thaw_settings_value,
 )
+from dlightrag.engine.ai.telemetry import hides_secret_value, is_secret_key
 from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
     DoclingSidecarSettings,
@@ -557,40 +558,17 @@ class AccessControlConfig(BaseModel):
     rules: list[AccessControlRuleConfig] = Field(default_factory=list)
 
 
-#: Name fragments whose values are secrets, in settings fields and in free-form
-#: provider options such as request headers.
-_SECRET_FIELD_PATTERNS: tuple[str, ...] = (
-    "api_key",
-    "api-key",
-    "api_secret",
-    "api_token",
-    "authorization",
-    "secret",
-    "verification_key",
-    "password",
-    "connection_string",
-    "milvus_uri",
-    "account_key",
-    "sas_token",
-    "token",
-)
-
-
-def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, Any]:
-    """Recursively redact values whose keys match sensitive patterns.
-
-    A matching key hides any non-empty text or container under it; numbers and
-    flags (for example ``max_tokens``) stay readable.
-    """
+def _redact_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Recursively redact values whose keys name secrets (see ``is_secret_key``)."""
     result: dict[str, Any] = {}
     for key, value in data.items():
-        if any(pattern in key.lower() for pattern in patterns):
-            result[key] = "***" if value and isinstance(value, str | dict | list | tuple) else value
+        if is_secret_key(key):
+            result[key] = "***" if hides_secret_value(value) else value
         elif isinstance(value, dict):
-            result[key] = _redact_dict(value, patterns)
+            result[key] = _redact_dict(value)
         elif isinstance(value, list | tuple):
             result[key] = type(value)(
-                _redact_dict(item, patterns) if isinstance(item, dict) else item for item in value
+                _redact_dict(item) if isinstance(item, dict) else item for item in value
             )
         else:
             result[key] = value
@@ -995,7 +973,7 @@ class DlightragConfig(BaseSettings):
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         dumped = _mask_hidden_fields(self, super().model_dump(**kwargs))
-        return _redact_dict(dumped, _SECRET_FIELD_PATTERNS)
+        return _redact_dict(dumped)
 
     def model_dump_json(self, **kwargs: Any) -> str:
         indent = kwargs.pop("indent", None)
