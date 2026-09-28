@@ -35,7 +35,7 @@ it('a single page renders every child without a paging control', async () => {
 
   expect([...panel.querySelectorAll('li[role="listitem"]')].map((li) => li.textContent?.trim()))
     .to.deep.equal(['succeeded: objective a', 'succeeded: objective b']);
-  expect(panel.querySelector('[data-load-older-children]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older="children"]')).to.equal(null);
 });
 
 it('paged roster renders the newest page and appends older pages with dedup', async () => {
@@ -54,7 +54,7 @@ it('paged roster renders the newest page and appends older pages with dedup', as
   );
   await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 1);
 
-  const button = panel.querySelector<HTMLButtonElement>('[data-load-older-children]')!;
+  const button = panel.querySelector<HTMLButtonElement>('[data-load-older="children"]')!;
   expect(button.textContent?.trim()).to.equal('Load older children');
   button.click();
   const flight = panel.loadOlderChildren();
@@ -73,8 +73,8 @@ it('paged roster renders the newest page and appends older pages with dedup', as
 
   expect([...panel.querySelectorAll('li[role="listitem"]')].map((li) => li.textContent?.trim()))
     .to.deep.equal(['succeeded: objective newest', 'succeeded: objective older']);
-  expect(panel.querySelector('[data-load-older-children]')).to.equal(null);
-  expect(panel.querySelector('[data-roster-status]')?.textContent).to.contain(
+  expect(panel.querySelector('[data-load-older="children"]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older-status="children"]')?.textContent).to.contain(
     'Loaded 1 older child.',
   );
 });
@@ -97,14 +97,14 @@ it('older-page failure keeps loaded rows and stays retryable', async () => {
 
   await panel.loadOlderChildren();
   await panel.updateComplete;
-  expect(panel.querySelector('[data-load-older-children]')?.textContent).to.contain(
+  expect(panel.querySelector('[data-load-older="children"]')?.textContent).to.contain(
     'Retry loading older children',
   );
 
   await panel.loadOlderChildren();
   await panel.updateComplete;
   expect(panel.querySelectorAll('li[role="listitem"]')).to.have.length(2);
-  expect(panel.querySelector('[data-load-older-children]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older="children"]')).to.equal(null);
 });
 
 it('refresh resets the traversal and rejects a late older response', async () => {
@@ -131,7 +131,7 @@ it('refresh resets the traversal and rejects a late older response', async () =>
 
   expect([...panel.querySelectorAll('li[role="listitem"]')].map((li) => li.textContent?.trim()))
     .to.deep.equal(['succeeded: objective fresh']);
-  expect(panel.querySelector('[data-load-older-children]')?.textContent).to.contain(
+  expect(panel.querySelector('[data-load-older="children"]')?.textContent).to.contain(
     'Load older children',
   );
 });
@@ -156,7 +156,7 @@ it('closing the dialog aborts in-flight pages and resets paging state', async ()
   await panel.updateComplete;
 
   expect(panel.querySelectorAll('li[role="listitem"]')).to.have.length(0);
-  expect(panel.querySelector('[data-load-older-children]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older="children"]')).to.equal(null);
   expect(panel.querySelector('.roster-list')?.textContent).to.contain(
     'No child agents were started.',
   );

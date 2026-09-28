@@ -270,3 +270,44 @@ it('clears workspace-scoped state before loading the next workspace', async () =
   }));
   await waitFor(() => recovery.loading === false);
 });
+
+it('pages more failed documents through the shared control and announces each page', async () => {
+  let moreAttempts = 0;
+  window.fetch = async (input) => {
+    const url = new URL(String(input), window.location.origin);
+    if (!url.searchParams.has('cursor')) {
+      return Response.json({...failedPage(), next_cursor: 'more-1'});
+    }
+    moreAttempts += 1;
+    if (moreAttempts === 1) return new Response('unavailable', {status: 503});
+    return Response.json({
+      workspace: 'personel',
+      failed: [
+        failedPage().failed[0],
+        {document_id: 'doc-2', file_name: 'later.pdf', error: 'parse failure', updated_at: ''},
+      ],
+      next_cursor: null,
+    });
+  };
+
+  const recovery = mount();
+  await waitFor(() => recovery.page?.failed.length === 1);
+  expect(recovery.textContent).to.contain('1+ documents need attention');
+  const more = recovery.querySelector<HTMLButtonElement>('[data-load-older="failed-documents"]')!;
+  expect(more.textContent?.trim()).to.equal('Load more failed documents');
+
+  more.click();
+  await waitFor(() => recovery.querySelector('[data-load-older="failed-documents"]')
+    ?.textContent?.includes('Retry') ?? false);
+  const status = () => recovery.querySelector('[data-load-older-status="failed-documents"]')
+    ?.textContent?.trim();
+  expect(status()).to.equal('More failed documents could not be loaded.');
+  expect(recovery.page?.failed).to.have.length(1);
+
+  recovery.querySelector<HTMLButtonElement>('[data-load-older="failed-documents"]')!.click();
+  await waitFor(() => recovery.page?.failed.length === 2);
+  await recovery.updateComplete;
+  expect(recovery.querySelector('[data-load-older="failed-documents"]')).to.equal(null);
+  expect(status()).to.equal('Loaded 1 more failed document.');
+  expect(recovery.textContent).to.contain('2 documents need attention');
+});

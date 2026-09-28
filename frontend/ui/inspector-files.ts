@@ -13,12 +13,14 @@ import {icon} from '../design-system/index.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
 import {apiErrorMessage, isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
+import {KeysetPager, type PageLoadState} from '../lib/paged.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {withRelativePath} from './folder-upload.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
 import {deleteWorkspaceRequest, resetWorkspaceRequest} from '../api/workspaces.ts';
 import {requestToast} from './toast-request.ts';
 import {corpusRepairNotice, resumeRepairLabel, resumeRepairResult} from './corpus-repair.ts';
+import {loadOlderControl} from './load-older.ts';
 import './failed-file-recovery.ts';
 import fileStyles from '../styles/inspector-files.module.css';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
@@ -47,7 +49,6 @@ export class DlInspectorFiles extends LightElement {
     error: {state: true},
     uploading: {state: true},
     acceptedFiles: {state: true},
-    filesLoadMoreState: {state: true},
     actionIntent: {state: true},
     actionPending: {state: true},
     actionConfirmed: {state: true},
@@ -60,7 +61,6 @@ export class DlInspectorFiles extends LightElement {
   declare error: string | null;
   declare uploading: boolean;
   declare acceptedFiles: number;
-  declare filesLoadMoreState: 'idle' | 'loading' | 'error';
 
   declare actionIntent: WorkspaceActionIntent | null;
   declare actionPending: boolean;
@@ -77,8 +77,14 @@ export class DlInspectorFiles extends LightElement {
     onSettled: (run) => { void this.#mutationSettled(run); },
     onLost: () => { void this.#mutationLost(); },
   });
-  #olderFilesFlight: Promise<void> | null = null;
-  #olderFilesAnnouncement = '';
+  readonly #olderFiles = new KeysetPager<WebFilePanelSnapshot>(async (cursor, signal) => {
+    const workspace = this.#workspace;
+    const page = await getFilePanel(workspace, cursor, signal);
+    // A page of another Workspace must never join this list.
+    if (page.workspace !== workspace) throw new Error('older file page changed workspace identity');
+    return page;
+  }, () => { this.requestUpdate(); });
+  #appendedFiles = 0;
   #restoreOlderFocus = false;
   #deleteTrigger: HTMLElement | null = null;
 
@@ -92,7 +98,6 @@ export class DlInspectorFiles extends LightElement {
     this.error = null;
     this.uploading = false;
     this.acceptedFiles = 0;
-    this.filesLoadMoreState = 'idle';
     this.actionIntent = null;
     this.actionPending = false;
     this.actionConfirmed = false;
@@ -122,6 +127,11 @@ export class DlInspectorFiles extends LightElement {
     }
   }
 
+  /** How the latest older-files page load stands. */
+  get filesLoadMoreState(): PageLoadState {
+    return this.#olderFiles.state;
+  }
+
   get hasActiveMutation(): boolean {
     return this.#session.mutating || this.#tracker.resuming;
   }
@@ -145,6 +155,7 @@ export class DlInspectorFiles extends LightElement {
       // never leave actionable rows from the previously selected Workspace.
       this.querySelector<HTMLDialogElement>('#workspace-action-dialog')?.close();
       this.snapshot = null;
+      this.#olderFiles.reset(null);
       this.acceptedFiles = 0;
       this.#tracker.clear();
       this.#deleteRunId = null;
@@ -161,6 +172,7 @@ export class DlInspectorFiles extends LightElement {
         throw new Error('file panel response changed workspace identity');
       }
       this.snapshot = snapshot;
+      this.#olderFiles.reset(snapshot.nextCursor);
       if (!this.#tracker.active) this.acceptedFiles = 0;
     } catch (error) {
       if (
@@ -169,7 +181,10 @@ export class DlInspectorFiles extends LightElement {
       ) return;
       // Keep the workspace transition fail closed even when a transport ignores
       // AbortSignal and resolves an invalidated request later.
-      if (this.snapshot?.workspace !== workspace) this.snapshot = null;
+      if (this.snapshot?.workspace !== workspace) {
+        this.snapshot = null;
+        this.#olderFiles.reset(null);
+      }
       this.error = apiErrorMessage(
         error,
         msg('Failed to load files.', {id: 'inspectorFiles.loadFailed'}),
@@ -183,52 +198,13 @@ export class DlInspectorFiles extends LightElement {
   }
 
   loadOlderFiles(): Promise<void> {
-    if (this.#olderFilesFlight !== null) return this.#olderFilesFlight;
-    const workspace = this.handles.ingest.workspace;
-    const cursor = this.snapshot?.workspace === workspace
-      ? this.snapshot.nextCursor
-      : null;
-    if (!cursor || this.loading || this.#session.requestBusy || !this.active) {
-      return Promise.resolve();
-    }
-    const flight = this.#loadOlderFilesPage(
-      workspace,
-      cursor,
-      this.#session.olderGeneration,
-    );
-    this.#olderFilesFlight = flight;
-    void flight.finally(() => {
-      if (this.#olderFilesFlight === flight) this.#olderFilesFlight = null;
-    });
-    return flight;
-  }
-
-  async #loadOlderFilesPage(
-    workspace: string,
-    cursor: string,
-    generation: number,
-  ): Promise<void> {
-    const controller = this.#session.startOlder();
-    this.filesLoadMoreState = 'loading';
-    this.#olderFilesAnnouncement = msg('Loading older files…', {id: 'inspectorFiles.loadingOlder'});
-    try {
-      const older = await getFilePanel(workspace, cursor, controller.signal);
+    if (
+      this.loading || this.#session.requestBusy || !this.active
+      || this.snapshot?.workspace !== this.handles.ingest.workspace
+    ) return Promise.resolve();
+    return this.#olderFiles.loadNext((older) => {
       const current = this.snapshot;
-      if (
-        !this.#session.isOlderCurrent(controller, generation)
-        || workspace !== this.handles.ingest.workspace
-        || current?.workspace !== workspace
-        || current.nextCursor !== cursor
-      ) {
-        if (this.#session.isOlderCurrent(controller, generation)) {
-          this.filesLoadMoreState = 'idle';
-          this.#olderFilesAnnouncement = '';
-        }
-        return;
-      }
-      if (older.workspace !== workspace) {
-        throw new Error('older file page changed workspace identity');
-      }
+      if (!current) return;
       const paths = new Set(current.files.map((file) => file.filePath));
       const appended = older.files.filter((file) => {
         if (paths.has(file.filePath)) return false;
@@ -240,25 +216,14 @@ export class DlInspectorFiles extends LightElement {
         files: [...current.files, ...appended],
         nextCursor: older.nextCursor,
       };
-      this.filesLoadMoreState = 'idle';
-      this.#olderFilesAnnouncement = appended.length === 1
-        ? msg('Loaded 1 older file.', {id: 'inspectorFiles.loadedOneOlder'})
-        : msg(str`Loaded ${appended.length} older files.`, {id: 'inspectorFiles.loadedOlder'});
+      this.#appendedFiles = appended.length;
       if (older.nextCursor === null && this.#restoreOlderFocus) {
         this.#restoreOlderFocus = false;
-        await this.updateComplete;
-        this.querySelector<HTMLElement>('#file-list')?.focus({preventScroll: true});
+        void this.updateComplete.then(() => {
+          this.querySelector<HTMLElement>('#file-list')?.focus({preventScroll: true});
+        });
       }
-    } catch (error) {
-      if (
-        isAbortError(error)
-        || !this.#session.isOlderCurrent(controller, generation)
-      ) return;
-      this.filesLoadMoreState = 'error';
-      this.#olderFilesAnnouncement = msg('Older files could not be loaded.', {id: 'inspectorFiles.olderFilesFailed'});
-    } finally {
-      this.#session.finishOlder(controller);
-    }
+    });
   }
 
   async upload(files: readonly File[], label?: string | null): Promise<void> {
@@ -399,10 +364,7 @@ export class DlInspectorFiles extends LightElement {
   }
 
   #invalidateOlderFiles(): void {
-    this.#session.invalidateOlder();
-    this.#olderFilesFlight = null;
-    this.filesLoadMoreState = 'idle';
-    this.#olderFilesAnnouncement = '';
+    this.#olderFiles.cancel();
     this.#restoreOlderFocus = false;
   }
 
@@ -730,21 +692,19 @@ export class DlInspectorFiles extends LightElement {
             `,
           )}
         </div>
-        ${snapshot?.nextCursor ? html`
-          <div class=${fileStyles['file-page-control']}>
-            <button type="button" data-load-older-files
-                    aria-busy=${this.filesLoadMoreState === 'loading' ? 'true' : 'false'}
-                    ?disabled=${this.filesLoadMoreState === 'loading'}
-                    @click=${this.#loadOlderFiles}>
-              ${this.filesLoadMoreState === 'error'
-                ? msg('Retry loading older files', {id: 'inspectorFiles.retryLoadOlder'})
-                : msg('Load older files', {id: 'inspectorFiles.loadOlder'})}
-            </button>
-          </div>
-        ` : nothing}
-        <span class="dl-sr-only" data-older-files-status role="status" aria-live="polite">
-          ${this.#olderFilesAnnouncement}
-        </span>
+        ${loadOlderControl({
+          list: 'files',
+          pages: this.#olderFiles,
+          label: msg('Load older files', {id: 'inspectorFiles.loadOlder'}),
+          retryLabel: msg('Retry loading older files', {id: 'inspectorFiles.retryLoadOlder'}),
+          loading: msg('Loading older files…', {id: 'inspectorFiles.loadingOlder'}),
+          loaded: this.#appendedFiles === 1
+            ? msg('Loaded 1 older file.', {id: 'inspectorFiles.loadedOneOlder'})
+            : msg(str`Loaded ${this.#appendedFiles} older files.`, {id: 'inspectorFiles.loadedOlder'}),
+          failed: msg('Older files could not be loaded.', {id: 'inspectorFiles.olderFilesFailed'}),
+          onLoad: this.#loadOlderFiles,
+          rowClass: fileStyles['file-page-control'],
+        })}
       ` : nothing}
       ${!this.loading && !this.error && files.length === 0 && !this.#tracker.active ? html`
         <div class="empty-state">${msg(str`No files ingested in workspace “${this.#workspace}”.`, {id: 'inspectorFiles.emptyState'})}</div>

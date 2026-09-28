@@ -420,23 +420,23 @@ it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async 
     loader,
     'cursor-1',
   );
-  expect(workspaceStore.hasMoreWorkspaces).to.equal(true);
+  expect(workspaceStore.morePages.hasOlder).to.equal(true);
 
   const flight = workspaceStore.loadMoreWorkspaces();
   expect(workspaceStore.loadMoreWorkspaces()).to.equal(flight);
   await flight;
-  expect(workspaceStore.workspaceLoadMoreState).to.equal('error');
+  expect(workspaceStore.morePages.state).to.equal('error');
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['default']);
 
   await workspaceStore.loadMoreWorkspaces();
-  expect(workspaceStore.workspaceLoadMoreState).to.equal('idle');
+  expect(workspaceStore.morePages.state).to.equal('idle');
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal([
     'default', 'finance', 'research',
   ]);
-  expect(workspaceStore.hasMoreWorkspaces).to.equal(true);
+  expect(workspaceStore.morePages.hasOlder).to.equal(true);
 
   await workspaceStore.loadMoreWorkspaces();
-  expect(workspaceStore.hasMoreWorkspaces).to.equal(false);
+  expect(workspaceStore.morePages.hasOlder).to.equal(false);
   expect(workspaceStore.records).to.have.length(3);
   expect(olderRequests).to.equal(3);
 });
@@ -468,8 +468,8 @@ it('rejects stale load-more pages after a fresh init invalidates the flight', as
   await flight;
 
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['fresh']);
-  expect(workspaceStore.hasMoreWorkspaces).to.equal(true);
-  expect(workspaceStore.workspaceLoadMoreState).to.equal('idle');
+  expect(workspaceStore.morePages.hasOlder).to.equal(true);
+  expect(workspaceStore.morePages.state).to.equal('idle');
 });
 
 it('renders an accessible load-more workspaces control in the picker', async () => {
@@ -489,18 +489,18 @@ it('renders an accessible load-more workspaces control in the picker', async () 
   scope.querySelector<HTMLButtonElement>('#workspace-trigger')!.click();
   await scope.updateComplete;
 
-  const control = scope.querySelector<HTMLButtonElement>('[data-load-more-workspaces]');
+  const control = scope.querySelector<HTMLButtonElement>('[data-load-older="workspaces"]');
   expect(control).not.to.equal(null);
   expect(control!.type).to.equal('button');
   expect(control!.textContent?.trim()).to.equal('Load more workspaces');
 
   control!.click();
-  await waitFor(() => scope.querySelector('[data-load-more-workspaces]') === null);
-  await waitFor(() => scope.querySelector('[data-workspaces-status]')?.textContent
+  await waitFor(() => scope.querySelector('[data-load-older="workspaces"]') === null);
+  await waitFor(() => scope.querySelector('[data-load-older-status="workspaces"]')?.textContent
     ?.includes('Loaded more workspaces.') ?? false);
 
-  expect(scope.querySelector('[data-load-more-workspaces]')).to.equal(null);
-  expect(scope.querySelector('[data-workspaces-status]')?.textContent).to.contain(
+  expect(scope.querySelector('[data-load-older="workspaces"]')).to.equal(null);
+  expect(scope.querySelector('[data-load-older-status="workspaces"]')?.textContent).to.contain(
     'Loaded more workspaces.',
   );
   expect([...scope.querySelectorAll('[data-workspace-choice]:not([data-workspace-all])')]

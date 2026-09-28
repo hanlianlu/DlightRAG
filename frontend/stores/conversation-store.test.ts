@@ -114,7 +114,7 @@ test('load older coalesces overlap and appends deduped deterministic pages', asy
   const firstFlight = store.loadOlder();
   const overlappingFlight = store.loadOlder();
   assert.equal(firstFlight, overlappingFlight);
-  assert.equal(store.loadMoreState, 'loading');
+  assert.equal(store.olderConversations.state, 'loading');
   older.resolve(page([
     summary('00000000-0000-0000-0000-000000000001'),
     summary('00000000-0000-0000-0000-000000000003', '2026-08-19T00:00:00Z'),
@@ -127,8 +127,8 @@ test('load older coalesces overlap and appends deduped deterministic pages', asy
     '00000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000003',
   ]);
-  assert.equal(store.hasOlderConversations, false);
-  assert.equal(store.loadMoreState, 'idle');
+  assert.equal(store.olderConversations.hasOlder, false);
+  assert.equal(store.olderConversations.state, 'idle');
 });
 
 test('load older errors preserve loaded rows and remain retryable', async () => {
@@ -145,11 +145,11 @@ test('load older errors preserve loaded rows and remain retryable', async () => 
 
   await store.loadOlder();
   assert.deepEqual(store.conversations.map((item) => item.conversationId), ['new']);
-  assert.equal(store.loadMoreState, 'error');
+  assert.equal(store.olderConversations.state, 'error');
   await store.loadOlder();
 
   assert.deepEqual(store.conversations.map((item) => item.conversationId), ['new', 'old']);
-  assert.equal(store.loadMoreState, 'idle');
+  assert.equal(store.olderConversations.state, 'idle');
 });
 
 test('reload cancels an older-page request and replaces it with a fresh first page', async () => {
@@ -179,7 +179,7 @@ test('reload cancels an older-page request and replaces it with a fresh first pa
 
   assert.equal(olderAborted, true);
   assert.deepEqual(store.conversations.map((item) => item.conversationId), ['reloaded']);
-  assert.equal(store.loadMoreState, 'idle');
+  assert.equal(store.olderConversations.state, 'idle');
 });
 
 test('dispose aborts a pending page without applying late state', async () => {
@@ -270,7 +270,7 @@ test('message history traverses 205 turns by prepend with coalescing and overlap
   const coalesced = store.loadOlderMessages();
   assert.equal(first, coalesced);
   await first;
-  while (store.hasOlderMessages) await store.loadOlderMessages();
+  while (store.olderMessages.hasOlder) await store.loadOlderMessages();
 
   assert.equal(store.history?.turns.length, 205);
   assert.deepEqual(store.history?.turns.map((item) => item.turnNumber),
@@ -300,7 +300,7 @@ test('a recent refresh replaces a disconnected loaded range and restores its old
     store.history?.turns.map((item) => item.turnNumber),
     Array.from({length: 40}, (_, index) => index + 51),
   );
-  assert.equal(store.hasOlderMessages, true);
+  assert.equal(store.olderMessages.hasOlder, true);
   assert.equal(store.history?.nextCursor, 'before-51');
 });
 

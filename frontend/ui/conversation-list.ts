@@ -6,6 +6,7 @@ import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
+import {loadOlderControl} from './load-older.ts';
 
 export interface ConversationIntentDetail {
   conversationId: string;
@@ -44,7 +45,7 @@ export class DlConversationList extends LightElement {
     this.busy = false;
     this.openMenuId = null;
     this.renameId = null;
-    /** Store reads: conversations, listState, loadMoreState, hasOlderConversations, activeConversationId. */
+    /** Store reads: conversations, listState, olderConversations, activeConversationId. */
     new StoreController(this, this.handles.conversations);
   }
 
@@ -326,29 +327,18 @@ export class DlConversationList extends LightElement {
           (conversation) => this.#renderRow(conversation),
         )}
       </div>
-      ${this.handles.conversations.loadMoreState === 'error'
-        ? html`
-          <div class="conversation-list-status" role="status">
-            <span>${msg('Could not load older conversations.', {id: 'conversationList.couldNotLoadOlder'})}</span>
-            <button type="button" @click=${() => {
-              void this.handles.conversations.loadOlder();
-            }}>${msg('Retry loading older conversations', {id: 'conversationList.retryLoadOlder'})}</button>
-          </div>
-        `
-        : nothing}
-      ${this.handles.conversations.hasOlderConversations && this.handles.conversations.loadMoreState !== 'error'
-        ? html`
-          <button
-            type="button"
-            class="conversation-load-older"
-            ?disabled=${this.handles.conversations.loadMoreState === 'loading'}
-            aria-label=${msg('Load older conversations', {id: 'conversationList.loadOlderAria'})}
-            @click=${() => { void this.handles.conversations.loadOlder(); }}
-          >${this.handles.conversations.loadMoreState === 'loading'
-            ? msg('Loading older…', {id: 'conversationList.loadingOlder'})
-            : msg('Load older', {id: 'conversationList.loadOlder'})}</button>
-        `
-        : nothing}
+      ${loadOlderControl({
+        list: 'conversations',
+        pages: this.handles.conversations.olderConversations,
+        label: msg('Load older conversations', {id: 'conversationList.loadOlder'}),
+        retryLabel: msg('Retry loading older conversations', {id: 'conversationList.retryLoadOlder'}),
+        loading: msg('Loading older conversations…', {id: 'conversationList.olderLoading'}),
+        loaded: msg('Loaded older conversations.', {id: 'conversationList.olderLoaded'}),
+        failed: msg('Could not load older conversations.', {id: 'conversationList.couldNotLoadOlder'}),
+        onLoad: () => { void this.handles.conversations.loadOlder(); },
+        rowClass: 'conversation-load-older-row',
+        buttonClass: 'conversation-load-older',
+      })}
     `;
   }
 }

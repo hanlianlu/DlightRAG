@@ -12,10 +12,10 @@ import {
 } from '../api/conversations.ts';
 import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
+import {KeysetPager, type KeysetPagerStatus} from '../lib/paged.ts';
 import {Store} from './base.ts';
 
 export type ConversationListState = 'loading' | 'ready' | 'error' | 'empty-error';
-export type ConversationLoadMoreState = 'idle' | 'loading' | 'error';
 export type ConversationViewState = 'new' | 'loading' | 'ready' | 'unavailable' | 'error';
 export type ConversationOpenResult = 'ready' | 'unavailable' | 'error' | 'stale';
 export type ConversationMutationResult = 'ok' | 'missing' | 'error';
@@ -52,24 +52,30 @@ export class ConversationStore extends Store {
   #activeConversationId: string | null = null;
   #history: ConversationHistory | null = null;
   #listState: ConversationListState = 'loading';
-  #loadMoreState: ConversationLoadMoreState = 'idle';
-  #nextCursor: string | null = null;
-  #loadMoreFlight: Promise<void> | null = null;
   #viewState: ConversationViewState = 'new';
   #viewRevision = 0;
   #mutationPending = false;
-  #listGeneration = 0;
   #viewGeneration = 0;
-  #listController: AbortController | null = null;
   #viewController: AbortController | null = null;
-  #historyPageController: AbortController | null = null;
-  #historyNextCursor: string | null = null;
-  #historyLoadMoreState: ConversationLoadMoreState = 'idle';
-  #historyLoadMoreFlight: Promise<void> | null = null;
+  readonly #listPages: KeysetPager<ConversationPage>;
+  readonly #olderMessages: KeysetPager<ConversationHistory>;
 
   constructor(api: ConversationApi = browserConversationApi) {
     super();
     this.#api = api;
+    this.#listPages = new KeysetPager<ConversationPage>(
+      (cursor, signal) => api.list(cursor, signal),
+      () => this.changed(),
+    );
+    this.#olderMessages = new KeysetPager<ConversationHistory>(async (cursor, signal) => {
+      const conversationId = this.#activeConversationId;
+      if (conversationId === null) throw new Error('no conversation is open');
+      const older = await api.history(conversationId, cursor, undefined, signal);
+      if (older.conversation.conversationId !== conversationId) {
+        throw new Error('older history response changed conversation identity');
+      }
+      return older;
+    }, () => this.#publishView());
   }
 
   get conversations(): readonly ConversationSummary[] {
@@ -88,20 +94,14 @@ export class ConversationStore extends Store {
     return this.#listState;
   }
 
-  get loadMoreState(): ConversationLoadMoreState {
-    return this.#loadMoreState;
+  /** The conversation list's next-page control reads this. */
+  get olderConversations(): KeysetPagerStatus {
+    return this.#listPages.snapshot();
   }
 
-  get hasOlderConversations(): boolean {
-    return this.#nextCursor !== null;
-  }
-
-  get historyLoadMoreState(): ConversationLoadMoreState {
-    return this.#historyLoadMoreState;
-  }
-
-  get hasOlderMessages(): boolean {
-    return this.#historyNextCursor !== null;
+  /** The message list's next-page control reads this. */
+  get olderMessages(): KeysetPagerStatus {
+    return this.#olderMessages.snapshot();
   }
 
   get viewState(): ConversationViewState {
@@ -128,70 +128,28 @@ export class ConversationStore extends Store {
     return this.#conversations[0]?.conversationId ?? null;
   }
 
-  async loadList(): Promise<void> {
-    this.#listController?.abort();
-    const controller = new AbortController();
-    const generation = ++this.#listGeneration;
-    this.#listController = controller;
-    this.#loadMoreFlight = null;
-    this.#loadMoreState = 'idle';
+  loadList(): Promise<void> {
     this.#listState = 'loading';
-    this.changed();
-    try {
-      const page = await this.#api.list(null, controller.signal);
-      if (generation !== this.#listGeneration) return;
+    return this.#listPages.start((page) => {
       this.#conversations = this.#merge([], page.items);
-      this.#nextCursor = page.nextCursor;
       this.#listState = 'ready';
-      this.changed();
-    } catch (error) {
-      if (isAbortError(error) || generation !== this.#listGeneration) return;
+    }, () => {
       this.#listState = this.#conversations.length > 0 ? 'error' : 'empty-error';
-      this.changed();
-    } finally {
-      if (this.#listController === controller) this.#listController = null;
-    }
+    });
   }
 
   loadOlder(): Promise<void> {
-    if (this.#loadMoreFlight !== null) return this.#loadMoreFlight;
-    if (this.#nextCursor === null || this.#listState === 'loading') return Promise.resolve();
-    const flight = this.#loadOlderPage(this.#nextCursor, this.#listGeneration);
-    this.#loadMoreFlight = flight;
-    void flight.finally(() => {
-      if (this.#loadMoreFlight === flight) this.#loadMoreFlight = null;
-    });
-    return flight;
-  }
-
-  async #loadOlderPage(cursor: string, generation: number): Promise<void> {
-    this.#listController?.abort();
-    const controller = new AbortController();
-    this.#listController = controller;
-    this.#loadMoreState = 'loading';
-    this.changed();
-    try {
-      const page = await this.#api.list(cursor, controller.signal);
-      if (generation !== this.#listGeneration) return;
+    if (this.#listState === 'loading') return Promise.resolve();
+    return this.#listPages.loadNext((page) => {
       this.#conversations = this.#merge(this.#conversations, page.items);
-      this.#nextCursor = page.nextCursor;
-      this.#loadMoreState = 'idle';
-      this.changed();
-    } catch (error) {
-      if (isAbortError(error) || generation !== this.#listGeneration) return;
-      this.#loadMoreState = 'error';
-      this.changed();
-    } finally {
-      if (this.#listController === controller) this.#listController = null;
-    }
+    });
   }
 
   openNew(): void {
     this.#abortView();
     this.#activeConversationId = null;
     this.#history = null;
-    this.#historyNextCursor = null;
-    this.#historyLoadMoreState = 'idle';
+    this.#olderMessages.reset(null);
     this.#viewState = 'new';
     this.#publishView();
   }
@@ -207,10 +165,9 @@ export class ConversationStore extends Store {
     const generation = this.#viewGeneration;
     this.#viewController = controller;
     this.#activeConversationId = conversationId;
-    this.#historyLoadMoreState = 'idle';
     if (!sameConversation) {
       this.#history = null;
-      this.#historyNextCursor = null;
+      this.#olderMessages.reset(null);
     }
     if (options.showLoading !== false) {
       this.#viewState = 'loading';
@@ -228,12 +185,12 @@ export class ConversationStore extends Store {
       const turns = sameConversation && this.#history !== null && !replaceHistory
         ? this.#mergeTurns(this.#history.turns, recent.turns, true)
         : this.#mergeTurns([], recent.turns, true);
-      if (!hadHistory || replaceHistory) this.#historyNextCursor = recent.nextCursor ?? null;
-      this.#history = {
-        ...recent,
-        turns,
-        nextCursor: this.#historyNextCursor,
-      };
+      // A refresh that joins the loaded range keeps paging from its oldest page.
+      const nextCursor = hadHistory && !replaceHistory
+        ? this.#history?.nextCursor ?? null
+        : recent.nextCursor ?? null;
+      this.#history = {...recent, turns, nextCursor};
+      this.#olderMessages.reset(nextCursor);
       this.#activeConversationId = conversationId;
       this.#upsert(recent.conversation);
       this.#viewState = 'ready';
@@ -244,7 +201,7 @@ export class ConversationStore extends Store {
       if (this.#isRouteUnavailable(error)) {
         this.#removeSummary(conversationId);
         this.#history = null;
-        this.#historyNextCursor = null;
+        this.#olderMessages.reset(null);
         this.#activeConversationId = conversationId;
         this.#viewState = 'unavailable';
         this.#publishView();
@@ -254,7 +211,7 @@ export class ConversationStore extends Store {
         return 'error';
       }
       this.#history = null;
-      this.#historyNextCursor = null;
+      this.#olderMessages.reset(null);
       this.#viewState = 'error';
       this.#publishView();
       return 'error';
@@ -264,66 +221,17 @@ export class ConversationStore extends Store {
   }
 
   loadOlderMessages(): Promise<void> {
-    if (this.#historyLoadMoreFlight !== null) return this.#historyLoadMoreFlight;
-    const conversationId = this.#activeConversationId;
-    const cursor = this.#historyNextCursor;
-    if (!conversationId || cursor === null || this.#viewState !== 'ready') {
-      return Promise.resolve();
-    }
-    const flight = this.#loadOlderMessagesPage(
-      conversationId,
-      cursor,
-      this.#viewGeneration,
-    );
-    this.#historyLoadMoreFlight = flight;
-    void flight.finally(() => {
-      if (this.#historyLoadMoreFlight === flight) this.#historyLoadMoreFlight = null;
-    });
-    return flight;
-  }
-
-  async #loadOlderMessagesPage(
-    conversationId: string,
-    cursor: string,
-    generation: number,
-  ): Promise<void> {
-    this.#historyPageController?.abort();
-    const controller = new AbortController();
-    this.#historyPageController = controller;
-    this.#historyLoadMoreState = 'loading';
-    this.#publishView();
-    try {
-      const older = await this.#api.history(
-        conversationId,
-        cursor,
-        undefined,
-        controller.signal,
-      );
-      if (
-        generation !== this.#viewGeneration
-        || this.#activeConversationId !== conversationId
-        || this.#historyNextCursor !== cursor
-      ) return;
-      if (older.conversation.conversationId !== conversationId || this.#history === null) {
-        throw new Error('older history response changed conversation identity');
-      }
+    if (!this.#activeConversationId || this.#viewState !== 'ready') return Promise.resolve();
+    return this.#olderMessages.loadNext((older) => {
+      if (this.#history === null) return;
       this.#history = {
         ...this.#history,
         conversation: older.conversation,
         turns: this.#mergeTurns(this.#history.turns, older.turns, false),
-        nextCursor: older.nextCursor ?? null,
+        nextCursor: older.nextCursor,
       };
-      this.#historyNextCursor = older.nextCursor ?? null;
-      this.#historyLoadMoreState = 'idle';
       this.#upsert(older.conversation);
-      this.#publishView();
-    } catch (error) {
-      if (isAbortError(error) || generation !== this.#viewGeneration) return;
-      this.#historyLoadMoreState = 'error';
-      this.#publishView();
-    } finally {
-      if (this.#historyPageController === controller) this.#historyPageController = null;
-    }
+    });
   }
 
   async refreshActive(): Promise<ConversationOpenResult> {
@@ -337,8 +245,7 @@ export class ConversationStore extends Store {
     this.#upsert(summary);
     this.#activeConversationId = summary.conversationId;
     this.#history = null;
-    this.#historyNextCursor = null;
-    this.#historyLoadMoreState = 'idle';
+    this.#olderMessages.reset(null);
     this.#viewState = 'ready';
     // The live answer already owns the viewport; only list consumers update.
     this.changed();
@@ -364,7 +271,7 @@ export class ConversationStore extends Store {
         if (this.#activeConversationId === conversationId) {
           this.#abortView();
           this.#history = null;
-          this.#historyNextCursor = null;
+          this.#olderMessages.reset(null);
           this.#viewState = 'unavailable';
           this.#publishView();
         }
@@ -391,7 +298,7 @@ export class ConversationStore extends Store {
         this.#abortView();
         this.#activeConversationId = conversationId;
         this.#history = null;
-        this.#historyNextCursor = null;
+        this.#olderMessages.reset(null);
         this.#viewState = 'unavailable';
         this.#publishView();
       }
@@ -414,11 +321,7 @@ export class ConversationStore extends Store {
   }
 
   dispose(): void {
-    this.#listController?.abort();
-    this.#listController = null;
-    this.#listGeneration += 1;
-    this.#loadMoreFlight = null;
-    this.#loadMoreState = 'idle';
+    this.#listPages.cancel();
     this.#abortView();
   }
 
@@ -444,15 +347,8 @@ export class ConversationStore extends Store {
   #abortView(): void {
     this.#viewController?.abort();
     this.#viewController = null;
-    this.#abortHistoryPage();
+    this.#olderMessages.cancel();
     this.#viewGeneration += 1;
-  }
-
-  #abortHistoryPage(): void {
-    this.#historyPageController?.abort();
-    this.#historyPageController = null;
-    this.#historyLoadMoreFlight = null;
-    this.#historyLoadMoreState = 'idle';
   }
 
   #upsert(summary: ConversationSummary): void {

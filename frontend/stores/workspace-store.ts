@@ -2,7 +2,7 @@
 
 import { Store } from './base.ts';
 import type {WorkspacePage, WorkspacePageItem} from '../api/workspaces.ts';
-import {KeysetPager, type PageLoadState} from '../lib/paged.ts';
+import {KeysetPager, type KeysetPagerStatus} from '../lib/paged.ts';
 
 export type WorkspaceRecord = WorkspacePageItem;
 
@@ -13,8 +13,6 @@ export type WorkspacePageLoader = (
   cursor: string | null,
   signal?: AbortSignal,
 ) => Promise<WorkspacePage>;
-
-export type WorkspaceLoadMoreState = PageLoadState;
 
 function setCookie(name: string, value: string): void {
   // biome-ignore lint/suspicious/noDocumentCookie: cookies are the workspace preference channel
@@ -33,7 +31,7 @@ export class WorkspaceStore extends Store {
   #primary = '';
   #deploymentDefault = '';
   #loader: WorkspacePageLoader | null = null;
-  readonly #pager: KeysetPager<WorkspacePageItem>;
+  readonly #pager: KeysetPager<WorkspacePage>;
 
   get records(): readonly WorkspaceRecord[] {
     return this.#records;
@@ -56,12 +54,9 @@ export class WorkspaceStore extends Store {
     return this.#deploymentDefault;
   }
 
-  get hasMoreWorkspaces(): boolean {
-    return this.#loader !== null && this.#pager.hasOlder;
-  }
-
-  get workspaceLoadMoreState(): WorkspaceLoadMoreState {
-    return this.#pager.state;
+  /** The picker's next-page control reads this. */
+  get morePages(): KeysetPagerStatus {
+    return this.#pager.snapshot();
   }
 
   init(
@@ -75,7 +70,8 @@ export class WorkspaceStore extends Store {
   ): void {
     this.#loader = loader;
     this.#deploymentDefault = deploymentDefault;
-    this.#pager.reset(nextCursor);
+    // Without a loader there is no next page to offer.
+    this.#pager.reset(loader === null ? null : nextCursor);
     this.#records = records;
     // The full authorized id set stays separate from the bounded display
     // page: active/primary are server-validated against the full catalog and
@@ -89,11 +85,10 @@ export class WorkspaceStore extends Store {
   }
 
   loadMoreWorkspaces(): Promise<void> {
-    if (this.#loader === null) return Promise.resolve();
     return this.#pager.loadNext((page) => {
       const known = new Set(this.#records.map((record) => record.workspace));
       const appended: WorkspaceRecord[] = [];
-      for (const item of page.items) {
+      for (const item of page.workspaces) {
         if (!item.workspace || known.has(item.workspace)) continue;
         known.add(item.workspace);
         appended.push({
@@ -108,11 +103,8 @@ export class WorkspaceStore extends Store {
 
   constructor() {
     super();
-    this.#pager = new KeysetPager<WorkspacePageItem>(
-      (cursor, signal) => this.#loader!(cursor, signal).then((page) => ({
-        items: page.workspaces,
-        nextCursor: page.nextCursor,
-      })),
+    this.#pager = new KeysetPager<WorkspacePage>(
+      (cursor, signal) => this.#loader!(cursor, signal),
       () => this.changed(),
     );
   }

@@ -1,70 +1,18 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Abort and generation bookkeeping for failed-document recovery.
 
- *  The Feature still owns page/recovery rendering and toasts, and
- *  CorpusRunTracker follows the accepted recovery Run. This session is the
- *  single in-flight list/mutation request.
+ *  The Feature still owns page/recovery rendering and toasts; KeysetPager
+ *  loads the failed-document pages and CorpusRunTracker follows the accepted
+ *  recovery Run. This session is the retry request and its confirmation.
  */
 
 export class FailedFileRecoverySession {
-  #list: AbortController | null = null;
-  #loadMore: AbortController | null = null;
   #mutation: AbortController | null = null;
   #modal: AbortController | null = null;
   #contextGeneration = 0;
-  #listGeneration = 0;
 
   get contextGeneration(): number {
     return this.#contextGeneration;
-  }
-
-  get listGeneration(): number {
-    return this.#listGeneration;
-  }
-
-  startList(): {controller: AbortController; generation: number} {
-    this.#list?.abort();
-    this.#loadMore?.abort();
-    const generation = ++this.#listGeneration;
-    const controller = new AbortController();
-    this.#list = controller;
-    return {controller, generation};
-  }
-
-  isListCurrent(
-    controller: AbortController,
-    workspace: string,
-    currentWorkspace: string,
-    generation: number,
-    active: boolean,
-  ): boolean {
-    return this.#list === controller
-      && workspace === currentWorkspace
-      && generation === this.#listGeneration
-      && active;
-  }
-
-  finishList(controller: AbortController): boolean {
-    if (this.#list !== controller) return false;
-    this.#list = null;
-    return true;
-  }
-
-  startLoadMore(): AbortController {
-    this.#loadMore?.abort();
-    const controller = new AbortController();
-    this.#loadMore = controller;
-    return controller;
-  }
-
-  isLoadMoreCurrent(controller: AbortController, generation: number): boolean {
-    return this.#loadMore === controller && generation === this.#contextGeneration;
-  }
-
-  finishLoadMore(controller: AbortController): boolean {
-    if (this.#loadMore !== controller) return false;
-    this.#loadMore = null;
-    return true;
   }
 
   startMutation(): AbortController {
@@ -108,11 +56,6 @@ export class FailedFileRecoverySession {
 
   cancelContext(): void {
     this.#contextGeneration += 1;
-    this.#listGeneration += 1;
-    this.#list?.abort();
-    this.#list = null;
-    this.#loadMore?.abort();
-    this.#loadMore = null;
     this.#mutation?.abort();
     this.#mutation = null;
     this.#modal?.abort();

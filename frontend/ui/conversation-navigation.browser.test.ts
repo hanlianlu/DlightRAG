@@ -196,6 +196,7 @@ it('keeps accessible Load older and retry controls outside list ownership', asyn
   expect([...ownedList.children].every(
     (child) => child.getAttribute('role') === 'listitem',
   )).to.equal(true);
+  expect(retry.getAttribute('aria-busy')).to.equal('false');
   retry.click();
   await waitFor(() => list.textContent?.includes('Older notes') ?? false);
 
@@ -204,7 +205,9 @@ it('keeps accessible Load older and retry controls outside list ownership', asyn
     '/web/api/conversations?cursor=opaque-next',
     '/web/api/conversations?cursor=opaque-next',
   ]);
-  expect(list.querySelector('[aria-label="Load older conversations"]')).to.equal(null);
+  expect(list.querySelector('[data-load-older="conversations"]')).to.equal(null);
+  expect(list.querySelector('[data-load-older-status="conversations"]')?.textContent)
+    .to.contain('Loaded older conversations.');
 });
 
 it('starts rename from a double-click on the conversation title', async () => {

@@ -14,21 +14,13 @@ import {ApiError} from '../api/wire.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {KeysetPager} from '../lib/paged.ts';
 import {corpusRepairNotice, resumeRepairLabel, resumeRepairResult} from './corpus-repair.ts';
+import {loadOlderControl} from './load-older.ts';
 import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import recoveryStyles from '../styles/failed-file-recovery.module.css';
 import {FailedFileRecoverySession} from './failed-file-recovery-session.ts';
-
-type PageLoadState = 'idle' | 'loading' | 'error';
-
-function normalizePage(page: WebFailedFilesPage): WebFailedFilesPage {
-  return {
-    ...page,
-    failed: Array.isArray(page.failed) ? page.failed : [],
-    nextCursor: page.nextCursor ?? null,
-  };
-}
 
 function failureTime(value: string): string {
   if (!value) return '';
@@ -68,7 +60,6 @@ export class DlFailedFileRecovery extends LightElement {
     page: {state: true},
     loading: {state: true},
     error: {state: true},
-    loadMoreState: {state: true},
     recoveryPending: {state: true},
   };
 
@@ -77,10 +68,14 @@ export class DlFailedFileRecovery extends LightElement {
   declare page: WebFailedFilesPage | null;
   declare loading: boolean;
   declare error: string | null;
-  declare loadMoreState: PageLoadState;
   declare recoveryPending: boolean;
 
   readonly #session = new FailedFileRecoverySession();
+  readonly #pages = new KeysetPager<WebFailedFilesPage>(
+    (cursor, signal) => getFailedFiles(this.workspace, cursor, signal),
+    () => { this.requestUpdate(); },
+  );
+  #appendedDocuments = 0;
   readonly #tracker = new CorpusRunTracker({
     onChange: () => { this.requestUpdate(); },
     onSettled: (run) => { void this.#settleRecovery(run); },
@@ -104,7 +99,6 @@ export class DlFailedFileRecovery extends LightElement {
     this.page = null;
     this.loading = false;
     this.error = null;
-    this.loadMoreState = 'idle';
     this.recoveryPending = false;
   }
 
@@ -122,12 +116,12 @@ export class DlFailedFileRecovery extends LightElement {
     if (changed.has('workspace')) {
       this.#session.cancelContext();
       this.#tracker.clear();
+      this.#pages.reset(null);
       this.loading = false;
       this.recoveryPending = false;
       this.#retryTrigger = null;
       this.page = null;
       this.error = null;
-      this.loadMoreState = 'idle';
     }
   }
 
@@ -140,17 +134,12 @@ export class DlFailedFileRecovery extends LightElement {
 
   async refresh(showLoading = true): Promise<void> {
     if (!this.active || !this.workspace) return;
-    const workspace = this.workspace;
-    const {controller, generation} = this.#session.startList();
     if (showLoading) this.loading = true;
     this.error = null;
-    this.loadMoreState = 'idle';
-    try {
-      const response = await getFailedFiles(workspace, null, controller.signal);
-      if (!this.#session.isListCurrent(controller, workspace, this.workspace, generation, this.active)) return;
-      this.page = normalizePage(response);
-    } catch (error) {
-      if (isAbortError(error) || !this.#session.isListCurrent(controller, workspace, this.workspace, generation, this.active)) return;
+    await this.#pages.start((page) => {
+      this.page = page;
+      this.#listSettled();
+    }, (error) => {
       this.page = null;
       this.error = recoveryRequestError(
         error,
@@ -158,16 +147,18 @@ export class DlFailedFileRecovery extends LightElement {
           id: 'inspectorFiles.recovery.loadFailed',
         }),
       );
-    } finally {
-      if (this.#session.finishList(controller)) {
-        this.loading = false;
-        if (this.active && this.isConnected) this.#tracker.wake();
-      }
-    }
+      this.#listSettled();
+    });
+  }
+
+  #listSettled(): void {
+    this.loading = false;
+    if (this.active && this.isConnected) this.#tracker.wake();
   }
 
   pause(): void {
     this.#session.cancelContext();
+    this.#pages.cancel();
     this.#tracker.pause();
     this.loading = false;
     this.recoveryPending = false;
@@ -199,14 +190,14 @@ export class DlFailedFileRecovery extends LightElement {
     const recoveryActive = this.#tracker.active && !repairWaiting;
     const pending = this.recoveryPending || this.#tracker.resuming;
     if (failed.length === 0 && !recoveryActive && !repairWaiting) return nothing;
-    const count = `${failed.length}${this.page?.nextCursor ? '+' : ''}`;
+    const count = `${failed.length}${this.#pages.hasOlder ? '+' : ''}`;
     const heading = repairWaiting
       ? msg('Corpus repair confirmation required', {
         id: 'inspectorFiles.recovery.repairRequired',
       })
       : recoveryActive
         ? msg('Document recovery in progress', {id: 'inspectorFiles.recovery.inProgress'})
-      : failed.length === 1 && !this.page?.nextCursor
+      : failed.length === 1 && !this.#pages.hasOlder
         ? msg('1 document needs attention', {id: 'inspectorFiles.recovery.oneNeedsAttention'})
         : msg(str`${count} documents need attention`, {
           id: 'inspectorFiles.recovery.nNeedsAttention',
@@ -260,22 +251,28 @@ export class DlFailedFileRecovery extends LightElement {
                 `,
               )}
             </ul>
-            ${this.page?.nextCursor ? html`
-              <div class=${recoveryStyles['failed-file-more']}>
-                <button class=${recoveryStyles['failed-file-more-button']} type="button"
-                        ?disabled=${this.loadMoreState === 'loading'}
-                        aria-busy=${this.loadMoreState === 'loading' ? 'true' : 'false'}
-                        @click=${() => { void this.#loadMore(); }}>
-                  ${this.loadMoreState === 'error'
-                    ? msg('Retry loading more failed documents', {
-                      id: 'inspectorFiles.recovery.retryLoadMore',
-                    })
-                    : msg('Load more failed documents', {
-                      id: 'inspectorFiles.recovery.loadMore',
-                    })}
-                </button>
-              </div>
-            ` : nothing}
+            ${loadOlderControl({
+              list: 'failed-documents',
+              pages: this.#pages,
+              label: msg('Load more failed documents', {id: 'inspectorFiles.recovery.loadMore'}),
+              retryLabel: msg('Retry loading more failed documents', {
+                id: 'inspectorFiles.recovery.retryLoadMore',
+              }),
+              loading: msg('Loading more failed documents…', {
+                id: 'inspectorFiles.recovery.loadingMore',
+              }),
+              loaded: this.#appendedDocuments === 1
+                ? msg('Loaded 1 more failed document.', {id: 'inspectorFiles.recovery.loadedOneMore'})
+                : msg(str`Loaded ${this.#appendedDocuments} more failed documents.`, {
+                  id: 'inspectorFiles.recovery.loadedMore',
+                }),
+              failed: msg('More failed documents could not be loaded.', {
+                id: 'inspectorFiles.recovery.moreFailed',
+              }),
+              onLoad: this.#loadMore,
+              rowClass: recoveryStyles['failed-file-more'],
+              buttonClass: recoveryStyles['failed-file-more-button'],
+            })}
             ${repairRun ? html`
               <div class=${recoveryStyles['failed-file-recovery-note']} role="status">
                 ${corpusRepairNotice(repairRun)}
@@ -304,50 +301,29 @@ export class DlFailedFileRecovery extends LightElement {
     `;
   }
 
-  async #loadMore(): Promise<void> {
-    const page = this.page;
-    const cursor = page?.nextCursor;
-    const workspace = this.workspace;
-    if (!cursor || !workspace || this.loadMoreState === 'loading') return;
-    const controller = this.#session.startLoadMore();
-    const generation = this.#session.contextGeneration;
-    this.loadMoreState = 'loading';
-    try {
-      const response = await getFailedFiles(workspace, cursor, controller.signal);
-      if (
-        !this.#session.isLoadMoreCurrent(controller, generation)
-        || workspace !== this.workspace
-        || this.page?.nextCursor !== cursor
-      ) return;
-      const older = normalizePage(response);
-      const seen = new Set(page.failed.map((item) => item.documentId));
+  #loadMore = (): void => {
+    void this.#pages.loadNext((older) => {
+      const current = this.page;
+      if (!current) return;
+      const seen = new Set(current.failed.map((item) => item.documentId));
       const appended = older.failed.filter((item) => !seen.has(item.documentId));
-      this.page = {
-        ...page,
-        failed: [...page.failed, ...appended],
-        nextCursor: older.nextCursor,
-      };
-      this.loadMoreState = 'idle';
-    } catch (error) {
-      if (isAbortError(error) || !this.#session.isLoadMoreCurrent(controller, generation)) return;
+      this.page = {...current, failed: [...current.failed, ...appended], nextCursor: older.nextCursor};
+      this.#appendedDocuments = appended.length;
+    }, (error) => {
       const status = refusalStatus(error);
-      if (status !== null && [401, 403, 409].includes(status)) {
-        this.#tracker.clear();
-        this.page = null;
-        this.error = recoveryRequestError(
-          error,
-          msg('Document status is temporarily unavailable.', {
-            id: 'inspectorFiles.recovery.loadFailed',
-          }),
-        );
-        this.loadMoreState = 'idle';
-        return;
-      }
-      this.loadMoreState = 'error';
-    } finally {
-      this.#session.finishLoadMore(controller);
-    }
-  }
+      if (status === null || ![401, 403, 409].includes(status)) return;
+      // A refusal of the list itself replaces it with the reason.
+      this.#tracker.clear();
+      this.#pages.reset(null);
+      this.page = null;
+      this.error = recoveryRequestError(
+        error,
+        msg('Document status is temporarily unavailable.', {
+          id: 'inspectorFiles.recovery.loadFailed',
+        }),
+      );
+    });
+  };
 
   #confirmRetry = async (event: Event): Promise<void> => {
     const trigger = event.currentTarget as HTMLButtonElement;

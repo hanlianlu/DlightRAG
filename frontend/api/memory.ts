@@ -116,8 +116,9 @@ const memoryPage = v.pipe(
   v.object({memories: v.array(memoryRecord), next_cursor: v.nullable(v.string())}),
   v.transform((w) => ({items: w.memories, nextCursor: w.next_cursor})),
 );
+export type MemoryPage = v.InferOutput<typeof memoryPage>;
 
-export async function listMemories(cursor: string | null, signal?: AbortSignal) {
+export async function listMemories(cursor: string | null, signal?: AbortSignal): Promise<MemoryPage> {
   const query = new URLSearchParams({limit: '20'});
   if (cursor) query.set('cursor', cursor);
   const response = await fetch(`/web/api/memory?${query}`, {signal});

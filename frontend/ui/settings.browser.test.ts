@@ -292,6 +292,31 @@ it('browses paginated memories, retries a page, forgets one item and restores it
   expect(mutations.every((item) => Boolean(item.key))).to.equal(true);
 });
 
+it('retries a failed first memory page from its own note', async () => {
+  let firstPages = 0;
+  window.fetch = async (input) => {
+    const url = new URL(String(input), window.location.origin);
+    if (url.pathname.endsWith('/settings')) return Response.json({enabled: true, active_count: 1});
+    firstPages += 1;
+    if (firstPages === 1) return new Response('Unavailable', {status: 503});
+    return Response.json({memories: [{memory_id: 'one', kind: 'fact', body: 'Lives in Sweden'}], next_cursor: null});
+  };
+  const settings = mount();
+  await settings.open();
+  await waitFor(() => !settings.memoryLoading);
+  await settings.updateComplete;
+  settings.querySelector<HTMLDetailsElement>('.memory-list')!.open = true;
+
+  await waitFor(() => settings.querySelector('.memory-list .settings-note')?.textContent
+    ?.includes('Could not load memories.') ?? false);
+  expect(settings.querySelector('[data-load-older="memories"]')).to.equal(null);
+  buttonNamed(settings.querySelector('.memory-list')!, 'Retry')!.click();
+
+  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 1);
+  expect(firstPages).to.equal(2);
+  expect(buttonNamed(settings.querySelector('.memory-list')!, 'Retry')).to.equal(null);
+});
+
 it('rejects a stale list page after memory is disabled, even when transport ignores abort', async () => {
   let releasePage!: (response: Response) => void;
   let pageStarted = false;

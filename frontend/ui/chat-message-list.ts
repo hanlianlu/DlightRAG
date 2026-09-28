@@ -12,6 +12,7 @@ import {icon} from '../design-system/index.ts';
 import {isTerminalTurnState, type ChatTurnView} from '../lib/chat-views.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import type {KeysetPagerStatus} from '../lib/paged.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
 import {rowDurationMs, toolRowText, type ToolRow} from '../lib/tool-events.ts';
 import {
@@ -23,6 +24,9 @@ import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
 import './answer-presentation.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
+import {loadOlderControl} from './load-older.ts';
+
+const NO_OLDER_PAGES: KeysetPagerStatus = {state: 'idle', hasOlder: false, outcome: null};
 
 export type ChatView =
   | {kind: 'new'}
@@ -32,8 +36,8 @@ export type ChatView =
       conversationId: string;
       history: readonly ConversationTurn[];
       lineage: string | null;
-      hasOlderMessages?: boolean;
-      olderMessagesState?: 'idle' | 'loading' | 'error';
+      /** A snapshot of the history's next-page state, taken with this view. */
+      olderMessages?: KeysetPagerStatus;
     }
   | {kind: 'unavailable'; hasRecent: boolean}
   | {kind: 'error'};
@@ -144,7 +148,6 @@ export class DlChatMessageList extends LightElement {
   #pendingTurnAnchor: string | null = null;
   #pendingPrependAnchor: {turnId: string; offset: number} | null = null;
   #restoreOlderFocus = false;
-  #olderAnnouncement = '';
   #range = {start: 0, end: -1};
   readonly #heights = new Map<string, number>();
   #scrollArea: HTMLElement | null = null;
@@ -201,26 +204,8 @@ export class DlChatMessageList extends LightElement {
     ) {
       this.#pendingPrependAnchor = null;
       this.#restoreOlderFocus = false;
-      this.#olderAnnouncement = '';
       this.#heights.clear();
       this.#range = {start: 0, end: Number.MAX_SAFE_INTEGER};
-    }
-    if (
-      previousView?.kind === 'ready'
-      && this.view.kind === 'ready'
-      && previousView.conversationId === this.view.conversationId
-    ) {
-      const previousState = previousView.olderMessagesState ?? 'idle';
-      const currentState = this.view.olderMessagesState ?? 'idle';
-      if (currentState === 'loading') {
-        this.#olderAnnouncement = msg('Loading older messages…', {id: 'chatMessageList.olderLoading'});
-      } else if (currentState === 'error') {
-        this.#olderAnnouncement = msg('Older messages could not be loaded.', {
-          id: 'chatMessageList.olderError',
-        });
-      } else if (previousState === 'loading') {
-        this.#olderAnnouncement = msg('Loaded older messages.', {id: 'chatMessageList.olderLoaded'});
-      }
     }
     const area = this.querySelector<HTMLElement>('#chat-area');
     this.#stickAfterUpdate = changed.has('scrollRequest') || !area
@@ -309,8 +294,8 @@ export class DlChatMessageList extends LightElement {
     const previousView = changed.get('view') as ChatView | undefined;
     const olderFlightSettled = previousView?.kind === 'ready'
       && this.view.kind === 'ready'
-      && (previousView.olderMessagesState ?? 'idle') === 'loading'
-      && (this.view.olderMessagesState ?? 'idle') !== 'loading';
+      && previousView.olderMessages?.state === 'loading'
+      && this.view.olderMessages?.state !== 'loading';
     if (this.#pendingPrependAnchor && olderFlightSettled) {
       if (this.#scrollFrame) cancelAnimationFrame(this.#scrollFrame);
       const pending = this.#pendingPrependAnchor;
@@ -328,7 +313,7 @@ export class DlChatMessageList extends LightElement {
         }
         if (this.#restoreOlderFocus) {
           this.#restoreOlderFocus = false;
-          const button = this.querySelector<HTMLButtonElement>('[data-load-older]');
+          const button = this.querySelector<HTMLButtonElement>('[data-load-older="messages"]');
           if (button) button.focus({preventScroll: true});
           else this.querySelector<HTMLElement>('#chat-messages')?.focus({preventScroll: true});
         }
@@ -368,10 +353,16 @@ export class DlChatMessageList extends LightElement {
     const turns = this.turns;
     return html`
       <main class="chat-area" id="chat-area" aria-label=${msg('Chat', {id: 'chatMessageList.chatAria'})} @click=${this.#backgroundClick}>
-        ${this.#olderMessagesControl()}
-        <span class="dl-sr-only" data-older-status role="status" aria-live="polite">
-          ${this.#olderAnnouncement}
-        </span>
+        ${loadOlderControl({
+          list: 'messages',
+          pages: this.view.kind === 'ready' ? this.view.olderMessages ?? NO_OLDER_PAGES : NO_OLDER_PAGES,
+          label: msg('Load older messages', {id: 'chatMessageList.loadOlder'}),
+          retryLabel: msg('Retry loading older messages', {id: 'chatMessageList.retryLoadOlder'}),
+          loading: msg('Loading older messages…', {id: 'chatMessageList.olderLoading'}),
+          loaded: msg('Loaded older messages.', {id: 'chatMessageList.olderLoaded'}),
+          failed: msg('Older messages could not be loaded.', {id: 'chatMessageList.olderError'}),
+          onLoad: this.#loadOlderMessages,
+        })}
         <div class="chat-messages" id="chat-messages" role="log" tabindex="-1"
              aria-label=${msg('Conversation messages', {id: 'chatMessageList.messagesAria'})}
              ?inert=${this.interactionLocked}>
@@ -390,21 +381,6 @@ export class DlChatMessageList extends LightElement {
           ` : nothing}
         </div>
       </main>
-    `;
-  }
-
-  #olderMessagesControl(): TemplateResult | typeof nothing {
-    if (this.view.kind !== 'ready' || !this.view.hasOlderMessages) return nothing;
-    const state = this.view.olderMessagesState ?? 'idle';
-    return html`
-      <div data-older-messages>
-        <button type="button" data-load-older aria-busy=${state === 'loading' ? 'true' : 'false'}
-                ?disabled=${state === 'loading'} @click=${this.#loadOlderMessages}>
-          ${state === 'error'
-            ? msg('Retry loading older messages', {id: 'chatMessageList.retryLoadOlder'})
-            : msg('Load older messages', {id: 'chatMessageList.loadOlder'})}
-        </button>
-      </div>
     `;
   }
 

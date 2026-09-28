@@ -5,6 +5,7 @@ import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {KeysetPager} from '../lib/paged.ts';
+import {loadOlderControl} from './load-older.ts';
 import './settings-connections.ts';
 import './toast.ts';
 import type {ToastRequestDetail} from './toast.ts';
@@ -17,6 +18,7 @@ import {
   clearMemory,
   forgetMemory,
   listMemories,
+  type MemoryPage,
   type MemoryRecord,
   getMemorySettings,
   putMemorySettings,
@@ -94,8 +96,8 @@ export class DlSettingsDialog extends LightElement {
   #returnFocus: HTMLElement | null = null;
   #seenMemoryOperations = new Set<string>();
   #memoryReadGeneration = 0;
-  readonly #memoryPager = new KeysetPager<MemoryRecord>(
-    (cursor, signal) => listMemories(cursor || null, signal),
+  readonly #memoryPager = new KeysetPager<MemoryPage>(
+    (cursor, signal) => listMemories(cursor, signal),
     () => this.requestUpdate(),
   );
 
@@ -394,6 +396,7 @@ export class DlSettingsDialog extends LightElement {
 
   #memoryList(): TemplateResult {
     const pager = this.#memoryPager;
+    const firstPage = this.memoryRecords === null;
     return html`
       <details class="memory-list" ?open=${this.memoryListOpen} @toggle=${this.#toggleMemoryList}>
         <summary>${msg('View memories', {id: 'settings.memory.view'})}</summary>
@@ -409,27 +412,34 @@ export class DlSettingsDialog extends LightElement {
             </li>
           `)}
         </ul>
-        <p class="settings-note" role="status">${pager.state === 'loading'
+        <p class="settings-note" role="status">${firstPage && pager.state === 'loading'
           ? msg('Loading memories…', {id: 'settings.memory.listLoading'})
-          : pager.state === 'error'
+          : firstPage && pager.state === 'error'
             ? msg('Could not load memories.', {id: 'settings.memory.listFailed'})
             : this.memoryRecords?.length === 0
               ? msg('No stored memories.', {id: 'settings.memory.empty'}) : nothing}</p>
-        ${pager.hasOlder ? html`
-          <button type="button" class="dl-btn" data-memory-load-more
-                  ?disabled=${this.memoryPending || pager.state === 'loading'}
-                  @click=${() => { void this.#loadMemoryPage(); }}>
-            ${pager.state === 'error'
-              ? msg('Retry', {id: 'settings.memory.retry'})
-              : msg('Load more', {id: 'settings.memory.loadMore'})}
+        ${firstPage && pager.state === 'error' ? html`
+          <button type="button" class="dl-btn" @click=${() => { this.#reloadMemoryList(); }}>
+            ${msg('Retry', {id: 'settings.memory.retry'})}
           </button>
         ` : nothing}
+        ${loadOlderControl({
+          list: 'memories',
+          pages: pager,
+          label: msg('Load more', {id: 'settings.memory.loadMore'}),
+          retryLabel: msg('Retry', {id: 'settings.memory.retry'}),
+          loading: msg('Loading more memories…', {id: 'settings.memory.loadingMore'}),
+          loaded: msg('Loaded more memories.', {id: 'settings.memory.loadedMore'}),
+          failed: msg('More memories could not be loaded.', {id: 'settings.memory.moreFailed'}),
+          onLoad: this.#loadMoreMemories,
+          buttonClass: 'dl-btn',
+        })}
       </details>`;
   }
 
   #toggleMemoryList = (event: Event): void => {
     this.memoryListOpen = (event.currentTarget as HTMLDetailsElement).open;
-    if (this.memoryListOpen && this.memoryRecords === null && !this.#memoryPager.hasOlder) {
+    if (this.memoryListOpen && this.memoryRecords === null && this.#memoryPager.state !== 'loading') {
       this.#reloadMemoryList();
     }
   };
@@ -437,23 +447,22 @@ export class DlSettingsDialog extends LightElement {
   #reloadMemoryList(): void {
     if (!this.memoryListOpen || !this.memory?.enabled || !this.#dialog()?.open) return;
     this.memoryRecords = null;
-    // Empty cursor denotes the first page; subsequent cursors come from the server.
-    this.#memoryPager.reset('');
-    void this.#loadMemoryPage();
+    void this.#memoryPager.start((page) => { this.#addMemories(page.items); });
   }
 
-  async #loadMemoryPage(): Promise<void> {
-    const trigger = this.querySelector<HTMLButtonElement>('[data-memory-load-more]');
-    const restoreFocus = trigger !== null && document.activeElement === trigger;
-    await this.#memoryPager.loadNext((page) => {
-      const records = new Map((this.memoryRecords ?? []).map((record) => [record.memoryId, record]));
-      for (const record of page.items) records.set(record.memoryId, record);
-      this.memoryRecords = [...records.values()];
-    });
+  #loadMoreMemories = async (event: Event): Promise<void> => {
+    const restoreFocus = document.activeElement === event.currentTarget;
+    await this.#memoryPager.loadNext((page) => { this.#addMemories(page.items); });
     await this.updateComplete;
     if (restoreFocus && !this.#memoryPager.hasOlder && this.memoryListOpen) {
       this.querySelector<HTMLElement>('.memory-list summary')?.focus();
     }
+  };
+
+  #addMemories(items: readonly MemoryRecord[]): void {
+    const records = new Map((this.memoryRecords ?? []).map((record) => [record.memoryId, record]));
+    for (const record of items) records.set(record.memoryId, record);
+    this.memoryRecords = [...records.values()];
   }
 
   async #forgetMemory(record: MemoryRecord): Promise<void> {

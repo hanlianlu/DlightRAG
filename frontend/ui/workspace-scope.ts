@@ -6,10 +6,12 @@ import {repeat} from 'lit/directives/repeat.js';
 import {icon} from '../design-system/index.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
+import type {PageLoadState} from '../lib/paged.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
+import {loadOlderControl} from './load-older.ts';
 import './workspace-create.ts';
 
 /** Search-scope selection and popover lifecycle. */
@@ -24,8 +26,7 @@ export class DlWorkspaceScope extends LightElement {
 
   #restoreLoadMoreFocus = false;
   #settledFocusRestore = false;
-  #loadMoreAnnouncement = '';
-  #lastLoadMoreState: 'idle' | 'loading' | 'error' = 'idle';
+  #lastLoadMoreState: PageLoadState = 'idle';
   readonly #dismiss = createAutoDismiss({
     getAnchor: () => this,
     isOpen: () => this.open,
@@ -52,18 +53,9 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   protected override willUpdate(_changed: PropertyValues<this>): void {
-    const state = this.handles.workspaces.workspaceLoadMoreState;
-    const previous = this.#lastLoadMoreState;
-    if (state === previous) return;
+    const {state} = this.handles.workspaces.morePages;
+    if (this.#lastLoadMoreState === 'loading' && state !== 'loading') this.#settledFocusRestore = true;
     this.#lastLoadMoreState = state;
-    if (state === 'loading') {
-      this.#loadMoreAnnouncement = msg('Loading workspaces…', {id: 'workspaceScope.loadingMore'});
-    } else if (state === 'error') {
-      this.#loadMoreAnnouncement = msg('Workspaces could not be loaded.', {id: 'workspaceScope.loadMoreFailed'});
-    } else if (previous === 'loading') {
-      this.#loadMoreAnnouncement = msg('Loaded more workspaces.', {id: 'workspaceScope.loadedMore'});
-      this.#settledFocusRestore = true;
-    }
   }
 
   protected override updated(): void {
@@ -74,7 +66,7 @@ export class DlWorkspaceScope extends LightElement {
       this.#settledFocusRestore = false;
       if (this.#restoreLoadMoreFocus) {
         this.#restoreLoadMoreFocus = false;
-        const control = this.querySelector<HTMLButtonElement>('[data-load-more-workspaces]');
+        const control = this.querySelector<HTMLButtonElement>('[data-load-older="workspaces"]');
         if (control) control.focus({preventScroll: true});
       }
     }
@@ -161,27 +153,19 @@ export class DlWorkspaceScope extends LightElement {
            @dl-workspace-created=${this.#workspaceCreated}>
         ${this.#allOption()}
         ${repeat(sorted, (record) => record.workspace, (record) => this.#option(record))}
-        ${this.#loadMoreControl()}
-        <span class="dl-sr-only" data-workspaces-status role="status" aria-live="polite">
-          ${this.#loadMoreAnnouncement}
-        </span>
+        ${loadOlderControl({
+          list: 'workspaces',
+          pages: this.handles.workspaces.morePages,
+          label: msg('Load more workspaces', {id: 'workspaceScope.loadMore'}),
+          retryLabel: msg('Retry loading workspaces', {id: 'workspaceScope.retryLoadMore'}),
+          loading: msg('Loading workspaces…', {id: 'workspaceScope.loadingMore'}),
+          loaded: msg('Loaded more workspaces.', {id: 'workspaceScope.loadedMore'}),
+          failed: msg('Workspaces could not be loaded.', {id: 'workspaceScope.loadMoreFailed'}),
+          onLoad: this.#loadMore,
+          rowClass: 'workspace-load-more',
+          buttonClass: 'dl-popover-item',
+        })}
         <dl-workspace-create .handles=${this.handles}></dl-workspace-create>
-      </div>
-    `;
-  }
-
-  #loadMoreControl(): TemplateResult | typeof nothing {
-    if (!this.handles.workspaces.hasMoreWorkspaces) return nothing;
-    const state = this.handles.workspaces.workspaceLoadMoreState;
-    return html`
-      <div class="workspace-load-more">
-        <button type="button" data-load-more-workspaces class="dl-popover-item"
-                aria-busy=${state === 'loading' ? 'true' : 'false'}
-                ?disabled=${state === 'loading'} @click=${this.#loadMore}>
-          ${state === 'error'
-            ? msg('Retry loading workspaces', {id: 'workspaceScope.retryLoadMore'})
-            : msg('Load more workspaces', {id: 'workspaceScope.loadMore'})}
-        </button>
       </div>
     `;
   }

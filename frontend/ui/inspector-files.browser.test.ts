@@ -109,7 +109,7 @@ it('appends older files with coalescing, overlap dedup, and accessible exhaustio
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
 
-  const button = panel.querySelector<HTMLButtonElement>('[data-load-older-files]')!;
+  const button = panel.querySelector<HTMLButtonElement>('[data-load-older="files"]')!;
   expect(button.type).to.equal('button');
   expect(button.textContent?.trim()).to.equal('Load older files');
   button.focus();
@@ -132,9 +132,9 @@ it('appends older files with coalescing, overlap dedup, and accessible exhaustio
     'Newest', 'Overlap', 'Oldest',
   ]);
   expect(panel.querySelectorAll('[role="listitem"]')).to.have.length(3);
-  expect(panel.querySelector('[data-load-older-files]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older="files"]')).to.equal(null);
   expect(document.activeElement).to.equal(panel.querySelector('#file-list'));
-  expect(panel.querySelector('[data-older-files-status]')?.textContent).to.contain(
+  expect(panel.querySelector('[data-load-older-status="files"]')?.textContent).to.contain(
     'Loaded 1 older file.',
   );
 });
@@ -163,7 +163,7 @@ it('keeps loaded rows and cursor retryable after an older-page failure', async (
   await panel.loadOlderFiles();
   await panel.updateComplete;
   expect(panel.querySelectorAll('[data-file-item]')).to.have.length(1);
-  expect(panel.querySelector('[data-load-older-files]')?.textContent).to.contain(
+  expect(panel.querySelector('[data-load-older="files"]')?.textContent).to.contain(
     'Retry loading older files',
   );
   expect(panel.error).to.equal(null);
@@ -171,7 +171,7 @@ it('keeps loaded rows and cursor retryable after an older-page failure', async (
   await panel.loadOlderFiles();
   await panel.updateComplete;
   expect(panel.querySelectorAll('[data-file-item]')).to.have.length(2);
-  expect(panel.querySelector('[data-load-older-files]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older="files"]')).to.equal(null);
 });
 
 it('rejects a late older page after pause invalidates its generation', async () => {
@@ -276,7 +276,7 @@ it('deletion reloads the first page after its durable Run succeeds', async () =>
 
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/replacement']);
   expect(panel.snapshot?.nextCursor).to.equal('replacement-older');
-  expect(panel.querySelector('[data-load-older-files]')).not.to.equal(null);
+  expect(panel.querySelector('[data-load-older="files"]')).not.to.equal(null);
 });
 
 it('stops polling a deletion whose status the Corpus Run API refuses', async () => {
@@ -425,7 +425,7 @@ it('clears prior-workspace rows when the selected workspace reload fails', async
   expect(panel.acceptedFiles).to.equal(0);
   expect(panel.querySelector('.file-name')).to.equal(null);
   expect(panel.querySelector('[data-file-delete]')).to.equal(null);
-  expect(panel.querySelector('[data-load-older-files]')).to.equal(null);
+  expect(panel.querySelector('[data-load-older="files"]')).to.equal(null);
 });
 
 it('delete Run settlement invalidates an older-page flight without latching loading state', async () => {
@@ -489,7 +489,7 @@ it('delete Run settlement invalidates an older-page flight without latching load
 
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/replacement']);
   expect(panel.filesLoadMoreState).to.equal('idle');
-  const button = panel.querySelector<HTMLButtonElement>('[data-load-older-files]')!;
+  const button = panel.querySelector<HTMLButtonElement>('[data-load-older="files"]')!;
   expect(button.disabled).to.equal(false);
   expect(button.getAttribute('aria-busy')).to.equal('false');
 });
@@ -546,7 +546,7 @@ it('load older is a no-op while a same-workspace first-page reload is active', a
 
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/fresh']);
   expect(panel.filesLoadMoreState).to.equal('idle');
-  const button = panel.querySelector<HTMLButtonElement>('[data-load-older-files]')!;
+  const button = panel.querySelector<HTMLButtonElement>('[data-load-older="files"]')!;
   expect(button.disabled).to.equal(false);
   expect(button.getAttribute('aria-busy')).to.equal('false');
 });

@@ -1393,7 +1393,7 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
     expect(memoryOperations).to.deep.equal(['memory-499/change-499', 'memory-1499/change-1499']);
     expect(turnAssignments).to.equal(6);
     expect(listTurnsUpdates).to.equal(5);
-    expect(feature.querySelectorAll('[role="status"]:not([data-older-status])')).to.have.length(1);
+    expect(feature.querySelectorAll('[role="status"]:not([data-load-older-status])')).to.have.length(1);
     expect(feature.textContent).to.contain('Stopped');
   } finally {
     window.requestAnimationFrame = originalRequestFrame;
@@ -1570,12 +1570,12 @@ it('Message List exposes an accessible retryable Load older messages control', a
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   list.view = {
     kind: 'ready', conversationId: 'paged', history: [storedTurn()], lineage: null,
-    hasOlderMessages: true, olderMessagesState: 'idle',
+    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
   };
   list.turns = [];
   document.body.appendChild(list);
   await list.updateComplete;
-  const button = list.querySelector<HTMLButtonElement>('[data-load-older]')!;
+  const button = list.querySelector<HTMLButtonElement>('[data-load-older="messages"]')!;
   let requests = 0;
   list.addEventListener('dl-chat-load-older', () => { requests += 1; });
 
@@ -1587,10 +1587,10 @@ it('Message List exposes an accessible retryable Load older messages control', a
   expect(button.getAttribute('aria-busy')).to.equal('false');
   expect(requests).to.equal(1);
 
-  list.view = {...list.view, olderMessagesState: 'error'};
+  list.view = {...list.view, olderMessages: {state: 'error', hasOlder: true, outcome: 'failed'}};
   await list.updateComplete;
-  expect(list.querySelector('[data-load-older]')?.textContent).to.contain('Retry');
-  expect(list.querySelector('[data-older-status]')?.textContent).to.contain(
+  expect(list.querySelector('[data-load-older="messages"]')?.textContent).to.contain('Retry');
+  expect(list.querySelector('[data-load-older-status="messages"]')?.textContent).to.contain(
     'could not be loaded',
   );
   expect(button.closest('[role="log"]')).to.equal(null);
@@ -1600,33 +1600,33 @@ it('Message List keeps the final older-page announcement and moves focus into th
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   list.view = {
     kind: 'ready', conversationId: 'last-page', history: [storedTurn()], lineage: null,
-    hasOlderMessages: true, olderMessagesState: 'idle',
+    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
   };
   list.turns = [storedTurnView(storedTurn())];
   document.body.appendChild(list);
   await list.updateComplete;
-  const button = list.querySelector<HTMLButtonElement>('[data-load-older]')!;
+  const button = list.querySelector<HTMLButtonElement>('[data-load-older="messages"]')!;
   button.focus();
   button.click();
 
-  list.view = {...list.view, olderMessagesState: 'loading'};
+  list.view = {...list.view, olderMessages: {state: 'loading', hasOlder: true, outcome: null}};
   await list.updateComplete;
-  list.view = {...list.view, hasOlderMessages: false, olderMessagesState: 'idle'};
+  list.view = {...list.view, olderMessages: {state: 'idle', hasOlder: false, outcome: 'loaded'}};
   await list.updateComplete;
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-  expect(list.querySelector('[data-load-older]')).to.equal(null);
-  expect(list.querySelector('[data-older-status]')?.textContent).to.contain(
+  expect(list.querySelector('[data-load-older="messages"]')).to.equal(null);
+  expect(list.querySelector('[data-load-older-status="messages"]')?.textContent).to.contain(
     'Loaded older messages',
   );
   expect(document.activeElement).to.equal(list.querySelector('#chat-messages'));
 
   list.view = {
     kind: 'ready', conversationId: 'another-page', history: [storedTurn()], lineage: null,
-    hasOlderMessages: true, olderMessagesState: 'idle',
+    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
   };
   await list.updateComplete;
-  expect(list.querySelector('[data-older-status]')?.textContent?.trim()).to.equal('');
+  expect(list.querySelector('[data-load-older-status="messages"]')?.textContent?.trim()).to.equal('');
 });
 
 it('Message List anchors the existing viewport when an older page is prepended', async () => {
@@ -1636,7 +1636,7 @@ it('Message List anchors the existing viewport when an older page is prepended',
   };
   list.view = {
     kind: 'ready', conversationId: 'anchor', history: [existing], lineage: null,
-    hasOlderMessages: true, olderMessagesState: 'idle',
+    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
   };
   list.turns = [storedTurnView(existing)];
   document.body.appendChild(list);
@@ -1647,14 +1647,14 @@ it('Message List anchors the existing viewport when an older page is prepended',
   const existingElement = list.querySelector<HTMLElement>('[data-turn-id="turn-2"]')!;
   const before = existingElement.getBoundingClientRect().top - area.getBoundingClientRect().top;
 
-  list.querySelector<HTMLButtonElement>('[data-load-older]')!.click();
-  list.view = {...list.view, olderMessagesState: 'loading'};
+  list.querySelector<HTMLButtonElement>('[data-load-older="messages"]')!.click();
+  list.view = {...list.view, olderMessages: {state: 'loading', hasOlder: true, outcome: null}};
   await list.updateComplete;
   const older = {
     ...storedTurn(), turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1',
   };
   list.turns = [storedTurnView(older), storedTurnView(existing)];
-  list.view = {...list.view, olderMessagesState: 'idle'};
+  list.view = {...list.view, olderMessages: {state: 'idle', hasOlder: true, outcome: 'loaded'}};
   await list.updateComplete;
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
@@ -1718,7 +1718,7 @@ it('Chat Feature preserves a non-terminal live projection across history republi
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
     kind: 'ready', conversationId: 'same-running', history: [running], lineage: null,
-    hasOlderMessages: true, olderMessagesState: 'idle',
+    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
   };
   document.body.appendChild(feature);
   await settle(feature);
@@ -1730,7 +1730,7 @@ it('Chat Feature preserves a non-terminal live projection across history republi
 
   feature.view = {
     ...feature.view,
-    olderMessagesState: 'loading',
+    olderMessages: {state: 'loading', hasOlder: true, outcome: null},
   };
   await settle(feature);
 
@@ -1849,7 +1849,7 @@ it('pages more than 40 turns through the wired store, sidebar, and Load older co
   await sidebar.updateComplete;
   await settle(feature);
   feature.querySelector<DlChatMessageList>('dl-chat-message-list')
-    ?.querySelector<HTMLButtonElement>('[data-load-older]')?.click();
+    ?.querySelector<HTMLButtonElement>('[data-load-older="messages"]')?.click();
   await waitFor(() => conversationStore.history?.turns.length === 80);
   await sidebar.updateComplete;
   await settle(feature);
@@ -1857,7 +1857,7 @@ it('pages more than 40 turns through the wired store, sidebar, and Load older co
   expect(feature.querySelectorAll('[data-turn-slot]')).to.have.length(80);
   expect(feature.querySelector('[data-turn-id="turn-1"]')).not.to.equal(null);
   expect(feature.textContent).to.contain('Question 80');
-  expect(feature.querySelector('[data-load-older]')).to.equal(null);
+  expect(feature.querySelector('[data-load-older="messages"]')).to.equal(null);
 });
 
 it('Message List revokes live attachment URLs when a turn is evicted', async () => {

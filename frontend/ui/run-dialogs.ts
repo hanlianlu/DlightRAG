@@ -12,6 +12,7 @@ import type {
 import {LightElement} from '../lib/lit-host.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {KeysetPager} from '../lib/paged.ts';
+import {loadOlderControl} from './load-older.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 
 export interface ContinuationResult {
@@ -95,10 +96,15 @@ export interface ChildRosterEntry {
   resultHandles?: readonly string[];
 }
 
+export interface ChildRosterPage {
+  children: ChildRosterEntry[];
+  nextCursor: string | null;
+}
+
 export type ChildRosterPageFetcher = (
   cursor: string | null,
   signal?: AbortSignal,
-) => Promise<{children: ChildRosterEntry[]; nextCursor: string | null}>;
+) => Promise<ChildRosterPage>;
 
 export interface ChildRosterActions {
   runId?: string;
@@ -171,9 +177,7 @@ export class DlChildrenRoster extends LightElement {
   #empty = true;
   #failed = false;
   #announcement = '';
-  #controller: AbortController | null = null;
   #observeController: AbortController | null = null;
-  #generation = 0;
   #dialogGeneration = 0;
   #selectedId: string | null = null;
   #observation: ChildObservation | null = null;
@@ -186,8 +190,9 @@ export class DlChildrenRoster extends LightElement {
   #focusKey: string | null = null;
   #refreshing = false;
   #refreshQueued = false;
-  #pager = new KeysetPager<ChildRosterEntry>(
-    (cursor, signal) => this.#pageFetcher!(cursor, signal).then((page) => ({items: page.children, nextCursor: page.nextCursor})),
+  #appendedChildren = 0;
+  #pager = new KeysetPager<ChildRosterPage>(
+    (cursor, signal) => this.#pageFetcher!(cursor, signal),
     () => this.requestUpdate(),
   );
 
@@ -224,68 +229,35 @@ export class DlChildrenRoster extends LightElement {
   }
 
   async refresh(): Promise<void> {
-    const selected = this.#selectedId;
-    this.#controller?.abort();
-    this.#controller = null;
-    this.#generation += 1;
+    if (!this.#pageFetcher) return;
     this.#announcement = '';
     this.#failed = false;
-    this.#pager.reset(null);
-    this.#selectedId = selected;
-    if (!this.#pageFetcher) return;
-    await this.#loadFirstPage();
+    await this.#pager.start((page) => {
+      this.#entries = page.children;
+      this.#empty = page.children.length === 0;
+    }, () => {
+      this.#empty = false;
+      this.#failed = true;
+    });
     await this.#restoreSelection(true);
   }
 
-  async #loadFirstPage(): Promise<void> {
-    const controller = new AbortController();
-    this.#controller = controller;
-    const generation = this.#generation;
-    try {
-      const page = await this.#pageFetcher!(null, controller.signal);
-      if (controller !== this.#controller || generation !== this.#generation) return;
-      this.#entries = page.children;
-      this.#pager.reset(page.nextCursor);
-      this.#empty = page.children.length === 0;
-      this.#failed = false;
-      this.requestUpdate();
-    } catch (error) {
-      if (controller !== this.#controller || generation !== this.#generation) return;
-      if (isAbortError(error)) return;
-      this.#empty = false;
-      this.#failed = true;
-      this.requestUpdate();
-    } finally {
-      if (this.#controller === controller) this.#controller = null;
-    }
-  }
-
   loadOlderChildren(): Promise<void> {
-    this.#announcement = msg('Loading older children…', {id: 'runDialogs.loadingOlderChildren'});
     return this.#pager.loadNext((page) => {
       const known = new Set(this.#entries.map((entry) => entry.childSessionId).filter(Boolean));
-      const appended = page.items.filter((entry) => {
+      const appended = page.children.filter((entry) => {
         if (!entry.childSessionId || known.has(entry.childSessionId)) return false;
         known.add(entry.childSessionId);
         return true;
       });
       this.#entries = [...this.#entries, ...appended];
-      this.#announcement = appended.length === 1
-        ? msg('Loaded 1 older child.', {id: 'runDialogs.loadedOneChild'})
-        : msg(str`Loaded ${appended.length} older children.`, {id: 'runDialogs.loadedOlderChildren'});
-    }, () => {
-      this.#announcement = msg('Older children could not be loaded.', {
-        id: 'runDialogs.olderChildrenFailed',
-      });
+      this.#appendedChildren = appended.length;
     });
   }
 
   #invalidate(): void {
-    this.#controller?.abort();
-    this.#controller = null;
     this.#observeController?.abort();
     this.#observeController = null;
-    this.#generation += 1;
     this.#announcement = '';
     this.#observation = null;
     this.#observeFailed = false;
@@ -747,18 +719,19 @@ export class DlChildrenRoster extends LightElement {
             `;
           })}
         </ul>
-        ${this.#pager.hasOlder && !showEmpty ? html`
-          <div class="roster-page-control">
-            <button type="button" data-load-older-children
-                    aria-busy=${this.#pager.state === 'loading' ? 'true' : 'false'}
-                    ?disabled=${this.#pager.state === 'loading'}
-                    @click=${this.#loadOlder}>
-              ${this.#pager.state === 'error'
-                ? msg('Retry loading older children', {id: 'runDialogs.retryLoadOlderChildren'})
-                : msg('Load older children', {id: 'runDialogs.loadOlderChildren'})}
-            </button>
-          </div>
-        ` : nothing}
+        ${loadOlderControl({
+          list: 'children',
+          pages: this.#pager,
+          label: msg('Load older children', {id: 'runDialogs.loadOlderChildren'}),
+          retryLabel: msg('Retry loading older children', {id: 'runDialogs.retryLoadOlderChildren'}),
+          loading: msg('Loading older children…', {id: 'runDialogs.loadingOlderChildren'}),
+          loaded: this.#appendedChildren === 1
+            ? msg('Loaded 1 older child.', {id: 'runDialogs.loadedOneChild'})
+            : msg(str`Loaded ${this.#appendedChildren} older children.`, {id: 'runDialogs.loadedOlderChildren'}),
+          failed: msg('Older children could not be loaded.', {id: 'runDialogs.olderChildrenFailed'}),
+          onLoad: this.#loadOlder,
+          rowClass: 'roster-page-control',
+        })}
         ${this.#observationPanel()}
         <span class="dl-sr-only" data-roster-status role="status" aria-live="polite">
           ${this.#announcement}
