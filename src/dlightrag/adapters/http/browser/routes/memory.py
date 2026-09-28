@@ -4,7 +4,6 @@
 from typing import Annotated, Any, Literal
 
 from dlightrag_memory import MemoryProvenance
-from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,7 +12,6 @@ from dlightrag.application.access import owner_id_from_user
 from dlightrag.application.memory import (
     MEMORY_LIST_PAGE_DEFAULT_LIMIT,
     MEMORY_LIST_PAGE_MAX_LIMIT,
-    MemoryDisabledError,
     MemoryListCursorError,
     MemoryListPageRequest,
     MemorySettings,
@@ -62,14 +60,11 @@ async def list_memories(
         page_request = MemoryListPageRequest(limit=limit, cursor=decoded_cursor)
     except (MemoryListCursorError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    try:
-        page = await application.memory.list_active_page(
-            owner_id=owner_id_from_user(user),
-            auth_mode=user.auth_mode,
-            page=page_request,
-        )
-    except (MemoryUnavailableError, MemoryDisabledError) as exc:
-        raise _capability_error(exc) from exc
+    page = await application.memory.list_active_page(
+        owner_id=owner_id_from_user(user),
+        auth_mode=user.auth_mode,
+        page=page_request,
+    )
     return {
         "memories": [
             {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in page.records
@@ -86,12 +81,9 @@ async def list_memories(
 async def memory_settings(request: Request) -> dict[str, object]:
     application = get_application(request)
     user = _user(request)
-    try:
-        settings = await application.memory.settings(
-            owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
-        )
-    except MemoryUnavailableError as exc:
-        raise HTTPException(status_code=403, detail=exc.public_message) from exc
+    settings = await application.memory.settings(
+        owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
+    )
     return _settings(settings)
 
 
@@ -99,12 +91,9 @@ async def memory_settings(request: Request) -> dict[str, object]:
 async def update_memory_settings(request: Request, body: MemorySettingsInput) -> dict[str, object]:
     application = get_application(request)
     user = _user(request)
-    try:
-        settings = await application.memory.set_enabled(
-            owner_id=owner_id_from_user(user), auth_mode=user.auth_mode, enabled=body.enabled
-        )
-    except MemoryUnavailableError as exc:
-        raise HTTPException(status_code=403, detail=exc.public_message) from exc
+    settings = await application.memory.set_enabled(
+        owner_id=owner_id_from_user(user), auth_mode=user.auth_mode, enabled=body.enabled
+    )
     return _settings(settings)
 
 
@@ -114,20 +103,15 @@ async def remember_memory(
 ) -> dict[str, Any]:
     application = get_application(request)
     user = _user(request)
-    try:
-        receipt = await application.memory.remember(
-            owner_id=owner_id_from_user(user),
-            auth_mode=user.auth_mode,
-            kind=body.kind,
-            body=body.body,
-            supersedes_id=body.supersedes_id,
-            provenance=MemoryProvenance(origin_kind="management", origin_id=idempotency_key),
-            idempotency_key=f"web:{idempotency_key}",
-        )
-    except (MemoryUnavailableError, MemoryDisabledError) as exc:
-        raise _capability_error(exc) from exc
-    except MemoryWriteRejectedError as exc:
-        raise HTTPException(status_code=409, detail=exc.public_message) from exc
+    receipt = await application.memory.remember(
+        owner_id=owner_id_from_user(user),
+        auth_mode=user.auth_mode,
+        kind=body.kind,
+        body=body.body,
+        supersedes_id=body.supersedes_id,
+        provenance=MemoryProvenance(origin_kind="management", origin_id=idempotency_key),
+        idempotency_key=f"web:{idempotency_key}",
+    )
     return memory_receipt_payload(receipt)
 
 
@@ -137,18 +121,13 @@ async def forget_memory(
 ) -> dict[str, Any]:
     application = get_application(request)
     user = _user(request)
-    try:
-        receipt = await application.memory.forget(
-            owner_id=owner_id_from_user(user),
-            auth_mode=user.auth_mode,
-            memory_id=memory_id,
-            provenance=MemoryProvenance(origin_kind="management", origin_id=idempotency_key),
-            idempotency_key=f"web:{idempotency_key}",
-        )
-    except (MemoryUnavailableError, MemoryDisabledError) as exc:
-        raise _capability_error(exc) from exc
-    except MemoryWriteRejectedError as exc:
-        raise HTTPException(status_code=409, detail=exc.public_message) from exc
+    receipt = await application.memory.forget(
+        owner_id=owner_id_from_user(user),
+        auth_mode=user.auth_mode,
+        memory_id=memory_id,
+        provenance=MemoryProvenance(origin_kind="management", origin_id=idempotency_key),
+        idempotency_key=f"web:{idempotency_key}",
+    )
     return memory_receipt_payload(receipt)
 
 
@@ -158,18 +137,13 @@ async def undo_memory_change(
 ) -> dict[str, Any]:
     application = get_application(request)
     user = _user(request)
-    try:
-        receipt = await application.memory.undo(
-            owner_id=owner_id_from_user(user),
-            auth_mode=user.auth_mode,
-            change_id=change_id,
-            provenance=MemoryProvenance(origin_kind="undo", origin_id=idempotency_key),
-            idempotency_key=f"web:{idempotency_key}",
-        )
-    except (MemoryUnavailableError, MemoryDisabledError) as exc:
-        raise _capability_error(exc) from exc
-    except MemoryWriteRejectedError as exc:
-        raise HTTPException(status_code=409, detail=exc.public_message) from exc
+    receipt = await application.memory.undo(
+        owner_id=owner_id_from_user(user),
+        auth_mode=user.auth_mode,
+        change_id=change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id=idempotency_key),
+        idempotency_key=f"web:{idempotency_key}",
+    )
     return memory_receipt_payload(receipt)
 
 
@@ -177,19 +151,11 @@ async def undo_memory_change(
 async def clear_memory(request: Request) -> None:
     application = get_application(request)
     user = _user(request)
-    try:
-        await application.memory.clear(owner_id=owner_id_from_user(user), auth_mode=user.auth_mode)
-    except (MemoryUnavailableError, MemoryDisabledError) as exc:
-        raise _capability_error(exc) from exc
+    await application.memory.clear(owner_id=owner_id_from_user(user), auth_mode=user.auth_mode)
 
 
 def _settings(settings: MemorySettings) -> dict[str, object]:
     return {"enabled": settings.enabled, "active_count": settings.active_count}
-
-
-def _capability_error(exc: Exception) -> HTTPException:
-    status_code = 409 if isinstance(exc, MemoryDisabledError) else 403
-    return HTTPException(status_code=status_code, detail=getattr(exc, "public_message", str(exc)))
 
 
 __all__ = ["router"]

@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Errors owned by the Profile Memory application capability."""
 
+from dlightrag.application.errors import ApplicationConflictError
 
-class MemoryDisabledError(Exception):
+
+class MemoryDisabledError(ApplicationConflictError):
     """The owner explicitly deactivated Profile Memory."""
 
     error_kind = "memory_disabled"

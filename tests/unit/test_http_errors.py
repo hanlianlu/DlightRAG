@@ -2,6 +2,7 @@
 """One HTTP projection for every typed failure family."""
 
 import pytest
+from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -13,6 +14,7 @@ from dlightrag.application.errors import (
     StorageSchemaError,
     WorkspaceWriteFencedError,
 )
+from dlightrag.application.memory import MemoryDisabledError
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 
 
@@ -124,6 +126,26 @@ def test_only_an_access_denial_is_forbidden() -> None:
     }
     assert os_failure.status_code == 500
     assert "/srv/corpus" not in os_failure.text
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "error_type"),
+    [
+        (MemoryDisabledError(), 409, "conflict"),
+        (MemoryUnavailableError(), 403, "auth"),
+        (MemoryWriteRejectedError("Memory idempotency key was reused."), 409, "conflict"),
+    ],
+    ids=["disabled", "unavailable", "write-rejected"],
+)
+def test_memory_refusals_answer_with_their_public_message(
+    failure: MemoryDisabledError | MemoryUnavailableError | MemoryWriteRejectedError,
+    status: int,
+    error_type: str,
+) -> None:
+    response = _client(failure).get("/fail")
+
+    assert response.status_code == status
+    assert response.json() == {"detail": failure.public_message, "error_type": error_type}
 
 
 def test_a_write_fence_says_when_to_retry() -> None:

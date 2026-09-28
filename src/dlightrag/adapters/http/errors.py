@@ -10,6 +10,7 @@ import logging
 import math
 from collections.abc import Mapping
 
+from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
@@ -160,6 +161,21 @@ def install_error_handlers(app: FastAPI) -> None:
             error_type="configuration",
             error_kind=exc.error_kind,
         )
+
+    @app.exception_handler(MemoryUnavailableError)
+    async def memory_unavailable(
+        request: Request,  # noqa: ARG001
+        exc: MemoryUnavailableError,
+    ) -> JSONResponse:
+        """Profile Memory is not offered to this caller's authentication."""
+        return error_response(403, exc.public_message)
+
+    @app.exception_handler(MemoryWriteRejectedError)
+    async def memory_write_rejected(
+        request: Request,  # noqa: ARG001
+        exc: MemoryWriteRejectedError,
+    ) -> JSONResponse:
+        return error_response(409, exc.public_message)
 
     @app.exception_handler(MetadataValidationError)
     async def metadata_validation(

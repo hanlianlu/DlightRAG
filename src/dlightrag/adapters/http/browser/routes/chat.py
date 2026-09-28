@@ -2,7 +2,8 @@
 """Web routes for the chat interface and durable answer runs."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from typing import Annotated, Any, Literal
@@ -50,7 +51,6 @@ from dlightrag.application.access import AccessAction, auth_mode_for_owner, owne
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
-    AnswerConnectionsChangedError,
     ChildRosterCursorError,
     ChildRosterPageRequest,
     child_control_receipt_payload,
@@ -61,17 +61,13 @@ from dlightrag.application.answer_runs.artifacts import (
     published_artifact_descriptor,
 )
 from dlightrag.application.corpus_admin import normalize_workspace_ids
-from dlightrag.application.runs import (
-    IdempotencyKeyConflict,
-    RunAdmissionLimitExceededError,
-    RunRuntimeUnavailableError,
-)
+from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 from dlightrag.application.web_conversations import (
     ConversationSubmissionConflict,
     LinkedTurn,
     WebAnswerSubmission,
     WebConversationService,
-    WebConversationUnavailableError,
 )
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.errors import AnswerInputError
@@ -145,6 +141,17 @@ async def start_answer_run(
     transaction before this result is returned, so the browser can discard its
     local File and Blob resources at the acceptance seam.
     """
+    with _answer_command(
+        reuse="request", unavailable="Answer submission is temporarily unavailable"
+    ):
+        return await _start_answer_run(request, workspace, conversation_service)
+
+
+async def _start_answer_run(
+    request: Request,
+    workspace: str,
+    conversation_service: WebConversationService,
+) -> AcceptedAnswer:
     application = get_application(request)
     cfg = application.config
     # Enforce the probed answer capability at admission (pre-acceptance 4xx).
@@ -158,8 +165,6 @@ async def start_answer_run(
             image_max_pixels=cfg.answer.generation.image_max_pixels,
             answer_image_capability=capability,
         )
-    except AnswerInputError as exc:
-        raise _rejected_input(exc) from None
     except HTTPException as exc:
         kind = "attachment_rejected" if exc.status_code == 413 else "invalid_request"
         raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
@@ -180,50 +185,20 @@ async def start_answer_run(
         mode = "research"
 
     target_workspaces = normalize_workspace_ids(body.workspaces or [workspace])
-    try:
-        for ws in target_workspaces:
-            await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
-    except HTTPException as exc:
-        if exc.status_code != 403:
-            raise
-        raise _command_error(403, "scope_forbidden", str(exc.detail)) from exc
+    for ws in target_workspaces:
+        await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
 
-    try:
-        submission = await conversation_service.start_answer(
-            getattr(request.state, "user_context", None),
-            conversation_id=(
-                str(body.conversation_id) if body.conversation_id is not None else None
-            ),
-            submission_id=str(body.submission_id),
-            query=query,
-            workspaces=target_workspaces,
-            attachments=body.attachments,
-            mode=mode,
-            requested_skill=requested_skill,
-            effort=body.effort,
-        )
-    except AnswerInputError as exc:
-        raise _rejected_input(exc) from None
-    except ConversationSubmissionConflict, IdempotencyKeyConflict:
-        raise _command_error(
-            409,
-            "submission_conflict",
-            "This submission id was already used for a different request",
-        ) from None
-    except AnswerConnectionsChangedError:
-        raise _command_error(
-            409, "submission_conflict", "Connections changed; submit the Answer again"
-        ) from None
-    except RunAdmissionLimitExceededError:
-        raise _command_error(
-            503,
-            "service_unavailable",
-            "Deployment-wide nonterminal admission limit reached",
-        ) from None
-    except RunRuntimeUnavailableError, WebConversationUnavailableError:
-        raise _command_error(
-            503, "service_unavailable", "Answer submission is temporarily unavailable"
-        ) from None
+    submission = await conversation_service.start_answer(
+        getattr(request.state, "user_context", None),
+        conversation_id=(str(body.conversation_id) if body.conversation_id is not None else None),
+        submission_id=str(body.submission_id),
+        query=query,
+        workspaces=target_workspaces,
+        attachments=body.attachments,
+        mode=mode,
+        requested_skill=requested_skill,
+        effort=body.effort,
+    )
     if submission is None:
         raise _command_error(404, "conversation_missing", "Conversation not found")
     return await accepted_answer(request, submission)
@@ -236,19 +211,15 @@ async def accepted_answer_submission(
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ) -> AcceptedAnswer:
     """Recover one owner-scoped accepted command after an ambiguous POST result."""
-    try:
+    with _answer_command(
+        reuse="request", unavailable="Answer submission lookup is temporarily unavailable"
+    ):
         submission = await conversation_service.submission(
             getattr(request.state, "user_context", None), str(submission_id)
         )
-    except WebConversationUnavailableError:
-        raise _command_error(
-            503,
-            "service_unavailable",
-            "Answer submission lookup is temporarily unavailable",
-        ) from None
-    if submission is None:
-        raise _command_error(404, "invalid_request", "Answer submission not found")
-    return await accepted_answer(request, submission)
+        if submission is None:
+            raise _command_error(404, "invalid_request", "Answer submission not found")
+        return await accepted_answer(request, submission)
 
 
 @router.get("/runs/{run_id}", response_model=ConversationTurn)
@@ -439,36 +410,13 @@ async def _fork_answer_run(
         ]
         for workspace_id in authorized_workspaces:
             await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace_id)
-    try:
-        submission = await conversation_service.fork_answer(
-            user,
-            parent_run_id=run_id,
-            submission_id=str(body.submission_id),
-            query=body.content,
-            authorized_workspaces=authorized_workspaces,
-        )
-    except AnswerInputError as exc:
-        raise _rejected_input(exc) from None
-    except ConversationSubmissionConflict, IdempotencyKeyConflict:
-        raise _command_error(
-            409,
-            "submission_conflict",
-            "This submission id was already used for a different continuation",
-        ) from None
-    except AnswerConnectionsChangedError:
-        raise _command_error(
-            409, "submission_conflict", "Connections changed; submit the Answer again"
-        ) from None
-    except RunAdmissionLimitExceededError:
-        raise _command_error(
-            503,
-            "service_unavailable",
-            "Deployment-wide nonterminal admission limit reached",
-        ) from None
-    except RunRuntimeUnavailableError, WebConversationUnavailableError:
-        raise _command_error(
-            503, "service_unavailable", "Answer submission is temporarily unavailable"
-        ) from None
+    submission = await conversation_service.fork_answer(
+        user,
+        parent_run_id=run_id,
+        submission_id=str(body.submission_id),
+        query=body.content,
+        authorized_workspaces=authorized_workspaces,
+    )
     if submission is None:
         raise _command_error(
             409,
@@ -490,12 +438,15 @@ async def fork_answer_run(
     The browser offers no per-turn Follow-Up: a conversation continues through the
     composer, which appends at the Lane tip (ADR 0022).
     """
-    return await _fork_answer_run(
-        run_id=run_id,
-        body=body,
-        request=request,
-        conversation_service=conversation_service,
-    )
+    with _answer_command(
+        reuse="continuation", unavailable="Answer submission is temporarily unavailable"
+    ):
+        return await _fork_answer_run(
+            run_id=run_id,
+            body=body,
+            request=request,
+            conversation_service=conversation_service,
+        )
 
 
 @router.delete("/runs/{run_id}", response_model=ConversationTurn)
@@ -735,6 +686,45 @@ def _command_error(
 def _rejected_input(exc: AnswerInputError) -> HTTPException:
     """Admission refused the request's input: say why, with its stable kind."""
     return _command_error(422, "invalid_request", exc.public_message, error_kind=exc.error_kind)
+
+
+_HTTP_COMMAND_KINDS: dict[int, WebCommandErrorKind] = {
+    403: "scope_forbidden",
+    409: "submission_conflict",
+    413: "attachment_rejected",
+    503: "service_unavailable",
+}
+
+
+@contextmanager
+def _answer_command(*, reuse: str, unavailable: str) -> Iterator[None]:
+    """Answer every failure of one browser Answer command with the typed envelope.
+
+    ``reuse`` names what a reused submission id collided with; ``unavailable``
+    is the retryable text for storage and runtime outages. Anything untyped
+    stays an internal error.
+    """
+    try:
+        yield
+    except HTTPException as exc:
+        if isinstance(exc.detail, dict):
+            raise  # already a command envelope
+        kind = _HTTP_COMMAND_KINDS.get(exc.status_code, "invalid_request")
+        raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
+    except AnswerInputError as exc:
+        raise _rejected_input(exc) from None
+    except ConversationSubmissionConflict, IdempotencyKeyConflict:
+        raise _command_error(
+            409,
+            "submission_conflict",
+            f"This submission id was already used for a different {reuse}",
+        ) from None
+    except ApplicationConflictError as exc:
+        raise _command_error(409, "submission_conflict", str(exc)) from None
+    except RunAdmissionLimitExceededError as exc:
+        raise _command_error(503, "service_unavailable", str(exc)) from None
+    except ApplicationUnavailableError:
+        raise _command_error(503, "service_unavailable", unavailable) from None
 
 
 async def _projection_workspaces(

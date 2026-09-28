@@ -392,19 +392,18 @@ async def test_http_rejects_tampered_cursor_before_service(list_memories) -> Non
     memory.list_active_page.assert_not_awaited()
 
 
-async def test_http_maps_disabled_and_unavailable_unchanged(list_memories) -> None:
+async def test_http_leaves_memory_refusals_to_the_shared_error_handlers(list_memories) -> None:
+    """Routes no longer translate Memory refusals; `install_error_handlers` answers them."""
     memory = _MemoryFake(secret=b"memory-list-tests")
     application = SimpleNamespace(memory=memory)
 
     memory.list_active_page.side_effect = MemoryDisabledError()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(MemoryDisabledError):
         await list_memories(_request(application))
-    assert exc.value.status_code == 409
 
     memory.list_active_page.side_effect = MemoryUnavailableError()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(MemoryUnavailableError):
         await list_memories(_request(application))
-    assert exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

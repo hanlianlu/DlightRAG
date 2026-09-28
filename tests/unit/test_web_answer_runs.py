@@ -16,6 +16,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.browser.answer_events import browser_frame, render_done_event
@@ -25,6 +26,7 @@ from dlightrag.adapters.http.browser.routes import conversations as conversation
 from dlightrag.adapters.http.browser.run_resources import image_rewrites
 from dlightrag.adapters.http.server import create_app
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
+from dlightrag.application import ApplicationClosedError
 from dlightrag.application.access import owner_id_from_user
 from dlightrag.application.answer_runs import (
     AnswerConnectionsChangedError,
@@ -679,6 +681,60 @@ async def test_an_unavailable_fork_is_a_typed_service_failure(
 
     assert response.status_code == 503
     assert response.json()["kind"] == "service_unavailable"
+
+
+async def test_an_answer_runtime_outage_before_acceptance_is_a_typed_failure(
+    client: AsyncClient, application_double: AsyncMock, service: AsyncMock
+) -> None:
+    application_double.answers.capabilities = AsyncMock(side_effect=ApplicationClosedError())
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "kind": "service_unavailable",
+        "message": "Answer submission is temporarily unavailable",
+    }
+    service.start_answer.assert_not_awaited()
+
+
+async def test_a_fork_outside_the_callers_scope_is_a_typed_refusal(
+    client: AsyncClient, service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.turn_for_run.return_value = linked_turn(
+        answer_run(status="succeeded", result={"answer": "done"})
+    )
+    monkeypatch.setattr(
+        chat_routes,
+        "enforce_web_access",
+        AsyncMock(side_effect=HTTPException(status_code=403, detail="Access denied")),
+    )
+
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/fork",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"kind": "scope_forbidden", "message": "Access denied"}
+    service.fork_answer.assert_not_awaited()
+
+
+async def test_a_fork_whose_parent_cannot_be_read_is_a_typed_service_failure(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.turn_for_run.side_effect = WebConversationUnavailableError()
+
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/fork",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "kind": "service_unavailable",
+        "message": "Answer submission is temporarily unavailable",
+    }
 
 
 async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
