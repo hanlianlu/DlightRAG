@@ -2,7 +2,6 @@
 """Unit-test fixtures; the root conftest isolates every suite from operator inputs."""
 
 from collections.abc import Generator
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -89,22 +88,6 @@ async def prepare_test_answer_run_input(
         model_catalog_revision=current_model_catalog_revision(),
         idempotency_fingerprint=idempotency_fingerprint,
     )
-
-
-@pytest.fixture(scope="session")
-def _unit_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("home")
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(monkeypatch: pytest.MonkeyPatch, _unit_home: Path) -> None:
-    """Keep unit tests out of the operator's home directory.
-
-    Defaults such as the Agent Workspace and Skills roots live under ~. The root
-    conftest hides the operator's .env and config.yaml from every suite; only unit
-    tests move HOME, because Playwright finds its browsers there.
-    """
-    monkeypatch.setenv("HOME", str(_unit_home))
 
 
 @pytest.fixture(autouse=True)

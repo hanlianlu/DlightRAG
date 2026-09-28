@@ -24,20 +24,16 @@ REQUIRED_PRELOAD_LIBRARIES = ("pg_textsearch", "pg_jieba")
 
 def e2e_enabled(env: Mapping[str, str] | None = None) -> bool:
     """Return whether PG18 E2E tests were explicitly enabled."""
-    value = (env or os.environ).get(RUN_E2E_ENV, "")
+    value = (os.environ if env is None else env).get(RUN_E2E_ENV, "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def pg_conn_kwargs_from_env(env: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Build asyncpg kwargs, preferring E2E-specific env over app env."""
-    source = env or os.environ
+    """Build asyncpg kwargs from the E2E-only environment, never the app's settings."""
+    source = os.environ if env is None else env
 
     def get(name: str, default: str) -> str:
-        return (
-            source.get(f"DLIGHTRAG_E2E_POSTGRES_{name}")
-            or source.get(f"DLIGHTRAG_STORAGE__POSTGRES__{name}")
-            or default
-        )
+        return source.get(f"DLIGHTRAG_E2E_POSTGRES_{name}") or default
 
     return {
         "host": get("HOST", "localhost"),

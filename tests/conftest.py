@@ -2,7 +2,10 @@
 """Shared test fixtures for dlightrag tests."""
 
 import os
-from collections.abc import Generator, Mapping, Sequence
+import shutil
+import sys
+import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import uuid7
@@ -196,12 +199,15 @@ def _answer_envelope(
     )
 
 
-# The operator's .env, config.yaml, and shell settings are deployment inputs, not
-# product contracts: a test that reads them asserts whatever this checkout is tuned
-# to. Tests that mean to exercise a YAML config or an environment set their own.
-_SUITE_GATES = ("DLIGHTRAG_RUN_", "DLIGHTRAG_E2E_")
+# The operator's .env, config.yaml, shell settings, and home are deployment inputs,
+# not product contracts: a test that reads them asserts whatever this checkout is
+# tuned to. Tests that mean to exercise a YAML config or an environment set their
+# own. Only the suite gates stay visible; they choose what runs and set nothing.
+_CLIENT_ENV_NAMES = frozenset(
+    {"DLIGHTRAG_API_TOKEN", "DLIGHTRAG_API_URL", "DLIGHTRAG_CLIENT_TIMEOUT"}
+)
 # The config.yaml files present when the run starts: this checkout's and the
-# invocation directory's. Tests that mean to load YAML write their own.
+# invocation directory's.
 _STARTUP_CONFIG_YAMLS = frozenset(
     (directory / "config.yaml").resolve()
     for directory in (Path(__file__).resolve().parents[1], Path.cwd())
@@ -218,31 +224,43 @@ def _yaml_config_ignoring_startup_files() -> Path | None:
     return found
 
 
-def _hide_operator_inputs(patch: pytest.MonkeyPatch) -> None:
-    """Hide the checkout's .env and config.yaml and the shell's DLIGHTRAG_* names.
+def _is_suite_gate(name: str) -> bool:
+    return config_sections._is_auxiliary_env_name(name) and name.upper() not in _CLIENT_ENV_NAMES
 
-    Only the suite gates (DLIGHTRAG_RUN_*, DLIGHTRAG_E2E_*) stay visible: they
-    choose which suites run and configure nothing.
-    """
+
+def _hide_operator_inputs(patch: pytest.MonkeyPatch) -> None:
+    """Hide the checkout's .env and config.yaml and the shell's DLIGHTRAG_* names."""
     patch.setenv("PYTHON_DOTENV_DISABLED", "1")  # LightRAG load_dotenv()s .env on import
     patch.setitem(DlightragConfig.model_config, "env_file", None)
     patch.setattr(config_sections, "_find_yaml_config", _yaml_config_ignoring_startup_files)
     for key in list(os.environ):
-        upper = key.upper()
-        if upper.startswith("DLIGHTRAG_") and not upper.startswith(_SUITE_GATES):
+        if key.upper().startswith("DLIGHTRAG_") and not _is_suite_gate(key):
             patch.delenv(key, raising=False)
 
 
-@pytest.hookimpl(wrapper=True)
-def pytest_make_collect_report(collector: pytest.Collector) -> Generator[None, Any, Any]:
-    """Import test modules under the same isolation as the tests themselves.
+def _playwright_browsers(home: Path) -> Path:
+    """Playwright's default browser cache under the operator's real home."""
+    if sys.platform == "darwin":
+        return home / "Library" / "Caches" / "ms-playwright"
+    if sys.platform == "win32":
+        return home / "AppData" / "Local" / "ms-playwright"
+    return Path(os.environ.get("XDG_CACHE_HOME", home / ".cache")) / "ms-playwright"
 
-    Some modules read config while they are imported (the MCP server builds
-    its HTTP auth from it), before any fixture runs.
-    """
-    with pytest.MonkeyPatch.context() as patch:
-        _hide_operator_inputs(patch)
-        return (yield)
+
+# Applied once for the whole session, as this conftest loads and before any suite's
+# conftest, session fixture, or module imports LightRAG or builds a config; undone
+# in pytest_unconfigure. Each test re-applies it in case one wrote os.environ.
+_SESSION = pytest.MonkeyPatch()
+_SESSION_HOME = Path(tempfile.mkdtemp(prefix="dlightrag-test-home-")).resolve()
+if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+    _SESSION.setenv("PLAYWRIGHT_BROWSERS_PATH", str(_playwright_browsers(Path.home())))
+_SESSION.setenv("HOME", str(_SESSION_HOME))
+_hide_operator_inputs(_SESSION)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:  # noqa: ARG001
+    _SESSION.undo()
+    shutil.rmtree(_SESSION_HOME, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

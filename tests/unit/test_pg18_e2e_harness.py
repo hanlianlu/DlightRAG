@@ -39,22 +39,17 @@ def test_pg18_harness_connection_env_prefers_e2e_namespace() -> None:
     }
 
 
-def test_pg18_harness_connection_env_falls_back_to_canonical_storage_namespace() -> None:
-    assert pg_conn_kwargs_from_env(
+def test_pg18_harness_never_borrows_the_application_database_settings() -> None:
+    """The smoke builds and tears down its own database, never the app's."""
+    kwargs = pg_conn_kwargs_from_env(
         {
             "DLIGHTRAG_STORAGE__POSTGRES__HOST": "primary",
-            "DLIGHTRAG_STORAGE__POSTGRES__PORT": "5544",
-            "DLIGHTRAG_STORAGE__POSTGRES__USER": "app",
-            "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "secret",
-            "DLIGHTRAG_STORAGE__POSTGRES__DATABASE": "corpus",
+            "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "app-secret",
         }
-    ) == {
-        "host": "primary",
-        "port": 5544,
-        "user": "app",
-        "password": "secret",
-        "database": "corpus",
-    }
+    )
+
+    assert kwargs["host"] == "localhost"
+    assert kwargs["password"] != "app-secret"
 
 
 def test_pg18_harness_tracks_required_postgres_extensions() -> None:
