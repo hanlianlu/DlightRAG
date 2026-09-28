@@ -3,7 +3,7 @@
 
 import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
-import {parseWire} from './wire.ts';
+import {apiError, parseWire} from './wire.ts';
 
 const memorySettings = v.pipe(
   v.object({enabled: v.boolean(), active_count: v.nullable(v.number())}),
@@ -64,12 +64,7 @@ export function parseMemoryOperationEvent(value: unknown): MemoryOperationEvent 
 
 export async function getMemorySettings(signal?: AbortSignal): Promise<MemorySettings> {
   const response = await fetch('/web/api/memory/settings', {signal});
-  return parseWire(
-    response,
-    memorySettings,
-    (status, message) => new Error(`${message} (${status})`),
-    'Failed to load memory settings',
-  );
+  return parseWire(response, memorySettings);
 }
 
 export async function putMemorySettings(
@@ -82,12 +77,7 @@ export async function putMemorySettings(
     body: JSON.stringify({enabled}),
     signal,
   });
-  return parseWire(
-    response,
-    memorySettings,
-    (status, message) => new Error(`${message} (${status})`),
-    'Failed to update memory settings',
-  );
+  return parseWire(response, memorySettings);
 }
 
 export async function undoMemoryChange(
@@ -105,12 +95,7 @@ export async function undoMemoryChange(
       signal,
     },
   );
-  return parseWire(
-    response,
-    memoryOperationReceipt,
-    (status, message) => new Error(`${message} (${status})`),
-    'Failed to undo memory change',
-  );
+  return parseWire(response, memoryOperationReceipt);
 }
 
 export async function clearMemory(signal?: AbortSignal): Promise<void> {
@@ -119,9 +104,7 @@ export async function clearMemory(signal?: AbortSignal): Promise<void> {
     headers: csrfHeaders(),
     signal,
   });
-  if (!response.ok) {
-    throw new Error(`Failed to clear memory (${response.status})`);
-  }
+  if (!response.ok) throw await apiError(response);
 }
 
 const memoryRecord = v.pipe(
@@ -138,8 +121,7 @@ export async function listMemories(cursor: string | null, signal?: AbortSignal) 
   const query = new URLSearchParams({limit: '20'});
   if (cursor) query.set('cursor', cursor);
   const response = await fetch(`/web/api/memory?${query}`, {signal});
-  return parseWire(response, memoryPage,
-    (status, message) => new Error(`${message} (${status})`), 'Failed to load memories');
+  return parseWire(response, memoryPage);
 }
 
 export async function forgetMemory(memoryId: string, signal?: AbortSignal): Promise<MemoryOperationReceipt> {
@@ -148,6 +130,5 @@ export async function forgetMemory(memoryId: string, signal?: AbortSignal): Prom
     headers: {...csrfHeaders(), 'Idempotency-Key': crypto.randomUUID()},
     signal,
   });
-  return parseWire(response, memoryOperationReceipt,
-    (status, message) => new Error(`${message} (${status})`), 'Failed to forget memory');
+  return parseWire(response, memoryOperationReceipt);
 }

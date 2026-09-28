@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {getConnections, ConnectionsApiError} from './connections.ts';
+import {ApiError} from './wire.ts';
 const originalFetch = globalThis.fetch;
 const originalDocument = globalThis.document;
 test.beforeEach(() => {Object.defineProperty(globalThis, 'document', {configurable: true, value: {cookie: ''}});});
@@ -11,7 +12,22 @@ test('Connections wire normalizes owner projection and rejects credential-shaped
   globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: []});
   assert.deepEqual(await getConnections(), {revision: '0', connections: [], presets: []});
   globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [], bearer: 'must-not-enter-ui'});
-  await assert.rejects(getConnections(), ConnectionsApiError);
+  await assert.rejects(getConnections(), ApiError);
+});
+
+test('a Connections refusal keeps its own {kind, message} envelope', async () => {
+  globalThis.fetch = async () => Response.json(
+    {kind: 'requires_reauthorization', message: 'Endpoint candidate needs a new grant'},
+    {status: 409},
+  );
+  await assert.rejects(getConnections(), (error: unknown) => error instanceof ConnectionsApiError
+    && error.status === 409
+    && error.kind === 'requires_reauthorization'
+    && error.message === 'Endpoint candidate needs a new grant');
+  globalThis.fetch = async () => new Response('', {status: 503});
+  await assert.rejects(getConnections(), (error: unknown) => error instanceof ConnectionsApiError
+    && error.status === 503
+    && error.kind === null);
 });
 
 test('presets arrive as display copy plus the tab they imply, and an unknown tab is rejected', async () => {
@@ -21,17 +37,17 @@ test('presets arrive as display copy plus the tab they imply, and an unknown tab
     {presetId: 'notion', label: 'Notion', endpoint: 'https://mcp.notion.com/mcp', defaultAuthentication: 'oauth'},
   ]);
   globalThis.fetch = async () => Response.json({revision: '0', connections: [], presets: [{...preset, default_authentication: 'token'}]});
-  await assert.rejects(getConnections(), ConnectionsApiError);
+  await assert.rejects(getConnections(), ApiError);
 });
 
 test('OAuth wire rejects unsafe redirects and credential-shaped replies', async () => {
   const {beginConnectionAuthorization} = await import('./connections.ts');
   for (const authorization_url of ['javascript:alert(1)', 'https://user:secret@as.example/', 'https://as.example/#secret']) {
     globalThis.fetch = async () => Response.json({authorization_url});
-    await assert.rejects(beginConnectionAuthorization('revision', 'connection', 'https://candidate.example/mcp'), ConnectionsApiError);
+    await assert.rejects(beginConnectionAuthorization('revision', 'connection', 'https://candidate.example/mcp'), ApiError);
   }
   globalThis.fetch = async () => Response.json({authorization_url: 'https://as.example/authorize', access_token: 'forbidden'});
-  await assert.rejects(beginConnectionAuthorization('revision', 'connection', 'https://candidate.example/mcp'), ConnectionsApiError);
+  await assert.rejects(beginConnectionAuthorization('revision', 'connection', 'https://candidate.example/mcp'), ApiError);
 });
 
 test('bearer candidate sends explicit new endpoint and only the write-only credential', async () => {

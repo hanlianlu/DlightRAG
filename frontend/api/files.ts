@@ -3,6 +3,7 @@
 import * as v from 'valibot';
 import {corpusRunReceipt, type WebCorpusRunReceipt} from './corpus-runs.ts';
 import {csrfHeaders} from './csrf.ts';
+import {parseWire} from './wire.ts';
 
 const webFileItem = v.pipe(
   v.object({file_name: v.string(), file_path: v.string()}),
@@ -54,37 +55,10 @@ const webFailedFilesPage = v.pipe(
 );
 export type WebFailedFilesPage = v.InferOutput<typeof webFailedFilesPage>;
 
-export class FilesApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'FilesApiError';
-    this.status = status;
-  }
-}
-
 function url(path: string, workspace: string): string {
   const target = new URL(path, window.location.origin);
   if (workspace) target.searchParams.set('workspace', workspace);
   return target.pathname + target.search;
-}
-
-async function json<Input, Output>(
-  response: Response,
-  schema: v.GenericSchema<Input, Output>,
-  fallback: string,
-): Promise<Output> {
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null) as {detail?: unknown} | null;
-    const detail = typeof payload?.detail === 'string' ? payload.detail : fallback;
-    throw new FilesApiError(response.status, detail);
-  }
-  try {
-    return v.parse(schema, await response.json());
-  } catch {
-    throw new FilesApiError(response.status, fallback);
-  }
 }
 
 export async function getFilePanel(
@@ -95,7 +69,7 @@ export async function getFilePanel(
   const target = new URL(url('/web/api/files', workspace), window.location.origin);
   if (cursor !== null) target.searchParams.set('cursor', cursor);
   const response = await fetch(target.pathname + target.search, {signal});
-  return json(response, webFilePanelSnapshot, 'Failed to load files');
+  return parseWire(response, webFilePanelSnapshot);
 }
 
 export async function getFailedFiles(
@@ -106,7 +80,7 @@ export async function getFailedFiles(
   const target = new URL(url('/web/api/files/failed', workspace), window.location.origin);
   if (cursor !== null) target.searchParams.set('cursor', cursor);
   const response = await fetch(target.pathname + target.search, {signal});
-  return json(response, webFailedFilesPage, 'Failed to load documents needing attention');
+  return parseWire(response, webFailedFilesPage);
 }
 
 export async function startFailedFileRetry(
@@ -118,7 +92,7 @@ export async function startFailedFileRetry(
     headers: csrfHeaders(),
     signal,
   });
-  return json(response, corpusRunReceipt, 'Document recovery could not be started');
+  return parseWire(response, corpusRunReceipt);
 }
 
 export async function uploadFileBatch(
@@ -138,7 +112,7 @@ export async function uploadFileBatch(
     body,
     signal,
   });
-  return json(response, corpusRunReceipt, 'Upload failed');
+  return parseWire(response, corpusRunReceipt);
 }
 
 export async function deleteFileRequest(
@@ -154,5 +128,5 @@ export async function deleteFileRequest(
     headers: csrfHeaders(),
     signal,
   });
-  return json(response, corpusRunReceipt, 'Deletion failed');
+  return parseWire(response, corpusRunReceipt);
 }

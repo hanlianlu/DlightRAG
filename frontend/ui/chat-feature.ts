@@ -7,8 +7,6 @@ import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
 import {AnswerSubmissionError} from '../api/web-command-error.ts';
 import type {MemoryOperationEvent} from '../api/memory.ts';
 import {
-  ChildControlRejectedError,
-  ConversationApiError,
   forkAnswerRun,
   controlAnswerChild,
   getAnswerRunChild,
@@ -18,6 +16,7 @@ import {
   type ConversationAttachmentReference,
   type ConversationTurn,
 } from '../api/conversations.ts';
+import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {localizedErrorKind} from '../lib/run-errors.ts';
@@ -86,12 +85,11 @@ export interface ChatChildActivityDetail {
 
 function childCommandAmbiguous(error: unknown): boolean {
   if (isAbortError(error)) return true;
-  if (error instanceof ChildControlRejectedError) return false;
-  if (error instanceof ConversationApiError) {
+  if (error instanceof ApiError) {
     // A successful HTTP response with an unreadable receipt may already be committed.
     if (error.status >= 200 && error.status < 300) return true;
-    if (error.status === 408 || error.status === 429 || error.status >= 500) return true;
-    return false;
+    // An explicit rejection (a 409 outcome included) settled the command.
+    return error.status === 408 || error.status === 429 || error.status >= 500;
   }
   return true;
 }

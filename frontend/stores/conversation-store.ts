@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {
-  ConversationApiError,
   deleteAllConversations,
   deleteConversation,
   getConversationHistory,
@@ -11,6 +10,7 @@ import {
   type ConversationPage,
   type ConversationSummary,
 } from '../api/conversations.ts';
+import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {Store} from './base.ts';
 
@@ -530,12 +530,11 @@ export class ConversationStore extends Store {
   }
 
   #isMissing(error: unknown): boolean {
-    return error instanceof ConversationApiError && error.status === 404;
+    return error instanceof ApiError && error.status === 404;
   }
 
   #isRouteUnavailable(error: unknown): boolean {
-    return this.#isMissing(error)
-      || (error instanceof ConversationApiError && error.status === 422);
+    return this.#isMissing(error) || (error instanceof ApiError && error.status === 422);
   }
 }
 

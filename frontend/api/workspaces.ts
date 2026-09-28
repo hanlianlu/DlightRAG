@@ -30,30 +30,19 @@ const workspacePage = v.pipe(
 );
 export type WorkspacePage = v.InferOutput<typeof workspacePage>;
 
-export class WorkspaceApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'WorkspaceApiError';
-    this.status = status;
-  }
-}
-
 export async function getWorkspacesPage(
   cursor: string | null,
   signal?: AbortSignal,
 ): Promise<WorkspacePage> {
   const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
   const response = await fetch(`/web/api/workspaces${query}`, {signal});
-  return parseWire(response, workspacePage, makeError, 'Failed to load workspaces');
+  return parseWire(response, workspacePage);
 }
 
 async function post<Input, Output>(
   path: string,
   body: Record<string, string>,
   schema: v.GenericSchema<Input, Output>,
-  fallback: string,
   signal?: AbortSignal,
 ): Promise<Output> {
   const response = await fetch(path, {
@@ -62,17 +51,7 @@ async function post<Input, Output>(
     body: new URLSearchParams(body).toString(),
     signal,
   });
-  if (!response.ok) {
-    // The route answers {detail, error_type}; fall back when it cannot.
-    const failure = await response.json().catch(() => null) as {detail?: unknown} | null;
-    const message = typeof failure?.detail === 'string' ? failure.detail : fallback;
-    throw new WorkspaceApiError(response.status, message);
-  }
-  return v.parse(schema, await response.json());
-}
-
-function makeError(status: number, message: string): Error {
-  return new WorkspaceApiError(status, message);
+  return parseWire(response, schema);
 }
 
 export function createWorkspaceRequest(
@@ -83,7 +62,6 @@ export function createWorkspaceRequest(
     '/web/api/workspaces/create',
     {workspace_name: name},
     createdWorkspace,
-    'Failed to create workspace',
     signal,
   );
 }
@@ -96,7 +74,6 @@ export function resetWorkspaceRequest(
     '/web/api/workspaces/reset',
     {workspace_name: name, confirm_name: name},
     corpusRunReceipt,
-    'Could not accept Corpus reset.',
     signal,
   );
 }
@@ -109,7 +86,6 @@ export function deleteWorkspaceRequest(
     '/web/api/workspaces/delete',
     {workspace_name: name, confirm_name: name},
     corpusRunReceipt,
-    'Could not accept workspace deletion.',
     signal,
   );
 }

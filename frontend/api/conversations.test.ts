@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {AnswerSubmissionError} from './web-command-error.ts';
+import {ApiError} from './wire.ts';
 import {
   ChildControlRejectedError,
   forkAnswerRun,
@@ -257,10 +258,31 @@ test('child control 409 surfaces the explicit terminal outcome', async () => {
     () => controlAnswerChild('run-1', 'child-1', 'steer', 'focus', 'submission-late'),
     (error: unknown) => {
       assert.ok(error instanceof ChildControlRejectedError);
+      assert.ok(error instanceof ApiError);
       assert.equal(error.outcome, 'terminal_child');
       assert.equal(error.status, 409);
+      assert.equal(error.errorType, 'conflict');
       return true;
     },
+  );
+});
+
+test('an unreadable child-command 409 still settles as rejected; other refusals stay plain', async () => {
+  globalThis.fetch = async () => new Response('{truncated', {status: 409});
+  await assert.rejects(
+    () => replyAnswerChild('run-1', 'req-1', 'answer', 'submission-1'),
+    (error: unknown) => error instanceof ChildControlRejectedError && error.outcome === 'rejected',
+  );
+
+  globalThis.fetch = async () => Response.json(
+    {detail: 'Answer child not found', error_type: 'not_found'},
+    {status: 404},
+  );
+  await assert.rejects(
+    () => controlAnswerChild('run-1', 'child-1', 'cancel', '', 'submission-2'),
+    (error: unknown) => error instanceof ApiError
+      && !(error instanceof ChildControlRejectedError)
+      && error.status === 404,
   );
 });
 

@@ -2,7 +2,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {WorkspaceApiError, createWorkspaceRequest, resetWorkspaceRequest} from './workspaces.ts';
+import {ApiError} from './wire.ts';
+import {createWorkspaceRequest, resetWorkspaceRequest} from './workspaces.ts';
 
 const originalDocument = globalThis.document;
 const originalFetch = globalThis.fetch;
@@ -22,7 +23,7 @@ test.afterEach(() => {
   });
 });
 
-test('a refused workspace command carries the server detail and status', async () => {
+test('a refused workspace command carries the server detail, type, and status', async () => {
   const remedy = 'This deployment is a read-only replica of the knowledge base: it accepts no '
     + 'corpus writes. Send the workspace creation to a writer.';
   globalThis.fetch = async () => Response.json(
@@ -32,19 +33,21 @@ test('a refused workspace command carries the server detail and status', async (
 
   await assert.rejects(
     createWorkspaceRequest('Finance'),
-    (error: unknown) => error instanceof WorkspaceApiError
+    (error: unknown) => error instanceof ApiError
       && error.status === 503
-      && error.message === remedy,
+      && error.errorType === 'unavailable'
+      && error.detail === remedy,
   );
 });
 
-test('a refusal without a readable detail falls back to the command copy', async () => {
+test('a refusal without a readable detail carries no copy for the UI to show', async () => {
   globalThis.fetch = async () => new Response('upstream failure', {status: 502});
 
   await assert.rejects(
     resetWorkspaceRequest('finance'),
-    (error: unknown) => error instanceof WorkspaceApiError
+    (error: unknown) => error instanceof ApiError
       && error.status === 502
-      && error.message === 'Could not accept Corpus reset.',
+      && error.errorType === 'internal'
+      && error.detail === null,
   );
 });

@@ -2,7 +2,6 @@
 
 import * as v from 'valibot';
 import {workspacePageItem} from './workspaces.ts';
-
 import {parseWire} from './wire.ts';
 import type {AgentEffort} from '../lib/agent-effort.ts';
 
@@ -72,22 +71,7 @@ const webBootstrap = v.pipe(
 );
 export type WebBootstrap = v.InferOutput<typeof webBootstrap>;
 
-export class BootstrapApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super('Failed to load the Web application');
-    this.name = 'BootstrapApiError';
-    this.status = status;
-  }
-}
-
 export async function getWebBootstrap(signal?: AbortSignal): Promise<WebBootstrap> {
   const response = await fetch('/web/api/bootstrap', {signal});
-  return parseWire(
-    response,
-    webBootstrap,
-    (status) => new BootstrapApiError(status),
-    'Failed to load the Web application',
-  );
+  return parseWire(response, webBootstrap);
 }

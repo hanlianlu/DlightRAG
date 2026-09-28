@@ -3,7 +3,7 @@
 import * as v from 'valibot';
 import {webCommandError} from './web-command-error.ts';
 import {csrfHeaders} from './csrf.ts';
-import {parseWire} from './wire.ts';
+import {ApiError, apiError, parseWire} from './wire.ts';
 import {videoPlaybackLink} from './video-playback.ts';
 
 const conversationSummary = v.pipe(
@@ -460,28 +460,16 @@ const agentChildRosterPage = v.pipe(
 );
 export type AgentChildRosterPage = v.InferOutput<typeof agentChildRosterPage>;
 
-export class ConversationApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'ConversationApiError';
-    this.status = status;
-  }
-}
-
-export class ChildControlRejectedError extends ConversationApiError {
+/** A child command refused with 409: its `detail` names the outcome the command met. */
+export class ChildControlRejectedError extends ApiError {
   readonly outcome: string;
 
-  constructor(status: number, outcome: string) {
-    super(status, outcome);
+  constructor(refusal: ApiError) {
+    super(refusal.status, refusal);
     this.name = 'ChildControlRejectedError';
-    this.outcome = outcome;
+    // An unreadable 409 still settles the command as rejected.
+    this.outcome = refusal.detail ?? 'rejected';
   }
-}
-
-function makeError(status: number, message: string): Error {
-  return new ConversationApiError(status, message);
 }
 
 export async function listConversations(
@@ -490,7 +478,7 @@ export async function listConversations(
 ): Promise<ConversationPage> {
   const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
   const response = await fetch(`/web/api/conversations${query}`, {signal});
-  return parseWire(response, conversationPage, makeError, 'Failed to load conversations');
+  return parseWire(response, conversationPage);
 }
 
 export async function getConversationHistory(
@@ -505,7 +493,7 @@ export async function getConversationHistory(
   if (limit !== undefined) query.set('limit', String(limit));
   const suffix = query.size > 0 ? `?${query.toString()}` : '';
   const response = await fetch(`/web/api/conversations/${id}/history${suffix}`, {signal});
-  return parseWire(response, conversationHistory, makeError, 'Failed to load conversation history');
+  return parseWire(response, conversationHistory);
 }
 
 export async function renameConversation(
@@ -520,7 +508,7 @@ export async function renameConversation(
     body: JSON.stringify({title}),
     signal,
   });
-  return parseWire(response, conversationSummary, makeError, 'Failed to rename conversation');
+  return parseWire(response, conversationSummary);
 }
 
 export async function deleteConversation(
@@ -533,9 +521,7 @@ export async function deleteConversation(
     headers: csrfHeaders(),
     signal,
   });
-  if (!response.ok) {
-    throw new ConversationApiError(response.status, 'Failed to delete conversation');
-  }
+  if (!response.ok) throw await apiError(response);
 }
 
 export async function deleteAllConversations(signal?: AbortSignal): Promise<void> {
@@ -544,9 +530,7 @@ export async function deleteAllConversations(signal?: AbortSignal): Promise<void
     headers: csrfHeaders(),
     signal,
   });
-  if (!response.ok) {
-    throw new ConversationApiError(response.status, 'Failed to delete conversations');
-  }
+  if (!response.ok) throw await apiError(response);
 }
 
 /** Parse the presentation served at a server-provided artifact URL. The URL
@@ -557,10 +541,10 @@ export async function getArtifactPresentationAt(
 ): Promise<AnswerPresentation> {
   const target = new URL(presentationUrl, window.location.origin);
   if (target.origin !== window.location.origin) {
-    throw new ConversationApiError(0, 'Untrusted artifact presentation URL');
+    throw new Error('Untrusted artifact presentation URL');
   }
   const response = await fetch(target.pathname + target.search, {signal});
-  return parseWire(response, answerPresentation, makeError, 'Failed to load the Artifact');
+  return parseWire(response, answerPresentation);
 }
 
 export async function getRun(
@@ -569,7 +553,7 @@ export async function getRun(
 ): Promise<ConversationTurn> {
   const id = encodeURIComponent(runId);
   const response = await fetch(`/web/api/runs/${id}`, {signal});
-  return parseWire(response, conversationTurn, makeError, 'Failed to load answer run');
+  return parseWire(response, conversationTurn);
 }
 
 /** Ask the server to stop a run; disconnecting never does this on its own. */
@@ -586,7 +570,7 @@ export async function steerAnswerRun(
     signal,
   });
   const schema = v.record(v.string(), v.unknown());
-  return parseWire(response, schema, makeError, 'Failed to steer the answer');
+  return parseWire(response, schema);
 }
 
 export async function getAnswerRunChildrenPage(
@@ -599,7 +583,7 @@ export async function getAnswerRunChildrenPage(
   if (cursor !== null) query.set('cursor', cursor);
   const suffix = query.size > 0 ? `?${query.toString()}` : '';
   const response = await fetch(`/web/api/answer/${id}/children${suffix}`, {signal});
-  return parseWire(response, agentChildRosterPage, makeError, 'Failed to load child agents');
+  return parseWire(response, agentChildRosterPage);
 }
 
 export async function getAnswerRunChild(
@@ -610,32 +594,12 @@ export async function getAnswerRunChild(
   const run = encodeURIComponent(runId);
   const child = encodeURIComponent(childSessionId);
   const response = await fetch(`/web/api/answer/${run}/children/${child}`, {signal});
-  return parseWire(response, childObservation, makeError, 'Failed to load child agent');
+  return parseWire(response, childObservation);
 }
 
-async function parseChildCommand(
-  response: Response,
-  fallback: string,
-): Promise<ChildControlReceipt> {
-  if (response.status === 409) {
-    let outcome = 'rejected';
-    try {
-      const body: unknown = await response.json();
-      if (
-        body !== null
-        && typeof body === 'object'
-        && 'detail' in body
-        && typeof body.detail === 'string'
-        && body.detail.trim()
-      ) {
-        outcome = body.detail;
-      }
-    } catch {
-      // Keep the generic rejected outcome when the 409 body is unreadable.
-    }
-    throw new ChildControlRejectedError(409, outcome);
-  }
-  return parseWire(response, childControlReceipt, makeError, fallback);
+async function childCommandRefusal(response: Response): Promise<ApiError> {
+  const refusal = await apiError(response);
+  return response.status === 409 ? new ChildControlRejectedError(refusal) : refusal;
 }
 
 export async function controlAnswerChild(
@@ -659,7 +623,7 @@ export async function controlAnswerChild(
     }),
     signal,
   });
-  return parseChildCommand(response, 'Failed to control child agent');
+  return parseWire(response, childControlReceipt, childCommandRefusal);
 }
 
 export async function replyAnswerChild(
@@ -677,7 +641,7 @@ export async function replyAnswerChild(
     body: JSON.stringify({content}),
     signal,
   });
-  return parseChildCommand(response, 'Failed to reply to child agent');
+  return parseWire(response, childControlReceipt, childCommandRefusal);
 }
 
 export async function forkAnswerRun(
@@ -694,7 +658,7 @@ export async function forkAnswerRun(
     signal,
   });
   if (!response.ok) throw await webCommandError(response);
-  return parseWire(response, acceptedAnswer, makeError, 'Failed to fork the answer');
+  return parseWire(response, acceptedAnswer);
 }
 
 export async function cancelRun(
@@ -707,5 +671,5 @@ export async function cancelRun(
     headers: csrfHeaders(),
     signal,
   });
-  return parseWire(response, conversationTurn, makeError, 'Failed to stop the answer');
+  return parseWire(response, conversationTurn);
 }

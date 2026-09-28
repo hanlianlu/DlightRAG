@@ -2,8 +2,9 @@
 
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
-import {WorkspaceApiError, createWorkspaceRequest} from '../api/workspaces.ts';
+import {createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
+import {apiErrorMessage} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
@@ -72,9 +73,10 @@ export class DlWorkspaceCreate extends LightElement {
         !lifecycle.signal.aborted && this.#lifecycle === lifecycle && this.isConnected
       ) {
         requestToast(this, {
-          message: error instanceof WorkspaceApiError
-            ? error.message
-            : msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
+          message: apiErrorMessage(
+            error,
+            msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
+          ),
           duration: 3000,
         });
       }

@@ -5,7 +5,6 @@ import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
-  CorpusRunApiError,
   corpusRunActive,
   corpusRunStatusRefused,
   getCorpusRunStatus,
@@ -14,11 +13,11 @@ import {
   type WebCorpusRunStatus,
 } from '../api/corpus-runs.ts';
 import {
-  FilesApiError,
   getFailedFiles,
   startFailedFileRetry,
   type WebFailedFilesPage,
 } from '../api/files.ts';
+import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {requestToast} from './toast-request.ts';
@@ -58,9 +57,7 @@ function failureTime(value: string): string {
 
 /** HTTP status of a Files or Corpus Run refusal; null for any other failure. */
 function refusalStatus(error: unknown): number | null {
-  return error instanceof FilesApiError || error instanceof CorpusRunApiError
-    ? error.status
-    : null;
+  return error instanceof ApiError ? error.status : null;
 }
 
 function recoveryRequestError(error: unknown, fallback: string): string {
@@ -342,7 +339,8 @@ export class DlFailedFileRecovery extends LightElement {
       this.loadMoreState = 'idle';
     } catch (error) {
       if (isAbortError(error) || !this.#session.isLoadMoreCurrent(controller, generation)) return;
-      if (error instanceof FilesApiError && [401, 403, 409].includes(error.status)) {
+      const status = refusalStatus(error);
+      if (status !== null && [401, 403, 409].includes(status)) {
         this.#stopPolling();
         this.page = null;
         this.recovery = null;

@@ -2,7 +2,7 @@
 
 import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
-import {parseWire} from './wire.ts';
+import {ApiError, parseWire} from './wire.ts';
 
 export const corpusRunReceipt = v.pipe(
   v.object({
@@ -79,7 +79,7 @@ export async function getCorpusRunStatus(
   signal?: AbortSignal,
 ): Promise<WebCorpusRunStatus> {
   const response = await fetch(statusUrl, {signal});
-  return parseWire(response, corpusRunStatus, makeError, 'Failed to read Corpus update status');
+  return parseWire(response, corpusRunStatus);
 }
 
 export async function resumeCorpusRun(
@@ -91,11 +91,7 @@ export async function resumeCorpusRun(
     headers: csrfHeaders(),
     signal,
   });
-  return parseWire(response, corpusRunStatus, makeError, 'Corpus repair resume failed');
-}
-
-function makeError(status: number, message: string): Error {
-  return new CorpusRunApiError(status, message);
+  return parseWire(response, corpusRunStatus);
 }
 
 // A status the Corpus Run API refuses to report ends polling for good: the Run
@@ -103,15 +99,5 @@ function makeError(status: number, message: string): Error {
 const REFUSED_STATUS_CODES: ReadonlySet<number> = new Set([401, 403, 404, 409]);
 
 export function corpusRunStatusRefused(error: unknown): boolean {
-  return error instanceof CorpusRunApiError && REFUSED_STATUS_CODES.has(error.status);
-}
-
-export class CorpusRunApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'CorpusRunApiError';
-    this.status = status;
-  }
+  return error instanceof ApiError && REFUSED_STATUS_CODES.has(error.status);
 }

@@ -13,22 +13,17 @@ import {
 } from '../api/corpus-runs.ts';
 import {
   deleteFileRequest,
-  FilesApiError,
   getFilePanel,
   uploadFileBatch,
   type WebFilePanelSnapshot,
 } from '../api/files.ts';
 import {icon} from '../design-system/index.ts';
-import {isAbortError} from '../lib/errors.ts';
+import {apiErrorMessage, isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {withRelativePath} from './folder-upload.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
-import {
-  deleteWorkspaceRequest,
-  resetWorkspaceRequest,
-  WorkspaceApiError,
-} from '../api/workspaces.ts';
+import {deleteWorkspaceRequest, resetWorkspaceRequest} from '../api/workspaces.ts';
 import {requestToast} from './toast-request.ts';
 import './failed-file-recovery.ts';
 import fileStyles from '../styles/inspector-files.module.css';
@@ -189,9 +184,10 @@ export class DlInspectorFiles extends LightElement {
       // Keep the workspace transition fail closed even when a transport ignores
       // AbortSignal and resolves an invalidated request later.
       if (this.snapshot?.workspace !== workspace) this.snapshot = null;
-      this.error = error instanceof FilesApiError
-        ? error.message
-        : msg('Failed to load files.', {id: 'inspectorFiles.loadFailed'});
+      this.error = apiErrorMessage(
+        error,
+        msg('Failed to load files.', {id: 'inspectorFiles.loadFailed'}),
+      );
     } finally {
       if (this.#session.finishRequest(controller)) {
         this.loading = false;
@@ -314,9 +310,10 @@ export class DlInspectorFiles extends LightElement {
         isAbortError(error)
         || !this.#isCurrent(controller, workspace, generation)
       ) return;
-      const message = error instanceof FilesApiError
-        ? error.message
-        : msg('Upload failed.', {id: 'inspectorFiles.uploadFailed'});
+      const message = apiErrorMessage(
+        error,
+        msg('Upload failed.', {id: 'inspectorFiles.uploadFailed'}),
+      );
       this.error = message;
       requestToast(this, {message, duration: 3000});
     } finally {
@@ -367,9 +364,10 @@ export class DlInspectorFiles extends LightElement {
         isAbortError(error)
         || !this.#isCurrent(controller, workspace, generation)
       ) return;
-      const message = error instanceof FilesApiError
-        ? error.message
-        : msg('Deletion failed.', {id: 'inspectorFiles.deletionFailed'});
+      const message = apiErrorMessage(
+        error,
+        msg('Deletion failed.', {id: 'inspectorFiles.deletionFailed'}),
+      );
       this.error = message;
       requestToast(this, {message, duration: 3000});
     } finally {
@@ -666,11 +664,9 @@ export class DlInspectorFiles extends LightElement {
     } catch (error) {
       if (!isAbortError(error) && this.#isCurrent(controller, workspace, generation)) {
         requestToast(this, {
-          message: error instanceof WorkspaceApiError
-            ? error.message
-            : kind === 'delete'
-              ? msg('Could not accept workspace deletion.', {id: 'inspectorFiles.deleteWorkspaceFailed'})
-              : msg('Could not accept Corpus reset.', {id: 'inspectorFiles.resetFailed'}),
+          message: apiErrorMessage(error, kind === 'delete'
+            ? msg('Could not accept workspace deletion.', {id: 'inspectorFiles.deleteWorkspaceFailed'})
+            : msg('Could not accept Corpus reset.', {id: 'inspectorFiles.resetFailed'})),
           duration: 3000,
         });
       }

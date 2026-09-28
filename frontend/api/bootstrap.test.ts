@@ -2,7 +2,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {BootstrapApiError, getWebBootstrap} from './bootstrap.ts';
+import {getWebBootstrap} from './bootstrap.ts';
+import {ApiError} from './wire.ts';
 
 const originalFetch = globalThis.fetch;
 
@@ -15,7 +16,7 @@ test('bootstrap rejects a non-success response through its typed error', async (
 
   await assert.rejects(
     getWebBootstrap(),
-    (error: unknown) => error instanceof BootstrapApiError && error.status === 503,
+    (error: unknown) => error instanceof ApiError && error.status === 503,
   );
 });
 
@@ -27,7 +28,7 @@ test('bootstrap rejects malformed success JSON through its typed error', async (
 
   await assert.rejects(
     getWebBootstrap(),
-    (error: unknown) => error instanceof BootstrapApiError && error.status === 200,
+    (error: unknown) => error instanceof ApiError && error.status === 200,
   );
 });
 
@@ -44,10 +45,10 @@ test('bootstrap v3 requires the agent effort offer and its own capabilities', as
   assert.equal(bootstrap.personalMcpConnections, true);
   assert.deepEqual(bootstrap.agentEffort, {levels: ['low', 'high', 'max'], default: 'high'});
   globalThis.fetch = async () => Response.json({...fixture, contract_version: 2});
-  await assert.rejects(getWebBootstrap(), BootstrapApiError);
+  await assert.rejects(getWebBootstrap(), ApiError);
   const {personal_mcp_connections: _capability, ...missing} = fixture;
   globalThis.fetch = async () => Response.json(missing);
-  await assert.rejects(getWebBootstrap(), BootstrapApiError);
+  await assert.rejects(getWebBootstrap(), ApiError);
   // A deployment that names no level, or one the three-level control cannot
   // name, reports no default rather than a level it would not run.
   globalThis.fetch = async () => Response.json({...fixture, agent_effort: {levels: ['low', 'high', 'max']}});

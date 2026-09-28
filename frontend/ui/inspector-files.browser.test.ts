@@ -3,6 +3,7 @@
 import {expect} from '@esm-bundle/chai';
 import {workspaceStore} from '../stores/workspace-store.ts';
 import {ingestStore} from '../stores/ingest-store.ts';
+import {setLanguagePreference} from '../i18n/locale.ts';
 import './inspector-files.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
@@ -642,4 +643,31 @@ it('failed deletion settles loading after superseding a pending visible reload',
   expect(panel.loading).to.equal(false);
   expect(panel.error).to.equal('Deletion rejected.');
   expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
+});
+
+it('a refused upload without a server reason shows the panel copy in the reader language', async () => {
+  const toasts: string[] = [];
+  window.fetch = async (_input, init) => {
+    if (init?.method === 'POST') return new Response('<html>Bad gateway</html>', {status: 502});
+    return new Response(JSON.stringify(snapshot([], null)), {
+      status: 200,
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+  await setLanguagePreference('zh');
+  try {
+    const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+    panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+    document.body.appendChild(panel);
+    panel.active = true;
+    await waitFor(() => panel.loading === false);
+
+    await panel.upload([new File(['report'], 'report.pdf', {type: 'application/pdf'})]);
+    await panel.updateComplete;
+
+    expect(panel.error).to.equal('上传失败。');
+    expect(toasts.at(-1)).to.equal('上传失败。');
+  } finally {
+    await setLanguagePreference('auto');
+  }
 });

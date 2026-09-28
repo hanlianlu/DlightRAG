@@ -36,5 +36,5 @@ export async function resolveVideoPlayback(link: VideoPlaybackLink, signal: Abor
     method: 'POST', headers: csrfHeaders('application/json'),
     body: JSON.stringify({url: link.url}), signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
   });
-  return parseWire(response, player, (_status, message) => new Error(message), 'Video playback unavailable');
+  return parseWire(response, player);
 }

@@ -2,6 +2,7 @@
 /** Web API client for the merged Agent Skill catalog. */
 
 import * as v from 'valibot';
+import {parseWire} from './wire.ts';
 
 const skillSummary = v.object({
   name: v.string(),
@@ -16,10 +17,7 @@ export function listSkills(): Promise<readonly SkillSummary[]> {
   if (catalogRequest === null) {
     catalogRequest = fetch('/web/api/skills')
       .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Failed to load Agent Skills (${response.status})`);
-        }
-        const body = v.parse(v.object({skills: v.array(v.unknown())}), await response.json());
+        const body = await parseWire(response, v.object({skills: v.array(v.unknown())}));
         // One malformed entry must not reject the whole catalog; skip it.
         return body.skills.filter((item): item is SkillSummary => v.is(skillSummary, item));
       })

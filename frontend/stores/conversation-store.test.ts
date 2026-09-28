@@ -2,12 +2,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  ConversationApiError,
-  type ConversationHistory,
-  type ConversationPage,
-  type ConversationSummary,
+import type {
+  ConversationHistory,
+  ConversationPage,
+  ConversationSummary,
 } from '../api/conversations.ts';
+import {ApiError} from '../api/wire.ts';
 import {ConversationStore, type ConversationApi} from './conversation-store.ts';
 
 function summary(id: string, updated = '2026-08-20T00:00:00Z'): ConversationSummary {
@@ -137,7 +137,7 @@ test('load older errors preserve loaded rows and remain retryable', async () => 
     list: async (cursor) => {
       if (cursor === null) return page([summary('new')], 'older-cursor');
       olderAttempts += 1;
-      if (olderAttempts === 1) throw new ConversationApiError(503, 'down');
+      if (olderAttempts === 1) throw new ApiError(503, {detail: 'down'});
       return page([summary('old', '2026-08-19T00:00:00Z')]);
     },
   }));
@@ -307,7 +307,7 @@ test('a recent refresh replaces a disconnected loaded range and restores its old
 test('missing and malformed route ids share one unavailable state', async () => {
   for (const status of [404, 422]) {
     const store = new ConversationStore(api({
-      history: async () => { throw new ConversationApiError(status, 'hidden'); },
+      history: async () => { throw new ApiError(status, {detail: 'hidden'}); },
     }));
 
     assert.equal(await store.open('opaque'), 'unavailable');
@@ -334,7 +334,7 @@ test('background refresh preserves visible history on transient failure', async 
   let fail = false;
   const store = new ConversationStore(api({
     history: async (id) => {
-      if (fail) throw new ConversationApiError(503, 'down');
+      if (fail) throw new ApiError(503, {detail: 'down'});
       return history(id);
     },
   }));
@@ -369,7 +369,7 @@ test('rename updates and reorders an already loaded summary', async () => {
 test('rename validation errors do not masquerade as missing conversations', async () => {
   const store = new ConversationStore(api({
     list: async () => page([summary('one')]),
-    rename: async () => { throw new ConversationApiError(422, 'invalid title'); },
+    rename: async () => { throw new ApiError(422, {detail: 'invalid title'}); },
   }));
   await store.loadList();
 

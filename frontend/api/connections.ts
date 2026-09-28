@@ -26,17 +26,33 @@ export type Connection = v.InferOutput<typeof connection>;
 /** A starter fill for the create form; it carries no credential and grants nothing. */
 export type Preset = v.InferOutput<typeof preset>;
 
+/** A refused Connections command: the module answers `{kind, message}`, not the general envelope. */
 export class ConnectionsApiError extends Error {
   readonly status: number;
-  constructor(status: number) {
-    super(status === 409 ? 'Connections changed or authorization is required. Reload before retrying.' : 'Connection request failed.');
+  /** The Connections module's refusal kind, or null when the body named none. */
+  readonly kind: string | null;
+  constructor(status: number, kind: string | null, message: string) {
+    super(message || `HTTP ${status}`);
+    this.name = 'ConnectionsApiError';
     this.status = status;
+    this.kind = kind;
   }
 }
 
+async function connectionsRefusal(response: Response): Promise<ConnectionsApiError> {
+  const body: unknown = await response.json().catch(() => null);
+  const {kind, message} = body !== null && typeof body === 'object'
+    ? body as {kind?: unknown; message?: unknown}
+    : {};
+  return new ConnectionsApiError(
+    response.status,
+    typeof kind === 'string' ? kind : null,
+    typeof message === 'string' ? message : '',
+  );
+}
+
 export async function getConnections(signal?: AbortSignal): Promise<ConnectionsView> {
-  return parseWire(await fetch('/web/api/connections/mcp', {signal}), view,
-    (status) => new ConnectionsApiError(status), 'Connection request failed.');
+  return parseWire(await fetch('/web/api/connections/mcp', {signal}), view, connectionsRefusal);
 }
 
 type Change = {kind: 'create'; label: string; endpoint: string}
@@ -61,7 +77,7 @@ export async function changeConnection(revision: string, command: Change, signal
     case 'probe': case 'revoke': method = 'POST'; url += `/${command.kind}`; break;
   }
   return parseWire(await fetch(url, {method, headers: csrfHeaders('application/json'), body: JSON.stringify(body), signal}),
-    view, (status) => new ConnectionsApiError(status), 'Connection request failed.');
+    view, connectionsRefusal);
 }
 
 const authorization = v.strictObject({authorization_url: v.pipe(v.string(), v.url(), v.check((url) => {
@@ -72,6 +88,6 @@ export async function beginConnectionAuthorization(revision: string, connectionI
   const result = await parseWire(await fetch(`/web/api/connections/mcp/${encodeURIComponent(connectionId)}/oauth`, {
     method: 'POST', headers: csrfHeaders('application/json'),
     body: JSON.stringify({expected_revision: revision, endpoint}), signal,
-  }), authorization, (status) => new ConnectionsApiError(status), 'Authorization failed. Restart from Settings.');
+  }), authorization, connectionsRefusal);
   return result.authorization_url;
 }
