@@ -9,7 +9,7 @@ import type {
   ConversationTurn,
 } from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
-import type {ChatTurnView} from '../lib/chat-views.ts';
+import {isTerminalTurnState, type ChatTurnView} from '../lib/chat-views.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
@@ -89,10 +89,6 @@ export function answerReconnectState(cancelRequested: boolean): AnswerReconnectS
   return cancelRequested ? 'stopping' : 'running';
 }
 
-function terminal(state: ChatTurnView['state']): boolean {
-  return state === 'succeeded' || state === 'failed' || state === 'cancelled';
-}
-
 function newlyCompletedTurn(
   previous: readonly ChatTurnView[],
   current: readonly ChatTurnView[],
@@ -100,7 +96,7 @@ function newlyCompletedTurn(
   const previousStates = new Map(previous.map((turn) => [turn.id, turn.state]));
   return [...current].reverse().find((turn) => {
     const previousState = previousStates.get(turn.id);
-    return previousState !== undefined && !terminal(previousState) && terminal(turn.state);
+    return previousState !== undefined && !isTerminalTurnState(previousState) && isTerminalTurnState(turn.state);
   })?.id ?? null;
 }
 
@@ -565,8 +561,7 @@ export class DlChatMessageList extends LightElement {
 
   #runActions(turn: ChatTurnView): TemplateResult | typeof nothing {
     if (!turn.runId) return nothing;
-    const terminal = turn.state === 'succeeded' || turn.state === 'failed'
-      || turn.state === 'cancelled';
+    const terminal = isTerminalTurnState(turn.state);
     if (!terminal && !turn.sawChildren) return nothing;
     if (!terminal) {
       return html`

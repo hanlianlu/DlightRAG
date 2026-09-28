@@ -53,7 +53,7 @@ import {
   type ChatView,
 } from './chat-message-list.ts';
 import './chat-message-list.ts';
-import type {ChatTurnView} from '../lib/chat-views.ts';
+import {isTerminalTurnState, type ChatTurnView} from '../lib/chat-views.ts';
 import {requestToast} from './toast-request.ts';
 import {webRouter} from './router.ts';
 
@@ -70,10 +70,6 @@ function submissionErrorText(error: AnswerSubmissionError | null): string {
     error,
     msg('The answer could not be submitted.', {id: 'chatFeature.submissionFailed'}),
   );
-}
-
-function terminalTurn(turn: ChatTurnView): boolean {
-  return turn.state === 'succeeded' || turn.state === 'failed' || turn.state === 'cancelled';
 }
 
 export interface ChatRunningChangeDetail {
@@ -347,12 +343,12 @@ export class DlChatFeature extends LightElement {
         );
         const mergedStored = stored.map((turn) => {
           const current = currentById.get(turn.id) ?? currentByRunId.get(turn.runId);
-          return current && !terminalTurn(current) && !terminalTurn(turn) ? current : turn;
+          return current && !isTerminalTurnState(current.state) && !isTerminalTurnState(turn.state) ? current : turn;
         });
         const storedIds = new Set(stored.map((turn) => turn.id));
         const storedRunIds = new Set(stored.map((turn) => turn.runId).filter(Boolean));
         const live = this.turns.filter((turn) => (
-          !terminalTurn(turn)
+          !isTerminalTurnState(turn.state)
           && !storedIds.has(turn.id)
           && (!turn.runId || !storedRunIds.has(turn.runId))
         ));

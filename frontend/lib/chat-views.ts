@@ -27,3 +27,8 @@ export interface ChatTurnView {
   steeringMessages: readonly string[];
   toolRows: readonly ToolRow[];
 }
+
+/** A turn whose Run has settled: it streams and changes no more. */
+export function isTerminalTurnState(state: ChatTurnView['state']): boolean {
+  return state === 'succeeded' || state === 'failed' || state === 'cancelled';
+}
