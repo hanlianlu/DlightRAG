@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from dlightrag.engine.ai.contracts import ApiFamily
 from dlightrag.engine.ai.providers.base import CompletionProvider
+from dlightrag.engine.ai.settings import ModelSettings
 
 _PROVIDER_CLASSES: dict[str, str] = {
     "openai": "dlightrag.engine.ai.providers.openai_compatible.OpenAICompatibleProvider",
@@ -46,4 +47,20 @@ def get_provider(
     )
 
 
-__all__ = ["get_provider"]
+def provider_for(settings: ModelSettings) -> CompletionProvider:
+    """Build the provider adapter one chat-model endpoint's settings select.
+
+    Every client option the settings carry (credential, base URL, API family,
+    timeout, and the SDK retry budget) is applied here and nowhere else.
+    """
+    return get_provider(
+        settings.provider,
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        api_family=settings.api_family,
+        timeout=settings.timeout,
+        max_retries=settings.max_retries,
+    )
+
+
+__all__ = ["get_provider", "provider_for"]

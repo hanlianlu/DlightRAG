@@ -57,7 +57,7 @@ async def test_response_family_uses_response_reasoning_shape_in_completion_reque
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -135,7 +135,7 @@ async def test_response_family_rejects_product_owned_raw_model_kwargs(
 
     provider = Provider()
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = CompletionModel(
@@ -167,7 +167,7 @@ async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disable
     telemetry = RecordingTelemetry()
     telemetry.capture_sensitive_data = False
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -201,7 +201,7 @@ async def test_stream_records_ttft_usage_cost_and_sensitive_text(monkeypatch) ->
 
     telemetry = RecordingTelemetry()
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -258,7 +258,7 @@ async def test_stream_propagates_cancellation_without_false_error(monkeypatch) -
 
     telemetry = RecordingTelemetry()
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -297,7 +297,7 @@ async def test_stream_consumer_abandonment_closes_provider_iterator(monkeypatch)
 
     telemetry = RecordingTelemetry()
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -356,7 +356,7 @@ async def test_json_object_folds_hint_into_system(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -397,7 +397,7 @@ async def test_json_schema_failure_retries_json_object_with_system_hint(monkeypa
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -431,7 +431,7 @@ async def test_json_schema_unrelated_failure_is_not_retried(monkeypatch) -> None
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -475,7 +475,7 @@ async def test_stream_retries_json_object_when_json_schema_type_is_unavailable(
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -517,7 +517,7 @@ async def test_json_schema_type_rejection_does_not_poison_other_endpoints(
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     broken = CompletionModel(
@@ -566,7 +566,7 @@ async def test_schema_validation_rejection_retries_without_being_remembered(
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     settings = ModelSettings(
@@ -607,7 +607,7 @@ async def test_remembered_rejection_is_reused_across_instances_and_modes(
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     common = {"provider": "openai", "model": "compat", "base_url": "https://api.deepseek.com"}

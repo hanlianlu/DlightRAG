@@ -11,7 +11,7 @@ from dlightrag.engine.ai.capacity import ModelCapabilityError, ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolChoice, ToolDefinition
-from dlightrag.engine.ai.providers import get_provider
+from dlightrag.engine.ai.providers import provider_for
 from dlightrag.engine.ai.providers.base import CompletionProvider
 from dlightrag.engine.ai.reasoning import (
     ReasoningLevel,
@@ -44,14 +44,7 @@ class ToolModel:
         self._telemetry = telemetry
         self._ordinary_model_kwargs = settings.model_kwargs_copy()
         self._agentic_model_kwargs = settings.agentic_model_kwargs_copy()
-        self._provider: CompletionProvider = get_provider(
-            settings.provider,
-            api_key=settings.api_key,
-            base_url=settings.base_url,
-            api_family=settings.api_family,
-            timeout=settings.timeout,
-            max_retries=settings.max_retries,
-        )
+        self._provider: CompletionProvider = provider_for(settings)
 
     async def __call__(
         self,

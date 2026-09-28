@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from dlightrag.engine.ai.providers import get_provider
+from dlightrag.engine.ai.providers import provider_for
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
@@ -146,14 +146,7 @@ class ModelImageCapabilities:
             model=settings.model,
         ) as observation:
             try:
-                provider = get_provider(
-                    settings.provider,
-                    api_key=settings.api_key,
-                    base_url=settings.base_url,
-                    api_family=settings.api_family,
-                    timeout=settings.timeout,
-                    max_retries=settings.max_retries,
-                )
+                provider = provider_for(settings)
                 outcome = await self._scheduler.run(
                     lambda: probe_image_capability(
                         provider,

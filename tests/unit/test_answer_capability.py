@@ -187,7 +187,7 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
         probed["api_key"] = kwargs["api_key"]
         return _StubProvider()
 
-    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", fake_get_provider)
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", fake_get_provider)
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", fake_probe)
 
     await coordinator.probe_answer()
@@ -220,7 +220,7 @@ async def test_image_probe_runs_on_the_configured_wire_and_keys_its_cache_on_it(
     async def fake_probe(provider, *, model, model_kwargs=None):
         return ImageProbeOutcome(status="supported")
 
-    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", fake_get_provider)
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", fake_get_provider)
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", fake_probe)
     capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
 
@@ -394,7 +394,7 @@ def _probed_models(monkeypatch: pytest.MonkeyPatch, *statuses: ImageCapabilitySt
             pass
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.vision.get_provider", lambda *_a, **_k: _StubProvider()
+        "dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: _StubProvider()
     )
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", fake_probe)
     return probed
@@ -455,7 +455,7 @@ async def test_distinct_capability_probes_share_scheduler_limit(
         async def aclose(self) -> None:
             return None
 
-    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", lambda *_a, **_k: Provider())
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: Provider())
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
     capabilities = ModelImageCapabilities(scheduler=scheduler)
     first = asyncio.create_task(
@@ -497,7 +497,7 @@ async def test_clear_during_inflight_probe_discards_the_stale_result(
         async def aclose(self) -> None:
             return None
 
-    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", lambda *_a, **_k: Provider())
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: Provider())
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
     capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
     settings = ModelSettings(provider="openai", model="changed", api_key="k")
@@ -580,7 +580,7 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
             pass
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.vision.get_provider", lambda *_a, **_k: _StubProvider()
+        "dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: _StubProvider()
     )
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", slow_probe)
     capabilities = ModelImageCapabilities(
@@ -623,7 +623,7 @@ async def test_cancelled_probe_finishes_provider_close(
     async def cancelled_probe(*_args, **_kwargs):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", lambda *_a, **_k: Provider())
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: Provider())
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", cancelled_probe)
     capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
     task = asyncio.create_task(
@@ -770,7 +770,7 @@ async def test_rerank_capability_is_probed_from_the_rerank_scoring_model(
     provider = type("Provider", (), {"aclose": AsyncMock()})()
     provider_factory = MagicMock(return_value=provider)
     probe = AsyncMock(return_value=ImageProbeOutcome(status="unsupported"))
-    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", provider_factory)
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", provider_factory)
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
     coordinator, _health_updates = _coordinator(config)
 

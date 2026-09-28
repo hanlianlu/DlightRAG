@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for provider ABC, registry, and concrete implementations."""
 
+import ast
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,8 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx2
 import pytest
 
+import dlightrag
 from dlightrag.engine.ai.messages import ToolDefinition
-from dlightrag.engine.ai.providers import get_provider
+from dlightrag.engine.ai.providers import get_provider, provider_for
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
@@ -28,6 +31,7 @@ from dlightrag.engine.ai.providers.openai_compatible import (
     _openai_tool_messages,
 )
 from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
+from dlightrag.engine.ai.settings import ModelSettings
 
 
 def _openai_error_response(status_code: int) -> httpx2.Response:
@@ -64,6 +68,77 @@ class TestProviderRegistry:
         assert cast(Any, provider)._api_family == "response"
         with pytest.raises(ValueError, match="requires the openai provider"):
             get_provider("anthropic", api_key="test-key", api_family="response")
+
+    @pytest.mark.parametrize(
+        ("provider_name", "api_family", "sdk"),
+        [
+            ("openai", "chat_completion", "openai_compatible.AsyncOpenAI"),
+            ("openai", "response", "openai_compatible.AsyncOpenAI"),
+            ("anthropic", "chat_completion", "anthropic_native.AsyncAnthropic"),
+        ],
+    )
+    def test_provider_for_applies_every_client_option_from_settings(
+        self,
+        provider_name: str,
+        api_family: str,
+        sdk: str,
+    ) -> None:
+        settings = ModelSettings(
+            provider=cast(Any, provider_name),
+            model="model-a",
+            api_key="test-key",
+            base_url="https://gateway.example/v1",
+            api_family=cast(Any, api_family),
+            timeout=12.5,
+            max_retries=5,
+        )
+        provider = provider_for(settings)
+        with patch(f"dlightrag.engine.ai.providers.{sdk}") as client_class:
+            cast(Any, provider)._get_client()
+
+        assert cast(Any, provider)._api_family == api_family
+        client_class.assert_called_once_with(
+            api_key="test-key",
+            base_url="https://gateway.example/v1",
+            timeout=12.5,
+            max_retries=5,
+        )
+
+    def test_provider_for_applies_every_client_option_to_gemini(self) -> None:
+        settings = ModelSettings(
+            provider="gemini",
+            model="model-a",
+            api_key="test-key",
+            base_url="https://gateway.example/v1",
+            timeout=12.5,
+            max_retries=5,
+        )
+        provider = provider_for(settings)
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as genai:
+            cast(Any, provider)._get_client()
+
+        genai.types.HttpRetryOptions.assert_called_once_with(attempts=6)
+        options = genai.types.HttpOptions.call_args.kwargs
+        assert options["base_url"] == "https://gateway.example/v1"
+        assert options["timeout"] == 12_500
+        assert genai.Client.call_args.kwargs["api_key"] == "test-key"
+
+    def test_nothing_but_provider_for_builds_a_provider_from_settings(self) -> None:
+        package = Path(dlightrag.__file__).parent
+        registry = package / "engine" / "ai" / "providers" / "__init__.py"
+        builders = sorted(
+            str(path.relative_to(package))
+            for path in package.rglob("*.py")
+            if path != registry
+            for node in ast.walk(ast.parse(path.read_text("utf-8")))
+            if isinstance(node, ast.Call)
+            and (
+                (isinstance(node.func, ast.Name) and node.func.id == "get_provider")
+                or (isinstance(node.func, ast.Attribute) and node.func.attr == "get_provider")
+            )
+        )
+
+        assert builders == []
 
 
 class TestAnthropicProvider:

@@ -56,7 +56,7 @@ class CapturingProvider:
 def _capture_provider(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: CapturingProvider(seen),
     )
     return seen
@@ -177,8 +177,7 @@ def test_chat_models_pass_api_family_to_provider_construction(
         received.append(kwargs["api_family"])
         return object()
 
-    monkeypatch.setattr("dlightrag.engine.ai.completion.get_provider", provider_factory)
-    monkeypatch.setattr("dlightrag.engine.ai.tool_model.get_provider", provider_factory)
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", provider_factory)
     settings = ModelSettings(model="model-a", api_family="response")
 
     CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
@@ -220,7 +219,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
 
     provider = Provider()
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = CompletionModel(
@@ -480,7 +479,7 @@ async def test_openai_strict_schema_failure_retries_json_object(monkeypatch) -> 
             return None
 
     monkeypatch.setattr(
-        "dlightrag.engine.ai.completion.get_provider",
+        "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     scheduler = ModelScheduler(max_concurrency=1)

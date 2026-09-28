@@ -149,8 +149,7 @@ async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = 
     provider.complete_tool_turn.return_value = AssistantTurn(
         text="a sonnet", tool_calls=(), stop_reason="stop"
     )
-    monkeypatch.setattr("dlightrag.engine.ai.tool_model.get_provider", lambda *a, **kw: provider)
-    monkeypatch.setattr("dlightrag.engine.ai.completion.get_provider", lambda *a, **kw: provider)
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *a, **kw: provider)
     runtime = _runtime()
     runtime._settings = replace(runtime._settings, model_roles=roles)
     executor = _executor()

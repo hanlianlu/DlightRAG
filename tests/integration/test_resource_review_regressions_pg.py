@@ -547,10 +547,7 @@ def _http_bound_providers(recorder: _FastProjectionProvider):
         bind_mock_http(provider, recorder.handler)
         return provider
 
-    with (
-        patch("dlightrag.engine.ai.completion.get_provider", factory),
-        patch("dlightrag.engine.ai.tool_model.get_provider", factory),
-    ):
+    with patch("dlightrag.engine.ai.providers.get_provider", factory):
         yield
 
 
