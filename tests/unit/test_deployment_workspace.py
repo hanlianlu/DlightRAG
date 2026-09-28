@@ -16,10 +16,10 @@ def test_the_configured_display_name_yields_one_canonical_id() -> None:
 
     assert settings.workspace == "Finance Team"
     assert settings.workspace_id == "finance_team"
-    # A leading digit gains a prefix, so 64 characters that start with one are too long.
     assert DeploymentSettings(workspace="2026 Q3").workspace_id == "_2026_q3"
 
 
+# A leading digit gains a prefix, so 64 characters that start with one are too long.
 @pytest.mark.parametrize("name", ["", "   ", "x" * 65, "1" + "x" * 63])
 def test_a_default_that_names_no_workspace_is_rejected_at_load(name: str) -> None:
     with pytest.raises(ValidationError, match="canonical workspace id required"):

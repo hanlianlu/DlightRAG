@@ -28,6 +28,7 @@ from dlightrag.application.access import (
     owner_id_from_user,
 )
 from dlightrag.application.corpus_admin import (
+    CorpusMutationAction,
     UnsafeUploadNameError,
     UploadTooLargeError,
     ingest_spec_from_payload,
@@ -70,7 +71,7 @@ async def _authorize(
     request: Request,
     user: UserContext,
     workspace: str | None,
-    action: str,
+    action: CorpusMutationAction,
 ) -> tuple[Any, str, str]:
     application = get_application(request)
     canonical = resolve_workspace(workspace, request)

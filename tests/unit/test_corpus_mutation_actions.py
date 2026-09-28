@@ -20,3 +20,9 @@ def test_every_action_has_its_own_authorization_boundary() -> None:
 
 def test_only_ingest_is_safe_to_repeat_after_a_recovered_handoff() -> None:
     assert frozenset(mutations._ACTIONS) - mutations._DESTRUCTIVE_ACTIONS == {"ingest"}
+
+
+def test_recovery_reconciles_upstream_only_for_pipeline_actions() -> None:
+    tracked = {action for action, spec in mutations._ACTIONS.items() if spec.tracks_upstream}
+
+    assert tracked == {"ingest", "replace", "retry"}

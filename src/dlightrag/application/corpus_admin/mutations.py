@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, assert_never, cast
 from uuid import UUID, uuid7
 
 from dlightrag.application.runs import (
@@ -76,17 +76,22 @@ class _ActionSpec:
     source_based: bool
     # A recovered handoff is never repeated without repair evidence.
     destructive: bool
+    # Enqueues LightRAG pipeline work under the Run's track id, so recovery first
+    # reconciles what upstream already did.
+    tracks_upstream: bool
 
 
 # The one list of actions; validation, recovery, and projections derive from it.
 _ACTIONS: Mapping[CorpusMutationAction, _ActionSpec] = MappingProxyType(
     {
-        "ingest": _ActionSpec(frozenset({"source", "staged_sources"}), True, False),
-        "replace": _ActionSpec(frozenset({"source", "staged_sources"}), True, True),
-        "delete": _ActionSpec(frozenset({"file_paths", "filenames", "document_ids"}), False, True),
-        "retry": _ActionSpec(frozenset({"document_ids", "selector"}), False, True),
-        "reset": _ActionSpec(frozenset({"supersedes_run_id"}), False, True),
-        "delete_workspace": _ActionSpec(frozenset(), False, True),
+        "ingest": _ActionSpec(frozenset({"source", "staged_sources"}), True, False, True),
+        "replace": _ActionSpec(frozenset({"source", "staged_sources"}), True, True, True),
+        "delete": _ActionSpec(
+            frozenset({"file_paths", "filenames", "document_ids"}), False, True, False
+        ),
+        "retry": _ActionSpec(frozenset({"document_ids", "selector"}), False, True, True),
+        "reset": _ActionSpec(frozenset({"supersedes_run_id"}), False, True, False),
+        "delete_workspace": _ActionSpec(frozenset(), False, True, False),
     }
 )
 
@@ -798,7 +803,7 @@ class CorpusMutationExecutor(RunExecutor):
         )
         try:
             runtime = await self._pool.acquire(workspace)
-            if action in {"ingest", "replace", "retry"}:
+            if _ACTIONS[action].tracks_upstream:
                 await session.enter_phase("reconciling_upstream")
                 upstream = await runtime.lightrag.aget_docs_by_track_id(checkpoint["track_id"])
                 checkpoint["upstream_documents"] = _public_upstream_state(upstream)
@@ -811,15 +816,19 @@ class CorpusMutationExecutor(RunExecutor):
                 checkpoint["phase"] = "repair_attempt_started"
                 await session.checkpoint_state(checkpoint, phase="repair_attempt_started")
 
-            if action in {"ingest", "replace"}:
-                return await self._ingest(session, runtime, raw, checkpoint)
-            if action == "delete":
-                return await self._delete(session, runtime, raw, checkpoint)
-            if action == "retry":
-                return await self._retry(session, runtime, raw, checkpoint)
-            if action == "delete_workspace":
-                return await self._delete_workspace(session, runtime, checkpoint)
-            return await self._reset(session, runtime, checkpoint)
+            match action:
+                case "ingest" | "replace":
+                    return await self._ingest(session, runtime, raw, checkpoint)
+                case "delete":
+                    return await self._delete(session, runtime, raw, checkpoint)
+                case "retry":
+                    return await self._retry(session, runtime, raw, checkpoint)
+                case "delete_workspace":
+                    return await self._delete_workspace(session, runtime, checkpoint)
+                case "reset":
+                    return await self._reset(session, runtime, checkpoint)
+                case _:
+                    assert_never(action)
         except WorkspaceWriteFencedError, _TrackedPipelineNotSettled:
             return _deferred(checkpoint, "corpus_storage", now=self._now)
         except RetryOutcomeUncertainError:
@@ -1262,7 +1271,7 @@ def validate_corpus_mutation_prepared_input(
         supersedes = raw.get("supersedes_run_id")
         if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
             raise ValueError("supersedes_run_id is invalid")
-    return cast(CorpusMutationAction, action), workspace
+    return action, workspace
 
 
 def _prepared_string_list(value: Any, *, field: str) -> tuple[str, ...]:
@@ -1303,7 +1312,7 @@ def _requires_repair_resume(
     """Fence recovered destructive work unless durable evidence makes replay unnecessary."""
     if checkpoint.get("operation_settled") is True:
         return False
-    if action == "ingest":
+    if not _ACTIONS[action].destructive:
         return False
     if action == "replace" and bool(checkpoint.get("upstream_documents")):
         return False
