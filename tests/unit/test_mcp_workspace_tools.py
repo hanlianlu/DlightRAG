@@ -7,7 +7,7 @@ import logging
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp import Client, MCPError
@@ -43,7 +43,8 @@ from dlightrag.engine.runtime.records import (
     RunRecord,
 )
 from tests.config_helpers import mutate_config, replace_config
-from tests.unit.conftest import answer_capability_view
+from tests.support.application_double import application_double
+from tests.unit.conftest import answer_capabilities
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
@@ -80,63 +81,49 @@ def _tool_json(result: CallToolResult | InputRequiredResult) -> Any:
 
 @pytest.fixture
 def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
-    application = AsyncMock()
-    application.config = test_config
-    application.corpora = SimpleNamespace(
-        list_workspaces=AsyncMock(return_value=["default"]),
-        alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}]),
-        list_workspace_records_page=AsyncMock(
-            return_value=WorkspaceCatalogPage(
-                items=(
-                    {
-                        "workspace": "default",
-                        "display_name": "default",
-                        "embedding_model": "voyage-multimodal-3.5",
-                        "created_at": None,
-                        "updated_at": None,
-                    },
-                ),
-                next_cursor=None,
-                fetched_rows=1,
-            )
+    application = application_double(test_config)
+    corpora = application.corpora
+    corpora.list_workspaces.return_value = ["default"]
+    corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
+    corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(
+            {
+                "workspace": "default",
+                "display_name": "default",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
+            },
         ),
-        create_workspace=AsyncMock(),
-        file_panel_cursor_codec=FilePanelCursorCodec(b"mcp-file-cursor-secret"),
-        file_panel_snapshot=AsyncMock(
-            return_value={
-                "files": [],
-                "next_cursor": None,
-                "fetched_rows": 0,
-            }
-        ),
+        next_cursor=None,
+        fetched_rows=1,
     )
+    corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"mcp-file-cursor-secret")
+    corpora.file_panel_snapshot.return_value = {
+        "files": [],
+        "next_cursor": None,
+        "fetched_rows": 0,
+    }
     corpus_run = _run_record(run_kind="corpus_mutation")
-    application.corpus_mutations = SimpleNamespace(
-        create_ingest=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
-        create_delete=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
-        create_retry=AsyncMock(return_value=SimpleNamespace(run=corpus_run, replayed=False)),
+    corpus_mutations = application.corpus_mutations
+    for accept in (
+        corpus_mutations.create_ingest,
+        corpus_mutations.create_delete,
+        corpus_mutations.create_retry,
+    ):
+        accept.return_value = SimpleNamespace(run=corpus_run, replayed=False)
+    application.retrieval.create.return_value = SimpleNamespace(
+        run=_run_record(run_kind="retrieval"), replayed=False
     )
-    application.retrieval = SimpleNamespace(
-        create=AsyncMock(
-            return_value=SimpleNamespace(run=_run_record(run_kind="retrieval"), replayed=False)
-        ),
-        project_stored=Mock(side_effect=_project_stored_retrieval),
+    application.retrieval.project_stored.side_effect = _project_stored_retrieval
+    run_get = application.runs.get
+    run_get.return_value = _run_record()
+    application.runs.get_global.side_effect = lambda **_kwargs: (
+        RunView.from_runtime(run_get.return_value) if run_get.return_value is not None else None
     )
-    capability_view = answer_capability_view()
-    run_get = AsyncMock(return_value=_run_record())
-    application.runs = SimpleNamespace(
-        get=run_get,
-        get_global=AsyncMock(
-            side_effect=lambda **_kwargs: (
-                RunView.from_runtime(run_get.return_value)
-                if run_get.return_value is not None
-                else None
-            )
-        ),
-        list=AsyncMock(return_value=(_run_record(),)),
-        cancel=AsyncMock(
-            return_value=SimpleNamespace(outcome="cancelled", run=_run_record(status="cancelled"))
-        ),
+    application.runs.list.return_value = (_run_record(),)
+    application.runs.cancel.return_value = SimpleNamespace(
+        outcome="cancelled", run=_run_record(status="cancelled")
     )
 
     async def _published_artifact(
@@ -147,20 +134,19 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
             return None
         return published_artifact_descriptor(record.result, resource_id)
 
-    application.answers = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(run=_run_record(), replayed=False)),
-        capabilities=capability_view.read,
-        agent_effort_offer=lambda: AgentEffortOffer(("low", "high", "max"), None),
-        list_artifacts=AsyncMock(return_value=()),
-        # The real publication rule over whatever run the test stores.
-        published_artifact=AsyncMock(side_effect=_published_artifact),
-        read_artifact=AsyncMock(return_value=None),
-        steer=AsyncMock(return_value=None),
-        continuation_workspaces=AsyncMock(return_value=None),
-        follow_up=AsyncMock(return_value=None),
-        fork=AsyncMock(return_value=None),
-        transcript_tail=AsyncMock(return_value=None),
-    )
+    answers = application.answers
+    answers.create.return_value = SimpleNamespace(run=_run_record(), replayed=False)
+    answers.capabilities.return_value = answer_capabilities()
+    answers.agent_effort_offer.return_value = AgentEffortOffer(("low", "high", "max"), None)
+    answers.list_artifacts.return_value = ()
+    # The real publication rule over whatever run the test stores.
+    answers.published_artifact.side_effect = _published_artifact
+    answers.read_artifact.return_value = None
+    answers.steer.return_value = None
+    answers.continuation_workspaces.return_value = None
+    answers.follow_up.return_value = None
+    answers.fork.return_value = None
+    answers.transcript_tail.return_value = None
     monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
     monkeypatch.setattr(mcp_server, "create_application", AsyncMock(return_value=application))
     return application
@@ -264,7 +250,7 @@ async def test_get_capabilities_reports_answer_image_capability(
 ) -> None:
     from dlightrag.engine.answer.image_capability import AnswerImageCapability
 
-    mock_mcp_application.answers.capabilities = answer_capability_view(
+    mock_mcp_application.answers.capabilities.return_value = answer_capabilities(
         AnswerImageCapability(
             status="supported",
             configured_ceiling=8,
@@ -274,7 +260,7 @@ async def test_get_capabilities_reports_answer_image_capability(
             model="test-model",
             failure_kind=None,
         )
-    ).read
+    )
 
     result = await mcp_server.mcp_app.call_tool("get_capabilities", {})
 
@@ -1522,20 +1508,18 @@ async def test_mcp_list_workspaces_returns_the_bounded_first_page(
         WorkspaceCatalogPage,
     )
 
-    mock_mcp_application.corpora.list_workspace_records_page = AsyncMock(
-        return_value=WorkspaceCatalogPage(
-            items=(
-                {
-                    "workspace": "default",
-                    "display_name": "default",
-                    "embedding_model": "voyage-multimodal-3.5",
-                    "created_at": None,
-                    "updated_at": None,
-                },
-            ),
-            next_cursor=WorkspaceCatalogCursor(after_workspace="default"),
-            fetched_rows=2,
-        )
+    mock_mcp_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(
+            {
+                "workspace": "default",
+                "display_name": "default",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
+            },
+        ),
+        next_cursor=WorkspaceCatalogCursor(after_workspace="default"),
+        fetched_rows=2,
     )
 
     result = await mcp_server.mcp_app.call_tool("list_workspaces", {})
