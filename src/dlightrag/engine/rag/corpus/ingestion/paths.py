@@ -55,6 +55,21 @@ def iter_ingestable_files(path: Path) -> list[Path]:
     return files
 
 
+def excluded_from_directory_scan(name: str, *, is_dir: bool) -> bool:
+    """Whether a scan of a tree copied elsewhere skips this entry and all below it.
+
+    A copy of a source tree keeps none of the source's ancestors, so the scan of
+    the copy skips exactly this: dot-prefixed entries, parser sidecars, and remote
+    ingest, remote source and ``__uploads__`` staging directories. A caller that
+    snapshots a tree for ingestion can leave these out of the copy.
+    """
+    return name.startswith(".") or (
+        is_dir
+        and name
+        in {PARSED_DIR_NAME, UPLOADS_DIR_NAME, REMOTE_INGEST_DIR_NAME, REMOTE_SOURCES_DIR_NAME}
+    )
+
+
 def _is_explicit_upload_batch_dir(path: Path) -> bool:
     """Return True for ``.../__uploads__/<batch>`` style explicit batch dirs."""
     return path.name != UPLOADS_DIR_NAME and UPLOADS_DIR_NAME in {p.name for p in path.parents}

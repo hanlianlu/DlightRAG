@@ -893,3 +893,130 @@ def test_a_missing_or_oversized_local_source_is_the_callers_to_fix(tmp_path: Pat
         (folder / f"{index}.txt").write_text("x", encoding="utf-8")
     with pytest.raises(CorpusMutationInputError, match="more than 100 files"):
         service._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+
+
+def test_an_oversized_local_folder_refuses_before_copying(tmp_path: Path, monkeypatch) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+
+    copied: list[Path] = []
+    real_copy = mutations._copy_regular_file
+
+    def counting_copy(fd: int, target: Path) -> dict:
+        copied.append(target)
+        return real_copy(fd, target)
+
+    monkeypatch.setattr(mutations, "_copy_regular_file", counting_copy)
+    folder = tmp_path / "default" / "many"
+    folder.mkdir(parents=True)
+    for index in range(101):
+        (folder / f"{index}.txt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(CorpusMutationInputError, match="more than 100 files"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+    assert copied == []
+
+
+def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monkeypatch) -> None:
+    """The listing is not trusted: every file is reopened without following a link."""
+    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    folder = tmp_path / "default" / "docs"
+    (folder / "zsub").mkdir(parents=True)
+    (folder / "a.txt").write_text("a", encoding="utf-8")
+    (folder / "zsub" / "secret.txt").write_text("inside", encoding="utf-8")
+    real_list = mutations._list_local_tree
+
+    def list_then_swap(source: int, *, max_files: int):
+        listed = real_list(source, max_files=max_files)
+        (folder / "zsub" / "secret.txt").unlink()
+        (folder / "zsub").rmdir()
+        (folder / "zsub").symlink_to(outside, target_is_directory=True)
+        return listed
+
+    monkeypatch.setattr(mutations, "_list_local_tree", list_then_swap)
+
+    with pytest.raises(CorpusMutationInputError):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+    staged = list((tmp_path / "default").rglob("secret.txt"))
+    assert staged == [], "no byte behind the link was staged"
+
+
+def test_a_file_that_became_a_link_refuses(tmp_path: Path) -> None:
+    """A source resolved before the swap is still opened without following a link."""
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.application.corpus_admin.mutations import _snapshot_local_source
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    workspace = tmp_path / "default"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "report.txt").symlink_to(outside)
+
+    with pytest.raises(CorpusMutationInputError, match="cannot contain symlinks"):
+        _snapshot_local_source(
+            workspace, ("docs", "report.txt"), tmp_path / "copy.txt", max_files=100
+        )
+    assert not (tmp_path / "copy.txt").exists()
+
+
+def test_a_linked_folder_refuses(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    folder = tmp_path / "default" / "docs"
+    folder.mkdir(parents=True)
+    (folder / "ok.txt").write_text("ok", encoding="utf-8")
+    (folder / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(CorpusMutationInputError, match="cannot contain symlinks"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+
+
+def test_a_workspace_root_source_copies_only_what_a_scan_ingests(tmp_path: Path) -> None:
+    """Run stages, dot entries and parser sidecars stay out of the copy, and its count."""
+    workspace = tmp_path / "default"
+    (workspace / "reports").mkdir(parents=True)
+    (workspace / "reports" / "q3.txt").write_text("quarter", encoding="utf-8")
+    (workspace / "top.txt").write_text("top", encoding="utf-8")
+    (workspace / ".staging").mkdir()
+    (workspace / ".staging" / "partial.txt").write_text("x", encoding="utf-8")
+    (workspace / ".hidden.txt").write_text("x", encoding="utf-8")
+    (workspace / "__parsed__").mkdir()
+    for index in range(150):
+        (workspace / "__parsed__" / f"{index}.md").write_text("x", encoding="utf-8")
+
+    spec, run_root, manifest = _service(tmp_path)._snapshot_local_spec(
+        _RUN_ID, "default", _local_spec(workspace)
+    )
+
+    copied = Path(cast(str, spec.path))
+    assert sorted(p.relative_to(copied).as_posix() for p in copied.rglob("*") if p.is_file()) == [
+        "reports/q3.txt",
+        "top.txt",
+    ]
+    assert run_root == workspace.resolve() / ".runs" / _RUN_ID
+    assert {Path(item["path"]).name for item in manifest} == {"q3.txt", "top.txt"}
+    top = next(item for item in manifest if item["path"].endswith("top.txt"))
+    assert top["size_bytes"] == 3
+    assert top["content_sha256"] == hashlib.sha256(b"top").hexdigest()
+
+
+def test_a_local_source_with_nothing_to_ingest_or_no_path_is_the_callers_to_fix(
+    tmp_path: Path,
+) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    workspace = tmp_path / "default"
+    (workspace / "empty" / ".git").mkdir(parents=True)
+    (workspace / "a.txt").write_text("a", encoding="utf-8")
+    service = _service(tmp_path)
+
+    with pytest.raises(CorpusMutationInputError, match="no files to ingest"):
+        service._snapshot_local_spec(_RUN_ID, "default", _local_spec(workspace / "empty"))
+    with pytest.raises(CorpusMutationInputError, match="does not exist"):
+        service._snapshot_local_spec(_RUN_ID, "default", _local_spec(workspace / "a.txt" / "x"))

@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import errno
 import hashlib
 import os
 import shutil
+import stat
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +29,7 @@ from dlightrag.engine.dependencies import (
     next_dependency_retry,
 )
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+from dlightrag.engine.rag.corpus.ingestion.paths import excluded_from_directory_scan
 from dlightrag.engine.rag.corpus.ingestion.uploads import safe_upload_relative_path
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import CorpusMaintenanceStore, WorkspaceWriteFencedError
@@ -693,23 +696,10 @@ class CorpusMutationService:
         source_root.mkdir(parents=True, exist_ok=False)
         manifest: list[dict[str, Any]] = []
 
-        def record_file(path: Path) -> None:
-            if len(manifest) >= _MAX_RESULT_DOCUMENTS:
-                raise CorpusMutationInputError(
-                    f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
-                )
-            manifest.append(
-                {
-                    "path": str(path),
-                    "content_sha256": _file_sha256(path),
-                    "size_bytes": path.stat().st_size,
-                }
-            )
-
         def copy_source(raw: str, ordinal: int) -> str:
             try:
                 source = Path(raw).resolve(strict=True)
-            except FileNotFoundError:
+            except FileNotFoundError, NotADirectoryError:
                 raise CorpusMutationInputError("local corpus source does not exist") from None
             if not source.is_relative_to(workspace_root):
                 raise CorpusMutationInputError(
@@ -720,25 +710,14 @@ class CorpusMutationService:
             except ValueError:
                 raise UnsafeUploadNameError(f"Unsafe filename: {source.name!r}") from None
             target = source_root / name
-            if source.is_dir():
-                # Refuse links and special files before copying anything: a followed
-                # link would stage bytes from outside the workspace input root.
-                _refuse_unsafe_entries(source)
-                shutil.copytree(source, target, symlinks=True)
-                for child in sorted(target.rglob("*")):
-                    if child.is_symlink():  # appeared after the scan
-                        raise CorpusMutationInputError(
-                            "local corpus sources cannot contain symlinks"
-                        )
-                    if child.is_file():
-                        record_file(child)
-            elif source.is_file():
-                shutil.copy2(source, target)
-                record_file(target)
-            else:
-                raise CorpusMutationInputError(
-                    "local corpus source is not a regular file or directory"
+            manifest.extend(
+                _snapshot_local_source(
+                    workspace_root,
+                    source.relative_to(workspace_root).parts,
+                    target,
+                    max_files=_MAX_RESULT_DOCUMENTS - len(manifest),
                 )
+            )
             return str(target)
 
         try:
@@ -1174,15 +1153,146 @@ async def _join_public_operation[T](operation: Awaitable[T]) -> T:
         return await asyncio.shield(task)
 
 
-def _refuse_unsafe_entries(root: Path) -> None:
-    """Refuse a local source tree holding links or anything but files and folders."""
-    for entry in root.rglob("*"):
-        if entry.is_symlink():
-            raise CorpusMutationInputError("local corpus sources cannot contain symlinks")
-        if not (entry.is_dir() or entry.is_file()):
+# Every local source path component is opened relative to its parent's descriptor
+# and never through a link, so no swap made while the copy runs can reach outside
+# the workspace input root. O_NONBLOCK keeps a FIFO that replaced a file from
+# stalling the open; its type check then refuses it.
+_NO_FOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+
+def _open_no_follow(parent: int, name: str, *, directory: bool = False) -> int:
+    try:
+        return os.open(name, _NO_FOLLOW | (os.O_DIRECTORY if directory else 0), dir_fd=parent)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise CorpusMutationInputError("local corpus sources cannot contain symlinks") from None
+        if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
             raise CorpusMutationInputError(
-                "local corpus sources may contain only regular files and folders"
-            )
+                "local corpus source changed while it was being copied"
+            ) from None
+        if exc.errno == errno.EACCES:
+            raise CorpusMutationInputError("local corpus source cannot be read") from None
+        raise
+
+
+def _open_below(root: int, parts: Sequence[str], *, directory: bool = False) -> int:
+    """Open ``parts`` under the ``root`` descriptor, one unfollowed component at a time."""
+    fd = os.dup(root)
+    try:
+        for index, name in enumerate(parts):
+            last = index == len(parts) - 1
+            opened = _open_no_follow(fd, name, directory=directory or not last)
+            os.close(fd)
+            fd = opened
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _list_local_tree(
+    source: int, *, max_files: int
+) -> tuple[list[tuple[str, ...]], list[tuple[str, ...]]]:
+    """List the directories and files a scan of the copy would ingest, before copying.
+
+    Links and special files refuse, and so does a tree holding more files than the
+    request allows, before a byte of it is copied. Entries the scan skips (dot
+    entries, parser sidecars, staging) are left out, which also keeps a workspace
+    root from copying its own Run stages into themselves.
+    """
+    directories: list[tuple[str, ...]] = []
+    files: list[tuple[str, ...]] = []
+    pending: list[tuple[str, ...]] = [()]
+    while pending:
+        prefix = pending.pop()
+        fd = _open_below(source, prefix, directory=True)
+        try:
+            with os.scandir(fd) as entries:
+                listed = sorted(entries, key=lambda entry: entry.name)
+            for entry in listed:
+                is_dir = entry.is_dir(follow_symlinks=False)
+                if excluded_from_directory_scan(entry.name, is_dir=is_dir):
+                    continue
+                path = (*prefix, entry.name)
+                if entry.is_symlink():
+                    raise CorpusMutationInputError("local corpus sources cannot contain symlinks")
+                if is_dir:
+                    directories.append(path)
+                    pending.append(path)
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(path)
+                    if len(files) > max_files:
+                        raise CorpusMutationInputError(
+                            f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
+                        )
+                else:
+                    raise CorpusMutationInputError(
+                        "local corpus sources may contain only regular files and folders"
+                    )
+        finally:
+            os.close(fd)
+    return sorted(directories), sorted(files)
+
+
+def _copy_regular_file(fd: int, target: Path) -> dict[str, Any]:
+    """Copy one opened regular file, hashing the same bytes it writes."""
+    status = os.fstat(fd)
+    if not stat.S_ISREG(status.st_mode):
+        raise CorpusMutationInputError(
+            "local corpus sources may contain only regular files and folders"
+        )
+    digest = hashlib.sha256()
+    size = 0
+    with target.open("xb") as stream:
+        while chunk := os.read(fd, _UPLOAD_CHUNK_BYTES):
+            digest.update(chunk)
+            stream.write(chunk)
+            size += len(chunk)
+    os.utime(target, ns=(status.st_atime_ns, status.st_mtime_ns))
+    return {"path": str(target), "content_sha256": digest.hexdigest(), "size_bytes": size}
+
+
+def _snapshot_local_source(
+    workspace_root: Path, parts: Sequence[str], target: Path, *, max_files: int
+) -> list[dict[str, Any]]:
+    """Copy one local source below ``workspace_root`` into ``target`` without links.
+
+    Returns the manifest of what was copied. A directory is listed and counted in
+    full before anything is copied, then every file is reopened through its own
+    unfollowed path, so a folder swapped for a link after the listing refuses
+    instead of staging what the link points at.
+    """
+    root = os.open(workspace_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        source = _open_below(root, parts)
+    finally:
+        os.close(root)
+    try:
+        mode = os.fstat(source).st_mode
+        if stat.S_ISREG(mode):
+            if max_files < 1:
+                raise CorpusMutationInputError(
+                    f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
+                )
+            return [_copy_regular_file(source, target)]
+        if not stat.S_ISDIR(mode):
+            raise CorpusMutationInputError("local corpus source is not a regular file or directory")
+        directories, files = _list_local_tree(source, max_files=max_files)
+        if not files:
+            raise CorpusMutationInputError("local corpus source contains no files to ingest")
+        target.mkdir()
+        for directory in directories:
+            target.joinpath(*directory).mkdir()
+        manifest = []
+        for path in files:
+            fd = _open_below(source, path)
+            try:
+                manifest.append(_copy_regular_file(fd, target.joinpath(*path)))
+            finally:
+                os.close(fd)
+        return manifest
+    finally:
+        os.close(source)
 
 
 def validate_corpus_mutation_prepared_input(
