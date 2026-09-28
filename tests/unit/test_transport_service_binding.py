@@ -14,6 +14,8 @@ from mcp.types import CallToolResult, TextContent
 from dlightrag.adapters.http import server as http_server
 from dlightrag.adapters.mcp import server as mcp_server
 from dlightrag.application import ApplicationClosedError
+from dlightrag.application.config import DlightragConfig
+from tests.support.application_double import application_double
 
 
 def test_transport_and_tool_modules_import_without_composing_an_application(
@@ -80,9 +82,9 @@ async def test_http_route_fails_fast_without_a_lifespan_bound_application(
 
 @pytest.mark.asyncio
 async def test_mcp_lifespan_binds_and_closes_exactly_one_application(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, test_config: DlightragConfig
 ) -> None:
-    application = AsyncMock()
+    application = application_double(test_config)
     create_application = AsyncMock(return_value=application)
     monkeypatch.setattr(mcp_server, "create_application", create_application)
     monkeypatch.setattr(mcp_server, "_application", None)
