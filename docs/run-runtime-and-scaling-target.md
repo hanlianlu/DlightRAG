@@ -156,6 +156,8 @@ Retry accepts explicit document IDs or a selector for all currently retryable do
 
 The cohort includes LightRAG `FAILED` documents and LightRAG `PROCESSED` documents whose DlightRAG finalization is incomplete. A processed-but-unfinalized document retries only its missing DlightRAG phases. A failed document is hidden, its complete owned retained source is verified, public `adelete_by_doc_id` must return `success` or `not_found`, and that source is re-enqueued without physical deletion using the Retry Run's stable `track_id`. This path inherits replace's destructive checkpoints and repair behavior. Already ready documents are idempotent successes; identity or source mismatch fails closed. DlightRAG never uses LightRAG's private process-local all-failed retry mailbox or directly rewrites document status.
 
+Admitted documents replay through shared pipeline passes of up to 64 documents, with their metadata read one window at a time. A pass that fails as a whole replays each of its documents alone, so one bad document cannot fail the others, and a document whose metadata row another replay may retire (they claim the same source locator) is read only after that replay settles. Outcomes therefore match a one-document-at-a-time retry.
+
 ### Corpus Reset
 
 Corpus Reset is a Workspace-scoped FIFO mutation barrier. Earlier ordinary mutations finish before it; later submissions execute against the empty corpus. It removes the Workspace's LightRAG corpus state, DlightRAG corpus projections and maintenance counters, and source/sidecar files. It preserves durable Run/event history, Conversations, Agent Sessions, historical Artifacts, Workspace access control, and logical Workspace identity.

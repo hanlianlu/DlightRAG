@@ -13,10 +13,12 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from inspect import isawaitable
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from lightrag.constants import PARSED_DIR_NAME
@@ -119,6 +121,12 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
 
 _REMOTE_INGEST_BATCH_SIZE = 64
 _REMOTE_DOWNLOAD_CONCURRENCY = 8
+# One retry pipeline pass is bounded like a remote ingest window: its remote
+# sources are materialized together.
+_RETRY_BATCH_SIZE = _REMOTE_INGEST_BATCH_SIZE
+_NO_RETRY_RESULT: Mapping[str, Any] = MappingProxyType(
+    {"processed": 0, "errors": ["retry ingestion failed"], "results": []}
+)
 
 RemoteIngestProgressCallback = Callable[["RemoteIngestWindowProgress"], Awaitable[None]]
 
@@ -143,6 +151,29 @@ class _RemoteDownloadFailure:
     """Sanitized per-document failure returned without exposing source exceptions."""
 
     error: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RetryRequest:
+    """One cohort document whose preflight admitted a same-ID replay."""
+
+    doc_id: str
+    file_path: str
+    source_uri: str
+    download_locator: str
+    display_filename: str
+    retry_metadata: dict[str, Any]
+    # Locators whose owners the replay may retire; replays sharing one never
+    # share a pipeline pass.
+    ownership_locators: tuple[str, ...]
+
+
+def _metadata_download_locator(metadata: object) -> str | None:
+    if isinstance(metadata, Mapping):
+        locator = metadata.get("download_locator")
+        if isinstance(locator, str):
+            return locator
+    return None
 
 
 def _safe_remote_source_id(document: SourceDocument) -> str:
@@ -1704,14 +1735,17 @@ class WorkspaceRag:
             (DocStatus.FAILED, DocStatus.PROCESSED)
         ):
             full = await self._lightrag_stores.get_full_doc_statuses(list(rows))
-            for doc_id, row in full.items():
-                status = lightrag_status(row)
-                if status == "failed":
-                    cohort.append(doc_id)
-                    continue
-                metadata = await self._metadata_index.get(doc_id)
-                if not ingest_finalization_complete(metadata):
-                    cohort.append(doc_id)
+            unsettled = [doc_id for doc_id, row in full.items() if lightrag_status(row) != "failed"]
+            # The publication marker is the finalization marker, so one
+            # set-wise read settles the whole page.
+            finalized = (
+                await self._metadata_index.visible_subset(unsettled) if unsettled else frozenset()
+            )
+            cohort.extend(
+                doc_id
+                for doc_id, row in full.items()
+                if lightrag_status(row) == "failed" or doc_id not in finalized
+            )
         return tuple(dict.fromkeys(cohort))
 
     async def aretry_failed_docs(
@@ -1722,7 +1756,14 @@ class WorkspaceRag:
         outcome_callback: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
         track_id: str | None = None,
     ) -> dict[str, Any]:
-        """Retry one frozen FAILED cohort and report compact per-document outcomes."""
+        """Retry one frozen FAILED cohort and report compact per-document outcomes.
+
+        Admitted documents replay together, up to ``_RETRY_BATCH_SIZE`` per
+        pipeline pass. A replay that may retire another cohort document's row
+        settles before that document is read, and replays that may retire the
+        same owner never share a pass, so every outcome matches a
+        one-document-at-a-time retry.
+        """
         self._require_writer("failed-document retry")
         self._ensure_initialized()
 
@@ -1757,160 +1798,62 @@ class WorkspaceRag:
             else:
                 details_truncated = True
 
-        for entry in entries:
-            doc_id = str(entry["doc_id"])
-            file_path = str(entry.get("file_path") or "")
-            recovered_processed = str(entry.get("status") or "") == "processed"
+        pending: list[_RetryRequest] = []
+        # Locators whose owners a pending replay may retire, and those of the
+        # replays settled since the current metadata window was read.
+        claimed: set[str] = set()
+        replayed: set[str] = set()
+        window: Mapping[str, Any] | None = None
 
-            async def preflight_failure(
-                reason: str,
-                *,
-                processed: bool = recovered_processed,
-                expected_doc_id: str = doc_id,
-            ) -> None:
-                if processed:
-                    # A processed pending item may already be a complete commit,
-                    # or may only need idempotent application finalization. Never
-                    # freeze the opposite ledger outcome because its source
-                    # preflight is temporarily unavailable.
-                    raise RetryOutcomeUncertainError(reason)
-                await record(
-                    expected_doc_id,
-                    "failed",
-                    {"doc_id": expected_doc_id, "reason": reason},
-                )
+        async def replay_pending() -> None:
+            if not pending:
+                return
+            requests = tuple(pending)
+            pending.clear()
+            replayed.update(claimed)
+            claimed.clear()
+            outcomes = await self._aingest_retry_requests(requests, track_id=track_id)
+            for request, outcome in zip(requests, outcomes, strict=True):
+                await self._settle_retry_outcome(request, outcome, record)
 
-            # A pending durable item with PROCESSED LightRAG status may have
-            # crashed before required DlightRAG finalization. A durable complete
-            # marker proves success without requiring the source to still exist;
-            # incomplete/legacy markers re-enter the same-ID finalization seam.
+        async def read_metadata(doc_id: str) -> object:
             if self._metadata_index is None:
-                await preflight_failure("source metadata unavailable")
-                continue
-
+                return None
             try:
-                metadata = await self._metadata_index.get(doc_id)
-            except Exception as exc:
-                logger.warning("Failed to load retry metadata for doc_id=%s", doc_id)
-                if recovered_processed:
-                    raise RetryOutcomeUncertainError(
-                        "retry finalization metadata read failed"
-                    ) from exc
-                await preflight_failure("source metadata unavailable")
-                continue
+                return await self._metadata_index.get(doc_id)
+            except Exception as exc:  # noqa: BLE001 - preflight settles the read failure
+                return exc
 
-            if not isinstance(metadata, Mapping):
-                await preflight_failure("source metadata incomplete")
-                continue
-            if recovered_processed and ingest_finalization_complete(metadata):
-                await record(
-                    doc_id,
-                    "succeeded",
-                    {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
+        for position, entry in enumerate(entries):
+            doc_id = str(entry["doc_id"])
+            if position % _RETRY_BATCH_SIZE == 0:
+                window = await self._retry_metadata_window(
+                    entries[position : position + _RETRY_BATCH_SIZE]
                 )
-                continue
-            source_uri = metadata.get("source_uri")
-            download_locator = metadata.get("download_locator")
-            stored_filename = metadata.get("filename")
-            if (
-                not isinstance(source_uri, str)
-                or not source_uri
-                or not isinstance(download_locator, str)
-                or not download_locator
-                or not isinstance(stored_filename, str)
-                or not stored_filename
-            ):
-                await preflight_failure("source metadata incomplete")
-                continue
-
+                replayed.clear()
+            metadata = window.get(doc_id) if window is not None else await read_metadata(doc_id)
+            locator = _metadata_download_locator(metadata)
+            if locator in claimed:
+                await replay_pending()
+                metadata = await read_metadata(doc_id)
+            elif window is not None and locator in replayed:
+                metadata = await read_metadata(doc_id)
             try:
-                display_filename = _retry_display_filename(stored_filename)
-                source_type, _ = self._validate_retry_source_contract(source_uri, download_locator)
-                resolve_source_options(
-                    source_type,
-                    metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD),
-                    default_s3_region=self.settings.s3_region,
-                )
-            except (OSError, TypeError, ValueError) as exc:
-                if recovered_processed:
-                    raise RetryOutcomeUncertainError(
-                        "retry finalization source preflight failed"
-                    ) from exc
-                await preflight_failure("source metadata invalid")
-                continue
-
-            retry_metadata = self._allowed_retry_metadata(metadata)
-            try:
-                result = await self._aingest_download_locator(
-                    source_uri,
-                    download_locator,
-                    display_filename,
-                    retry_metadata,
-                    track_id=track_id,
-                )
-                processed = result.get("processed")
-                if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
-                    await record(
-                        doc_id,
-                        "failed",
-                        {
-                            "doc_id": doc_id,
-                            **({"file_path": file_path} if file_path else {}),
-                            "reason": "retry ingestion failed",
-                        },
-                    )
-                    continue
+                request = await self._retry_preflight(entry, metadata, record)
             except RetryOutcomeUncertainError:
+                # Documents admitted before the uncertain one still replay, as
+                # they would have one at a time.
+                await replay_pending()
                 raise
-            except Exception:
-                logger.warning("Retry failed for doc_id=%s", doc_id)
-                outcome = await self._retry_doc_authoritative_outcome(doc_id)
-                if outcome == "succeeded":
-                    # Corpus commit won a late finalization/outcome race. Keep
-                    # durable totals aligned with the authoritative status.
-                    await record(
-                        doc_id,
-                        "succeeded",
-                        {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
-                    )
-                    continue
-                if outcome is None:
-                    raise RetryOutcomeUncertainError(
-                        "retry document status is not yet authoritative"
-                    ) from None
-                await record(
-                    doc_id,
-                    "failed",
-                    {
-                        "doc_id": doc_id,
-                        **({"file_path": file_path} if file_path else {}),
-                        "reason": "retry ingestion failed",
-                    },
-                )
+            if request is None:
                 continue
-
-            if self._retry_result_identity(result) != doc_id:
-                # The parser path fixes the canonical ID before ingestion. An
-                # identity-invalid result is not an ambiguous finalization
-                # error and must never be reconciled from PROCESSED to success.
-                # A reported mismatch may name a pre-existing unrelated doc.
-                logger.warning("Retry returned invalid identity for doc_id=%s", doc_id)
-                await record(
-                    doc_id,
-                    "failed",
-                    {
-                        "doc_id": doc_id,
-                        **({"file_path": file_path} if file_path else {}),
-                        "reason": "retry ingestion failed",
-                    },
-                )
-                continue
-
-            await record(
-                doc_id,
-                "succeeded",
-                {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
-            )
+            if claimed.intersection(request.ownership_locators):
+                await replay_pending()
+            pending.append(request)
+            claimed.update(request.ownership_locators)
+            if len(pending) >= _RETRY_BATCH_SIZE:
+                await replay_pending()
+        await replay_pending()
 
         retried = len(entries)
         if retried == 0:
@@ -1923,6 +1866,230 @@ class WorkspaceRag:
             "failed_docs": still_failed,
             "details_truncated": details_truncated,
         }
+
+    async def _retry_metadata_window(
+        self, entries: Sequence[Mapping[str, Any]]
+    ) -> Mapping[str, Any] | None:
+        """Read one window's metadata rows at once; None reads each row alone."""
+        if self._metadata_index is None:
+            return {}
+        try:
+            return await self._metadata_index.get_many([str(entry["doc_id"]) for entry in entries])
+        except Exception as exc:  # noqa: BLE001 - each document then settles its own read
+            # Storage errors can echo connection details, so only the type is logged.
+            logger.warning("Failed to load a retry metadata window (%s)", type(exc).__name__)
+            return None
+
+    async def _retry_preflight(
+        self,
+        entry: Mapping[str, Any],
+        metadata: object,
+        record: Callable[[str, str, dict[str, Any]], Awaitable[None]],
+    ) -> _RetryRequest | None:
+        """Settle an entry that needs no replay, or admit its same-ID replay.
+
+        ``metadata`` is the entry's metadata row, or the exception its read
+        raised.
+        """
+        doc_id = str(entry["doc_id"])
+        file_path = str(entry.get("file_path") or "")
+        recovered_processed = str(entry.get("status") or "") == "processed"
+
+        async def preflight_failure(reason: str) -> None:
+            if recovered_processed:
+                # A processed pending item may already be a complete commit,
+                # or may only need idempotent application finalization. Never
+                # freeze the opposite ledger outcome because its source
+                # preflight is temporarily unavailable.
+                raise RetryOutcomeUncertainError(reason)
+            await record(doc_id, "failed", {"doc_id": doc_id, "reason": reason})
+
+        # A pending durable item with PROCESSED LightRAG status may have
+        # crashed before required DlightRAG finalization. A durable complete
+        # marker proves success without requiring the source to still exist;
+        # incomplete/legacy markers re-enter the same-ID finalization seam.
+        if self._metadata_index is None:
+            await preflight_failure("source metadata unavailable")
+            return None
+        if isinstance(metadata, Exception):
+            logger.warning("Failed to load retry metadata for doc_id=%s", doc_id)
+            if recovered_processed:
+                raise RetryOutcomeUncertainError(
+                    "retry finalization metadata read failed"
+                ) from metadata
+            await preflight_failure("source metadata unavailable")
+            return None
+        if not isinstance(metadata, Mapping):
+            await preflight_failure("source metadata incomplete")
+            return None
+        if recovered_processed and ingest_finalization_complete(metadata):
+            await record(
+                doc_id,
+                "succeeded",
+                {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
+            )
+            return None
+        source_uri = metadata.get("source_uri")
+        download_locator = metadata.get("download_locator")
+        stored_filename = metadata.get("filename")
+        if (
+            not isinstance(source_uri, str)
+            or not source_uri
+            or not isinstance(download_locator, str)
+            or not download_locator
+            or not isinstance(stored_filename, str)
+            or not stored_filename
+        ):
+            await preflight_failure("source metadata incomplete")
+            return None
+
+        try:
+            display_filename = _retry_display_filename(stored_filename)
+            source_type, _ = self._validate_retry_source_contract(source_uri, download_locator)
+            resolve_source_options(
+                source_type,
+                metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD),
+                default_s3_region=self.settings.s3_region,
+            )
+            ownership_locators = self._retry_ownership_locators(
+                source_type=source_type,
+                source_uri=validate_source_uri(source_uri),
+                download_locator=download_locator,
+                display_filename=display_filename,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            if recovered_processed:
+                raise RetryOutcomeUncertainError(
+                    "retry finalization source preflight failed"
+                ) from exc
+            await preflight_failure("source metadata invalid")
+            return None
+
+        return _RetryRequest(
+            doc_id=doc_id,
+            file_path=file_path,
+            source_uri=source_uri,
+            download_locator=download_locator,
+            display_filename=display_filename,
+            retry_metadata=self._allowed_retry_metadata(metadata),
+            ownership_locators=ownership_locators,
+        )
+
+    async def _aingest_retry_requests(
+        self,
+        requests: Sequence[_RetryRequest],
+        *,
+        track_id: str | None,
+    ) -> list[Mapping[str, Any] | Exception]:
+        """Replay admitted retries through one shared pipeline pass.
+
+        Each outcome is the document's ingest result or the exception its
+        replay raised. When the shared pass itself fails, every document
+        replays alone, so one bad document cannot fail the others with it.
+        """
+        outcomes: list[Mapping[str, Any] | Exception] = [_NO_RETRY_RESULT] * len(requests)
+        admitted: list[tuple[int, PreparedIngestFile]] = []
+        replay_alone = False
+        async with AsyncExitStack() as cleanup:
+            for index, request in enumerate(requests):
+                try:
+                    item = await self._prepare_retry_item(
+                        request.source_uri,
+                        request.download_locator,
+                        request.display_filename,
+                        request.retry_metadata,
+                        cleanup=cleanup,
+                    )
+                except RetryOutcomeUncertainError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - settled per document
+                    outcomes[index] = exc
+                else:
+                    admitted.append((index, item))
+            if admitted:
+                try:
+                    batch = await self._require_ingestion_engine().aingest_files(
+                        [item for _index, item in admitted], replace=False, track_id=track_id
+                    )
+                except RetryOutcomeUncertainError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - settled per document
+                    if len(admitted) == 1:
+                        outcomes[admitted[0][0]] = exc
+                    else:
+                        logger.warning(
+                            "Shared retry pass failed (%s); replaying %d documents one at a time",
+                            type(exc).__name__,
+                            len(admitted),
+                        )
+                        replay_alone = True
+                else:
+                    if len(admitted) == 1:
+                        outcomes[admitted[0][0]] = self._single_file_result(batch)
+                    else:
+                        results = {
+                            result["doc_id"]: result
+                            for result in batch.get("results") or ()
+                            if isinstance(result, dict) and isinstance(result.get("doc_id"), str)
+                        }
+                        for index, _item in admitted:
+                            outcomes[index] = results.get(requests[index].doc_id, _NO_RETRY_RESULT)
+        if replay_alone:
+            for index, _item in admitted:
+                request = requests[index]
+                try:
+                    outcomes[index] = await self._aingest_download_locator(
+                        request.source_uri,
+                        request.download_locator,
+                        request.display_filename,
+                        request.retry_metadata,
+                        track_id=track_id,
+                    )
+                except RetryOutcomeUncertainError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - settled per document
+                    outcomes[index] = exc
+        return outcomes
+
+    async def _settle_retry_outcome(
+        self,
+        request: _RetryRequest,
+        outcome: Mapping[str, Any] | Exception,
+        record: Callable[[str, str, dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Record one replay's ingest result, or its failure, as the document outcome."""
+        doc_id = request.doc_id
+        succeeded = {"doc_id": doc_id, "file_path": request.file_path, "replacement_count": 1}
+        failed = {
+            "doc_id": doc_id,
+            **({"file_path": request.file_path} if request.file_path else {}),
+            "reason": "retry ingestion failed",
+        }
+        if isinstance(outcome, Exception):
+            logger.warning("Retry failed for doc_id=%s", doc_id)
+            authoritative = await self._retry_doc_authoritative_outcome(doc_id)
+            if authoritative == "succeeded":
+                # Corpus commit won a late finalization/outcome race. Keep
+                # durable totals aligned with the authoritative status.
+                await record(doc_id, "succeeded", succeeded)
+                return
+            if authoritative is None:
+                raise RetryOutcomeUncertainError("retry document status is not yet authoritative")
+            await record(doc_id, "failed", failed)
+            return
+        processed = outcome.get("processed")
+        if outcome.get("errors") or (isinstance(processed, int | float) and processed < 1):
+            await record(doc_id, "failed", failed)
+            return
+        if self._retry_result_identity(outcome) != doc_id:
+            # The parser path fixes the canonical ID before ingestion. An
+            # identity-invalid result is not an ambiguous finalization
+            # error and must never be reconciled from PROCESSED to success.
+            # A reported mismatch may name a pre-existing unrelated doc.
+            logger.warning("Retry returned invalid identity for doc_id=%s", doc_id)
+            await record(doc_id, "failed", failed)
+            return
+        await record(doc_id, "succeeded", succeeded)
 
     async def _retry_doc_authoritative_outcome(self, doc_id: str) -> str | None:
         """Return a durable outcome only for an authoritative terminal status."""
@@ -2051,6 +2218,29 @@ class WorkspaceRag:
                 return resolved
         raise FileNotFoundError("download locator is unavailable")
 
+    def _require_ingestion_engine(self) -> UnifiedIngestionEngine:
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+        return self._ingestion_engine
+
+    def _retry_ownership_locators(
+        self,
+        *,
+        source_type: str,
+        source_uri: str,
+        download_locator: str,
+        display_filename: str,
+    ) -> tuple[str, ...]:
+        """Return the locators whose owners one retry replay may retire."""
+        if source_type == "local":
+            return (download_locator,)
+        return self._remote_replacement_locators(
+            primary_locator=download_locator,
+            source_type=source_type,
+            source_uri=source_uri,
+            key=display_filename,
+        )
+
     async def _aingest_download_locator(
         self,
         source_uri: str,
@@ -2060,22 +2250,46 @@ class WorkspaceRag:
         *,
         track_id: str | None = None,
     ) -> dict[str, Any]:
-        """Materialize one validated locator while preserving source provenance."""
+        """Replay one validated locator alone while preserving source provenance."""
+        async with AsyncExitStack() as cleanup:
+            item = await self._prepare_retry_item(
+                source_uri,
+                download_locator,
+                display_filename,
+                retry_metadata,
+                cleanup=cleanup,
+            )
+            result = await self._require_ingestion_engine().aingest_files(
+                [item], replace=False, track_id=track_id
+            )
+        return self._single_file_result(result)
+
+    async def _prepare_retry_item(
+        self,
+        source_uri: str,
+        download_locator: str,
+        display_filename: str,
+        retry_metadata: Mapping[str, Any] | None,
+        *,
+        cleanup: AsyncExitStack,
+    ) -> PreparedIngestFile:
+        """Materialize one retry locator as same-ID parser input.
+
+        A remote source is downloaded to a transient parser file; ``cleanup``
+        removes that file and closes its adapter once the replay settles.
+        """
         source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
         stable_source_uri = validate_source_uri(source_uri)
-        if source_type == "local":
-            ownership_locators = (download_locator,)
-        else:
-            ownership_locators = self._remote_replacement_locators(
-                primary_locator=download_locator,
+        replacement_doc_ids, replacement_ownership = await self._retry_replacement_owners(
+            download_locators=self._retry_ownership_locators(
                 source_type=source_type,
                 source_uri=stable_source_uri,
-                key=display_filename,
-            )
-        replacement_doc_ids, replacement_ownership = await self._retry_replacement_owners(
-            download_locators=ownership_locators,
+                download_locator=download_locator,
+                display_filename=display_filename,
+            ),
             source_uri=stable_source_uri,
         )
+        self._require_ingestion_engine()
 
         raw_title = retry_metadata.get("title") if retry_metadata else None
         raw_author = retry_metadata.get("author") if retry_metadata else None
@@ -2090,59 +2304,32 @@ class WorkspaceRag:
         if retry_metadata and retry_metadata.get("creation_date") is not None:
             user_metadata["creation_date"] = retry_metadata["creation_date"]
 
-        retry_kwargs: dict[str, Any] = {
+        if source_type == "local":
+            return PreparedIngestFile(
+                parser_path=self._retry_local_source_path(download_locator),
+                source_uri=stable_source_uri,
+                download_locator=download_locator,
+                display_filename=display_filename,
+                title=title,
+                author=author,
+                metadata=user_metadata,
+                replacement_doc_ids=replacement_doc_ids,
+                replacement_ownership=replacement_ownership,
+            )
+
+        # Replays with ``replace=False``; the adapter and transient parser
+        # source are cleaned up either way.
+        source_options = resolve_source_options(
+            source_type,
+            retry_metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD) if retry_metadata else None,
+            default_s3_region=self.settings.s3_region,
+        )
+        common_fields: dict[str, Any] = {
+            "filename": display_filename,
             "source_uri": stable_source_uri,
-            "download_locator": download_locator,
-            "display_filename": display_filename,
             "title": title,
             "author": author,
             "metadata": user_metadata,
-            "replacement_doc_ids": replacement_doc_ids,
-            "replacement_ownership": replacement_ownership,
-        }
-        if source_type == "local":
-            return await self._aingest_local_retry_locator(**retry_kwargs, track_id=track_id)
-        return await self._aingest_remote_retry_locator(
-            source_type=source_type,
-            parts=parts,
-            track_id=track_id,
-            source_options=resolve_source_options(
-                source_type,
-                retry_metadata.get(SOURCE_RETRIEVAL_OPTIONS_FIELD) if retry_metadata else None,
-                default_s3_region=self.settings.s3_region,
-            ),
-            **retry_kwargs,
-        )
-
-    async def _aingest_remote_retry_locator(
-        self,
-        *,
-        source_type: str,
-        parts: Mapping[str, Any],
-        source_uri: str,
-        download_locator: str,
-        display_filename: str,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        replacement_doc_ids: tuple[str, ...] = (),
-        replacement_ownership: tuple[tuple[str, str, str], ...] = (),
-        track_id: str | None = None,
-        source_options: SourceRetrievalOptions | None = None,
-    ) -> dict[str, Any]:
-        """Download one remote retry locator and replay it in the same-ID seam.
-
-        Replays with ``replace=False``; the adapter and transient parser
-        source are cleaned up either way.
-        """
-        if self._ingestion_engine is None:
-            raise RuntimeError("Ingestion engine not initialized")
-        common_fields: dict[str, Any] = {
-            "filename": display_filename,
-            "source_uri": source_uri,
-            "title": title,
-            "author": author,
-            "metadata": metadata,
         }
         factory = RemoteSourceFactory(self.settings)
         if source_type == "url":
@@ -2162,74 +2349,30 @@ class WorkspaceRag:
                 )
             else:
                 source = factory.azure(str(parts["container_name"]))
+        cleanup.push_async_callback(_aclose_source, source)
 
-        try:
-            parser_path = (
-                self._workspace_input_root()
-                / remote_parser_input_path(
-                    batch_root=Path(), source_uri=source_uri, key=display_filename
-                ).name
-            )
-            parser_path.parent.mkdir(parents=True, exist_ok=True)
-            prepared = PreparedIngestFile(
-                parser_path=parser_path,
-                source_uri=source_uri,
-                download_locator=download_locator,
-                display_filename=display_filename,
-                title=title,
-                author=author,
-                metadata=metadata,
-                source_options=source_options,
-                replacement_doc_ids=replacement_doc_ids,
-                replacement_ownership=replacement_ownership,
-            )
-            try:
-                await source.amaterialize_document(source_document, parser_path)
-                result = await self._ingestion_engine.aingest_files(
-                    [prepared], replace=False, track_id=track_id
-                )
-                return self._single_file_result(result)
-            finally:
-                await asyncio.to_thread(_remove_remote_parser_sources, [prepared])
-        finally:
-            close = getattr(source, "aclose", None)
-            if close is not None:
-                result = close()
-                if isawaitable(result):
-                    _ = await result
-
-    async def _aingest_local_retry_locator(
-        self,
-        *,
-        source_uri: str,
-        download_locator: str,
-        display_filename: str,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        replacement_doc_ids: tuple[str, ...] = (),
-        replacement_ownership: tuple[tuple[str, str, str], ...] = (),
-        track_id: str | None = None,
-    ) -> dict[str, Any]:
-        if self._ingestion_engine is None:
-            raise RuntimeError("Ingestion engine not initialized")
-
-        source_path = self._retry_local_source_path(download_locator)
-        item = PreparedIngestFile(
-            parser_path=source_path,
-            source_uri=source_uri,
+        parser_path = (
+            self._workspace_input_root()
+            / remote_parser_input_path(
+                batch_root=Path(), source_uri=stable_source_uri, key=display_filename
+            ).name
+        )
+        parser_path.parent.mkdir(parents=True, exist_ok=True)
+        prepared = PreparedIngestFile(
+            parser_path=parser_path,
+            source_uri=stable_source_uri,
             download_locator=download_locator,
             display_filename=display_filename,
             title=title,
             author=author,
-            metadata=metadata,
+            metadata=user_metadata,
+            source_options=source_options,
             replacement_doc_ids=replacement_doc_ids,
             replacement_ownership=replacement_ownership,
         )
-        result = await self._ingestion_engine.aingest_files(
-            [item], replace=False, track_id=track_id
-        )
-        return self._single_file_result(result)
+        cleanup.push_async_callback(asyncio.to_thread, _remove_remote_parser_sources, [prepared])
+        await source.amaterialize_document(source_document, parser_path)
+        return prepared
 
     async def adelete_files(
         self,
@@ -2338,6 +2481,19 @@ def _remove_empty_parents(path: Path, stop: Path) -> None:
         except OSError:
             return
         current = current.parent
+
+
+async def _aclose_source(source: object) -> None:
+    """Close one retry source adapter; a failed close never changes an outcome."""
+    close = getattr(source, "aclose", None)
+    if close is None:
+        return
+    try:
+        result = close()
+        if isawaitable(result):
+            await result
+    except Exception as exc:  # noqa: BLE001 - the replay has already settled
+        logger.warning("Failed to close a retry source adapter (%s)", type(exc).__name__)
 
 
 def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:

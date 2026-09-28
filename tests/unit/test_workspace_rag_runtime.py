@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +62,61 @@ def _set_failed_docs(service: WorkspaceRag, docs: list[dict[str, Any]]) -> None:
         yield list(docs)
 
     service._iter_failed_doc_pages = _pages  # type: ignore[method-assign]
+
+
+def _serve_metadata(
+    index: Any,
+    rows: Mapping[str, Any] | Callable[[str], Any] | Exception,
+) -> None:
+    """Answer point and windowed metadata reads from the same rows."""
+
+    def lookup(doc_id: str) -> Any:
+        if isinstance(rows, Exception):
+            raise rows
+        return rows(doc_id) if callable(rows) else rows.get(doc_id)
+
+    async def get(doc_id: str) -> Any:
+        return lookup(doc_id)
+
+    async def get_many(doc_ids: list[str]) -> dict[str, Any]:
+        return {doc_id: row for doc_id in doc_ids if (row := lookup(doc_id)) is not None}
+
+    index.get = AsyncMock(side_effect=get)
+    index.get_many = AsyncMock(side_effect=get_many)
+
+
+def _replay_each(
+    service: WorkspaceRag, replay: AsyncMock, *, passes: list[int] | None = None
+) -> AsyncMock:
+    """Serve every shared retry pass one document at a time through ``replay``.
+
+    ``passes`` collects the size of each shared pass the retry requested.
+    """
+    from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+
+    async def requests(batch: Sequence[Any], *, track_id: str | None = None) -> list[Any]:
+        if passes is not None:
+            passes.append(len(batch))
+        outcomes: list[Any] = []
+        for request in batch:
+            try:
+                outcomes.append(
+                    await replay(
+                        request.source_uri,
+                        request.download_locator,
+                        request.display_filename,
+                        request.retry_metadata,
+                        track_id=track_id,
+                    )
+                )
+            except RetryOutcomeUncertainError:
+                raise
+            except Exception as exc:
+                outcomes.append(exc)
+        return outcomes
+
+    service._aingest_retry_requests = requests  # type: ignore[method-assign]
+    return replay
 
 
 def _runtime_lightrag() -> SimpleNamespace:
@@ -2643,11 +2698,12 @@ class TestWorkspaceRagLightRAGMainPath:
         service._metadata_index = AsyncMock()
         # The durable completion marker is authoritative even if the original
         # download locator is no longer available after restart.
-        service._metadata_index.get.return_value = {
-            "_dlightrag_finalization_complete": True,
-        }
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={"processed": 1, "doc_id": "doc-committed"}
+        _serve_metadata(
+            service._metadata_index,
+            {"doc-committed": {"_dlightrag_finalization_complete": True}},
+        )
+        replay = _replay_each(
+            service, AsyncMock(return_value={"processed": 1, "doc_id": "doc-committed"})
         )
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_full_doc_statuses.return_value = {
@@ -2669,8 +2725,9 @@ class TestWorkspaceRagLightRAGMainPath:
         assert result["retried"] == 1
         assert result["succeeded"] == 1
         assert outcomes == [("doc-committed", "succeeded")]
-        service._metadata_index.get.assert_awaited_once_with("doc-committed")
-        service._aingest_download_locator.assert_not_awaited()
+        service._metadata_index.get_many.assert_awaited_once_with(["doc-committed"])
+        service._metadata_index.get.assert_not_awaited()
+        replay.assert_not_awaited()
 
     async def test_recovered_processed_replay_retires_remaining_locator_owner(
         self, test_config: DlightragConfig
@@ -2720,7 +2777,7 @@ class TestWorkspaceRagLightRAGMainPath:
         stores.get_full_doc.return_value = {"sidecar_location": None}
 
         metadata_index = AsyncMock()
-        metadata_index.get.side_effect = lambda doc_id: metadata.get(doc_id)
+        _serve_metadata(metadata_index, metadata)
         metadata_index.find_by_download_locator.return_value = [candidate_id, old_id]
 
         async def upsert_metadata(doc_id: str, row: dict[str, object]) -> None:
@@ -2823,7 +2880,7 @@ class TestWorkspaceRagLightRAGMainPath:
         stores.get_full_doc.return_value = {"sidecar_location": None}
 
         metadata_index = AsyncMock()
-        metadata_index.get.side_effect = lambda doc_id: metadata.get(doc_id)
+        _serve_metadata(metadata_index, metadata)
 
         async def find_owners(locator: str) -> list[str]:
             if locator == primary_locator:
@@ -2909,7 +2966,7 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.side_effect = RuntimeError("metadata temporarily down")
+        _serve_metadata(service._metadata_index, RuntimeError("metadata temporarily down"))
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_full_doc_statuses.return_value = {
             "doc-committed": SimpleNamespace(status="processed", file_path="report.pdf")
@@ -2934,12 +2991,17 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/committed",
-            "download_locator": "file:///outside/workspace/report.pdf",
-            "_dlightrag_finalization_complete": False,
-        }
+        _serve_metadata(
+            service._metadata_index,
+            {
+                "doc-committed": {
+                    "filename": "report.pdf",
+                    "source_uri": "bynder://asset/committed",
+                    "download_locator": "file:///outside/workspace/report.pdf",
+                    "_dlightrag_finalization_complete": False,
+                }
+            },
+        )
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_full_doc_statuses.return_value = {
             "doc-committed": SimpleNamespace(status="processed", file_path="report.pdf")
@@ -3009,31 +3071,36 @@ class TestWorkspaceRagLightRAGMainPath:
 
         service._iter_failed_doc_pages = dynamic_failed_pages  # type: ignore[method-assign]
         service._metadata_index = AsyncMock()
-        current_doc_id = ""
-
-        async def metadata(doc_id: str) -> dict[str, str]:
-            nonlocal current_doc_id
-            current_doc_id = doc_id
-            return {
+        _serve_metadata(
+            service._metadata_index,
+            lambda doc_id: {
                 "filename": f"{doc_id}.pdf",
                 "source_uri": f"bynder://asset/{doc_id}",
                 "download_locator": f"https://cdn.example.com/{doc_id}.pdf",
-            }
+            },
+        )
 
-        async def retry(*_args: object, **_kwargs: object) -> dict[str, object]:
-            scheduled.append(
-                {"doc_id": current_doc_id, "file_path": "recreated.pdf", "error": "again"}
-            )
-            return {"doc_id": current_doc_id}
+        async def retry(
+            _source_uri: str, download_locator: str, *_args: object, **_kwargs: object
+        ) -> dict[str, object]:
+            doc_id = download_locator.rsplit("/", 1)[-1].removesuffix(".pdf")
+            scheduled.append({"doc_id": doc_id, "file_path": "recreated.pdf", "error": "again"})
+            return {"doc_id": doc_id}
 
-        service._metadata_index.get.side_effect = metadata
         service._lightrag = MagicMock()
-        service._aingest_download_locator = AsyncMock(side_effect=retry)  # type: ignore[attr-defined]
+        passes: list[int] = []
+        replay = _replay_each(service, AsyncMock(side_effect=retry), passes=passes)
 
         result = await service.aretry_failed_docs()
 
         assert result["retried"] == 200
-        assert service._aingest_download_locator.await_count == 200  # type: ignore[attr-defined]
+        assert result["succeeded"] == 200
+        assert replay.await_count == 200
+        # The cohort replays in bounded shared passes, reading metadata one
+        # window at a time.
+        assert passes == [64, 64, 64, 8]
+        assert service._metadata_index.get_many.await_count == 4
+        service._metadata_index.get.assert_not_awaited()
 
     async def test_retry_failed_doc_uses_metadata_locator_not_deleted_parser_path(
         self, test_config: DlightragConfig
@@ -3053,7 +3120,7 @@ class TestWorkspaceRagLightRAGMainPath:
         )
         service._metadata_index = AsyncMock()
 
-        async def get_metadata(doc_id: str) -> dict[str, str]:
+        def get_metadata(doc_id: str) -> dict[str, str]:
             assert doc_id == "doc-failed"
             events.append("metadata")
             return {
@@ -3062,7 +3129,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "download_locator": "https://cdn.example.com/assets/1.pdf",
             }
 
-        service._metadata_index.get = AsyncMock(side_effect=get_metadata)
+        _serve_metadata(service._metadata_index, get_metadata)
         service._lightrag = MagicMock()
 
         service._lightrag.adelete_by_doc_id = AsyncMock()
@@ -3085,7 +3152,7 @@ class TestWorkspaceRagLightRAGMainPath:
             events.append("ingest")
             return {"doc_id": "doc-failed", "status": "success"}
 
-        service._aingest_download_locator = AsyncMock(side_effect=retry_locator)  # type: ignore[attr-defined]
+        _replay_each(service, AsyncMock(side_effect=retry_locator))
         service.aingest = AsyncMock(side_effect=AssertionError("must not parse doc_status path"))
 
         result = await service.aretry_failed_docs()
@@ -3104,16 +3171,21 @@ class TestWorkspaceRagLightRAGMainPath:
             [{"doc_id": "doc-same", "file_path": "report.pdf", "error": "parser failed"}],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/1",
-            "download_locator": "https://cdn.example.com/assets/1.pdf",
-            "title": "Annual report",
-            "author": "Finance team",
-            "creation_date": "2026-01-02",
-            "custom_metadata": {"department": "finance"},
-            "workspace": "must-not-be-forwarded",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            {
+                "doc-same": {
+                    "filename": "report.pdf",
+                    "source_uri": "bynder://asset/1",
+                    "download_locator": "https://cdn.example.com/assets/1.pdf",
+                    "title": "Annual report",
+                    "author": "Finance team",
+                    "creation_date": "2026-01-02",
+                    "custom_metadata": {"department": "finance"},
+                    "workspace": "must-not-be-forwarded",
+                }
+            },
+        )
         service._lightrag = MagicMock()
 
         async def retry_locator(
@@ -3133,11 +3205,11 @@ class TestWorkspaceRagLightRAGMainPath:
             }
             return {"processed": 1, "errors": [], "results": [{"doc_id": "doc-same"}]}
 
-        service._aingest_download_locator = AsyncMock(side_effect=retry_locator)  # type: ignore[attr-defined]
+        replay = _replay_each(service, AsyncMock(side_effect=retry_locator))
 
         result = await service.aretry_failed_docs()
 
-        assert service._aingest_download_locator.await_count == 1, result  # type: ignore[attr-defined]
+        assert replay.await_count == 1, result
         assert result["succeeded"] == 1
         assert result["succeeded_docs"] == [
             {"doc_id": "doc-same", "file_path": "report.pdf", "replacement_count": 1}
@@ -3183,7 +3255,7 @@ class TestWorkspaceRagLightRAGMainPath:
         stores.doc_status.upsert = AsyncMock(side_effect=upsert_status)
 
         metadata_index = AsyncMock()
-        metadata_index.get.side_effect = lambda doc_id: metadata_records.get(doc_id)
+        _serve_metadata(metadata_index, metadata_records)
 
         async def upsert_metadata(doc_id: str, record: dict[str, object]) -> None:
             metadata_records[doc_id] = dict(record)
@@ -3346,17 +3418,17 @@ class TestWorkspaceRagLightRAGMainPath:
             ],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = metadata
+        _serve_metadata(service._metadata_index, lambda _doc_id: metadata)
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
-        service._aingest_download_locator = AsyncMock()  # type: ignore[attr-defined]
+        replay = _replay_each(service, AsyncMock())
         service.aingest = AsyncMock()
 
         result = await service.aretry_failed_docs()
 
         assert result["failed"] == 1
         service._lightrag.adelete_by_doc_id.assert_not_awaited()
-        service._aingest_download_locator.assert_not_awaited()  # type: ignore[attr-defined]
+        replay.assert_not_awaited()
         service.aingest.assert_not_awaited()
 
     async def test_retry_failed_doc_rejects_non_raising_ingest_failure(
@@ -3373,19 +3445,25 @@ class TestWorkspaceRagLightRAGMainPath:
             ],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/1",
-            "download_locator": "https://cdn.example.com/assets/1.pdf",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            lambda _doc_id: {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": "https://cdn.example.com/assets/1.pdf",
+            },
+        )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={
-                "processed": 0,
-                "errors": ["report.pdf: remote materialization failed"],
-                "results": [],
-            }
+        _replay_each(
+            service,
+            AsyncMock(
+                return_value={
+                    "processed": 0,
+                    "errors": ["report.pdf: remote materialization failed"],
+                    "results": [],
+                }
+            ),
         )
 
         result = await service.aretry_failed_docs()
@@ -3413,8 +3491,9 @@ class TestWorkspaceRagLightRAGMainPath:
             ],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.side_effect = RuntimeError(
-            "database failed for https://private?token=secret"
+        _serve_metadata(
+            service._metadata_index,
+            RuntimeError("database failed for https://private?token=secret"),
         )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
@@ -3442,19 +3521,25 @@ class TestWorkspaceRagLightRAGMainPath:
             ],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/1",
-            "download_locator": "https://cdn.example.com/assets/1.pdf",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            lambda _doc_id: {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": "https://cdn.example.com/assets/1.pdf",
+            },
+        )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_doc_status.return_value = {"status": "failed"}
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            side_effect=RuntimeError(
-                "download failed for https://signed.example.com/report?token=secret"
-            )
+        _replay_each(
+            service,
+            AsyncMock(
+                side_effect=RuntimeError(
+                    "download failed for https://signed.example.com/report?token=secret"
+                )
+            ),
         )
 
         result = await service.aretry_failed_docs()
@@ -3484,17 +3569,21 @@ class TestWorkspaceRagLightRAGMainPath:
             ],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/1",
-            "download_locator": "https://cdn.example.com/assets/1.pdf",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            lambda _doc_id: {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": "https://cdn.example.com/assets/1.pdf",
+            },
+        )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_doc_status.return_value = {"status": "failed"}
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={"processed": 1, "errors": [], "results": []}
+        _replay_each(
+            service,
+            AsyncMock(return_value={"processed": 1, "errors": [], "results": []}),
         )
 
         result = await service.aretry_failed_docs()
@@ -3510,23 +3599,29 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         _set_failed_docs(service, [{"doc_id": "doc-old", "error": "parser failed"}])
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/1",
-            "download_locator": "s3://documents/assets/1.pdf",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            lambda _doc_id: {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": "s3://documents/assets/1.pdf",
+            },
+        )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock(
             return_value=SimpleNamespace(status="success")
         )
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_doc_status.return_value = {"status": "failed"}
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={
-                "processed": 1,
-                "errors": [],
-                "results": [{"doc_id": "doc-new", "chunks": ["not-persisted"]}],
-            }
+        _replay_each(
+            service,
+            AsyncMock(
+                return_value={
+                    "processed": 1,
+                    "errors": [],
+                    "results": [{"doc_id": "doc-new", "chunks": ["not-persisted"]}],
+                }
+            ),
         )
 
         result = await service.aretry_failed_docs()
@@ -3550,7 +3645,7 @@ class TestWorkspaceRagLightRAGMainPath:
             "download_locator": "s3://documents/assets/expected.pdf",
         }
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = source_contract
+        _serve_metadata(service._metadata_index, lambda _doc_id: source_contract)
         processed_row = {
             "status": "processed",
             "file_path": "/inputs/default/report.pdf",
@@ -3564,12 +3659,15 @@ class TestWorkspaceRagLightRAGMainPath:
         service._lightrag_stores.get_doc_status.return_value = processed_row
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={
-                "processed": 1,
-                "errors": [],
-                "results": [{"doc_id": "doc-unrelated"}],
-            }
+        _replay_each(
+            service,
+            AsyncMock(
+                return_value={
+                    "processed": 1,
+                    "errors": [],
+                    "results": [{"doc_id": "doc-unrelated"}],
+                }
+            ),
         )
         outcomes: list[tuple[str, str]] = []
 
@@ -3592,23 +3690,29 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         _set_failed_docs(service, [{"doc_id": "doc-same", "error": "parser failed"}])
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "bynder://asset/1",
-            "download_locator": "s3://documents/assets/1.pdf",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            lambda _doc_id: {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": "s3://documents/assets/1.pdf",
+            },
+        )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock(
             return_value=SimpleNamespace(status="success")
         )
         service._lightrag_stores = AsyncMock()
         service._lightrag_stores.get_doc_status.return_value = {"status": "failed"}
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={
-                "doc_id": "doc-same",
-                "processed": 1,
-                "results": [{"doc_id": "doc-extra"}],
-            }
+        _replay_each(
+            service,
+            AsyncMock(
+                return_value={
+                    "doc_id": "doc-same",
+                    "processed": 1,
+                    "results": [{"doc_id": "doc-extra"}],
+                }
+            ),
         )
 
         result = await service.aretry_failed_docs()
@@ -3633,18 +3737,22 @@ class TestWorkspaceRagLightRAGMainPath:
             ],
         )
         service._metadata_index = AsyncMock()
-        service._metadata_index.get.return_value = {
-            "filename": "report.pdf",
-            "source_uri": "local://default/report.pdf",
-            "download_locator": "/inputs/default/report.pdf",
-        }
+        _serve_metadata(
+            service._metadata_index,
+            lambda _doc_id: {
+                "filename": "report.pdf",
+                "source_uri": "local://default/report.pdf",
+                "download_locator": "/inputs/default/report.pdf",
+            },
+        )
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._validate_retry_source_contract = MagicMock(  # type: ignore[method-assign]
             return_value=("local", {"path": "/inputs/default/report.pdf"})
         )
-        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-            return_value={"doc_id": "doc-same", "source_kind": "document"}
+        _replay_each(
+            service,
+            AsyncMock(return_value={"doc_id": "doc-same", "source_kind": "document"}),
         )
 
         result = await service.aretry_failed_docs()
@@ -3982,16 +4090,22 @@ async def test_retry_status_read_error_stays_uncertain_then_recovers_processed(
     service = _service(test_config)
     _set_failed_docs(service, [{"doc_id": "doc-a", "file_path": "a.pdf"}])
     service._metadata_index = AsyncMock()
-    service._metadata_index.get.return_value = {
-        "filename": "a.pdf",
-        "source_uri": "bynder://asset/a",
-        "download_locator": "https://cdn.example.com/a.pdf",
-    }
-    service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-        side_effect=[
-            RuntimeError("late finalization"),
-            {"processed": 1, "doc_id": "doc-a"},
-        ]
+    _serve_metadata(
+        service._metadata_index,
+        lambda _doc_id: {
+            "filename": "a.pdf",
+            "source_uri": "bynder://asset/a",
+            "download_locator": "https://cdn.example.com/a.pdf",
+        },
+    )
+    _replay_each(
+        service,
+        AsyncMock(
+            side_effect=[
+                RuntimeError("late finalization"),
+                {"processed": 1, "doc_id": "doc-a"},
+            ]
+        ),
     )
     stores = AsyncMock()
     stores.get_doc_status.side_effect = RuntimeError("status database unavailable")
@@ -4020,13 +4134,17 @@ async def test_retry_identity_mismatch_records_failed_without_status_write(
     service = _service(test_config)
     _set_failed_docs(service, [{"doc_id": "doc-a", "file_path": "a.pdf"}])
     service._metadata_index = AsyncMock()
-    service._metadata_index.get.return_value = {
-        "filename": "a.pdf",
-        "source_uri": "bynder://asset/a",
-        "download_locator": "https://cdn.example.com/a.pdf",
-    }
-    service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
-        return_value={"processed": 1, "doc_id": "doc-other"}
+    _serve_metadata(
+        service._metadata_index,
+        lambda _doc_id: {
+            "filename": "a.pdf",
+            "source_uri": "bynder://asset/a",
+            "download_locator": "https://cdn.example.com/a.pdf",
+        },
+    )
+    _replay_each(
+        service,
+        AsyncMock(return_value={"processed": 1, "doc_id": "doc-other"}),
     )
     service._lightrag_stores = AsyncMock()
     service._lightrag_stores.get_doc_status.return_value = {
@@ -4044,6 +4162,211 @@ async def test_retry_identity_mismatch_records_failed_without_status_write(
     assert result["failed"] == 1
     assert outcomes == [("doc-a", "failed")]
     service._lightrag_stores.doc_status.upsert.assert_not_awaited()
+
+
+async def test_retryable_cohort_snapshot_reads_finalization_once_per_page(
+    test_config: DlightragConfig,
+) -> None:
+    service = _service(test_config)
+    service._initialized = True
+    pages = [
+        {"doc-f1": object(), "doc-p1": object(), "doc-p2": object()},
+        {"doc-p3": object()},
+    ]
+    statuses = {
+        "doc-f1": SimpleNamespace(status="failed"),
+        "doc-p1": SimpleNamespace(status="processed"),
+        "doc-p2": SimpleNamespace(status="processed"),
+        "doc-p3": SimpleNamespace(status="processed"),
+    }
+
+    async def status_pages(*_args: Any) -> AsyncIterator[dict[str, object]]:
+        for page in pages:
+            yield page
+
+    stores = MagicMock()
+    stores.iter_doc_status_pages = status_pages
+    stores.get_full_doc_statuses = AsyncMock(
+        side_effect=lambda doc_ids: {doc_id: statuses[doc_id] for doc_id in doc_ids}
+    )
+    service._lightrag_stores = stores
+    service._metadata_index = AsyncMock()
+    service._metadata_index.visible_subset.side_effect = lambda doc_ids: frozenset(
+        doc_id for doc_id in doc_ids if doc_id in {"doc-p1", "doc-p3"}
+    )
+
+    cohort = await service.aretryable_document_ids()
+
+    assert cohort == ("doc-f1", "doc-p2")
+    assert service._metadata_index.visible_subset.await_args_list == [
+        call(["doc-p1", "doc-p2"]),
+        call(["doc-p3"]),
+    ]
+    service._metadata_index.get.assert_not_awaited()
+
+
+def _local_retry_service(
+    test_config: DlightragConfig,
+    names: Sequence[str],
+    *,
+    locators: Mapping[str, str] | None = None,
+    statuses: Mapping[str, str] | None = None,
+) -> tuple[WorkspaceRag, dict[str, dict[str, Any]], dict[str, str]]:
+    """Build a writer whose FAILED cohort replays local files through a fake engine.
+
+    Returns the service, its live metadata rows, and the parser file name -> doc id map.
+    """
+    service = _service(test_config)
+    root = service._workspace_input_root()
+    root.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, dict[str, Any]] = {}
+    doc_by_file: dict[str, str] = {}
+    for name in names:
+        doc_id = f"doc-{name}"
+        source = root / f"{name}.pdf"
+        source.write_bytes(b"%PDF-1.4")
+        locator = (locators or {}).get(name, str(source))
+        metadata[doc_id] = {
+            "filename": Path(locator).name,
+            "source_uri": f"local://default/{Path(locator).name}",
+            "download_locator": locator,
+        }
+        doc_by_file[Path(locator).name] = doc_id
+    _set_failed_docs(
+        service,
+        [
+            {
+                "doc_id": f"doc-{name}",
+                "file_path": f"{name}.pdf",
+                **({"status": statuses[name]} if statuses and name in statuses else {}),
+            }
+            for name in names
+        ],
+    )
+    service._metadata_index = AsyncMock()
+    _serve_metadata(service._metadata_index, metadata)
+    service._metadata_index.find_by_download_locator.side_effect = lambda locator: [
+        doc_id for doc_id, row in metadata.items() if row.get("download_locator") == locator
+    ]
+    service._lightrag_stores = AsyncMock()
+    service._lightrag_stores.get_doc_status.side_effect = lambda doc_id: {"status": "failed"}
+    return service, metadata, doc_by_file
+
+
+def _fake_engine(
+    doc_by_file: Mapping[str, str],
+    *,
+    fail: Callable[[list[str]], Exception | None] = lambda _doc_ids: None,
+    metadata: dict[str, dict[str, Any]] | None = None,
+) -> tuple[SimpleNamespace, list[list[str]]]:
+    """An ingestion engine that records each pass and retires replacement owners."""
+    passes: list[list[str]] = []
+
+    async def aingest_files(
+        items: list[PreparedIngestFile], *, replace: bool, track_id: str | None = None
+    ) -> dict[str, Any]:
+        assert replace is False
+        doc_ids = [doc_by_file[item.parser_path.name] for item in items]
+        passes.append(doc_ids)
+        if (error := fail(doc_ids)) is not None:
+            raise error
+        for item, doc_id in zip(items, doc_ids, strict=True):
+            for owner in item.replacement_doc_ids:
+                if owner != doc_id and metadata is not None:
+                    metadata.pop(owner, None)
+        return {
+            "processed": len(doc_ids),
+            "errors": [],
+            "results": [{"doc_id": doc_id} for doc_id in doc_ids],
+        }
+
+    return SimpleNamespace(aingest_files=aingest_files), passes
+
+
+async def test_retry_replays_admitted_documents_in_one_shared_pass(
+    test_config: DlightragConfig,
+) -> None:
+    service, _metadata, doc_by_file = _local_retry_service(test_config, ["a", "b", "c"])
+    engine, passes = _fake_engine(doc_by_file)
+    service._ingestion_engine = engine  # type: ignore[assignment]
+
+    result = await service.aretry_failed_docs(track_id="track-1")
+
+    assert result["succeeded"] == 3
+    assert result["failed"] == 0
+    assert passes == [["doc-a", "doc-b", "doc-c"]]
+    index = cast(AsyncMock, service._metadata_index)
+    index.get_many.assert_awaited_once_with(["doc-a", "doc-b", "doc-c"])
+    index.get.assert_not_awaited()
+
+
+async def test_failed_shared_pass_replays_each_document_alone(
+    test_config: DlightragConfig,
+) -> None:
+    service, _metadata, doc_by_file = _local_retry_service(test_config, ["a", "b", "c"])
+
+    def fail(doc_ids: list[str]) -> Exception | None:
+        if len(doc_ids) > 1:
+            return ValueError("one document poisons the shared pass")
+        return RuntimeError("still broken") if doc_ids == ["doc-b"] else None
+
+    engine, passes = _fake_engine(doc_by_file, fail=fail)
+    service._ingestion_engine = engine  # type: ignore[assignment]
+    outcomes: list[tuple[str, str]] = []
+
+    async def outcome(doc_id: str, state: str, _summary: dict[str, Any]) -> None:
+        outcomes.append((doc_id, state))
+
+    result = await service.aretry_failed_docs(outcome_callback=outcome)
+
+    assert passes == [["doc-a", "doc-b", "doc-c"], ["doc-a"], ["doc-b"], ["doc-c"]]
+    assert outcomes == [("doc-a", "succeeded"), ("doc-b", "failed"), ("doc-c", "succeeded")]
+    assert result["succeeded"] == 2
+    assert result["failed"] == 1
+
+
+async def test_retry_reads_a_document_after_the_replay_that_may_retire_it(
+    test_config: DlightragConfig,
+) -> None:
+    service, metadata, doc_by_file = _local_retry_service(test_config, ["a", "b"])
+    shared = metadata["doc-a"]["download_locator"]
+    # Both rows claim a's source, so replaying a retires b's row, exactly as a
+    # one-at-a-time retry would observe before reading b.
+    metadata["doc-b"] = {**metadata["doc-b"], "download_locator": shared}
+    engine, passes = _fake_engine(doc_by_file, metadata=metadata)
+    service._ingestion_engine = engine  # type: ignore[assignment]
+
+    result = await service.aretry_failed_docs()
+
+    assert passes == [["doc-a"]]
+    assert result["succeeded_docs"] == [
+        {"doc_id": "doc-a", "file_path": "a.pdf", "replacement_count": 1}
+    ]
+    assert result["failed_docs"] == [{"doc_id": "doc-b", "reason": "source metadata incomplete"}]
+    cast(AsyncMock, service._metadata_index).get.assert_awaited_once_with("doc-b")
+
+
+async def test_uncertain_preflight_still_replays_documents_admitted_before_it(
+    test_config: DlightragConfig,
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+
+    service, metadata, doc_by_file = _local_retry_service(
+        test_config, ["a", "b"], statuses={"b": "processed"}
+    )
+    metadata["doc-b"] = {"filename": "b.pdf"}  # incomplete: b's outcome is uncertain
+    engine, passes = _fake_engine(doc_by_file)
+    service._ingestion_engine = engine  # type: ignore[assignment]
+    outcomes: list[tuple[str, str]] = []
+
+    async def outcome(doc_id: str, state: str, _summary: dict[str, Any]) -> None:
+        outcomes.append((doc_id, state))
+
+    with pytest.raises(RetryOutcomeUncertainError, match="source metadata incomplete"):
+        await service.aretry_failed_docs(outcome_callback=outcome)
+
+    assert passes == [["doc-a"]]
+    assert outcomes == [("doc-a", "succeeded")]
 
 
 @pytest.mark.parametrize(
@@ -4115,7 +4438,7 @@ async def test_s3_ingest_retry_preserves_accepted_region(
         retry = _service(test_config)
         _set_failed_docs(retry, [{"doc_id": "doc-report", "error": "parser failed"}])
         retry._metadata_index = AsyncMock()
-        retry._metadata_index.get.return_value = stored
+        _serve_metadata(retry._metadata_index, lambda _doc_id: stored)
         retry._metadata_index.find_by_download_locator.return_value = []
         retry._ingestion_engine = MagicMock()
         retry._ingestion_engine.aingest_files = AsyncMock(side_effect=ingest)
