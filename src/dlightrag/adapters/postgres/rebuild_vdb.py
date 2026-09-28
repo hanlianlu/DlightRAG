@@ -363,11 +363,8 @@ async def run_rebuild(
             if restore_sidecar_alignment:
                 lightrag_surface = _lightrag_surface(tool)
                 from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
-                from dlightrag.adapters.postgres.corpus.lightrag_contract import (
-                    PGLightRAGContractGuard,
-                )
 
-                PGLightRAGContractGuard(lightrag_surface).verify_surface()
+                _verify_restoration_surface(lightrag_surface)
                 stores = LightRAGStores(
                     lightrag_surface,
                     chunk_store=PGCorpusChunkStore(lightrag_surface),
@@ -445,6 +442,29 @@ def _lightrag_surface(tool: DlightRAGRebuildTool) -> Any:
         relation_chunks=object(),
         llm_response_cache=object(),
     )
+
+
+_RESTORATION_DOC_STATUS_READS = ("get_docs_by_statuses_page", "get_full_docs_by_ids")
+
+
+def _verify_restoration_surface(surface: Any) -> None:
+    """Fail when a document-status read fused-vector restoration makes has drifted.
+
+    The rebuild opens LightRAG's storages, never a LightRAG instance, so the
+    pipeline surface the service's contract guard checks is absent by design;
+    only the reads restoration makes are checked here.
+    """
+    missing = [
+        name
+        for name in _RESTORATION_DOC_STATUS_READS
+        if not callable(getattr(surface.doc_status, name, None))
+    ]
+    if missing:
+        raise RuntimeError(
+            "LightRAG doc_status storage is missing "
+            + ", ".join(repr(name) for name in missing)
+            + "; fused visual-vector restoration cannot run"
+        )
 
 
 def _mapping_get(value: Any, key: str) -> Any:

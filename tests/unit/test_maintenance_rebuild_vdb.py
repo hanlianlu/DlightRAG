@@ -396,12 +396,6 @@ async def test_runner_addresses_the_workspace_by_its_canonical_id(
         AsyncMock(return_value=[{"label": "chunks", "errors": []}]),
     )
     monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
-    from dlightrag.adapters.postgres.corpus import lightrag_contract
-
-    monkeypatch.setattr(
-        lightrag_contract.PGLightRAGContractGuard, "verify_surface", lambda self: None
-    )
-
     exit_code = await module.run_rebuild(config=config, target="chunks", assume_yes=True)
 
     assert exit_code == 0
@@ -412,6 +406,91 @@ async def test_runner_addresses_the_workspace_by_its_canonical_id(
     bm25_args = rebuild_bm25.await_args
     assert bm25_args is not None
     assert bm25_args.kwargs["config"].deployment.workspace == "my_space"
+
+
+async def test_chunks_rebuild_restores_fused_vectors_through_the_storage_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    events: list[str] = []
+    embedder = _stub_rebuild(monkeypatch, module, events)
+
+    exit_code = await module.run_rebuild(
+        config=cast(Any, _fake_config()), target="chunks", assume_yes=True
+    )
+
+    assert exit_code == 0
+    assert events == ["chunks", "probe", "restore"]
+    embedder.aclose.assert_awaited_once()
+
+
+async def test_restoration_names_a_drifted_doc_status_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.adapters.postgres import rebuild_vdb as module
+
+    events: list[str] = []
+    _stub_rebuild(
+        monkeypatch,
+        module,
+        events,
+        doc_status=SimpleNamespace(get_full_docs_by_ids=AsyncMock(), finalize=AsyncMock()),
+    )
+
+    with pytest.raises(RuntimeError, match="'get_docs_by_statuses_page'"):
+        await module.run_rebuild(config=cast(Any, _fake_config()), target="chunks", assume_yes=True)
+
+    assert "restore" not in events
+
+
+def _stub_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    module: Any,
+    events: list[str],
+    *,
+    doc_status: Any | None = None,
+) -> AsyncMock:
+    """Stub every rebuild step and record the order they run in."""
+    embedder = AsyncMock()
+    monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
+    monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
+
+    async def probe(*_args: Any, **_kwargs: Any) -> bool:
+        events.append("probe")
+        return True
+
+    async def restore(**_kwargs: Any) -> dict[str, int]:
+        events.append("restore")
+        return {"processed_docs": 1, "skipped_docs": 0}
+
+    async def rebuild(label: str) -> list[dict[str, Any]]:
+        events.append(label)
+        return [{"label": label, "errors": []}]
+
+    async def fake_setup(self) -> bool:
+        self.graph = AsyncMock()
+        self.entities_vdb = AsyncMock()
+        self.relationships_vdb = AsyncMock()
+        self.chunks_vdb = AsyncMock()
+        self.text_chunks = AsyncMock()
+        self.full_docs = AsyncMock()
+        self.doc_status = doc_status if doc_status is not None else AsyncMock()
+        return True
+
+    monkeypatch.setattr(module, "resolve_direct_image_embedding_enabled", probe)
+    monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore)
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
+    monkeypatch.setattr(
+        module.DlightRAGRebuildTool,
+        "run_rebuild_entities_relations",
+        lambda self: rebuild("graph"),
+    )
+    monkeypatch.setattr(
+        module.DlightRAGRebuildTool, "run_rebuild_chunks", lambda self: rebuild("chunks")
+    )
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
+    return embedder
 
 
 def _fake_config():
