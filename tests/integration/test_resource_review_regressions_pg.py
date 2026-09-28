@@ -42,13 +42,15 @@ from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.execution.executor import (
     AnswerExecutor,
     AnswerExecutorSettings,
-    AnswerResourceResolver,
-    AnswerResourceSettings,
 )
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     PinnedModelProfile,
     model_reasoning_settings,
+)
+from dlightrag.engine.answer.execution.resources import (
+    AnswerResourceResolver,
+    AnswerResourceSettings,
 )
 from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings

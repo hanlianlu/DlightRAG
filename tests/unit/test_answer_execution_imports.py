@@ -107,11 +107,22 @@ expected = {
     "ResolvedAnswerResources", "answer_trace_output", "research_history_input_measure",
 }
 assert set(execution.__all__) == expected
+resolver_names = {"AnswerResourceResolver", "AnswerResourceSettings", "ResolvedAnswerResources"}
+# The resource resolver serves acceptance too, so reaching it never loads the executor.
+from dlightrag.engine.answer.execution import AnswerResourceResolver
+assert "dlightrag.engine.answer.execution.executor" not in sys.modules
+from dlightrag.engine.answer.execution import resources
+assert AnswerResourceResolver is resources.AnswerResourceResolver
 from dlightrag.engine.answer.execution import AnswerExecutor
 from dlightrag.engine.answer.execution import executor, acceptance
 assert AnswerExecutor is executor.AnswerExecutor
 for name in expected:
-    source = acceptance if name == "research_history_input_measure" else executor
+    if name == "research_history_input_measure":
+        source = acceptance
+    elif name in resolver_names:
+        source = resources
+    else:
+        source = executor
     assert getattr(execution, name) is getattr(source, name), name
 try:
     execution.not_an_export

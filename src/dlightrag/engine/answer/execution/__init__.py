@@ -11,11 +11,13 @@ if TYPE_CHECKING:
         AnswerExecutionStore,
         AnswerExecutor,
         AnswerExecutorSettings,
+        OrchestratorRun,
+        answer_trace_output,
+    )
+    from .resources import (
         AnswerResourceResolver,
         AnswerResourceSettings,
-        OrchestratorRun,
         ResolvedAnswerResources,
-        answer_trace_output,
     )
 
 __all__ = [
@@ -37,14 +39,15 @@ def __getattr__(name: str) -> Any:
         from .acceptance import research_history_input_measure
 
         return research_history_input_measure
+    if name in {"AnswerResourceResolver", "AnswerResourceSettings", "ResolvedAnswerResources"}:
+        from . import resources
+
+        return getattr(resources, name)
     if name in {
         "AnswerExecutionStore",
         "AnswerExecutor",
         "AnswerExecutorSettings",
-        "AnswerResourceResolver",
-        "AnswerResourceSettings",
         "OrchestratorRun",
-        "ResolvedAnswerResources",
         "answer_trace_output",
     }:
         from . import executor
