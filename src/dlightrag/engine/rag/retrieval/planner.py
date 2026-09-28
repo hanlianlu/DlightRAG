@@ -305,7 +305,7 @@ class RetrievalPlanner:
             self._model_profile,
             input_tokens=input_tokens,
         )
-        response = await self._call_llm_with_retry(
+        response = await self._call_llm_once(
             planner_input,
             system_prompt,
             structured_output=RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
@@ -336,7 +336,7 @@ class RetrievalPlanner:
         )
         return plan
 
-    async def _call_llm_with_retry(
+    async def _call_llm_once(
         self,
         query: str,
         system_prompt: str,
@@ -345,41 +345,30 @@ class RetrievalPlanner:
         start_time: float,
         max_tokens: int | None,
     ) -> str | None:
-        _MAX_RETRIES = 2
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                response = await self._call_llm(
-                    query,
-                    system_prompt,
-                    structured_output=structured_output,
-                    max_tokens=max_tokens,
-                )
-                logger.info(
-                    "[Planner] LLM call: %.1fs (attempt %d)",
-                    time.monotonic() - start_time,
-                    attempt,
-                )
-                return response
-            except Exception:
-                if attempt < _MAX_RETRIES:
-                    delay = 2**attempt
-                    logger.warning(
-                        "RetrievalPlanner LLM call failed (attempt %d/%d), retrying in %ds",
-                        attempt + 1,
-                        _MAX_RETRIES + 1,
-                        delay,
-                        exc_info=True,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.warning(
-                        "RetrievalPlanner LLM call failed after %d attempts (%.1fs)",
-                        _MAX_RETRIES + 1,
-                        time.monotonic() - start_time,
-                        exc_info=True,
-                    )
-                    return None
-        return None
+        """Make one planning request, or return None to plan without the model.
+
+        The provider SDK owns request retries: it retries a transient failure up
+        to the model's ``max_retries`` and never an authentication, request, or
+        context-window rejection. Retrying here as well would multiply its
+        attempts, so a failure the SDK gave up on falls back to the unplanned
+        query instead.
+        """
+        try:
+            response = await self._call_llm(
+                query,
+                system_prompt,
+                structured_output=structured_output,
+                max_tokens=max_tokens,
+            )
+        except Exception:
+            logger.warning(
+                "RetrievalPlanner LLM call failed (%.1fs); planning without the model",
+                time.monotonic() - start_time,
+                exc_info=True,
+            )
+            return None
+        logger.info("[Planner] LLM call: %.1fs", time.monotonic() - start_time)
+        return response
 
     def _parse_response(
         self,

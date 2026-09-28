@@ -71,7 +71,11 @@ Retrieval Stage
 and current-image hints. It never sees answer attachment bytes/text/manifests.
 Explicit BM25 terms and metadata filters remain authoritative. A Research KB
 tool's chosen semantic query is preserved while the planner derives only its
-supporting lexical/filter/image context.
+supporting lexical/filter/image context. The planner makes one model request
+whose provider SDK owns retries: a transient failure is retried up to the
+`extract` model's `max_retries`, an authentication, request, or context-window
+rejection never. A request that still fails plans without the model
+(`fallback_provider_error`), searching the query as given.
 
 The `LightRAG mix` and BM25 lanes degrade independently. If one fails, the other
 may return results and trace records `lightrag_error_type` or `bm25_error_type`.

@@ -4,11 +4,19 @@
 import json
 import logging
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from functools import partial
+from typing import Any
+from unittest.mock import AsyncMock
 
+import httpx2
+import openai
 import pytest
 
 from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.providers import openai_compatible
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
@@ -283,8 +291,7 @@ class TestPlanWithLLM:
 
         planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
-        with patch("dlightrag.engine.rag.retrieval.planner.asyncio.sleep", new=AsyncMock()):
-            plan = await planner.plan("what is X")
+        plan = await planner.plan("what is X")
 
         assert plan.standalone_query == "what is X"
 
@@ -533,9 +540,8 @@ class TestPlanFallback:
     async def test_llm_exception_returns_fallback(self):
         llm = AsyncMock(side_effect=RuntimeError("LLM error"))
         planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
-        with patch("dlightrag.engine.rag.retrieval.planner.asyncio.sleep", new=AsyncMock()):
-            plan = await planner.plan("query")
-        assert llm.await_count == 3
+        plan = await planner.plan("query")
+        assert llm.await_count == 1
         assert plan.outcome == "fallback_provider_error"
         assert plan.standalone_query == "query"
         assert plan.metadata_filter is None
@@ -563,6 +569,106 @@ class TestPlanFallback:
         plan = await planner.plan("query")
         assert plan.standalone_query == "query"
         assert plan.bm25_query == "parsed terms"
+
+
+def _openai_status_error(
+    error_class: type[openai.APIStatusError],
+    status: int,
+    message: str,
+) -> openai.APIStatusError:
+    response = httpx2.Response(status, request=httpx2.Request("POST", "https://planner.test/v1"))
+    return error_class(message, response=response, body={"error": {"message": message}})
+
+
+class TestPlannerRetryOwnership:
+    """The provider SDK is the only layer that retries a planning request."""
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            _openai_status_error(openai.AuthenticationError, 401, "Incorrect API key"),
+            _openai_status_error(openai.PermissionDeniedError, 403, "Forbidden"),
+            _openai_status_error(openai.BadRequestError, 400, "Invalid value for temperature"),
+            _openai_status_error(
+                openai.BadRequestError,
+                400,
+                "This model's maximum context length is 8192 tokens",
+            ),
+            _openai_status_error(openai.InternalServerError, 503, "Service unavailable"),
+            openai.APIConnectionError(request=httpx2.Request("POST", "https://planner.test/v1")),
+        ],
+        ids=["auth-401", "auth-403", "bad-request", "context-overflow", "503", "connection"],
+    )
+    async def test_the_planner_makes_one_attempt_whatever_the_failure(
+        self,
+        failure: Exception,
+    ) -> None:
+        llm = AsyncMock(side_effect=failure)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
+
+        plan = await planner.plan("query")
+
+        assert llm.await_count == 1
+        assert plan.outcome == "fallback_provider_error"
+        assert plan.standalone_query == "query"
+
+    @pytest.mark.parametrize(
+        ("status", "message", "requests"),
+        [
+            (503, "Service unavailable", 3),
+            (429, "Rate limit reached", 3),
+            (401, "Incorrect API key", 1),
+            (403, "Forbidden", 1),
+            (400, "Invalid value for temperature", 1),
+            (400, "This model's maximum context length is 8192 tokens", 1),
+        ],
+        ids=["503", "429", "auth-401", "auth-403", "bad-request", "context-overflow"],
+    )
+    async def test_sdk_retries_are_bounded_and_rejections_are_never_retried(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        status: int,
+        message: str,
+        requests: int,
+    ) -> None:
+        sent: list[httpx2.Request] = []
+
+        def endpoint(request: httpx2.Request) -> httpx2.Response:
+            sent.append(request)
+            return httpx2.Response(
+                status,
+                json={"error": {"message": message}},
+                headers={"retry-after-ms": "1"},
+            )
+
+        sdk_client = openai.AsyncOpenAI
+
+        def client(**kwargs: Any) -> openai.AsyncOpenAI:
+            transport = httpx2.MockTransport(endpoint)
+            return sdk_client(**kwargs, http_client=httpx2.AsyncClient(transport=transport))
+
+        monkeypatch.setattr(openai_compatible, "AsyncOpenAI", client)
+        model = CompletionModel(
+            ModelSettings(
+                model="planner-model",
+                api_key="test-key",
+                base_url="https://planner.test/v1",
+                max_retries=2,
+            ),
+            scheduler=ModelScheduler(max_concurrency=1),
+        )
+        planner = RetrievalPlanner(
+            llm_func=partial(model, model_profile=_TEST_PROFILE),
+            model_profile=_TEST_PROFILE,
+        )
+        try:
+            plan = await planner.plan("query")
+        finally:
+            await model.aclose()
+
+        # max_retries=2 bounds a transient failure at three requests in total.
+        assert len(sent) == requests
+        assert plan.outcome == "fallback_provider_error"
 
 
 # ---------------------------------------------------------------------------

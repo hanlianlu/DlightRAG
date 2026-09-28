@@ -299,7 +299,7 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 | `structured_output` | `auto` | `auto`, `json_schema`, or `json_object` |
 | `temperature` | unset | Nonnegative provider temperature |
 | `timeout` | `240` | Request timeout seconds |
-| `max_retries` | `3` | Provider retry count |
+| `max_retries` | `3` | Provider SDK retries of a transient request failure; the retrieval planner adds none |
 | `reasoning` | unset | Typed reasoning level |
 | `agentic_reasoning` | inherits `reasoning` | Research-specific level; explicit `null` disables |
 | `model_kwargs` | `{}` | Provider-specific ordinary options |
