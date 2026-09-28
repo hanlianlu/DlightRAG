@@ -239,13 +239,15 @@ known multimodal models. `text` disables both image paths. `multimodal` requires
 them and makes probe failure fatal. Fused output replaces the canonical chunk
 vector; it never creates a second visual document vector.
 
-Under `auto`, only a definitive probe outcome settles a workspace runtime's
-mode: a provider that rejects the image probe (an unsupported input, a
-non-retryable request error) leaves both image paths off for that runtime. A
-transient failure (connection error, timeout, 429, or 5xx) settles nothing:
-the workspace is reported unavailable and its construction is retried with
+Only a definitive probe outcome settles a workspace runtime's mode. A failure
+the shared dependency classification treats as transient (a connection error,
+a timeout, or a retryable status such as 429 or 503) settles nothing: the
+workspace is reported unavailable and its construction is retried with
 backoff, so a provider blip never makes a runtime embed documents text-only
-beside the corpus's fused vectors.
+beside the corpus's fused vectors. Every other failure is definitive, including
+5xx statuses outside that retryable set (for example 501, 505, or 507): the
+probe settles the runtime, leaving both image paths off under `auto` and
+failing the runtime's construction under `multimodal`.
 
 ```yaml
 models:
