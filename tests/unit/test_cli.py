@@ -223,6 +223,50 @@ def test_terminal_keeps_whole_source_and_lists_each_resource_once(status: str) -
     )
 
 
+def test_terminal_resolves_rest_relative_links_against_the_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example/api/")
+    result = _cli.AnswerResult.from_payload(
+        {
+            "answer": "See the report and the figure.",
+            "parts": [
+                {
+                    "type": "artifact",
+                    "artifact": {
+                        "resource_id": "artifact-report",
+                        "label": "Report",
+                        "status": "available",
+                        "uri": "dlightrag://answer/run-1/artifacts/artifact-report",
+                        "download_url": "/answer/run-1/artifacts/artifact-report/download",
+                    },
+                }
+            ],
+            "evidence_images": [
+                {
+                    "id": "fig-1",
+                    "chunk_id": "chunk-1",
+                    "source_ref": "1-1",
+                    "label": "paper.pdf",
+                    "url": "/images/finance/chunk-1",
+                    "thumbnail_url": "/images/finance/chunk-1?size=thumb",
+                }
+            ],
+        }
+    )
+
+    rendered = _cli._render_answer_for_terminal(result)
+
+    assert (
+        "[Artifact: Report] https://rag.example/api/answer/run-1/artifacts/artifact-report/download"
+        in rendered
+    )
+    assert (
+        "[evidence image 1-1] paper.pdf https://rag.example/api/images/finance/chunk-1?size=thumb"
+        in rendered
+    )
+
+
 async def test_ingest_workspace_override_uses_the_durable_rest_facade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -142,11 +142,18 @@ def _build_answer_payload(
     return payload
 
 
+def _openable(url: str | None) -> str:
+    """Resolve a REST-relative link against the API so a terminal can open it."""
+    if not url or not url.startswith("/"):
+        return url or ""
+    return f"{sdk_http.api_url().rstrip('/')}{url}"
+
+
 def _format_evidence_image(source_ref: str, label: str, url: str) -> str:
     text = f"[evidence image {source_ref or '?'}]"
     if label:
         text = f"{text} {label}"
-    return f"{text} {url}" if url else text
+    return f"{text} {_openable(url)}" if url else text
 
 
 def _render_answer_for_terminal(data: AnswerResult) -> str:
@@ -160,7 +167,11 @@ def _render_answer_for_terminal(data: AnswerResult) -> str:
             if artifact.resource_id in seen_artifacts:
                 continue
             seen_artifacts.add(artifact.resource_id)
-            suffix = artifact.uri if artifact.status == "available" else "unavailable"
+            suffix = (
+                _openable(artifact.download_url) or artifact.uri
+                if artifact.status == "available"
+                else "unavailable"
+            )
             resources.append(f"[Artifact: {artifact.label}] {suffix}")
         elif part.type == "evidence_image" and part.evidence_image is not None:
             image = part.evidence_image
