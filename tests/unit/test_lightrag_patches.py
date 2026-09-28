@@ -6,9 +6,8 @@ import pytest
 from dlightrag.engine.rag.lightrag import patches as _lightrag_patches
 
 
-def test_docling_mode_does_not_install_the_mineru_patch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.fixture
+def installed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     installed: list[str] = []
     monkeypatch.setattr(
         "dlightrag.engine.rag.corpus.ingestion.parser_hygiene.apply_mineru_content_list_hygiene",
@@ -18,7 +17,20 @@ def test_docling_mode_does_not_install_the_mineru_patch(
         "dlightrag.engine.rag.corpus.ingestion.docling_options.apply_docling_request_options",
         lambda **_kwargs: installed.append("docling") or True,
     )
+    monkeypatch.setattr(
+        "dlightrag.engine.rag.corpus.ingestion.parser_transport.apply_parser_outage_reporting",
+        lambda *, docling_active: installed.append(f"outage:docling={docling_active}") or True,
+    )
+    return installed
 
+
+def test_docling_mode_does_not_install_the_mineru_patch(installed: list[str]) -> None:
     _lightrag_patches.apply(docling_active=True)
 
-    assert installed == ["docling"]
+    assert installed == ["docling", "outage:docling=True"]
+
+
+def test_mineru_mode_reports_outages_of_the_mineru_client(installed: list[str]) -> None:
+    _lightrag_patches.apply(docling_active=False)
+
+    assert installed == ["mineru", "outage:docling=False"]

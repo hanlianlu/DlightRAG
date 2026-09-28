@@ -41,6 +41,16 @@ class ParserUnavailableError(TransientDependencyError):
 
 _AUTH_STATUS_CODES = frozenset({401, 403})
 _RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+# A refused or reset connection, a timed-out socket operation, or a server or
+# proxy that dropped or refused the connection. An unsupported URL scheme or a
+# local protocol violation is configuration or a client bug and stays
+# non-retryable.
+_TRANSIENT_HTTPX_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+    httpx.ProxyError,
+)
 _PROVIDER_MODULE_PREFIXES = ("openai", "anthropic", "google.genai", "google.api_core")
 _STORAGE_MODULE_PREFIXES = ("asyncpg", "pymilvus", "grpc")
 _AUTH_NAME_MARKERS = ("authentication", "unauthorized", "permissiondenied", "forbidden")
@@ -108,7 +118,7 @@ def classify_transient_dependency(
             return item.component
         if isinstance(item, TimeoutError | ConnectionError) and component_hint is not None:
             return component_hint
-        if isinstance(item, httpx.TransportError):
+        if isinstance(item, _TRANSIENT_HTTPX_ERRORS):
             return component_hint or "providers"
         if isinstance(item, httpx.HTTPStatusError):
             if _status_code(item) in _RETRYABLE_STATUS_CODES:
@@ -126,6 +136,25 @@ def classify_transient_dependency(
             ):
                 return "corpus_storage"
     return None
+
+
+def is_transient_request_failure(exc: BaseException) -> bool:
+    """Return whether one HTTP request failed for an explicitly transient reason.
+
+    This is the request-level half of :func:`classify_transient_dependency` for
+    code that retries or names a failed request itself (the embedding client and
+    the document-parser transport boundary), so it agrees with durable deferral:
+    a transient transport error or retryable status anywhere in the cause chain,
+    and no non-retryable marker anywhere in it.
+    """
+
+    chain = tuple(_exception_chain(exc))
+    if any(_is_non_retryable(item) for item in chain):
+        return False
+    return any(
+        isinstance(item, _TRANSIENT_HTTPX_ERRORS) or _status_code(item) in _RETRYABLE_STATUS_CODES
+        for item in chain
+    )
 
 
 def next_dependency_retry(
@@ -214,5 +243,6 @@ __all__ = [
     "TransientDependencyError",
     "classify_transient_dependency",
     "dependency_component_from_checkpoint",
+    "is_transient_request_failure",
     "next_dependency_retry",
 ]

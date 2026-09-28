@@ -9,6 +9,7 @@ from dlightrag.engine.dependencies import (
     ParserUnavailableError,
     ProviderUnavailableError,
     classify_transient_dependency,
+    is_transient_request_failure,
 )
 
 
@@ -58,3 +59,75 @@ def test_authentication_cause_wins_over_a_transient_wrapper() -> None:
         wrapper.__cause__ = auth
 
     assert classify_transient_dependency(wrapper) is None
+
+
+_REQUEST = httpx.Request("POST", "https://dependency.example")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("refused", request=_REQUEST),
+        httpx.ReadError("reset", request=_REQUEST),
+        httpx.ConnectTimeout("slow", request=_REQUEST),
+        httpx.PoolTimeout("saturated", request=_REQUEST),
+        httpx.RemoteProtocolError("server disconnected", request=_REQUEST),
+        httpx.ProxyError("proxy unavailable", request=_REQUEST),
+    ],
+)
+def test_transient_transport_failures_agree_across_request_and_run_classification(
+    error: httpx.TransportError,
+) -> None:
+    assert is_transient_request_failure(error) is True
+    assert classify_transient_dependency(error) == "providers"
+    assert classify_transient_dependency(error, component_hint="parser") == "parser"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.UnsupportedProtocol("missing scheme", request=_REQUEST),
+        httpx.LocalProtocolError("illegal header", request=_REQUEST),
+    ],
+)
+def test_transport_configuration_failures_are_not_transient(error: httpx.TransportError) -> None:
+    assert is_transient_request_failure(error) is False
+    assert classify_transient_dependency(error) is None
+
+
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
+def test_retryable_statuses_are_transient_requests(status: int) -> None:
+    assert is_transient_request_failure(_http_error(status)) is True
+    stamped = RuntimeError(f"parser upload failed: HTTP {status}")
+    stamped.status_code = status  # type: ignore[attr-defined]
+    assert is_transient_request_failure(stamped) is True
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 413, 422, 501, 505])
+def test_rejected_and_unlisted_statuses_are_not_transient_requests(status: int) -> None:
+    assert is_transient_request_failure(_http_error(status)) is False
+
+
+def test_request_failure_needs_an_explicit_transient_surface() -> None:
+    assert is_transient_request_failure(RuntimeError("temporarily unavailable")) is False
+    assert is_transient_request_failure(TimeoutError()) is False
+
+
+def test_non_retryable_marker_wins_over_a_transient_request_surface() -> None:
+    try:
+        raise httpx.ConnectError("refused", request=_REQUEST)
+    except httpx.ConnectError as transport:
+        wrapper = RuntimeError("invalid api key")
+        wrapper.__cause__ = transport
+
+    assert is_transient_request_failure(wrapper) is False
+
+
+def test_a_named_parser_outage_is_not_attributed_to_the_providers() -> None:
+    try:
+        raise httpx.ConnectError("refused", request=_REQUEST)
+    except httpx.ConnectError as transport:
+        outage = ParserUnavailableError()
+        outage.__cause__ = transport
+
+    assert classify_transient_dependency(outage) == "parser"

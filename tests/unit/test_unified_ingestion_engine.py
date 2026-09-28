@@ -11,9 +11,10 @@ import pytest
 from lightrag.base import DocStatus
 from lightrag.parser.routing import FilenameParserHintError
 from lightrag.utils import compute_mdhash_id
-from lightrag.utils_pipeline import normalize_document_file_path
+from lightrag.utils_pipeline import doc_status_parse_failure_fields, normalize_document_file_path
 from PIL import Image
 
+from dlightrag.engine.dependencies import ParserUnavailableError, classify_transient_dependency
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     DocumentEmbeddingTrace,
@@ -288,6 +289,27 @@ async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Pa
         await engine.aingest_file(source, replace=False)
 
     assert deps["metadata_index"].upsert.await_count == 1
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
+
+
+async def test_document_ingest_names_a_recorded_parser_outage(tmp_path: Path) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    failure_fields, _ = doc_status_parse_failure_fields(
+        ParserUnavailableError(),
+        status_doc={"content_summary": "", "metadata": {}},
+        engine_hint="mineru",
+    )
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        {"status": DocStatus.FAILED, "chunks_list": [], **failure_fields},
+    ]
+
+    with pytest.raises(ParserUnavailableError) as raised:
+        await engine.aingest_file(source, replace=False)
+
+    assert classify_transient_dependency(raised.value) == "parser"
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 

@@ -14,6 +14,11 @@ body, so the code/formula preset and PDF heading-level inference are unreachable
 no matter how the parser service is configured. The patch forwards both and is
 installed only when Docling is the active parser.
 
+Parser outage reporting: LightRAG records whatever its MinerU or Docling client
+raises as the document's failure, so a parser service outage looked like a
+rejected document. The active client names a transient transport failure
+``ParserUnavailableError`` instead.
+
 Keep this module small and delete patches as upstream covers them.
 """
 
@@ -28,6 +33,10 @@ def apply(
     docling_code_formula_preset: str | None = None,
 ) -> None:
     """Apply all LightRAG patches. Idempotent."""
+    from dlightrag.engine.rag.corpus.ingestion.parser_transport import (
+        apply_parser_outage_reporting,
+    )
+
     applied = []
     if docling_active:
         from dlightrag.engine.rag.corpus.ingestion.docling_options import (
@@ -45,6 +54,8 @@ def apply(
 
         if apply_mineru_content_list_hygiene():
             applied.append("mineru_content_list_hygiene")
+    if apply_parser_outage_reporting(docling_active=docling_active):
+        applied.append("parser_outage_reporting")
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:

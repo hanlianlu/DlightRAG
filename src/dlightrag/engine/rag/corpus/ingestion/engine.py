@@ -23,6 +23,7 @@ from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.dependencies import ParserUnavailableError
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     RobustDocumentEmbedder,
@@ -35,6 +36,7 @@ from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
     padded_parser_path,
 )
 from dlightrag.engine.rag.corpus.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
+from dlightrag.engine.rag.corpus.ingestion.parser_transport import parser_unavailable_recorded
 from dlightrag.engine.rag.corpus.ingestion.paths import lightrag_archived_source_path
 from dlightrag.engine.rag.corpus.sources.factory import SourceRetrievalOptions
 from dlightrag.engine.rag.corpus.sources.source_contract import (
@@ -953,6 +955,8 @@ class UnifiedIngestionEngine:
     ) -> dict[str, Any]:
         doc_status = await self._stores.get_doc_status(doc_id)
         if lightrag_status(doc_status) != "processed":
+            if parser_unavailable_recorded(doc_status):
+                raise ParserUnavailableError()
             error_summary = (doc_status or {}).get("error_msg") or (doc_status or {}).get(
                 "content_summary"
             )

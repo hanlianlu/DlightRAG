@@ -182,6 +182,15 @@ Point its block at `http://docling:5001` with `code_formula_preset: null`. It
 publishes only `127.0.0.1:5001`; do not run it beside a host Docling service on
 the same port. Independently managed Docling endpoints are also supported.
 
+LightRAG's MinerU or Docling client makes every parser request. When the parser
+service refuses or resets the connection, a connect/read/write timeout expires,
+the connection drops, or the service answers HTTP 408, 425, 429, 500, 502, 503,
+or 504, the document is recorded with the fixed error `Document parser is
+temporarily unavailable` and the underlying client error is logged as a warning.
+Every other parser failure keeps LightRAG's own message: a 4xx rejection, a
+conversion the parser reports as failed, an exhausted polling budget or download
+deadline, and an oversized or malformed result bundle.
+
 ## Product Document Finalization And Failed Ingestion Cleanup
 
 A LightRAG `processed` status alone does not publish a Product Document.
