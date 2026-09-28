@@ -4,7 +4,7 @@ The browser consumes server JSON through one validated edge: api modules own val
 
 ## Status
 
-Accepted. Implementation ships with the frontend tooling adoption that follows this decision; the wire contract documented here is the current one.
+Accepted and implemented; the wire contract documented here is the current one.
 
 ## Context
 

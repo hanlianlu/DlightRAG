@@ -1,12 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Storage-neutral ports: text embedding and recall candidate shapes.
 
-These ports are the P4 substrate. ``TextEmbedder`` keeps dense recall optional
-and backend-independent; ``NullEmbedder`` is the zero-configuration default
-for standalone hosts (sparse + exact legs only). ``SearchCandidate`` is the
-leg-tagged candidate a storage adapter returns in per-leg rank order.
-PostgreSQL-specific connection and migration shapes live in ``_storage.pg``,
-not here.
+``TextEmbedder`` keeps dense recall optional and backend-independent;
+``NullEmbedder`` is the zero-configuration default for standalone hosts
+(sparse + exact legs only). ``SearchCandidate`` is the leg-tagged candidate a
+storage adapter returns in per-leg rank order. PostgreSQL-specific connection
+and migration shapes live in ``_storage.pg``, not here.
 """
 
 from __future__ import annotations

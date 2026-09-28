@@ -112,7 +112,7 @@ Workspaces in a running deployment. Neither delegates to the other.
 
 Run the repository-owned failure matrix, fake-model PG18 convergence gate, and
 opt-in fake-only load campaign with `make validate-runtime`. `runtime-faults`
-fails on any P0/P1/P2 Python or frontend recovery regression; `runtime-pg18`
+fails on any Python or frontend recovery regression in the matrix; `runtime-pg18`
 requires the supported PostgreSQL 18 image/extensions; `load-runtime` prints
 `RUN_RUNTIME_LOAD PASS` only when every correctness/survival gate passes and
 writes bounded local evidence to `.test-results/load-runtime/`. A reported

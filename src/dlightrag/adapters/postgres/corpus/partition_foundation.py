@@ -9,7 +9,7 @@ DlightRAG hides PostgreSQL LIST partitioning behind this seam:
 * partition names are internal deterministic hashes, never raw workspace
   identifiers;
 * every retrieval-critical parent carries a shared DEFAULT partition so new
-  workspaces work without per-workspace DDL, while Commit 3 promotion attaches
+  workspaces work without per-workspace DDL, while promotion attaches
   dedicated children for hot workspaces.
 
 The seam converts LightRAG's fresh empty upstream tables in place (never a
@@ -393,9 +393,9 @@ async def attach_workspace_partition(
 ) -> str:
     """Create one deterministic attached child for compact planner tests.
 
-    This helper creates a new ``PARTITION OF`` directly. Commit 3's production
-    cutover must instead use ``ATTACH PARTITION`` for its detached, pre-indexed
-    staging table. The raw workspace value is bound as a quoted literal, never
+    This helper creates a new ``PARTITION OF`` directly. The production
+    promotion cutover instead uses ``ATTACH PARTITION`` for its detached,
+    pre-indexed staging table. The raw workspace value is bound as a quoted literal, never
     as an identifier.
     """
     parent = pg_identifier(table_name)

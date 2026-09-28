@@ -1,10 +1,8 @@
 # Personal MCP Connections
 
-**Status: IMPLEMENTED IN THE CURRENT WORKTREE / FINAL VALIDATION AND REVIEW PENDING**
+**Status:** Implemented; shipped in 2.0.8. The contract below is current; the delivery-slice plan that closes the document is kept as design history.
 
-**Implementation baseline:** `main@be16218297601e2c965d596b762d49358a389e3b` plus the owned, uncommitted implementation. Owner management, all three authentication modes, automatic discovery/refresh, atomic Research binding and effect fencing, retention/GC, and keyring maintenance are implemented. This document records the current contract, not a released-version or full-CI acceptance claim.
-
-This plan is the implementation authority for the accepted target. It is governed by [ADR 0012](adr/0012-personal-connections-and-hot-plug.md) and uses the canonical [Domain Language](domain-language.md). It supersedes the earlier local research proposals, not their historical baseline evidence. The optional gitignored research is not required to understand or implement this tracked design.
+Owner management, all three authentication modes, automatic discovery/refresh, atomic Research binding and effect fencing, retention/GC, and keyring maintenance are implemented. This document is the current contract. It is governed by [ADR 0012](adr/0012-personal-connections-and-hot-plug.md) and uses the canonical [Domain Language](domain-language.md).
 
 ## Product contract
 
@@ -24,7 +22,7 @@ This plan is the implementation authority for the accepted target. It is governe
 
 ## Scope and non-goals
 
-The implementation includes CRUD, enable/disable, all three authentication choices, automatic catalogue refresh, atomic Run binding, recovery, effect-time revocation, retention/GC, and Settings status together. Independent full validation and review remain release gates.
+The implementation includes CRUD, enable/disable, all three authentication choices, automatic catalogue refresh, atomic Run binding, recovery, effect-time revocation, retention/GC, and Settings status together.
 
 It does not add a marketplace, public Connection-management REST API, inbound-MCP management tools, arbitrary request headers, MCP resources/prompts/apps, a protocol registry, a universal `PluginManager`, a second `RunRuntime`, or a durable invocation-permit ledger. It does not merge Connections with models, Skills, Profile Memory, or Web resources. A static, code-owned list of starter Presets is not a marketplace: it has no discovery, ranking, or installation semantics, and it only fills the create form.
 
@@ -117,7 +115,7 @@ The private composition root injects `Connections.restore_research` behind the E
 | `config.yaml` | Remove deployment server/tool declarations and document only non-secret Connection policy defaults |
 | `src/dlightrag/adapters/http/browser/routes/__init__.py` | Mount the Web-only routes |
 | `frontend/ui/settings.ts` | Add Settings navigation and compose the Connections Feature; do not touch the composer |
-| `src/dlightrag/adapters/http/browser/routes/bootstrap.py`, `frontend/api/bootstrap.ts` | Add a required owner-specific `personal_mcp_connections` capability in the server projection and validated frontend wire; bump `contract_version` from 1 to 2 atomically and update bootstrap fixtures/consumers |
+| `src/dlightrag/adapters/http/browser/routes/bootstrap.py`, `frontend/api/bootstrap.ts` | Add a required owner-specific `personal_mcp_connections` capability in the server projection and validated frontend wire; bump `contract_version` atomically and update bootstrap fixtures/consumers |
 | `docs/architecture.md`, `docs/configuration.md`, `docs/security.md` | At implementation time, change current-state text only after the capability ships |
 
 Direction remains `browser → application.connections`, `application → engine contracts`, and concrete `postgres/mcp → application-owned ports`. `run_store.py` receives a purpose-built Postgres-side pin writer; it does not expose a universal transaction or import HTTP/MCP. This follows [ADR 0001](adr/0001-application-engine-adapters-architecture.md) and [ADR 0011](adr/0011-owner-specific-operational-state-adapters.md).
@@ -307,7 +305,7 @@ Tests use local in-process fake AS/MCP adapters only: state/PKCE/resource/audien
 
 ### Slice 6 — Retention, hardening, and close-out
 
-Land GC, key-rotation operation support, quotas/metrics, and docs/current-state cutover. Deployment `OutboundMcpServerConfig`/stdio paths and their re-export shim are removed. OAuth preflight, GC and writer keyring maintenance are implemented; final independent full validation/review remain pending.
+Land GC, key-rotation operation support, quotas/metrics, and docs/current-state cutover. Deployment `OutboundMcpServerConfig`/stdio paths and their re-export shim are removed. OAuth preflight, GC and writer keyring maintenance are implemented.
 
 Tests: pinned generations survive until retained Run deletion; cascade releases pins; retired secrets are removed from the live store; cache keys cannot cross owner/grant/version; fault matrix covers auth, DNS, protocol, timeout, unknown side effect, catalogue drift, shutdown, and listener reconnect; `uv run lint-imports` proves no reverse import.
 
@@ -331,4 +329,4 @@ Each slice adds unit and Postgres integration coverage at the deep module interf
 - Notifications are hints with polling/reconnect startup scans. Shutdown cancels discovery/maintenance and pending authorizations before Run drain, then closes outstanding MCP tasks. A possibly sent effect is never replayed.
 - See [credential rotation operations](configuration.md#personal-connection-credential-rotation) for deployment order, verification and backup limits.
 
-Focused fake-SDK, actual PostgreSQL multi-worker, browser, accessibility and i18n regressions cover these paths. Dedicated full CI and independent reviewers must still validate the combined owned worktree. Tests use no real model, MCP or OAuth provider; dead-worker refresh takeover is modeled by durable lease expiry, not an OS process kill. Unknown in-flight external effects cannot be rolled back.
+Focused fake-SDK, actual PostgreSQL multi-worker, browser, accessibility and i18n regressions cover these paths. Tests use no real model, MCP or OAuth provider; dead-worker refresh takeover is modeled by durable lease expiry, not an OS process kill. Unknown in-flight external effects cannot be rolled back.

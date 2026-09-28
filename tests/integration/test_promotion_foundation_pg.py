@@ -1,11 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""PostgreSQL integration coverage for the Commit 1 promotion control-plane schema.
+"""PostgreSQL integration coverage for the promotion control-plane schema.
 
 Compact real-PostgreSQL fixtures prove the durable registry control-plane
 fields and the promotion-job table: idempotent enqueue, leased claims,
 fenced transitions, legal-state constraints, and the bounded claim indexes.
-No worker or trigger exists in this commit, so only the adapter interfaces
-drive these rows.
+Only the adapter interfaces drive these rows here; the worker has its own suite.
 """
 
 import datetime

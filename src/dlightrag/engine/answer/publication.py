@@ -128,7 +128,7 @@ def _identify_media_type(content: bytes) -> str:
     truncated container whose header is still recognizable is admitted, and a
     viewer of bytes the browser cannot decode sees the element's own error path
     rather than a publication issue. Recorded in
-    ``docs/adr/0026-video-artifacts-and-link-cards.md``.
+    ``docs/adr/0026-a-video-artifact-plays-and-a-video-link-is-a-card.md``.
     """
     global _MEDIA_IDENTIFIER
     if _MEDIA_IDENTIFIER is None:

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Deterministic workload shape and metric helpers for Slice 6."""
+"""Deterministic workload shape and metric helpers for the RunRuntime load campaign."""
 
 from __future__ import annotations
 

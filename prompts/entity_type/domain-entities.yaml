@@ -1,9 +1,9 @@
 # DlightRAG entity-type prompt profile — example.
-# Activate in config.yaml:  extraction.entity_type_prompt_file: domain-entities.yaml
+# Activate in config.yaml:  corpus.extraction.entity_type_prompt_file: domain-entities.yaml
 #
 # - entity_extraction_json_examples is REQUIRED (DlightRAG extracts in JSON mode).
-# - A non-empty kg_entity_types in config.yaml overrides entity_types_guidance
-#   below; the examples still apply. Clear kg_entity_types to use this guidance.
+# - A non-empty corpus.retrieval.kg_entity_types in config.yaml overrides
+#   entity_types_guidance below; the examples still apply. Clear it to use this guidance.
 
 entity_types_guidance: |
   Classify each entity using one of the following types. If no type fits, use `Other`.

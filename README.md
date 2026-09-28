@@ -230,7 +230,7 @@ durable Answers, then call
 | Retrieval | One durable Query-lane Run returning LightRAG mix plus metadata, BM25, visual fusion, and rerank evidence | [Retrieval and Answer](docs/retrieval-answer.md) |
 | Run | Common durable lifecycle for Retrieval, Answer, and Corpus Mutation across REST, MCP, Web, Python, and evaluation | [RunRuntime](docs/durable-answer-runs.md) |
 | Answer Run | A Query-lane Run that resolves Fast or Research and generates an Answer | [Retrieval and Answer](docs/retrieval-answer.md#answer-orchestration) |
-| Resource | Request-local attachment read deterministically or inspected visually on demand | [Retrieval and Answer](docs/retrieval-answer.md#answer-attachments-and-resources) |
+| Resource | Answer attachment or public link, read as bounded text or viewed as images on demand; later Runs in the same Session can adopt it | [Retrieval and Answer](docs/retrieval-answer.md#answer-attachments-and-resources) |
 | Published Artifact | Owner-visible Research output authorized by a settled root attachment and validated at publication | [Domain language](docs/domain-language.md) |
 | Source | Durable provenance and download contract for an ingested document | [Interfaces](docs/interfaces.md#sources) |
 
@@ -268,6 +268,9 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [Retrieval and Answer](docs/retrieval-answer.md) | Retrieval, fusion, rerank, packing, citations, highlights |
 | [RunRuntime and Durable Execution](docs/durable-answer-runs.md) | Common Query and Corpus Mutation state machine, leases, events, recovery, retention |
 | [RunRuntime and Scaling Target](docs/run-runtime-and-scaling-target.md) | Accepted workload model, lane bounds, lifecycle guarantees, captured 10k control-plane evidence, and ownership boundary |
+| [Personal MCP Connections](docs/personal-mcp-connections.md) | Owner-managed MCP Connections, authorization, and their binding into Research Runs |
+| [Answer Resource Reading](docs/resource-reading.md) | `read`/`view` contracts for Answer attachments and Resources, conversion routes |
+| [Response API Qualification](docs/response-api-qualification.md) | Qualification evidence and limits for the Response API family |
 | [Security](docs/security.md) | Authentication, authorization, ingress and content boundaries |
 | [PostgreSQL](docs/postgresql.md) | PostgreSQL requirements, schema ownership, tuning |
 | [Operations](docs/operations.md) | Executable runbooks and recovery workflows |
@@ -275,8 +278,8 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [Evaluation](docs/evaluation.md) | RAGAS workflow |
 | [Web Theme Design](docs/web-theme-design.md) | Web appearance and interaction decisions |
 
-Plans, ADRs, and research notes under `docs/` are historical design evidence,
-not required reading for operating DlightRAG.
+ADRs under `docs/adr/` and the [frontend stack assessment](docs/frontend-stack-choice.md)
+are design history, not required reading for operating DlightRAG.
 
 ## License
 

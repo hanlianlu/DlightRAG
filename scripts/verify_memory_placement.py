@@ -2,7 +2,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Real-model check: the trailing memory block must not be obeyed.
 
-P2 places the standing memory block as the LAST user-role message. A model
+Research places the standing memory block as the LAST user-role message. A model
 could misread the newest user message as the current request. This script
 sends the exact Research control-turn shape with an adversarial instruction
 hidden inside the memory block and asserts that DlightRAG's configured query

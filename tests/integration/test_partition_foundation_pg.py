@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Durable PostgreSQL integration coverage for the Commit 1 partition foundation.
+"""Durable PostgreSQL integration coverage for the partition foundation.
 
 Runs against a dedicated fresh test database (never the development corpus):
 the suite creates/drops ``dlightrag_partition_foundation_test`` itself, so the
@@ -314,13 +314,13 @@ async def test_fresh_writer_init_builds_partitioned_foundation(writer_corpus: Wr
         assert keys == ["workspace"]
 
         # The durable promotion job schema is installed by normal maintenance
-        # startup even though Commit 3 has not wired the worker yet.
+        # startup.
         assert (
             await conn.fetchval("SELECT to_regclass('dlightrag_promotion_jobs')::text")
             == "dlightrag_promotion_jobs"
         )
 
-        # DOC_STATUS and the full-doc table stay unpartitioned in this commit.
+        # DOC_STATUS and the full-doc table stay unpartitioned.
         for table in ("lightrag_doc_status", "lightrag_doc_full"):
             state = await _table_state(conn, table)
             assert state["relkind"] == "r", f"{table} must not be partitioned yet"

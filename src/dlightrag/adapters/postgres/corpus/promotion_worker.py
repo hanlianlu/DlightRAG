@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Automatic hot-workspace promotion worker (Commit 3 control plane).
+"""Automatic hot-workspace promotion worker.
 
 One background task per writer process claims durable promotion jobs with the
 existing lease fencing, then drives one workspace through an idempotent,

@@ -578,8 +578,7 @@ asset audit; `scripts/format_route_bench.py` measures the unmodified PDF/XLSX
 conversion and Registry/effect/recovery paths. These offline small-sample costs
 are not live service, Host/PG latency or platform-wide promises. Non-Latin font
 qualification is optional local-only evidence; no proprietary font/PDF is bundled.
-See [the approved contract](resource-reading.md); whole-contract acceptance still
-requires independent review.
+See [the resource-reading contract](resource-reading.md).
 
 When Exa or Tavily is configured, Research can search Web passages as peer
 evidence through one provider-neutral tool. Search and Extract use independently

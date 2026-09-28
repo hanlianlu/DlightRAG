@@ -376,9 +376,8 @@ class PGCorpusMaintenanceStore:
         self._promotion_jobs = promotion_jobs or PGPromotionJobStore()
 
     async def initialize(self, *, validate_only: bool = False) -> None:
-        # The job table is part of the Commit-1 durable schema foundation even
-        # before Commit 3 wires its worker. Readers validate both scopes and
-        # remain strictly DDL-free.
+        # Readers validate the registry and promotion-job schemas and remain
+        # strictly DDL-free.
         await self._workspace_registry.initialize(validate_only=validate_only)
         await self._promotion_jobs.initialize(validate_only=validate_only)
 

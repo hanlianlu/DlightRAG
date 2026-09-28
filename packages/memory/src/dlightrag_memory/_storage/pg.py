@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""PostgreSQL adapter for the Memory facade (P3/P4 substrate).
+"""PostgreSQL adapter for the Memory facade.
 
 Owns its own schema, namespace, and migration registry: the package never
 shares DlightRAG's answer-run migrations or tables. The three recall legs are
@@ -13,7 +13,7 @@ implemented here behind the neutral ports:
 
 Dense is opt-in: with the NullEmbedder the adapter runs exact + sparse only.
 A changed embedder fingerprint leaves old rows out of the dense leg (exact and
-sparse still reach them); automatic re-embedding is a P4 decision.
+sparse still reach them); rows are not re-embedded automatically.
 """
 
 from __future__ import annotations

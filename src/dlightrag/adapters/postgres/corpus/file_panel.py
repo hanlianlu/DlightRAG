@@ -107,7 +107,7 @@ class PGFilePanelStore(PostgresOperationRunner):
     """Read file-panel data without constructing a LightRAG runtime."""
 
     async def ensure_page_index(self) -> None:
-        """Create the exact writer-owned index after LightRAG creates its table."""
+        """Create the writer-owned processed and failed page indexes on LightRAG's table."""
 
         async def _operation(conn: Any) -> None:
             await conn.execute(_CREATE_PAGE_INDEX)

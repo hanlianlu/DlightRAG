@@ -359,7 +359,7 @@ _Avoid_: Agent Event, Tool Turn Executor, workflow engine, max-agent-turn policy
 
 ### Personal Connections
 
-The terms in this subsection describe the owner-bound implementation in [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), including OAuth refresh and retention. Final independent validation/review of the combined implementation remains pending.
+The terms in this subsection describe the owner-bound implementation in [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), including OAuth refresh and retention.
 
 **Connection**:
 An owner's logical relationship to one remote MCP endpoint and external account context. Enabling a Connection authorizes all of its current and future discovered tools for that owner's future Research Runs.

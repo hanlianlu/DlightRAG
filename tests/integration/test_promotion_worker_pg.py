@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Real-PostgreSQL integration coverage for the Commit 3 promotion control plane.
+"""Real-PostgreSQL integration coverage for the promotion worker control plane.
 
 Runs against a dedicated fresh database (``dlightrag_promotion_worker_test``)
 that this module creates and drops itself. Proves on compact fixtures:

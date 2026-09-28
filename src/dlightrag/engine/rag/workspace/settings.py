@@ -274,9 +274,10 @@ class RetrievalSettings(FrozenSettings):
 class WorkspacePromotionSettings(FrozenSettings):
     """Thresholds and worker timing for dedicated hot-workspace partitions.
 
-    Commit 1 exposes tiny test overrides but deliberately ships no guessed
-    production threshold. Commit 3 enables the worker after the scale release
-    gate supplies benchmark-derived values.
+    A shared workspace is marked for promotion once its cumulative ingested
+    documents or chunks reach a configured threshold. No threshold ships by
+    default, so nothing is promoted until an operator sets one, ideally from
+    benchmark-derived values.
     """
 
     doc_threshold: int | None = Field(default=None, ge=1)

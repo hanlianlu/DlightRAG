@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""P0/P1 lane isolation, fencing, ordering, and recovery on one RunRuntime."""
+"""Lane isolation, fencing, ordering, and recovery on one RunRuntime."""
 
 from __future__ import annotations
 

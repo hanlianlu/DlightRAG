@@ -171,7 +171,7 @@ class RunRecord:
 
     @property
     def owner_id(self) -> str:
-        """Answer's owner scope during Slice 1; callers should use access_scope."""
+        """The owner scope id; new callers should read access_scope."""
         return self.access_scope.scope_id
 
     def request_input(self) -> Mapping[str, Any]:

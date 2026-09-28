@@ -1,6 +1,6 @@
 # Answer Resource Reading and Viewing
 
-Status: approved implementation contract. Implementation and evaluation results must be reported separately from these requirements.
+Status: implemented. `read`/`view` shipped in 2.0.8 and lineage adoption in 2.0.9. The sections below keep the approved implementation brief; the table under *Approved bounded route decision* records the production routes.
 
 Scope note: [ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md) is the accepted decision that revises the run-scoped reach of Resource ids. It is implemented: a named earlier handle is adopted on first use under the consuming Run's fence, and an unauthorized or unusable one fails as a typed refusal.
 
@@ -60,8 +60,7 @@ User clarification after the paired pilot supersedes image-free-only DOCX routin
 ### Approved bounded route decision after per-format reassessment
 
 The supervisor approved PDF and XLSX adoption after the independent 17-fixture
-reassessment; this is implementation scope, not whole-contract acceptance.
-Current production routes are:
+reassessment. Current production routes are:
 
 | Format | Primary text / independent visuals | Ordinary fallback / pending qualification |
 |---|---|---|
@@ -92,14 +91,8 @@ No new formats, whole Office-page renders, corpus changes or image/no-image
 engine selectors are authorized. Integrated tests and measurements must be
 reported separately from the earlier direct-call prototypes; small synthetic
 samples do not prove production latency, arbitrary-document completeness, or
-untested platforms. The full local assessment with fixed-source citations is
-supplemental at `docs/research/format-route-reassessment.md`; the route table
-above remains authoritative even when ignored research files are unavailable.
+untested platforms. The route table above is authoritative.
 
-## Validation and review
+## Verification
 
-Implement destination-shaped slices, update authoritative documentation and test the new contract rather than retaining tests for deleted behavior. Include focused coverage for schema/tool composition/children, images and URL classification, physical page discovery and pagination, conversion/error routing, asset membership and duplicate occurrences, real durable settlement/replay, snapshot reuse, cancellation and aggregate image budgets, and provider attachment projections.
-
-Run independent fresh-context reviews on four axes: Standards/simplicity, Spec compliance, Runtime correctness/durability, and Security/evidence/budgets. Review against the pre-change `main` baseline `521dc33ae105e0e1f502b835af5eb152d9382b6e`, including added files and unstaged changes. Fix accepted findings, rerun affected checks and re-review before claiming completion. No commit, push, deployment, public publication or destructive data cleanup is authorized by this implementation contract.
-
-Supplemental pre-implementation research is available locally at `docs/research/anydoc-markitdown-evaluation.md`; its findings are evidence and proposals, not proof of successful adoption. Its references to old `inspect` behavior are historical context, not a compatibility requirement.
+Tests cover schema/tool composition/children, images and URL classification, physical page discovery and pagination, conversion/error routing, asset membership and duplicate occurrences, real durable settlement/replay, snapshot reuse, cancellation and aggregate image budgets, and provider attachment projections.

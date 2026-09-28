@@ -340,9 +340,9 @@ class SubagentHost:
     ) -> tuple[tuple[str, str], ...]:
         """Return complete durable dispatch outcomes not driven in this execution.
 
-        Notification identity includes each Child Operation identity. Slice 2 can
-        therefore expose later Operations in the same Child Session without
-        deduplicating the Session forever.
+        Notification identity includes each Child Operation identity, so later
+        Operations in the same Child Session surface without deduplicating the
+        Session forever.
         """
         if not self.async_lifecycle or self.list_children is None:
             return ()

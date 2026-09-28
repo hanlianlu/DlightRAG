@@ -116,8 +116,8 @@ _ABANDONED_ERROR_MESSAGE = "Run exceeded its reclaim-without-progress bound."
 _BATCH_LIMIT = 200
 _EVENT_PAGE_LIMIT = 500
 DEFAULT_QUERY_MAX_NONTERMINAL_RUNS = 30_000
-# Validated by the deterministic bounded-control-plane campaign documented in
-# docs/validation/run-runtime-slice-6.md.
+# Validated by the deterministic bounded-control-plane campaign; see
+# docs/run-runtime-and-scaling-target.md#captured-local-load-evidence.
 DEFAULT_CORPUS_MUTATION_MAX_NONTERMINAL_RUNS = 1_000
 
 _MIGRATE_ANSWER_RUNTIME = """
@@ -3052,12 +3052,12 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         routing: RoutingAcceptance | None = None,
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
-        """Create or replay one run inside a transaction the caller already owns.
+        """Create or replay one Web Answer run inside a transaction the caller already owns.
 
         This is the composition seam another durable table uses to link its own
         row to the accepted run atomically. It performs no transaction control
         of its own, so the caller's commit is what makes the run and its link
-        durable together. ``request`` is the bounded accepted execution input.
+        durable together. ``envelope`` carries the bounded accepted execution input.
         """
         if envelope.run_kind != "answer" or envelope.lane != "query":
             raise ValueError("Web Answer acceptance requires answer kind on the query lane")

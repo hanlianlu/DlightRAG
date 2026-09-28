@@ -154,7 +154,7 @@ workspace-wheels: frontend-build
 test-unit:
 	uv run pytest tests/unit -q --tb=short
 
-# P0/P1/P2 RunRuntime fault injection. PostgreSQL must be reachable;
+# RunRuntime fault-injection matrix. PostgreSQL must be reachable;
 # providers and parsers are controlled fakes. The browser command exercises
 # reconnect and explicit Corpus Mutation repair/resume presentation.
 runtime-faults: frontend-browser-install

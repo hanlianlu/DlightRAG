@@ -248,9 +248,9 @@ refresh/rotation and retention. Actual accepting PostgreSQL transactions write n
 owner/Run/generation pins; Engine restores them through a neutral injected resolver.
 The existing pending-effect/Run/Child gate checks revocation and cancellation before
 one foreground call. Fast has no external tools. No deployment-global tool tuple or
-Web-managed stdio remains. See the [implementation contract](personal-mcp-connections.md)
-and [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), including pending final
-independent validation/review and the limits of external-account isolation.
+Web-managed stdio remains. See the [Personal MCP Connections contract](personal-mcp-connections.md)
+and [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), including the limits of
+external-account isolation.
 
 ## Durable Execution
 

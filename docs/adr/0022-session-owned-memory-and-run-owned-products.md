@@ -7,7 +7,7 @@ continuation carry is deleted, so memory stops depending on how a Run arrived.
 
 ## Status
 
-Accepted. Implementation lands in the slices under [Consequences](#consequences).
+Accepted; implemented in 2.0.10.
 
 It supersedes four clauses, and each of those ADRs points here:
 

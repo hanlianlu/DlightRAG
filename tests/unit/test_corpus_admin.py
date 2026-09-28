@@ -554,7 +554,7 @@ async def test_workspace_catalog_cursor_codec_is_exposed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Commit 3: promotion fence gates and storage status
+# Promotion fence gates and storage status
 # ---------------------------------------------------------------------------
 
 
