@@ -11,7 +11,8 @@ the real signature rejects raises ``TypeError``.
 
 Configure a service through its autospecced methods (``return_value``,
 ``side_effect``); assigning a plain mock or a lambda over one drops the signature
-check. Pass a service by keyword only when a test needs a real or hand-built one.
+check. Pass a service by keyword only when a test needs a real one. A stateful
+hand-built fake stays behind the autospec instead, through ``delegate``.
 """
 
 import inspect
@@ -92,4 +93,15 @@ def application_double(config: DlightragConfig, **services: object) -> Any:
     return double
 
 
-__all__ = ["SERVICE_TYPES", "application_double"]
+def delegate(service: Any, behaviour: object, *methods: str) -> None:
+    """Answer each named autospecced method of ``service`` with ``behaviour``'s method.
+
+    The call still meets the real signature first, so a hand-built fake keeps its
+    state and behaviour without accepting calls the real service would refuse. A
+    name the real service lacks raises ``AttributeError``.
+    """
+    for name in methods:
+        getattr(service, name).side_effect = getattr(behaviour, name)
+
+
+__all__ = ["SERVICE_TYPES", "application_double", "delegate"]

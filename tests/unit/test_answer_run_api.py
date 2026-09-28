@@ -28,7 +28,7 @@ from dlightrag.engine.runtime.records import (
     RunEvent,
     RunRecord,
 )
-from tests.support.application_double import application_double
+from tests.support.application_double import application_double, delegate
 
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
@@ -84,40 +84,34 @@ def _event(sequence: int, event_type: str, payload: dict[str, Any]) -> RunEvent:
 class _RunApplication:
     """Run and answer behaviour that records what the REST routes asked for.
 
-    The routes see ``application``, the strict double: each RunService and
-    AnswerService method below is the side effect of its autospecced
-    counterpart, so a call the real service would reject fails before this
-    behaviour runs.
+    The routes see ``application``, the strict double, whose RunService and
+    AnswerService methods delegate here: a call the real service would reject
+    fails before this behaviour runs.
     """
 
     def __init__(self, config: DlightragConfig) -> None:
         self.application = application_double(config)
         self.application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
         self.application.answers.child_roster_cursor_codec = ChildRosterCursorCodec(b"run-api-test")
-        for service, behaviours in (
-            (self.application.runs, ("get", "get_global", "cancel", "subscribe")),
-            (
-                self.application.answers,
-                (
-                    "create",
-                    "list_artifacts",
-                    "artifact_size",
-                    "read_artifact",
-                    "open_artifact",
-                    "steer",
-                    "control_child",
-                    "reply_to_child",
-                    "continuation_workspaces",
-                    "follow_up",
-                    "fork",
-                    "transcript_tail",
-                    "children",
-                    "observe_child",
-                ),
-            ),
-        ):
-            for name in behaviours:
-                getattr(service, name).side_effect = getattr(self, name)
+        delegate(self.application.runs, self, "get", "get_global", "cancel", "subscribe")
+        delegate(
+            self.application.answers,
+            self,
+            "create",
+            "list_artifacts",
+            "artifact_size",
+            "read_artifact",
+            "open_artifact",
+            "steer",
+            "control_child",
+            "reply_to_child",
+            "continuation_workspaces",
+            "follow_up",
+            "fork",
+            "transcript_tail",
+            "children",
+            "observe_child",
+        )
         self.created: list[dict[str, Any]] = []
         self.cancelled: list[str] = []
         self.subscriptions: list[dict[str, Any]] = []
