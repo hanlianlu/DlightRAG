@@ -156,8 +156,6 @@ async def test_recovery_preserves_current_pinned_tools():
 
     orchestrator = _child_orchestrator(model, environment=MagicMock())
     assert orchestrator.subagent_host is not None
-    orchestrator.subagent_host.async_lifecycle = False
-    orchestrator.subagent_host.interactive_controls = False
     request = ChildRequest(objective="continue pinned work")
     parent = SessionId.new()
     child = SessionId.new()

@@ -79,6 +79,8 @@ class ChildRequest(BaseModel):
 class SpawnAgentInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    # The schema text is part of every accepted spawn_agent contract, so it keeps
+    # the retired lifecycle's wording rather than change accepted Plan digests.
     children: tuple[ChildRequest, ...] = Field(
         min_length=1,
         max_length=8,
@@ -276,8 +278,6 @@ class SubagentHost:
     run_id: str = ""
     owner_id: str = ""
     max_concurrency: int = 4
-    async_lifecycle: bool = True
-    interactive_controls: bool = True
     check_cancelled: Callable[[], Awaitable[None]] | None = None
     persist: PersistChild | None = None
     load_child: LoadChild | None = None
@@ -305,7 +305,6 @@ class SubagentHost:
     context_snapshot: ChildContextSnapshot | None = None
     depth: int = 0
     merge_evidence: Callable[[Mapping[str, Any], str, str], tuple[str, ...]] | None = None
-    record_usage: Callable[[Mapping[str, int]], None] | None = None
     tasks: dict[str, asyncio.Task[ChildOutcome]] = field(default_factory=dict)
     outcomes: dict[str, ChildOutcome] = field(default_factory=dict)
     _semaphore: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
@@ -324,7 +323,7 @@ class SubagentHost:
 
     async def restore_pending(self) -> None:
         """Rebuild runnable process tasks from durable accepted envelopes."""
-        if not self.async_lifecycle or self.list_children is None:
+        if self.list_children is None:
             return
         rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
         for row in rows or ():
@@ -345,7 +344,7 @@ class SubagentHost:
         Operations in the same Child Session surface without deduplicating the
         Session forever.
         """
-        if not self.async_lifecycle or self.list_children is None:
+        if self.list_children is None:
             return ()
         if self.list_guidance is not None and self.parent_session_id is not None:
             questions = await self.list_guidance(
@@ -496,85 +495,61 @@ _SPAWN_DESCRIPTION = (
 )
 
 
-def subagent_declarations(
-    *,
-    model_guidance: str | None = None,
-    async_lifecycle: bool = True,
-    interactive_controls: bool = True,
-) -> tuple[ToolDeclaration, ...]:
-    """Declare the exact child-session contract without constructing a Host."""
-    if not async_lifecycle:
-        descriptions = (
-            "Run one or many foreground child Agent Sessions and wait for all results.",
-            "Read one foreground or completed child session status.",
-            "Wait for one known foreground child session.",
-            "Cancel one known foreground child session.",
-        )
-    else:
-        descriptions = (
-            _SPAWN_DESCRIPTION,
-            "Read one accepted asynchronous or completed child session status.",
-            "Wait for one known asynchronous child session to settle.",
-            "Durably cancel one known child session without cancelling its siblings.",
-        )
+def subagent_declarations(*, model_guidance: str | None = None) -> tuple[ToolDeclaration, ...]:
+    """Declare the exact child-session contract without constructing a Host.
 
-    five_models = model_guidance is not None
+    Accepted Agent Run Plans pin these declarations byte for byte (contract 5).
+    """
     version = 5
     return (
         ToolDeclaration(
             "spawn_agent",
-            descriptions[0] + ("\n" + (model_guidance or "") if five_models else ""),
+            _SPAWN_DESCRIPTION + ("" if model_guidance is None else "\n" + model_guidance),
             SpawnAgentInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "subagent_status",
-            descriptions[1],
+            "Read one accepted asynchronous or completed child session status.",
             ChildControlInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "wait_subagent",
-            descriptions[2],
+            "Wait for one known asynchronous child session to settle.",
             ChildControlInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "cancel_subagent",
-            descriptions[3],
+            "Durably cancel one known child session without cancelling its siblings.",
             ChildControlInput,
             replay_policy="never",
             contract_version=version,
         ),
-        *(
-            (
-                ToolDeclaration(
-                    "steer_subagent",
-                    "Queue guidance for only the current Operation of a running child.",
-                    ChildMessageInput,
-                    replay_policy="replayable",
-                    contract_version=version,
-                ),
-                ToolDeclaration(
-                    "continue_subagent",
-                    "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
-                    ChildMessageInput,
-                    replay_policy="replayable",
-                    contract_version=version,
-                ),
-                ToolDeclaration(
-                    "reply_subagent",
-                    "Reply to one correlated ask_parent request from a child.",
-                    GuidanceReplyInput,
-                    replay_policy="replayable",
-                    contract_version=version,
-                ),
-            )
-            if async_lifecycle and interactive_controls
-            else ()
+        ToolDeclaration(
+            "steer_subagent",
+            "Queue guidance for only the current Operation of a running child.",
+            ChildMessageInput,
+            replay_policy="replayable",
+            contract_version=version,
+        ),
+        ToolDeclaration(
+            "continue_subagent",
+            "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
+            ChildMessageInput,
+            replay_policy="replayable",
+            contract_version=version,
+        ),
+        ToolDeclaration(
+            "reply_subagent",
+            "Reply to one correlated ask_parent request from a child.",
+            GuidanceReplyInput,
+            replay_policy="replayable",
+            contract_version=version,
         ),
     )
 
@@ -684,11 +659,7 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     }
     return tuple(
         declaration.bind(handlers[declaration.name])
-        for declaration in subagent_declarations(
-            model_guidance=host.model_guidance,
-            async_lifecycle=host.async_lifecycle,
-            interactive_controls=host.interactive_controls,
-        )
+        for declaration in subagent_declarations(model_guidance=host.model_guidance)
     )
 
 
@@ -818,18 +789,12 @@ async def _spawn(
         for position in range(len(args.children))
     )
 
-    # Every reconstructible async envelope commits before any handle becomes
-    # visible. Foreground replay can return an already settled outcome.
+    # Every reconstructible envelope commits before any handle becomes visible.
     for child_id, request in zip(child_ids, args.children, strict=True):
-        terminal = (
-            await _load_terminal_child(host, child_id.value) if not host.async_lifecycle else None
-        )
-        envelope: Mapping[str, Any] = {}
-        if host.async_lifecycle and host.persist is not None:
+        if host.persist is not None:
             if host.prepare_dispatch is None:
                 raise RuntimeError("spawn_agent has no durable dispatch envelope builder")
             envelope = host.prepare_dispatch(child_id, request, context_snapshot)
-        if terminal is None and host.persist is not None:
             await host.persist(
                 owner_id=host.owner_id,
                 run_id=host.run_id,
@@ -846,30 +811,18 @@ async def _spawn(
                 **envelope,
             )
 
-    tasks = tuple(
+    for child_id, request in zip(child_ids, args.children, strict=True):
         _start_child_task(host, child_id, request, runtime.call_id, context_snapshot)
-        for child_id, request in zip(child_ids, args.children, strict=True)
-    )
-    if host.async_lifecycle:
-        return _many_result(
-            tuple(
-                ChildOutcome(
-                    status="running",
-                    summary="Child session accepted; use status, wait, or cancel with this handle.",
-                    child_session_id=child_id.value,
-                )
-                for child_id in child_ids
+    return _many_result(
+        tuple(
+            ChildOutcome(
+                status="running",
+                summary="Child session accepted; use status, wait, or cancel with this handle.",
+                child_session_id=child_id.value,
             )
+            for child_id in child_ids
         )
-    try:
-        outcomes = await asyncio.gather(*tasks)
-        return _many_result(tuple(outcomes))
-    finally:
-        for child_id in child_ids:
-            task = host.tasks.pop(child_id.value, None)
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    )
 
 
 def _start_child_task(
@@ -902,11 +855,6 @@ async def _run_one(
 ) -> ChildOutcome:
     persisted = await _load_terminal_child(host, child_id.value)
     if persisted is not None:
-        if not host.async_lifecycle:
-            if persisted.evidence_state is not None and host.merge_evidence is not None:
-                host.merge_evidence(persisted.evidence_state, child_id.value, parent_call_id)
-            if persisted.usage is not None and host.record_usage is not None:
-                host.record_usage(persisted.usage)
         host.outcomes[child_id.value] = persisted
         return persisted
     if host.run_child is None:
@@ -956,10 +904,6 @@ async def _run_one(
             summary="Child session failed before producing a result.",
             child_session_id=child_id.value,
         )
-    if not host.async_lifecycle:
-        outcome = _adopt_outcome(host, outcome, parent_call_id=parent_call_id)
-        if outcome.usage is not None and host.record_usage is not None:
-            host.record_usage(outcome.usage)
     return await _finish_outcome(host, child_id.value, outcome)
 
 

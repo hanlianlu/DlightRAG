@@ -182,15 +182,11 @@ def compose_research_tools(
     access = scheduler or AccessScheduler()
     child_declarations: tuple[ToolDeclaration, ...] = ()
     if subagent_host is not None:
-        if child:
-            if subagent_host.async_lifecycle and subagent_host.interactive_controls:
-                child_declarations = child_guidance_declarations()
-        else:
-            child_declarations = subagent_declarations(
-                model_guidance=subagent_host.model_guidance,
-                async_lifecycle=subagent_host.async_lifecycle,
-                interactive_controls=subagent_host.interactive_controls,
-            )
+        child_declarations = (
+            child_guidance_declarations()
+            if child
+            else subagent_declarations(model_guidance=subagent_host.model_guidance)
+        )
     declarations = research_tool_declarations(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,

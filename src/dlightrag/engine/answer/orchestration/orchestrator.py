@@ -920,13 +920,6 @@ class AnswerOrchestrator:
                 )
 
             subagent_host.merge_evidence = merge_child
-
-            def record_child_usage(usage: Mapping[str, int]) -> None:
-                inclusive = trace.setdefault("child_usage", {})
-                for key, value in usage.items():
-                    inclusive[key] = int(inclusive.get(key, 0)) + int(value)
-
-            subagent_host.record_usage = record_child_usage
         memory_host = self._memory_host
         if child and child_session_id and memory_host is not None:
             memory_host = replace(memory_host, session_id=child_session_id)

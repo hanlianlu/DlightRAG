@@ -293,16 +293,13 @@ def _incomplete_operation_error(operation: Any, *, message: str) -> RunExecution
     return RunExecutionError("run_execution_failed", message)
 
 
-def _child_lifecycle_for_plan(plan: AgentRunPlan | None) -> tuple[bool, bool]:
-    """Return ``(async_lifecycle, interactive_controls)`` from the pinned spawn contract."""
+def _require_current_child_lifecycle(plan: AgentRunPlan | None) -> None:
+    """Refuse a Research plan whose pinned spawn contract predates asynchronous Children."""
     if plan is None:
         raise IncompatibleActiveRunError("Research answer run is missing its accepted Agent Plan")
     spawn = next((tool for tool in plan.tools if tool.name == "spawn_agent"), None)
-    if spawn is None:
-        return False, False
-    if spawn.contract_version == 5:
-        return True, True
-    raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
+    if spawn is not None and spawn.contract_version != 5:
+        raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
 
 
 def _scoped_secret(secret: bytes | None, scope: str | None) -> bytes | None:
@@ -1632,11 +1629,8 @@ class AnswerExecutor:
         agent_operations: list[dict[str, Any]] = []
 
         fetched_buffer = FetchedResourceBuffer()
-        async_subagents, interactive_controls = (
-            _child_lifecycle_for_plan(request.agent_run_plan)
-            if resolved_mode == "research"
-            else (True, True)
-        )
+        if resolved_mode == "research":
+            _require_current_child_lifecycle(request.agent_run_plan)
 
         connection_tools: tuple[AgentTool, ...] = ()
         if resolved_mode == "research" and request.run_connection_bindings:
@@ -1672,8 +1666,6 @@ class AnswerExecutor:
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
-            async_subagents=async_subagents,
-            interactive_controls=interactive_controls,
             pinned_models=request.pinned_models,
             connection_tools=connection_tools,
             lineage_loader=lineage,
@@ -2047,11 +2039,7 @@ class AnswerExecutor:
                                 )
                             else:
                                 next_input = (command.command_id, command.content)
-                    while (
-                        next_input is None
-                        and subagent_host is not None
-                        and subagent_host.async_lifecycle
-                    ):
+                    while next_input is None and subagent_host is not None:
                         notifications = await subagent_host.completed_dispatch_notifications(
                             seen=notified_child_operations
                         )
@@ -2388,12 +2376,6 @@ class AnswerExecutor:
                         owner_id=session.owner_id,
                         run_id=session.run_id,
                     )
-                    if not child_usage:
-                        child_usage = {
-                            str(key): int(value)
-                            for key, value in (trace.get("child_usage") or {}).items()
-                            if isinstance(value, int)
-                        }
                     inclusive = dict(root_usage)
                     for key, value in child_usage.items():
                         inclusive[key] = inclusive.get(key, 0) + value
@@ -2490,7 +2472,7 @@ class AnswerExecutor:
                     logger.exception("Failed to clear Fast Host turn reservation")
             raise
         finally:
-            if subagent_host is not None and subagent_host.async_lifecycle:
+            if subagent_host is not None:
                 try:
                     await subagent_host.stop(cancel=cancel_children_on_exit)
                 except Exception:
@@ -2516,8 +2498,6 @@ class AnswerExecutor:
         resolved_mode: ResolvedMode,
         resource_scope: str,
         skills: SkillsBundle | None = None,
-        async_subagents: bool = True,
-        interactive_controls: bool = True,
         pinned_models: tuple[PinnedModelProfile, ...],
         agent_effort: ReasoningLevel | None = None,
         connection_tools: tuple[AgentTool, ...] = (),
@@ -2650,8 +2630,6 @@ class AnswerExecutor:
                 resolved_mode=resolved_mode,
                 subagent_host=(
                     SubagentHost(
-                        async_lifecycle=async_subagents,
-                        interactive_controls=interactive_controls,
                         guidance_timeout_seconds=self._settings.child_guidance_timeout_seconds,
                         model_guidance=child_model_guidance(pinned_models),
                     )

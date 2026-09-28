@@ -47,10 +47,10 @@ from dlightrag.engine.answer.execution import (
     AnswerResourceSettings,
 )
 from dlightrag.engine.answer.execution.executor import (
-    _child_lifecycle_for_plan,
     _close_execution_resources,
     _memory_recall_allowed,
     _publication_plan,
+    _require_current_child_lifecycle,
     _stage_publications,
 )
 from dlightrag.engine.answer.execution.input import (
@@ -394,19 +394,8 @@ def test_pinned_child_lifecycle_requires_current_contract() -> None:
             tools, model_role="query", context_policy_revision="policy-1"
         )
 
-    def _spawn(*, async_lifecycle: bool, interactive_controls: bool = True) -> AgentTool:
-        return next(
-            tool
-            for tool in subagent_tools(
-                host=SubagentHost(
-                    async_lifecycle=async_lifecycle,
-                    interactive_controls=interactive_controls,
-                )
-            )
-            if tool.name == "spawn_agent"
-        )
-
-    supported = _spawn(async_lifecycle=True)
+    tools = subagent_tools(host=SubagentHost())
+    supported = next(tool for tool in tools if tool.name == "spawn_agent")
     unsupported = AgentTool(
         supported.name,
         supported.description,
@@ -419,10 +408,14 @@ def test_pinned_child_lifecycle_requires_current_contract() -> None:
 
     for version in (2, 3, 4):
         with pytest.raises(IncompatibleActiveRunError):
-            _child_lifecycle_for_plan(_plan(replace(supported, contract_version=version)))
-    assert _child_lifecycle_for_plan(_plan(supported)) == (True, True)
+            _require_current_child_lifecycle(_plan(replace(supported, contract_version=version)))
     with pytest.raises(IncompatibleActiveRunError):
-        _child_lifecycle_for_plan(_plan(unsupported))
+        _require_current_child_lifecycle(_plan(unsupported))
+    with pytest.raises(IncompatibleActiveRunError, match="missing its accepted Agent Plan"):
+        _require_current_child_lifecycle(None)
+    # The current contract, and a plan that offers no Children at all, both run.
+    _require_current_child_lifecycle(_plan(*tools))
+    _require_current_child_lifecycle(_plan())
 
 
 def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:
