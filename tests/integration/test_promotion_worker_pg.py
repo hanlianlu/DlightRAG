@@ -903,6 +903,116 @@ async def test_stale_lease_generation_cannot_complete_a_newer_claim(
     )
 
 
+class _ClaimResponseLostOnce(PGPromotionJobStore):
+    """Let the first claim commit, then lose its response as a dropped connection does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lost = False
+
+    async def _run(self, operation: Any) -> Any:
+        async def commit_then_lose_response(conn: Any) -> Any:
+            result = await operation(conn)
+            if not self.lost:
+                self.lost = True
+                raise ConnectionResetError("claim response lost after its commit")
+            return result
+
+        return await super()._run(commit_then_lose_response)
+
+
+async def _job_states(jobs: tuple[int, ...]) -> dict[int, tuple[str, int, int]]:
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        rows = await conn.fetch(
+            "SELECT job_id, state, attempt_count, lease_generation"
+            " FROM dlightrag_promotion_jobs WHERE job_id = ANY($1::bigint[])",
+            list(jobs),
+        )
+    finally:
+        await conn.close()
+    return {
+        int(row["job_id"]): (
+            str(row["state"]),
+            int(row["attempt_count"]),
+            int(row["lease_generation"]),
+        )
+        for row in rows
+    }
+
+
+async def test_a_replayed_claim_returns_the_job_it_already_leased(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    """A lost claim response is replayed by the pool; the replay must not strand the job."""
+    from dlightrag.application.config import get_config
+    from tests.config_helpers import mutate_config
+
+    first_ws, second_ws = workspaces
+    await _clean_state()
+    config = get_config()
+    backoff = config.storage.postgres.connection_retry_backoff
+    await PGPromotionJobStore().enqueue(first_ws)
+    await PGPromotionJobStore().enqueue(second_ws)
+    store = _ClaimResponseLostOnce()
+
+    mutate_config(config, "storage.postgres.connection_retry_backoff", 0.0)
+    try:
+        claimed = await store.claim_next(
+            owner="worker-replayed",
+            lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300),
+        )
+    finally:
+        mutate_config(config, "storage.postgres.connection_retry_backoff", backoff)
+
+    assert store.lost
+    assert claimed is not None
+    assert claimed["workspace"] == first_ws
+    assert (int(claimed["attempt_count"]), int(claimed["lease_generation"])) == (1, 1)
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        rows = await conn.fetch(
+            "SELECT workspace, state, lease_owner FROM dlightrag_promotion_jobs"
+            " WHERE workspace = ANY($1::text[])",
+            [first_ws, second_ws],
+        )
+    finally:
+        await conn.close()
+    assert {row["workspace"]: (row["state"], row["lease_owner"]) for row in rows} == {
+        first_ws: ("promoting", "worker-replayed"),
+        second_ws: ("pending", None),
+    }
+
+
+async def test_a_new_claim_leaves_a_lease_the_worker_abandoned_to_expire(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    """Only a replay re-adopts: a later claim by the same owner leases the next job."""
+    first_ws, second_ws = workspaces
+    await _clean_state()
+    jobs = PGPromotionJobStore()
+    await jobs.enqueue(first_ws)
+    await jobs.enqueue(second_ws)
+    first = await jobs.claim_next(
+        owner="worker-same",
+        lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300),
+    )
+    assert first is not None and first["workspace"] == first_ws
+
+    second = await jobs.claim_next(
+        owner="worker-same",
+        lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300),
+    )
+
+    assert second is not None
+    assert second["workspace"] == second_ws
+    states = await _job_states((int(first["job_id"]), int(second["job_id"])))
+    assert states == {
+        int(first["job_id"]): ("promoting", 1, 1),
+        int(second["job_id"]): ("promoting", 1, 1),
+    }
+
+
 async def test_already_attached_workspace_reconciles_without_new_partitions(
     corpus: None, workspaces: tuple[str, str]
 ) -> None:

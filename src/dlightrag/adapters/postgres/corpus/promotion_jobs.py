@@ -6,10 +6,11 @@ narrow claim/transition interface. The table survives crashes, enforces its
 legal-state transitions, and exposes bounded claim scans.
 
 Idempotency: at most one live/retrying job per workspace (partial unique
-index). Leasing/fencing: only the current owner + generation may transition an
-unexpired ``promoting`` lease; each claim bumps both ``attempt_count`` and the
-generation. Failures carry an error and required next-retry timestamp. Partial
-indexes bound pending, due-retry, and expired-lease claim scans.
+index), and a replayed claim returns the job it already leased. Leasing/fencing:
+only the current owner + generation may transition an unexpired ``promoting``
+lease; each claim bumps both ``attempt_count`` and the generation. Failures
+carry an error and required next-retry timestamp. Partial indexes bound
+pending, due-retry, and expired-lease claim scans.
 """
 
 from typing import Any
@@ -90,30 +91,50 @@ VALUES ($1)
 ON CONFLICT (workspace) WHERE state IN ('pending', 'promoting', 'failed') DO NOTHING
 """
 
+# A claim runs through the retrying operation runner. When its commit lands but
+# the response is lost, the replay must return the job that commit leased rather
+# than lease a second one and strand the first until its lease expires. The
+# requested expiry is unique to one claim call, so the same owner asking for the
+# same expiry is that call's replay and re-adopts the row unchanged. A lease the
+# worker abandoned in an earlier call is still left to expire, as before.
 _CLAIM_NEXT = """
-WITH candidate AS (
+WITH replayed AS (
+    SELECT job_id, workspace, attempt_count, lease_generation
+    FROM dlightrag_promotion_jobs
+    WHERE state = 'promoting'
+      AND lease_owner = $1
+      AND lease_until = $2::timestamptz
+      AND lease_until > NOW()
+), candidate AS (
     SELECT job_id
     FROM dlightrag_promotion_jobs
-    WHERE state = 'pending'
-       OR (state = 'failed' AND next_retry_at <= NOW())
-       OR (state = 'promoting' AND lease_until <= NOW())
+    WHERE NOT EXISTS (SELECT 1 FROM replayed)
+      AND (
+          state = 'pending'
+          OR (state = 'failed' AND next_retry_at <= NOW())
+          OR (state = 'promoting' AND lease_until <= NOW())
+      )
     ORDER BY COALESCE(next_retry_at, lease_until, created_at), job_id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
+), claimed AS (
+    UPDATE dlightrag_promotion_jobs AS job
+    SET state = 'promoting',
+        lease_owner = $1,
+        lease_until = $2::timestamptz,
+        lease_generation = lease_generation + 1,
+        attempt_count = attempt_count + 1,
+        last_error = NULL,
+        next_retry_at = NULL,
+        promoted_at = NULL,
+        updated_at = NOW()
+    FROM candidate
+    WHERE job.job_id = candidate.job_id AND $2::timestamptz > NOW()
+    RETURNING job.job_id, job.workspace, job.attempt_count, job.lease_generation
 )
-UPDATE dlightrag_promotion_jobs AS job
-SET state = 'promoting',
-    lease_owner = $1,
-    lease_until = $2::timestamptz,
-    lease_generation = lease_generation + 1,
-    attempt_count = attempt_count + 1,
-    last_error = NULL,
-    next_retry_at = NULL,
-    promoted_at = NULL,
-    updated_at = NOW()
-FROM candidate
-WHERE job.job_id = candidate.job_id AND $2::timestamptz > NOW()
-RETURNING job.job_id, job.workspace, job.attempt_count, job.lease_generation
+SELECT job_id, workspace, attempt_count, lease_generation FROM replayed
+UNION ALL
+SELECT job_id, workspace, attempt_count, lease_generation FROM claimed
 """
 
 _RENEW_LEASE = """
@@ -267,6 +288,8 @@ class PGPromotionJobStore(PostgresOperationRunner):
         Every successful claim increments and returns ``lease_generation``.
         The worker carries that generation through every side effect and
         transition, so an expired stale worker cannot complete a newer claim.
+        A replay of this call (same owner and ``lease_until``) returns the job
+        it already leased, unchanged, so a lost response strands nothing.
         """
         owner_id = _nonempty(owner, field="lease owner")
 

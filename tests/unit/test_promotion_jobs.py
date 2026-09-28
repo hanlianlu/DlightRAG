@@ -124,6 +124,9 @@ async def test_claim_next_recovers_due_retry_and_expired_lease_with_new_generati
     assert "lease_generation = lease_generation + 1" in sql
     assert "$2::timestamptz > NOW()" in sql
     assert "job.lease_generation" in sql
+    # A replay of the same call (owner and requested expiry) re-adopts its lease.
+    assert "lease_owner = $1\n      AND lease_until = $2::timestamptz" in sql
+    assert "WHERE NOT EXISTS (SELECT 1 FROM replayed)" in sql
     assert args == ("worker-1", "2026-04-01T00:00:00Z")
 
 
