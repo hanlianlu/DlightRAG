@@ -1,7 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared test fixtures for dlightrag tests."""
 
-from collections.abc import Mapping, Sequence
+import os
+from collections.abc import Generator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import uuid7
@@ -12,6 +13,7 @@ from dlightrag.adapters.postgres.runtime.run_store import (
     PGRunStore,
 )
 from dlightrag.application.config import DlightragConfig, reset_config, set_config
+from dlightrag.application.config import sections as config_sections
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
@@ -192,6 +194,61 @@ def _answer_envelope(
         accepted_input=accepted_input_envelope(prepared),
         retention_seconds=DEFAULT_RUN_RETENTION_SECONDS,
     )
+
+
+# The operator's .env, config.yaml, and shell settings are deployment inputs, not
+# product contracts: a test that reads them asserts whatever this checkout is tuned
+# to. Tests that mean to exercise a YAML config or an environment set their own.
+_SUITE_GATES = ("DLIGHTRAG_RUN_", "DLIGHTRAG_E2E_")
+# The config.yaml files present when the run starts: this checkout's and the
+# invocation directory's. Tests that mean to load YAML write their own.
+_STARTUP_CONFIG_YAMLS = frozenset(
+    (directory / "config.yaml").resolve()
+    for directory in (Path(__file__).resolve().parents[1], Path.cwd())
+)
+# Bound before the isolation patches the name, otherwise the wrapper recurses.
+_FIND_YAML_CONFIG = config_sections._find_yaml_config
+
+
+def _yaml_config_ignoring_startup_files() -> Path | None:
+    """Resolve config.yaml as production does, minus the files present at startup."""
+    found = _FIND_YAML_CONFIG()
+    if found is not None and found.resolve() in _STARTUP_CONFIG_YAMLS:
+        return None
+    return found
+
+
+def _hide_operator_inputs(patch: pytest.MonkeyPatch) -> None:
+    """Hide the checkout's .env and config.yaml and the shell's DLIGHTRAG_* names.
+
+    Only the suite gates (DLIGHTRAG_RUN_*, DLIGHTRAG_E2E_*) stay visible: they
+    choose which suites run and configure nothing.
+    """
+    patch.setenv("PYTHON_DOTENV_DISABLED", "1")  # LightRAG load_dotenv()s .env on import
+    patch.setitem(DlightragConfig.model_config, "env_file", None)
+    patch.setattr(config_sections, "_find_yaml_config", _yaml_config_ignoring_startup_files)
+    for key in list(os.environ):
+        upper = key.upper()
+        if upper.startswith("DLIGHTRAG_") and not upper.startswith(_SUITE_GATES):
+            patch.delenv(key, raising=False)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector: pytest.Collector) -> Generator[None, Any, Any]:
+    """Import test modules under the same isolation as the tests themselves.
+
+    Some modules read config while they are imported (the MCP server builds
+    its HTTP auth from it), before any fixture runs.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        _hide_operator_inputs(patch)
+        return (yield)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_from_operator_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the operator's .env, config.yaml and DLIGHTRAG_* settings out of every test."""
+    _hide_operator_inputs(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
