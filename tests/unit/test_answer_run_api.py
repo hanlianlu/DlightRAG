@@ -28,6 +28,7 @@ from dlightrag.engine.runtime.records import (
     RunEvent,
     RunRecord,
 )
+from tests.support.application_double import application_double
 
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
@@ -81,16 +82,42 @@ def _event(sequence: int, event_type: str, payload: dict[str, Any]) -> RunEvent:
 
 
 class _RunApplication:
-    """An Application-shaped fake exposing the AnswerService transport port."""
+    """Run and answer behaviour that records what the REST routes asked for.
+
+    The routes see ``application``, the strict double: each RunService and
+    AnswerService method below is the side effect of its autospecced
+    counterpart, so a call the real service would reject fails before this
+    behaviour runs.
+    """
 
     def __init__(self, config: DlightragConfig) -> None:
-        self.config = config
-        self.corpora = SimpleNamespace(
-            alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}])
-        )
-        self.runs = self
-        self.answers = self
-        self.child_roster_cursor_codec = ChildRosterCursorCodec(b"run-api-test")
+        self.application = application_double(config)
+        self.application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
+        self.application.answers.child_roster_cursor_codec = ChildRosterCursorCodec(b"run-api-test")
+        for service, behaviours in (
+            (self.application.runs, ("get", "get_global", "cancel", "subscribe")),
+            (
+                self.application.answers,
+                (
+                    "create",
+                    "list_artifacts",
+                    "artifact_size",
+                    "read_artifact",
+                    "open_artifact",
+                    "steer",
+                    "control_child",
+                    "reply_to_child",
+                    "continuation_workspaces",
+                    "follow_up",
+                    "fork",
+                    "transcript_tail",
+                    "children",
+                    "observe_child",
+                ),
+            ),
+        ):
+            for name in behaviours:
+                getattr(service, name).side_effect = getattr(self, name)
         self.created: list[dict[str, Any]] = []
         self.cancelled: list[str] = []
         self.subscriptions: list[dict[str, Any]] = []
@@ -315,9 +342,9 @@ def _app(test_config: DlightragConfig) -> Iterator[FastAPI]:
 
 @pytest.fixture
 def run_application(_app: FastAPI, test_config: DlightragConfig) -> _RunApplication:
-    application = _RunApplication(test_config)
-    _app.state.application = application
-    return application
+    behaviour = _RunApplication(test_config)
+    _app.state.application = behaviour.application
+    return behaviour
 
 
 @pytest.fixture
@@ -893,8 +920,8 @@ async def test_schema_validation_error_is_a_safe_503(
 ) -> None:
     from dlightrag.engine.runtime.errors import RunSchemaError
 
-    run_application.get_global = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
-        side_effect=RunSchemaError("column dlightrag_runs.secret is missing")
+    run_application.application.runs.get_global.side_effect = RunSchemaError(
+        "column dlightrag_runs.secret is missing"
     )
 
     response = await client.get(f"/runs/{_RUN_ID}")
@@ -1324,14 +1351,14 @@ async def test_retrieval_run_id_cannot_read_published_artifacts_over_rest(
 @pytest.mark.parametrize("action", ["steer", "continue"])
 @pytest.mark.parametrize("content", [None, "", "   "])
 async def test_child_control_rejects_empty_content_before_application(
-    _app: FastAPI, action: str, content: str | None
+    _app: FastAPI, test_config: DlightragConfig, action: str, content: str | None
 ) -> None:
     # Production Application validation and real ASGI routing, not a permissive fake.
     from dlightrag.application.answer_runs.service import AnswerService
 
     service: Any = object.__new__(AnswerService)
     service._store = SimpleNamespace(get_run=AsyncMock(return_value=_record()))
-    _app.state.application = SimpleNamespace(answers=service)
+    _app.state.application = application_double(test_config, answers=service)
     body = {"action": action}
     if content is not None:
         body["content"] = content
@@ -1375,13 +1402,11 @@ async def test_answer_control_input_errors_are_the_callers_to_fix(_app: FastAPI)
 
 
 async def test_child_control_does_not_translate_internal_value_error(
-    _app: FastAPI,
+    _app: FastAPI, test_config: DlightragConfig
 ) -> None:
-    _app.state.application = SimpleNamespace(
-        answers=SimpleNamespace(
-            control_child=AsyncMock(side_effect=ValueError("internal invariant"))
-        )
-    )
+    application = application_double(test_config)
+    application.answers.control_child.side_effect = ValueError("internal invariant")
+    _app.state.application = application
     async with AsyncClient(
         transport=ASGITransport(app=_app, raise_app_exceptions=False), base_url="http://test"
     ) as client:
@@ -1391,6 +1416,8 @@ async def test_child_control_does_not_translate_internal_value_error(
             json={"action": "steer", "content": "valid"},
         )
     assert response.status_code == 500
+    # The 500 is the service's own ValueError, not a call the real signature refused.
+    application.answers.control_child.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -1400,7 +1427,9 @@ async def test_child_control_does_not_translate_internal_value_error(
         f"/answer/{_RUN_ID}/child-guidance/not-a-uuid/reply",
     ],
 )
-async def test_child_command_validates_uuid_before_storage(_app: FastAPI, path: str) -> None:
+async def test_child_command_validates_uuid_before_storage(
+    _app: FastAPI, test_config: DlightragConfig, path: str
+) -> None:
     from dlightrag.application.answer_runs.service import AnswerService
 
     service: Any = object.__new__(AnswerService)
@@ -1413,7 +1442,7 @@ async def test_child_command_validates_uuid_before_storage(_app: FastAPI, path: 
             side_effect=ValueError("guidance ids must be canonical UUIDs")
         ),
     )
-    _app.state.application = SimpleNamespace(answers=service)
+    _app.state.application = application_double(test_config, answers=service)
     async with AsyncClient(
         transport=ASGITransport(app=_app, raise_app_exceptions=False), base_url="http://test"
     ) as client:
