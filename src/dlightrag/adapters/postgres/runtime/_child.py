@@ -27,8 +27,10 @@ _MAX_PENDING_CHILD_CONTROLS = 100
 PENDING_CONTROL_READ_LIMIT = 100
 _MAX_PENDING_CHILD_GUIDANCE = 8
 # Wake hints arrive through the notification hub, which resynchronizes after any
-# reconnect; this bounded re-read is only a safety fallback.
-_GUIDANCE_RESYNC_SECONDS = 30.0
+# reconnect. While the hub is reconnecting (with backoff) or cannot get a pool
+# connection, no hint arrives, so a waiting child still re-reads its one indexed
+# guidance row this often.
+_GUIDANCE_RESYNC_SECONDS = 5.0
 
 _UPSERT_CHILD_SESSION = """
 INSERT INTO dlightrag_answer_child_sessions (

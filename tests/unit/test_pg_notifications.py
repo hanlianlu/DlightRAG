@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
+import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.core import _notifications
@@ -19,39 +20,66 @@ class _Connection:
         self.listeners: dict[str, Callable[..., None]] = {}
         self.statements: list[str] = []
         self.keepalive_error: Exception | None = None
+        self.hang: set[str] = set()  # statements that never complete
+        self.entered: set[str] = set()  # hanging statements that have started
         self._termination: list[Callable[[Any], None]] = []
         self._closed = False
+        self._detached = False
+
+    def _check(self) -> None:
+        if self._detached:
+            raise asyncpg.InterfaceError("connection has been released back to the pool")
+
+    async def _statement(self, statement: str) -> None:
+        self._check()
+        self.statements.append(statement)
+        if statement in self.hang:
+            self.entered.add(statement)
+            await asyncio.Event().wait()
 
     async def add_listener(self, channel: str, callback: Callable[..., None]) -> None:
-        self.statements.append(f"LISTEN {channel}")
+        await self._statement(f"LISTEN {channel}")
         self.listeners[channel] = callback
 
     async def remove_listener(self, channel: str, _callback: Callable[..., None]) -> None:
-        self.statements.append(f"UNLISTEN {channel}")
+        await self._statement(f"UNLISTEN {channel}")
         self.listeners.pop(channel, None)
 
     def add_termination_listener(self, callback: Callable[[Any], None]) -> None:
+        self._check()
         self._termination.append(callback)
 
     def remove_termination_listener(self, callback: Callable[[Any], None]) -> None:
+        self._check()
         if callback in self._termination:
             self._termination.remove(callback)
 
-    async def fetchval(self, query: str, *, timeout: float | None = None) -> int:
-        self.statements.append(query)
+    async def fetchval(self, query: str) -> int:
+        await self._statement(query)
         if self.keepalive_error is not None:
             raise self.keepalive_error
         return 1
 
     def is_closed(self) -> bool:
+        self._check()
         return self._closed
 
     def terminate(self) -> None:
+        self._check()
+        self._end()
+
+    def detach(self) -> None:
+        """What asyncpg does to a pool connection the server closed: clean up, detach."""
+        self._end()
+        self._detached = True
+
+    def _end(self) -> None:
         if self._closed:
             return
         self._closed = True
         for callback in tuple(self._termination):
             asyncio.get_running_loop().call_soon(callback, self)
+        self._termination.clear()
 
     def notify(self, channel: str, payload: str) -> None:
         self.listeners[channel](self, 4242, channel, payload)
@@ -214,3 +242,98 @@ async def test_closing_the_hub_releases_its_connection_and_refuses_new_subscribe
     assert connection.listeners == {}
     with pytest.raises(RuntimeError, match="closed"):
         await hub.subscribe("runs", received.append)
+
+
+async def test_a_subscribe_cancelled_during_its_listen_leaves_nothing_registered() -> None:
+    """Only a channel's first subscriber LISTENs, so a leftover would mute every later one."""
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    kept: list[str | None] = []
+    await hub.subscribe("keep", kept.append)
+    await _until(lambda: kept == [None])
+    first = endpoint.opened[0]
+    first.hang.add("LISTEN runs")
+    abandoned: list[str | None] = []
+
+    async def wait_for_runs() -> None:
+        async with hub.listen("runs", abandoned.append):
+            await asyncio.Event().wait()
+
+    waiter = asyncio.create_task(wait_for_runs())
+    await _until(lambda: "LISTEN runs" in first.entered)
+    waiter.cancel()
+    await asyncio.gather(waiter, return_exceptions=True)
+
+    assert "runs" not in hub._subscribers  # noqa: SLF001
+    # The abandoned statement cost its connection; the replacement serves the rest.
+    await _until(lambda: len(endpoint.opened) == 2 and kept == [None, None])
+    replacement = endpoint.opened[1]
+    assert replacement.statements == ["LISTEN keep"]
+    later: list[str | None] = []
+    await hub.subscribe("runs", later.append)
+    replacement.notify("runs", "reply")
+    assert later == ["reply"]
+    assert abandoned == []
+    await hub.aclose()
+
+
+async def test_a_failed_listen_keeps_the_subscriber_for_the_replacement_connection() -> None:
+    """A server-closed pool connection is a detached proxy: every call raises, terminate too."""
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    kept: list[str | None] = []
+    await hub.subscribe("keep", kept.append)
+    await _until(lambda: kept == [None])
+    endpoint.opened[0].detach()
+    fresh: list[str | None] = []
+
+    await hub.subscribe("fresh", fresh.append)
+
+    await _until(lambda: len(endpoint.opened) == 2 and fresh == [None])
+    replacement = endpoint.opened[1]
+    assert sorted(replacement.statements) == ["LISTEN fresh", "LISTEN keep"]
+    assert kept == [None, None]
+    replacement.notify("fresh", "wake")
+    assert fresh == [None, "wake"]
+    await hub.aclose()
+
+
+async def test_a_hung_unlisten_is_bounded_and_costs_only_the_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.05)
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    kept: list[str | None] = []
+    leaving: list[str | None] = []
+    await hub.subscribe("keep", kept.append)
+    await hub.subscribe("leaving", leaving.append)
+    await _until(lambda: kept == [None])
+    half_open = endpoint.opened[0]
+    half_open.hang.add("UNLISTEN leaving")
+
+    await asyncio.wait_for(hub.unsubscribe("leaving", leaving.append), timeout=1)
+
+    assert half_open.is_closed()
+    await _until(lambda: len(endpoint.opened) == 2 and kept == [None, None])
+    assert endpoint.opened[1].statements == ["LISTEN keep"]
+    await hub.aclose()
+
+
+async def test_a_hung_keepalive_is_bounded_and_the_connection_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.01)
+    monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.05)
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    received: list[str | None] = []
+
+    async with hub.listen("runs", received.append):
+        await _until(lambda: received == [None])
+        half_open = endpoint.opened[0]
+        half_open.hang.add("SELECT 1")
+        await _until(lambda: received == [None, None])
+
+    assert half_open.is_closed()
+    await hub.aclose()

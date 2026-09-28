@@ -342,7 +342,12 @@ listens, that fans each channel out to its subscribers (the Connections
 scheduler and OAuth inbox, and Answer child-guidance waits, however many are
 waiting). A notification is only a wake hint. After every reconnect the hub
 tells each subscriber to re-read its authoritative rows, and a periodic
-keepalive replaces a connection that died silently. The model catalogue
+keepalive replaces a connection that died silently. Each LISTEN, UNLISTEN, and
+keepalive is bounded to five seconds; one that fails, hangs, or is abandoned by
+a cancelled caller costs only the connection, which is replaced, and never
+leaves a subscriber registered on a channel nothing listens on. A waiting child
+also re-reads its guidance row every five seconds, so a hub that is
+reconnecting delays a reply by at most that much. The model catalogue
 listener uses a dedicated connection when it is given an explicit endpoint, as
 the service composition currently does, and the run-cancellation listener keeps
 its own pooled connection.

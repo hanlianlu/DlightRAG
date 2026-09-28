@@ -8,14 +8,17 @@ asks the subscriber to re-read its authoritative state. Notifications are wake
 hints, never authority. Callbacks run on the event loop and must not block.
 
 The hub holds its connection only while something subscribes, replaces a lost
-connection (termination, or a failed keepalive) with bounded exponential backoff,
-and releases the connection when the last subscriber leaves.
+connection (termination, or a failed or hung statement) with bounded exponential
+backoff, and releases the connection when the last subscriber leaves. A
+registered subscriber is always LISTENed on the current connection, or will be
+by the next one.
 """
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from functools import partial
 from typing import Any
 
 import asyncpg
@@ -29,7 +32,11 @@ _RECONNECT_MAX_SECONDS = 30.0
 # A LISTEN connection is otherwise idle, so a half-open socket would go unnoticed;
 # the keepalive turns that into a reconnect and a resynchronization.
 _KEEPALIVE_SECONDS = 30.0
-_KEEPALIVE_TIMEOUT_SECONDS = 10.0
+# Bounds every statement the hub runs: LISTEN, UNLISTEN, and the keepalive. They
+# run under the hub lock, because asyncpg runs one statement per connection at a
+# time, so this is also the longest a half-open socket can hold up subscribe and
+# unsubscribe before the connection is dropped and replaced.
+_STATEMENT_TIMEOUT_SECONDS = 5.0
 
 
 @asynccontextmanager
@@ -57,8 +64,8 @@ class PGNotificationHub:
     @asynccontextmanager
     async def listen(self, channel: str, callback: NotificationCallback) -> AsyncIterator[None]:
         """Deliver ``channel`` to ``callback`` for the duration of the block."""
-        await self.subscribe(channel, callback)
         try:
+            await self.subscribe(channel, callback)
             yield
         finally:
             await self.unsubscribe(channel, callback)
@@ -67,28 +74,35 @@ class PGNotificationHub:
         """Start delivering ``channel`` to ``callback``.
 
         When the hub is connected, the channel is LISTENed before this returns, so a
-        subscriber that reads its state afterwards misses nothing. Otherwise the
-        connection it is waiting for delivers ``None`` once it listens.
+        subscriber that reads its state afterwards misses nothing. When it is not,
+        or that LISTEN fails, the subscriber stays registered and the next
+        connection LISTENs it and delivers ``None``. A subscribe cancelled during its
+        LISTEN leaves nothing registered.
         """
         if self._closing:
             raise RuntimeError("notification hub is closed")
         async with self._lock:
             callbacks = self._subscribers.setdefault(channel, [])
             callbacks.append(callback)
-            if len(callbacks) == 1 and self._connection is not None:
+            connection = self._connection
+            if len(callbacks) == 1 and connection is not None:
                 try:
-                    await self._connection.add_listener(channel, self._dispatch)
+                    await self._statement(
+                        connection, partial(connection.add_listener, channel, self._dispatch)
+                    )
                 except Exception:
+                    # The failed connection was dropped; its replacement LISTENs every
+                    # registered channel and resynchronizes every subscriber.
                     logger.warning(
                         "LISTEN failed on the notification connection; reconnecting",
                         exc_info=True,
                     )
-                    # The replacement connection listens on every channel and
-                    # resynchronizes every subscriber, this one included.
-                    self._connection.terminate()
-                    self._connection = None
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._run(), name="dlightrag-pg-notifications")
+                except BaseException:
+                    # A registration without a LISTEN would swallow this channel for
+                    # every later subscriber, since only the first one LISTENs.
+                    del self._subscribers[channel]
+                    raise
+        self._ensure_running()
 
     async def unsubscribe(self, channel: str, callback: NotificationCallback) -> None:
         """Stop delivering ``channel`` to ``callback``; the last one out releases the hub."""
@@ -100,9 +114,14 @@ class PGNotificationHub:
             if callbacks:
                 return
             del self._subscribers[channel]
-            if self._connection is not None:
+            connection = self._connection
+            if connection is not None:
+                # A failed UNLISTEN only costs the connection: the replacement LISTENs
+                # the channels still registered, which no longer include this one.
                 with suppress(Exception):
-                    await self._connection.remove_listener(channel, self._dispatch)
+                    await self._statement(
+                        connection, partial(connection.remove_listener, channel, self._dispatch)
+                    )
         if not self._subscribers:
             self._changed.set()
 
@@ -112,16 +131,42 @@ class PGNotificationHub:
         async with self._lock:
             channels = tuple(self._subscribers)
             self._subscribers.clear()
-            if self._connection is not None:
-                for channel in channels:
-                    with suppress(Exception):
-                        await self._connection.remove_listener(channel, self._dispatch)
+            connection = self._connection
+            for channel in channels:
+                if connection is None or self._connection is not connection:
+                    break
+                with suppress(Exception):
+                    await self._statement(
+                        connection, partial(connection.remove_listener, channel, self._dispatch)
+                    )
         self._changed.set()
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+    def _ensure_running(self) -> None:
+        if not self._closing and (self._task is None or self._task.done()):
+            self._task = asyncio.create_task(self._run(), name="dlightrag-pg-notifications")
+
+    async def _statement(self, connection: Any, statement: Callable[[], Awaitable[object]]) -> None:
+        """Run one statement on the connection; one that fails is never used again.
+
+        Callers hold the lock. A statement that fails, hangs past the timeout, or is
+        abandoned by a cancelled caller leaves the connection's state unknown, so the
+        connection is dropped and terminated, which ends its serve loop.
+        """
+        try:
+            await asyncio.wait_for(statement(), timeout=_STATEMENT_TIMEOUT_SECONDS)
+        except BaseException:
+            if self._connection is connection:
+                self._connection = None
+            # A pool connection asyncpg already cleaned up is a detached proxy, on which
+            # even terminate() raises; its termination was already signalled.
+            with suppress(asyncpg.InterfaceError):
+                connection.terminate()
+            raise
 
     async def _run(self) -> None:
         backoff = _RECONNECT_BASE_SECONDS
@@ -151,12 +196,8 @@ class PGNotificationHub:
                 self._changed.set()
 
             connection.add_termination_listener(_terminated)
-            failed = False
             try:
                 await self._listen_on(connection, lost)
-            except Exception:
-                failed = True
-                raise
             finally:
                 async with self._lock:
                     if self._connection is connection:
@@ -165,17 +206,18 @@ class PGNotificationHub:
                 # its proxy, and every call on it raises InterfaceError.
                 with suppress(asyncpg.InterfaceError):
                     connection.remove_termination_listener(_terminated)
-                    if failed or connection.is_closed():
-                        # One that failed an operation may be half-open, and asyncpg can
-                        # report a server-closed one closed before cleaning it up, which
-                        # is what frees its pool slot. terminate() does both, now.
+                    if connection.is_closed():
+                        # asyncpg can report a server-closed connection closed before
+                        # cleaning it up, which is what frees its pool slot.
                         connection.terminate()
 
     async def _listen_on(self, connection: Any, lost: asyncio.Event) -> None:
         async with self._lock:
-            for channel in self._subscribers:
-                await connection.add_listener(channel, self._dispatch)
             self._connection = connection
+            for channel in tuple(self._subscribers):
+                await self._statement(
+                    connection, partial(connection.add_listener, channel, self._dispatch)
+                )
         self._deliver_to_all(None)
         while self._subscribers and not lost.is_set() and not self._closing:
             self._changed.clear()
@@ -183,7 +225,9 @@ class PGNotificationHub:
                 await asyncio.wait_for(self._changed.wait(), timeout=_KEEPALIVE_SECONDS)
             except TimeoutError:
                 async with self._lock:
-                    await connection.fetchval("SELECT 1", timeout=_KEEPALIVE_TIMEOUT_SECONDS)
+                    if self._connection is not connection:
+                        return  # dropped by a failed statement; the next one replaces it
+                    await self._statement(connection, partial(connection.fetchval, "SELECT 1"))
 
     def _dispatch(self, _connection: object, _pid: object, channel: str, payload: str) -> None:
         for callback in tuple(self._subscribers.get(channel, ())):
