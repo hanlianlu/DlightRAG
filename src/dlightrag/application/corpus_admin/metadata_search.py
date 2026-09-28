@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from dlightrag.application.errors import ApplicationInputError
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
@@ -13,7 +14,7 @@ MetadataSearchFilenameMode = Literal["exact", "contains"]
 _FILENAME_MODES = frozenset({"exact", "contains"})
 
 
-class MetadataSearchCursorError(ValueError):
+class MetadataSearchCursorError(ApplicationInputError):
     """An opaque metadata-search page cursor is malformed or fails integrity checks."""
 
 

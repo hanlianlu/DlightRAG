@@ -12,8 +12,9 @@ class ApplicationError(Exception):
 
     Transports map each family once rather than per route: an unavailable
     outcome may succeed later, a conflict names durable state the caller can
-    observe or change. A subclass belongs to exactly one family; the base is
-    never raised. Anything else that escapes a use case is internal.
+    observe or change, and an input error names what the caller must change.
+    A subclass belongs to exactly one family; the base is never raised.
+    Anything else that escapes a use case is internal.
     """
 
 
@@ -23,6 +24,10 @@ class ApplicationUnavailableError(ApplicationError, RuntimeError):
 
 class ApplicationConflictError(ApplicationError, RuntimeError):
     """The request conflicts with durable state the caller can observe or change."""
+
+
+class ApplicationInputError(ApplicationError, ValueError):
+    """The request itself is invalid; the caller must change it before retrying."""
 
 
 class ApplicationClosedError(ApplicationUnavailableError):
@@ -62,6 +67,7 @@ __all__ = [
     "ApplicationClosedError",
     "ApplicationConflictError",
     "ApplicationError",
+    "ApplicationInputError",
     "ApplicationUnavailableError",
     "CorpusUnavailableError",
     "RunSchemaError",

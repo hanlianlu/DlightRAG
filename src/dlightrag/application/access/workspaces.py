@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import NotRequired, Protocol, Required, TypedDict
 
 from dlightrag.application.access.control import AccessAction, AccessControl, AccessSubject
+from dlightrag.application.errors import ApplicationInputError
 
 
-class WorkspaceSelectionConflictError(ValueError):
+class WorkspaceSelectionConflictError(ApplicationInputError):
     """Raised when all-workspace and explicit selection conflict."""
 
 

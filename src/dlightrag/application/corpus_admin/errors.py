@@ -4,26 +4,38 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+from dlightrag.application.errors import (
+    ApplicationConflictError,
+    ApplicationInputError,
+    ApplicationUnavailableError,
+)
 
 
-class UnsafeUploadNameError(ValueError):
+class UnsafeUploadNameError(ApplicationInputError):
     """An upload filename is unsafe or not a single basename."""
+
+
+class LocalIngestPathError(ApplicationInputError):
+    """A caller-supplied local ingest path is absolute or escapes its workspace input root."""
+
+
+class WorkspaceNameError(ApplicationInputError):
+    """A user-facing workspace name is empty, too long, or has forbidden characters."""
 
 
 class WorkspaceExistsError(ApplicationConflictError):
     """A workspace with this canonical identity is already registered."""
 
 
-class UploadTooLargeError(ValueError):
+class UploadTooLargeError(ApplicationInputError):
     """A streamed upload exceeded its configured byte cap."""
 
 
-class MetadataValidationError(ValueError):
+class MetadataValidationError(ApplicationInputError):
     """Caller-supplied document metadata is invalid."""
 
 
-class SourceDownloadInvalidError(ValueError):
+class SourceDownloadInvalidError(ApplicationInputError):
     """Stored source metadata cannot produce a safe download."""
 
 

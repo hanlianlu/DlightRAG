@@ -397,6 +397,62 @@ async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_application: Asy
     assert "database-secret" not in _tool_text(result)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("internal invariant at /srv/dlightrag/state"),
+        PermissionError(13, "Permission denied", "/srv/dlightrag/corpus/a.pdf"),
+    ],
+    ids=["value-error", "os-permission"],
+)
+async def test_mcp_untyped_failures_stay_internal(
+    mock_mcp_application: AsyncMock, failure: Exception
+) -> None:
+    mock_mcp_application.answers.create.side_effect = failure
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == "Error: internal tool failure"
+
+
+async def test_mcp_names_invalid_arguments_without_echoing_them(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "retry_files",
+        {
+            "workspace": "default",
+            "document_ids": ["secret-doc-id"],
+            "selector": "all_retryable",
+        },
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    text = _tool_text(result)
+    assert text.startswith("Error: ")
+    assert "provide document_ids or selector='all_retryable', but not both" in text
+    assert "secret-doc-id" not in text
+    mock_mcp_application.corpus_mutations.create_retry.assert_not_awaited()
+
+
+async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: AsyncMock) -> None:
+    from dlightrag.application.answer_runs import AnswerRequestError
+
+    mock_mcp_application.answers.steer.side_effect = AnswerRequestError(
+        "steer instruction exceeds 20000 characters"
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "steer_answer_run", {"run_id": "run-1", "instruction": "focus"}
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert _tool_text(result) == "Error: steer instruction exceeds 20000 characters"
+
+
 async def test_mcp_protocol_errors_remain_protocol_errors() -> None:
     app = mcp_server.DlightRAGMCPServer("probe")
 

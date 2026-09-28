@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import uuid7
 
-from dlightrag.application.errors import CorpusUnavailableError
+from dlightrag.application.errors import ApplicationInputError, CorpusUnavailableError
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -86,7 +86,7 @@ class _VisualQueryCacheKey:
     payload_digest: bytes
 
 
-class RetrievalInputError(ValueError):
+class RetrievalInputError(ApplicationInputError):
     """A top-level Retrieval request failed pre-acceptance validation."""
 
 

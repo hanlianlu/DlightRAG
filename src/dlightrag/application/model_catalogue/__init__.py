@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag.application.errors import ApplicationUnavailableError
+from dlightrag.application.errors import ApplicationInputError, ApplicationUnavailableError
 from dlightrag.engine.ai.catalog import (
     MODEL_CATALOGUE,
     CatalogueEntry,
@@ -51,7 +51,7 @@ class ModelCatalogueRevisionConflict(RuntimeError):
         super().__init__(f"model catalogue revision changed; current={current_revision}")
 
 
-class ModelCatalogueValidationError(ValueError):
+class ModelCatalogueValidationError(ApplicationInputError):
     """A proposed overlay or configured role is invalid."""
 
 

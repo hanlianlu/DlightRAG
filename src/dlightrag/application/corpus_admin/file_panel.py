@@ -6,6 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
+from dlightrag.application.errors import ApplicationInputError
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
@@ -53,7 +54,7 @@ def public_failure_diagnostic(value: object) -> str:
     return _SAFE_PUBLIC_FAILURE_DIAGNOSTICS.get(text.casefold(), _GENERIC_PUBLIC_FAILURE_DIAGNOSTIC)
 
 
-class FilePanelCursorError(ValueError):
+class FilePanelCursorError(ApplicationInputError):
     """An opaque file-panel page cursor is malformed or fails integrity checks."""
 
 

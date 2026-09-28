@@ -272,12 +272,12 @@ async def start_failed_file_retry(
             selector="all_retryable",
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except ApplicationError:
         # A typed refusal (a read-only replica, the admission limit) answers as itself
         # rather than as a generic acceptance failure.
         raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception:
         logger.exception(
             "Could not accept failed-document retry for workspace %s",
@@ -404,10 +404,10 @@ async def delete_files(
             file_paths=file_paths,
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
-    except ApplicationError:
-        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    except ApplicationError:
+        raise
     except Exception:
         logger.exception("Delete Run acceptance failed")
         raise HTTPException(status_code=503, detail="Delete could not be accepted") from None

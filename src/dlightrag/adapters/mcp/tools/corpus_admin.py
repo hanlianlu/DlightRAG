@@ -17,6 +17,7 @@ from dlightrag.adapters.mcp.contracts import (
     ListFilesInput,
     RetryFilesInput,
 )
+from dlightrag.adapters.mcp.errors import ToolRejection
 from dlightrag.adapters.mcp.server import (
     mcp_app,
 )
@@ -31,7 +32,6 @@ from dlightrag.application.corpus_admin import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
-    normalize_workspace,
 )
 from dlightrag.application.runs import RunCreation
 from dlightrag.engine.answer.image_capability import answer_image_capability_summary
@@ -277,8 +277,7 @@ async def ingest_tool(
 ) -> dict[str, Any]:
     args = IngestInput.model_validate(locals())
     application = await mcp_server._ensure_application()
-    workspace_name = args.workspace or application.config.deployment.workspace
-    workspace_name = normalize_workspace(workspace_name)
+    workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
         AccessAction.WORKSPACE_INGEST,
         workspace_name,
@@ -337,7 +336,7 @@ async def list_files_tool(
 ) -> dict[str, Any]:
     args = ListFilesInput.model_validate(locals())
     application = await mcp_server._ensure_application()
-    workspace_name = normalize_workspace(args.workspace or application.config.deployment.workspace)
+    workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
         AccessAction.WORKSPACE_LIST_FILES,
         workspace_name,
@@ -355,7 +354,7 @@ async def list_files_tool(
             raise FilePanelCursorError("file-panel cursor belongs to another view")
         page = FilePanelPageRequest(limit=args.limit, cursor=decoded)
     except (FilePanelCursorError, ValueError) as exc:
-        raise ValueError(str(exc)) from None
+        raise ToolRejection(str(exc)) from None
     snapshot = await application.corpora.file_panel_snapshot(workspace_name, page=page)
     files = snapshot["files"]
     next_cursor = snapshot["next_cursor"]
@@ -400,7 +399,7 @@ async def retry_files_tool(
 ) -> dict[str, Any]:
     args = RetryFilesInput.model_validate(locals())
     application = await mcp_server._ensure_application()
-    workspace_name = normalize_workspace(args.workspace or application.config.deployment.workspace)
+    workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
         AccessAction.WORKSPACE_INGEST,
         workspace_name,
@@ -449,7 +448,7 @@ async def delete_files_tool(
 ) -> dict[str, Any]:
     args = DeleteFilesInput.model_validate(locals())
     application = await mcp_server._ensure_application()
-    workspace_name = normalize_workspace(args.workspace or application.config.deployment.workspace)
+    workspace_name = mcp_server._workspace_id(application, args.workspace)
     await mcp_server._enforce_access(
         AccessAction.WORKSPACE_DELETE_FILES,
         workspace_name,

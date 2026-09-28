@@ -1332,6 +1332,34 @@ async def test_child_control_rejects_empty_content_before_application(
     assert response.status_code == 422
 
 
+async def test_answer_control_input_errors_are_the_callers_to_fix(_app: FastAPI) -> None:
+    from dlightrag.application.answer_runs import AnswerRequestError
+
+    _app.state.application = SimpleNamespace(
+        answers=SimpleNamespace(
+            control_child=AsyncMock(
+                side_effect=AnswerRequestError(
+                    "Child control idempotency key must be between 1 and 200 characters"
+                )
+            )
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=_app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
+            headers={"Idempotency-Key": "valid-control"},
+            json={"action": "steer", "content": "valid"},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Child control idempotency key must be between 1 and 200 characters",
+        "error_type": "validation",
+    }
+
+
 async def test_child_control_does_not_translate_internal_value_error(
     _app: FastAPI,
 ) -> None:

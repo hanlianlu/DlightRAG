@@ -276,10 +276,10 @@ async def delete_workspace(
             workspace=ws,
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
-    except ApplicationError:
-        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    except ApplicationError:
+        raise
     except Exception:
         logger.exception("Workspace Delete Run acceptance failed")
         raise HTTPException(

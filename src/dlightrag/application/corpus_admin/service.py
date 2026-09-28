@@ -60,6 +60,7 @@ from dlightrag.engine.rag.workspace.workspaces import (
 from .errors import (
     CorpusMutationUnavailableError,
     LocalDownloadTarget,
+    LocalIngestPathError,
     MetadataValidationError,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
@@ -67,11 +68,13 @@ from .errors import (
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
     WorkspaceExistsError,
+    WorkspaceNameError,
 )
 from .file_panel import (
     FailedFileRowPage,
     FilePanelCursor,
     FilePanelCursorCodec,
+    FilePanelCursorError,
     FilePanelPageRequest,
     FilePanelRowPage,
 )
@@ -79,6 +82,7 @@ from .metadata_search import (
     MetadataMatchRowPage,
     MetadataSearchCursor,
     MetadataSearchCursorCodec,
+    MetadataSearchCursorError,
     MetadataSearchPage,
     MetadataSearchPageRequest,
 )
@@ -113,11 +117,11 @@ def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
     """
     label = name.strip()
     if not label:
-        raise ValueError("Workspace name cannot be empty")
+        raise WorkspaceNameError("Workspace name cannot be empty")
     if len(label) > max_length:
-        raise ValueError(f"Workspace name too long (max {max_length} characters)")
+        raise WorkspaceNameError(f"Workspace name too long (max {max_length} characters)")
     if _WORKSPACE_FORBIDDEN_RE.search(label):
-        raise ValueError("Workspace name contains forbidden characters")
+        raise WorkspaceNameError("Workspace name contains forbidden characters")
     return label
 
 
@@ -300,26 +304,26 @@ def managed_local_ingest_path(
 
     root = (input_dir / normalize_workspace(workspace)).resolve()
     if "\0" in path or path.startswith(("~", "/", "\\")):
-        raise ValueError(
+        raise LocalIngestPathError(
             "local ingest paths from REST/MCP must be relative to input_dir/<workspace>"
         )
     posix_path = PurePosixPath(path)
     windows_path = PureWindowsPath(path)
     if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
-        raise ValueError(
+        raise LocalIngestPathError(
             "local ingest paths from REST/MCP must be relative to input_dir/<workspace>"
         )
 
     parts = tuple(part for part in re.split(r"[\\/]+", path) if part)
     if not parts or any(part in {".", ".."} for part in parts):
-        raise ValueError(
+        raise LocalIngestPathError(
             "local ingest paths from REST/MCP must be relative to input_dir/<workspace>"
         )
     resolved = root.joinpath(*parts).resolve(strict=False)
     try:
         resolved.relative_to(root)
     except ValueError:
-        raise ValueError(
+        raise LocalIngestPathError(
             "local ingest paths from REST/MCP must be under input_dir/<workspace>"
         ) from None
     return str(resolved)
@@ -552,9 +556,9 @@ class CorpusAdmin:
         workspace = require_canonical_workspace_id(workspace_id)
         requested = page or FilePanelPageRequest()
         if requested.cursor is not None and requested.cursor.workspace != workspace:
-            raise ValueError("file-panel cursor belongs to another workspace")
+            raise FilePanelCursorError("file-panel cursor belongs to another workspace")
         if requested.cursor is not None and requested.cursor.view != "processed":
-            raise ValueError("file-panel cursor belongs to another view")
+            raise FilePanelCursorError("file-panel cursor belongs to another view")
         result = await self._file_panel.list_processed_files(workspace, page=requested)
         next_cursor = None
         if result.has_more:
@@ -582,9 +586,9 @@ class CorpusAdmin:
         workspace = require_canonical_workspace_id(workspace_id)
         requested = page or FilePanelPageRequest()
         if requested.cursor is not None and requested.cursor.workspace != workspace:
-            raise ValueError("file-panel cursor belongs to another workspace")
+            raise FilePanelCursorError("file-panel cursor belongs to another workspace")
         if requested.cursor is not None and requested.cursor.view != "failed":
-            raise ValueError("file-panel cursor belongs to another view")
+            raise FilePanelCursorError("file-panel cursor belongs to another view")
         result = await self._file_panel.list_failed_files(workspace, page=requested)
         next_cursor = None
         if result.has_more:
@@ -668,7 +672,7 @@ class CorpusAdmin:
         workspace = require_canonical_workspace_id(workspace_id)
         requested = page or MetadataSearchPageRequest()
         if requested.cursor is not None and requested.cursor.workspace != workspace:
-            raise ValueError("metadata-search cursor belongs to another workspace")
+            raise MetadataSearchCursorError("metadata-search cursor belongs to another workspace")
         result = await self._metadata_search.search_metadata_page(
             workspace,
             filters,

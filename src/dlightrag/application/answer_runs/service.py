@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol, cast
 from uuid import UUID, uuid7
 
 from dlightrag.application.connections import BoundResearchConnections
-from dlightrag.application.errors import ApplicationConflictError
+from dlightrag.application.errors import ApplicationConflictError, ApplicationInputError
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -115,6 +115,7 @@ from .artifacts import published_artifact_descriptor
 from .child_roster import (
     ChildRosterCursor,
     ChildRosterCursorCodec,
+    ChildRosterCursorError,
     ChildRosterPage,
     ChildRosterPageRequest,
     ChildRosterRowPage,
@@ -375,6 +376,10 @@ class ChildObservation:
             "questions": [dict(item) for item in self.questions],
             "result": dict(self.result) if self.result is not None else None,
         }
+
+
+class AnswerRequestError(ApplicationInputError):
+    """A steering, child-control, or continuation request is invalid as given."""
 
 
 class AnswerConnectionsChangedError(ApplicationConflictError):
@@ -1252,9 +1257,9 @@ class AnswerService:
         """Queue one ordered steering instruction for a live Research session."""
         text = instruction.strip()
         if not text:
-            raise ValueError("steer instruction cannot be empty")
+            raise AnswerRequestError("steer instruction cannot be empty")
         if len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
-            raise ValueError("steer instruction exceeds 20000 characters")
+            raise AnswerRequestError("steer instruction exceeds 20000 characters")
         if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
             return None
         row = await self._store.enqueue_agent_control(
@@ -1290,7 +1295,9 @@ class AnswerService:
         parent_session_id = str(record.request_input().get("agent_session_id") or "") or None
         key = idempotency_key.strip()
         if not key or len(key) > 200:
-            raise ValueError("Child control idempotency key must be between 1 and 200 characters")
+            raise AnswerRequestError(
+                "Child control idempotency key must be between 1 and 200 characters"
+            )
         if action == "cancel":
             row = await self._store.cancel_child_session_by_owner(
                 owner_id=owner_id,
@@ -1302,7 +1309,7 @@ class AnswerService:
         else:
             text = content.strip()
             if not text or len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
-                raise ValueError(
+                raise AnswerRequestError(
                     "Child control content must be non-empty and at most 20000 characters"
                 )
             if action == "steer":
@@ -1327,7 +1334,7 @@ class AnswerService:
                     reauthorize_user_cancelled=reauthorize_user_cancelled,
                 )
             else:
-                raise ValueError("unknown Child control action")
+                raise AnswerRequestError("unknown Child control action")
         if not isinstance(row, Mapping):
             return None
         outcome = str(row.get("outcome") or "unknown_child")
@@ -1404,7 +1411,7 @@ class AnswerService:
             return None
         requested = page or ChildRosterPageRequest()
         if requested.cursor is not None and str(requested.cursor.run_id) != run_id:
-            raise ValueError("child-roster cursor belongs to another run")
+            raise ChildRosterCursorError("child-roster cursor belongs to another run")
         result = await self._store.list_child_sessions_page(
             owner_id=owner_id,
             run_id=run_id,
@@ -1610,9 +1617,9 @@ class AnswerService:
         """
         text = query.strip()
         if not text:
-            raise ValueError("continuation query cannot be empty")
+            raise AnswerRequestError("continuation query cannot be empty")
         if len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
-            raise ValueError("continuation query exceeds 20000 characters")
+            raise AnswerRequestError("continuation query exceeds 20000 characters")
         record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
         if record is None or not record.terminal:
             return None
@@ -2135,6 +2142,7 @@ class AnswerService:
 
 __all__ = [
     "AnswerConnectionsChangedError",
+    "AnswerRequestError",
     "AnswerHistoryResource",
     "AnswerInputArtifact",
     "AnswerRequest",

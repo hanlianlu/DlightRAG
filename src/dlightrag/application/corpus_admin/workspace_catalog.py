@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.application.access import WorkspaceRecord
+from dlightrag.application.errors import ApplicationInputError
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
@@ -13,7 +14,7 @@ WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT = 50
 WORKSPACE_CATALOG_PAGE_MAX_LIMIT = 100
 
 
-class WorkspaceCatalogCursorError(ValueError):
+class WorkspaceCatalogCursorError(ApplicationInputError):
     """An opaque workspace-catalog page cursor is malformed or fails checks."""
 
 

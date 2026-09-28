@@ -20,6 +20,7 @@ from dlightrag.application.access import AccessDeniedError
 from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import (
     ApplicationConflictError,
+    ApplicationInputError,
     ApplicationUnavailableError,
     RunSchemaError,
     StorageSchemaError,
@@ -115,6 +116,13 @@ def install_error_handlers(app: FastAPI) -> None:
         exc: ApplicationConflictError,
     ) -> JSONResponse:
         return error_response(409, str(exc))
+
+    @app.exception_handler(ApplicationInputError)
+    async def invalid_input(
+        request: Request,  # noqa: ARG001
+        exc: ApplicationInputError,
+    ) -> JSONResponse:
+        return error_response(422, str(exc))
 
     @app.exception_handler(WorkspaceWriteFencedError)
     async def write_fenced(

@@ -11,6 +11,8 @@ import json
 from collections.abc import Mapping, Set
 from typing import Any
 
+from dlightrag.application.errors import ApplicationInputError
+
 _CURSOR_MAC_BYTES = 16
 _CURSOR_SECRET_DERIVATION_ITERATIONS = 600_000
 _BASE64URL_CHARACTERS = frozenset(
@@ -18,7 +20,7 @@ _BASE64URL_CHARACTERS = frozenset(
 )
 
 
-class OpaqueCursorError(ValueError):
+class OpaqueCursorError(ApplicationInputError):
     """A signed opaque cursor is malformed, non-canonical, or fails integrity checks."""
 
 

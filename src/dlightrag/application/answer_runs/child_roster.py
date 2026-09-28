@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from dlightrag.application.errors import ApplicationInputError
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 
 CHILD_ROSTER_PAGE_DEFAULT_LIMIT = 50
 CHILD_ROSTER_PAGE_MAX_LIMIT = 100
 
 
-class ChildRosterCursorError(ValueError):
+class ChildRosterCursorError(ApplicationInputError):
     """An opaque child-roster page cursor is malformed or fails integrity checks."""
 
 

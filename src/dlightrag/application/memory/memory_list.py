@@ -7,13 +7,14 @@ from uuid import UUID
 
 from dlightrag_memory import MemoryRecord
 
+from dlightrag.application.errors import ApplicationInputError
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 
 MEMORY_LIST_PAGE_DEFAULT_LIMIT = 50
 MEMORY_LIST_PAGE_MAX_LIMIT = 100
 
 
-class MemoryListCursorError(ValueError):
+class MemoryListCursorError(ApplicationInputError):
     """An opaque memory-list page cursor is malformed or fails integrity checks."""
 
 

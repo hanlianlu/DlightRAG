@@ -13,6 +13,7 @@ from dlightrag.adapters.mcp.contracts import (
     AnswerInput,
     AnswerRunInput,
 )
+from dlightrag.adapters.mcp.errors import ToolRejection
 from dlightrag.adapters.mcp.server import (
     AttachmentsParam,
     FederatedRerankParam,
@@ -105,7 +106,7 @@ async def answer_tool(
     application = await mcp_server._ensure_application()
     max_attachments = application.config.answer.generation.max_attachments
     if len(args.attachments) > max_attachments:
-        raise ValueError(f"Too many attachments; at most {max_attachments} are allowed")
+        raise ToolRejection(f"Too many attachments; at most {max_attachments} are allowed")
     resolved_workspaces = await mcp_server._resolve_authorized_query_workspaces(
         application,
         workspaces=args.workspaces,
@@ -218,9 +219,9 @@ async def cancel_run_tool(
     record = await _authorized_run(application, args.run_id, cancel=True)
     outcome = await application.runs.cancel(owner_id=record.access_scope_id, run_id=args.run_id)
     if outcome.run is None:
-        raise ValueError(f"Run not found: {args.run_id}")
+        raise ToolRejection(f"Run not found: {args.run_id}")
     if outcome.outcome == "rejected":
-        raise ValueError("Run cancellation is no longer safe after upstream handoff")
+        raise ToolRejection("Run cancellation is no longer safe after upstream handoff")
     return mcp_server._run_descriptor(outcome.run)
 
 
@@ -237,7 +238,7 @@ async def steer_answer_run_tool(
         owner_id=mcp_server._owner_id(), run_id=run_id, instruction=instruction
     )
     if receipt is None:
-        raise ValueError("Run is not a live Research session")
+        raise ToolRejection("Run is not a live Research session")
     return {
         "run_id": receipt.run_id,
         "control_sequence": receipt.control_sequence,
@@ -248,18 +249,19 @@ async def steer_answer_run_tool(
 async def _authorized_run(application: Any, run_id: str, *, cancel: bool) -> RunView:
     record = await application.runs.get_global(run_id=run_id)
     if record is None:
-        raise ValueError(f"Run not found: {run_id}")
+        raise ToolRejection(f"Run not found: {run_id}")
     if record.access_scope_kind == "owner":
         if record.access_scope_id != mcp_server._owner_id():
-            raise ValueError(f"Run not found: {run_id}")
+            raise ToolRejection(f"Run not found: {run_id}")
         return record
     action = AccessAction.WORKSPACE_LIST_FILES
     if cancel:
         action = corpus_mutation_access_action(record.request_input().get("action"))
     try:
         await mcp_server._enforce_access(action, record.access_scope_id, application=application)
-    except Exception:
-        raise ValueError(f"Run not found: {run_id}") from None
+    except ToolRejection:
+        # A denied caller learns no more than a missing run would tell it.
+        raise ToolRejection(f"Run not found: {run_id}") from None
     return record
 
 
@@ -292,7 +294,7 @@ async def _mcp_continuation(
         authorized_workspaces=authorized_workspaces,
     )
     if creation is None:
-        raise ValueError("Continuation requires a terminal owned run")
+        raise ToolRejection("Continuation requires a terminal owned run")
     return mcp_server._run_descriptor(creation.run)
 
 
@@ -335,7 +337,7 @@ async def get_answer_transcript_tool(
         owner_id=mcp_server._owner_id(), run_id=run_id, limit=limit
     )
     if transcript is None:
-        raise ValueError(f"Answer run not found: {run_id}")
+        raise ToolRejection(f"Answer run not found: {run_id}")
     return {
         "run_id": transcript.run_id,
         "status": transcript.status,
@@ -370,12 +372,12 @@ async def list_answer_artifacts_tool(
     application = await mcp_server._ensure_application()
     owner_id = mcp_server._owner_id()
     if await application.answers.list_artifacts(owner_id=owner_id, run_id=run_id) is None:
-        raise ValueError(f"Answer run not found: {run_id}")
+        raise ToolRejection(f"Answer run not found: {run_id}")
     record = await application.runs.get(owner_id=owner_id, run_id=run_id)
     if record is None:
-        raise ValueError(f"Answer run not found: {run_id}")
+        raise ToolRejection(f"Answer run not found: {run_id}")
     if record.result is None:
-        raise ValueError("Answer artifacts are not available until the run has a stored result")
+        raise ToolRejection("Answer artifacts are not available until the run has a stored result")
     projected = project_answer_result(
         record.result,
         run_id=run_id,
@@ -409,7 +411,7 @@ async def read_answer_artifact_tool(
         )
         is None
     ):
-        raise ValueError("artifact not found")
+        raise ToolRejection("artifact not found")
     start = max(0, offset)
     chunk = await application.answers.read_artifact(
         owner_id=owner_id,
@@ -419,7 +421,7 @@ async def read_answer_artifact_tool(
         length=min(max(0, length), 1_048_576),
     )
     if chunk is None:
-        raise ValueError("artifact not found")
+        raise ToolRejection("artifact not found")
     return {
         "data": base64.b64encode(chunk).decode("ascii"),
         "offset": start,

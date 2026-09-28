@@ -19,7 +19,7 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, InputRequiredResult, TextContent
-from pydantic import Field
+from pydantic import Field, ValidationError
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp
 
@@ -30,6 +30,7 @@ from dlightrag.adapters.mcp.contracts import (
     ConversationMessage,
     CreateWorkspaceInput,
 )
+from dlightrag.adapters.mcp.errors import ToolRejection
 from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.application.access import (
     AccessAction,
@@ -47,8 +48,13 @@ from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.corpus_admin import (
     normalize_workspace,
     normalize_workspace_ids,
+    require_canonical_workspace_id,
 )
-from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+from dlightrag.application.errors import (
+    ApplicationConflictError,
+    ApplicationInputError,
+    ApplicationUnavailableError,
+)
 from dlightrag.application.runs import (
     RunView,
 )
@@ -141,15 +147,25 @@ def _run_descriptor(record: RunView) -> dict[str, Any]:
     }
 
 
-# Caller-facing refusals surface verbatim; any other failure stays behind the
-# generic internal-failure text. One list, so a new refusal cannot be surfaced
-# in one branch and hidden in the other.
+# Caller-facing refusals surface verbatim; any other failure, including a bare
+# ValueError or an operating system PermissionError, stays behind the generic
+# internal-failure text. One list, so a new refusal cannot be surfaced in one
+# branch and hidden in the other.
 _REJECTIONS: tuple[type[BaseException], ...] = (
-    ValueError,
-    PermissionError,
-    ApplicationUnavailableError,
+    ToolRejection,
+    AccessDeniedError,
+    ApplicationInputError,
     ApplicationConflictError,
+    ApplicationUnavailableError,
 )
+
+
+def _invalid_arguments(exc: ValidationError) -> str:
+    """Name each invalid argument without echoing its value."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'arguments'}: {error['msg']}"
+        for error in exc.errors(include_input=False, include_url=False)
+    )
 
 
 class DlightRAGMCPServer(MCPServer):
@@ -171,18 +187,20 @@ class DlightRAGMCPServer(MCPServer):
             # inspect __cause__ as well. Server misconfiguration is a server failure;
             # user-facing validation/authorization messages are surfaced as rejections;
             # unexpected internals hide behind a generic message.
-            surfaced = (InvalidToolConfigurationError, *_REJECTIONS)
+            surfaced = (InvalidToolConfigurationError, ValidationError, *_REJECTIONS)
             inner = exc if isinstance(exc, surfaced) else exc.__cause__
             if isinstance(inner, InvalidToolConfigurationError):
                 logger.exception("MCP tool '%s' failed: %s", name, inner)
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
+            elif isinstance(inner, ValidationError):
+                logger.warning("MCP tool '%s' rejected its arguments", name)
+                text = f"Error: {_invalid_arguments(inner)}"
+            elif isinstance(inner, AnswerInputError):
+                logger.warning("MCP tool '%s' rejected: %s", name, inner)
+                text = f"Error [{inner.error_kind}]: {inner.public_message}"
             elif isinstance(inner, _REJECTIONS):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
-                text = (
-                    f"Error [{inner.error_kind}]: {inner.public_message}"
-                    if isinstance(inner, AnswerInputError)
-                    else f"Error: {inner}"
-                )
+                text = f"Error: {inner}"
             else:
                 logger.exception("MCP tool '%s' failed", name)
                 text = "Error: internal tool failure"
@@ -198,11 +216,11 @@ class DlightRAGMCPServer(MCPServer):
     ) -> None:
         tool = next((tool for tool in await self.list_tools() if tool.name == name), None)
         if tool is None:
-            raise ValueError(f"Unknown tool: {name}")
+            raise ToolRejection(f"Unknown tool: {name}")
         allowed = set(tool.input_schema.get("properties", {}))
         unknown = sorted(set(arguments) - allowed)
         if unknown:
-            raise ValueError(f"Unexpected argument(s) for {name}: {', '.join(unknown)}")
+            raise ToolRejection(f"Unexpected argument(s) for {name}: {', '.join(unknown)}")
 
 
 class DlightRAGRequestScopeMiddleware:
@@ -303,7 +321,7 @@ async def _enforce_access(
     try:
         await _access_gate(application).check(action, workspace=workspace)
     except AccessDeniedError as exc:
-        raise ValueError(str(exc)) from None
+        raise ToolRejection(str(exc)) from None
 
 
 def _access_gate(application: Application) -> AccessGate:
@@ -347,9 +365,18 @@ async def _resolve_authorized_query_workspaces(
             all_workspaces=all_workspaces,
         )
     except NoQueryableWorkspacesError:
-        raise PermissionError("No workspaces are available for query") from None
+        raise ToolRejection("No workspaces are available for query") from None
     except AccessDeniedError as exc:
-        raise ValueError(str(exc)) from None
+        raise ToolRejection(str(exc)) from None
+
+
+def _workspace_id(application: Application, workspace: str | None) -> str:
+    """The canonical id for a workspace argument, or the deployment's own."""
+    workspace_id = normalize_workspace(workspace or application.config.deployment.workspace)
+    try:
+        return require_canonical_workspace_id(workspace_id)
+    except ValueError:
+        raise ToolRejection(f"Invalid workspace name: {workspace!r}") from None
 
 
 def _register_tools() -> None:

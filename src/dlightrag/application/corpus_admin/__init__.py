@@ -8,11 +8,13 @@ from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_file
 from dlightrag.engine.rag.workspace.workspaces import (
     normalize_workspace,
     normalize_workspace_ids,
+    require_canonical_workspace_id,
 )
 
 from .errors import (
     CorpusMutationUnavailableError,
     LocalDownloadTarget,
+    LocalIngestPathError,
     MetadataValidationError,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
@@ -22,6 +24,7 @@ from .errors import (
     UnsafeUploadNameError,
     UploadTooLargeError,
     WorkspaceExistsError,
+    WorkspaceNameError,
 )
 from .file_panel import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
@@ -103,6 +106,7 @@ __all__ = [
     "FilePanelStore",
     "IngestSpec",
     "LocalDownloadTarget",
+    "LocalIngestPathError",
     "MetadataValidationError",
     "MetadataMatchRowPage",
     "MetadataSearchCursor",
@@ -130,6 +134,7 @@ __all__ = [
     "UploadLimits",
     "UploadTooLargeError",
     "WorkspaceExistsError",
+    "WorkspaceNameError",
     "WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT",
     "WORKSPACE_CATALOG_PAGE_MAX_LIMIT",
     "WorkspaceCatalogCursor",
@@ -144,6 +149,7 @@ __all__ = [
     "managed_local_ingest_path",
     "normalize_workspace",
     "normalize_workspace_ids",
+    "require_canonical_workspace_id",
     "safe_log_text",
     "safe_source_filename",
     "safe_upload_basename",

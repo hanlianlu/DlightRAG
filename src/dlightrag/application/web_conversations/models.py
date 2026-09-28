@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
-from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+from dlightrag.application.errors import (
+    ApplicationConflictError,
+    ApplicationInputError,
+    ApplicationUnavailableError,
+)
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.application.runs import RunView
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
@@ -90,7 +94,7 @@ CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT = 40
 CONVERSATION_HISTORY_PAGE_MAX_LIMIT = 100
 
 
-class ConversationCursorError(ValueError):
+class ConversationCursorError(ApplicationInputError):
     """An opaque conversation page cursor is malformed or fails integrity checking."""
 
 
