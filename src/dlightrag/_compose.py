@@ -163,7 +163,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.rag.workspace.pool import WorkspacePool
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
-    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
     from dlightrag.engine.runtime.contracts import RunKind
     from dlightrag.engine.runtime.coordinator import RunCoordinator, RunExecutor
     from dlightrag.engine.runtime.errors import IncompatibleActiveRunError, RunExecutionError
@@ -218,7 +217,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         logger.info("Created WorkspaceRag for workspace '%s'", safe_log_text(workspace_id))
         return runtime
 
-    default_workspace = normalize_workspace(config.deployment.workspace)
+    default_workspace = config.deployment.workspace_id
 
     def workspace_unavailable(workspace_id: str) -> None:
         if workspace_id == default_workspace:
@@ -288,7 +287,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         resource_identity_secret=cursor_secrets.derive("answer-resource-identity"),
         resource_cursor_secret=cursor_secrets.derive("answer-resource-cursor"),
     )
-    schema_index = PGMetadataIndex(workspace=normalize_workspace(config.deployment.workspace))
+    schema_index = PGMetadataIndex(workspace=config.deployment.workspace_id)
 
     async def schema_lookup(workspaces: Sequence[str]) -> dict[str, Any]:
         return await schema_index.get_field_schema(workspaces=tuple(workspaces))

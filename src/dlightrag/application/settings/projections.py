@@ -190,7 +190,7 @@ def retrieval_settings(config: DlightragConfig) -> RetrievalSettings:
 def corpus_admin_settings(config: DlightragConfig) -> CorpusAdminSettings:
     """Snapshot root corpus administration policy into immutable settings."""
     return CorpusAdminSettings(
-        default_workspace_id=normalize_workspace(config.deployment.workspace),
+        default_workspace_id=config.deployment.workspace_id,
         default_display_name=config.deployment.workspace,
         default_embedding_model=config.models.embedding.model,
         read_only=config.is_reader,

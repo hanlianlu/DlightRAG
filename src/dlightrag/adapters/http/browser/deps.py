@@ -26,9 +26,9 @@ def get_workspace(
     """Read the current workspace from its cookie, else the configured deployment one."""
     from dlightrag.application.corpus_admin import normalize_workspace
 
-    return normalize_workspace(
-        dlightrag_workspace or get_application(request).config.deployment.workspace
-    )
+    if dlightrag_workspace:
+        return normalize_workspace(dlightrag_workspace)
+    return get_application(request).config.deployment.workspace_id
 
 
 def get_web_conversation_service(request: Request) -> WebConversationService:

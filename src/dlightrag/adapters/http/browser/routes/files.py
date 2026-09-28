@@ -47,8 +47,10 @@ async def download_source(
     """Download one source document through the Web session boundary."""
     from dlightrag.application.corpus_admin import normalize_workspace
 
-    safe_workspace = normalize_workspace(
-        workspace or get_application(request).config.deployment.workspace
+    safe_workspace = (
+        normalize_workspace(workspace)
+        if workspace
+        else get_application(request).config.deployment.workspace_id
     )
     try:
         await enforce_web_access(

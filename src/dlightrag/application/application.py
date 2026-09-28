@@ -313,11 +313,10 @@ class Application:
     async def _warm_default_workspace(self) -> str | None:
         """Warm the default workspace; return the detail that degrades startup."""
         from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
-        from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
         from .errors import StorageSchemaError
 
-        workspace = normalize_workspace(self._config.deployment.workspace)
+        workspace = self._config.deployment.workspace_id
         try:
             await self._components.pool.acquire(workspace)
         except CorpusSchemaError as exc:

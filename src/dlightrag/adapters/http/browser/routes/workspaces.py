@@ -53,10 +53,12 @@ async def _visible_workspace_names(request: Request, application: Application) -
     return [str(row["workspace"]) for row in visible]
 
 
-def _default_workspace(workspaces: list[str]) -> str:
-    if not workspaces:
-        return ""
-    return "default" if "default" in workspaces else workspaces[0]
+def _default_workspace(request: Request, workspaces: list[str]) -> str:
+    """The deployment's default workspace when visible, else the first visible one."""
+    default = get_application(request).config.deployment.workspace_id
+    if default in workspaces:
+        return default
+    return workspaces[0] if workspaces else ""
 
 
 def _set_workspace_cookies(
@@ -94,7 +96,7 @@ def _set_workspace_cookies(
         fallback = (
             normalize_workspace(primary_workspace)
             if primary_workspace and normalize_workspace(primary_workspace) in visible
-            else _default_workspace(canonical_visible)
+            else _default_workspace(request, canonical_visible)
         )
         active = [fallback] if fallback else []
     primary = (

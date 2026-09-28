@@ -111,7 +111,7 @@ async def build_web_bootstrap(
         raise WebBootstrapUnavailableError from exc
 
     known = set(record["workspace"] for record in records)
-    default_workspace = normalize_workspace(application.config.deployment.workspace)
+    default_workspace = application.config.deployment.workspace_id
     if next_cursor is None:
         # Degraded catalog fallback: a synthetic default record the full
         # authorization list carries but the registry page could not may only

@@ -27,8 +27,9 @@ def idempotency_key(request: Request) -> str | None:
 
 
 def resolve_workspace(ws: str | None, request: Request) -> str:
-    workspace = get_application(request).config.deployment.workspace
-    return normalize_workspace(ws or workspace)
+    if ws:
+        return normalize_workspace(ws)
+    return get_application(request).config.deployment.workspace_id
 
 
 def get_access_control(request: Request) -> AccessControl:
@@ -84,9 +85,7 @@ async def resolve_authorized_query_workspaces(
     try:
         return await get_access_gate(request, user).resolve_query_workspaces(
             get_application(request).corpora,
-            default_workspace=normalize_workspace(
-                get_application(request).config.deployment.workspace
-            ),
+            default_workspace=get_application(request).config.deployment.workspace_id,
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )

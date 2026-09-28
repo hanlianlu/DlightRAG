@@ -48,6 +48,10 @@ from dlightrag.engine.rag.workspace.settings import (
     MinerUSidecarSettings,
     VLMSidecarSettings,
 )
+from dlightrag.engine.rag.workspace.workspaces import (
+    normalize_workspace,
+    require_canonical_workspace_id,
+)
 
 type ServiceRole = Literal["writer", "reader"]
 
@@ -688,8 +692,20 @@ class WebIdentitySettings(BaseModel):
 
 class DeploymentSettings(FrozenSettings):
     service_role: ServiceRole = "writer"
+    # The default workspace's display name; `workspace_id` is its canonical id.
     workspace: str = "default"
     working_dir: str = "./dlightrag_storage"
+
+    @field_validator("workspace")
+    @classmethod
+    def _names_a_canonical_workspace(cls, value: str) -> str:
+        require_canonical_workspace_id(normalize_workspace(value))
+        return value
+
+    @property
+    def workspace_id(self) -> str:
+        """The default workspace's canonical id, derived here once for every caller."""
+        return normalize_workspace(self.workspace)
 
     @field_validator("working_dir")
     @classmethod

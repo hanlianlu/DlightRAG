@@ -360,7 +360,7 @@ async def _resolve_authorized_query_workspaces(
     try:
         return await _access_gate(application).resolve_query_workspaces(
             application.corpora,
-            default_workspace=normalize_workspace(application.config.deployment.workspace),
+            default_workspace=application.config.deployment.workspace_id,
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
@@ -372,7 +372,9 @@ async def _resolve_authorized_query_workspaces(
 
 def _workspace_id(application: Application, workspace: str | None) -> str:
     """The canonical id for a workspace argument, or the deployment's own."""
-    workspace_id = normalize_workspace(workspace or application.config.deployment.workspace)
+    if not workspace:
+        return application.config.deployment.workspace_id
+    workspace_id = normalize_workspace(workspace)
     try:
         return require_canonical_workspace_id(workspace_id)
     except ValueError:
