@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {AnswerSubmissionError} from './web-command-error.ts';
 import {
   ChildControlRejectedError,
   forkAnswerRun,
@@ -262,5 +263,21 @@ test('child control 409 surfaces the explicit terminal outcome', async () => {
       assert.equal(error.status, 409);
       return true;
     },
+  );
+});
+
+test('a rejected continuation keeps the server reason and its stable kind', async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    kind: 'invalid_request',
+    message: 'Current model does not support image input.',
+    error_kind: 'CURRENT_IMAGES_UNSUPPORTED',
+  }), {status: 422, headers: {'Content-Type': 'application/json'}});
+
+  await assert.rejects(
+    forkAnswerRun('parent-run', 'branch', 'submission-2'),
+    (error: unknown) => error instanceof AnswerSubmissionError
+      && error.status === 422
+      && error.kind === 'invalid_request'
+      && error.errorKind === 'CURRENT_IMAGES_UNSUPPORTED',
   );
 });

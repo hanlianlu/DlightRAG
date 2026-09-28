@@ -71,6 +71,7 @@ from dlightrag.application.web_conversations import (
     WebConversationUnavailableError,
 )
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
+from dlightrag.engine.answer.errors import AnswerInputError
 from dlightrag.engine.answer.results import (
     project_answer_result,
     project_artifact_sources,
@@ -154,6 +155,8 @@ async def start_answer_run(
             image_max_pixels=cfg.answer.generation.image_max_pixels,
             answer_image_capability=capability,
         )
+    except AnswerInputError as exc:
+        raise _rejected_input(exc) from None
     except HTTPException as exc:
         kind = "attachment_rejected" if exc.status_code == 413 else "invalid_request"
         raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
@@ -196,6 +199,8 @@ async def start_answer_run(
             requested_skill=requested_skill,
             effort=body.effort,
         )
+    except AnswerInputError as exc:
+        raise _rejected_input(exc) from None
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise _command_error(
             409,
@@ -439,6 +444,8 @@ async def _fork_answer_run(
             query=body.content,
             authorized_workspaces=authorized_workspaces,
         )
+    except AnswerInputError as exc:
+        raise _rejected_input(exc) from None
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise _command_error(
             409,
@@ -454,6 +461,10 @@ async def _fork_answer_run(
             503,
             "service_unavailable",
             "Deployment-wide nonterminal admission limit reached",
+        ) from None
+    except AnswerRuntimeUnavailableError, WebConversationUnavailableError:
+        raise _command_error(
+            503, "service_unavailable", "Answer submission is temporarily unavailable"
         ) from None
     if submission is None:
         raise _command_error(
@@ -703,11 +714,24 @@ async def accepted_answer(
     )
 
 
-def _command_error(status_code: int, kind: WebCommandErrorKind, message: str) -> HTTPException:
+def _command_error(
+    status_code: int,
+    kind: WebCommandErrorKind,
+    message: str,
+    *,
+    error_kind: str | None = None,
+) -> HTTPException:
     return HTTPException(
         status_code=status_code,
-        detail=WebCommandError(kind=kind, message=message).model_dump(),
+        detail=WebCommandError(kind=kind, message=message, error_kind=error_kind).model_dump(
+            exclude_none=True
+        ),
     )
+
+
+def _rejected_input(exc: AnswerInputError) -> HTTPException:
+    """Admission refused the request's input: say why, with its stable kind."""
+    return _command_error(422, "invalid_request", exc.public_message, error_kind=exc.error_kind)
 
 
 async def _projection_workspaces(

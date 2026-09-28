@@ -2235,3 +2235,59 @@ it('counts published reference sources', async () => {
   await list.updateComplete;
   expect(list.querySelector('.runSummary')!.textContent?.trim()).to.equal('2 sources');
 });
+
+async function submissionFailureText(respond: () => Response): Promise<string | undefined> {
+  workspaceStore.init([
+    {workspace: 'alpha', displayName: 'Alpha', embeddingModel: ''},
+  ], ['alpha'], 'alpha');
+  window.fetch = async (input) => String(input).includes('/answer-submissions/')
+    ? new Response(null, {status: 404})
+    : respond();
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId: 'failure-reason',
+    lineage: null,
+    history: [storedTurn()],
+  };
+  document.body.appendChild(feature);
+  await settle(feature);
+  const input = feature.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = 'A new question';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await feature.querySelector('dl-chat-composer')?.updateComplete;
+  feature.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await waitFor(() => feature.turns.length === 2 && feature.turns.at(-1)?.state === 'failed');
+  await feature.updateComplete;
+  return feature.querySelector('.submission-failure span')?.textContent?.trim();
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {'Content-Type': 'application/json'},
+  });
+}
+
+it('a rejected submission shows the localized copy for its error kind', async () => {
+  const text = await submissionFailureText(() => jsonResponse(422, {
+    kind: 'invalid_request',
+    message: 'Server wording',
+    error_kind: 'unsupported_resource_capability',
+  }));
+  expect(text).to.equal('This request needs a resource capability that no answer mode can provide.');
+});
+
+it('an unmapped rejection shows the server reason', async () => {
+  const text = await submissionFailureText(() => jsonResponse(422, {
+    kind: 'invalid_request',
+    message: 'Server wording',
+    error_kind: 'unmapped',
+  }));
+  expect(text).to.equal('Server wording');
+});
+
+it('a failure without a reason shows the localized fallback', async () => {
+  const text = await submissionFailureText(() => new Response('upstream failure', {status: 502}));
+  expect(text).to.equal('The answer could not be submitted.');
+});

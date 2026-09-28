@@ -4,6 +4,7 @@ import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {waitFor} from 'xstate';
 import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
+import {AnswerSubmissionError} from '../api/web-command-error.ts';
 import type {MemoryOperationEvent} from '../api/memory.ts';
 import {
   ChildControlRejectedError,
@@ -20,6 +21,7 @@ import {
 } from '../api/conversations.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
+import {localizedErrorKind} from '../lib/run-errors.ts';
 import {applyAnswerEvent} from '../lib/turn-projection.ts';
 import {
   RunController,
@@ -57,6 +59,19 @@ import {requestToast} from './toast-request.ts';
 import {webRouter} from './router.ts';
 
 export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat-message-list.ts';
+
+/** Why a command failed: localized kind copy, the server's reason, or the fallback. */
+function commandErrorText(error: unknown, fallback: string): string {
+  if (!(error instanceof AnswerSubmissionError)) return fallback;
+  return localizedErrorKind(error.errorKind) || error.message || fallback;
+}
+
+function submissionErrorText(error: AnswerSubmissionError | null): string {
+  return commandErrorText(
+    error,
+    msg('The answer could not be submitted.', {id: 'chatFeature.submissionFailed'}),
+  );
+}
 
 function terminalTurn(turn: ChatTurnView): boolean {
   return turn.state === 'succeeded' || turn.state === 'failed' || turn.state === 'cancelled';
@@ -305,10 +320,13 @@ export class DlChatFeature extends LightElement {
       if (controller.signal.aborted || this.#continuationController !== controller) return;
       this.handles.conversations.upsertSummary(descriptor.conversation);
       await webRouter.navigate(conversationRoute(descriptor.conversation.conversationId));
-    } catch {
+    } catch (error) {
       if (!controller.signal.aborted && this.#continuationController === controller) {
         requestToast(this, {
-          message: msg('The continuation could not be started.', {id: 'chatFeature.continuationFailed'}),
+          message: commandErrorText(
+            error,
+            msg('The continuation could not be started.', {id: 'chatFeature.continuationFailed'}),
+          ),
           duration: 3000,
         });
       }
@@ -421,7 +439,7 @@ export class DlChatFeature extends LightElement {
     if (!['editable', 'retryable', 'conflict', 'login'].includes(snapshot.status)) return html``;
     return html`
       <div role="alert" class="submission-failure">
-        <span>${snapshot.error?.message || msg('The answer could not be submitted.', {id: 'chatFeature.submissionFailed'})}</span>
+        <span>${submissionErrorText(snapshot.error)}</span>
         ${snapshot.status === 'login' ? html`
           <a class="dl-btn" href=${loginHref()} @click=${this.#loginSubmission}>
             ${msg('Sign in', {id: 'chatFeature.submissionSignIn'})}
@@ -475,9 +493,7 @@ export class DlChatFeature extends LightElement {
     return {
       ...turn,
       state: 'failed',
-      error: snapshot.error?.message || msg('The answer could not be submitted.', {
-        id: 'chatFeature.submissionFailed',
-      }),
+      error: submissionErrorText(snapshot.error),
     };
   }
 
@@ -608,9 +624,7 @@ export class DlChatFeature extends LightElement {
     if (snapshot.status !== 'accepted' || !snapshot.accepted) {
       this.#setTurnError(
         turnId,
-        snapshot.error?.message || msg('The answer could not be submitted.', {
-          id: 'chatFeature.submissionFailed',
-        }),
+        submissionErrorText(snapshot.error),
       );
       this.#runStateChanged();
       return;

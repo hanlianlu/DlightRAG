@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import * as v from 'valibot';
+import {webCommandError} from './web-command-error.ts';
 import {csrfHeaders} from './csrf.ts';
 import {parseWire} from './wire.ts';
 import {videoPlaybackLink} from './video-playback.ts';
@@ -702,6 +703,7 @@ export async function forkAnswerRun(
     body: JSON.stringify({content, submission_id: submissionId}),
     signal,
   });
+  if (!response.ok) throw await webCommandError(response);
   return parseWire(response, acceptedAnswer, makeError, 'Failed to fork the answer');
 }
 

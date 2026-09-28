@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {waitFor} from 'xstate';
-import {AnswerSubmissionError, type AnswerSubmissionAdapter} from '../api/answer-submission.ts';
+import type {AnswerSubmissionAdapter} from '../api/answer-submission.ts';
+import {AnswerSubmissionError} from '../api/web-command-error.ts';
 import type {AcceptedAnswer} from '../api/conversations.ts';
 import type {AttachmentLease} from './attachment-store.ts';
 import {

@@ -5,17 +5,7 @@ import {acceptedAnswer as acceptedAnswerSchema, type AcceptedAnswer} from './con
 import type {AgentEffort} from '../lib/agent-effort.ts';
 import {buildAnswerRequest, type AnswerMode} from '../lib/answer-request.ts';
 import * as v from 'valibot';
-
-const WEB_COMMAND_ERROR_KINDS = [
-  'invalid_request',
-  'attachment_rejected',
-  'scope_forbidden',
-  'conversation_missing',
-  'submission_conflict',
-  'service_unavailable',
-] as const;
-
-export type WebCommandErrorKind = (typeof WEB_COMMAND_ERROR_KINDS)[number];
+import {AnswerSubmissionError, webCommandError} from './web-command-error.ts';
 
 export interface AnswerSubmissionIntent {
   readonly submissionId: string;
@@ -28,41 +18,8 @@ export interface AnswerSubmissionIntent {
   readonly effort?: AgentEffort | null;
 }
 
-export class AnswerSubmissionError extends Error {
-  readonly status: number;
-  readonly kind: WebCommandErrorKind | 'ambiguous';
-
-  constructor(
-    status: number,
-    kind: WebCommandErrorKind | 'ambiguous',
-    message: string,
-  ) {
-    super(message);
-    this.name = 'AnswerSubmissionError';
-    this.status = status;
-    this.kind = kind;
-  }
-}
-
 function acceptedAnswer(value: unknown): AcceptedAnswer {
   return v.parse(acceptedAnswerSchema, value);
-}
-
-async function failure(response: Response): Promise<AnswerSubmissionError> {
-  let value: unknown;
-  try {
-    value = await response.json();
-  } catch {
-    value = null;
-  }
-  const body = value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-  const kind = WEB_COMMAND_ERROR_KINDS.includes(body.kind as WebCommandErrorKind)
-    ? body.kind as WebCommandErrorKind
-    : 'ambiguous';
-  const message = typeof body.message === 'string' ? body.message : 'Answer submission failed';
-  return new AnswerSubmissionError(response.status, kind, message);
 }
 
 export interface AnswerSubmissionAdapter {
@@ -99,14 +56,14 @@ export class BrowserAnswerSubmissionAdapter implements AnswerSubmissionAdapter {
       });
     } catch (error) {
       if (signal.aborted) throw error;
-      throw new AnswerSubmissionError(0, 'ambiguous', 'Answer submission was interrupted');
+      throw new AnswerSubmissionError(0, 'ambiguous', '');
     }
-    if (!response.ok) throw await failure(response);
+    if (!response.ok) throw await webCommandError(response);
     try {
       return acceptedAnswer(await response.json());
     } catch (error) {
       if (error instanceof AnswerSubmissionError) throw error;
-      throw new AnswerSubmissionError(0, 'ambiguous', 'Malformed answer acceptance');
+      throw new AnswerSubmissionError(0, 'ambiguous', '');
     }
   }
 
@@ -119,10 +76,10 @@ export class BrowserAnswerSubmissionAdapter implements AnswerSubmissionAdapter {
       );
     } catch (error) {
       if (signal.aborted) throw error;
-      throw new AnswerSubmissionError(0, 'ambiguous', 'Answer lookup was interrupted');
+      throw new AnswerSubmissionError(0, 'ambiguous', '');
     }
     if (response.status === 404) return null;
-    if (!response.ok) throw await failure(response);
+    if (!response.ok) throw await webCommandError(response);
     return acceptedAnswer(await response.json());
   }
 }

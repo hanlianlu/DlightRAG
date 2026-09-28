@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-/** Localized projection of durable answer-run error kinds.
+/** Localized projection of answer error kinds, stored on Runs or named by rejections.
 
  * The server taxonomy lives in `src/dlightrag/engine/answer/errors.py`.
  * MODEL_CAPABILITY_UNAVAILABLE is historical: no current path raises it, but
@@ -30,27 +30,30 @@ const RUN_ERROR_KIND_COPY: Record<string, string> = {
     'Current model does not support image input. Use a vision-capable model or remove images.',
 };
 
-function kindSource(kind: unknown): {kind: string; source: string} | null {
-  if (typeof kind !== 'string') return null;
-  const source = RUN_ERROR_KIND_COPY[kind];
-  return source === undefined ? null : {kind, source};
+function kindSource(kind: string | null): {kind: string; source: string} | null {
+  if (kind === null || !Object.hasOwn(RUN_ERROR_KIND_COPY, kind)) return null;
+  return {kind, source: RUN_ERROR_KIND_COPY[kind]};
+}
+
+/** Localized copy for a known error kind, or null when the kind is unmapped. */
+export function localizedErrorKind(kind: string | null): string | null {
+  const known = kindSource(kind);
+  return known ? msg(known.source, {id: `errors.kind.${known.kind}`}) : null;
 }
 
 /** Project one live SSE error payload to user-facing copy. */
 export function localizedRunErrorPayload(payload: unknown, fallback?: string): string {
-  const known = kindSource(
-    payload !== null && typeof payload === 'object' && !Array.isArray(payload)
-      ? (payload as {kind?: unknown}).kind
-      : undefined,
-  );
-  if (known) return msg(known.source, {id: `errors.kind.${known.kind}`});
-  return answerErrorMessage(payload, fallback);
+  const kind = payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as {kind?: unknown}).kind
+    : undefined;
+  return localizedErrorKind(typeof kind === 'string' ? kind : null)
+    ?? answerErrorMessage(payload, fallback);
 }
 
 /** Project one stored turn's terminal error fields to user-facing copy. */
 export function localizedStoredRunError(kind: string | null, message: string | null): string {
-  const known = kindSource(kind);
-  if (known) return msg(known.source, {id: `errors.kind.${known.kind}`});
+  const localized = localizedErrorKind(kind);
+  if (localized) return localized;
   if (typeof message === 'string' && message.trim()) return message;
   return answerErrorMessage(null);
 }

@@ -2,11 +2,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  AnswerSubmissionError,
-  BrowserAnswerSubmissionAdapter,
-  type AnswerSubmissionIntent,
-} from './answer-submission.ts';
+import {BrowserAnswerSubmissionAdapter, type AnswerSubmissionIntent} from './answer-submission.ts';
+import {AnswerSubmissionError} from './web-command-error.ts';
 import type {AcceptedAnswer} from './conversations.ts';
 
 const intent: AnswerSubmissionIntent = {
@@ -143,6 +140,36 @@ test('browser answer command preserves typed failures and marks transport failur
     (error: unknown) => error instanceof AnswerSubmissionError
       && error.status === 0
       && error.kind === 'ambiguous',
+  );
+});
+
+test('a rejected input keeps the server reason and its stable error kind', async () => {
+  const adapter = new BrowserAnswerSubmissionAdapter();
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    kind: 'invalid_request',
+    message: 'This request needs a resource capability that no answer mode can provide.',
+    error_kind: 'unsupported_resource_capability',
+  }), {
+    status: 422,
+    headers: {'Content-Type': 'application/json'},
+  });
+  await assert.rejects(
+    adapter.submit(intent, [], new AbortController().signal),
+    (error: unknown) => error instanceof AnswerSubmissionError
+      && error.status === 422
+      && error.kind === 'invalid_request'
+      && error.errorKind === 'unsupported_resource_capability'
+      && error.message.startsWith('This request needs'),
+  );
+
+  globalThis.fetch = async () => new Response('upstream failure', {status: 502});
+  await assert.rejects(
+    adapter.submit(intent, [], new AbortController().signal),
+    // No server reason: the UI shows its localized fallback, not English copy.
+    (error: unknown) => error instanceof AnswerSubmissionError
+      && error.kind === 'ambiguous'
+      && error.errorKind === null
+      && error.message === '',
   );
 });
 

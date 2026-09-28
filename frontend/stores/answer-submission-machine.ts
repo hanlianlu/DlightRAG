@@ -7,11 +7,8 @@ import {
   setup,
   type ActorRefFrom,
 } from 'xstate';
-import {
-  AnswerSubmissionError,
-  type AnswerSubmissionAdapter,
-  type AnswerSubmissionIntent,
-} from '../api/answer-submission.ts';
+import type {AnswerSubmissionAdapter, AnswerSubmissionIntent} from '../api/answer-submission.ts';
+import {AnswerSubmissionError} from '../api/web-command-error.ts';
 import type {AcceptedAnswer} from '../api/conversations.ts';
 import type {AttachmentLease} from './attachment-store.ts';
 
@@ -47,7 +44,7 @@ interface MachineContext extends MachineInput {
 function submissionError(value: unknown): AnswerSubmissionError {
   return value instanceof AnswerSubmissionError
     ? value
-    : new AnswerSubmissionError(0, 'ambiguous', 'Answer submission failed');
+    : new AnswerSubmissionError(0, 'ambiguous', '');
 }
 
 function actorError(event: unknown): AnswerSubmissionError {

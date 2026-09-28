@@ -536,7 +536,12 @@ and search workspaces. It returns HTTP 202 with canonical `{conversation, turn}`
 For a first submission, the server creates conversation, turn, blobs, and run in
 one transaction from the owner-scoped `submission_id`. On an ambiguous result,
 use `GET /web/api/answer-submissions/{submission_id}`; the browser must not
-blindly repeat the POST.
+blindly repeat the POST. Submit, lookup, and `POST /web/api/answer/{run_id}/fork`
+fail with `{kind, message, error_kind?}`, where `kind` is one of
+`invalid_request`, `attachment_rejected`, `scope_forbidden`,
+`conversation_missing`, `submission_conflict`, or `service_unavailable`, and
+`error_kind` names the stable answer error kind when admission rejected the
+input.
 
 The Web event stream follows the same durable sequence as REST but projects a
 typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,

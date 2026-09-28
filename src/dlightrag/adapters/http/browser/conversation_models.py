@@ -73,10 +73,15 @@ WebCommandErrorKind = Literal[
 
 
 class WebCommandError(ClientContractModel):
-    """Stable browser answer-command error payload."""
+    """Stable browser answer-command error payload.
+
+    ``error_kind`` names the stable answer error kind when admission rejected the
+    request's input, so the browser can localize the reason.
+    """
 
     kind: WebCommandErrorKind
     message: str
+    error_kind: str | None = None
 
 
 class ConversationHistory(ClientContractModel):

@@ -46,6 +46,11 @@ from dlightrag.application.web_conversations import (
     WebConversationService,
     WebConversationUnavailableError,
 )
+from dlightrag.engine.answer.errors import (
+    CurrentImagePayloadError,
+    UnsupportedAnswerModeError,
+    UnsupportedResourceCapabilityError,
+)
 from tests.unit.conftest import answer_capability_view
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
@@ -610,6 +615,73 @@ async def test_submission_to_an_unknown_conversation_is_404(
 
     assert response.status_code == 404
     assert response.json()["kind"] == "conversation_missing"
+
+
+async def test_a_rejected_answer_input_says_why_with_its_stable_kind(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.start_answer.side_effect = UnsupportedResourceCapabilityError()
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "kind": "invalid_request",
+        "message": UnsupportedResourceCapabilityError().public_message,
+        "error_kind": "unsupported_resource_capability",
+    }
+
+
+async def test_a_rejection_while_parsing_the_request_says_why_with_its_stable_kind(
+    client: AsyncClient, service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        chat_routes,
+        "parse_web_answer_request",
+        AsyncMock(side_effect=CurrentImagePayloadError("at most 0 current images are allowed")),
+    )
+
+    response = await client.post("/web/api/answer", json=_BODY)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "kind": "invalid_request",
+        "message": "at most 0 current images are allowed",
+        "error_kind": "CURRENT_IMAGE_LIMIT_EXCEEDED",
+    }
+    service.start_answer.assert_not_awaited()
+
+
+async def test_an_unavailable_fork_is_a_typed_service_failure(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.fork_answer.side_effect = WebConversationUnavailableError("database unavailable")
+
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/fork",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["kind"] == "service_unavailable"
+
+
+async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.fork_answer.side_effect = UnsupportedAnswerModeError("fast")
+
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/fork",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "kind": "invalid_request",
+        "message": UnsupportedAnswerModeError("fast").public_message,
+        "error_kind": "unsupported_answer_mode",
+    }
 
 
 async def test_an_empty_question_is_rejected_before_acceptance(
