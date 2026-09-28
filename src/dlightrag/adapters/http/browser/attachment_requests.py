@@ -18,6 +18,7 @@ from dlightrag.adapters.http.browser.attachment_models import (
     validate_web_attachments,
 )
 from dlightrag.adapters.http.browser.requests import WebAnswerRequest
+from dlightrag.adapters.http.errors import invalid_fields
 from dlightrag.engine.answer.client_contracts import AnswerEffort, normalize_answer_effort
 from dlightrag.engine.answer.errors import UnsupportedAnswerModeError
 from dlightrag.engine.answer.image_capability import (
@@ -96,7 +97,7 @@ async def parse_web_answer_request(
         try:
             body = WebAnswerRequest.model_validate_json(await request.body())
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+            raise HTTPException(status_code=422, detail=invalid_fields(exc)) from exc
         return ParsedWebAnswerRequest(
             query=body.query,
             workspaces=body.workspaces,

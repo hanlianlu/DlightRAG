@@ -25,6 +25,7 @@ from dlightrag.adapters.http.artifact_delivery import (
     artifact_range,
     artifact_response,
 )
+from dlightrag.adapters.http.errors import invalid_fields
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
@@ -133,7 +134,7 @@ async def _parse_answer_body(
         try:
             body = AnswerRequest.model_validate_json(await request.body())
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+            raise HTTPException(status_code=422, detail=invalid_fields(exc)) from exc
         _enforce_answer_attachment_count(len(body.attachments or []), answer_cfg.max_attachments)
         return body, []
 
@@ -178,7 +179,7 @@ async def _parse_answer_body(
         try:
             body = AnswerRequest.model_validate_json(request_json)
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+            raise HTTPException(status_code=422, detail=invalid_fields(exc)) from exc
 
         uploads: list[_UploadedAttachment] = []
         total = 0

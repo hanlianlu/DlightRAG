@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException
 
 from dlightrag.adapters.http.rest.models import ErrorDetail
@@ -54,6 +55,14 @@ def error_type_for_status(status: int) -> str:
     if 400 <= status < 500:
         return "validation"
     return "internal"
+
+
+def invalid_fields(exc: ValidationError) -> str:
+    """Name each invalid field and why, without echoing the submitted value."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'body'}: {error['msg']}"
+        for error in exc.errors(include_input=False, include_url=False)
+    )
 
 
 def error_response(
@@ -205,4 +214,4 @@ def install_error_handlers(app: FastAPI) -> None:
         app.add_exception_handler(schema_error, schema_incompatible)
 
 
-__all__ = ["error_response", "error_type_for_status", "install_error_handlers"]
+__all__ = ["error_response", "error_type_for_status", "install_error_handlers", "invalid_fields"]

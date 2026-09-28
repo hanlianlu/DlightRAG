@@ -430,6 +430,20 @@ class TestCreate:
         assert response.json()["status"] == "running"
         assert run_application.created == []
 
+    async def test_an_invalid_body_names_the_field_without_echoing_it(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        response = await client.post(
+            "/answer", json={"query": "hello", "workspaces": "SECRET-NOT-A-LIST"}
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error_type"] == "validation"
+        assert body["detail"].startswith("workspaces: ")
+        assert "SECRET-NOT-A-LIST" not in response.text
+        assert run_application.created == []
+
     @pytest.mark.parametrize(
         ("error", "detail"),
         [
