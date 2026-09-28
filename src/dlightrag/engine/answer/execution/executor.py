@@ -2865,7 +2865,15 @@ class AnswerExecutor:
                     "run_execution_failed",
                     "Answer run attachment bytes no longer exist.",
                 )
-            return b"".join(pieces)
+            content = b"".join(pieces)
+            # The accepted reference names its bytes by content address; every
+            # other restoration path already refuses bytes that do not match.
+            if hashlib.sha256(content).hexdigest() != digest:
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "Answer run attachment bytes do not match their accepted digest.",
+                )
+            return content
 
         def loader(digest: str) -> Callable[[], Awaitable[bytes]]:
             async def read() -> bytes:

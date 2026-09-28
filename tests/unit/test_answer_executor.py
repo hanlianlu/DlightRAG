@@ -2279,3 +2279,60 @@ async def test_publication_plan_validates_off_the_event_loop(
 
     assert [item.relative_path for item in plan.artifacts] == ["report.md"]
     assert threads and threads[0] is not threading.current_thread()
+
+
+@pytest.mark.parametrize(
+    ("filename", "mime_type"),
+    [("notes.txt", "text/plain"), ("photo.png", "image/png")],
+    ids=["lazy-attachment", "eager-image"],
+)
+async def test_answer_run_attachments_must_match_their_accepted_digest(
+    filename: str, mime_type: str
+) -> None:
+    import hashlib
+
+    from dlightrag.engine.answer.execution.input import AnswerRunInput
+
+    accepted = b"accepted bytes"
+    stored = {"bytes": b"tampered bytes"}
+
+    def stream(*, owner_id: str, digest: str) -> Any:
+        del owner_id, digest
+
+        async def pieces() -> Any:
+            yield stored["bytes"]
+
+        return pieces()
+
+    executor = _executor()
+    executor._blob_store = SimpleNamespace(stream=stream)  # type: ignore[assignment]
+    request = AnswerRunInput(
+        query="q",
+        pinned_models=(),
+        context_policy_revision="policy",
+        model_catalog_revision="catalog",
+        idempotency_fingerprint="fingerprint",
+        attachments=(
+            AttachmentReference(
+                digest=hashlib.sha256(accepted).hexdigest(),
+                filename=filename,
+                mime_type=mime_type,
+                ordinal=0,
+            ),
+        ),
+    )
+
+    async def load_attachment() -> bytes:
+        resources = await executor._answer_run_resources(request, owner_id="owner")
+        assert resources is not None
+        (resource,) = resources
+        if resource.loader is None:
+            assert resource.content is not None
+            return resource.content
+        return await resource.loader()
+
+    with pytest.raises(RunExecutionError, match="do not match their accepted digest"):
+        await load_attachment()
+
+    stored["bytes"] = accepted
+    assert await load_attachment() == accepted
