@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Lightweight migrations for DlightRAG-owned PostgreSQL schemas."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from dlightrag.adapters.postgres.core._locks import advisory_lock_key
@@ -81,6 +81,11 @@ WHERE i.inhparent = $1
 
 _TABLE_RELKIND = "SELECT c.relkind::text FROM pg_catalog.pg_class c WHERE c.oid = $1"
 
+_TABLE_TRIGGERS = """SELECT t.tgname AS name
+FROM pg_catalog.pg_trigger t
+WHERE t.tgrelid = $1 AND NOT t.tgisinternal AND t.tgenabled <> 'D'
+"""
+
 _TABLE_FOREIGN_KEYS = """SELECT cf.relname AS referenced,
        array_agg(a.attname ORDER BY k.ord) AS columns
 FROM pg_catalog.pg_constraint con
@@ -110,12 +115,35 @@ class ForeignKeyRequirement:
 
 
 @dataclass(frozen=True)
+class IndexRequirement:
+    """One index a scope owns, declared once for both its DDL and its verification.
+
+    ``definition`` is everything after the table name: the column list and any
+    ``WHERE`` predicate. A migration that introduces the index and the baseline
+    that bakes the current schema both use :attr:`ddl`, so the two cannot drift.
+    """
+
+    name: str
+    table: str
+    definition: str
+    unique: bool = False
+
+    @property
+    def ddl(self) -> str:
+        kind = "UNIQUE INDEX" if self.unique else "INDEX"
+        return f"CREATE {kind} IF NOT EXISTS {self.name} ON {self.table} {self.definition}"
+
+
+@dataclass(frozen=True)
 class TableRequirement:
     """Schema objects one revision requires on one table.
 
     ``unique_indexes`` names the partial unique indexes that enforce an invariant
     no constraint can express; the catalog must report them as unique, because a
     same-named index rebuilt without uniqueness would silently retire that invariant.
+
+    ``triggers`` names row triggers that enforce an invariant; each must be
+    present and enabled.
 
     ``partitioned_by`` names the LIST partition key columns: the catalog must
     report the table as partitioned on exactly those columns. ``required_child_partitions``
@@ -131,8 +159,18 @@ class TableRequirement:
     checks: tuple[str, ...] = ()
     indexes: tuple[str, ...] = ()
     unique_indexes: tuple[str, ...] = ()
+    triggers: tuple[str, ...] = ()
     partitioned_by: tuple[str, ...] = ()
     required_child_partitions: tuple[str, ...] = ()
+
+    def with_indexes(self, declared: tuple[IndexRequirement, ...]) -> TableRequirement:
+        """Add every declared index on this table to what a reader verifies."""
+        own = tuple(index for index in declared if index.table == self.name)
+        return replace(
+            self,
+            indexes=(*self.indexes, *(index.name for index in own if not index.unique)),
+            unique_indexes=(*self.unique_indexes, *(index.name for index in own if index.unique)),
+        )
 
 
 async def apply_migrations(
@@ -254,6 +292,9 @@ async def _absent_table_objects(conn: Any, table: TableRequirement) -> list[str]
     if table.checks:
         present = await _names(conn, _TABLE_CHECKS, oid)
         absent += [f"constraint {name}" for name in table.checks if name not in present]
+    if table.triggers:
+        present = await _names(conn, _TABLE_TRIGGERS, oid)
+        absent += [f"trigger {name}" for name in table.triggers if name not in present]
     if table.primary_key or table.unique:
         keys = [
             (str(row["contype"]), tuple(row["columns"]))

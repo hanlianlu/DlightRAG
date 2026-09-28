@@ -14,7 +14,6 @@ from the shared integration-test PostgreSQL environment; skipped if unavailable.
 
 import asyncio
 import hashlib
-import json
 import uuid
 from collections.abc import AsyncIterator
 from functools import partial
@@ -25,15 +24,22 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
+from dlightrag.adapters.postgres.core._migrations import apply_migrations
 from dlightrag.adapters.postgres.runtime.run_blob_store import (
     BlobSizeConflict,
     PGRunBlobStore,
     write_blob_content,
     write_complete_blob,
 )
-from dlightrag.adapters.postgres.runtime.run_store import RUN_MIGRATIONS, PGRunStore
+from dlightrag.adapters.postgres.runtime.run_store import (
+    RUN_MIGRATION_SCOPE,
+    RUN_MIGRATIONS,
+    RUN_SCHEMA_TABLES,
+    PGRunStore,
+)
 from dlightrag.engine.agent.session.ids import StageIntentId
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES
+from dlightrag.engine.runtime.errors import RunSchemaError
 from dlightrag.engine.runtime.policy import (
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     RUN_ABANDONED_ERROR_KIND,
@@ -52,6 +58,10 @@ from dlightrag.engine.runtime.workspace import CommittedSpillRecord, HandoffComm
 from tests.conftest import FingerprintingRunStore
 from tests.support.pg import (
     PG_CONN_KWARGS,
+    catalog_definitions,
+    catalog_table,
+    catalog_tables,
+    declared_shape,
     delete_runs,
     drop_database,
     skip_without_postgres,
@@ -69,9 +79,8 @@ _OTHER_OWNER = "owner-beta"
 _WORKER = "worker-1"
 _ABANDONED_ERROR_MESSAGE = "Run exceeded its reclaim-without-progress bound."
 
-# Verbatim deployed Answer-run tables from baseline main@5c66e5b2. In
-# particular, accepted_input_json is already a required column; this fixture
-# guards the supported terminal-only rename without inventing an older schema.
+# The Answer-run table of release 2.0.5 (main@5c66e5b2), verbatim. Its presence marks
+# a database this revision refuses, with the reset remedy, instead of migrating.
 _BASELINE_ANSWER_RUNS_DDL = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
     owner_id            TEXT        NOT NULL,
@@ -122,27 +131,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
         CHECK ((status IN ('queued', 'running')) = (prepared_input_json IS NOT NULL)),
     CONSTRAINT dlightrag_answer_runs_workspace_epoch_check
         CHECK (workspace_epoch IS NULL OR workspace_epoch >= 1)
-)
-"""
-_BASELINE_ANSWER_RUN_EVENTS_DDL = """
-CREATE TABLE IF NOT EXISTS dlightrag_answer_run_events (
-    owner_id       TEXT        NOT NULL,
-    run_id         UUID        NOT NULL,
-    event_sequence BIGINT      NOT NULL,
-    event_type     TEXT        NOT NULL,
-    payload        JSONB       NOT NULL DEFAULT '{}'::jsonb,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (owner_id, run_id, event_sequence),
-    FOREIGN KEY (owner_id, run_id)
-        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
-    CONSTRAINT dlightrag_answer_run_events_type_check
-        CHECK (event_type IN (
-            'progress', 'token', 'reset',
-            'tool_start', 'tool_progress', 'tool_end',
-            'memory_operation_settled', 'done', 'error'
-        )),
-    CONSTRAINT dlightrag_answer_run_events_sequence_check
-        CHECK (event_sequence >= 1)
 )
 """
 
@@ -475,77 +463,54 @@ async def _assert_run_event_parent_guard(store: FingerprintingRunStore, pool: An
 
 
 class TestSchema:
-    async def test_migrates_the_deployed_terminal_answer_schema_and_remains_writable(
-        self, pool
-    ) -> None:
-        legacy_run_id = uuid.uuid7()
-        accepted_input = {"query": "legacy terminal", "workspaces": ["alpha"]}
-        legacy_result = {"answer": "preserved"}
+    async def test_refuses_a_pre_runtime_answer_schema_with_the_reset_remedy(self, pool) -> None:
+        """A 2.0.x Answer schema is reset, never migrated: both roles refuse to start on it."""
         async with pool.acquire() as conn:
             await conn.execute(_BASELINE_ANSWER_RUNS_DDL)
-            await conn.execute(_BASELINE_ANSWER_RUN_EVENTS_DDL)
-            await conn.execute(
-                "INSERT INTO dlightrag_answer_runs "
-                "(owner_id, run_id, idempotency_key, accepted_input_json, "
-                "request_fingerprint, status, next_event_sequence, result_json, "
-                "started_at, finished_at) "
-                "VALUES ($1, $2, 'legacy-terminal', $3::jsonb, 'legacy-fingerprint', "
-                "'succeeded', 2, $4::jsonb, NOW(), NOW())",
-                _OWNER,
-                legacy_run_id,
-                json.dumps(accepted_input),
-                json.dumps(legacy_result),
-            )
-            await conn.execute(
-                "INSERT INTO dlightrag_answer_run_events "
-                "(owner_id, run_id, event_sequence, event_type, payload) "
-                "VALUES ($1, $2, 1, 'done', $3::jsonb)",
-                _OWNER,
-                legacy_run_id,
-                json.dumps({"status": "succeeded", "result": legacy_result}),
-            )
 
-        migrated = FingerprintingRunStore(pool=pool)
-        await migrated.initialize()
+        for validate_only in (False, True):
+            with pytest.raises(RunSchemaError, match="full development reset"):
+                await PGRunStore(pool=pool).initialize(validate_only=validate_only)
 
-        legacy = await migrated.get_run(owner_id=_OWNER, run_id=str(legacy_run_id))
-        assert legacy is not None
-        assert legacy.status == "succeeded"
-        assert legacy.accepted_input == accepted_input
-        assert legacy.result == legacy_result
-        legacy_events = await migrated.read_event_page(owner_id=_OWNER, run_id=str(legacy_run_id))
-        assert [(event.event_type, event.payload) for event in legacy_events] == [
-            ("done", {"status": "succeeded", "result": legacy_result})
-        ]
-
-        inserted = await migrated.create_run(owner_id=_OWNER, request=_request("after migration"))
-        claim = await _claimed(migrated)
-        assert claim.run.run_id == inserted.run.run_id
-        outcome = await migrated.finish_success(
-            owner_id=_OWNER,
-            run_id=inserted.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            result={"answer": "new"},
-        )
-        assert outcome.committed is True
-        assert (await migrated.get_run(owner_id=_OWNER, run_id=inserted.run.run_id)) is not None
         async with pool.acquire() as conn:
-            assert await conn.fetchval("SELECT to_regclass('dlightrag_answer_runs')") is None
-            assert await conn.fetchval("SELECT to_regclass('dlightrag_runs')") == "dlightrag_runs"
-            event_checks = {
-                str(row["conname"])
-                for row in await conn.fetch(
-                    "SELECT conname FROM pg_constraint "
-                    "WHERE conrelid = 'dlightrag_run_events'::regclass AND contype = 'c'"
-                )
-            }
-        assert "dlightrag_run_events_sequence_check" in event_checks
-        assert "dlightrag_answer_run_events_sequence_check" not in event_checks
+            assert await conn.fetchval("SELECT to_regclass('dlightrag_runs')") is None
+            assert await conn.fetchval("SELECT to_regclass('dlightrag_schema_migrations')") is None
 
-        reader = PGRunStore(pool=pool)
-        await reader.initialize(validate_only=True)
-        await _assert_run_event_parent_guard(migrated, pool)
+    async def test_later_migrations_change_nothing_on_a_fresh_baseline(self, pool) -> None:
+        """The baseline is the whole current schema; later versions only advance older ones.
+
+        Every later migration restates what it introduced for databases created before
+        it. On a fresh baseline each must therefore be a no-op, down to the definition of
+        every constraint, index, trigger, and column; a restatement that drifted from the
+        baseline would make fresh and upgraded databases disagree.
+        """
+        async with pool.acquire() as conn:
+            await apply_migrations(
+                conn,
+                scope=RUN_MIGRATION_SCOPE,
+                migrations=RUN_MIGRATIONS[:1],
+                schema_error=RunSchemaError,
+            )
+            baseline = await catalog_definitions(conn)
+            await apply_migrations(
+                conn,
+                scope=RUN_MIGRATION_SCOPE,
+                migrations=RUN_MIGRATIONS,
+                schema_error=RunSchemaError,
+            )
+
+            assert await catalog_definitions(conn) == baseline
+
+    async def test_fresh_catalog_is_exactly_its_declaration(self, pool) -> None:
+        """Readers verify the declaration, so every object the migrations create is in it."""
+        await FingerprintingRunStore(pool=pool).initialize()
+
+        async with pool.acquire() as conn:
+            assert await catalog_tables(conn) - {"dlightrag_schema_migrations"} == {
+                declared.name for declared in RUN_SCHEMA_TABLES
+            }
+            for declared in RUN_SCHEMA_TABLES:
+                assert await catalog_table(conn, declared.name) == declared_shape(declared)
 
     async def test_fresh_schema_enforces_run_event_parent_contract(self, store, pool) -> None:
         await _assert_run_event_parent_guard(store, pool)

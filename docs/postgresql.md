@@ -217,6 +217,20 @@ to perform that reset; it also recreates the required PostgreSQL extensions
 and verifies the empty database. See
 [operations.md](operations.md#full-development-reset).
 
+A ledger version alone does not prove a schema, since it survives an object
+dropped afterwards, so each scope also declares the objects its revision needs
+(columns, keys, foreign keys, checks, indexes, and guard triggers) and readers
+read each one back from the catalog. The Run scope declares each index once:
+its baseline and the migration that introduced it both create the index from
+that declaration, and readers verify it by the same name. The Run baseline is
+the complete current schema; each later Run migration only brings a database
+created before it up to date. Integration tests require a freshly migrated Run
+catalog to contain exactly what is declared, no more and no less, and require
+every later Run migration to leave a fresh baseline unchanged down to each
+definition. A database that still holds the Answer tables of release 2.0.x
+(`dlightrag_answer_runs`) is not migrated in place: writers and readers both
+refuse to start on it and name the full development reset above as the remedy.
+
 ## Durable Run State
 
 Every top-level Retrieval and Answer is one durable Run. DlightRAG-owned tables

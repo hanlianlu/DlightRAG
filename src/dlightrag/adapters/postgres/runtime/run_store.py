@@ -29,6 +29,7 @@ from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
 from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
 from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
+    IndexRequirement,
     Migration,
     TableRequirement,
     apply_migrations,
@@ -127,133 +128,139 @@ DEFAULT_QUERY_MAX_NONTERMINAL_RUNS = 30_000
 # docs/run-runtime-and-scaling-target.md#captured-local-load-evidence.
 DEFAULT_CORPUS_MUTATION_MAX_NONTERMINAL_RUNS = 1_000
 
-_MIGRATE_ANSWER_RUNTIME = """
-DO $$
-BEGIN
-    IF to_regclass('dlightrag_answer_runs') IS NOT NULL
-       AND to_regclass('dlightrag_runs') IS NULL THEN
-        IF EXISTS (
-            SELECT 1 FROM dlightrag_answer_runs
-            WHERE status IN ('queued', 'running')
-        ) THEN
-            RAISE EXCEPTION
-                'cannot rename Answer runtime schema while nonterminal runs exist';
-        END IF;
-        ALTER TABLE dlightrag_answer_runs RENAME TO dlightrag_runs;
-    END IF;
-    IF to_regclass('dlightrag_answer_run_events') IS NOT NULL
-       AND to_regclass('dlightrag_run_events') IS NULL THEN
-        ALTER TABLE dlightrag_answer_run_events RENAME TO dlightrag_run_events;
-    END IF;
-END $$
-"""
-
-_MIGRATE_RUN_COLUMNS = """
-DO $$
-BEGIN
-    IF to_regclass('dlightrag_runs') IS NULL THEN
-        RETURN;
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'dlightrag_runs' AND column_name = 'idempotency_key'
-    ) THEN
-        ALTER TABLE dlightrag_runs RENAME COLUMN idempotency_key TO submission_key;
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'dlightrag_runs' AND column_name = 'workspace_epoch'
-    ) THEN
-        ALTER TABLE dlightrag_runs RENAME COLUMN workspace_epoch TO agent_workspace_epoch;
-    END IF;
-END $$
-"""
-
-_ALTER_RUN_RUNTIME = """
-ALTER TABLE dlightrag_runs
-    ADD COLUMN IF NOT EXISTS run_kind TEXT NOT NULL DEFAULT 'answer',
-    ADD COLUMN IF NOT EXISTS lane TEXT NOT NULL DEFAULT 'query',
-    ADD COLUMN IF NOT EXISTS submitted_by TEXT,
-    ADD COLUMN IF NOT EXISTS access_scope_kind TEXT NOT NULL DEFAULT 'owner',
-    ADD COLUMN IF NOT EXISTS retention_seconds BIGINT NOT NULL DEFAULT 31536000,
-    ADD COLUMN IF NOT EXISTS purge_after TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS checkpoint_json JSONB,
-    ADD COLUMN IF NOT EXISTS handoff_started_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS superseded_by_run_id UUID;
-UPDATE dlightrag_runs
-SET submitted_by = owner_id,
-    submission_key = COALESCE(submission_key, 'legacy:' || run_id::text),
-    purge_after = CASE
-        WHEN finished_at IS NOT NULL AND purge_after IS NULL
-        THEN finished_at + make_interval(secs => retention_seconds::double precision)
-        ELSE purge_after
-    END;
-ALTER TABLE dlightrag_runs
-    ALTER COLUMN submitted_by SET NOT NULL,
-    ALTER COLUMN submission_key SET NOT NULL;
-"""
-
-_NORMALIZE_RUN_CONSTRAINTS = """
-ALTER TABLE dlightrag_runs
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_status_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_phase_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_counter_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_lease_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_terminal_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_result_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_error_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_prepared_input_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_workspace_epoch_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_kind_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_lane_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_scope_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_status_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_phase_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_counter_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_lease_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_permit_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_terminal_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_result_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_error_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_prepared_input_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_runs_workspace_epoch_check;
-ALTER TABLE dlightrag_runs
-    ADD CONSTRAINT dlightrag_runs_kind_check
-        CHECK (run_kind IN ('retrieval', 'answer', 'corpus_mutation')),
-    ADD CONSTRAINT dlightrag_runs_lane_check
-        CHECK (lane IN ('query', 'corpus_mutation')),
-    ADD CONSTRAINT dlightrag_runs_scope_check
-        CHECK (access_scope_kind IN ('owner', 'workspace')),
-    ADD CONSTRAINT dlightrag_runs_status_check
-        CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
-    ADD CONSTRAINT dlightrag_runs_counter_check
-        CHECK (fencing_epoch >= 0 AND next_event_sequence >= 1
-               AND durable_progress_version >= 0
-               AND last_reclaim_progress_version >= 0
-               AND reclaims_without_progress >= 0 AND retention_seconds >= 1),
-    ADD CONSTRAINT dlightrag_runs_lease_check
-        CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
-    ADD CONSTRAINT dlightrag_runs_terminal_check
-        CHECK ((status IN ('succeeded', 'failed', 'cancelled')) = (finished_at IS NOT NULL)),
-    ADD CONSTRAINT dlightrag_runs_result_check
-        CHECK (status <> 'succeeded' OR result_json IS NOT NULL),
-    ADD CONSTRAINT dlightrag_runs_error_check
-        CHECK ((status = 'failed') = (error_kind IS NOT NULL)),
-    ADD CONSTRAINT dlightrag_runs_prepared_input_check
-        CHECK ((status IN ('queued', 'running')) = (prepared_input_json IS NOT NULL)),
-    ADD CONSTRAINT dlightrag_runs_workspace_epoch_check
-        CHECK (agent_workspace_epoch IS NULL OR agent_workspace_epoch >= 1);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_runs_global_id ON dlightrag_runs (run_id);
-DROP INDEX IF EXISTS idx_dlightrag_answer_runs_idempotency;
-DROP INDEX IF EXISTS idx_dlightrag_runs_idempotency;
-CREATE UNIQUE INDEX idx_dlightrag_runs_submission
-    ON dlightrag_runs (run_kind, submitted_by, submission_key);
-"""
+# Every index the runs scope owns, declared once. The baseline creates each one; a
+# later migration that introduced an index repeats its statement for databases
+# initialized before it; readers verify every one by name.
+_RUNS_CLAIM_INDEX = IndexRequirement(
+    # Claim and sweep scan nonterminal rows oldest-first across every owner.
+    "idx_dlightrag_runs_claim",
+    "dlightrag_runs",
+    "(lane, next_attempt_at, created_at, run_id) WHERE status IN ('queued', 'running')",
+)
+_RUNS_SUBMISSION_INDEX = IndexRequirement(
+    "idx_dlightrag_runs_submission",
+    "dlightrag_runs",
+    "(run_kind, submitted_by, submission_key)",
+    unique=True,
+)
+# The one uniqueness of a bare run id; a foreign key to dlightrag_runs (run_id)
+# relies on it.
+_RUNS_GLOBAL_ID_INDEX = IndexRequirement(
+    "idx_dlightrag_runs_global_id", "dlightrag_runs", "(run_id)", unique=True
+)
+_RUNS_RETENTION_INDEX = IndexRequirement(
+    "idx_dlightrag_runs_retention",
+    "dlightrag_runs",
+    "(purge_after) WHERE purge_after IS NOT NULL",
+)
+_RUNS_CANCEL_PENDING_INDEX = IndexRequirement(
+    # Reconnect/notification rescans page only this worker's live cancellations.
+    "idx_dlightrag_runs_cancel_pending",
+    "dlightrag_runs",
+    "(lease_owner, created_at, run_id)"
+    " WHERE cancel_requested_at IS NOT NULL AND status = 'running'",
+)
+_RUNS_MUTATION_FIFO_INDEX = IndexRequirement(
+    # Workspace mutation eligibility walks each Workspace's queue oldest-first.
+    "idx_dlightrag_runs_mutation_fifo",
+    "dlightrag_runs",
+    "(owner_id, created_at, run_id)"
+    " WHERE lane = 'corpus_mutation' AND status IN ('queued', 'running')",
+)
+_RUN_EVENTS_TERMINAL_INDEX = IndexRequirement(
+    # Exactly one terminal event per run, enforced durably rather than by convention.
+    "idx_dlightrag_run_events_terminal",
+    "dlightrag_run_events",
+    "(owner_id, run_id) WHERE event_type IN ('done', 'error')",
+    unique=True,
+)
+_RUN_ARTIFACTS_DIGEST_INDEX = IndexRequirement(
+    # Reverse lookup for ownership-safe blob cleanup and the RESTRICT foreign key.
+    "idx_dlightrag_answer_run_artifacts_digest",
+    "dlightrag_answer_run_artifacts",
+    "(owner_id, digest)",
+)
+_EVIDENCE_RUN_INDEX = IndexRequirement(
+    "idx_dlightrag_answer_evidence_run", "dlightrag_answer_evidence", "(owner_id, run_id)"
+)
+_RESOURCES_RUN_INDEX = IndexRequirement(
+    "idx_dlightrag_answer_resources_run", "dlightrag_answer_resources", "(owner_id, run_id)"
+)
+_RESOURCES_BLOB_INDEX = IndexRequirement(
+    "idx_dlightrag_answer_resources_blob",
+    "dlightrag_answer_resources",
+    "(owner_id, blob_digest) WHERE blob_digest IS NOT NULL",
+)
+_ATTACHMENT_OCCURRENCE_INDEX = IndexRequirement(
+    # Retained exact Entry occurrences, found without scanning an owner's catalogue.
+    "idx_answer_attachment_occurrence",
+    "dlightrag_answer_resources",
+    "(owner_id, resource_id)"
+    " WHERE kind='fetched_blob' AND capabilities->>'resource_kind'='attachment_occurrence'",
+)
+_CHILD_ROSTER_INDEX = IndexRequirement(
+    # Newest-first bounded child-roster keyset pages ride one exact order.
+    "idx_answer_child_sessions_roster",
+    "dlightrag_answer_child_sessions",
+    "(owner_id, run_id, created_at DESC, child_session_id DESC)",
+)
+_CHILD_OPERATIONS_STATUS_INDEX = IndexRequirement(
+    "idx_answer_child_operations_status",
+    "dlightrag_answer_child_operations",
+    "(owner_id, run_id, child_session_id, status)",
+)
+_CHILD_CONTROLS_SUBMISSION_INDEX = IndexRequirement(
+    "idx_agent_controls_submission",
+    "dlightrag_agent_controls",
+    "(owner_id, run_id, target_session_id, submission_key)"
+    " WHERE target_session_id IS NOT NULL AND submission_key IS NOT NULL",
+    unique=True,
+)
+_PARENT_CONTROLS_SUBMISSION_INDEX = IndexRequirement(
+    "idx_agent_parent_controls_submission",
+    "dlightrag_agent_controls",
+    "(owner_id, run_id, submission_key)"
+    " WHERE target_session_id IS NULL AND submission_key IS NOT NULL",
+    unique=True,
+)
+_CHILD_GUIDANCE_PENDING_INDEX = IndexRequirement(
+    "idx_child_guidance_pending",
+    "dlightrag_answer_child_guidance",
+    "(owner_id, run_id, status, expires_at)",
+)
+_RUN_INDEXES = (
+    _RUNS_CLAIM_INDEX,
+    _RUNS_SUBMISSION_INDEX,
+    _RUNS_GLOBAL_ID_INDEX,
+    _RUNS_RETENTION_INDEX,
+    _RUNS_CANCEL_PENDING_INDEX,
+    _RUNS_MUTATION_FIFO_INDEX,
+    _RUN_EVENTS_TERMINAL_INDEX,
+    _RUN_ARTIFACTS_DIGEST_INDEX,
+    _EVIDENCE_RUN_INDEX,
+    _RESOURCES_RUN_INDEX,
+    _RESOURCES_BLOB_INDEX,
+    _ATTACHMENT_OCCURRENCE_INDEX,
+    _CHILD_ROSTER_INDEX,
+    _CHILD_OPERATIONS_STATUS_INDEX,
+    _CHILD_CONTROLS_SUBMISSION_INDEX,
+    _PARENT_CONTROLS_SUBMISSION_INDEX,
+    _CHILD_GUIDANCE_PENDING_INDEX,
+)
 
 # ─────────────────────────────────────────────────────────────────
 # Final clean-break baseline schema
 # ─────────────────────────────────────────────────────────────────
+
+# The released 2.0.x Answer store kept its runs in dlightrag_answer_runs. This
+# revision does not migrate that schema in place; development data is reset
+# instead (docs/postgresql.md), so its presence refuses startup with that remedy.
+_PRE_RUNTIME_ANSWER_SCHEMA = "SELECT to_regclass('dlightrag_answer_runs') IS NOT NULL"
+_PRE_RUNTIME_ANSWER_SCHEMA_ERROR = (
+    "dlightrag_answer_runs holds a pre-RunRuntime Answer schema (release 2.0.x), which "
+    "this revision does not migrate in place; run a full development reset "
+    "(scripts/reset_development.py) and start a writer on the empty database"
+)
 
 _CREATE_RUNS = """
 CREATE TABLE IF NOT EXISTS dlightrag_runs (
@@ -294,7 +301,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_runs (
     finished_at         TIMESTAMPTZ,
     agent_workspace_epoch BIGINT,
     PRIMARY KEY (owner_id, run_id),
-    UNIQUE (run_id),
     CONSTRAINT dlightrag_runs_kind_check
         CHECK (run_kind IN ('retrieval', 'answer', 'corpus_mutation')),
     CONSTRAINT dlightrag_runs_lane_check
@@ -337,17 +343,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_run_events (
     CONSTRAINT dlightrag_run_events_sequence_check
         CHECK (event_sequence >= 1)
 )
-"""
-
-_NORMALIZE_RUN_EVENTS = """
-ALTER TABLE dlightrag_run_events
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_run_events_type_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_run_events_type_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_answer_run_events_sequence_check,
-    DROP CONSTRAINT IF EXISTS dlightrag_run_events_sequence_check;
-ALTER TABLE dlightrag_run_events
-    ADD CONSTRAINT dlightrag_run_events_sequence_check
-        CHECK (event_sequence >= 1);
 """
 
 _ENFORCE_RUN_EVENT_CONSTRAINTS = """
@@ -805,49 +800,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_child_guidance (
 """
 
 
-_CREATE_INDEXES = (
-    # Claim and sweep scan nonterminal rows oldest-first across every owner.
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_runs_claim "
-    "ON dlightrag_runs (lane, next_attempt_at, created_at, run_id) "
-    "WHERE status IN ('queued', 'running')",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_runs_submission "
-    "ON dlightrag_runs (run_kind, submitted_by, submission_key)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_runs_global_id ON dlightrag_runs (run_id)",
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_runs_retention "
-    "ON dlightrag_runs (purge_after) WHERE purge_after IS NOT NULL",
-    # Reconnect/notification rescans page only this worker's live cancellations.
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_runs_cancel_pending "
-    "ON dlightrag_runs (lease_owner, created_at, run_id) "
-    "WHERE cancel_requested_at IS NOT NULL AND status = 'running'",
-    # Exactly one terminal event per run, enforced durably rather than by convention.
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_run_events_terminal "
-    "ON dlightrag_run_events (owner_id, run_id) "
-    "WHERE event_type IN ('done', 'error')",
-    # Reverse lookup for ownership-safe blob cleanup and the RESTRICT foreign key.
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_run_artifacts_digest "
-    "ON dlightrag_answer_run_artifacts (owner_id, digest)",
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_evidence_run "
-    "ON dlightrag_answer_evidence (owner_id, run_id)",
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_resources_run "
-    "ON dlightrag_answer_resources (owner_id, run_id)",
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_resources_blob "
-    "ON dlightrag_answer_resources (owner_id, blob_digest) "
-    "WHERE blob_digest IS NOT NULL",
-    # Newest-first bounded child-roster keyset pages ride one exact order.
-    "CREATE INDEX IF NOT EXISTS idx_answer_child_sessions_roster "
-    "ON dlightrag_answer_child_sessions "
-    "(owner_id, run_id, created_at DESC, child_session_id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_answer_child_operations_status "
-    "ON dlightrag_answer_child_operations (owner_id, run_id, child_session_id, status)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_controls_submission "
-    "ON dlightrag_agent_controls (owner_id, run_id, target_session_id, submission_key) "
-    "WHERE target_session_id IS NOT NULL AND submission_key IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_parent_controls_submission "
-    "ON dlightrag_agent_controls (owner_id, run_id, submission_key) "
-    "WHERE target_session_id IS NULL AND submission_key IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS idx_child_guidance_pending "
-    "ON dlightrag_answer_child_guidance (owner_id, run_id, status, expires_at)",
-)
+_CREATE_INDEXES = tuple(index.ddl for index in _RUN_INDEXES)
 
 _CREATE_WORKSPACE_INVENTORY = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_workspace_inventory (
@@ -958,21 +911,20 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_session_notes (
 )
 """
 
-# The baseline bakes the current schema directly into CREATE statements. Later
-# migrations advance initialized databases without adding runtime compatibility paths.
+# The baseline bakes the current schema directly into CREATE statements, so a fresh
+# database is complete once it has run. Later migrations advance databases
+# initialized before them, and each is a no-op on a fresh baseline; an integration
+# test holds both properties. Nothing here migrates a pre-RunRuntime schema.
 
 RUN_MIGRATIONS = (
     Migration(
         "run_runtime_v1",
-        "Rename terminal Answer rows and create the operation-neutral RunRuntime schema",
+        "Create the operation-neutral RunRuntime schema",
         (
-            _MIGRATE_ANSWER_RUNTIME,
-            _MIGRATE_RUN_COLUMNS,
             _CREATE_RUNS,
-            _ALTER_RUN_RUNTIME,
-            _NORMALIZE_RUN_CONSTRAINTS,
             _CREATE_EVENTS,
-            _NORMALIZE_RUN_EVENTS,
+            _ENFORCE_RUN_EVENT_CONSTRAINTS,
+            _CREATE_RUN_EVENT_CONSTRAINT_TRIGGER,
             _CREATE_SESSIONS,
             _CREATE_ENTRIES,
             _CREATE_SESSION_REGISTERS,
@@ -988,6 +940,8 @@ RUN_MIGRATIONS = (
             _CREATE_CHILD_OPERATIONS,
             _CREATE_CHILD_GUIDANCE,
             *_CREATE_INDEXES,
+            # References dlightrag_runs (run_id) through its unique global-id index.
+            _CREATE_CORPUS_MUTATION_WINDOWS,
             _CREATE_WORKSPACE_INVENTORY,
             _CREATE_ARTIFACT_ATTACHMENT_ORDER,
             _CREATE_ARTIFACT_ATTACHMENTS,
@@ -999,20 +953,12 @@ RUN_MIGRATIONS = (
     Migration(
         "child_roster_index",
         "Index child sessions for bounded newest-first roster pages",
-        (
-            "CREATE INDEX IF NOT EXISTS idx_answer_child_sessions_roster "
-            "ON dlightrag_answer_child_sessions "
-            "(owner_id, run_id, created_at DESC, child_session_id DESC)",
-        ),
+        (_CHILD_ROSTER_INDEX.ddl,),
     ),
     Migration(
         "worker_cancel_pending_index",
         "Index bounded worker-local cancellation rescans",
-        (
-            "CREATE INDEX IF NOT EXISTS idx_dlightrag_runs_cancel_pending "
-            "ON dlightrag_runs (lease_owner, created_at, run_id) "
-            "WHERE cancel_requested_at IS NOT NULL AND status = 'running'",
-        ),
+        (_RUNS_CANCEL_PENDING_INDEX.ddl,),
     ),
     Migration(
         "write_model_published_artifact_kind",
@@ -1059,9 +1005,7 @@ RUN_MIGRATIONS = (
             "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS superseded_by_run_id UUID",
             _CREATE_CORPUS_MUTATION_WINDOWS,
             _CLEAN_BREAK_CORPUS_MUTATIONS,
-            "CREATE INDEX IF NOT EXISTS idx_dlightrag_runs_mutation_fifo "
-            "ON dlightrag_runs (owner_id, created_at, run_id) "
-            "WHERE lane = 'corpus_mutation' AND status IN ('queued', 'running')",
+            _RUNS_MUTATION_FIFO_INDEX.ddl,
         ),
     ),
     Migration(
@@ -1107,17 +1051,10 @@ RUN_MIGRATIONS = (
             "CHECK (origin IN ('user', 'parent'))",
             _CREATE_CHILD_OPERATIONS,
             _CREATE_CHILD_GUIDANCE,
-            "CREATE INDEX IF NOT EXISTS idx_answer_child_operations_status "
-            "ON dlightrag_answer_child_operations "
-            "(owner_id, run_id, child_session_id, status)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_controls_submission "
-            "ON dlightrag_agent_controls (owner_id, run_id, target_session_id, submission_key) "
-            "WHERE target_session_id IS NOT NULL AND submission_key IS NOT NULL",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_parent_controls_submission "
-            "ON dlightrag_agent_controls (owner_id, run_id, submission_key) "
-            "WHERE target_session_id IS NULL AND submission_key IS NOT NULL",
-            "CREATE INDEX IF NOT EXISTS idx_child_guidance_pending "
-            "ON dlightrag_answer_child_guidance (owner_id, run_id, status, expires_at)",
+            _CHILD_OPERATIONS_STATUS_INDEX.ddl,
+            _CHILD_CONTROLS_SUBMISSION_INDEX.ddl,
+            _PARENT_CONTROLS_SUBMISSION_INDEX.ddl,
+            _CHILD_GUIDANCE_PENDING_INDEX.ddl,
         ),
     ),
     Migration(
@@ -1133,11 +1070,7 @@ RUN_MIGRATIONS = (
     Migration(
         "attachment_occurrence_reference_index",
         "Find retained exact Entry occurrences without scanning an owner's Run catalogue",
-        (
-            "CREATE INDEX IF NOT EXISTS idx_answer_attachment_occurrence "
-            "ON dlightrag_answer_resources (owner_id, resource_id) "
-            "WHERE kind='fetched_blob' AND capabilities->>'resource_kind'='attachment_occurrence'",
-        ),
+        (_ATTACHMENT_OCCURRENCE_INDEX.ddl,),
     ),
     Migration(
         "write_model_fork_points",
@@ -1193,7 +1126,7 @@ RUN_MIGRATIONS = (
     ),
 )
 
-RUN_SCHEMA_TABLES = (
+_RUN_TABLES = (
     TableRequirement(
         name="dlightrag_answer_session_notes",
         columns=(
@@ -1273,15 +1206,6 @@ RUN_SCHEMA_TABLES = (
             "dlightrag_runs_prepared_input_check",
             "dlightrag_runs_workspace_epoch_check",
         ),
-        indexes=(
-            "idx_dlightrag_runs_claim",
-            "idx_dlightrag_runs_retention",
-            "idx_dlightrag_runs_cancel_pending",
-        ),
-        unique_indexes=(
-            "idx_dlightrag_runs_submission",
-            "idx_dlightrag_runs_global_id",
-        ),
     ),
     TableRequirement(
         name="dlightrag_corpus_mutation_windows",
@@ -1305,7 +1229,7 @@ RUN_SCHEMA_TABLES = (
             ForeignKeyRequirement(columns=("owner_id", "run_id"), references="dlightrag_runs"),
         ),
         checks=("dlightrag_run_events_sequence_check",),
-        unique_indexes=("idx_dlightrag_run_events_terminal",),
+        triggers=("trg_dlightrag_run_events_enforce",),
     ),
     TableRequirement(
         name="dlightrag_agent_sessions",
@@ -1430,7 +1354,6 @@ RUN_SCHEMA_TABLES = (
             "dlightrag_answer_evidence_ordinal_check",
             "dlightrag_answer_evidence_digest_check",
         ),
-        indexes=("idx_dlightrag_answer_evidence_run",),
     ),
     TableRequirement(
         name="dlightrag_answer_resources",
@@ -1458,10 +1381,6 @@ RUN_SCHEMA_TABLES = (
         checks=(
             "dlightrag_answer_resources_kind_check",
             "dlightrag_answer_resources_blob_link_check",
-        ),
-        indexes=(
-            "idx_dlightrag_answer_resources_run",
-            "idx_dlightrag_answer_resources_blob",
         ),
     ),
     TableRequirement(
@@ -1506,7 +1425,6 @@ RUN_SCHEMA_TABLES = (
             "dlightrag_answer_run_artifacts_kind_check",
             "dlightrag_answer_run_artifacts_ordinal_check",
         ),
-        indexes=("idx_dlightrag_answer_run_artifacts_digest",),
     ),
     TableRequirement(
         name="dlightrag_answer_workspace_inventory",
@@ -1609,7 +1527,6 @@ RUN_SCHEMA_TABLES = (
         foreign_keys=(
             ForeignKeyRequirement(columns=("owner_id", "run_id"), references="dlightrag_runs"),
         ),
-        indexes=("idx_answer_child_sessions_roster",),
         checks=(
             "dlightrag_answer_child_sessions_status_check",
             "dlightrag_answer_child_sessions_depth_check",
@@ -1643,10 +1560,6 @@ RUN_SCHEMA_TABLES = (
             "dlightrag_agent_controls_target_check",
             "dlightrag_agent_controls_origin_check",
         ),
-        indexes=(
-            "idx_agent_controls_submission",
-            "idx_agent_parent_controls_submission",
-        ),
     ),
     TableRequirement(
         name="dlightrag_answer_child_operations",
@@ -1669,13 +1582,16 @@ RUN_SCHEMA_TABLES = (
             "updated_at",
         ),
         primary_key=("owner_id", "run_id", "child_session_id", "operation_sequence"),
+        unique=(
+            ("owner_id", "run_id", "child_session_id", "operation_id"),
+            ("owner_id", "run_id", "child_session_id", "idempotency_key"),
+        ),
         foreign_keys=(
             ForeignKeyRequirement(
                 columns=("owner_id", "run_id", "child_session_id"),
                 references="dlightrag_answer_child_sessions",
             ),
         ),
-        indexes=("idx_answer_child_operations_status",),
         checks=(
             "dlightrag_answer_child_operations_sequence_check",
             "dlightrag_answer_child_operations_status_check",
@@ -1711,7 +1627,6 @@ RUN_SCHEMA_TABLES = (
                 references="dlightrag_answer_child_sessions",
             ),
         ),
-        indexes=("idx_child_guidance_pending",),
         checks=(
             "dlightrag_answer_child_guidance_status_check",
             "dlightrag_answer_child_guidance_question_check",
@@ -1737,6 +1652,9 @@ RUN_SCHEMA_TABLES = (
         ),
     ),
 )
+
+# What a reader verifies: every table above, plus every index the scope declares.
+RUN_SCHEMA_TABLES = tuple(table.with_indexes(_RUN_INDEXES) for table in _RUN_TABLES)
 
 #: ``(expression, output name)`` for every column :func:`run_record` reads.
 _RUN_COLUMN_SPECS: tuple[tuple[str, str], ...] = (
@@ -2723,6 +2641,8 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             return
 
         async def _operation(conn: Any) -> None:
+            if await conn.fetchval(_PRE_RUNTIME_ANSWER_SCHEMA):
+                raise RunSchemaError(_PRE_RUNTIME_ANSWER_SCHEMA_ERROR)
             if validate_only:
                 await verify_migrations(
                     conn,

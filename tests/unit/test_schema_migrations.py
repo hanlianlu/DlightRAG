@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for DlightRAG-owned PostgreSQL schema migrations."""
 
+import re
 from collections import Counter
 from collections.abc import Sequence
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 
 from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
+    IndexRequirement,
     Migration,
     TableRequirement,
 )
@@ -118,6 +120,8 @@ class _Conn:
                 {"columns": list(columns), "referenced": referenced}
                 for columns, referenced in table.get("fks", ())
             ]
+        if "pg_trigger" in query:
+            return [{"name": name} for name in table.get("triggers", ())]
         raise AssertionError(f"unexpected catalog fetch: {query}")
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -209,12 +213,6 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
     initial_migrations = RUN_MIGRATIONS[
         : expected_versions.index("normalize_run_event_constraints")
     ]
-    assert all(
-        "dlightrag_enforce_run_event_constraints" not in statement
-        and "trg_dlightrag_run_events_enforce" not in statement
-        for migration in initial_migrations
-        for statement in migration.statements
-    )
 
     conn = _Conn()
     await apply_migrations(
@@ -237,6 +235,9 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
     guard_statements = migrations_by_version["normalize_run_event_constraints"].statements
     drop_statements = migrations_by_version["remove_run_active_permit"].statements
     assert len(guard_statements) == 2
+    # The baseline is the complete current schema: it creates the event guard itself,
+    # and the guard's own migration restates it for databases created before it.
+    assert set(guard_statements) <= set(RUN_MIGRATIONS[0].statements)
     assert len(drop_statements) == 1
     active_permit_statements = [
         (migration.version, statement)
@@ -409,6 +410,7 @@ def _example_table() -> TableRequirement:
         checks=("example_name_check",),
         indexes=("example_name_idx",),
         unique_indexes=("example_key_idx",),
+        triggers=("example_guard",),
     )
 
 
@@ -422,6 +424,7 @@ def _example_catalog() -> dict[str, dict[str, Any]]:
             "checks": ["example_name_check"],
             "keys": [("p", ["id"]), ("u", ["name"])],
             "fks": [(["id"], "parent")],
+            "triggers": ["example_guard"],
         }
     }
 
@@ -477,6 +480,7 @@ _DAMAGED_CATALOGS: list[tuple[str, str]] = [
     ("primary_key", "primary key example (id)"),
     ("unique", "unique key example (name)"),
     ("foreign_key", "foreign key example (id) -> parent"),
+    ("trigger", "trigger example_guard"),
 ]
 
 
@@ -502,6 +506,9 @@ def _damaged_catalog(kind: str) -> dict[str, dict[str, Any]]:
         table["keys"] = [("p", ["id"]), ("u", ["legacy_column"])]
     elif kind == "foreign_key":
         table["fks"] = []
+    elif kind == "trigger":
+        # A disabled or dropped guard trigger lets writes skip the invariant it enforces.
+        table["triggers"] = []
     return catalog
 
 
@@ -524,6 +531,42 @@ async def test_verify_migrations_rejects_a_fully_recorded_ledger_missing_an_obje
     assert expected in str(excinfo.value)
     assert "example" in str(excinfo.value)
     assert conn.executed == []
+
+
+def test_an_index_is_declared_once_for_its_ddl_and_its_verification() -> None:
+    unique = IndexRequirement("example_key_idx", "example", "(name) WHERE name <> ''", unique=True)
+    plain = IndexRequirement("example_name_idx", "example", "(name)")
+    elsewhere = IndexRequirement("other_idx", "other", "(id)")
+
+    assert unique.ddl == (
+        "CREATE UNIQUE INDEX IF NOT EXISTS example_key_idx ON example (name) WHERE name <> ''"
+    )
+    assert plain.ddl == "CREATE INDEX IF NOT EXISTS example_name_idx ON example (name)"
+    declared = TableRequirement(name="example").with_indexes((unique, plain, elsewhere))
+    assert declared.indexes == ("example_name_idx",)
+    assert declared.unique_indexes == ("example_key_idx",)
+
+
+def test_every_runs_index_statement_comes_from_its_declaration() -> None:
+    """A migration that writes its own index DDL could create what no reader verifies."""
+    from dlightrag.adapters.postgres.runtime import run_store
+
+    declared = {index.ddl for index in run_store._RUN_INDEXES}
+    statements = {
+        part.strip()
+        for migration in run_store.RUN_MIGRATIONS
+        for statement in migration.statements
+        for part in statement.split(";")
+        if re.search(r"CREATE (UNIQUE )?INDEX", part)
+    }
+
+    assert statements == declared
+    verified = {
+        name
+        for table in run_store.RUN_SCHEMA_TABLES
+        for name in (*table.indexes, *table.unique_indexes)
+    }
+    assert verified == {index.name for index in run_store._RUN_INDEXES}
 
 
 async def test_web_conversation_migration_creates_only_final_run_links() -> None:

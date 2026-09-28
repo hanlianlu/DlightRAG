@@ -197,6 +197,8 @@ class _SchemaConn:
     async def fetchval(self, sql: str, *args: Any) -> Any:
         if "dlightrag_schema_migrations" in sql:
             return self.ledger_exists
+        if "to_regclass('dlightrag_answer_runs')" in sql:
+            return False  # a RunRuntime database holds no pre-RunRuntime Answer table
         if "pg_inherits" in sql:
             return True  # every declared parent index has a child index
         if "pg_catalog.pg_class" in sql:
@@ -248,6 +250,8 @@ class _SchemaConn:
                 {"columns": list(key.columns), "referenced": key.references}
                 for key in table.foreign_keys
             ]
+        if "pg_trigger" in sql:
+            return [{"name": name} for name in table.triggers]
         raise AssertionError(f"unexpected fetch: {sql}")
 
     async def execute(self, sql: str, *args: Any) -> str:
