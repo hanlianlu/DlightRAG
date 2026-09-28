@@ -112,8 +112,11 @@ _TRANSIENT_PROVIDER_CLASS_NAMES = frozenset(
     }
 )
 # An error event inside an Anthropic stream arrives on the 200 response, so only
-# its documented error type says the provider was overloaded or failed internally.
-_TRANSIENT_ANTHROPIC_ERROR_TYPES = frozenset({"api_error", "overloaded_error", "rate_limit_error"})
+# its documented error type says the provider was overloaded, rate limited,
+# timed out, or failed internally.
+_TRANSIENT_ANTHROPIC_ERROR_TYPES = frozenset(
+    {"api_error", "overloaded_error", "rate_limit_error", "timeout_error"}
+)
 _TRANSIENT_STORAGE_TEXT = (
     "broken pipe",
     "closed channel",

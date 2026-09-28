@@ -322,6 +322,7 @@ async def _anthropic_stream_error(error_type: str) -> BaseException:
         ("overloaded_error", "providers"),
         ("api_error", "providers"),
         ("rate_limit_error", "providers"),
+        ("timeout_error", "providers"),
         ("invalid_request_error", None),
         ("authentication_error", None),
     ],
