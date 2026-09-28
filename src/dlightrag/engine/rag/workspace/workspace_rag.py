@@ -2,6 +2,8 @@
 """One-workspace storage-neutral RAG capability."""
 
 import asyncio
+import heapq
+import itertools
 import logging
 import uuid
 from collections.abc import (
@@ -124,6 +126,8 @@ _REMOTE_DOWNLOAD_CONCURRENCY = 8
 # One retry pipeline pass is bounded like a remote ingest window: its remote
 # sources are materialized together.
 _RETRY_BATCH_SIZE = _REMOTE_INGEST_BATCH_SIZE
+# Per outcome kind, a retry reports details for at most this many documents.
+_RETRY_DETAIL_LIMIT = 500
 _NO_RETRY_RESULT: Mapping[str, Any] = MappingProxyType(
     {"processed": 0, "errors": ["retry ingestion failed"], "results": []}
 )
@@ -1777,11 +1781,19 @@ class WorkspaceRag:
             # first destructive retry starts.
             await cohort_callback(cohort)
 
-        succeeded: list[dict[str, Any]] = []
-        still_failed: list[dict[str, Any]] = []
         succeeded_count = 0
         failed_count = 0
         details_truncated = False
+        # Each detail list is bounded, and keeps the documents earliest in the
+        # cohort whatever order outcomes settle in: a shared pass settles its
+        # replays after the documents preflight settles, while callers read the
+        # details of the cohort's leading documents.
+        positions = {doc_id: index for index, doc_id in enumerate(cohort)}
+        sequence = itertools.count()
+        details: dict[str, list[tuple[int, int, dict[str, Any]]]] = {
+            "succeeded": [],
+            "failed": [],
+        }
 
         async def record(doc_id: str, outcome: str, detail: dict[str, Any]) -> None:
             nonlocal details_truncated, failed_count, succeeded_count
@@ -1791,11 +1803,15 @@ class WorkspaceRag:
                 succeeded_count += 1
             else:
                 failed_count += 1
-            target = succeeded if outcome == "succeeded" else still_failed
-            if len(target) < 500:
-                target.append(detail)
-            else:
+            kept = details["succeeded" if outcome == "succeeded" else "failed"]
+            position = positions.get(doc_id, len(cohort))
+            heapq.heappush(kept, (-position, next(sequence), detail))
+            if len(kept) > _RETRY_DETAIL_LIMIT:
+                heapq.heappop(kept)  # the latest cohort position
                 details_truncated = True
+
+        def cohort_ordered(kept: list[tuple[int, int, dict[str, Any]]]) -> list[dict[str, Any]]:
+            return [detail for _position, _sequence, detail in sorted(kept, reverse=True)]
 
         pending: list[_RetryRequest] = []
         # Locators whose owners a pending replay may retire, and those of the
@@ -1861,8 +1877,8 @@ class WorkspaceRag:
             "retried": retried,
             "succeeded": succeeded_count,
             "failed": failed_count,
-            "succeeded_docs": succeeded,
-            "failed_docs": still_failed,
+            "succeeded_docs": cohort_ordered(details["succeeded"]),
+            "failed_docs": cohort_ordered(details["failed"]),
             "details_truncated": details_truncated,
         }
 

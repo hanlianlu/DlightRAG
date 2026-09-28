@@ -4337,6 +4337,50 @@ def _fake_engine(
     return SimpleNamespace(aingest_files=aingest_files), passes
 
 
+async def test_retry_details_keep_the_cohort_leaders_whatever_order_outcomes_settle(
+    test_config: DlightragConfig,
+) -> None:
+    from dlightrag.application.corpus_admin.mutations import _retry_outcomes
+
+    service = _service(test_config)
+    service._initialized = True
+    finalized = [f"doc-done-{index}" for index in range(600)]
+    # A resumed all-retryable cohort: the third document failed last time and
+    # replays now, after preflight has already settled 600 finalized ones.
+    cohort = (*finalized[:2], "doc-retry", *finalized[2:])
+    statuses = {
+        doc_id: SimpleNamespace(status="processed", file_path=f"{doc_id}.pdf")
+        for doc_id in finalized
+    }
+    statuses["doc-retry"] = SimpleNamespace(status="failed", file_path="retry.pdf")
+    stores = AsyncMock()
+    stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: statuses[doc_id] for doc_id in doc_ids
+    }
+    service._lightrag_stores = stores
+    rows: dict[str, dict[str, object]] = {
+        doc_id: {"_dlightrag_finalization_complete": True} for doc_id in finalized
+    }
+    rows["doc-retry"] = {
+        "filename": "retry.pdf",
+        "source_uri": "bynder://asset/retry",
+        "download_locator": "https://cdn.example.com/retry.pdf",
+    }
+    service._metadata_index = AsyncMock()
+    _serve_metadata(service._metadata_index, rows)
+    _replay_each(service, AsyncMock(return_value={"processed": 1, "doc_id": "doc-retry"}))
+
+    result = await service.aretry_failed_docs(cohort_doc_ids=cohort)
+
+    assert (result["succeeded"], result["failed"]) == (601, 0)
+    assert result["details_truncated"] is True
+    assert len(result["succeeded_docs"]) == 500
+    assert [item["doc_id"] for item in result["succeeded_docs"][:3]] == list(cohort[:3])
+    # The Application reads the leading documents' details: every one is ready.
+    outcomes = _retry_outcomes(result, list(cohort))
+    assert {item["status"] for item in outcomes} == {"ready"}
+
+
 async def test_retry_replays_admitted_documents_in_one_shared_pass(
     test_config: DlightragConfig,
 ) -> None:
