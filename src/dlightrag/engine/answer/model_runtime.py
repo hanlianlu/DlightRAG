@@ -4,7 +4,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 class WebSourceRuntimeSettings:
     """Immutable credentials and independently ordered provider chains."""
 
-    exa_api_key: str | None = None
-    tavily_api_key: str | None = None
+    exa_api_key: str | None = field(default=None, repr=False)
+    tavily_api_key: str | None = field(default=None, repr=False)
     search_providers: tuple[str, ...] = ()
     extract_providers: tuple[str, ...] = ()
 

@@ -2,6 +2,7 @@
 """Canonical nine-section configuration contracts."""
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -21,12 +22,15 @@ from dlightrag.engine.rag.workspace.settings import (
     MinerUSidecarSettings,
     ParserSidecarsSettings,
 )
+from tests.support.settings_models import names_a_config_field
+
+_REPO = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
 def _clean_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
-        if key.startswith("DLIGHTRAG_"):
+        if key.upper().startswith("DLIGHTRAG_"):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
 
@@ -106,9 +110,27 @@ def test_old_flat_constructor_field_is_rejected() -> None:
         DlightragConfig(postgres_host="old")  # type: ignore[call-arg]
 
 
-def test_old_flat_environment_field_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DLIGHTRAG_POSTGRES_HOST", "old")
+@pytest.mark.parametrize(
+    "name",
+    ["DLIGHTRAG_POSTGRES_HOST", "DLIGHTRAG_OPENAI_API_KEY", "DLIGHTRAG_POSTGRES_SHARED_BUFFERS"],
+)
+def test_retired_environment_names_are_rejected(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv(name, "old")
     with pytest.raises(ValueError, match="Unknown DlightRAG environment variables"):
+        DlightragConfig()
+
+
+def test_the_environment_gate_ignores_case_like_the_settings_do(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("dlightrag_postgres_host", "old")
+    with pytest.raises(ValueError, match="dlightrag_postgres_host"):
+        DlightragConfig()
+
+
+def test_a_renamed_compose_input_names_its_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DLIGHTRAG_POSTGRES_SHARED_BUFFERS", "8GB")
+    with pytest.raises(ValueError, match="-> COMPOSE_POSTGRES_SHARED_BUFFERS"):
         DlightragConfig()
 
 
@@ -117,10 +139,24 @@ def test_auxiliary_environment_is_not_misread_as_server_config(
 ) -> None:
     monkeypatch.setenv("DLIGHTRAG_API_URL", "https://client.example")
     monkeypatch.setenv("DLIGHTRAG_API_TOKEN", "client-token")
-    monkeypatch.setenv("DLIGHTRAG_POSTGRES_SHARED_BUFFERS", "8GB")
+    monkeypatch.setenv("COMPOSE_POSTGRES_SHARED_BUFFERS", "8GB")
     monkeypatch.setenv("COMPOSE_GLOBAL_SKILLS_DIR", "/srv/operator-skills")
 
     assert DlightragConfig().interfaces.api.host == "127.0.0.1"
+
+
+@pytest.mark.parametrize("compose_file", ["docker-compose.yml", "packages/memory/compose.yaml"])
+def test_compose_uses_the_reserved_namespace_only_for_config_fields(compose_file: str) -> None:
+    """A .env shared by Compose and the application may hold only names the application accepts.
+
+    Compose-only inputs use COMPOSE_*; any DLIGHTRAG_* name Compose reads or sets must be a
+    configuration field, or the application refuses to start from that .env.
+    """
+    compose = (_REPO / compose_file).read_text(encoding="utf-8")
+    names = set(re.findall(r"\$\{?(DLIGHTRAG_[A-Z0-9_]+)", compose))
+    names |= set(re.findall(r"^\s+-?\s*(DLIGHTRAG_[A-Z0-9_]+)[:=]", compose, re.M))
+
+    assert sorted(name for name in names if not names_a_config_field(name)) == []
 
 
 def test_settings_are_deeply_immutable() -> None:

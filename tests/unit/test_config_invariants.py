@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import ssl
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
+from dlightrag.application.access import AuthenticationSettings
 from dlightrag.application.config import (
     AccessSectionSettings,
     AnswerConfig,
@@ -21,18 +23,21 @@ from dlightrag.application.config import (
     InterfacesSettings,
     LightRAGStorageSettings,
     McpInterfaceSettings,
+    ObservabilitySettings,
     PostgresSettings,
     StorageSettings,
     WebSourceProviderConfig,
     WebSourcesConfig,
     load_config,
 )
+from dlightrag.application.config.sections import _SECRET_FIELD_PATTERNS
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelSettings,
     ModelsSettings,
     RerankSettings,
 )
+from dlightrag.engine.answer.model_runtime import WebSourceRuntimeSettings
 from dlightrag.engine.rag.workspace.settings import (
     BM25ProfileSettings,
     CorpusSettings,
@@ -41,15 +46,17 @@ from dlightrag.engine.rag.workspace.settings import (
     MinerUSidecarSettings,
     ParserSidecarsSettings,
     RetrievalSettings,
+    SourceSettings,
     VisualAssetSettings,
     VLMSidecarSettings,
 )
+from tests.support.settings_models import settings_models
 
 
 @pytest.fixture(autouse=True)
 def _clean_config_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in tuple(os.environ):
-        if key.startswith("DLIGHTRAG_") or key in {
+        if key.upper().startswith("DLIGHTRAG_") or key in {
             "LIGHTRAG_PARSER",
             "POSTGRES_SERVER_SETTINGS",
             "POSTGRES_WORKSPACE",
@@ -584,3 +591,132 @@ def test_config_composes_canonical_models_without_snapshot_copy() -> None:
     assert config.answer is answer
     assert runtime.models is config.models
     assert runtime.corpus is config.corpus
+
+
+_SECRET = "zq7X-never-echo-nested-K9wP"
+
+
+def _holds_text(annotation: Any) -> bool:
+    return annotation in (str, SecretStr) or any(_holds_text(arg) for arg in get_args(annotation))
+
+
+def _secret_named(name: str) -> bool:
+    return any(pattern in name for pattern in _SECRET_FIELD_PATTERNS)
+
+
+def test_every_secret_named_setting_is_hidden_from_repr() -> None:
+    """A new secret field that forgets repr=False fails here, before it can reach a log."""
+    exposed = [
+        f"{model.__name__}.{name}"
+        for model in settings_models()
+        for name, field in model.model_fields.items()
+        if _secret_named(name) and _holds_text(field.annotation) and field.repr
+    ]
+    exposed += [
+        f"{projection.__name__}.{item.name}"
+        for projection in (AuthenticationSettings, WebSourceRuntimeSettings)
+        for item in dataclasses.fields(projection)
+        if _secret_named(item.name) and item.repr
+    ]
+
+    assert exposed == []
+
+
+def test_every_settings_model_hides_rejected_input_in_errors() -> None:
+    """A validation error must not echo a secret that sits in the rejected input."""
+    exposed = sorted(
+        model.__name__
+        for model in settings_models()
+        if model.model_config.get("hide_input_in_errors") is not True
+    )
+
+    assert exposed == []
+
+
+def test_nested_secret_settings_never_render_in_repr() -> None:
+    """The root redacts its own repr; nested settings and runtime projections hide secrets too."""
+    rendered = [
+        ModelSettings(model="m", api_key=_SECRET),
+        EmbeddingSettings(model="e", api_key=_SECRET),
+        RerankSettings(api_key=_SECRET),
+        PostgresSettings(password=_SECRET),
+        LightRAGStorageSettings(
+            vector_storage="MilvusVectorDBStorage", milvus_uri=_SECRET, milvus_token=_SECRET
+        ),
+        AccessSectionSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
+        ObservabilitySettings(langfuse_secret_key=_SECRET),
+        WebSourceProviderConfig(api_key=_SECRET),
+        WebSourcesConfig(exa=WebSourceProviderConfig(api_key=_SECRET)),
+        MinerUSidecarSettings(api_token=_SECRET),
+        SourceSettings(blob_connection_string=_SECRET),
+        WebSourceRuntimeSettings(exa_api_key=_SECRET, tavily_api_key=_SECRET),
+        AuthenticationSettings(api_token=_SECRET, jwt_verification_key=_SECRET),
+    ]
+    for item in rendered:
+        assert _SECRET not in repr(item), type(item).__name__
+        assert _SECRET not in str(item), type(item).__name__
+
+
+def test_root_config_renders_no_part_of_a_secret() -> None:
+    """str() and f-strings go through pydantic field reprs unless the root routes them."""
+    # Gateway credentials need not match any secret name pattern.
+    headers = {
+        "extra_headers": {"Helicone-Auth": _SECRET, "Cookie": _SECRET},
+        "authorization": {"bearer": _SECRET},
+    }
+    config = DlightragConfig(
+        storage=StorageSettings(postgres=PostgresSettings(password=_SECRET)),
+        models=ModelsSettings(
+            chat={"default": {"model": "m", "model_kwargs": headers}},  # pyright: ignore[reportArgumentType]
+        ),
+    )
+
+    for text in (repr(config), str(config), f"{config}", config.model_dump_json()):
+        assert _SECRET[:4] not in text
+        assert _SECRET[-4:] not in text
+    assert _SECRET not in repr(config.models.chat.default)
+
+
+def test_dotenv_may_carry_client_and_test_names(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DLIGHTRAG_API_TOKEN=client-token\n"
+        "dlightrag_client_timeout=30\n"
+        "DLIGHTRAG_RUN_LOAD=1\n"
+        "DLIGHTRAG_E2E_ARTIFACT_DIR=/tmp/e2e\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(env_file)
+
+    assert config.access.api_token is None
+
+
+def test_client_and_test_names_are_not_settings_elsewhere() -> None:
+    """Only a shared .env may carry them; constructor values stay strict."""
+    with pytest.raises(ValidationError, match="api_token"):
+        DlightragConfig(api_token="client-token")  # type: ignore[call-arg]
+
+
+def test_a_renamed_compose_input_in_dotenv_names_its_replacement(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text("DLIGHTRAG_POSTGRES_SHARED_BUFFERS=8GB\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="-> COMPOSE_POSTGRES_SHARED_BUFFERS"):
+        load_config(env_file)
+
+
+def test_nested_settings_hide_rejected_input_in_errors() -> None:
+    with pytest.raises(ValidationError) as caught:
+        PostgresSettings.model_validate({"passwrod": _SECRET})
+    assert _SECRET not in str(caught.value)
+
+    with pytest.raises(ValidationError) as caught:
+        WebSourceProviderConfig.model_validate({"api_key": _SECRET, "unexpected": _SECRET})
+    assert _SECRET not in str(caught.value)

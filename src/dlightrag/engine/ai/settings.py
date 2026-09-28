@@ -71,7 +71,9 @@ def _canonical_provider(value: Any) -> Any:
 class FrozenSettings(BaseModel):
     """Strict, frozen base for all canonical settings."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, arbitrary_types_allowed=True, hide_input_in_errors=True
+    )
 
 
 class ModelSettings(FrozenSettings):
@@ -79,7 +81,7 @@ class ModelSettings(FrozenSettings):
 
     provider: ChatProvider = "openai"
     model: str
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     base_url: str | None = None
     api_family: ApiFamily = "chat_completion"
     structured_output: Literal["auto", "json_schema", "json_object"] = "auto"
@@ -88,8 +90,9 @@ class ModelSettings(FrozenSettings):
     max_retries: int = Field(default=3, ge=0)
     reasoning: ReasoningLevel | None = None
     agentic_reasoning: ReasoningLevel | None = None
-    model_kwargs: Mapping[str, Any] = Field(default_factory=dict)
-    agentic_model_kwargs: Mapping[str, Any] = Field(default_factory=dict)
+    # Provider options may carry credentials, e.g. gateway request headers.
+    model_kwargs: Mapping[str, Any] = Field(default_factory=dict, repr=False)
+    agentic_model_kwargs: Mapping[str, Any] = Field(default_factory=dict, repr=False)
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -320,7 +323,7 @@ class EmbeddingSettings(FrozenSettings):
         "voyage",
     ] = "voyage"
     model: str = "voyage-multimodal-3.5"
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     base_url: str | None = None
     dim: int = Field(default=1024, ge=1)
     max_token_size: int = Field(default=8192, ge=1)
@@ -336,14 +339,14 @@ class RerankSettings(FrozenSettings):
     strategy: RerankStrategy = "chat_llm_reranker"
     provider: ChatProvider | None = None
     model: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     base_url: str | None = None
     input_modality: InputModality = "auto"
     score_threshold: float | None = Field(default=None, ge=0)
     max_concurrency: int = Field(default=8, ge=1)
     batch_size: int = Field(default=8, ge=1)
     temperature: float | None = Field(default=None, ge=0)
-    model_kwargs: Mapping[str, Any] = Field(default_factory=dict)
+    model_kwargs: Mapping[str, Any] = Field(default_factory=dict, repr=False)
 
     @field_validator("provider", mode="before")
     @classmethod

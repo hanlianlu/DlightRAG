@@ -7,6 +7,9 @@
 #
 #   docker compose -f packages/memory/compose.yaml up -d
 #   dlightrag-memory-mcp --dsn postgres://dlightrag:dlightrag@127.0.0.1:5432/dlightrag
+#
+# COMPOSE_MEMORY_POSTGRES_DATABASE, COMPOSE_MEMORY_POSTGRES_USER, and
+# COMPOSE_MEMORY_POSTGRES_PASSWORD override the database credentials.
 services:
   postgres:
     restart: unless-stopped
@@ -17,9 +20,9 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_DB: ${DLIGHTRAG_MEMORY_POSTGRES_DATABASE:-dlightrag}
-      POSTGRES_USER: ${DLIGHTRAG_MEMORY_POSTGRES_USER:-dlightrag}
-      POSTGRES_PASSWORD: ${DLIGHTRAG_MEMORY_POSTGRES_PASSWORD:-dlightrag}
+      POSTGRES_DB: ${COMPOSE_MEMORY_POSTGRES_DATABASE:-dlightrag}
+      POSTGRES_USER: ${COMPOSE_MEMORY_POSTGRES_USER:-dlightrag}
+      POSTGRES_PASSWORD: ${COMPOSE_MEMORY_POSTGRES_PASSWORD:-dlightrag}
     volumes:
       - memory_pg_data:/var/lib/postgresql
     command:

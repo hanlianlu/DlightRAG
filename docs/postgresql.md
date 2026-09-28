@@ -65,7 +65,14 @@ DlightRAG splits PostgreSQL tuning into two layers:
   `maintenance_work_mem`, WAL settings, preload libraries) belong to the
   PostgreSQL deployment. The checked-in Docker compose stack carries a local
   single-node profile; production deployments should tune these in their own
-  Postgres configuration.
+  Postgres configuration. The compose profile reads its overrides from
+  `COMPOSE_POSTGRES_SHARED_BUFFERS`, `COMPOSE_POSTGRES_WORK_MEM`,
+  `COMPOSE_POSTGRES_MAINTENANCE_WORK_MEM`, `COMPOSE_POSTGRES_EFFECTIVE_CACHE_SIZE`,
+  `COMPOSE_POSTGRES_MAX_CONNECTIONS`, and `COMPOSE_POSTGRES_SHM_SIZE`, set in the
+  shell or the `.env` beside `docker-compose.yml`. Compose-only inputs stay out
+  of the application-reserved `DLIGHTRAG_*` namespace, where the application
+  rejects any name that is neither a configuration field nor a documented
+  client or test variable.
 - **Docker shared memory** is separate from PostgreSQL memory GUCs. The
   checked-in compose stack sets `shm_size: 8gb` so HNSW index builds and
   rebuilds have enough `/dev/shm` headroom. This should be kept in proportion
@@ -173,8 +180,8 @@ The approximate initial internal budget is
 `ceil(margin * chunk_top_k / estimated_filter_selectivity)`; the SQL filter and
 `LIMIT` still determine the exact result. The optimization therefore changes
 work performed, not result correctness. Override the two server settings with
-`DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED` and
-`DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN` only after comparing
+`COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED` and
+`COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN` only after comparing
 representative `EXPLAIN (ANALYZE, BUFFERS)` plans and latency. External
 PostgreSQL deployments should set the equivalent GUCs in their own server or
 session configuration.

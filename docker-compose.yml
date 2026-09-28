@@ -150,7 +150,7 @@ services:
     image: dlightrag-postgres:pg18
     build:
       context: postgres
-    shm_size: ${DLIGHTRAG_POSTGRES_SHM_SIZE:-8gb}
+    shm_size: ${COMPOSE_POSTGRES_SHM_SIZE:-8gb}
     ports:
       - "127.0.0.1:5432:5432"
     environment:
@@ -168,18 +168,18 @@ services:
       # corpus.retrieval.chunk_top_k still owns the requested result count;
       # these GUCs only reduce rescoring retries and do not change correctness.
       - "-c"
-      - "pg_textsearch.filtered_seed=${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
+      - "pg_textsearch.filtered_seed=${COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
       - "-c"
-      - "pg_textsearch.filtered_seed_margin=${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
+      - "pg_textsearch.filtered_seed_margin=${COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
       # Memory
       - "-c"
-      - "shared_buffers=${DLIGHTRAG_POSTGRES_SHARED_BUFFERS:-8GB}"
+      - "shared_buffers=${COMPOSE_POSTGRES_SHARED_BUFFERS:-8GB}"
       - "-c"
-      - "work_mem=${DLIGHTRAG_POSTGRES_WORK_MEM:-256MB}"
+      - "work_mem=${COMPOSE_POSTGRES_WORK_MEM:-256MB}"
       - "-c"
-      - "maintenance_work_mem=${DLIGHTRAG_POSTGRES_MAINTENANCE_WORK_MEM:-2GB}"
+      - "maintenance_work_mem=${COMPOSE_POSTGRES_MAINTENANCE_WORK_MEM:-2GB}"
       - "-c"
-      - "effective_cache_size=${DLIGHTRAG_POSTGRES_EFFECTIVE_CACHE_SIZE:-18GB}"
+      - "effective_cache_size=${COMPOSE_POSTGRES_EFFECTIVE_CACHE_SIZE:-18GB}"
       # SSD / IO
       - "-c"
       - "random_page_cost=1.1"
@@ -195,7 +195,7 @@ services:
       - "max_parallel_maintenance_workers=4"
       # Connections
       - "-c"
-      - "max_connections=${DLIGHTRAG_POSTGRES_MAX_CONNECTIONS:-80}"
+      - "max_connections=${COMPOSE_POSTGRES_MAX_CONNECTIONS:-80}"
       # Disable JIT (no benefit for vector/JSONB workloads, saves compilation overhead)
       - "-c"
       - "jit=off"

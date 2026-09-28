@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared test fixtures for dlightrag tests."""
 
-import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -226,13 +225,13 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
                 default=ModelSettings(
                     model="z-ai/glm-5.3-flash",
                     base_url="https://openrouter.ai/api/v1",
-                    api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+                    api_key="test-key-for-unit-tests",
                 )
             ),
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
-                api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+                api_key="test-key-for-unit-tests",
                 startup_probe=False,
             ),
         },

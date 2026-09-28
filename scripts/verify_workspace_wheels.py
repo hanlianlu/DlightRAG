@@ -1257,7 +1257,7 @@ def smoke_installed(dist_dir: Path, *, config_path: Path) -> None:
     base_env = dict(os.environ)
     base_env.pop("PYTHONPATH", None)
     for name in tuple(base_env):
-        if name.startswith("DLIGHTRAG_"):
+        if name.upper().startswith("DLIGHTRAG_"):
             base_env.pop(name)
     base_env["PYTHONSAFEPATH"] = "1"
 

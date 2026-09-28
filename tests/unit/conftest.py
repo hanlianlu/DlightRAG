@@ -117,7 +117,7 @@ def _no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
     monkeypatch.setattr(config_module, "_find_yaml_config", _yaml_config_ignoring_repo_file)
     for key in list(os.environ):
-        if key.startswith("DLIGHTRAG_"):
+        if key.upper().startswith("DLIGHTRAG_"):
             monkeypatch.delenv(key, raising=False)
 
 

@@ -17,8 +17,9 @@ import math
 import os
 import ssl
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlencode, urlsplit
 
@@ -31,7 +32,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, NoDecode, SettingsConfigDict
 
 from dlightrag.application.config.yaml_source import Yaml12ConfigSettingsSource
 from dlightrag.application.connections.policy import ConnectionPolicy
@@ -59,22 +60,75 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://[::1]:*",
 ]
 _LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
-_AUXILIARY_ENV_NAMES = {
-    "DLIGHTRAG_API_TOKEN",
-    "DLIGHTRAG_API_URL",
-    "DLIGHTRAG_CLIENT_TIMEOUT",
-    "DLIGHTRAG_OPENAI_API_KEY",
-    # Compose-only PostgreSQL container tuning; these are interpolated by
-    # docker-compose and intentionally are not application config fields.
-    "DLIGHTRAG_POSTGRES_EFFECTIVE_CACHE_SIZE",
-    "DLIGHTRAG_POSTGRES_MAINTENANCE_WORK_MEM",
-    "DLIGHTRAG_POSTGRES_MAX_CONNECTIONS",
-    "DLIGHTRAG_POSTGRES_SHARED_BUFFERS",
-    "DLIGHTRAG_POSTGRES_SHM_SIZE",
-    "DLIGHTRAG_POSTGRES_WORK_MEM",
-    "DLIGHTRAG_RUN_E2E_PG18",
-}
+#: Non-config names that share the reserved namespace, accepted from the process
+#: environment and from a .env shared with clients and tests. Compose-only inputs
+#: never join them: they use COMPOSE_* instead.
+_AUXILIARY_ENV_NAMES = frozenset(
+    {
+        # HTTP client adapter
+        "DLIGHTRAG_API_TOKEN",
+        "DLIGHTRAG_API_URL",
+        "DLIGHTRAG_CLIENT_TIMEOUT",
+        # Test gates
+        "DLIGHTRAG_RUN_E2E_PG18",
+        "DLIGHTRAG_RUN_LOAD",
+    }
+)
 _AUXILIARY_ENV_PREFIXES = ("DLIGHTRAG_E2E_",)
+#: Compose-only inputs that left the reserved namespace, named in the startup error.
+_RENAMED_ENV_NAMES = MappingProxyType(
+    {
+        **{
+            f"DLIGHTRAG_POSTGRES_{suffix}": f"COMPOSE_POSTGRES_{suffix}"
+            for suffix in (
+                "EFFECTIVE_CACHE_SIZE",
+                "MAINTENANCE_WORK_MEM",
+                "MAX_CONNECTIONS",
+                "PG_TEXTSEARCH_FILTERED_SEED",
+                "PG_TEXTSEARCH_FILTERED_SEED_MARGIN",
+                "SHARED_BUFFERS",
+                "SHM_SIZE",
+                "WORK_MEM",
+            )
+        },
+        **{
+            f"DLIGHTRAG_MEMORY_POSTGRES_{suffix}": f"COMPOSE_MEMORY_POSTGRES_{suffix}"
+            for suffix in ("DATABASE", "USER", "PASSWORD")
+        },
+        "DLIGHTRAG_SKILLS_DIR": "COMPOSE_GLOBAL_SKILLS_DIR",
+    }
+)
+
+
+def _is_auxiliary_env_name(name: str) -> bool:
+    upper = name.upper()
+    return upper in _AUXILIARY_ENV_NAMES or upper.startswith(_AUXILIARY_ENV_PREFIXES)
+
+
+def _unknown_environment(names: Sequence[str]) -> ValueError:
+    renamed = [
+        f"{name} -> {_RENAMED_ENV_NAMES[name.upper()]}"
+        for name in names
+        if name.upper() in _RENAMED_ENV_NAMES
+    ]
+    hint = f"; renamed: {', '.join(renamed)}" if renamed else ""
+    return ValueError(f"Unknown DlightRAG environment variables: {list(names)}{hint}")
+
+
+def _drop_auxiliary_dotenv_names(source: DotEnvSettingsSource) -> None:
+    """Let a .env shared with clients and tests carry their names; they are not settings.
+
+    Only this source is filtered: constructor values and config.yaml keep rejecting
+    unknown keys. A renamed Compose input fails here with its replacement named.
+    """
+    renamed = sorted(name for name in source.env_vars if name.upper() in _RENAMED_ENV_NAMES)
+    if renamed:
+        raise _unknown_environment(renamed)
+    source.env_vars = {
+        name: value for name, value in source.env_vars.items() if not _is_auxiliary_env_name(name)
+    }
+
+
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
 
@@ -107,7 +161,7 @@ def _find_yaml_config() -> Path | None:
 class CitationHighlightConfig(BaseModel):
     """Optional semantic highlighting for cited source snippets."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     enabled: bool = True
     timeout: float = Field(default=10.0, gt=0)
@@ -120,7 +174,7 @@ class CitationHighlightConfig(BaseModel):
 class CitationsConfig(BaseModel):
     """Citation validation and UI enrichment configuration."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     highlights: CitationHighlightConfig = Field(default_factory=CitationHighlightConfig)
 
@@ -128,7 +182,7 @@ class CitationsConfig(BaseModel):
 class AnswerConfig(BaseModel):
     """Final answer generation controls."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     max_attachments: int = Field(
         default=6,
@@ -202,7 +256,7 @@ class AnswerConfig(BaseModel):
 class LaneRuntimeConfig(BaseModel):
     """Per-lane local workers and deployment-wide nonterminal admission limit."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     worker_concurrency: int = Field(ge=1)
     max_nonterminal_runs: int = Field(ge=1)
@@ -211,7 +265,7 @@ class LaneRuntimeConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Operation-neutral durable RunRuntime admission and retention."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     query: LaneRuntimeConfig = LaneRuntimeConfig(
         worker_concurrency=16,
@@ -243,7 +297,7 @@ class ConnectionsSettings(ConnectionPolicy):
 class ArtifactPublicationConfig(BaseModel):
     """Independent Agent workspace, publication, and browser-preview budgets."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     max_artifacts: int = Field(default=20, ge=1)
     max_file_bytes: int = Field(default=30 * 1024 * 1024, ge=1)
@@ -269,7 +323,7 @@ class SessionNotesConfig(BaseModel):
     that does not fit is refused for that note alone — never truncated, never evicted.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     max_count: int = Field(
         default=64,
@@ -296,7 +350,7 @@ class SessionNotesConfig(BaseModel):
 class AgentExecutionConfig(BaseModel):
     """Optional Agent execution: no environment, or one confined to its workspace."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     @field_validator("skills_root", "owner_skills_root")
     @classmethod
@@ -396,7 +450,7 @@ class AgentExecutionConfig(BaseModel):
 class WebConversationsConfig(BaseModel):
     """Browser conversation surface; retention follows RuntimeConfig."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     active_html_preview_enabled: bool = Field(
         default=True,
@@ -407,9 +461,9 @@ class WebConversationsConfig(BaseModel):
 class WebSourceProviderConfig(BaseModel):
     """Credential for one first-class Web source provider."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -427,7 +481,7 @@ class WebSourcesConfig(BaseModel):
     explicit empty tuple disables that operation while retaining credentials.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     search_providers: tuple[Literal["exa", "tavily"], ...] | None = None
     extract_providers: tuple[Literal["exa", "tavily"], ...] | None = None
@@ -482,7 +536,7 @@ class WebSourcesConfig(BaseModel):
 class AccessControlRuleConfig(BaseModel):
     """Map one verified JWT claim value to DlightRAG actions."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     claim: str
     value: str
@@ -493,32 +547,70 @@ class AccessControlRuleConfig(BaseModel):
 class AccessControlConfig(BaseModel):
     """DlightRAG resource authorization settings."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     mode: Literal["allow_all", "jwt_claims"] = "allow_all"
     rules: list[AccessControlRuleConfig] = Field(default_factory=list)
 
 
+#: Name fragments whose values are secrets, in settings fields and in free-form
+#: provider options such as request headers.
+_SECRET_FIELD_PATTERNS: tuple[str, ...] = (
+    "api_key",
+    "api-key",
+    "api_secret",
+    "api_token",
+    "authorization",
+    "secret",
+    "verification_key",
+    "password",
+    "connection_string",
+    "milvus_uri",
+    "account_key",
+    "sas_token",
+    "token",
+)
+
+
 def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, Any]:
-    """Recursively redact values whose keys match sensitive patterns."""
+    """Recursively redact values whose keys match sensitive patterns.
+
+    A matching key hides any non-empty text or container under it; numbers and
+    flags (for example ``max_tokens``) stay readable.
+    """
     result: dict[str, Any] = {}
     for key, value in data.items():
         if any(pattern in key.lower() for pattern in patterns):
-            if isinstance(value, str) and len(value) > 8:
-                result[key] = value[:4] + "***" + value[-4:]
-            elif isinstance(value, str):
-                result[key] = "***"
-            else:
-                result[key] = value
+            result[key] = "***" if value and isinstance(value, str | dict | list | tuple) else value
         elif isinstance(value, dict):
             result[key] = _redact_dict(value, patterns)
-        elif isinstance(value, list):
-            result[key] = [
+        elif isinstance(value, list | tuple):
+            result[key] = type(value)(
                 _redact_dict(item, patterns) if isinstance(item, dict) else item for item in value
-            ]
+            )
         else:
             result[key] = value
     return result
+
+
+def _mask_hidden_fields(model: BaseModel, data: dict[str, Any]) -> dict[str, Any]:
+    """Mask every field a settings model declares ``repr=False`` in its dump."""
+    for name, field in type(model).model_fields.items():
+        if name not in data:
+            continue
+        value = getattr(model, name)
+        if not field.repr:
+            data[name] = "***" if data[name] else data[name]
+        elif isinstance(value, BaseModel) and isinstance(data[name], dict):
+            data[name] = _mask_hidden_fields(value, data[name])
+        elif isinstance(value, tuple | list) and isinstance(data[name], list | tuple):
+            data[name] = type(data[name])(
+                _mask_hidden_fields(item, dumped)
+                if isinstance(item, BaseModel) and isinstance(dumped, dict)
+                else dumped
+                for item, dumped in zip(value, data[name], strict=False)
+            )
+    return data
 
 
 class WebIdentitySettings(BaseModel):
@@ -530,6 +622,8 @@ class WebIdentitySettings(BaseModel):
     token of its own. JWKS and issuer values are public material and may live
     in ``config.yaml``.
     """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     edge: Literal["cloudflare", "azure", "aws"] | None = Field(
         default=None,
@@ -611,7 +705,7 @@ class PostgresSettings(FrozenSettings):
     host: str = "localhost"
     port: int = Field(default=5432, ge=1, le=65535)
     user: str = "dlightrag"
-    password: str = "dlightrag"  # noqa: S105 - local development default
+    password: str = Field(default="dlightrag", repr=False)  # local development default
     database: str = "dlightrag"
     ssl_mode: PostgresSSLMode | None = None
     ssl_cert: str | None = None
@@ -658,8 +752,8 @@ class LightRAGStorageSettings(FrozenSettings):
     graph_storage: Literal["PGTableGraphStorage"] = "PGTableGraphStorage"
     kv_storage: Literal["PGKVStorage"] = "PGKVStorage"
     doc_status_storage: Literal["PGDocStatusStorage"] = "PGDocStatusStorage"
-    milvus_uri: str | None = None
-    milvus_token: str | None = None
+    milvus_uri: str | None = Field(default=None, repr=False)
+    milvus_token: str | None = Field(default=None, repr=False)
     milvus_db_name: str | None = None
     vector_db_kwargs: Mapping[str, Any] = Field(default_factory=dict)
 
@@ -745,9 +839,9 @@ class AnswerSectionSettings(FrozenSettings):
 
 class AccessSectionSettings(FrozenSettings):
     auth_mode: Literal["none", "simple", "jwt"] = "none"
-    api_token: str | None = None
+    api_token: str | None = Field(default=None, repr=False)
     allow_insecure_no_auth: bool = False
-    jwt_verification_key: str | None = None
+    jwt_verification_key: str | None = Field(default=None, repr=False)
     jwt_jwks_url: str | None = None
     jwt_issuer: str | None = None
     jwt_audience: Annotated[str | tuple[str, ...] | None, NoDecode] = None
@@ -800,7 +894,7 @@ class InterfacesSettings(FrozenSettings):
 class ObservabilitySettings(FrozenSettings):
     log_level: str = "info"
     langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
+    langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_export_external_spans: bool = False
     langfuse_trace_sensitive_data: bool = True
@@ -826,19 +920,6 @@ class ObservabilitySettings(FrozenSettings):
 class DlightragConfig(BaseSettings):
     """The nine-section immutable DlightRAG configuration."""
 
-    _SECRET_PATTERNS: tuple[str, ...] = (
-        "api_key",
-        "api_secret",
-        "api_token",
-        "secret",
-        "verification_key",
-        "password",
-        "connection_string",
-        "milvus_uri",
-        "account_key",
-        "sas_token",
-        "token",
-    )
     model_config = SettingsConfigDict(
         env_prefix="DLIGHTRAG_",
         env_nested_delimiter="__",
@@ -854,16 +935,16 @@ class DlightragConfig(BaseSettings):
 
     def __init__(self, **values: Any) -> None:
         allowed = {name.upper() for name in self.__class__.model_fields}
+        # Settings read the environment case-insensitively, so the gate does too.
         unknown = sorted(
             key
             for key in os.environ
-            if key.startswith("DLIGHTRAG_")
-            and key not in _AUXILIARY_ENV_NAMES
-            and not key.startswith(_AUXILIARY_ENV_PREFIXES)
-            and key.removeprefix("DLIGHTRAG_").split("__", 1)[0].upper() not in allowed
+            if key.upper().startswith("DLIGHTRAG_")
+            and not _is_auxiliary_env_name(key)
+            and key.upper().removeprefix("DLIGHTRAG_").split("__", 1)[0] not in allowed
         )
         if unknown:
-            raise ValueError(f"Unknown DlightRAG environment variables: {unknown}")
+            raise _unknown_environment(unknown)
         super().__init__(**values)
         # BaseSettings serializes constructor-supplied nested models through its
         # source pipeline. Restore the already-validated canonical instances so
@@ -888,6 +969,8 @@ class DlightragConfig(BaseSettings):
     def settings_customise_sources(
         cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
     ):
+        if isinstance(dotenv_settings, DotEnvSettingsSource):
+            _drop_auxiliary_dotenv_names(dotenv_settings)
         sources = [init_settings, env_settings, dotenv_settings]
         if (yaml_path := _find_yaml_config()) is not None:
             sources.append(Yaml12ConfigSettingsSource(settings_cls, yaml_file=yaml_path))
@@ -895,7 +978,8 @@ class DlightragConfig(BaseSettings):
         return tuple(sources)
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        return _redact_dict(super().model_dump(**kwargs), self._SECRET_PATTERNS)
+        dumped = _mask_hidden_fields(self, super().model_dump(**kwargs))
+        return _redact_dict(dumped, _SECRET_FIELD_PATTERNS)
 
     def model_dump_json(self, **kwargs: Any) -> str:
         indent = kwargs.pop("indent", None)
@@ -903,6 +987,9 @@ class DlightragConfig(BaseSettings):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({', '.join(f'{k}={v!r}' for k, v in self.model_dump().items())})"
+
+    def __str__(self) -> str:
+        return repr(self)
 
     @model_validator(mode="after")
     def _validate_config(self) -> Self:

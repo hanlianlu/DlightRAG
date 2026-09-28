@@ -168,11 +168,11 @@ def test_compose_enables_filtered_pg_textsearch_top_k_seed() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert (
-        "pg_textsearch.filtered_seed=${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
+        "pg_textsearch.filtered_seed=${COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
     ) in compose
     assert (
         "pg_textsearch.filtered_seed_margin="
-        "${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
+        "${COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
     ) in compose
 
 
@@ -194,7 +194,7 @@ def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
         "effective_cache_size": "18GB",
         "max_connections": "80",
     }.items():
-        env_name = f"DLIGHTRAG_POSTGRES_{setting.upper()}"
+        env_name = f"COMPOSE_POSTGRES_{setting.upper()}"
         assert f"{setting}=${{{env_name}:-{default}}}" in compose
 
 

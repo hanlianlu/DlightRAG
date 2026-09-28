@@ -2,7 +2,7 @@
 """Transport-neutral bearer authentication."""
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -21,8 +21,8 @@ type AuthenticationErrorKind = Literal[
 @dataclass(frozen=True, slots=True)
 class AuthenticationSettings:
     mode: Literal["none", "simple", "jwt"] = "none"
-    api_token: str | None = None
-    jwt_verification_key: str | None = None
+    api_token: str | None = field(default=None, repr=False)
+    jwt_verification_key: str | None = field(default=None, repr=False)
     jwt_jwks_url: str | None = None
     jwt_issuer: str | None = None
     jwt_audience: str | tuple[str, ...] | None = None

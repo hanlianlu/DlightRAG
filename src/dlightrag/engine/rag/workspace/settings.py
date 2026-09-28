@@ -90,7 +90,7 @@ class VLMSidecarSettings(FrozenSettings):
 
 class MinerUSidecarSettings(FrozenSettings):
     api_mode: Literal["local", "official"] = "local"
-    api_token: str | None = None
+    api_token: str | None = Field(default=None, repr=False)
     official_endpoint: str = "https://mineru.net"
     local_endpoint: str = "http://127.0.0.1:8210"
     language: Literal[
@@ -290,7 +290,7 @@ class WorkspacePromotionSettings(FrozenSettings):
 
 
 class SourceSettings(FrozenSettings):
-    blob_connection_string: str | None = None
+    blob_connection_string: str | None = Field(default=None, repr=False)
     azure_sas_expiry: int = Field(default=3600, ge=1)
     s3_presign_expiry: int = Field(default=3600, ge=1)
     s3_region: str | None = None
