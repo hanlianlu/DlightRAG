@@ -45,10 +45,10 @@ async def download_source(
     workspace: str | None = Query(default=None),
 ) -> FileResponse | RedirectResponse:
     """Download one source document through the Web session boundary."""
-    from dlightrag.application.corpus_admin import normalize_workspace
+    from dlightrag.application.corpus_admin import workspace_id_for_name
 
     safe_workspace = (
-        normalize_workspace(workspace)
+        workspace_id_for_name(workspace)
         if workspace
         else get_application(request).config.deployment.workspace_id
     )
@@ -74,12 +74,11 @@ async def download_source(
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:
-    from dlightrag.application.corpus_admin import normalize_workspace
+    from dlightrag.application.corpus_admin import workspace_id_for_name
 
-    if not requested:
+    if not requested or not requested.strip():
         return cookie_workspace
-    normalized = normalize_workspace(requested)
-    return normalized or cookie_workspace
+    return workspace_id_for_name(requested)
 
 
 async def _resolve_registered_workspace(

@@ -23,11 +23,18 @@ def get_workspace(
     request: Request,
     dlightrag_workspace: str | None = Cookie(default=None),
 ) -> str:
-    """Read the current workspace from its cookie, else the configured deployment one."""
-    from dlightrag.application.corpus_admin import normalize_workspace
+    """Read the current workspace from its cookie, else the configured deployment one.
+
+    The cookie is browser state, not a request: one that names no canonical
+    workspace falls back to the deployment's rather than failing every route.
+    """
+    from dlightrag.application.corpus_admin import WorkspaceNameError, workspace_id_for_name
 
     if dlightrag_workspace:
-        return normalize_workspace(dlightrag_workspace)
+        try:
+            return workspace_id_for_name(dlightrag_workspace)
+        except WorkspaceNameError:
+            pass
     return get_application(request).config.deployment.workspace_id
 
 

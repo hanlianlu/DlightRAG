@@ -1093,15 +1093,15 @@ class TestCorpusMutationEndpoints:
         assert (await client.post("/ingest", json={})).status_code == 404
         assert (await client.get("/ingest/jobs/old-job")).status_code == 404
 
-    async def test_list_runs_maps_an_empty_workspace_selector_to_bounded_400(
+    async def test_list_runs_refuses_an_empty_workspace_selector(
         self, client: AsyncClient, mock_application
     ) -> None:
         app.state.application = mock_application
 
         response = await client.get("/runs?workspace=")
 
-        assert response.status_code == 400
-        assert response.json()["detail"] == "Invalid workspace"
+        assert response.status_code == 422
+        assert response.json()["detail"].startswith("Invalid workspace name")
         mock_application.runs.list.assert_not_awaited()
 
 

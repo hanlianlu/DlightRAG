@@ -1751,3 +1751,38 @@ class TestSourcePresentation:
         payload = response.json()
         assert payload["error_type"] == "unavailable"
         assert "read-only replica" in payload["detail"]
+
+
+_NO_CANONICAL_ID = "1" * 64  # gains a leading underscore: 65 characters
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        (f"/web/api/images/{_NO_CANONICAL_ID}/chunk-1", None),
+        ("/web/api/files", {"workspace": _NO_CANONICAL_ID}),
+        ("/web/api/files/raw/doc-1", {"workspace": _NO_CANONICAL_ID}),
+    ],
+    ids=["image", "files", "download"],
+)
+async def test_browser_routes_refuse_a_workspace_name_without_a_canonical_id(
+    client: AsyncClient, mock_application, path: str, params: dict[str, str] | None
+) -> None:
+    """Formerly a 500 or 503: the name normalized, but to no canonical id."""
+    response = await client.get(path, params=params)
+
+    assert response.status_code == 422
+    assert response.json()["error_type"] == "validation"
+    assert _NO_CANONICAL_ID not in response.text
+    mock_application.corpora.workspace_exists.assert_not_awaited()
+
+
+async def test_a_workspace_cookie_without_a_canonical_id_falls_back_to_the_default(
+    client: AsyncClient, mock_application
+) -> None:
+    client.cookies.set("dlightrag_workspace", _NO_CANONICAL_ID)
+
+    response = await client.get("/web/api/files")
+
+    assert response.status_code == 200
+    assert response.json()["workspace"] == "default"

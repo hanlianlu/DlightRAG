@@ -112,14 +112,9 @@ async def list_runs(
 ) -> dict[str, Any]:
     owner = owner_id_from_user(user)
     if workspace is not None:
-        from dlightrag.application.corpus_admin import normalize_workspace
+        from dlightrag.application.corpus_admin import workspace_id_for_name
 
-        try:
-            owner = normalize_workspace(workspace)
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid workspace") from exc
-        if not owner:
-            raise HTTPException(status_code=400, detail="Invalid workspace")
+        owner = workspace_id_for_name(workspace)
         await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=owner)
     rows = await get_application(request).runs.list(
         owner_id=owner,
