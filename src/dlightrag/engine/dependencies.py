@@ -12,9 +12,21 @@ from __future__ import annotations
 import socket
 import ssl
 from collections.abc import Mapping
+from types import ModuleType
 from typing import Any, Literal
 
 import httpx
+
+# The OpenAI and Anthropic SDKs ship their own httpx fork. They wrap a failed
+# request, but an error while reading a streamed response reaches the caller as
+# the fork's own transport exception.
+_HTTP_CLIENTS: list[ModuleType] = [httpx]
+try:
+    import httpx2
+except ImportError:  # pragma: no cover - installed with the provider SDKs
+    pass
+else:
+    _HTTP_CLIENTS.append(httpx2)
 
 type DependencyComponent = Literal["corpus_storage", "parser", "providers"]
 
@@ -42,17 +54,30 @@ class ParserUnavailableError(TransientDependencyError):
 
 
 _AUTH_STATUS_CODES = frozenset({401, 403})
-_RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+# 520-524 are an edge proxy (Cloudflare) reporting its origin failed, down,
+# unreachable, or slow; 529 is an overloaded provider (Anthropic). 409 is left
+# out on purpose: it reports a conflict with the target's current state, not an
+# unavailable dependency, and a durable Run would otherwise defer on a conflict
+# that resending the same request cannot resolve. The OpenAI and Anthropic SDKs
+# still retry 409 within their own bounded budget.
+_RETRYABLE_STATUS_CODES = frozenset(
+    {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}
+)
 # A refused or reset connection, a timed-out socket operation, or a server or
 # proxy that dropped or refused the connection. An unsupported URL scheme or a
 # local protocol violation is configuration or a client bug and stays
 # non-retryable.
-_TRANSIENT_HTTPX_ERRORS = (
-    httpx.TimeoutException,
-    httpx.NetworkError,
-    httpx.RemoteProtocolError,
-    httpx.ProxyError,
+_TRANSIENT_HTTPX_ERRORS = tuple(
+    error
+    for client in _HTTP_CLIENTS
+    for error in (
+        client.TimeoutException,
+        client.NetworkError,
+        client.RemoteProtocolError,
+        client.ProxyError,
+    )
 )
+_HTTP_STATUS_ERRORS = tuple(client.HTTPStatusError for client in _HTTP_CLIENTS)
 _PROVIDER_MODULE_PREFIXES = ("openai", "anthropic", "google.genai", "google.api_core")
 _STORAGE_MODULE_PREFIXES = ("asyncpg", "pymilvus", "grpc")
 _AUTH_NAME_MARKERS = ("authentication", "unauthorized", "permissiondenied", "forbidden")
@@ -62,6 +87,7 @@ _TRANSIENT_PROVIDER_CLASS_NAMES = frozenset(
         "APITimeoutError",
         "DeadlineExceeded",
         "InternalServerError",
+        "OverloadedError",
         "RateLimitError",
         "ServerError",
         "ServiceUnavailable",
@@ -69,6 +95,9 @@ _TRANSIENT_PROVIDER_CLASS_NAMES = frozenset(
         "TooManyRequests",
     }
 )
+# An error event inside an Anthropic stream arrives on the 200 response, so only
+# its documented error type says the provider was overloaded or failed internally.
+_TRANSIENT_ANTHROPIC_ERROR_TYPES = frozenset({"api_error", "overloaded_error", "rate_limit_error"})
 _TRANSIENT_STORAGE_TEXT = (
     "broken pipe",
     "closed channel",
@@ -128,7 +157,7 @@ def classify_transient_dependency(
             if misconfigured:
                 continue
             return component_hint or "providers"
-        if isinstance(item, httpx.HTTPStatusError):
+        if isinstance(item, _HTTP_STATUS_ERRORS):
             if _status_code(item) in _RETRYABLE_STATUS_CODES:
                 return component_hint or "providers"
             continue
@@ -136,7 +165,14 @@ def classify_transient_dependency(
         name = type(item).__name__
         status = _status_code(item)
         if module.startswith(_PROVIDER_MODULE_PREFIXES) and not misconfigured:
-            if status in _RETRYABLE_STATUS_CODES or name in _TRANSIENT_PROVIDER_CLASS_NAMES:
+            if (
+                status in _RETRYABLE_STATUS_CODES
+                or name in _TRANSIENT_PROVIDER_CLASS_NAMES
+                or (
+                    module.startswith("anthropic")
+                    and _anthropic_error_type(item) in _TRANSIENT_ANTHROPIC_ERROR_TYPES
+                )
+            ):
                 return "providers"
         if module.startswith(_STORAGE_MODULE_PREFIXES):
             if status in _RETRYABLE_STATUS_CODES or any(
@@ -220,7 +256,7 @@ def _exception_chain(exc: BaseException):
 def _is_non_retryable(exc: BaseException) -> bool:
     status = _status_code(exc)
     if status in _AUTH_STATUS_CODES or (
-        status is not None and 400 <= status < 500 and status not in {408, 425, 429}
+        status is not None and 400 <= status < 500 and status not in _RETRYABLE_STATUS_CODES
     ):
         return True
     name = type(exc).__name__.lower()
@@ -244,6 +280,13 @@ def _is_misconfigured_endpoint(exc: BaseException) -> bool:
     return isinstance(exc, ssl.SSLError) and not isinstance(
         exc, ssl.SSLEOFError | ssl.SSLZeroReturnError
     )
+
+
+def _anthropic_error_type(exc: BaseException) -> str | None:
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, Mapping) else None
+    kind = error.get("type") if isinstance(error, Mapping) else None
+    return kind if isinstance(kind, str) else None
 
 
 def _status_code(exc: BaseException) -> int | None:

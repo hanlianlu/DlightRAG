@@ -609,7 +609,7 @@ async def test_connection_failures_retry_at_most_twice(failure: httpx.TransportE
     assert sleep.await_count == 2
 
 
-@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529])
 async def test_retryable_http_statuses_are_retried(status: int) -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",

@@ -185,8 +185,9 @@ the same port. Independently managed Docling endpoints are also supported.
 LightRAG's MinerU or Docling client makes every parser request. When the parser
 service refuses or resets the connection, a connect/read/write timeout expires,
 the connection drops, or the service answers HTTP 408, 425, 429, 500, 502, 503,
-or 504, the document is recorded with the fixed error `Document parser is
-temporarily unavailable` and the underlying client error is logged as a warning.
+504, 520-524, or 529, the document is recorded with the fixed error `Document
+parser is temporarily unavailable` and the underlying client error is logged as
+a warning.
 Every other parser failure keeps LightRAG's own message: a 4xx rejection, a
 conversion the parser reports as failed, an exhausted polling budget or download
 deadline, an oversized or malformed result bundle, and a misconfigured endpoint
