@@ -47,6 +47,10 @@ from dlightrag.engine.answer.owner import personal_owner
 
 logger = logging.getLogger(__name__)
 
+# Wake hints only: every waiter re-reads authoritative rows.
+_CHANGED_CHANNEL = "dlightrag_connections_changed"
+_OAUTH_CHANNEL = "dlightrag_connection_oauth"
+
 _SCHEMA = """
 CREATE TABLE dlightrag_connection_heads (
  owner_id TEXT NOT NULL, connection_id TEXT NOT NULL, revision BIGINT NOT NULL DEFAULT 1,
@@ -298,42 +302,31 @@ class PGConnectionsStore(PostgresOperationRunner):
         self._oauth_wakes: dict[str, asyncio.Event] = {}
         self._wake = asyncio.Event()
         self._dispatch_wake = asyncio.Event()
-        self._listener: asyncio.Task[None] | None = None
+        self._listening = False
 
     async def start_notifications(self) -> None:
-        if self._listener is None:
-            self._listener = asyncio.create_task(self._listen_forever())
+        if self._listening:
+            return
+        self._listening = True
+        hub = self._notification_hub()
+        await hub.subscribe(_OAUTH_CHANNEL, self._oauth_changed)
+        await hub.subscribe(_CHANGED_CHANNEL, self._changed)
+        self._wake.set()  # The startup scan recovers anything published before now.
 
-    async def _listen_forever(self) -> None:
-        def changed(*_args: Any) -> None:
-            self._wake.set()
-            self._dispatch_wake.set()
+    def _changed(self, _payload: str | None) -> None:
+        # A hub reconnect (None) wakes the same scan a notification does.
+        self._wake.set()
+        self._dispatch_wake.set()
 
-        def oauth_changed(_conn: Any, _pid: int, _channel: str, worker_id: str) -> None:
-            wake = self._oauth_wakes.get(worker_id)
-            if wake is not None:
+    def _oauth_changed(self, worker_id: str | None) -> None:
+        if worker_id is None:
+            # After a reconnect any flow owner may have missed its callback.
+            for wake in self._oauth_wakes.values():
                 wake.set()
-
-        async def listen(conn: Any) -> None:
-            await conn.add_listener("dlightrag_connection_oauth", oauth_changed)
-            await conn.add_listener("dlightrag_connections_changed", changed)
-            self._wake.set()  # Reconnect/startup scan recovers missed notifications.
-            try:
-                while not conn.is_closed():
-                    await asyncio.sleep(1)
-            finally:
-                if not conn.is_closed():
-                    await conn.remove_listener("dlightrag_connections_changed", changed)
-                    await conn.remove_listener("dlightrag_connection_oauth", oauth_changed)
-
-        while True:
-            try:
-                await self._run_once(listen)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning("Connection notification listener unavailable; retrying")
-            await asyncio.sleep(1)
+            return
+        wake = self._oauth_wakes.get(worker_id)
+        if wake is not None:
+            wake.set()
 
     async def wait_refresh(self, timeout: float) -> None:
         try:
@@ -343,10 +336,12 @@ class PGConnectionsStore(PostgresOperationRunner):
         self._wake.clear()
 
     async def stop_notifications(self) -> None:
-        task, self._listener = self._listener, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        if not self._listening:
+            return
+        self._listening = False
+        hub = self._notification_hub()
+        await hub.unsubscribe(_CHANGED_CHANNEL, self._changed)
+        await hub.unsubscribe(_OAUTH_CHANNEL, self._oauth_changed)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         async def operation(conn: Any) -> None:

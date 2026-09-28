@@ -3520,9 +3520,13 @@ class TestAgentControlsAndChildren:
         )
         assert isinstance(stale, TransactionLeaseLost)
 
-    async def test_wait_for_child_guidance_does_not_hold_the_pool_during_listen(
-        self, store
-    ) -> None:
+    async def test_concurrent_guidance_waits_share_one_listen_connection(self, store) -> None:
+        """Waiting children listen through one shared connection, whatever their number.
+
+        A connection per waiter would let enough waiting children exhaust the pool the
+        replies they wait for must use; the notification hub holds exactly one, and
+        gives it back when the last waiter leaves.
+        """
         creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
         claim = await _claimed(store)
         run_id = creation.run.run_id
@@ -3563,26 +3567,26 @@ class TestAgentControlsAndChildren:
             owner_id=_OWNER, run_id=run_id, child_session_id=child_id
         )
         assert child is not None and child_epoch == 1
-        request_id = str(uuid.uuid7())
-        assert await store.create_child_guidance(
-            owner_id=_OWNER,
-            run_id=run_id,
-            request_id=request_id,
-            child_session_id=child_id,
-            child_operation_id=child["operation_id"],
-            parent_session_id=parent_id,
-            question="Do not hold the domain pool",
-            expires_after_seconds=30,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            child_fencing_epoch=child_epoch,
-        )
+        request_ids = (str(uuid.uuid7()), str(uuid.uuid7()))
+        for request_id in request_ids:
+            assert await store.create_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=request_id,
+                child_session_id=child_id,
+                child_operation_id=child["operation_id"],
+                parent_session_id=parent_id,
+                question="Do not hold the domain pool",
+                expires_after_seconds=30,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                child_fencing_epoch=child_epoch,
+            )
 
         class _CountingPool:
             def __init__(self, inner: Any) -> None:
                 self._inner = inner
                 self.held = 0
-                self._connect_kwargs = getattr(inner, "_connect_kwargs", {})
 
             def acquire(self) -> Any:
                 inner = self._inner
@@ -3608,29 +3612,38 @@ class TestAgentControlsAndChildren:
         counting = _CountingPool(original_pool)
         store._operation_pool = counting  # noqa: SLF001
         try:
-            waiter = asyncio.create_task(
-                store.wait_for_child_guidance(
-                    owner_id=_OWNER,
-                    run_id=run_id,
-                    request_id=request_id,
-                    timeout_seconds=5,
+            waiters = [
+                asyncio.create_task(
+                    store.wait_for_child_guidance(
+                        owner_id=_OWNER,
+                        run_id=run_id,
+                        request_id=request_id,
+                        timeout_seconds=5,
+                    )
                 )
-            )
-            await asyncio.sleep(0.1)
+                for request_id in request_ids
+            ]
+            await asyncio.sleep(0.2)
+            assert counting.held == 1
+            for index, request_id in enumerate(request_ids):
+                assert (
+                    await store.reply_child_guidance(
+                        owner_id=_OWNER,
+                        run_id=run_id,
+                        request_id=request_id,
+                        content=f"reply {index}",
+                        submission_key=f"pool-free-{index}",
+                    )
+                )["outcome"] == "replied"
+            woke = await asyncio.wait_for(asyncio.gather(*waiters), timeout=2)
+            for _ in range(200):
+                if counting.held == 0:
+                    break
+                await asyncio.sleep(0.01)
             assert counting.held == 0
-            assert (
-                await store.reply_child_guidance(
-                    owner_id=_OWNER,
-                    run_id=run_id,
-                    request_id=request_id,
-                    content="pool was free",
-                    submission_key="pool-free",
-                )
-            )["outcome"] == "replied"
-            woke = await asyncio.wait_for(waiter, timeout=2)
         finally:
             store._operation_pool = original_pool  # noqa: SLF001
-        assert woke is not None and woke["reply"] == "pool was free"
+        assert [row["reply"] for row in woke] == ["reply 0", "reply 1"]
 
     async def test_expire_child_guidance_false_after_reply_or_cancel_is_not_lease_loss(
         self, store

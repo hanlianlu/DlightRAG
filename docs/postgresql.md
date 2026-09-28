@@ -322,6 +322,17 @@ The dedicated DlightRAG pool avoids contention between LightRAG internals and
 metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
 and session-level PostgreSQL tuning.
 
+Cross-process wake-ups use LISTEN/NOTIFY through one notification hub per
+process: a single LISTEN connection, held from `pg_pool` while anything
+listens, that fans each channel out to its subscribers (the Connections
+scheduler and OAuth inbox, and Answer child-guidance waits, however many are
+waiting). A notification is only a wake hint. After every reconnect the hub
+tells each subscriber to re-read its authoritative rows, and a periodic
+keepalive replaces a connection that died silently. The model catalogue
+listener uses a dedicated connection when it is given an explicit endpoint, as
+the service composition currently does, and the run-cancellation listener keeps
+its own pooled connection.
+
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and
 `CorpusMaintenanceStore` interfaces. Their PostgreSQL implementations own

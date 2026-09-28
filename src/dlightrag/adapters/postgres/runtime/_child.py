@@ -6,22 +6,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-import asyncpg
-
+from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.application.answer_runs import ChildRosterPageRequest, ChildRosterRowPage
 from dlightrag.engine.agent.session.ids import OperationId
 from dlightrag.engine.runtime.cancellation import cancellation_notify_key
 from dlightrag.engine.runtime.policy import RUN_LEASE_SECONDS
 from dlightrag.engine.runtime.records import parse_run_id
-
-logger = logging.getLogger(__name__)
 
 _RUN_ACTIVITY_CHANNEL = "dlightrag_run_activity"
 _MAX_PENDING_CHILD_CONTROLS = 100
@@ -30,7 +26,9 @@ _MAX_PENDING_CHILD_CONTROLS = 100
 # again after applying a batch, so every pending control still arrives, in order.
 PENDING_CONTROL_READ_LIMIT = 100
 _MAX_PENDING_CHILD_GUIDANCE = 8
-_GUIDANCE_HINT_POLL_SECONDS = 1.0
+# Wake hints arrive through the notification hub, which resynchronizes after any
+# reconnect; this bounded re-read is only a safety fallback.
+_GUIDANCE_RESYNC_SECONDS = 30.0
 
 _UPSERT_CHILD_SESSION = """
 INSERT INTO dlightrag_answer_child_sessions (
@@ -625,9 +623,9 @@ def _child_roster_row(row: Any) -> dict[str, Any]:
 class ChildRunStoreMixin:
     """Child Session, control, and guidance operations on PGRunStore."""
 
-    _operation_pool: Any
     _run_read: Callable[..., Awaitable[Any]]
     _run_write: Callable[..., Awaitable[Any]]
+    _notification_hub: Callable[[], PGNotificationHub]
 
     async def upsert_child_session(
         self,
@@ -1626,22 +1624,22 @@ class ChildRunStoreMixin:
             return None
         wake_key = cancellation_notify_key(owner_id=owner, run_id=str(run_uuid))
         bounded_timeout = max(0.0, min(float(timeout_seconds), 86_400.0))
-        row = await self.load_child_guidance(
-            owner_id=owner_id, run_id=run_id, request_id=request_id
-        )
-        if row is None or str(row["status"]) != "pending":
-            return row
-        remaining = max(0.0, (row["expires_at"] - datetime.now(UTC)).total_seconds())
-        deadline = datetime.now(UTC).timestamp() + min(bounded_timeout, remaining)
-        connection = await asyncpg.connect(**self._notify_connect_kwargs())
-        queue: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        wake = asyncio.Event()
 
-        def _notified(_conn: object, _pid: object, channel: str, payload: str) -> None:
-            if channel == _RUN_ACTIVITY_CHANNEL and payload == wake_key and queue.empty():
-                queue.put_nowait(None)
+        def _notified(payload: str | None) -> None:
+            # None is the hub reconnecting: a wake may have been missed, so re-read.
+            if payload is None or payload == wake_key:
+                wake.set()
 
-        try:
-            await connection.add_listener(_RUN_ACTIVITY_CHANNEL, _notified)
+        # Listen before the first read, so a reply that lands in between still wakes.
+        async with self._notification_hub().listen(_RUN_ACTIVITY_CHANNEL, _notified):
+            row = await self.load_child_guidance(
+                owner_id=owner_id, run_id=run_id, request_id=request_id
+            )
+            if row is None or str(row["status"]) != "pending":
+                return row
+            remaining = max(0.0, (row["expires_at"] - datetime.now(UTC)).total_seconds())
+            deadline = datetime.now(UTC).timestamp() + min(bounded_timeout, remaining)
             while True:
                 left = deadline - datetime.now(UTC).timestamp()
                 if left <= 0:
@@ -1649,33 +1647,15 @@ class ChildRunStoreMixin:
                         owner_id=owner_id, run_id=run_id, request_id=request_id
                     )
                 try:
-                    await asyncio.wait_for(
-                        queue.get(), timeout=min(left, _GUIDANCE_HINT_POLL_SECONDS)
-                    )
+                    await asyncio.wait_for(wake.wait(), timeout=min(left, _GUIDANCE_RESYNC_SECONDS))
                 except TimeoutError:
                     pass
+                wake.clear()
                 current = await self.load_child_guidance(
                     owner_id=owner_id, run_id=run_id, request_id=request_id
                 )
                 if current is None or str(current["status"]) != "pending":
                     return current
-        finally:
-            try:
-                await connection.remove_listener(_RUN_ACTIVITY_CHANNEL, _notified)
-            except Exception:
-                logger.debug("Guidance listener removal failed", exc_info=True)
-            await connection.close()
-
-    def _notify_connect_kwargs(self) -> dict[str, Any]:
-        """Return dedicated LISTEN connection kwargs that are not the domain pool."""
-        pool = self._operation_pool
-        if pool is not None:
-            kwargs = getattr(pool, "_connect_kwargs", None)
-            if isinstance(kwargs, Mapping) and kwargs:
-                return dict(kwargs)
-        from dlightrag.application.config import get_config
-
-        return dict(get_config().pg_connection_kwargs())
 
     async def expire_child_guidance(
         self,

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TypeVar
 
 from dlightrag.adapters.postgres.core._errors import guard_payload
+from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.core._pool import pg_pool
 
 T = TypeVar("T")
@@ -21,6 +22,19 @@ class PostgresOperationRunner:
 
     def __init__(self, *, pool: ConnectionPool | None = None) -> None:
         self._operation_pool = pool
+        self._pool_notifications: PGNotificationHub | None = None
+
+    def _notification_hub(self) -> PGNotificationHub:
+        """The LISTEN hub on the pool this runner operates on.
+
+        The process pool's hub is shared by every adapter in the process; an
+        injected pool gets one hub of its own, on the same database.
+        """
+        if self._operation_pool is None:
+            return pg_pool.notifications
+        if self._pool_notifications is None:
+            self._pool_notifications = PGNotificationHub(connect=self._operation_pool.acquire)
+        return self._pool_notifications
 
     async def _run(self, operation: Callable[[Any], Awaitable[T]]) -> T:
         if self._operation_pool is None:

@@ -891,20 +891,28 @@ async def test_notification_reconnect_wakes_a_scan_after_listener_connection_los
         try:
             await store.wait_refresh(2)
             async with pool.acquire() as conn:
-                pid = None
-                for _ in range(100):
-                    pid = await conn.fetchval(
-                        "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND query ILIKE 'LISTEN%' LIMIT 1"
-                    )
-                    if pid is not None:
-                        break
-                    await asyncio.sleep(0.01)
+
+                async def listen_backend(other_than: int | None = None) -> int | None:
+                    for _ in range(300):
+                        pid = await conn.fetchval(
+                            "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND pid IS DISTINCT FROM $1 AND query ILIKE 'LISTEN%' LIMIT 1",
+                            other_than,
+                        )
+                        if pid is not None:
+                            return pid
+                        await asyncio.sleep(0.01)
+                    return None
+
+                pid = await listen_backend()
                 assert pid is not None
+                await store.wait_refresh(0.05)  # the first connection's own resynchronization
                 assert await conn.fetchval("SELECT pg_terminate_backend($1)", pid)
-            # Reconnection's startup wake is observable without a new NOTIFY.
-            started = asyncio.get_running_loop().time()
-            await store.wait_refresh(5)
-            assert asyncio.get_running_loop().time() - started < 4
+                # Reconnection's resynchronization wake is observable without a new NOTIFY.
+                started = asyncio.get_running_loop().time()
+                await store.wait_refresh(5)
+                assert asyncio.get_running_loop().time() - started < 4
+                replacement = await listen_backend(other_than=pid)
+                assert replacement is not None
         finally:
             await store.stop_notifications()
 
