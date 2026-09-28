@@ -64,6 +64,7 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
 )
 from dlightrag.engine.rag.corpus.visual_assets import ThumbnailCache, VisualAssetResolver
 from dlightrag.engine.rag.lightrag.models import LightRagChatModels, build_lightrag_embedding
+from dlightrag.engine.rag.lightrag.status import lightrag_status
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
@@ -146,13 +147,6 @@ class _RemoteDownloadFailure:
 
 def _safe_remote_source_id(document: SourceDocument) -> str:
     return safe_source_filename(document.display_filename or document.key)
-
-
-def _normalized_retry_status(value: object) -> str:
-    raw_status = (
-        value.get("status") if isinstance(value, Mapping) else getattr(value, "status", None)
-    )
-    return str(getattr(raw_status, "value", raw_status) or "").strip().lower()
 
 
 def _retry_display_filename(value: object) -> str:
@@ -1711,7 +1705,7 @@ class WorkspaceRag:
         ):
             full = await self._lightrag_stores.get_full_doc_statuses(list(rows))
             for doc_id, row in full.items():
-                status = _normalized_retry_status(row)
+                status = lightrag_status(row)
                 if status == "failed":
                     cohort.append(doc_id)
                     continue
@@ -1938,7 +1932,7 @@ class WorkspaceRag:
             row = await self._lightrag_stores.get_doc_status(doc_id)
         except Exception as exc:
             raise RetryOutcomeUncertainError("retry document status read failed") from exc
-        status = _normalized_retry_status(row)
+        status = lightrag_status(row)
         if status == "processed":
             if self._metadata_index is None:
                 raise RetryOutcomeUncertainError("retry finalization metadata is unavailable")
@@ -1968,7 +1962,7 @@ class WorkspaceRag:
         entries: list[dict[str, Any]] = []
         for doc_id in doc_ids:
             row = rows.get(doc_id)
-            status = _normalized_retry_status(row)
+            status = lightrag_status(row)
             entries.append(
                 {
                     "doc_id": doc_id,

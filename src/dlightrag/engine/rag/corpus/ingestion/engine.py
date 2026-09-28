@@ -41,6 +41,7 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
     local_source_uri,
     safe_source_filename,
 )
+from dlightrag.engine.rag.lightrag.status import lightrag_status
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
@@ -164,7 +165,7 @@ class UnifiedIngestionEngine:
                     doc_id
                     for doc_id in pending
                     if (status := statuses.get(doc_id)) is not None
-                    and _normalized_status(status) in _ACTIVE_INGEST_STATUSES
+                    and lightrag_status(status) in _ACTIVE_INGEST_STATUSES
                 ]
                 if not pending:
                     return
@@ -584,7 +585,7 @@ class UnifiedIngestionEngine:
         if hash_match_decision is not None:
             return hash_match_decision
 
-        if _normalized_status(existing_status) == "processed":
+        if lightrag_status(existing_status) == "processed":
             # LightRAG rejects an existing canonical ID as a duplicate. A hash
             # mismatch must therefore delete the old corpus before enqueue.
             return _DocumentIngestDecision(enqueue=True, cleanup_kind="replace")
@@ -600,7 +601,7 @@ class UnifiedIngestionEngine:
         existing_status: Mapping[str, Any] | None,
     ) -> _DocumentIngestDecision | None:
         stored_hash = _mapping_get(existing_status, "content_hash")
-        if _normalized_status(existing_status) != "processed" or not stored_hash:
+        if lightrag_status(existing_status) != "processed" or not stored_hash:
             return None
         current_hash = await asyncio.to_thread(_file_sha256, entry.parser_path)
         if current_hash != stored_hash:
@@ -762,7 +763,7 @@ class UnifiedIngestionEngine:
             deletion = None
         except Exception:
             deletion = None
-        deletion_status = str(_mapping_get(deletion, "status") or "").lower()
+        deletion_status = lightrag_status(deletion)
         candidate_gone = await self._stores.get_doc_status(entry.doc_id) is None
         if deletion_status in {"success", "not_found"} or candidate_gone:
             await self._metadata_index.delete(entry.doc_id)
@@ -910,8 +911,7 @@ class UnifiedIngestionEngine:
                     error,
                 )
             raise
-        raw_status = _mapping_get(result, "status")
-        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        status = lightrag_status(result)
         if status != "success":
             current_status = await self._stores.get_doc_status(doc_id)
             if current_status is None:
@@ -952,7 +952,7 @@ class UnifiedIngestionEngine:
         commit_complete: bool = True,
     ) -> dict[str, Any]:
         doc_status = await self._stores.get_doc_status(doc_id)
-        if _normalized_status(doc_status) != "processed":
+        if lightrag_status(doc_status) != "processed":
             error_summary = (doc_status or {}).get("error_msg") or (doc_status or {}).get(
                 "content_summary"
             )
@@ -993,7 +993,7 @@ class UnifiedIngestionEngine:
             raise RetryOutcomeUncertainError(
                 "replacement finalization status is uncertain"
             ) from error
-        if _normalized_status(doc_status) != "processed":
+        if lightrag_status(doc_status) != "processed":
             raise RetryOutcomeUncertainError("replacement finalization status is uncertain")
         completed = _with_finalized_local_download_locator(metadata_record)
         completed[_FINALIZATION_COMPLETE_KEY] = True
@@ -1228,11 +1228,6 @@ def _mapping_get(value: Any, key: str) -> Any:
     if isinstance(value, Mapping):
         return value.get(key)
     return getattr(value, key, None)
-
-
-def _normalized_status(value: Any) -> str:
-    raw_status = _mapping_get(value, "status")
-    return str(getattr(raw_status, "value", raw_status) or "").lower()
 
 
 def _required_enqueue_fields(entry: _PendingDocumentIngest) -> tuple[str, str]:

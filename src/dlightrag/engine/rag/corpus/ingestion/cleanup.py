@@ -10,6 +10,7 @@ from typing import Any
 
 from dlightrag.engine.rag.corpus.contracts import DocStatusLookup
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
+from dlightrag.engine.rag.lightrag.status import lightrag_status
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
 )
@@ -165,12 +166,7 @@ async def cascade_delete(
             stats["outcomes"].append({"doc_id": doc_id, "status": "waiting_for_repair"})
             logger.warning("cascade_delete upstream call failed for %s: %s", doc_id, exc)
             continue
-        raw_status = (
-            deletion.get("status")
-            if isinstance(deletion, dict)
-            else getattr(deletion, "status", None)
-        )
-        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        status = lightrag_status(deletion)
         if status == "not_allowed":
             # Public LightRAG guarantees this rejection made no write. Restore
             # the exact DlightRAG-owned visibility projection.
