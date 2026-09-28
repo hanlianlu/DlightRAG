@@ -14,7 +14,11 @@ import pytest
 
 import dlightrag
 from dlightrag.engine.ai.messages import ToolDefinition
-from dlightrag.engine.ai.providers import get_provider, provider_for
+from dlightrag.engine.ai.providers import (
+    _PROVIDER_CLASSES,  # pyright: ignore[reportPrivateUsage]
+    get_provider,
+    provider_for,
+)
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
     CompletionProvider,
@@ -126,16 +130,26 @@ class TestProviderRegistry:
     def test_nothing_but_provider_for_builds_a_provider_from_settings(self) -> None:
         package = Path(dlightrag.__file__).parent
         registry = package / "engine" / "ai" / "providers" / "__init__.py"
+        # The registry's own factory, and every provider class it knows.
+        factories = {"get_provider"} | {
+            qualified.rsplit(".", 1)[1] for qualified in _PROVIDER_CLASSES.values()
+        }
         builders = sorted(
-            str(path.relative_to(package))
+            f"{path.relative_to(package)}: {name}"
             for path in package.rglob("*.py")
             if path != registry
             for node in ast.walk(ast.parse(path.read_text("utf-8")))
             if isinstance(node, ast.Call)
             and (
-                (isinstance(node.func, ast.Name) and node.func.id == "get_provider")
-                or (isinstance(node.func, ast.Attribute) and node.func.attr == "get_provider")
+                name := (
+                    node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else ""
+                )
             )
+            in factories
         )
 
         assert builders == []
