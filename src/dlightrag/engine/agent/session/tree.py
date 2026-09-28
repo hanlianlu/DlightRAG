@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Immutable Session Tree snapshots and stable checkpoint queries."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
@@ -48,11 +48,14 @@ class AgentSessionTree:
     commit_sequence: int
     entries: tuple[SessionEntry, ...]
     lanes: tuple[LaneSnapshot, ...]
+    # The validated graph of these immutable entries, reused by every query.
+    _graph: AgentSessionGraph = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.commit_sequence < 0:
             raise ValueError("Session commit sequence cannot be negative")
         graph = AgentSessionGraph.from_entries(self.session_id, self.entries)
+        object.__setattr__(self, "_graph", graph)
         known = {entry.entry_id for entry in graph.entries}
         lane_ids: set[LaneId] = set()
         for lane in self.lanes:
@@ -66,7 +69,7 @@ class AgentSessionTree:
 
     @property
     def graph(self) -> AgentSessionGraph:
-        return AgentSessionGraph.from_entries(self.session_id, self.entries)
+        return self._graph
 
     def lane(self, lane_id: LaneId = LaneId.main()) -> LaneSnapshot:
         for lane in self.lanes:

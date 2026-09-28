@@ -132,7 +132,8 @@ class ChildContextSnapshot:
 
         if self.depth < 0:
             raise ValueError("Child context depth cannot be negative")
-        if not isinstance(json.loads(self.messages_json), list):
+        messages = json.loads(self.messages_json)
+        if not isinstance(messages, list):
             raise ValueError("Child context messages must be an array")
         if not isinstance(json.loads(self.evidence_state_json), dict):
             raise ValueError("Child context evidence state must be an object")
@@ -141,7 +142,7 @@ class ChildContextSnapshot:
             for occurrence in self.attachment_occurrences
         ]
         actual = [
-            attachment for message in self.messages for attachment in message.get("attachments", [])
+            attachment for message in messages for attachment in message.get("attachments", [])
         ]
         if actual != expected or any(
             occurrence.attachment.data for occurrence in self.attachment_occurrences

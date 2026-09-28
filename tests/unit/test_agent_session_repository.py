@@ -222,6 +222,51 @@ async def test_refresh_is_identity_stable_and_merges_only_gap_free_entry_suffix(
     assert not any(record.ref.key == branch_id.value for record in refreshed.registers)
 
 
+@pytest.mark.asyncio
+async def test_snapshot_views_are_built_once_and_follow_each_snapshot() -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    await _seed(store, session_id)
+    branch_id = LaneId.new()
+    await _fork_branch(
+        store,
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    await _append_entries(
+        store,
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=(await store.load(session_id)).tree.lane().head,
+        entries=[_user(session_id, "main delta")],
+    )
+    snapshot = await store.load(session_id)
+
+    # Each view is built once per immutable snapshot and reused by every query.
+    assert snapshot.tree is snapshot.tree
+    assert snapshot.graph is snapshot.graph
+    assert snapshot.tree.graph is snapshot.tree.graph
+
+    # A replaced snapshot starts without them and derives the same views.
+    rebuilt = replace(snapshot)
+    assert rebuilt.tree is not snapshot.tree
+    assert rebuilt.tree == snapshot.tree
+    assert rebuilt.graph == snapshot.graph
+    assert rebuilt.tree.ancestry(branch_id) == snapshot.tree.ancestry(branch_id)
+
+    # Selecting another Lane is a new snapshot whose graph follows that Lane.
+    branch = replace(snapshot, selected_lane_id=branch_id)
+
+    def contents(entries: tuple[object, ...]) -> list[str]:
+        return [entry.content for entry in entries if isinstance(entry, UserMessageEntry)]
+
+    assert contents(snapshot.graph.ancestry()) == ["root", "main delta"]
+    assert contents(branch.graph.ancestry()) == ["root"]
+    assert contents(snapshot.tree.ancestry(branch_id)) == ["root"]
+    assert branch.graph.head_entry_id == snapshot.tree.lane(branch_id).head_entry_id
+
+
 async def test_refresh_rejects_malformed_or_regressed_cursors() -> None:
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()

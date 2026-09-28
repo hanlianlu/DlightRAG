@@ -714,7 +714,10 @@ class ResearchRuntimeEffects:
     ) -> ToolEffectResult[EffectHostUpdate]:
         await self._check_cancelled()
         self._check_pins()
-        self._orchestrator.bind_child_context(self._prepared, context)
+        if item.tool_name == "spawn_agent":
+            # Only a spawn hands the parent ancestry to a Child, and capturing it
+            # folds the whole transcript, so no other tool pays for it.
+            self._orchestrator.bind_child_context(self._prepared, context)
         if item.intent_id is None:
             raise RuntimeError("executable Tool item lost its IntentId")
         tool = self._tools.get(item.tool_name)

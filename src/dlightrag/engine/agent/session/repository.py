@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical Agent Session repository/store read and transaction contract."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from dlightrag.engine.agent.session.entries import SessionEntry
@@ -46,6 +46,10 @@ class AgentSessionSnapshot:
     entries: tuple[SessionEntry, ...]
     registers: tuple[RegisterRecord, ...] = ()
     selected_lane_id: LaneId = LaneId.main()
+    # Views derived from the immutable fields above, built on first use. A
+    # replaced snapshot is a new instance and starts without them.
+    _tree: AgentSessionTree | None = field(default=None, init=False, repr=False, compare=False)
+    _graph: AgentSessionGraph | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         AgentSessionCursor(self.commit_sequence, self.last_entry_sequence)
@@ -76,6 +80,13 @@ class AgentSessionSnapshot:
     @property
     def graph(self) -> AgentSessionGraph:
         """Return the physical Entry Tree selected at the chosen Lane Head."""
+        graph = self._graph
+        if graph is None:
+            graph = self._selected_graph()
+            object.__setattr__(self, "_graph", graph)
+        return graph
+
+    def _selected_graph(self) -> AgentSessionGraph:
         graph = AgentSessionGraph.from_entries(self.session_id, self.entries)
         for record in self.registers:
             if (
@@ -88,6 +99,13 @@ class AgentSessionSnapshot:
 
     @property
     def tree(self) -> AgentSessionTree:
+        tree = self._tree
+        if tree is None:
+            tree = self._lane_tree()
+            object.__setattr__(self, "_tree", tree)
+        return tree
+
+    def _lane_tree(self) -> AgentSessionTree:
         heads = {
             record.value.lane_id: record
             for record in self.registers

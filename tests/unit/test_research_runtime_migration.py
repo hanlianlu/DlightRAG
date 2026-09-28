@@ -8,6 +8,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 from pydantic import BaseModel
@@ -164,6 +165,64 @@ async def _settle_bounded_research_tool(
         emit_ephemeral,
     )
     return settled, prepared
+
+
+@pytest.mark.asyncio
+async def test_only_spawn_agent_captures_the_parent_context() -> None:
+    async def execute(_input: BaseModel, _runtime: Any) -> ToolResult:
+        return ToolResult.text("done")
+
+    tools = (
+        AgentTool("read", "Read something.", _EmptyToolInput, execute=execute),
+        AgentTool("spawn_agent", "Spawn a child.", _EmptyToolInput, execute=execute),
+    )
+    bind = Mock()
+    prepared = SimpleNamespace(
+        tools=tools,
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=EvidenceLedger(),
+    )
+    effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=bind)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+
+    async def emit_ephemeral(_event: object) -> None:
+        return None
+
+    async def run(tool: AgentTool) -> None:
+        item = ToolBatchItem(
+            source_index=0,
+            call_id=f"{tool.name}-call",
+            tool_name=tool.name,
+            disposition="executable",
+            result_entry_id=EntryId.new(),
+            intent_id=IntentId.new(),
+            replay_policy=tool.replay_policy,
+            contract_version=tool.contract_version,
+            input_schema_digest=tool.input_schema_digest,
+            effective_input_digest="0" * 64,
+        )
+        await effects.execute_tool(cast(Any, context), item, {}, AttemptId.new(), emit_ephemeral)
+
+    # Capturing the parent context folds the whole transcript, so an ordinary
+    # tool call must not pay for it.
+    await run(tools[0])
+    bind.assert_not_called()
+
+    await run(tools[1])
+    bind.assert_called_once_with(prepared, context)
 
 
 @pytest.mark.asyncio

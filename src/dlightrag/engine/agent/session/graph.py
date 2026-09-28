@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Immutable parent-linked views over one canonical Agent Session Tree."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dlightrag.engine.agent.session.entries import SessionEntry
 from dlightrag.engine.agent.session.ids import EntryId, SessionId
@@ -25,6 +25,11 @@ class AgentSessionGraph:
     session_id: SessionId
     nodes: tuple[SessionNode, ...]
     head_entry_id: EntryId | None = None
+    # Entry index over the immutable nodes, built on first use and shared by
+    # every Head selected from this graph.
+    _by_id: dict[EntryId, SessionNode] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @classmethod
     def from_entries(
@@ -65,13 +70,23 @@ class AgentSessionGraph:
         )
 
     def select_head(self, head_entry_id: EntryId) -> AgentSessionGraph:
-        if all(node.entry.entry_id != head_entry_id for node in self.nodes):
+        by_id = self._index()
+        if head_entry_id not in by_id:
             raise KeyError(f"unknown Agent Session head: {head_entry_id}")
-        return AgentSessionGraph(
+        selected = AgentSessionGraph(
             session_id=self.session_id,
             nodes=self.nodes,
             head_entry_id=head_entry_id,
         )
+        object.__setattr__(selected, "_by_id", by_id)
+        return selected
+
+    def _index(self) -> dict[EntryId, SessionNode]:
+        by_id = self._by_id
+        if by_id is None:
+            by_id = {node.entry.entry_id: node for node in self.nodes}
+            object.__setattr__(self, "_by_id", by_id)
+        return by_id
 
     @property
     def entries(self) -> tuple[SessionEntry, ...]:
@@ -81,7 +96,7 @@ class AgentSessionGraph:
         head = self.head_entry_id if head_entry_id is None else head_entry_id
         if head is None:
             return ()
-        by_id = {node.entry.entry_id: node for node in self.nodes}
+        by_id = self._index()
         reverse: list[SessionEntry] = []
         current: EntryId | None = head
         while current is not None:
