@@ -4,10 +4,10 @@
 import asyncio
 import datetime
 import logging
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol
 from uuid import UUID, uuid5
 
 from dlightrag.application.access import UserContext, owner_id_from_user
@@ -52,7 +52,6 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
-T = TypeVar("T")
 
 
 class WebAttachment(Protocol):
@@ -229,7 +228,7 @@ class WebConversationService:
 
     async def create(self, user: UserContext | None) -> ConversationSummary:
         principal_id = owner_id_from_user(user)
-        row = await self._store_call(self._store.create_conversation(principal_id))
+        row = await self._store.create_conversation(principal_id)
         return _conversation_summary(row)
 
     async def list(
@@ -246,9 +245,7 @@ class WebConversationService:
         """
         principal_id = owner_id_from_user(user)
         requested_page = page or ConversationPageRequest()
-        result = await self._store_call(
-            self._store.list_conversations(principal_id, page=requested_page)
-        )
+        result = await self._store.list_conversations(principal_id, page=requested_page)
         items = tuple(_conversation_summary(row) for row in result.items)
         next_cursor = None
         if result.has_more:
@@ -282,12 +279,10 @@ class WebConversationService:
             raise ConversationCursorError(
                 "conversation history cursor belongs to another conversation"
             )
-        result = await self._store_call(
-            self._store.history_page(
-                principal_id,
-                conversation_id,
-                page=requested,
-            )
+        result = await self._store.history_page(
+            principal_id,
+            conversation_id,
+            page=requested,
         )
         if result is None:
             return None
@@ -311,24 +306,20 @@ class WebConversationService:
         title: str,
     ) -> ConversationSummary | None:
         principal_id = owner_id_from_user(user)
-        row = await self._store_call(
-            self._store.rename_conversation(
-                principal_id,
-                conversation_id,
-                title=title,
-            )
+        row = await self._store.rename_conversation(
+            principal_id,
+            conversation_id,
+            title=title,
         )
         return _conversation_summary(row) if row is not None else None
 
     async def delete(self, user: UserContext | None, conversation_id: str) -> bool:
         principal_id = owner_id_from_user(user)
-        return await self._store_call(
-            self._store.delete_conversation(principal_id, conversation_id)
-        )
+        return await self._store.delete_conversation(principal_id, conversation_id)
 
     async def delete_all(self, user: UserContext | None) -> int:
         principal_id = owner_id_from_user(user)
-        return await self._store_call(self._store.delete_all_conversations(principal_id))
+        return await self._store.delete_all_conversations(principal_id)
 
     # ------------------------------------------------------------------
     # Reads
@@ -344,7 +335,7 @@ class WebConversationService:
         principal_id = owner_id_from_user(user)
         if parse_run_id(run_id) is None:
             return None
-        return await self._store_call(self._store.find_turn_by_run(principal_id, run_id))
+        return await self._store.find_turn_by_run(principal_id, run_id)
 
     async def submission(
         self, user: UserContext | None, submission_id: str
@@ -355,9 +346,7 @@ class WebConversationService:
             UUID(submission_id)
         except ValueError:
             return None
-        creation = await self._store_call(
-            self._store.find_answer_turn_by_submission(principal_id, submission_id)
-        )
+        creation = await self._store.find_answer_turn_by_submission(principal_id, submission_id)
         return None if creation is None else _submission(creation)
 
     async def run_resource(
@@ -370,23 +359,19 @@ class WebConversationService:
         principal_id = owner_id_from_user(user)
         if await self.turn_for_run(user, run_id) is None:
             return None
-        return await self._store_call(
-            self._answers.read_run_resource(
-                owner_id=principal_id,
-                run_id=run_id,
-                resource_id=resource_id,
-            )
+        return await self._answers.read_run_resource(
+            owner_id=principal_id,
+            run_id=run_id,
+            resource_id=resource_id,
         )
 
     async def run_external_sources(
         self, user: UserContext | None, run_id: str
     ) -> Mapping[str, str]:
         """Return each external URL this owned run holds stored bytes for."""
-        return await self._store_call(
-            self._answers.run_external_source_map(
-                owner_id=owner_id_from_user(user),
-                run_id=run_id,
-            )
+        return await self._answers.run_external_source_map(
+            owner_id=owner_id_from_user(user),
+            run_id=run_id,
         )
 
     async def thumbnail(
@@ -451,13 +436,11 @@ class WebConversationService:
             requested_skill=requested_skill,
             effort=effort,
         )
-        replay = await self._store_call(
-            self._store.replay_answer_turn(
-                principal_id=principal_id,
-                conversation_id=conversation_id,
-                submission_id=submission_id,
-                idempotency_fingerprint=idempotency_fingerprint,
-            )
+        replay = await self._store.replay_answer_turn(
+            principal_id=principal_id,
+            conversation_id=conversation_id,
+            submission_id=submission_id,
+            idempotency_fingerprint=idempotency_fingerprint,
         )
         if replay is not None:
             return _submission(replay)
@@ -465,12 +448,10 @@ class WebConversationService:
         if create_conversation:
             seed = SubmissionSeed(head=_empty_head(principal_id, conversation_id))
         else:
-            seed = await self._store_call(
-                self._store.submission_seed(
-                    principal_id,
-                    conversation_id,
-                    attachment_limit=max(0, self._max_attachments - len(attachments)),
-                )
+            seed = await self._store.submission_seed(
+                principal_id,
+                conversation_id,
+                attachment_limit=max(0, self._max_attachments - len(attachments)),
             )
             if seed is None:
                 return None
@@ -503,13 +484,11 @@ class WebConversationService:
         except Exception:
             # A concurrent identical acceptance may win while recovery is being
             # projected. Never turn that durable replay into a recovery failure.
-            replay = await self._store_call(
-                self._store.replay_answer_turn(
-                    principal_id=principal_id,
-                    conversation_id=conversation_id,
-                    submission_id=submission_id,
-                    idempotency_fingerprint=idempotency_fingerprint,
-                )
+            replay = await self._store.replay_answer_turn(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                submission_id=submission_id,
+                idempotency_fingerprint=idempotency_fingerprint,
             )
             if replay is not None:
                 return _submission(replay)
@@ -561,9 +540,6 @@ class WebConversationService:
                 forked_from_conversation_id=parent.conversation_id,
             ),
         )
-
-    async def _store_call(self, operation: Awaitable[T]) -> T:
-        return await operation
 
 
 def _new_conversation_id(principal_id: str, submission_id: str) -> str:

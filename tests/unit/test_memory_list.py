@@ -19,7 +19,6 @@ from dlightrag.application.access import UserContext, owner_id_from_user
 from dlightrag.application.memory import (
     MEMORY_LIST_PAGE_DEFAULT_LIMIT,
     MEMORY_LIST_PAGE_MAX_LIMIT,
-    InMemoryMemorySettingsStore,
     MemoryDisabledError,
     MemoryListCursor,
     MemoryListCursorCodec,
@@ -28,6 +27,7 @@ from dlightrag.application.memory import (
     MemoryListPageRequest,
     MemoryService,
 )
+from tests.support.memory import InMemoryMemorySettingsStore
 
 _UTC = datetime.UTC
 

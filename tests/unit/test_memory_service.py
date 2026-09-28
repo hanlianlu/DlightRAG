@@ -6,11 +6,11 @@ from dlightrag_memory import MemoryProvenance
 from dlightrag_memory.store import InMemoryMemoryStore
 
 from dlightrag.application.memory import (
-    InMemoryMemorySettingsStore,
     MemoryDisabledError,
     MemoryService,
 )
 from dlightrag.engine.answer.memory import MemoryCapability
+from tests.support.memory import InMemoryMemorySettingsStore
 
 
 def _service() -> MemoryService:

@@ -12,7 +12,6 @@ from .memory_list import (
     MemoryListPageRequest,
 )
 from .service import (
-    InMemoryMemorySettingsStore,
     MemoryCapability,
     MemoryService,
     MemorySettings,
@@ -21,7 +20,6 @@ from .service import (
 )
 
 __all__ = [
-    "InMemoryMemorySettingsStore",
     "MEMORY_LIST_PAGE_DEFAULT_LIMIT",
     "MEMORY_LIST_PAGE_MAX_LIMIT",
     "MemoryCapability",

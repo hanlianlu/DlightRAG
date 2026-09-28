@@ -248,23 +248,6 @@ def _fit_summary_text(
     return fitted
 
 
-def _episodic_summary(
-    pairs: Sequence[Sequence[dict[str, Any]]],
-    *,
-    max_tokens: int,
-) -> str:
-    if not pairs or max_tokens <= 0:
-        return ""
-    lines: list[str] = ["Earlier conversation (extractive continuation):"]
-    for pair in pairs:
-        for message in pair:
-            role = str(message.get("role") or "message")
-            content = message.get("content")
-            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-            lines.append(f"{role}: {text}")
-    return truncate_to_estimated_tokens("\n".join(lines), max_tokens)
-
-
 def _complete_pairs(messages: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     pairs: list[list[dict[str, Any]]] = []
     index = 0
