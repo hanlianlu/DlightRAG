@@ -22,13 +22,11 @@ from dlightrag.application.access import AccessAction, WorkspaceRecord, owner_id
 from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
-    CorpusMutationUnavailableError,
     WorkspaceCatalogCursorError,
     WorkspaceCatalogPageRequest,
-    WorkspaceExistsError,
     normalize_workspace,
 )
-from dlightrag.application.runs import RunAdmissionLimitExceededError
+from dlightrag.application.errors import ApplicationError
 from dlightrag.engine.answer.client_contracts import ClientContractModel
 
 if TYPE_CHECKING:
@@ -124,8 +122,12 @@ def _set_workspace_cookies(
     )
 
 
-def _error(message: str, status_code: int = 400) -> JSONResponse:
-    return JSONResponse({"error": message}, status_code=status_code)
+def _require_confirmation(name: str, confirm: str) -> None:
+    """Type-to-confirm: the typed name must be this workspace's."""
+    if not name:
+        raise HTTPException(status_code=400, detail="Workspace name cannot be empty")
+    if normalize_workspace(name) != normalize_workspace(confirm):
+        raise HTTPException(status_code=400, detail="Confirmation name does not match")
 
 
 class WebWorkspacesPage(ClientContractModel):
@@ -182,7 +184,7 @@ async def create_workspace(
     try:
         name = validate_workspace_name(workspace_name)
     except ValueError as exc:
-        return _error(str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
     ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
@@ -190,14 +192,15 @@ async def create_workspace(
     # Initialize workspace (creates the WorkspaceRag); the registry keeps it unique.
     try:
         await application.corpora.create_workspace(ws, display_name=name)
-    except WorkspaceExistsError:
-        return _error(f"Workspace '{name}' already exists", status_code=409)
+    except ApplicationError:
+        # An existing name, a read-only replica, or unavailable storage answer as themselves.
+        raise
     except Exception:
         logger.exception("Workspace creation failed")
-        return _error(
-            "Failed to create workspace; see server logs for details.",
+        raise HTTPException(
             status_code=500,
-        )
+            detail="Failed to create workspace; see server logs for details.",
+        ) from None
 
     response = JSONResponse({"workspace": ws, "display_name": name})
     visible_workspaces = await _visible_workspace_names(request, application)
@@ -222,11 +225,7 @@ async def reset_workspace(
     name = workspace_name.strip()
     confirm = confirm_name.strip()
 
-    if not name:
-        return _error("Workspace name cannot be empty")
-    if normalize_workspace(name) != normalize_workspace(confirm):
-        return _error("Confirmation name does not match")
-
+    _require_confirmation(name, confirm)
     ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_RESET, ws)
 
@@ -235,16 +234,14 @@ async def reset_workspace(
             workspace=ws,
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
-    except RunAdmissionLimitExceededError:
-        return _error("Deployment-wide nonterminal admission limit reached", status_code=503)
-    except CorpusMutationUnavailableError as exc:
-        return _error(str(exc), status_code=503)
+    except ApplicationError:
+        raise
     except Exception:
         logger.exception("Workspace reset Run acceptance failed")
-        return _error(
-            "Failed to accept Corpus Reset; see server logs for details.",
+        raise HTTPException(
             status_code=503,
-        )
+            detail="Failed to accept Corpus Reset; see server logs for details.",
+        ) from None
     return corpus_run_receipt(creation.run, workspace=ws)
 
 
@@ -259,36 +256,34 @@ async def delete_workspace(
     name = workspace_name.strip()
     confirm = confirm_name.strip()
 
-    if not name:
-        return _error("Workspace name cannot be empty")
-    if normalize_workspace(name) != normalize_workspace(confirm):
-        return _error("Confirmation name does not match")
-
+    _require_confirmation(name, confirm)
     ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
     try:
         registered = await application.corpora.workspace_exists(ws)
+    except ApplicationError:
+        raise
     except Exception:
         logger.exception("Workspace catalog lookup failed before Workspace Delete")
-        return _error("Workspace catalog is temporarily unavailable", status_code=503)
+        raise HTTPException(
+            status_code=503, detail="Workspace catalog is temporarily unavailable"
+        ) from None
     if not registered:
-        return _error("Workspace no longer exists", status_code=404)
+        raise HTTPException(status_code=404, detail="Workspace no longer exists")
 
     try:
         creation = await application.corpus_mutations.create_workspace_delete(
             workspace=ws,
             submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
         )
+    except ApplicationError:
+        raise
     except ValueError as exc:
-        return _error(str(exc))
-    except RunAdmissionLimitExceededError:
-        return _error("Deployment-wide nonterminal admission limit reached", status_code=503)
-    except CorpusMutationUnavailableError as exc:
-        return _error(str(exc), status_code=503)
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except Exception:
         logger.exception("Workspace Delete Run acceptance failed")
-        return _error(
-            "Failed to accept Workspace Delete; see server logs for details.",
+        raise HTTPException(
             status_code=503,
-        )
+            detail="Failed to accept Workspace Delete; see server logs for details.",
+        ) from None
     return corpus_run_receipt(creation.run, workspace=ws)

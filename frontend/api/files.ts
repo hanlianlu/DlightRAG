@@ -76,15 +76,8 @@ async function json<Input, Output>(
   fallback: string,
 ): Promise<Output> {
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as {
-      detail?: unknown;
-      error?: unknown;
-    } | null;
-    const detail = typeof payload?.detail === 'string'
-      ? payload.detail
-      : typeof payload?.error === 'string'
-        ? payload.error
-        : fallback;
+    const payload = await response.json().catch(() => null) as {detail?: unknown} | null;
+    const detail = typeof payload?.detail === 'string' ? payload.detail : fallback;
     throw new FilesApiError(response.status, detail);
   }
   try {

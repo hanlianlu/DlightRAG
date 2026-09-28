@@ -150,13 +150,10 @@ class CorpusMutationService:
         self._writable = writable
         self._default_workspace = require_canonical_workspace_id(default_workspace)
 
-    def _require_writable(self) -> None:
-        """Refuse a corpus write before any of it happens, or say who can take it."""
+    def _require_writable(self, request: str) -> None:
+        """Refuse a corpus write before any of it happens, and say who can take it."""
         if not self._writable:
-            raise CorpusMutationUnavailableError(
-                "This deployment is a read-only replica of the knowledge base: it accepts "
-                "no corpus writes. Send the upload, retry, or delete to a writer."
-            )
+            raise CorpusMutationUnavailableError(request=request)
 
     async def replay(
         self,
@@ -188,7 +185,7 @@ class CorpusMutationService:
         submitted_by: str,
         idempotency_key: str | None = None,
     ) -> RunCreation:
-        self._require_writable()
+        self._require_writable("the ingest")
         action: CorpusMutationAction = "replace" if bool(spec.replace) else "ingest"
         request = {
             "action": action,
@@ -272,7 +269,7 @@ class CorpusMutationService:
         metadata: Mapping[str, Any] | None = None,
         replace: bool = False,
     ) -> RunCreation:
-        self._require_writable()
+        self._require_writable("the upload")
         run_id = staged.path.parents[1].name
         action: CorpusMutationAction = "replace" if replace else "ingest"
         source_identity = {
@@ -327,7 +324,7 @@ class CorpusMutationService:
         idempotency_key: str | None = None,
         replace: bool = False,
     ) -> RunCreation:
-        self._require_writable()
+        self._require_writable("the upload")
         """Accept one already-staged multipart cohort as one ingest or replace Run."""
         if not staged:
             raise ValueError("at least one staged source is required")
@@ -384,7 +381,7 @@ class CorpusMutationService:
         document_ids: Sequence[str] = (),
         idempotency_key: str | None = None,
     ) -> RunCreation:
-        self._require_writable()
+        self._require_writable("the delete")
         selectors = {
             "file_paths": _bounded_unique(file_paths),
             "filenames": _bounded_unique(filenames),
@@ -409,7 +406,7 @@ class CorpusMutationService:
         selector: RetrySelector | None = None,
         idempotency_key: str | None = None,
     ) -> RunCreation:
-        self._require_writable()
+        self._require_writable("the retry")
         ids = _bounded_unique(document_ids)
         if bool(ids) == bool(selector):
             raise ValueError("provide document_ids or selector='all_retryable', but not both")
@@ -431,7 +428,7 @@ class CorpusMutationService:
         supersedes_run_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> RunCreation:
-        self._require_writable()
+        self._require_writable("the Corpus Reset")
         return await self._create_action(
             action="reset",
             workspace=workspace,
@@ -448,7 +445,7 @@ class CorpusMutationService:
         idempotency_key: str | None = None,
     ) -> RunCreation:
         """Accept the Workspace's final mutation: a full reset, then identity removal."""
-        self._require_writable()
+        self._require_writable("the Workspace Delete")
         if require_canonical_workspace_id(workspace) == self._default_workspace:
             raise ValueError("The default workspace cannot be deleted; reset its corpus instead.")
         return await self._create_action(
@@ -590,7 +587,7 @@ class CorpusMutationService:
         content_sha256: str | None = None,
     ) -> StagedCorpusSource:
         """Stream, hash, bound, and atomically commit one source outside Run blobs."""
-        self._require_writable()
+        self._require_writable("the upload")
         canonical = require_canonical_workspace_id(workspace)
         try:
             safe_path = safe_upload_relative_path(filename)

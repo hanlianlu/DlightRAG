@@ -110,7 +110,7 @@ it('preserves typed confirmation and focus after a failed corpus reset', async (
   let calls = 0;
   window.fetch = async () => {
     calls += 1;
-    return new Response(JSON.stringify({error: 'Deletion denied'}), {
+    return new Response(JSON.stringify({detail: 'Deletion denied', error_type: 'internal'}), {
       status: 500,
       headers: {'Content-Type': 'application/json'},
     });
@@ -247,7 +247,7 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
   expect(cancelEvent.defaultPrevented).to.equal(true);
   expect(dialog.open).to.equal(true);
 
-  requests[0]!(new Response(JSON.stringify({error: 'Deletion denied'}), {
+  requests[0]!(new Response(JSON.stringify({detail: 'Deletion denied', error_type: 'internal'}), {
     status: 500,
     headers: {'Content-Type': 'application/json'},
   }));

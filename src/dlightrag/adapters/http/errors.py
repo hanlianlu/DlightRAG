@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from dlightrag.adapters.http.rest.models import ErrorDetail
+from dlightrag.application.access import AccessDeniedError
 from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import (
     ApplicationConflictError,
@@ -96,8 +97,14 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request,
         exc: ApplicationUnavailableError,
     ) -> JSONResponse:
+        # A translated outage keeps its cause's traceback; a plain refusal (a read-only
+        # replica, the admission limit) is expected and needs only one line.
         logger.warning(
-            "%s %s is unavailable: %s", request.method, request.url.path, exc, exc_info=exc
+            "%s %s is unavailable: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=exc if exc.__cause__ is not None else None,
         )
         return error_response(503, str(exc))
 
@@ -124,11 +131,12 @@ def install_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         return error_response(422, str(exc))
 
-    @app.exception_handler(PermissionError)
-    async def permission_denied(
+    @app.exception_handler(AccessDeniedError)
+    async def access_denied(
         request: Request,  # noqa: ARG001
-        exc: PermissionError,
+        exc: AccessDeniedError,
     ) -> JSONResponse:
+        """An access-control denial; an OS permission failure stays an internal error."""
         return error_response(403, str(exc))
 
     @app.exception_handler(AnswerInputError)

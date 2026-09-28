@@ -33,8 +33,14 @@ class ModelCatalogueUnavailableError(ApplicationUnavailableError):
     """The runtime catalogue has not completed PostgreSQL synchronization."""
 
 
-class ModelCatalogueReadOnlyError(RuntimeError):
+class ModelCatalogueReadOnlyError(ApplicationUnavailableError):
     """This deployment may consume but not publish catalogue changes."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This deployment is a read-only replica: it cannot change the model "
+            "catalogue. Send the change to a writer."
+        )
 
 
 class ModelCatalogueRevisionConflict(RuntimeError):
@@ -268,9 +274,7 @@ class ModelCatalogueAdmin:
 
     def _require_writable(self) -> None:
         if self._read_only:
-            raise ModelCatalogueReadOnlyError(
-                "runtime model catalogue is read-only on this deployment"
-            )
+            raise ModelCatalogueReadOnlyError()
 
     def _require_expected_revision(self, expected_revision: str) -> None:
         self._require_ready()

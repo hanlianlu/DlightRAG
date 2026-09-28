@@ -665,23 +665,34 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
 
     spec = IngestSpec(source_type="url", url="https://example.com/report.pdf")
     calls = (
-        service.create_ingest(workspace="default", spec=spec, submitted_by="owner"),
-        service.create_delete(workspace="default", document_ids=["doc-1"], submitted_by="owner"),
-        service.create_retry(workspace="default", submitted_by="owner"),
-        service.create_reset(workspace="default", submitted_by="owner"),
-        service.create_workspace_delete(workspace="research", submitted_by="owner"),
+        ("the ingest", service.create_ingest(workspace="default", spec=spec, submitted_by="o")),
+        (
+            "the delete",
+            service.create_delete(workspace="default", document_ids=["doc-1"], submitted_by="o"),
+        ),
+        ("the retry", service.create_retry(workspace="default", submitted_by="o")),
+        ("the Corpus Reset", service.create_reset(workspace="default", submitted_by="o")),
+        (
+            "the Workspace Delete",
+            service.create_workspace_delete(workspace="research", submitted_by="o"),
+        ),
+        (
+            "the upload",
+            service.stage_upload(
+                workspace="default",
+                run_id="run-1",
+                filename="report.pdf",
+                reader=AsyncMock(),
+                max_bytes=1024,
+            ),
+        ),
     )
-    for call in calls:
-        with pytest.raises(CorpusMutationUnavailableError, match="read-only replica"):
+    for request, call in calls:
+        with pytest.raises(CorpusMutationUnavailableError) as refused:
             await call
-
-    with pytest.raises(CorpusMutationUnavailableError, match="read-only replica"):
-        await service.stage_upload(
-            workspace="default",
-            run_id="run-1",
-            filename="report.pdf",
-            reader=AsyncMock(),
-            max_bytes=1024,
+        assert str(refused.value) == (
+            "This deployment is a read-only replica of the knowledge base: it accepts no "
+            f"corpus writes. Send {request} to a writer."
         )
     assert list(tmp_path.rglob("*")) == []
 

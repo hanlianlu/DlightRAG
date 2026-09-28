@@ -63,9 +63,9 @@ async function post<Input, Output>(
     signal,
   });
   if (!response.ok) {
-    // The route answers with {"error": ...}; fall back when it cannot.
-    const detail = await response.json().catch(() => null) as {error?: unknown} | null;
-    const message = typeof detail?.error === 'string' ? detail.error : fallback;
+    // The route answers {detail, error_type}; fall back when it cannot.
+    const failure = await response.json().catch(() => null) as {detail?: unknown} | null;
+    const message = typeof failure?.detail === 'string' ? failure.detail : fallback;
     throw new WorkspaceApiError(response.status, message);
   }
   return v.parse(schema, await response.json());

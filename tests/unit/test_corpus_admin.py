@@ -120,6 +120,22 @@ def _admin(
     return admin, pool, maintenance, jobs, file_panel, download
 
 
+async def test_a_reader_refuses_workspace_and_metadata_writes_with_the_remedy() -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+
+    reader, pool, _maintenance, _, _, _ = _admin(read_only=True)
+
+    with pytest.raises(
+        CorpusMutationUnavailableError, match="Send the workspace creation to a writer"
+    ):
+        await reader.create_workspace("finance")
+    with pytest.raises(
+        CorpusMutationUnavailableError, match="Send the metadata update to a writer"
+    ):
+        await reader.update_metadata("default", "doc-1", {"team": "finance"})
+    pool.acquire.assert_not_awaited()
+
+
 async def test_create_workspace_refuses_an_existing_identity_instead_of_renaming_it() -> None:
     from dlightrag.application.corpus_admin import WorkspaceExistsError
 

@@ -109,10 +109,8 @@ def test_put_forwards_normalized_if_match_and_authenticated_actor(monkeypatch) -
     )
 
 
-def test_put_maps_read_only_deployment_to_forbidden(monkeypatch) -> None:
-    catalogue = SimpleNamespace(
-        upsert=AsyncMock(side_effect=ModelCatalogueReadOnlyError("read-only"))
-    )
+def test_put_on_a_read_only_replica_names_the_remedy(monkeypatch) -> None:
+    catalogue = SimpleNamespace(upsert=AsyncMock(side_effect=ModelCatalogueReadOnlyError()))
     monkeypatch.setattr(routes, "enforce_access", AsyncMock())
 
     response = _client(catalogue).put(
@@ -121,7 +119,14 @@ def test_put_maps_read_only_deployment_to_forbidden(monkeypatch) -> None:
         json=_payload(),
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": (
+            "This deployment is a read-only replica: it cannot change the model catalogue. "
+            "Send the change to a writer."
+        ),
+        "error_type": "unavailable",
+    }
 
 
 def test_delete_forwards_endpoint_identity(monkeypatch) -> None:

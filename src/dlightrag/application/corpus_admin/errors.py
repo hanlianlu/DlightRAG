@@ -39,10 +39,16 @@ class CorpusMutationUnavailableError(ApplicationUnavailableError):
     """This deployment cannot accept corpus writes, because it is a read-only replica.
 
     A `reader` process registers no corpus-mutation executor, so accepting a write would
-    stage bytes for a Run that can never execute and then fail it late. The refusal
-    happens before anything is staged, and names the remedy (ADR-style: a deployment that
-    accepts writes is a `writer`).
+    stage bytes for a Run that can never execute and then fail it late; direct corpus
+    writes such as workspace creation are refused the same way. The refusal happens
+    before anything changes and names the remedy: send ``request`` to a `writer`.
     """
+
+    def __init__(self, *, request: str) -> None:
+        super().__init__(
+            "This deployment is a read-only replica of the knowledge base: it accepts no "
+            f"corpus writes. Send {request} to a writer."
+        )
 
 
 @dataclass(frozen=True, slots=True)

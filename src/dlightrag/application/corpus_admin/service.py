@@ -58,6 +58,7 @@ from dlightrag.engine.rag.workspace.workspaces import (
 )
 
 from .errors import (
+    CorpusMutationUnavailableError,
     LocalDownloadTarget,
     MetadataValidationError,
     RedirectDownloadTarget,
@@ -731,7 +732,7 @@ class CorpusAdmin:
 
     def _require_writer(self, operation: str) -> None:
         if self._settings.read_only:
-            raise PermissionError(f"{operation} requires a writer service role")
+            raise CorpusMutationUnavailableError(request=f"the {operation}")
 
 
 def _payload_value(payload: Any, name: str) -> Any:

@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from dlightrag.adapters.http.errors import error_type_for_status, install_error_handlers
+from dlightrag.application.access import AccessDeniedError
 from dlightrag.application.errors import (
     ApplicationClosedError,
     CorpusUnavailableError,
@@ -109,6 +110,20 @@ def test_routing_failures_use_the_same_envelope() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Not Found", "error_type": "not_found"}
+
+
+def test_only_an_access_denial_is_forbidden() -> None:
+    denied = _client(AccessDeniedError("Access denied for action=workspace.query")).get("/fail")
+    # An OS permission failure is a server fault: no 403, and no path in the body.
+    os_failure = _client(PermissionError(13, "Permission denied", "/srv/corpus/a.pdf")).get("/fail")
+
+    assert denied.status_code == 403
+    assert denied.json() == {
+        "detail": "Access denied for action=workspace.query",
+        "error_type": "auth",
+    }
+    assert os_failure.status_code == 500
+    assert "/srv/corpus" not in os_failure.text
 
 
 def test_a_write_fence_says_when_to_retry() -> None:

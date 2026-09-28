@@ -877,9 +877,7 @@ async def test_mcp_corpus_mutation_surfaces_caller_refusals(
     from dlightrag.application.runs import IdempotencyKeyConflict
 
     error = {
-        "CorpusMutationUnavailableError": CorpusMutationUnavailableError(
-            "This deployment is a read-only replica of the knowledge base."
-        ),
+        "CorpusMutationUnavailableError": CorpusMutationUnavailableError(request="the retry"),
         "IdempotencyKeyConflict": IdempotencyKeyConflict(),
     }[refusal]
     mock_mcp_application.corpus_mutations.create_retry.side_effect = error

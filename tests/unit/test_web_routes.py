@@ -1423,7 +1423,7 @@ class TestWebWorkspaceCreate:
             data={"workspace_name": "default"},
         )
         assert resp.status_code == 409
-        assert resp.json()["error"] == "Workspace 'default' already exists"
+        assert resp.json()["detail"] == "Workspace 'default' already exists"
 
     @pytest.mark.parametrize(
         "workspace_name",
@@ -1444,7 +1444,7 @@ class TestWebWorkspaceCreate:
             data={"workspace_name": workspace_name},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]
+        assert resp.json()["detail"]
 
 
 async def test_bootstrap_falls_back_to_the_configured_default_workspace(
@@ -1480,6 +1480,100 @@ async def test_reset_workspace_accepts_a_durable_corpus_run(
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/web/api/workspaces/create", "/web/api/workspaces/reset", "/web/api/workspaces/delete"],
+    ids=["create", "reset", "delete"],
+)
+async def test_workspace_commands_on_a_read_only_replica_pass_the_refusal_through(
+    client: AsyncClient, mock_application, path: str
+) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+
+    refusal = CorpusMutationUnavailableError(request="the request")
+    mock_application.corpora.create_workspace = AsyncMock(side_effect=refusal)
+    mock_application.corpus_mutations.create_reset.side_effect = refusal
+    mock_application.corpus_mutations.create_workspace_delete.side_effect = refusal
+
+    response = await client.post(
+        path, data={"workspace_name": "test-ws", "confirm_name": "test-ws"}
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": str(refusal), "error_type": "unavailable"}
+
+
+@pytest.mark.parametrize(
+    ("path", "failing", "status", "detail", "logged"),
+    [
+        (
+            "/web/api/workspaces/create",
+            "create_workspace",
+            500,
+            "Failed to create workspace; see server logs for details.",
+            "Workspace creation failed",
+        ),
+        (
+            "/web/api/workspaces/reset",
+            "create_reset",
+            503,
+            "Failed to accept Corpus Reset; see server logs for details.",
+            "Workspace reset Run acceptance failed",
+        ),
+        (
+            "/web/api/workspaces/delete",
+            "workspace_exists",
+            503,
+            "Workspace catalog is temporarily unavailable",
+            "Workspace catalog lookup failed before Workspace Delete",
+        ),
+        (
+            "/web/api/workspaces/delete",
+            "create_workspace_delete",
+            503,
+            "Failed to accept Workspace Delete; see server logs for details.",
+            "Workspace Delete Run acceptance failed",
+        ),
+    ],
+    ids=["create", "reset", "delete-lookup", "delete"],
+)
+async def test_workspace_commands_hide_untyped_failures_behind_logged_advice(
+    client: AsyncClient,
+    mock_application,
+    caplog: pytest.LogCaptureFixture,
+    path: str,
+    failing: str,
+    status: int,
+    detail: str,
+    logged: str,
+) -> None:
+    failure = RuntimeError("socket closed at 10.0.0.7")
+    if failing in {"create_workspace", "workspace_exists"}:
+        setattr(mock_application.corpora, failing, AsyncMock(side_effect=failure))
+    else:
+        getattr(mock_application.corpus_mutations, failing).side_effect = failure
+
+    with caplog.at_level("ERROR"):
+        response = await client.post(
+            path, data={"workspace_name": "test-ws", "confirm_name": "test-ws"}
+        )
+
+    assert response.status_code == status
+    assert response.json()["detail"] == detail
+    assert "10.0.0.7" not in response.text
+    assert logged in caplog.text
+
+
+async def test_workspace_commands_require_a_name(client: AsyncClient) -> None:
+    response = await client.post("/web/api/workspaces/reset", data={"workspace_name": " "})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Workspace name cannot be empty",
+        "error_type": "validation",
+    }
+
+
 async def test_reset_workspace_projects_the_admission_limit(
     client: AsyncClient, mock_application
 ) -> None:
@@ -1491,7 +1585,7 @@ async def test_reset_workspace_projects_the_admission_limit(
     )
 
     assert response.status_code == 503
-    assert response.json()["error"] == "Deployment-wide nonterminal admission limit reached"
+    assert response.json()["detail"] == "Deployment-wide nonterminal admission limit reached"
 
 
 async def test_delete_workspace_accepts_a_durable_run_behind_the_delete_permission(
@@ -1531,7 +1625,7 @@ async def test_delete_workspace_requires_a_matching_confirmation(
     )
 
     assert response.status_code == 400
-    assert response.json()["error"] == "Confirmation name does not match"
+    assert response.json()["detail"] == "Confirmation name does not match"
     mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
 
 
@@ -1546,7 +1640,7 @@ async def test_delete_workspace_reports_a_workspace_that_is_already_gone(
     )
 
     assert response.status_code == 404
-    assert response.json()["error"] == "Workspace no longer exists"
+    assert response.json()["detail"] == "Workspace no longer exists"
     mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
 
 
@@ -1563,7 +1657,7 @@ async def test_delete_workspace_explains_why_the_default_is_kept(
     )
 
     assert response.status_code == 400
-    assert response.json()["error"] == (
+    assert response.json()["detail"] == (
         "The default workspace cannot be deleted; reset its corpus instead."
     )
 
@@ -1643,10 +1737,7 @@ class TestSourcePresentation:
         """
         from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
 
-        refusal = CorpusMutationUnavailableError(
-            "This deployment is a read-only replica of the knowledge base: it accepts no "
-            "corpus writes. Send the upload, retry, or delete to a writer."
-        )
+        refusal = CorpusMutationUnavailableError(request="the upload")
         mock_application.corpus_mutations.stage_uploads.side_effect = refusal
         mock_application.corpus_mutations.create_retry.side_effect = refusal
         mock_application.corpus_mutations.create_delete.side_effect = refusal

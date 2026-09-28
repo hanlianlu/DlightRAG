@@ -346,8 +346,10 @@ A reader:
 - **refuses corpus writes at acceptance, before staging a byte**: it registers no
   corpus-mutation executor, so an upload, retry, delete, or reset is answered
   immediately with HTTP 503 and the remedy (send it to a writer) instead of a Run
-  no process here can execute. Web's Files panel keeps its read surface: the file
-  list, the failed list, and source download where the corpus root is mounted.
+  no process here can execute. Workspace creation, metadata updates, and
+  runtime model-catalogue changes are refused the same way. Web's Files panel
+  keeps its read surface: the file list, the failed list, and source download
+  where the corpus root is mounted.
 
 DlightRAG makes no physical-standby or read-endpoint promise: both roles use the
 same primary endpoint. Read-replica routing would need a separate corpus endpoint
