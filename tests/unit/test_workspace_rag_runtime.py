@@ -954,7 +954,7 @@ class TestWorkspaceRagLightRAGMainPath:
             _FakeChatModels,
         )
         monkeypatch.setattr(
-            "dlightrag.engine.rag.workspace.workspace_rag.build_product_reranker",
+            "dlightrag.engine.rag.workspace.workspace_rag.build_rerank_func",
             lambda *_a, **_k: None,
         )
         monkeypatch.setattr(
@@ -1017,7 +1017,7 @@ class TestWorkspaceRagLightRAGMainPath:
             _FakeChatModels,
         )
         monkeypatch.setattr(
-            "dlightrag.engine.rag.workspace.workspace_rag.build_product_reranker",
+            "dlightrag.engine.rag.workspace.workspace_rag.build_rerank_func",
             lambda *_a, **_k: None,
         )
         monkeypatch.setattr(

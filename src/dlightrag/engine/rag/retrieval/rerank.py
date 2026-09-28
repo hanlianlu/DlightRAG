@@ -71,11 +71,7 @@ def rerank_consumes_images(
     if not settings.enabled:
         return False
     if settings.strategy == "chat_llm_reranker":
-        if settings.input_modality == "text":
-            return False
-        if settings.input_modality == "multimodal":
-            return True
-        return supports_vision is not False
+        return _chat_rerank_reads_images(settings, supports_vision=supports_vision)
     try:
         accepts_images = rerank_accepts_images(settings)
     except ValueError:
@@ -340,6 +336,15 @@ class _RerankCallable:
         await self._closeable.aclose()
 
 
+def _chat_rerank_reads_images(settings: RerankSettings, *, supports_vision: bool | None) -> bool:
+    """Whether the chat-listwise reranker sends chunk images to its scoring model.
+
+    ``auto`` reads images unless the scoring model is known to lack vision; an
+    explicit ``multimodal`` against a text-only model refuses at construction.
+    """
+    return settings.input_modality != "text" and supports_vision is not False
+
+
 def build_rerank_func(
     settings: RerankSettings,
     *,
@@ -348,7 +353,12 @@ def build_rerank_func(
     supports_vision: bool | None = None,
     telemetry: Telemetry = NOOP_TELEMETRY,
 ) -> Callable[..., Any] | None:
-    """Build one closeable rerank orchestration from immutable settings."""
+    """Build one closeable rerank orchestration from immutable settings.
+
+    Workspace runtimes and the federation pass share this one construction: only
+    the chat-listwise strategy reads ``scoring_settings``, and a disabled rerank
+    yields None without any model wiring.
+    """
     if not settings.enabled:
         return None
 
@@ -360,7 +370,7 @@ def build_rerank_func(
                 "chat_llm_reranker input_modality=multimodal but the selected scoring "
                 "model does not support image input"
             )
-        multimodal = settings.input_modality != "text" and supports_vision is not False
+        multimodal = _chat_rerank_reads_images(settings, supports_vision=supports_vision)
         scoring_model = CompletionModel(
             scoring_settings,
             scheduler=scheduler,
@@ -415,37 +425,8 @@ def build_rerank_func(
     )
 
 
-def build_product_reranker(
-    settings: RerankSettings,
-    *,
-    scoring_settings: ModelSettings | None,
-    scheduler: ModelScheduler,
-    supports_vision: bool | None = None,
-    telemetry: Telemetry = NOOP_TELEMETRY,
-) -> Callable[..., Any] | None:
-    """Build the product-configured reranker for one runtime.
-
-    One shared construction shape for workspace runtimes and the federation
-    pass: the chat-listwise strategy needs the scoring model settings, every
-    other strategy needs none, and a disabled rerank yields None without any
-    model wiring.
-    """
-    return build_rerank_func(
-        settings,
-        scheduler=scheduler,
-        scoring_settings=(
-            scoring_settings
-            if settings.enabled and settings.strategy == "chat_llm_reranker"
-            else None
-        ),
-        supports_vision=supports_vision,
-        telemetry=telemetry,
-    )
-
-
 __all__ = [
     "LISTWISE_RERANK_SYSTEM_PROMPT",
-    "build_product_reranker",
     "build_rerank_func",
     "rerank_consumes_images",
 ]

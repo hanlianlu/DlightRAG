@@ -146,7 +146,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
     from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
     from dlightrag.engine.ai.scheduler import ModelScheduler
-    from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+    from dlightrag.engine.ai.settings import (
+        CHAT_MODEL_SELECTORS,
+        MODEL_ROLE_NAMES,
+        ChatModelSelector,
+    )
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
     from dlightrag.engine.answer.capabilities import (
@@ -158,7 +162,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.answer.workspace import agent_workspace_reclaimer
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker
-    from dlightrag.engine.rag.retrieval.rerank import build_product_reranker
+    from dlightrag.engine.rag.retrieval.rerank import build_rerank_func
     from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
     from dlightrag.engine.rag.workspace.pool import WorkspacePool
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -299,13 +303,24 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         built from the same product reranker settings the workspaces use.
         """
         resolved_rerank = rag_settings(config).rerank
-        return build_product_reranker(
+        return build_rerank_func(
             resolved_rerank,
             scoring_settings=rerank_scoring_model_settings(config),
             scheduler=scheduler,
             supports_vision=capabilities.rerank_supports_vision,
             telemetry=telemetry,
         )
+
+    model_selectors: dict[str, ChatModelSelector] = {name: name for name in CHAT_MODEL_SELECTORS}
+
+    def fingerprint_for_role(role: str):
+        """The invocation fingerprint a pinned role resolves to; unknown roles refuse."""
+        selector = model_selectors.get(role)
+        if selector is None:
+            raise ValueError(f"unknown pinned model role: {role}")
+        return model_invocation_fingerprint(model_settings_for_role(config, selector))
+
+    run_retention_seconds = config.runtime.run_retention_days * 24 * 3600
 
     retrieval = RetrievalService(
         pool=pool,
@@ -321,15 +336,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         settings=retrieval_settings(config),
         telemetry=telemetry,
         model_profile_for_role=lambda role: capabilities.model_profile(role),
-        model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
-            model_settings_for_role(config, role)
-        ),
+        model_invocation_fingerprint_for_role=fingerprint_for_role,
         federated_reranker_factory=federated_reranker_factory,
     )
 
     run_blob_store = PGRunBlobStore()
     run_store = PGRunStore(
-        retention_seconds=config.runtime.run_retention_days * 24 * 3600,
+        retention_seconds=run_retention_seconds,
         query_max_nonterminal_runs=config.runtime.query.max_nonterminal_runs,
         corpus_mutation_max_nonterminal_runs=(config.runtime.corpus_mutation.max_nonterminal_runs),
         promotion_doc_threshold=config.corpus.promotion.doc_threshold,
@@ -389,9 +402,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         resources=resources,
         settings=answer_executor_settings(config),
         telemetry=telemetry,
-        model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
-            model_settings_for_role(config, role)
-        ),
+        model_invocation_fingerprint_for_role=fingerprint_for_role,
         execution_environment=config.answer.agent.execution_environment,
         shell_confinement=agent_confinement_policy(config),
         workspace_root=config.answer.agent.workspace_root,
@@ -411,19 +422,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         on_dependency_recovered=health.mark_component_healthy,
     )
 
-    model_roles: dict[str, ModelRole] = {name: name for name in MODEL_ROLE_NAMES}
-
-    def retrieval_model_invocation_fingerprint(role: str):
-        selected_role = model_roles.get(role)
-        if selected_role is None:
-            raise ValueError(f"unknown pinned Retrieval model role: {role}")
-        return model_invocation_fingerprint(model_settings_for_role(config, selected_role))
-
     retrieval_executor = RetrievalExecutor(
         operation=retrieval,
         telemetry=telemetry,
         timeout_seconds=config.corpus.retrieval.timeout,
-        model_invocation_fingerprint_for_role=retrieval_model_invocation_fingerprint,
+        model_invocation_fingerprint_for_role=fingerprint_for_role,
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
     )
@@ -511,16 +514,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         capability_view=AnswerCapabilityView(capabilities),
         models=models,
         resources=resources,
-        model_invocation_fingerprint_for_role=lambda role: model_invocation_fingerprint(
-            model_settings_for_role(config, role)
-        ),
+        model_invocation_fingerprint_for_role=fingerprint_for_role,
         research_tool_declarations=answer_executor.research_tool_declarations,
         memory_capability=memory.execution_capability,
         bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
         child_roster_cursor_secret=cursor_secrets.derive("dlightrag-child-roster-cursor"),
-        run_retention_seconds=config.runtime.run_retention_days * 24 * 3600,
+        run_retention_seconds=run_retention_seconds,
     )
     web_store = PGWebConversationStore(run_store=run_store)
     web_conversations = WebConversationService(

@@ -71,7 +71,7 @@ from dlightrag.engine.rag.retrieval.metadata_fields import (
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
 from dlightrag.engine.rag.retrieval.rerank import (
-    build_product_reranker,
+    build_rerank_func,
     rerank_consumes_images,
 )
 from dlightrag.engine.rag.retrieval.visibility import ingest_finalization_complete
@@ -360,7 +360,7 @@ class WorkspaceRag:
         self._chat_models = chat_models
         default_func_lr = chat_models.default_func
         resolved_rerank = settings.rerank
-        rerank_func = build_product_reranker(
+        rerank_func = build_rerank_func(
             resolved_rerank,
             scoring_settings=settings.rerank_scoring_model,
             scheduler=self._model_scheduler,

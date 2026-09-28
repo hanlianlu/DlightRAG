@@ -304,7 +304,7 @@ def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMulti
     )
     monkeypatch.setattr(
         service_module,
-        "build_product_reranker",
+        "build_rerank_func",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
