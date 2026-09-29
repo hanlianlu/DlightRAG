@@ -6,6 +6,8 @@ Usage:
     # Durable ingestion (requires the API server)
     uv run scripts/cli.py ingest ./docs
     uv run scripts/cli.py ingest ./docs --replace
+    # --workspace names an existing workspace; create it first (POST /workspaces,
+    # the MCP create_workspace tool, or the Web UI). Omitted: the default workspace.
     uv run scripts/cli.py ingest ./docs --workspace project-a
     uv run scripts/cli.py ingest ./report.pdf --title "Quarterly Report" --metadata-json '{"department":"finance"}'
 
@@ -503,7 +505,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Retain fetched bytes for later download (including signed URL fetches)",
     )
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
-    p_ingest.add_argument("--workspace", default=None, help="Target workspace")
+    p_ingest.add_argument(
+        "--workspace",
+        default=None,
+        help="Target workspace, which must already exist (create it with POST /workspaces, "
+        "the MCP create_workspace tool, or the Web UI); default: the default workspace",
+    )
     p_ingest.add_argument("--title", default=None, help="Optional document title metadata")
     p_ingest.add_argument("--author", default=None, help="Optional document author metadata")
     p_ingest.add_argument(
