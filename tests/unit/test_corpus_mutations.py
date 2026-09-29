@@ -666,6 +666,10 @@ def _payload(action: str, **fields: Any) -> dict[str, Any]:
     }
 
 
+#: A corpus directory that holds nothing, for executor tests that never stage.
+_NO_CORPUS = Path("/nonexistent/dlightrag-test/corpus")
+
+
 def _executor(
     runtime: Any,
     *,
@@ -673,6 +677,7 @@ def _executor(
     acquire_error: Exception | None = None,
     maintenance: _Maintenance | None = None,
     store: Any = None,
+    corpus_root: Path = _NO_CORPUS,
 ):
     pool = SimpleNamespace(
         acquire=AsyncMock(side_effect=acquire_error, return_value=runtime),
@@ -683,6 +688,7 @@ def _executor(
         pool=cast(Any, pool),
         maintenance=cast(Any, maintenance or _Maintenance()),
         store=cast(Any, store),
+        corpus_root=corpus_root,
         now=now,
     )
     return executor, pool, store
@@ -866,6 +872,81 @@ async def test_a_local_run_missing_a_staged_file_fails_before_its_handoff(tmp_pa
     runtime.aingest.assert_not_awaited()
 
 
+def _staged_run(corpus_root: Path) -> tuple[Path, dict[str, Any]]:
+    """One staged file of this Run, and the Run's prepared input."""
+    source = corpus_root / "default" / ".runs" / _RUN_ID / "sources" / "0" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"pdf")
+    return source.parents[2], _local_payload(source)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"processed": 1, "errors": [], "results": [{"doc_id": "doc-1", "chunks": []}]},
+        {"processed": 0, "errors": ["report.pdf: document processing failed"], "results": []},
+    ],
+    ids=["succeeded", "failed"],
+)
+async def test_a_settled_local_run_removes_its_stage(tmp_path: Path, result: dict) -> None:
+    """Each ingested document has its own copy in the corpus directory by then."""
+    stage, payload = _staged_run(tmp_path)
+    runtime = _runtime()
+    runtime.aingest.return_value = result
+    executor, _pool, _store = _executor(runtime, corpus_root=tmp_path)
+
+    outcome = await executor.execute(cast(Any, _Session(payload)))
+
+    assert isinstance(outcome, Succeeded | Failed)
+    assert not stage.exists()
+
+
+async def test_a_run_that_may_run_again_keeps_its_stage(tmp_path: Path) -> None:
+    stage, payload = _staged_run(tmp_path)
+    error = TransientDependencyError("corpus_storage", "temporarily unavailable")
+    executor, _pool, _store = _executor(_runtime(), acquire_error=error, corpus_root=tmp_path)
+
+    outcome = await executor.execute(cast(Any, _Session(payload)))
+
+    assert isinstance(outcome, Deferred)
+    assert (stage / "sources" / "0" / "report.pdf").read_bytes() == b"pdf"
+
+
+async def test_a_run_cancelled_before_its_handoff_removes_its_stage(tmp_path: Path) -> None:
+    from dlightrag.engine.runtime.coordinator import RunCancellationObserved
+
+    stage, payload = _staged_run(tmp_path)
+    executor, _pool, _store = _executor(_runtime(), corpus_root=tmp_path)
+    session = _Session(payload)
+    session.begin_handoff = AsyncMock(side_effect=RunCancellationObserved)  # type: ignore[method-assign]
+
+    with pytest.raises(RunCancellationObserved):
+        await executor.execute(cast(Any, session))
+
+    assert not stage.exists()
+
+
+async def test_a_corpus_run_cancelled_while_queued_loses_its_stage(tmp_path: Path) -> None:
+    from dlightrag.application.runs import RunView
+
+    stage = tmp_path / "corpus" / "default" / ".runs" / _RUN_ID
+    (stage / "sources" / "0").mkdir(parents=True)
+    service = _service(tmp_path)
+    cancelled = cast(
+        RunView,
+        SimpleNamespace(
+            run_id=_RUN_ID,
+            run_kind="corpus_mutation",
+            access_scope_kind="workspace",
+            access_scope_id="default",
+        ),
+    )
+
+    await service.discard_cancelled_run(cancelled)
+
+    assert not stage.exists()
+
+
 @pytest.mark.parametrize("active_status", ["parsing", "analyzing", "processing", "preprocessed"])
 async def test_recovered_ingest_does_not_redrive_an_active_tracked_pipeline(
     active_status: str,
@@ -925,7 +1006,7 @@ async def test_fresh_retry_seals_the_exact_cohort_before_handoff() -> None:
     )
 
 
-async def test_fresh_reset_preserves_later_run_sources_and_evicts_only_runtime() -> None:
+async def test_fresh_reset_evicts_only_runtime() -> None:
     runtime = _runtime()
     executor, pool, _store = _executor(runtime)
     session = _Session(_payload("reset", supersedes_run_id=None))
@@ -933,8 +1014,29 @@ async def test_fresh_reset_preserves_later_run_sources_and_evicts_only_runtime()
     outcome = await executor.execute(cast(Any, session))
 
     assert isinstance(outcome, Succeeded)
-    runtime.areset.assert_awaited_once_with(preserve_run_sources_after=_RUN_ID)
+    runtime.areset.assert_awaited_once_with()
     pool.evict.assert_awaited_once_with("default")
+
+
+async def test_a_reset_drops_only_the_stage_of_the_run_it_supersedes(tmp_path: Path) -> None:
+    """A Run it supersedes ended at acceptance; a Run queued behind it keeps its stage."""
+    superseded, queued = (
+        "0199a0a0-0000-7000-8000-000000000002",
+        "0199a0a0-0000-7000-8000-000000000003",
+    )
+    stages = tmp_path / "default" / ".runs"
+    for run_id in (superseded, queued):
+        (stages / run_id / "sources" / "0").mkdir(parents=True)
+        (stages / run_id / "sources" / "0" / "report.pdf").write_bytes(b"pdf")
+    executor, _pool, _store = _executor(_runtime(), corpus_root=tmp_path)
+
+    outcome = await executor.execute(
+        cast(Any, _Session(_payload("reset", supersedes_run_id=superseded)))
+    )
+
+    assert isinstance(outcome, Succeeded)
+    assert not (stages / superseded).exists()
+    assert (stages / queued / "sources" / "0" / "report.pdf").read_bytes() == b"pdf"
 
 
 async def test_settled_delete_checkpoint_finishes_without_repeating_upstream() -> None:
@@ -1089,8 +1191,12 @@ def _run_record(run_id: str, *, status: str = "queued", run_kind: str = "corpus_
 def _successor_store(*pages: tuple[Any, ...]) -> SimpleNamespace:
     return SimpleNamespace(
         list_runs=AsyncMock(side_effect=list(pages)),
-        request_cancellation=AsyncMock(),
+        request_cancellation=AsyncMock(return_value=SimpleNamespace(outcome="cancelled")),
     )
+
+
+def _run_ids(count: int) -> list[str]:
+    return [f"0199a0a0-0000-7000-8000-{index:012d}" for index in range(10, 10 + count)]
 
 
 def _workspace_delete_session(**kwargs: Any) -> _Session:
@@ -1102,42 +1208,69 @@ def _workspace_delete_session(**kwargs: Any) -> _Session:
     return session
 
 
-async def test_workspace_delete_resets_everything_then_retires_identity_and_successors() -> None:
+async def test_workspace_delete_resets_everything_then_retires_identity_and_successors(
+    tmp_path: Path,
+) -> None:
+    queued, done, answer = _run_ids(3)
+    stages = tmp_path / "research" / ".runs"
+    for run_id in (queued, done):
+        (stages / run_id / "sources").mkdir(parents=True)
     runtime = _runtime()
     maintenance = _Maintenance()
     store = _successor_store(
         (
-            _run_record("run-queued"),
-            _run_record("run-done", status="succeeded"),
-            _run_record("run-answer", run_kind="answer"),
+            _run_record(queued),
+            _run_record(done, status="succeeded"),
+            _run_record(answer, run_kind="answer"),
         ),
     )
-    executor, pool, _store = _executor(runtime, maintenance=maintenance, store=store)
+    executor, pool, _store = _executor(
+        runtime, maintenance=maintenance, store=store, corpus_root=tmp_path
+    )
     session = _workspace_delete_session()
 
     outcome = await executor.execute(cast(Any, session))
 
     assert isinstance(outcome, Succeeded)
     assert outcome.result["action"] == "delete_workspace"
-    # No source is preserved: every queued successor is cancelled, never replayed.
-    runtime.areset.assert_awaited_once_with(preserve_run_sources_after=None)
+    runtime.areset.assert_awaited_once_with()
     assert session.handoff_started is True
     assert session.phases == ["resetting_corpus", "removing_workspace"]
     assert maintenance.unregistered == ["research"]
     store.list_runs.assert_awaited_once_with(owner_id="research", after_run_id=_RUN_ID, limit=100)
-    store.request_cancellation.assert_awaited_once_with(owner_id="research", run_id="run-queued")
+    store.request_cancellation.assert_awaited_once_with(owner_id="research", run_id=queued)
     pool.evict.assert_awaited_once_with("research")
+    # Every successor ended, so its stage went, and with it the Workspace's folders.
+    assert not (tmp_path / "research").exists()
+
+
+async def test_workspace_delete_keeps_a_stage_it_did_not_end(tmp_path: Path) -> None:
+    """An upload still staging for the deleted Workspace keeps its folder; nothing races it."""
+    running, uploading = _run_ids(2)
+    stages = tmp_path / "research" / ".runs"
+    for run_id in (running, uploading):
+        (stages / run_id / "sources").mkdir(parents=True)
+    store = _successor_store((_run_record(running),))
+    store.request_cancellation.return_value = SimpleNamespace(outcome="pending")
+    executor, _pool, _store = _executor(_runtime(), store=store, corpus_root=tmp_path)
+
+    outcome = await executor.execute(cast(Any, _workspace_delete_session()))
+
+    assert isinstance(outcome, Succeeded)
+    assert (stages / running / "sources").is_dir()
+    assert (stages / uploading / "sources").is_dir()
 
 
 async def test_workspace_delete_pages_through_every_queued_successor() -> None:
-    first = tuple(_run_record(f"run-{index:03d}") for index in range(100))
-    store = _successor_store(first, (_run_record("run-last"),))
+    run_ids = _run_ids(101)
+    first = tuple(_run_record(run_id) for run_id in run_ids[:100])
+    store = _successor_store(first, (_run_record(run_ids[100]),))
     executor, _pool, _store = _executor(_runtime(), store=store)
 
     outcome = await executor.execute(cast(Any, _workspace_delete_session()))
 
     assert isinstance(outcome, Succeeded)
-    assert store.list_runs.await_args_list[1].kwargs["after_run_id"] == "run-099"
+    assert store.list_runs.await_args_list[1].kwargs["after_run_id"] == run_ids[99]
     assert store.request_cancellation.await_count == 101
 
 

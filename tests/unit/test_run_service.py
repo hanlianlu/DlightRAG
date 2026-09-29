@@ -78,6 +78,24 @@ async def test_terminal_cancellation_does_not_signal_a_worker() -> None:
     scheduler.cancel_local.assert_not_called()
 
 
+async def test_only_a_run_cancellation_ended_while_queued_is_announced() -> None:
+    """No executor runs it again, so the listener releases what it held."""
+    announced: list[RunView] = []
+
+    async def on_cancelled(run: RunView) -> None:
+        announced.append(run)
+
+    repository = AsyncMock()
+    service = RunService(store=repository, scheduler=Mock(), on_cancelled=on_cancelled)
+    for outcome in ("pending", "already_terminal", "rejected", "cancelled"):
+        repository.request_cancellation.return_value = CancellationOutcome(
+            outcome=outcome, run=_runtime_record()
+        )
+        await service.cancel(owner_id="owner", run_id="run")
+
+    assert [run.run_id for run in announced] == ["run"]
+
+
 async def test_reads_and_events_drop_runtime_worker_state() -> None:
     record = _runtime_record()
     repository = AsyncMock()

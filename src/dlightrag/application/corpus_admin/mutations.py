@@ -24,6 +24,7 @@ from dlightrag.application.runs import (
     RunAdmissionLimitExceededError,
     RunCreation,
     RunRuntimeUnavailableError,
+    RunView,
 )
 from dlightrag.engine.dependencies import (
     DependencyComponent,
@@ -33,6 +34,7 @@ from dlightrag.engine.dependencies import (
 from dlightrag.engine.rag.corpus.contracts import IngestDocument
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.paths import (
+    RUN_STAGES_DIR_NAME,
     document_name,
     excluded_from_directory_scan,
 )
@@ -40,7 +42,11 @@ from dlightrag.engine.rag.corpus.ingestion.uploads import safe_upload_relative_p
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import CorpusMaintenanceStore, WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
-from dlightrag.engine.runtime.coordinator import RunExecutor, RunSession
+from dlightrag.engine.runtime.coordinator import (
+    RunCancellationObserved,
+    RunExecutor,
+    RunSession,
+)
 from dlightrag.engine.runtime.policy import CORPUS_MUTATION_RUN_RETENTION_SECONDS
 from dlightrag.engine.runtime.records import (
     Deferred,
@@ -729,6 +735,15 @@ class CorpusMutationService:
         run_root = self._run_root(require_canonical_workspace_id(workspace), run_id)
         await asyncio.to_thread(shutil.rmtree, run_root, True)
 
+    async def discard_cancelled_run(self, run: RunView) -> None:
+        """Drop the stage of a Corpus Mutation that cancellation ended while queued.
+
+        It never ran, so its executor, which otherwise removes the stage, never
+        will; nothing else reads it.
+        """
+        if run.run_kind == "corpus_mutation" and run.access_scope_kind == "workspace":
+            await self.discard_staged_run(workspace=run.access_scope_id, run_id=run.run_id)
+
     def _run_root(self, workspace: str, run_id: str) -> Path:
         return _run_stage_root(self._corpus_root, workspace, run_id)
 
@@ -806,11 +821,13 @@ class CorpusMutationExecutor(RunExecutor):
         pool: WorkspacePool,
         maintenance: CorpusMaintenanceStore,
         store: CorpusMutationStore,
+        corpus_root: Path,
         now: Callable[[], datetime.datetime] | None = None,
     ) -> None:
         self._pool = pool
         self._maintenance = maintenance
         self._store = store
+        self._corpus_root = Path(corpus_root)
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
@@ -824,6 +841,30 @@ class CorpusMutationExecutor(RunExecutor):
         if workspace != session.owner_id:
             return Failed("invalid_corpus_mutation", "Corpus Mutation scope does not match input.")
 
+        # A Run's stage is its own: the Run removes it once it ends. A Run that
+        # defers or waits for repair may still read it, and one whose lease moved
+        # leaves it to the next owner.
+        try:
+            outcome = await self._execute(session, raw, action, workspace)
+        except RunCancellationObserved:
+            if _ACTIONS[action].source_based:
+                await self._discard_stage(workspace, session.run_id)
+            raise
+        if _ACTIONS[action].source_based and isinstance(outcome, Succeeded | Failed):
+            await self._discard_stage(workspace, session.run_id)
+        return outcome
+
+    async def _discard_stage(self, workspace: str, run_id: str) -> None:
+        stage = _run_stage_root(self._corpus_root, workspace, run_id)
+        await asyncio.to_thread(shutil.rmtree, stage, True)
+
+    async def _execute(
+        self,
+        session: RunSession,
+        raw: Mapping[str, Any],
+        action: CorpusMutationAction,
+        workspace: str,
+    ) -> RunExecutionOutcome:
         recovered_after_handoff = session.handoff_started
         checkpoint = dict(session.checkpoint or {})
         checkpoint.update(
@@ -854,9 +895,9 @@ class CorpusMutationExecutor(RunExecutor):
                 case "retry":
                     return await self._retry(session, runtime, raw, checkpoint)
                 case "delete_workspace":
-                    return await self._delete_workspace(session, runtime, checkpoint)
+                    return await self._delete_workspace(session, runtime, raw, checkpoint)
                 case "reset":
-                    return await self._reset(session, runtime, checkpoint)
+                    return await self._reset(session, runtime, raw, checkpoint)
                 case _:
                     assert_never(action)
         except WorkspaceWriteFencedError, _TrackedPipelineNotSettled:
@@ -1125,13 +1166,13 @@ class CorpusMutationExecutor(RunExecutor):
         self,
         session: RunSession,
         runtime: Any,
+        raw: Mapping[str, Any],
         checkpoint: dict[str, Any],
     ) -> RunExecutionOutcome:
-        waiting = await self._settle_full_reset(
-            session, runtime, checkpoint, preserve_run_sources_after=session.run_id
-        )
+        waiting = await self._settle_full_reset(session, runtime, checkpoint)
         if waiting is not None:
             return waiting
+        await self._discard_superseded_stage(session.owner_id, raw)
         await self._pool.evict(session.owner_id)
         return Succeeded(_result("reset", _checkpoint_documents(checkpoint), checkpoint))
 
@@ -1139,6 +1180,7 @@ class CorpusMutationExecutor(RunExecutor):
         self,
         session: RunSession,
         runtime: Any,
+        raw: Mapping[str, Any],
         checkpoint: dict[str, Any],
     ) -> RunExecutionOutcome:
         """Reset the whole corpus, then retire the Workspace and every queued successor.
@@ -1149,16 +1191,15 @@ class CorpusMutationExecutor(RunExecutor):
         Both are idempotent, so recovery after the settled reset repeats them.
         """
         workspace = session.owner_id
-        # No later source survives: every queued successor is cancelled below.
-        waiting = await self._settle_full_reset(
-            session, runtime, checkpoint, preserve_run_sources_after=None
-        )
+        waiting = await self._settle_full_reset(session, runtime, checkpoint)
         if waiting is not None:
             return waiting
         await session.enter_phase("removing_workspace")
         await self._maintenance.unregister_workspace(workspace)
+        await self._discard_superseded_stage(workspace, raw)
         await self._cancel_successors(workspace, session.run_id)
         await self._pool.evict(workspace)
+        await asyncio.to_thread(_remove_empty_workspace_folders, self._corpus_root, workspace)
         return Succeeded(_result("delete_workspace", _checkpoint_documents(checkpoint), checkpoint))
 
     async def _settle_full_reset(
@@ -1166,13 +1207,11 @@ class CorpusMutationExecutor(RunExecutor):
         session: RunSession,
         runtime: Any,
         checkpoint: dict[str, Any],
-        *,
-        preserve_run_sources_after: str | None,
     ) -> WaitingForRepair | None:
         """Reset the whole corpus once, or say why it needs repair.
 
-        Corpus Reset keeps the sources of Runs queued after it; Workspace Delete
-        keeps none. A settled reset is checkpointed, so recovery never repeats it.
+        Run stages stay: each belongs to its Run. A settled reset is
+        checkpointed, so recovery never repeats it.
         """
         if checkpoint.get("operation_settled") is True:
             return None
@@ -1180,9 +1219,7 @@ class CorpusMutationExecutor(RunExecutor):
             await session.begin_handoff({**checkpoint, "phase": "handoff_started"})
         await session.enter_phase("resetting_corpus")
         async with self._maintenance.workspace_write_gate(session.owner_id):
-            result = await _join_public_operation(
-                runtime.areset(preserve_run_sources_after=preserve_run_sources_after)
-            )
+            result = await _join_public_operation(runtime.areset())
         documents = [dict(result)] if isinstance(result, Mapping) else []
         if not isinstance(result, Mapping) or result.get("errors"):
             return WaitingForRepair(_repair_checkpoint(checkpoint, documents))
@@ -1190,19 +1227,45 @@ class CorpusMutationExecutor(RunExecutor):
         await session.checkpoint_state(checkpoint, phase="reset_settled")
         return None
 
+    async def _discard_superseded_stage(self, workspace: str, raw: Mapping[str, Any]) -> None:
+        """The Run a full reset superseded ended at acceptance and never runs again."""
+        superseded = raw.get("supersedes_run_id")
+        if isinstance(superseded, str) and superseded:
+            await self._discard_stage(workspace, superseded)
+
     async def _cancel_successors(self, workspace: str, run_id: str) -> None:
-        """Cancel every Corpus Mutation queued behind this one in its Workspace."""
+        """Cancel every Corpus Mutation queued behind this one, and drop its stage."""
         after = run_id
         while True:
             page = await self._store.list_runs(
                 owner_id=workspace, after_run_id=after, limit=_SUCCESSOR_PAGE_LIMIT
             )
             for record in page:
-                if record.run_kind == "corpus_mutation" and not record.terminal:
-                    await self._store.request_cancellation(owner_id=workspace, run_id=record.run_id)
+                if record.run_kind != "corpus_mutation":
+                    continue
+                if not record.terminal:
+                    cancellation = await self._store.request_cancellation(
+                        owner_id=workspace, run_id=record.run_id
+                    )
+                    if cancellation.outcome not in {"cancelled", "already_terminal"}:
+                        continue
+                await self._discard_stage(workspace, record.run_id)
             if len(page) < _SUCCESSOR_PAGE_LIMIT:
                 return
             after = page[-1].run_id
+
+
+def _remove_empty_workspace_folders(corpus_root: Path, workspace: str) -> None:
+    """Remove a deleted Workspace's corpus folders once nothing is left in them.
+
+    A stage an upload still writes keeps them; removing only empty folders never
+    races with it.
+    """
+    for folder in (corpus_root / workspace / RUN_STAGES_DIR_NAME, corpus_root / workspace):
+        try:
+            folder.rmdir()
+        except OSError:
+            return
 
 
 async def _join_public_operation[T](operation: Awaitable[T]) -> T:
@@ -1231,7 +1294,7 @@ _MAX_LOCAL_ENTRIES = 10_000
 
 def _run_stage_root(corpus_root: Path, workspace: str, run_id: str) -> Path:
     """One Run's stage: ``corpus_root/<workspace>/.runs/<run_id>``."""
-    return corpus_root / workspace / ".runs" / str(UUID(run_id))
+    return corpus_root / workspace / RUN_STAGES_DIR_NAME / str(UUID(run_id))
 
 
 def _upload_basename(filename: str) -> str:

@@ -47,6 +47,10 @@ def _projection_store() -> Any:
     return SimpleNamespace(record_corpus_window=AsyncMock(return_value=True))
 
 
+#: A corpus directory that holds nothing: these Runs stage no local source.
+_NO_CORPUS = Path("/nonexistent/dlightrag-test/corpus")
+
+
 def _runtime(*, tracked: dict[str, Any] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         lightrag=SimpleNamespace(
@@ -135,6 +139,7 @@ async def test_ingest_owned_phase_faults_defer_without_leaking_capacity_or_diagn
             pool=cast(Any, _WorkspacePool(runtimes)),
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
+            corpus_root=_NO_CORPUS,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -195,6 +200,7 @@ async def test_transient_ingest_recovers_the_same_track_with_exponential_checkpo
             pool=cast(Any, pool),
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
+            corpus_root=_NO_CORPUS,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -270,6 +276,7 @@ async def test_ambiguous_destructive_phase_waits_for_repair_and_keeps_fifo(
             pool=cast(Any, _WorkspacePool({workspace: runtime})),
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
+            corpus_root=_NO_CORPUS,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -364,6 +371,7 @@ async def test_public_track_reconciliation_does_not_repeat_source_admission(acti
             pool=cast(Any, _WorkspacePool({workspace: runtime})),
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
+            corpus_root=_NO_CORPUS,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -413,6 +421,7 @@ async def test_missing_staged_source_fails_terminally_without_public_path() -> N
             pool=cast(Any, _WorkspacePool({workspace: runtime})),
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
+            corpus_root=_NO_CORPUS,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -433,3 +442,54 @@ async def test_missing_staged_source_fails_terminally_without_public_path() -> N
         assert "missing" not in str(final.result)
         assert "source.pdf" not in str(final.error_message)
         runtime.aingest.assert_not_awaited()
+
+
+async def test_a_settled_local_run_removes_its_stage(tmp_path: Path) -> None:
+    """A Run's stage is its own: once the Run settles, nothing reads it again."""
+    workspace = "settled_stage"
+    runtime = _runtime()
+    run_id = str(uuid.uuid7())
+    stage = tmp_path / workspace / ".runs" / run_id
+    staged = stage / "sources" / "0" / "report.pdf"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"%PDF")
+    async with isolated_run_runtime("mutation_stage_settled") as (store, _pool):
+        envelope = run_envelope(
+            "corpus_mutation", key="settled-stage", workspace=workspace, action="ingest"
+        )
+        payload = {
+            **envelope.payload,
+            "source": {
+                "source_type": "local",
+                "documents": [{"path": str(staged)}],
+                "replace": False,
+            },
+            "staged_sources": [{"path": str(staged), "content_sha256": "0" * 64, "size_bytes": 4}],
+        }
+        accepted = await store.accept_run(
+            envelope=replace(envelope, payload=payload), run_id=run_id
+        )
+        executor = CorpusMutationExecutor(
+            pool=cast(Any, _WorkspacePool({workspace: runtime})),
+            maintenance=cast(Any, _Maintenance()),
+            store=cast(Any, _projection_store()),
+            corpus_root=tmp_path,
+        )
+        coordinator = RunCoordinator(
+            store=store,
+            executors={"corpus_mutation": executor},
+            query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
+            sweep_seconds=0.02,
+        )
+        await coordinator.start()
+        coordinator.wake()
+        try:
+            final = await _wait_for(store, workspace, accepted.run.run_id, lambda row: row.terminal)
+        finally:
+            await coordinator.aclose()
+
+        assert final.status == "succeeded"
+        runtime.aingest.assert_awaited_once()
+        assert runtime.aingest.await_args.kwargs["documents"] == [{"path": str(staged)}]
+        assert not stage.exists()

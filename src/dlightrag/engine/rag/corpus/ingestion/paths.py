@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 UPLOADS_DIR_NAME = "__uploads__"
 REMOTE_INGEST_DIR_NAME = "__remote_ingest__"
 REMOTE_SOURCES_DIR_NAME = "__remote_sources__"
+#: Where a workspace's Run stages live in its corpus directory, one folder per Run.
+RUN_STAGES_DIR_NAME = ".runs"
 
 
 def workspace_input_root(input_dir: Path, workspace: str) -> Path:

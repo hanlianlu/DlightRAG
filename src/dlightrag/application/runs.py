@@ -2,7 +2,7 @@
 """Owner-scoped Application service and views for the common durable Run lifecycle."""
 
 import datetime
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -194,11 +194,22 @@ class RunScheduler(Protocol):
 
 
 class RunService:
-    """The sole generic lifecycle authority exposed by Application."""
+    """The sole generic lifecycle authority exposed by Application.
 
-    def __init__(self, *, store: RunRepository, scheduler: RunScheduler) -> None:
+    ``on_cancelled`` hears of each Run that cancellation ended while it was
+    queued: no executor runs it again, so whatever it held is released there.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: RunRepository,
+        scheduler: RunScheduler,
+        on_cancelled: Callable[[RunView], Awaitable[None]] | None = None,
+    ) -> None:
         self._store = store
         self._scheduler = scheduler
+        self._on_cancelled = on_cancelled
 
     async def get(self, *, owner_id: str, run_id: str) -> RunView | None:
         record = await self._store.get_run(owner_id=owner_id, run_id=run_id)
@@ -221,7 +232,14 @@ class RunService:
         outcome = await self._store.request_cancellation(owner_id=owner_id, run_id=run_id)
         if outcome.outcome == "pending":
             self._scheduler.cancel_local(owner_id, run_id)
-        return RunCancellation.from_runtime(outcome)
+        cancellation = RunCancellation.from_runtime(outcome)
+        if (
+            cancellation.outcome == "cancelled"
+            and cancellation.run is not None
+            and self._on_cancelled is not None
+        ):
+            await self._on_cancelled(cancellation.run)
+        return cancellation
 
     async def resume_repair(self, *, owner_id: str, run_id: str) -> bool:
         resumed = await self._store.resume_repair(owner_id=owner_id, run_id=run_id)

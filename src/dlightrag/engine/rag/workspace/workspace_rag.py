@@ -618,14 +618,11 @@ class WorkspaceRag:
         if cancellation is not None:
             raise cancellation
 
-    async def areset(
-        self,
-        *,
-        preserve_run_sources_after: str | None = None,
-    ) -> dict[str, Any]:
+    async def areset(self) -> dict[str, Any]:
         """Clear this workspace's corpus content and files; its identity stays registered.
 
-        Delegates to the dedicated five-phase RAG reset module.
+        Delegates to the dedicated five-phase RAG reset module. Run stages stay:
+        each belongs to its Run.
         """
         self._require_writer("workspace reset")
         from dlightrag.engine.rag.corpus.reset import areset
@@ -636,7 +633,6 @@ class WorkspaceRag:
             lightrag=self.lightrag,
             metadata_index=self._metadata_index,
             maintenance=self.backend.maintenance,
-            preserve_run_sources_after=preserve_run_sources_after,
         )
         self._initialized = False
         return result

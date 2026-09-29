@@ -69,7 +69,7 @@ def _make_service(*, workspace: str = "test_ws") -> WorkspaceRag:
                 )
             )
         ),
-        input_root=Path("/tmp/dlightrag-test/inputs"),
+        input_root=Path("/tmp/dlightrag-test/corpus"),
     )
     maintenance = MagicMock()
     maintenance.clean_orphan_rows = AsyncMock(return_value=0)
@@ -196,56 +196,47 @@ class TestAresetPhase4:
         service = _make_service()
         service.settings = cast(
             Any,
-            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+            SimpleNamespace(input_root=tmp_path / "corpus", read_only=False),
         )
-        ws_dir = tmp_path / "inputs" / service.workspace_id
+        ws_dir = tmp_path / "corpus" / service.workspace_id
 
-        # Workspace-scoped files under input_dir/<workspace>/
+        # Workspace-scoped files under the workspace's corpus directory.
         ws_dir.mkdir(parents=True)
         (ws_dir / "parsed_doc.json").write_text("{}")
         (ws_dir / "subdir").mkdir()
         (ws_dir / "subdir" / "data.bin").write_bytes(b"x" * 100)
-        run_sources = ws_dir / ".runs" / "0199a0a0-0000-7000-8000-000000000001" / "sources"
-        run_sources.mkdir(parents=True)
-        (run_sources / "report.pdf").write_bytes(b"pdf")
 
         result = await service.areset()
 
-        # Without preservation (Workspace Delete) Run sources go too.
-        assert result["local_files_removed"] == 3
-        assert not ws_dir.exists()
+        assert result["local_files_removed"] == 2
+        assert list(ws_dir.iterdir()) == []
 
-    async def test_preserves_sources_accepted_after_reset_run(self, tmp_path: Path) -> None:
+    async def test_never_touches_run_stages(self, tmp_path: Path) -> None:
+        """Each stage belongs to its Run: a queued Run or an upload in flight keeps it."""
         service = _make_service()
         service.settings = cast(
             Any,
-            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+            SimpleNamespace(input_root=tmp_path / "corpus", read_only=False),
         )
-        runs = tmp_path / "inputs" / service.workspace_id / ".runs"
-        older = runs / "0199a0a0-0000-7000-8000-000000000001" / "sources"
-        reset = runs / "0199a0a0-0000-7000-8000-000000000002" / "sources"
-        newer = runs / "0199a0a0-0000-7000-8000-000000000003" / "sources"
-        invalid = runs / "stale-partial" / "sources"
-        for source in (older, reset, newer, invalid):
-            source.mkdir(parents=True)
-            (source / "report.pdf").write_bytes(b"pdf")
+        runs = tmp_path / "corpus" / service.workspace_id / ".runs"
+        stages = [
+            runs / "0199a0a0-0000-7000-8000-000000000001" / "sources",
+            runs / "0199a0a0-0000-7000-8000-000000000003" / "sources",
+            runs / "stale-partial" / "sources",
+        ]
+        for stage in stages:
+            stage.mkdir(parents=True)
+            (stage / "report.pdf").write_bytes(b"pdf")
         workspace = runs.parent
-        (workspace / "parsed_doc.json").write_text("{}")
-        (workspace / "staged").mkdir()
-        (workspace / "staged" / "a.pdf").write_bytes(b"a")
+        (workspace / "report.pdf").write_bytes(b"parser input")
+        (workspace / "__parsed__").mkdir()
+        (workspace / "__parsed__" / "report.pdf").write_bytes(b"archived")
 
-        result = await service.areset(
-            preserve_run_sources_after="0199a0a0-0000-7000-8000-000000000002"
-        )
+        result = await service.areset()
 
-        # Preservation spares only later Runs' sources; the rest of the corpus goes.
-        assert result["local_files_removed"] == 5
-        assert not older.exists()
-        assert not reset.exists()
-        assert not invalid.exists()
-        assert not (workspace / "parsed_doc.json").exists()
-        assert not (workspace / "staged").exists()
-        assert (newer / "report.pdf").read_bytes() == b"pdf"
+        assert result["local_files_removed"] == 2
+        assert sorted(path.name for path in workspace.iterdir()) == [".runs"]
+        assert all((stage / "report.pdf").read_bytes() == b"pdf" for stage in stages)
 
     async def test_root_files_survive_reset(self, tmp_path: Path) -> None:
         """Shared files in working_dir root must NOT be deleted per-workspace."""
@@ -254,7 +245,7 @@ class TestAresetPhase4:
         service = _make_service()
         service.settings = cast(
             Any,
-            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+            SimpleNamespace(input_root=tmp_path / "corpus", read_only=False),
         )
 
         db_path = tmp_path / "shared_state.db"
@@ -273,14 +264,14 @@ class TestAresetPhase4:
         service = _make_service(workspace="___outside")
         service.settings = cast(
             Any,
-            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+            SimpleNamespace(input_root=tmp_path / "corpus", read_only=False),
         )
 
         outside = tmp_path / "outside"
         outside.mkdir()
         (outside / "secret.txt").write_text("keep")
 
-        normalized_ws_dir = tmp_path / "inputs" / "___outside"
+        normalized_ws_dir = tmp_path / "corpus" / "___outside"
         normalized_ws_dir.mkdir(parents=True)
         (normalized_ws_dir / "staged.txt").write_text("delete")
 
@@ -288,7 +279,7 @@ class TestAresetPhase4:
 
         assert result["local_files_removed"] == 1
         assert outside.exists()
-        assert not normalized_ws_dir.exists()
+        assert list(normalized_ws_dir.iterdir()) == []
 
     async def test_removes_files_off_the_event_loop(self, tmp_path: Path) -> None:
         from dlightrag.engine.rag.corpus import reset
@@ -296,9 +287,9 @@ class TestAresetPhase4:
         service = _make_service()
         service.settings = cast(
             Any,
-            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+            SimpleNamespace(input_root=tmp_path / "corpus", read_only=False),
         )
-        workspace = tmp_path / "inputs" / service.workspace_id
+        workspace = tmp_path / "corpus" / service.workspace_id
         workspace.mkdir(parents=True)
         (workspace / "staged.txt").write_text("delete")
         remove = reset._reset_workspace_files

@@ -436,6 +436,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             pool=pool,
             maintenance=corpus_backend.maintenance,
             store=run_store,
+            corpus_root=config.corpus_dir_path,
         )
 
     async def validate_active_runs() -> None:
@@ -478,7 +479,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     retrieval.bind_runtime(store=run_store, coordinator=coordinator)
 
-    runs = RunService(store=run_store, scheduler=coordinator)
     corpus_mutations = CorpusMutationService(
         source_root=config.input_dir_path,
         corpus_root=config.corpus_dir_path,
@@ -493,6 +493,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         workspace_exists=corpora.workspace_exists,
         writable=not config.is_reader,
         default_workspace=default_workspace,
+    )
+    runs = RunService(
+        store=run_store,
+        scheduler=coordinator,
+        on_cancelled=corpus_mutations.discard_cancelled_run,
     )
 
     async def _cancel_local(owner: str, run_id: str) -> None:

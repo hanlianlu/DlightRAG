@@ -14,9 +14,9 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 from dlightrag.engine.ai.telemetry import safe_log_text
+from dlightrag.engine.rag.corpus.ingestion.paths import RUN_STAGES_DIR_NAME
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
 from dlightrag.engine.rag.workspace.lifecycle import shutdown_lightrag_worker_pools
 from dlightrag.engine.rag.workspace.ports import CorpusMaintenanceStore
@@ -35,7 +35,6 @@ async def areset(
     lightrag: Any,
     metadata_index: MetadataIndexProtocol | None,
     maintenance: CorpusMaintenanceStore,
-    preserve_run_sources_after: str | None = None,
 ) -> dict[str, Any]:
     """Run the module's five-phase cleanup for one workspace.
 
@@ -105,16 +104,13 @@ async def areset(
         logger.warning("areset Phase 3 failed: %s", exc)
 
     # Phase 4: File system cleanup — workspace-scoped only.
-    # Each workspace owns input_dir/<workspace>/; the working_dir root is shared
-    # and must never be wiped per-workspace.
+    # Each workspace owns <input_root>/<workspace>/ in the service's own corpus
+    # directory; the root is shared and must never be wiped per-workspace.
     try:
         # A workspace tree can be large; the writer's event loop keeps serving
         # HTTP, SSE and Run leases while it is removed.
         stats["local_files_removed"] = await asyncio.to_thread(
-            _reset_workspace_input,
-            input_root,
-            workspace,
-            preserve_run_sources_after=preserve_run_sources_after,
+            _reset_workspace_input, input_root, workspace
         )
     except Exception as exc:
         errors.append(f"Phase 4 (filesystem): {exc}")
@@ -131,55 +127,34 @@ async def areset(
 # -- Internal helpers ----------------------------------------------------------
 
 
-def _reset_workspace_input(
-    input_root: Path,
-    workspace: str,
-    *,
-    preserve_run_sources_after: str | None,
-) -> int:
-    """Remove one workspace's input files; return how many files were removed."""
+def _reset_workspace_input(input_root: Path, workspace: str) -> int:
+    """Remove one workspace's corpus files; return how many files were removed."""
     input_ws_dir = _workspace_input_dir(input_root, workspace)
     if input_ws_dir is None or not input_ws_dir.is_dir():
         return 0
-    return _reset_workspace_files(
-        input_ws_dir,
-        preserve_run_sources_after=preserve_run_sources_after,
-    )
+    return _reset_workspace_files(input_ws_dir)
 
 
-def _reset_workspace_files(
-    workspace_root: Path,
-    *,
-    preserve_run_sources_after: str | None,
-) -> int:
-    """Remove corpus files while retaining sources accepted after this Reset."""
+def _reset_workspace_files(workspace_root: Path) -> int:
+    """Remove a workspace's corpus files; its Run stages and the folder itself stay.
+
+    Each Run stage belongs to one Run, which removes it once it ends, so a reset
+    never enters them: an upload still being staged, or a Run queued behind the
+    reset, keeps its files. Nothing else writes the rest of the folder while the
+    reset holds the Workspace's mutation lane.
+    """
     removed = 0
-    preserve_after = UUID(preserve_run_sources_after) if preserve_run_sources_after else None
     for child in sorted(workspace_root.iterdir()):
+        if child.name == RUN_STAGES_DIR_NAME:
+            continue
         if child.is_symlink():
             raise ValueError("workspace path contains a symlink")
-        if child.name == ".runs" and preserve_after is not None:
-            for run_root in sorted(child.iterdir()) if child.is_dir() else ():
-                if run_root.is_symlink():
-                    raise ValueError("run source path contains a symlink")
-                try:
-                    accepted_after_reset = UUID(run_root.name).int > preserve_after.int
-                except ValueError:
-                    accepted_after_reset = False
-                if accepted_after_reset:
-                    continue
-                removed += sum(1 for item in run_root.rglob("*") if item.is_file())
-                shutil.rmtree(run_root)
-            continue
-        removed += sum(1 for item in child.rglob("*") if item.is_file()) if child.is_dir() else 1
         if child.is_dir():
+            removed += sum(1 for item in child.rglob("*") if item.is_file())
             shutil.rmtree(child)
         else:
+            removed += 1
             child.unlink()
-    try:
-        workspace_root.rmdir()
-    except OSError:
-        pass
     return removed
 
 
