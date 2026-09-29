@@ -4445,6 +4445,70 @@ async def test_retry_reads_a_document_after_the_replay_that_may_retire_it(
     cast(AsyncMock, service._metadata_index).get.assert_awaited_once_with("doc-b")
 
 
+async def test_retry_rereads_every_document_a_settled_replay_may_have_retired(
+    test_config: DlightragConfig,
+) -> None:
+    service, metadata, doc_by_file = _local_retry_service(test_config, ["a", "b", "c"])
+    shared = metadata["doc-a"]["download_locator"]
+    # All three rows claim a's source. Replaying a retires b and c; b settles
+    # that replay before it is read, and c, no longer waiting on any pending
+    # replay, must not trust the window read before a replayed either.
+    for doc_id in ("doc-b", "doc-c"):
+        metadata[doc_id] = {**metadata[doc_id], "download_locator": shared}
+    engine, passes = _fake_engine(doc_by_file, metadata=metadata)
+    service._ingestion_engine = engine  # type: ignore[assignment]
+
+    result = await service.aretry_failed_docs()
+
+    assert passes == [["doc-a"]]
+    assert result["succeeded_docs"] == [
+        {"doc_id": "doc-a", "file_path": "a.pdf", "replacement_count": 1}
+    ]
+    assert result["failed_docs"] == [
+        {"doc_id": "doc-b", "reason": "source metadata incomplete"},
+        {"doc_id": "doc-c", "reason": "source metadata incomplete"},
+    ]
+    assert cast(AsyncMock, service._metadata_index).get.await_args_list == [
+        call("doc-b"),
+        call("doc-c"),
+    ]
+
+
+async def test_remote_replays_sharing_a_retained_locator_never_share_a_pass(
+    test_config: DlightragConfig,
+) -> None:
+    service = _service(test_config)
+    service._initialized = True
+    # Two rows fetched the same Bynder asset from different mirrors. Their own
+    # locators differ, but ingestion retains both at one workspace path, so
+    # either replay may retire whichever document owns that path.
+    rows = {
+        f"doc-{mirror}": {
+            "filename": "report.pdf",
+            "source_uri": "bynder://asset/report",
+            "download_locator": f"https://{mirror}.example.com/report.pdf",
+        }
+        for mirror in ("cdn", "mirror")
+    }
+    _set_failed_docs(service, [{"doc_id": doc_id, "file_path": "report.pdf"} for doc_id in rows])
+    service._metadata_index = AsyncMock()
+    _serve_metadata(service._metadata_index, rows)
+    doc_by_locator = {row["download_locator"]: doc_id for doc_id, row in rows.items()}
+
+    async def replay(
+        _source_uri: str, download_locator: str, *_args: Any, **_kwargs: Any
+    ) -> dict[str, Any]:
+        return {"processed": 1, "doc_id": doc_by_locator[download_locator]}
+
+    passes: list[int] = []
+    _replay_each(service, AsyncMock(side_effect=replay), passes=passes)
+
+    result = await service.aretry_failed_docs()
+
+    assert passes == [1, 1]
+    assert (result["succeeded"], result["failed"]) == (2, 0)
+
+
 async def test_uncertain_preflight_still_replays_documents_admitted_before_it(
     test_config: DlightragConfig,
 ) -> None:
