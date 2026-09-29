@@ -25,7 +25,6 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
 from dlightrag.engine.rag.corpus.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     REMOTE_INGEST_DIR_NAME,
-    iter_ingestable_files,
     lightrag_archived_source_path,
     remote_parser_input_path,
     retained_remote_source_path,
@@ -222,7 +221,7 @@ class TestWorkspaceRagAingest:
     async def test_aingest_not_initialized_raises(self, test_config: DlightragConfig) -> None:
         service = _service(test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
-            await service.aingest(source_type="local", path="/tmp/f.pdf")
+            await service.aingest(source_type="local", documents=[{"path": "/tmp/f.pdf"}])
 
     async def test_acreate_closes_partial_service_when_initialization_fails(
         self,
@@ -258,7 +257,7 @@ class TestWorkspaceRagAingest:
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
-        await service.aingest(source_type="local", path=str(fake_pdf))
+        await service.aingest(source_type="local", documents=[{"path": str(fake_pdf)}])
         call_kwargs = ingestion.aingest_files.call_args
         assert call_kwargs.kwargs["replace"] is True
 
@@ -269,7 +268,9 @@ class TestWorkspaceRagAingest:
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
-        await service.aingest(source_type="local", path=str(fake_pdf), replace=False)
+        await service.aingest(
+            source_type="local", documents=[{"path": str(fake_pdf)}], replace=False
+        )
         call_kwargs = ingestion.aingest_files.call_args
         assert call_kwargs.kwargs["replace"] is False
 
@@ -286,7 +287,9 @@ class TestWorkspaceRagAingest:
             "results": [],
         }
 
-        result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
+        result = await service.aingest(
+            source_type="local", documents=[{"path": str(fake_pdf)}], replace=True
+        )
 
         assert result["errors"] == ["broken.pdf: document processing failed"]
 
@@ -2318,7 +2321,7 @@ class TestWorkspaceRagLightRAGMainPath:
             }
         )
 
-        result = await service.aingest(source_type="local", path=str(fake_pdf))
+        result = await service.aingest(source_type="local", documents=[{"path": str(fake_pdf)}])
         service._ingestion_engine.aingest_files.assert_awaited_once()
         parser_input = test_config.corpus_dir_path / test_config.deployment.workspace / "f.pdf"
         (item,) = service._ingestion_engine.aingest_files.call_args.args[0]
@@ -2330,116 +2333,22 @@ class TestWorkspaceRagLightRAGMainPath:
         assert item.source_uri_explicit is False
         assert item.download_locator_explicit is False
 
-    async def test_aingest_local_directory_uses_batch_pipeline(
+    async def test_aingest_local_needs_an_explicit_file_list(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Local directory ingestion batches contained files into LightRAG's staged pipeline."""
-        docs_dir = tmp_path / "docs"
-        nested_dir = docs_dir / "nested"
-        upload_tmp_dir = docs_dir / "__uploads__" / "batch"
-        nested_dir.mkdir(parents=True)
-        upload_tmp_dir.mkdir(parents=True)
-        pdf = docs_dir / "b.pdf"
-        docx = docs_dir / "a.docx"
-        pptx = nested_dir / "c.pptx"
-        for path in (pdf, docx, pptx):
-            path.write_bytes(b"fake")
-        (upload_tmp_dir / "stale.pdf").write_bytes(b"stale")
-
-        service = _service(test_config)
-        service._initialized = True
-        service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_files = AsyncMock(
-            side_effect=lambda paths, **kwargs: {
-                "processed": len(paths),
-                "errors": [],
-                "results": [
-                    {"doc_id": item.parser_path.name, "file_path": str(item.parser_path)}
-                    for item in paths
-                ],
-            }
-        )
-
-        result = await service.aingest(source_type="local", path=str(docs_dir))
-
-        assert result["processed"] == 3
-        assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
-        input_root = test_config.corpus_dir_path / test_config.deployment.workspace
-        service._ingestion_engine.aingest_files.assert_awaited_once()
-        await_args = service._ingestion_engine.aingest_files.await_args
-        assert await_args is not None
-        items = list(await_args.args[0])
-        assert [item.parser_path for item in items] == [docx, pdf, pptx]
-        assert [item.source_uri for item in items] == [
-            f"local://{test_config.deployment.workspace}/a.docx",
-            f"local://{test_config.deployment.workspace}/b.pdf",
-            f"local://{test_config.deployment.workspace}/c.pptx",
-        ]
-        # A nested file's parser input is flat too: LightRAG only looks there.
-        assert [item.download_locator for item in items] == [
-            str(input_root / "a.docx"),
-            str(input_root / "b.pdf"),
-            str(input_root / "c.pptx"),
-        ]
-        assert all(item.source_uri_explicit is False for item in items)
-        assert all(item.download_locator_explicit is False for item in items)
-        assert all(item.display_filename_explicit is False for item in items)
-
-    async def test_aingest_local_directory_offloads_its_scan(
-        self,
-        test_config: DlightragConfig,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+        """Nothing scans a folder: a local ingest names every file it reads."""
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir()
         (docs_dir / "a.pdf").write_bytes(b"a")
-        (docs_dir / "b.pdf").write_bytes(b"b")
-        calls = []
-
-        async def fake_to_thread(func, *args, **kwargs):
-            calls.append(func)
-            return func(*args, **kwargs)
-
-        monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_files = AsyncMock(
-            return_value={"processed": 2, "errors": [], "results": []}
-        )
+        service._ingestion_engine.aingest_files = AsyncMock()
 
-        await service.aingest(source_type="local", path=str(docs_dir))
+        with pytest.raises(ValueError, match="explicit 'documents' list"):
+            await service.aingest(source_type="local", path=str(docs_dir))
 
-        assert iter_ingestable_files in calls
-
-    async def test_aingest_explicit_upload_batch_directory_is_ingestable(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        """A directory inside legacy ``__uploads__`` staging stays ingestable when named."""
-        upload_dir = tmp_path / "docs" / "__uploads__" / "batch"
-        upload_dir.mkdir(parents=True)
-        pdf = upload_dir / "uploaded.pdf"
-        pdf.write_bytes(b"%PDF-fake")
-
-        service = _service(test_config)
-        service._initialized = True
-        service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_files = AsyncMock(
-            return_value={"processed": 1, "errors": [], "results": []}
-        )
-
-        result = await service.aingest(source_type="local", path=str(upload_dir))
-
-        assert result["processed"] == 1
-        input_root = test_config.corpus_dir_path / test_config.deployment.workspace
-        service._ingestion_engine.aingest_files.assert_awaited_once()
-        await_args = service._ingestion_engine.aingest_files.await_args
-        assert await_args is not None
-        item = await_args.args[0][0]
-        assert item.parser_path == pdf
-        assert item.source_uri == f"local://{test_config.deployment.workspace}/uploaded.pdf"
-        assert item.download_locator == str(input_root / "uploaded.pdf")
+        service._ingestion_engine.aingest_files.assert_not_awaited()
 
     async def test_aingest_replace_delegates_cleanup_to_ingestion_engine(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2460,7 +2369,9 @@ class TestWorkspaceRagLightRAGMainPath:
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
 
-        result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
+        result = await service.aingest(
+            source_type="local", documents=[{"path": str(fake_pdf)}], replace=True
+        )
 
         assert result["results"][0]["doc_id"] == "new-doc"
         assert service._ingestion_engine.aingest_files.await_args.kwargs["replace"] is True

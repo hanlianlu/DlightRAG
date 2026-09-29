@@ -309,6 +309,7 @@ async def _upload_action(
             return await _accept(
                 lambda: authorized_application.corpus_mutations.create_staged_batch(
                     workspace=workspace,
+                    run_id=run_id,
                     staged=staged,
                     submitted_by=submitted_by,
                     idempotency_key=key,
@@ -328,6 +329,7 @@ async def _upload_action(
         return await _accept(
             lambda: authorized_application.corpus_mutations.create_staged_ingest(
                 workspace=workspace,
+                run_id=run_id,
                 staged=staged[0],
                 submitted_by=submitted_by,
                 idempotency_key=key,

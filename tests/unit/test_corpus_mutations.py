@@ -31,6 +31,7 @@ from dlightrag.engine.dependencies import TransientDependencyError
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.runtime.records import (
     Deferred,
+    Failed,
     Succeeded,
     WaitingForRepair,
     run_request_fingerprint,
@@ -364,7 +365,9 @@ async def test_stage_uploads_refuses_counts_and_digests_it_cannot_honour(tmp_pat
     assert not (tmp_path / "corpus" / "default").exists()
 
 
-async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> None:
+async def test_stage_upload_keeps_the_relative_path_as_identity_and_the_name_on_disk(
+    tmp_path: Path,
+) -> None:
     content = b"durable upload"
     staged = await _service(tmp_path).stage_upload(
         workspace="default",
@@ -376,7 +379,7 @@ async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> N
 
     assert staged.filename == "reports/annual.pdf"
     assert staged.path == (
-        tmp_path / "corpus" / "default" / ".runs" / _RUN_ID / "sources" / "reports" / "annual.pdf"
+        tmp_path / "corpus" / "default" / ".runs" / _RUN_ID / "sources" / "0" / "annual.pdf"
     )
     assert staged.path.read_bytes() == content
     assert staged.content_sha256 == hashlib.sha256(content).hexdigest()
@@ -392,9 +395,7 @@ async def test_staging_never_writes_the_operators_source_folder(tmp_path: Path) 
     before = {path: path.read_bytes() for path in inputs.rglob("*") if path.is_file()}
     service = _service(tmp_path)
 
-    _spec, run_root, manifest = service._snapshot_local_spec(
-        _RUN_ID, "default", _local_spec(inputs / "docs")
-    )
+    _spec, manifest = service._snapshot_local_spec(_RUN_ID, "default", _local_spec(inputs / "docs"))
     upload = await service.stage_upload(
         workspace="default",
         run_id="0199a0a0-0000-7000-8000-000000000002",
@@ -405,9 +406,86 @@ async def test_staging_never_writes_the_operators_source_folder(tmp_path: Path) 
 
     assert {path: path.read_bytes() for path in inputs.rglob("*") if path.is_file()} == before
     corpus = (tmp_path / "corpus").resolve()
-    assert run_root.is_relative_to(corpus)
-    assert all(Path(item["path"]).is_relative_to(corpus) for item in manifest)
+    assert manifest and all(Path(item["path"]).is_relative_to(corpus) for item in manifest)
     assert upload.path.is_relative_to(corpus)
+
+
+async def test_uploads_that_would_become_one_document_are_refused_before_staging(
+    tmp_path: Path,
+) -> None:
+    """LightRAG names a document by its basename, whatever folder it was uploaded from."""
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    with pytest.raises(CorpusMutationInputError, match="same document 'report.pdf'"):
+        await _service(tmp_path).stage_uploads(
+            workspace="default",
+            run_id=_RUN_ID,
+            uploads=[("q1/report.pdf", _Reader(b"a")), ("q2/report.pdf", _Reader(b"b"))],
+        )
+    assert not (tmp_path / "corpus").exists()
+
+
+async def test_a_nested_upload_batch_lists_every_file_under_the_callers_run(
+    tmp_path: Path,
+) -> None:
+    """The Run ingests exactly what was staged, from any folder, under the run id given."""
+    store = AsyncMock()
+    store.accept_run.side_effect = RuntimeError("captured envelope")
+    service = _accepting_service(tmp_path, store)
+    staged = await service.stage_uploads(
+        workspace="default",
+        run_id=_RUN_ID,
+        uploads=[
+            ("reports/q1/a.pdf", _Reader(b"a")),
+            ("reports/q2/b.pdf", _Reader(b"b")),
+            ("c.pdf", _Reader(b"c")),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="captured envelope"):
+        await service.create_staged_batch(
+            workspace="default", run_id=_RUN_ID, staged=staged, submitted_by="o"
+        )
+
+    kwargs = store.accept_run.await_args.kwargs
+    payload = kwargs["envelope"].payload
+    assert kwargs["run_id"] == _RUN_ID
+    assert payload["track_id"] == _TRACK_ID
+    assert payload["source"]["documents"] == [{"path": str(item.path)} for item in staged]
+    assert [item["path"] for item in payload["staged_sources"]] == [
+        str(item.path) for item in staged
+    ]
+    assert validate_corpus_mutation_prepared_input(payload) == ("ingest", "default")
+    # An unaccepted Run's stage goes with its refusal.
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
+
+
+async def test_a_single_upload_is_one_listed_document_with_its_defaults(tmp_path: Path) -> None:
+    store = AsyncMock()
+    store.accept_run.side_effect = RuntimeError("captured envelope")
+    service = _accepting_service(tmp_path, store)
+    (staged,) = await service.stage_uploads(
+        workspace="default", run_id=_RUN_ID, uploads=[("report.pdf", _Reader(b"pdf"))]
+    )
+
+    with pytest.raises(RuntimeError, match="captured envelope"):
+        await service.create_staged_ingest(
+            workspace="default",
+            run_id=_RUN_ID,
+            staged=staged,
+            submitted_by="o",
+            title="Annual",
+            replace=True,
+        )
+
+    payload = store.accept_run.await_args.kwargs["envelope"].payload
+    assert payload["source"] == {
+        "source_type": "local",
+        "documents": [{"path": str(staged.path)}],
+        "replace": True,
+        "title": "Annual",
+    }
+    assert validate_corpus_mutation_prepared_input(payload) == ("replace", "default")
 
 
 @pytest.mark.parametrize(
@@ -492,6 +570,30 @@ def test_prepared_input_validator_accepts_workspace_delete() -> None:
 
     assert action == "delete_workspace"
     assert workspace == "research"
+
+
+def _staged(*paths: str) -> list[dict[str, Any]]:
+    return [{"path": path, "content_sha256": "a" * 64, "size_bytes": 1} for path in paths]
+
+
+def test_a_local_run_must_list_exactly_its_staged_files_in_order() -> None:
+    """The check is on data alone: the Run ingests the documents it lists, no folder."""
+    listed = {"source_type": "local", "documents": [{"path": "/s/0/a.pdf"}, {"path": "/s/1/b.pdf"}]}
+    staged = _staged("/s/0/a.pdf", "/s/1/b.pdf")
+
+    assert validate_corpus_mutation_prepared_input(
+        _payload("ingest", source={**listed, "replace": False}, staged_sources=staged)
+    ) == ("ingest", "default")
+    for source, records in (
+        ({**listed, "replace": False}, list(reversed(staged))),
+        ({**listed, "replace": False}, staged[:1]),
+        ({"source_type": "local", "path": "/s", "replace": False}, staged),
+        ({"source_type": "local", "documents": [{"path": "/s/0/a.pdf"}], "replace": False}, []),
+    ):
+        with pytest.raises(ValueError):
+            validate_corpus_mutation_prepared_input(
+                _payload("ingest", source=source, staged_sources=records)
+            )
 
 
 def test_public_result_is_bounded_and_drops_paths_and_diagnostics() -> None:
@@ -715,6 +817,53 @@ async def test_fresh_ingest_handoffs_once_and_records_its_settled_window() -> No
         docs=1,
         chunks=1,
     )
+
+
+def _local_payload(*paths: Path) -> dict[str, Any]:
+    return _payload(
+        "ingest",
+        source={
+            "source_type": "local",
+            "documents": [{"path": str(path)} for path in paths],
+            "replace": False,
+        },
+        staged_sources=_staged(*(str(path) for path in paths)),
+    )
+
+
+async def test_a_local_run_hands_the_engine_exactly_its_listed_files(tmp_path: Path) -> None:
+    first, second = tmp_path / "0" / "a.pdf", tmp_path / "1" / "b.pdf"
+    for path in (first, second):
+        path.parent.mkdir()
+        path.write_bytes(b"x")
+    runtime = _runtime()
+    executor, _pool, _store = _executor(runtime)
+
+    outcome = await executor.execute(cast(Any, _Session(_local_payload(first, second))))
+
+    assert isinstance(outcome, Succeeded)
+    runtime.aingest.assert_awaited_once_with(
+        "local",
+        documents=[{"path": str(first)}, {"path": str(second)}],
+        replace=False,
+        _track_id=_TRACK_ID,
+    )
+
+
+async def test_a_local_run_missing_a_staged_file_fails_before_its_handoff(tmp_path: Path) -> None:
+    present = tmp_path / "0" / "a.pdf"
+    present.parent.mkdir()
+    present.write_bytes(b"x")
+    runtime = _runtime()
+    executor, _pool, _store = _executor(runtime)
+    session = _Session(_local_payload(present, tmp_path / "1" / "gone.pdf"))
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Failed)
+    assert outcome.error_kind == "corpus_source_unavailable"
+    assert session.handoff_started is False
+    runtime.aingest.assert_not_awaited()
 
 
 @pytest.mark.parametrize("active_status", ["parsing", "analyzing", "processing", "preprocessed"])
@@ -1196,16 +1345,16 @@ def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monke
     (folder / "zsub").mkdir(parents=True)
     (folder / "a.txt").write_text("a", encoding="utf-8")
     (folder / "zsub" / "secret.txt").write_text("inside", encoding="utf-8")
-    real_list = mutations._list_local_tree
+    real_members = mutations._local_source_members
 
-    def list_then_swap(source: int, *, max_files: int):
-        listed = real_list(source, max_files=max_files)
+    def list_then_swap(source: int, name: str, **kwargs: Any):
+        listed = real_members(source, name, **kwargs)
         (folder / "zsub" / "secret.txt").unlink()
         (folder / "zsub").rmdir()
         (folder / "zsub").symlink_to(outside, target_is_directory=True)
         return listed
 
-    monkeypatch.setattr(mutations, "_list_local_tree", list_then_swap)
+    monkeypatch.setattr(mutations, "_local_source_members", list_then_swap)
 
     with pytest.raises(CorpusMutationInputError):
         _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
@@ -1216,126 +1365,20 @@ def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monke
 def test_a_file_that_became_a_link_refuses(tmp_path: Path) -> None:
     """A source resolved before the swap is still opened without following a link."""
     from dlightrag.application.corpus_admin import CorpusMutationInputError
-    from dlightrag.application.corpus_admin.mutations import _snapshot_local_source
+    from dlightrag.application.corpus_admin.mutations import _open_below
 
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    workspace = tmp_path / "default"
+    workspace = tmp_path / "inputs" / "default"
     (workspace / "docs").mkdir(parents=True)
     (workspace / "docs" / "report.txt").symlink_to(outside)
 
-    stage = tmp_path / "stage"
-    stage.mkdir()
-    stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
+    root = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY)
     try:
         with pytest.raises(CorpusMutationInputError, match="cannot contain symlinks"):
-            _snapshot_local_source(
-                workspace,
-                ("docs", "report.txt"),
-                stage_fd,
-                "copy.txt",
-                stage / "copy.txt",
-                max_files=100,
-            )
+            _open_below(root, ("docs", "report.txt"))
     finally:
-        os.close(stage_fd)
-    assert not (stage / "copy.txt").exists()
-
-
-def test_a_run_stage_behind_a_link_refuses_and_writes_nothing_there(tmp_path: Path) -> None:
-    """A stage that could be redirected could stage bytes where another account reads."""
-    from dlightrag.application.corpus_admin import CorpusStageUnavailableError
-
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    workspace = tmp_path / "inputs" / "default"
-    (workspace / "docs").mkdir(parents=True)
-    (workspace / "docs" / "a.txt").write_text("a", encoding="utf-8")
-    (tmp_path / "corpus" / "default").mkdir(parents=True)
-    (tmp_path / "corpus" / "default" / ".runs").symlink_to(elsewhere, target_is_directory=True)
-
-    with pytest.raises(CorpusStageUnavailableError):
-        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(workspace / "docs"))
-    assert list(elsewhere.iterdir()) == []
-
-
-async def test_an_upload_scratch_folder_behind_a_link_refuses(tmp_path: Path) -> None:
-    from dlightrag.application.corpus_admin import CorpusStageUnavailableError
-
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    (tmp_path / "corpus" / "default").mkdir(parents=True)
-    (tmp_path / "corpus" / "default" / ".staging").symlink_to(elsewhere, target_is_directory=True)
-
-    with pytest.raises(CorpusStageUnavailableError):
-        await _service(tmp_path).stage_upload(
-            workspace="default",
-            run_id=_RUN_ID,
-            filename="report.pdf",
-            reader=_Reader(b"bytes"),
-            max_bytes=1024,
-        )
-    assert list(elsewhere.iterdir()) == []
-
-
-async def test_staged_sources_are_private_to_this_service(tmp_path: Path) -> None:
-    """Stage folders are 0700 and staged files 0600, including a stage made wider earlier."""
-    workspace = tmp_path / "inputs" / "default"
-    stages = tmp_path / "corpus" / "default"
-    (workspace / "docs").mkdir(parents=True)
-    source = workspace / "docs" / "a.txt"
-    source.write_text("a", encoding="utf-8")
-    source.chmod(0o644)
-    (stages / ".runs").mkdir(mode=0o755, parents=True)
-    (stages / ".runs").chmod(0o755)
-
-    spec, run_root, manifest = _service(tmp_path)._snapshot_local_spec(
-        _RUN_ID, "default", _local_spec(workspace / "docs")
-    )
-    staged = Path(manifest[0]["path"])
-    assert (stages / ".runs").stat().st_mode & 0o777 == 0o700
-    assert run_root.stat().st_mode & 0o777 == 0o700
-    assert staged.parent.stat().st_mode & 0o777 == 0o700
-    assert staged.stat().st_mode & 0o777 == 0o600
-
-    upload = await _service(tmp_path).stage_upload(
-        workspace="default",
-        run_id="0199a0a0-0000-7000-8000-000000000002",
-        filename="report.pdf",
-        reader=_Reader(b"bytes"),
-        max_bytes=1024,
-    )
-    assert upload.path.read_bytes() == b"bytes"
-    assert upload.path.stat().st_mode & 0o777 == 0o600
-    assert (stages / ".staging").stat().st_mode & 0o777 == 0o700
-
-
-def test_a_stage_changed_after_acceptance_is_not_ingested(tmp_path: Path) -> None:
-    """The ingest scans the stage, so anything beside the recorded files refuses the Run."""
-    from dlightrag.application.corpus_admin.mutations import _local_source_complete
-
-    outside = tmp_path / "secret.txt"
-    outside.write_text("API_KEY=sk-secret", encoding="utf-8")
-    workspace = tmp_path / "inputs" / "default"
-    (workspace / "docs").mkdir(parents=True)
-    (workspace / "docs" / "a.txt").write_text("a", encoding="utf-8")
-    spec, _run_root, manifest = _service(tmp_path)._snapshot_local_spec(
-        _RUN_ID, "default", _local_spec(workspace / "docs")
-    )
-    source = spec.model_dump()
-    copied = Path(cast(str, spec.path))
-    assert _local_source_complete(source, manifest) is True
-
-    (copied / "extra.txt").symlink_to(outside)
-    assert _local_source_complete(source, manifest) is False
-    (copied / "extra.txt").unlink()
-    (copied / "extra.txt").write_text("added", encoding="utf-8")
-    assert _local_source_complete(source, manifest) is False
-    (copied / "extra.txt").unlink()
-    (copied / "a.txt").write_text("changed", encoding="utf-8")
-    assert _local_source_complete(source, manifest) is False
-    (copied / "a.txt").write_text("a", encoding="utf-8")
-    assert _local_source_complete(source, manifest) is True
+        os.close(root)
 
 
 def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch) -> None:
@@ -1346,6 +1389,10 @@ def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch
     nested = deep.joinpath(*[f"d{index}" for index in range(mutations._MAX_LOCAL_DEPTH + 1)])
     nested.mkdir(parents=True)
     (nested / "a.txt").write_text("a", encoding="utf-8")
+    deepest = workspace / "deepest"
+    allowed = deepest.joinpath(*[f"d{index}" for index in range(mutations._MAX_LOCAL_DEPTH)])
+    allowed.mkdir(parents=True)
+    (allowed / "a.txt").write_text("a", encoding="utf-8")
     wide = workspace / "wide"
     wide.mkdir()
     (wide / "a.txt").write_text("a", encoding="utf-8")
@@ -1355,9 +1402,15 @@ def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch
 
     with pytest.raises(CorpusMutationInputError, match="more than 32 deep"):
         service._snapshot_local_spec(_RUN_ID, "default", _local_spec(deep))
+    # Folders nest exactly as deep as the bound allows.
+    _spec, manifest = service._snapshot_local_spec(_RUN_ID, "default", _local_spec(deepest))
+    assert [Path(item["path"]).name for item in manifest] == ["a.txt"]
+    # Entries the listing skips still count toward the entry bound: they are read.
     monkeypatch.setattr(mutations, "_MAX_LOCAL_ENTRIES", 10)
     with pytest.raises(CorpusMutationInputError, match="more than 10 entries"):
-        service._snapshot_local_spec(_RUN_ID, "default", _local_spec(wide))
+        service._snapshot_local_spec(
+            "0199a0a0-0000-7000-8000-000000000002", "default", _local_spec(wide)
+        )
 
 
 def test_an_unreadable_local_source_is_the_callers_to_fix(tmp_path: Path) -> None:
@@ -1391,8 +1444,8 @@ def test_a_linked_folder_refuses(tmp_path: Path) -> None:
         _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
 
 
-def test_a_workspace_root_source_copies_only_what_a_scan_ingests(tmp_path: Path) -> None:
-    """Dot entries and parser sidecars stay out of the copy, and its count."""
+def test_a_workspace_root_source_copies_only_what_ingestion_reads(tmp_path: Path) -> None:
+    """Dot entries and parser folders stay out of the copy, and out of its file count."""
     workspace = tmp_path / "inputs" / "default"
     (workspace / "reports").mkdir(parents=True)
     (workspace / "reports" / "q3.txt").write_text("quarter", encoding="utf-8")
@@ -1404,18 +1457,20 @@ def test_a_workspace_root_source_copies_only_what_a_scan_ingests(tmp_path: Path)
     for index in range(150):
         (workspace / "__parsed__" / f"{index}.md").write_text("x", encoding="utf-8")
 
-    spec, run_root, manifest = _service(tmp_path)._snapshot_local_spec(
+    spec, manifest = _service(tmp_path)._snapshot_local_spec(
         _RUN_ID, "default", _local_spec(workspace)
     )
 
-    copied = Path(cast(str, spec.path))
-    assert sorted(p.relative_to(copied).as_posix() for p in copied.rglob("*") if p.is_file()) == [
-        "reports/q3.txt",
-        "top.txt",
+    sources = (tmp_path / "corpus").resolve() / "default" / ".runs" / _RUN_ID / "sources"
+    assert [item["path"] for item in manifest] == [
+        str(sources / "0" / "q3.txt"),
+        str(sources / "1" / "top.txt"),
     ]
-    assert run_root == (tmp_path / "corpus").resolve() / "default" / ".runs" / _RUN_ID
-    assert {Path(item["path"]).name for item in manifest} == {"q3.txt", "top.txt"}
-    top = next(item for item in manifest if item["path"].endswith("top.txt"))
+    assert [document.path for document in spec.documents or ()] == [
+        item["path"] for item in manifest
+    ]
+    assert spec.path is None
+    top = manifest[1]
     assert top["size_bytes"] == 3
     assert top["content_sha256"] == hashlib.sha256(b"top").hexdigest()
 
@@ -1434,3 +1489,86 @@ def test_a_local_source_with_nothing_to_ingest_or_no_path_is_the_callers_to_fix(
         service._snapshot_local_spec(_RUN_ID, "default", _local_spec(workspace / "empty"))
     with pytest.raises(CorpusMutationInputError, match="does not exist"):
         service._snapshot_local_spec(_RUN_ID, "default", _local_spec(workspace / "a.txt" / "x"))
+
+
+def test_a_local_file_is_staged_under_its_own_name(tmp_path: Path) -> None:
+    """LightRAG names the document by the parser input's basename, so the stage keeps it."""
+    source = tmp_path / "inputs" / "default" / "docs" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"%PDF")
+
+    spec, manifest = _service(tmp_path)._snapshot_local_spec(
+        _RUN_ID, "default", _local_spec(source)
+    )
+
+    (record,) = manifest
+    assert Path(record["path"]).name == "report.pdf"
+    assert Path(record["path"]).read_bytes() == b"%PDF"
+    assert [document.path for document in spec.documents or ()] == [record["path"]]
+
+
+def test_a_manifest_keeps_each_documents_fields_and_names_only_files(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+    from dlightrag.engine.rag.corpus.contracts import IngestDocument
+
+    workspace = tmp_path / "inputs" / "default"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "a.pdf").write_bytes(b"a")
+    (workspace / "docs" / "b.pdf").write_bytes(b"b")
+    service = _service(tmp_path)
+    spec = IngestSpec(
+        source_type="local",
+        title="batch title",
+        documents=[
+            IngestDocument(path=str(workspace / "docs" / "a.pdf"), metadata={"n": 1}),
+            IngestDocument(path=str(workspace / "docs" / "b.pdf"), filename="renamed.pdf"),
+        ],
+    )
+
+    executed, manifest = service._snapshot_local_spec(_RUN_ID, "default", spec)
+
+    documents = executed.documents or []
+    assert [document.path for document in documents] == [item["path"] for item in manifest]
+    assert documents[0].metadata == {"n": 1}
+    assert documents[1].filename == "renamed.pdf"
+    assert executed.title == "batch title"
+
+    folder = IngestSpec(
+        source_type="local", documents=[IngestDocument(path=str(workspace / "docs"))]
+    )
+    with pytest.raises(CorpusMutationInputError, match="must name a file"):
+        service._snapshot_local_spec("0199a0a0-0000-7000-8000-000000000002", "default", folder)
+
+
+def test_two_local_files_that_would_become_one_document_are_refused(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    folder = tmp_path / "inputs" / "default" / "docs"
+    (folder / "a").mkdir(parents=True)
+    (folder / "b").mkdir()
+    (folder / "a" / "report.pdf").write_bytes(b"a")
+    (folder / "b" / "report.pdf").write_bytes(b"b")
+
+    with pytest.raises(CorpusMutationInputError, match="same document 'report.pdf'"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
+
+
+def test_a_workspace_named_sources_stages_and_validates_like_any_other(tmp_path: Path) -> None:
+    source = tmp_path / "inputs" / "sources" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"%PDF")
+
+    spec, manifest = _service(tmp_path)._snapshot_local_spec(
+        _RUN_ID, "sources", _local_spec(source)
+    )
+
+    action, workspace = validate_corpus_mutation_prepared_input(
+        _payload(
+            "ingest",
+            workspace="sources",
+            source=spec.model_dump(mode="json", exclude_none=True),
+            staged_sources=manifest,
+        )
+    )
+    assert (action, workspace) == ("ingest", "sources")

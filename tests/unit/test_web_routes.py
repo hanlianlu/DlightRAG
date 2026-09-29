@@ -1163,6 +1163,11 @@ class TestWebFiles:
         assert body["file_count"] == 1
         mock_application.corpus_mutations.stage_uploads.assert_awaited_once()
         mock_application.corpus_mutations.create_staged_batch.assert_awaited_once()
+        # The Run is accepted under the id its files were staged for, never one
+        # derived from their paths.
+        staged_for = mock_application.corpus_mutations.stage_uploads.await_args.kwargs["run_id"]
+        accepted = mock_application.corpus_mutations.create_staged_batch.await_args.kwargs
+        assert accepted["run_id"] == staged_for
         mock_application.corpus_mutations.discard_staged_run.assert_not_awaited()
 
     async def test_single_upload_forwards_digest_verification_to_the_shared_stager(

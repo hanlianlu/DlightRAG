@@ -117,7 +117,7 @@ async def test_initialized_default_runtime_does_not_capture_tenant_workspace(
         result = _only_document(
             await tenant.aingest(
                 source_type="local",
-                path=str(doc_path),
+                documents=[{"path": str(doc_path)}],
                 replace=True,
                 title="Workspace isolation",
             )
@@ -197,7 +197,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         first = _only_document(
             await service.aingest(
                 source_type="local",
-                path=str(doc_path),
+                documents=[{"path": str(doc_path)}],
                 replace=True,
                 title="PG18 E2E Document",
                 metadata={"e2e_case": " pg18 "},
@@ -206,7 +206,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         second = _only_document(
             await service.aingest(
                 source_type="local",
-                path=str(doc_path),
+                documents=[{"path": str(doc_path)}],
                 replace=True,
                 title="PG18 E2E Document",
                 metadata={"e2e_case": " pg18 "},
@@ -567,7 +567,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         result = _only_document(
             await writer.aingest(
                 source_type="local",
-                path=str(doc_path),
+                documents=[{"path": str(doc_path)}],
                 replace=True,
                 title="Reader Smoke",
                 metadata={"e2e_case": "reader"},
@@ -639,7 +639,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         with pytest.raises(PermissionError):
             await reader.aupdate_metadata(doc_id, {"note": "nope"})
         with pytest.raises(PermissionError):
-            await reader.aingest(source_type="local", path=str(doc_path))
+            await reader.aingest(source_type="local", documents=[{"path": str(doc_path)}])
     finally:
         try:
             if created_run_id is not None:

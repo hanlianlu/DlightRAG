@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path, PurePosixPath
 
 from lightrag.constants import PARSED_DIR_NAME
+from lightrag.utils_pipeline import normalize_document_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -29,53 +30,23 @@ def workspace_input_root(input_dir: Path, workspace: str) -> Path:
     return input_dir / workspace
 
 
-def iter_ingestable_files(path: Path) -> list[Path]:
-    """Resolve a local ingest target into concrete source files.
-
-    Broad directory scans skip LightRAG parser sidecars, dot-prefixed paths,
-    remote ingest/source staging, and the ``__uploads__`` staging that earlier
-    releases left under workspace inputs. A directory inside ``__uploads__`` stays
-    ingestable when a caller names it explicitly.
-    """
-    if path.is_file():
-        return [path]
-    if not path.exists():
-        raise FileNotFoundError(f"Local ingest path does not exist: {path}")
-    if not path.is_dir():
-        raise ValueError(f"Local ingest path is not a file or directory: {path}")
-
-    explicit_upload_batch = _is_explicit_upload_batch_dir(path)
-    files = [
-        item
-        for item in sorted(
-            (p for p in path.rglob("*") if p.is_file()),
-            key=lambda p: p.relative_to(path).as_posix(),
-        )
-        if _is_ingestable_child(item, scan_root=path, explicit_upload_batch=explicit_upload_batch)
-    ]
-    if not files:
-        raise ValueError(f"Local ingest directory contains no files: {path}")
-    return files
+def document_name(filename: str | Path) -> str:
+    """The name LightRAG stores a document under, and derives its id from."""
+    return normalize_document_file_path(Path(filename).name)
 
 
 def excluded_from_directory_scan(name: str, *, is_dir: bool) -> bool:
-    """Whether a scan of a tree copied elsewhere skips this entry and all below it.
+    """Whether listing a local source folder skips this entry and all below it.
 
-    A copy of a source tree keeps none of the source's ancestors, so the scan of
-    the copy skips exactly this: dot-prefixed entries, parser sidecars, and remote
-    ingest, remote source and ``__uploads__`` staging directories. A caller that
-    snapshots a tree for ingestion can leave these out of the copy.
+    Skipped are dot-prefixed entries and the folders LightRAG and earlier releases
+    wrote beside sources: parser sidecars and the remote ingest, remote source and
+    ``__uploads__`` staging directories.
     """
     return name.startswith(".") or (
         is_dir
         and name
         in {PARSED_DIR_NAME, UPLOADS_DIR_NAME, REMOTE_INGEST_DIR_NAME, REMOTE_SOURCES_DIR_NAME}
     )
-
-
-def _is_explicit_upload_batch_dir(path: Path) -> bool:
-    """Return True for ``.../__uploads__/<batch>`` style explicit batch dirs."""
-    return path.name != UPLOADS_DIR_NAME and UPLOADS_DIR_NAME in {p.name for p in path.parents}
 
 
 def parser_input_path(input_root: Path, source: Path) -> Path:
@@ -177,25 +148,6 @@ def lightrag_archived_source_path(source_path: Path) -> Path:
     if path.parent.name == PARSED_DIR_NAME:
         return path
     return path.parent / PARSED_DIR_NAME / path.name
-
-
-def _is_ingestable_child(
-    item: Path,
-    *,
-    scan_root: Path,
-    explicit_upload_batch: bool,
-) -> bool:
-    relative_parts = item.relative_to(scan_root).parts
-    parent_names = {p.name for p in item.parents}
-    if PARSED_DIR_NAME in parent_names:
-        return False
-    if not explicit_upload_batch and UPLOADS_DIR_NAME in parent_names:
-        return False
-    if any(part.startswith(".") for part in relative_parts):
-        return False
-    if REMOTE_INGEST_DIR_NAME in parent_names or REMOTE_SOURCES_DIR_NAME in parent_names:
-        return False
-    return True
 
 
 def _remote_source_filename(*, source_uri: str, key: str) -> str:

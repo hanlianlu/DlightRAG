@@ -397,7 +397,7 @@ async def test_missing_staged_source_fails_terminally_without_public_path() -> N
         missing_path = str((Path("missing") / "source.pdf").resolve())
         payload["source"] = {
             "source_type": "local",
-            "path": missing_path,
+            "documents": [{"path": missing_path}],
             "replace": False,
         }
         payload["staged_sources"] = [

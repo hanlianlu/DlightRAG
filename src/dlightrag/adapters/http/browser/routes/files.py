@@ -329,6 +329,7 @@ async def upload_files(
         try:
             creation = await application.corpus_mutations.create_staged_batch(
                 workspace=selected_workspace,
+                run_id=run_id,
                 staged=staged,
                 submitted_by=owner_id_from_user(getattr(request.state, "user_context", None)),
             )

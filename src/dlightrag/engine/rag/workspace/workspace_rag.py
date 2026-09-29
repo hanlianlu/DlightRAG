@@ -45,7 +45,6 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     discard_parser_input,
-    iter_ingestable_files,
     lightrag_archived_source_path,
     parser_input_path,
     remote_ingest_batch_root,
@@ -732,30 +731,6 @@ class WorkspaceRag:
         except Exception as exc:
             raise RetryOutcomeUncertainError("retry replacement ownership lookup failed") from exc
 
-    async def _aingest_local_files(
-        self,
-        file_paths: list[Path],
-        *,
-        replace: bool,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        track_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Ingest local files through one LightRAG staged batch."""
-        engine = self._require_ingestion_engine()
-        if not file_paths:
-            return {"processed": 0, "errors": [], "results": []}
-        items = [self._local_item(file_path) for file_path in file_paths]
-        return await engine.aingest_files(
-            items,
-            replace=replace,
-            title=title,
-            author=author,
-            metadata=metadata,
-            track_id=track_id,
-        )
-
     async def _aingest_local_manifest(
         self,
         documents: list[IngestDocument],
@@ -1323,7 +1298,7 @@ class WorkspaceRag:
         Args:
             source_type: "local", "azure_blob", "s3", or "url"
             kwargs:
-                local: path, replace
+                local: documents (each naming one file), replace
                 azure_blob: source, container_name, blob_path, prefix, replace
                 s3: bucket, key, prefix, replace
                 url: url or urls, optional filename, replace
@@ -1334,25 +1309,15 @@ class WorkspaceRag:
         track_id = kwargs.pop("_track_id", None)
 
         if self._ingestion_engine is not None and source_type == "local":
+            # A local ingest names its files explicitly; nothing scans a folder.
             documents = _ingest_documents(kwargs.get("documents"))
-            if documents is not None:
-                return await self._aingest_local_manifest(
-                    documents,
-                    replace=replace,
-                    title=kwargs.get("title"),
-                    author=kwargs.get("author"),
-                    metadata=kwargs.get("metadata"),
-                    track_id=track_id,
-                )
-            path_str = kwargs.get("path")
-            if not path_str:
-                raise ValueError("'path' is required for local source_type")
-            file_paths = await asyncio.to_thread(iter_ingestable_files, Path(path_str))
+            if documents is None:
+                raise ValueError("local ingestion needs an explicit 'documents' list")
             # One file is a one-item batch: a failed document settles as a
             # per-document outcome, never as an exception the Corpus Mutation
             # executor must treat as an ambiguous destructive handoff.
-            return await self._aingest_local_files(
-                file_paths,
+            return await self._aingest_local_manifest(
+                documents,
                 replace=replace,
                 title=kwargs.get("title"),
                 author=kwargs.get("author"),

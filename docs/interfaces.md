@@ -111,7 +111,7 @@ curl -X POST http://localhost:8100/runs/corpus/ingest \
 | Field | Required for | Description |
 |---|---|---|
 | `source_type` | all | `local`, `azure_blob`, `s3`, or `url` |
-| `path` | local | File/directory relative to managed `input_dir/<workspace>` |
+| `path` | local | File/directory relative to managed `input_dir/<workspace>`; exclusive with `documents` |
 | `container_name` | Azure | Container name |
 | `blob_path` | Azure single | Object path; exclusive with `prefix` |
 | `bucket` | S3 | Bucket name |
@@ -135,15 +135,21 @@ separate queryless locator. S3 uses the standard AWS credential chain. Payloads
 never carry access keys.
 
 A `local` source is copied into the Run's own stage before it is accepted, so
-later edits under `input_dir` never change what the Run ingests. The copy never
+later edits under `input_dir` never change what the Run ingests. `path` may name
+a file or a folder; each `documents` entry must name a file. The copy never
 follows a link: among the entries ingestion would read, a symlink or anything
 but a regular file or folder refuses the source as the caller's to fix, even
 when the link is swapped in while the copy runs. A folder is listed before
 anything is copied; it may hold at most 100 files that ingestion would read,
 nest folders at most 32 deep, and hold at most 10,000 entries in all. Entries
-ingestion skips (dot entries, parser sidecars, and staging folders) are neither
-copied nor counted, and a link among them is ignored. A folder with nothing to
-ingest is refused too.
+ingestion skips (dot entries, parser sidecars, and staging folders) are not
+copied, and a link among them is ignored, but they count toward the 10,000.
+A folder with nothing to ingest is refused too.
+
+LightRAG names a document by its file name alone, so one request may not hold
+two files with the same name (a parser hint such as `.[mineru]` aside), even
+from different folders or uploads: it is refused with 400 before anything is
+staged.
 
 `input_dir` (`<working_dir>/inputs`) belongs to operators: DlightRAG reads local
 sources from `input_dir/<workspace>` and never writes there. Every file
@@ -153,13 +159,13 @@ sources and parser sidecars, fetched remote sources) lives in its own
 Reset and Workspace Delete clear that directory; they never delete operators'
 files in `input_dir`.
 
-Stages (`.runs/<run>/sources` and the upload scratch folder `.staging` under
-`corpus/<workspace>`) are this service's own: created 0700, with staged files
-0600, opened without following links. A stage folder that is a link or belongs
-to another account makes the request fail as unavailable (503) and logs the
-folder. Before the ingest reads a stage, the stage must still hold exactly the
-recorded files with their recorded sizes and digests; anything added, changed,
-or linked since fails the Run as `corpus_source_unavailable`.
+A Run's stage (`corpus/<workspace>/.runs/<run>/sources`) holds each accepted
+file as `<n>/<file name>`, and the Run records exactly that list, in order, with
+each file's size and digest. The Run ingests only the files it lists; nothing
+scans a folder. Right before a file is enqueued it is copied to
+`corpus/<workspace>/<file name>`, the one place LightRAG looks a document up.
+A listed file missing when the Run starts fails it as `corpus_source_unavailable`
+before any upstream effect.
 
 Per-document metadata uses a manifest:
 

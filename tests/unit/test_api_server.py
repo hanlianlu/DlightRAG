@@ -1034,7 +1034,9 @@ class TestCorpusMutationEndpoints:
         assert response.status_code == 400
         cleanup = mock_application.corpus_mutations.discard_staged_run.await_args.kwargs
         assert cleanup["workspace"] == "default"
-        assert cleanup["run_id"]
+        staged_for = mock_application.corpus_mutations.stage_uploads.await_args.kwargs["run_id"]
+        accepted = mock_application.corpus_mutations.create_staged_ingest.await_args.kwargs
+        assert cleanup["run_id"] == accepted["run_id"] == staged_for
 
     async def test_ingest_requires_idempotency_key(
         self, client: AsyncClient, mock_application

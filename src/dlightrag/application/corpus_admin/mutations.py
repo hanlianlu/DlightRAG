@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime
 import errno
 import hashlib
@@ -31,8 +30,12 @@ from dlightrag.engine.dependencies import (
     classify_transient_dependency,
     next_dependency_retry,
 )
+from dlightrag.engine.rag.corpus.contracts import IngestDocument
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
-from dlightrag.engine.rag.corpus.ingestion.paths import excluded_from_directory_scan
+from dlightrag.engine.rag.corpus.ingestion.paths import (
+    document_name,
+    excluded_from_directory_scan,
+)
 from dlightrag.engine.rag.corpus.ingestion.uploads import safe_upload_relative_path
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import CorpusMaintenanceStore, WorkspaceWriteFencedError
@@ -61,7 +64,6 @@ from dlightrag.engine.runtime.records import (
 from .errors import (
     CorpusMutationInputError,
     CorpusMutationUnavailableError,
-    CorpusStageUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
     WorkspaceNotFoundError,
@@ -236,10 +238,11 @@ class CorpusMutationService:
         idempotency_key: str | None = None,
     ) -> RunCreation:
         self._require_writable("the ingest")
+        canonical = require_canonical_workspace_id(workspace)
         action: CorpusMutationAction = "replace" if bool(spec.replace) else "ingest"
         request = {
             "action": action,
-            "workspace": require_canonical_workspace_id(workspace),
+            "workspace": canonical,
             "source": spec.model_dump(mode="json", exclude_none=True),
         }
         if spec.source_type != "local":
@@ -250,68 +253,58 @@ class CorpusMutationService:
             )
             if replay is not None:
                 return replay
-        await self._require_workspace(request["workspace"], action)
-
-        run_id = str(uuid7())
-        execution_spec = spec
-        staged_root: Path | None = None
-        staged_sources: list[dict[str, Any]] = []
-        if spec.source_type == "local":
-            execution_spec, staged_root, staged_sources = await asyncio.to_thread(
-                self._snapshot_local_spec, run_id, workspace, spec
+            await self._require_workspace(canonical, action)
+            run_id = str(uuid7())
+            return await self._accept(
+                run_id=run_id,
+                workspace=canonical,
+                submitted_by=submitted_by,
+                idempotency_key=idempotency_key,
+                normalized_request=request,
+                payload={**request, "staged_sources": [], "track_id": _track_id(run_id)},
             )
+
+        await self._require_workspace(canonical, action)
+        run_id = str(uuid7())
+        execution_spec, staged_sources = await asyncio.to_thread(
+            self._snapshot_local_spec, run_id, canonical, spec
+        )
+        # A local source is identified by the bytes it had, so a retried key can
+        # only be matched once they are staged.
         normalized_request = {
             **request,
-            **(
-                {
-                    "staged_sources": [
-                        {
-                            "content_sha256": item["content_sha256"],
-                            "size_bytes": item["size_bytes"],
-                        }
-                        for item in staged_sources
-                    ]
-                }
-                if staged_sources
-                else {}
-            ),
+            "staged_sources": [
+                {"content_sha256": item["content_sha256"], "size_bytes": item["size_bytes"]}
+                for item in staged_sources
+            ],
         }
-        if staged_root is not None:
-            replay = await self.replay(
-                submitted_by=submitted_by,
-                idempotency_key=idempotency_key,
-                normalized_request=normalized_request,
-            )
-            if replay is not None:
-                await asyncio.to_thread(shutil.rmtree, staged_root, True)
-                return replay
-        payload = {
-            **request,
-            "source": execution_spec.model_dump(mode="json", exclude_none=True),
-            "staged_sources": staged_sources,
-            "track_id": _track_id(run_id),
-        }
-        try:
-            creation = await self._accept(
-                run_id=run_id,
-                workspace=workspace,
-                submitted_by=submitted_by,
-                idempotency_key=idempotency_key,
-                normalized_request=normalized_request,
-                payload=payload,
-            )
-        except BaseException:
-            if staged_root is not None:
-                await asyncio.to_thread(shutil.rmtree, staged_root, True)
-            raise
-        if staged_root is not None and creation.replayed and creation.run.run_id != run_id:
-            await asyncio.to_thread(shutil.rmtree, staged_root, True)
-        return creation
+        replay = await self.replay(
+            submitted_by=submitted_by,
+            idempotency_key=idempotency_key,
+            normalized_request=normalized_request,
+        )
+        if replay is not None:
+            await self.discard_staged_run(workspace=canonical, run_id=run_id)
+            return replay
+        return await self._accept_staged(
+            run_id=run_id,
+            workspace=canonical,
+            submitted_by=submitted_by,
+            idempotency_key=idempotency_key,
+            normalized_request=normalized_request,
+            payload={
+                **request,
+                "source": execution_spec.model_dump(mode="json", exclude_none=True),
+                "staged_sources": staged_sources,
+                "track_id": _track_id(run_id),
+            },
+        )
 
     async def create_staged_ingest(
         self,
         *,
         workspace: str,
+        run_id: str,
         staged: StagedCorpusSource,
         submitted_by: str,
         idempotency_key: str | None = None,
@@ -320,72 +313,64 @@ class CorpusMutationService:
         metadata: Mapping[str, Any] | None = None,
         replace: bool = False,
     ) -> RunCreation:
+        """Accept one upload that ``stage_uploads`` staged for ``run_id``."""
         self._require_writable("the upload")
-        run_id = staged.path.parents[1].name
+        canonical = require_canonical_workspace_id(workspace)
         action: CorpusMutationAction = "replace" if replace else "ingest"
-        source_identity = {
-            "source_type": "local",
-            "filename": staged.filename,
-            "content_sha256": staged.content_sha256,
-            "size_bytes": staged.size_bytes,
+        defaults = {
             **({"title": title} if title is not None else {}),
             **({"author": author} if author is not None else {}),
             **({"metadata": dict(metadata)} if metadata is not None else {}),
         }
         request = {
             "action": action,
-            "workspace": require_canonical_workspace_id(workspace),
-            "source": source_identity,
-        }
-        payload = {
-            **request,
+            "workspace": canonical,
             "source": {
                 "source_type": "local",
-                "path": str(staged.path),
-                "replace": replace,
-                **({"title": title} if title is not None else {}),
-                **({"author": author} if author is not None else {}),
-                **({"metadata": dict(metadata)} if metadata is not None else {}),
+                "filename": staged.filename,
+                "content_sha256": staged.content_sha256,
+                "size_bytes": staged.size_bytes,
+                **defaults,
             },
-            "staged_sources": [_staged_source_record(staged)],
-            "track_id": _track_id(run_id),
         }
-        try:
-            creation = await self._accept(
-                run_id=run_id,
-                workspace=workspace,
-                submitted_by=submitted_by,
-                idempotency_key=idempotency_key,
-                normalized_request=request,
-                payload=payload,
-            )
-        except BaseException:
-            await asyncio.to_thread(shutil.rmtree, staged.path.parents[1], True)
-            raise
-        if creation.replayed and creation.run.run_id != run_id:
-            await asyncio.to_thread(shutil.rmtree, staged.path.parents[1], True)
-        return creation
+        return await self._accept_staged(
+            run_id=run_id,
+            workspace=canonical,
+            submitted_by=submitted_by,
+            idempotency_key=idempotency_key,
+            normalized_request=request,
+            payload={
+                **request,
+                "source": {
+                    "source_type": "local",
+                    "documents": [{"path": str(staged.path)}],
+                    "replace": replace,
+                    **defaults,
+                },
+                "staged_sources": [_staged_source_record(staged)],
+                "track_id": _track_id(run_id),
+            },
+        )
 
     async def create_staged_batch(
         self,
         *,
         workspace: str,
+        run_id: str,
         staged: Sequence[StagedCorpusSource],
         submitted_by: str,
         idempotency_key: str | None = None,
         replace: bool = False,
     ) -> RunCreation:
+        """Accept the uploads ``stage_uploads`` staged for ``run_id`` as one Run."""
         self._require_writable("the upload")
-        """Accept one already-staged multipart cohort as one ingest or replace Run."""
         if not staged:
             raise ValueError("at least one staged source is required")
-        run_id = staged[0].path.parents[1].name
-        if any(item.path.parents[1].name != run_id for item in staged):
-            raise ValueError("staged sources do not belong to one Run")
+        canonical = require_canonical_workspace_id(workspace)
         action: CorpusMutationAction = "replace" if replace else "ingest"
         request = {
             "action": action,
-            "workspace": require_canonical_workspace_id(workspace),
+            "workspace": canonical,
             "sources": [
                 {
                     "filename": item.filename,
@@ -395,31 +380,49 @@ class CorpusMutationService:
                 for item in staged
             ],
         }
-        payload = {
-            **request,
-            "source": {
-                "source_type": "local",
-                "path": str(staged[0].path.parent),
-                "replace": replace,
+        return await self._accept_staged(
+            run_id=run_id,
+            workspace=canonical,
+            submitted_by=submitted_by,
+            idempotency_key=idempotency_key,
+            normalized_request=request,
+            payload={
+                **request,
+                "source": {
+                    "source_type": "local",
+                    "documents": [{"path": str(item.path)} for item in staged],
+                    "replace": replace,
+                },
+                "staged_sources": [_staged_source_record(item) for item in staged],
+                "track_id": _track_id(run_id),
             },
-            "staged_sources": [_staged_source_record(item) for item in staged],
-            "track_id": _track_id(run_id),
-        }
-        run_root = staged[0].path.parents[1]
+        )
+
+    async def _accept_staged(
+        self,
+        *,
+        run_id: str,
+        workspace: str,
+        submitted_by: str,
+        idempotency_key: str | None,
+        normalized_request: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> RunCreation:
+        """Accept a Run over the stage this request wrote, which it removes unless accepted."""
         try:
             creation = await self._accept(
                 run_id=run_id,
                 workspace=workspace,
                 submitted_by=submitted_by,
                 idempotency_key=idempotency_key,
-                normalized_request=request,
+                normalized_request=normalized_request,
                 payload=payload,
             )
         except BaseException:
-            await asyncio.to_thread(shutil.rmtree, run_root, True)
+            await self.discard_staged_run(workspace=workspace, run_id=run_id)
             raise
         if creation.replayed and creation.run.run_id != run_id:
-            await asyncio.to_thread(shutil.rmtree, run_root, True)
+            await self.discard_staged_run(workspace=workspace, run_id=run_id)
         return creation
 
     async def create_delete(
@@ -633,8 +636,9 @@ class CorpusMutationService:
         """Stage one request's files under the shared per-file and per-request caps.
 
         Every file is bounded by the per-file cap and by what the request has left,
-        so no surface can let one file use the whole request budget. A failed file
-        removes the whole Run-exclusive stage.
+        so no surface can let one file use the whole request budget. Two files that
+        would become one document are refused before any is staged. A failed file
+        removes the whole Run stage.
         """
         limits = self._upload_limits
         if not uploads:
@@ -644,9 +648,12 @@ class CorpusMutationService:
             raise UploadTooLargeError(f"upload contains more than {limits.request_files} files")
         if content_sha256 is not None and len(uploads) != 1:
             raise CorpusMutationInputError("content_sha256 is supported only for a single upload")
+        names: set[str] = set()
+        for filename, _reader in uploads:
+            _claim_document_name(names, _upload_basename(filename))
         staged: list[StagedCorpusSource] = []
         remaining = limits.request_bytes
-        for filename, reader in uploads:
+        for ordinal, (filename, reader) in enumerate(uploads):
             if remaining <= 0:
                 await self.discard_staged_run(workspace=workspace, run_id=run_id)
                 raise UploadTooLargeError(f"upload exceeds {limits.request_bytes} bytes")
@@ -657,6 +664,7 @@ class CorpusMutationService:
                 reader=reader,
                 max_bytes=min(limits.file_bytes, remaining),
                 content_sha256=content_sha256,
+                ordinal=ordinal,
             )
             staged.append(item)
             remaining -= item.size_bytes
@@ -671,14 +679,17 @@ class CorpusMutationService:
         reader: Any,
         max_bytes: int,
         content_sha256: str | None = None,
+        ordinal: int = 0,
     ) -> StagedCorpusSource:
-        """Stream, hash, bound, and atomically commit one source outside Run blobs."""
+        """Stream, hash and bound one upload into its own folder of the Run's stage.
+
+        Nothing reads a stage before its Run is accepted, and a Run ingests only the
+        files it lists, so a half-written file needs no scratch folder: a failure
+        removes the whole stage.
+        """
         self._require_writable("the upload")
         canonical = require_canonical_workspace_id(workspace)
-        try:
-            safe_path = safe_upload_relative_path(filename)
-        except ValueError:
-            raise UnsafeUploadNameError(f"Unsafe filename: {filename!r}") from None
+        name = _upload_basename(filename)
         expected = content_sha256.lower() if content_sha256 else None
         if expected is not None and (
             len(expected) != 64 or any(ch not in "0123456789abcdef" for ch in expected)
@@ -686,30 +697,13 @@ class CorpusMutationService:
             raise CorpusMutationInputError(
                 "content_sha256 must be a lowercase or uppercase SHA-256 hex digest"
             )
-
-        stage, source_root = await asyncio.to_thread(
-            _open_run_stage, self._corpus_root, canonical, run_id, exclusive=False
-        )
-        run_root = source_root.parent
-        temporary = f"{run_id}.part"
-        staging = parent = None
+        target = self._run_root(canonical, run_id) / "sources" / str(ordinal) / name
         try:
-            staging = await asyncio.to_thread(_open_upload_staging, self._corpus_root, canonical)
-            parent = await asyncio.to_thread(_stage_parents, stage, safe_path.parts[:-1])
-            try:
-                os.stat(safe_path.name, dir_fd=parent, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            else:
-                raise CorpusMutationInputError("upload contains duplicate source filenames")
+            await asyncio.to_thread(target.parent.mkdir, parents=True)
             digest = hashlib.sha256()
             size = 0
-            written = os.open(temporary, _CREATE_NO_FOLLOW, 0o600, dir_fd=staging)
-            with os.fdopen(written, "wb") as stream:
-                while True:
-                    chunk = await reader.read(_UPLOAD_CHUNK_BYTES)
-                    if not chunk:
-                        break
+            with target.open("xb") as stream:
+                while chunk := await reader.read(_UPLOAD_CHUNK_BYTES):
                     size += len(chunk)
                     if size > max_bytes:
                         raise UploadTooLargeError(f"upload exceeds {max_bytes} bytes")
@@ -720,82 +714,75 @@ class CorpusMutationService:
             actual = digest.hexdigest()
             if expected is not None and actual != expected:
                 raise CorpusMutationInputError("content_sha256 does not match the uploaded bytes")
-            os.replace(temporary, safe_path.name, src_dir_fd=staging, dst_dir_fd=parent)
-            return StagedCorpusSource(
-                path=source_root / safe_path,
-                filename=safe_path.as_posix(),
-                content_sha256=actual,
-                size_bytes=size,
-            )
         except BaseException:
-            if staging is not None:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(temporary, dir_fd=staging)
-            await asyncio.to_thread(shutil.rmtree, run_root, True)
+            await self.discard_staged_run(workspace=canonical, run_id=run_id)
             raise
-        finally:
-            for fd in (parent, staging, stage):
-                if fd is not None:
-                    os.close(fd)
+        return StagedCorpusSource(
+            path=target,
+            filename=safe_upload_relative_path(filename).as_posix(),
+            content_sha256=actual,
+            size_bytes=size,
+        )
 
     async def discard_staged_run(self, *, workspace: str, run_id: str) -> None:
-        """Delete one unaccepted Run-exclusive upload stage without leaking layout."""
-        canonical = require_canonical_workspace_id(workspace)
-        safe_run_id = str(UUID(run_id))
-        run_root = self._corpus_root / canonical / ".runs" / safe_run_id
+        """Delete one Run's stage, whole, without leaking its layout."""
+        run_root = self._run_root(require_canonical_workspace_id(workspace), run_id)
         await asyncio.to_thread(shutil.rmtree, run_root, True)
+
+    def _run_root(self, workspace: str, run_id: str) -> Path:
+        return _run_stage_root(self._corpus_root, workspace, run_id)
 
     def _snapshot_local_spec(
         self, run_id: str, workspace: str, spec: IngestSpec
-    ) -> tuple[IngestSpec, Path, list[dict[str, Any]]]:
+    ) -> tuple[IngestSpec, list[dict[str, Any]]]:
+        """Copy a local source's files into the Run's stage and list them explicitly.
+
+        Returns the spec the Run executes, whose ``documents`` are exactly the
+        staged files in manifest order, and that manifest. ``path`` may name a
+        file or a folder; each ``documents`` entry must name a file and keeps its
+        own fields. Every file is staged as ``sources/<ordinal>/<basename>``.
+        """
         canonical = require_canonical_workspace_id(workspace)
         workspace_root = (self._source_root / canonical).resolve()
-        stage, source_root = _open_run_stage(self._corpus_root, canonical, run_id, exclusive=True)
-        run_root = source_root.parent
+        sources = self._run_root(canonical, run_id) / "sources"
+        requested = (
+            [(cast(str, document.path), document) for document in spec.documents]
+            if spec.documents is not None
+            else [(cast(str, spec.path), None)]
+        )
         manifest: list[dict[str, Any]] = []
-
-        def copy_source(raw: str, ordinal: int) -> str:
-            try:
-                source = Path(raw).resolve(strict=True)
-            except FileNotFoundError, NotADirectoryError:
-                raise CorpusMutationInputError("local corpus source does not exist") from None
-            except OSError:
-                raise CorpusMutationInputError("local corpus source cannot be read") from None
-            if not source.is_relative_to(workspace_root):
-                raise CorpusMutationInputError(
-                    "local corpus sources must stay under input_dir/<workspace>"
-                )
-            try:
-                name = f"{ordinal:04d}-{safe_upload_basename(source.name)}"
-            except ValueError:
-                raise UnsafeUploadNameError(f"Unsafe filename: {source.name!r}") from None
-            target = source_root / name
-            manifest.extend(
-                _snapshot_local_source(
-                    workspace_root,
-                    source.relative_to(workspace_root).parts,
-                    stage,
-                    name,
-                    target,
-                    max_files=_MAX_RESULT_DOCUMENTS - len(manifest),
-                )
-            )
-            return str(target)
-
+        documents: list[IngestDocument] = []
+        names: set[str] = set()
         try:
-            if spec.documents is not None:
-                documents = [
-                    document.model_copy(update={"path": copy_source(cast(str, document.path), i)})
-                    for i, document in enumerate(spec.documents)
-                ]
-                return spec.model_copy(update={"documents": documents}), run_root, manifest
-            copied = copy_source(cast(str, spec.path), 0)
-            return spec.model_copy(update={"path": copied}), run_root, manifest
+            for raw, document in requested:
+                root, name = _open_local_source(workspace_root, raw)
+                try:
+                    members = _local_source_members(
+                        root,
+                        name,
+                        folder_allowed=document is None,
+                        max_files=_MAX_RESULT_DOCUMENTS - len(manifest),
+                    )
+                    for parts, member in members:
+                        _claim_document_name(names, member)
+                        target = sources / str(len(manifest)) / member
+                        target.parent.mkdir(parents=True)
+                        fd = _open_below(root, parts) if parts else os.dup(root)
+                        try:
+                            record = _copy_regular_file(fd, target)
+                        finally:
+                            os.close(fd)
+                        manifest.append(record)
+                        fields = document.model_dump(exclude_none=True) if document else {}
+                        documents.append(
+                            IngestDocument.model_validate({**fields, "path": record["path"]})
+                        )
+                finally:
+                    os.close(root)
         except BaseException:
-            shutil.rmtree(run_root, ignore_errors=True)
+            shutil.rmtree(self._run_root(canonical, run_id), ignore_errors=True)
             raise
-        finally:
-            os.close(stage)
+        return spec.model_copy(update={"path": None, "documents": documents}), manifest
 
 
 class _TrackedPipelineNotSettled(RuntimeError):
@@ -922,9 +909,7 @@ class CorpusMutationExecutor(RunExecutor):
             )
         else:
             if source_type == "local" and not await asyncio.to_thread(
-                _local_source_complete,
-                kwargs,
-                raw.get("staged_sources"),
+                _staged_sources_present, raw["staged_sources"]
             ):
                 raise FileNotFoundError
             kwargs["replace"] = raw.get("action") == "replace"
@@ -1232,17 +1217,39 @@ async def _join_public_operation[T](operation: Awaitable[T]) -> T:
         return await asyncio.shield(task)
 
 
-# Every local source and stage path component is opened relative to its parent's
-# descriptor and never through a link, so no swap made while a copy runs can reach
-# outside the workspace input root or move the stage elsewhere. O_NONBLOCK keeps a
+# A local source sits in the folder operators write, so every path component of it
+# is opened relative to its parent's descriptor and never through a link: no swap
+# made while a copy runs can reach outside the workspace folder. O_NONBLOCK keeps a
 # FIFO that replaced a file from stalling the open; its type check then refuses it.
+# Stages live in this service's own corpus directory, which nobody else writes.
 _READ_NO_FOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-_DIRECTORY_NO_FOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-_CREATE_NO_FOLLOW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 #: A local source is a folder tree an operator placed under input_dir; these bound
 #: the listing so a pathological tree cannot occupy a worker thread for minutes.
 _MAX_LOCAL_DEPTH = 32
 _MAX_LOCAL_ENTRIES = 10_000
+
+
+def _run_stage_root(corpus_root: Path, workspace: str, run_id: str) -> Path:
+    """One Run's stage: ``corpus_root/<workspace>/.runs/<run_id>``."""
+    return corpus_root / workspace / ".runs" / str(UUID(run_id))
+
+
+def _upload_basename(filename: str) -> str:
+    try:
+        return safe_upload_relative_path(filename).name
+    except ValueError:
+        raise UnsafeUploadNameError(f"Unsafe filename: {filename!r}") from None
+
+
+def _claim_document_name(names: set[str], filename: str) -> None:
+    """Refuse a second source that LightRAG would store as the same document."""
+    name = document_name(filename)
+    if name in names:
+        raise CorpusMutationInputError(
+            f"two sources would become the same document {filename!r}: "
+            "LightRAG names a document by its file name, so rename one"
+        )
+    names.add(name)
 
 
 def _open_no_follow(parent: int, name: str, *, directory: bool = False) -> int:
@@ -1281,99 +1288,29 @@ def _open_below(root: int, parts: Sequence[str], *, directory: bool = False) -> 
         raise
 
 
-def _private_directory(parent: int, name: str, *, create: bool, exclusive: bool = False) -> int:
-    """Open one stage directory this service alone owns and writes.
+def _open_local_source(workspace_root: Path, raw: str) -> tuple[int, str]:
+    """Open one requested local source below ``workspace_root``, never through a link.
 
-    It is created 0700 when absent, and one this service created earlier with a
-    wider mode is narrowed to 0700. A link, a missing directory that was not to be
-    created, or a directory another account owns refuses: whoever could redirect or
-    write the stage could read what it stages or add files the ingest would read.
+    Returns its descriptor and its name. The path must resolve inside the workspace
+    folder; every component is then reopened from that folder without following a
+    link, so a link swapped in after the check is refused.
     """
-    if create:
-        try:
-            os.mkdir(name, 0o700, dir_fd=parent)
-        except FileExistsError:
-            if exclusive:
-                raise
     try:
-        fd = os.open(name, _DIRECTORY_NO_FOLLOW, dir_fd=parent)
-    except OSError as exc:
-        logger.warning("Corpus stage directory %r cannot be opened as a directory: %s", name, exc)
-        raise CorpusStageUnavailableError() from None
-    status = os.fstat(fd)
-    if status.st_uid != os.geteuid():
-        os.close(fd)
-        logger.warning("Corpus stage directory %r is owned by uid %d", name, status.st_uid)
-        raise CorpusStageUnavailableError()
-    if status.st_mode & 0o077:
-        os.fchmod(fd, 0o700)
-    return fd
-
-
-def _open_workspace(input_root: Path, workspace: str) -> int:
-    """Open ``input_root/<workspace>``, creating it, never through a link at the workspace.
-
-    The workspace folder may be shared with the operator who places sources there;
-    only the stages below it are this service's own.
-    """
-    input_root.mkdir(parents=True, exist_ok=True)
-    root = os.open(input_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        source = Path(raw).resolve(strict=True)
+    except FileNotFoundError, NotADirectoryError:
+        raise CorpusMutationInputError("local corpus source does not exist") from None
+    except OSError:
+        raise CorpusMutationInputError("local corpus source cannot be read") from None
+    if not source.is_relative_to(workspace_root):
+        raise CorpusMutationInputError("local corpus sources must stay under input_dir/<workspace>")
     try:
-        with contextlib.suppress(FileExistsError):
-            os.mkdir(workspace, dir_fd=root)
-        try:
-            return os.open(workspace, _DIRECTORY_NO_FOLLOW, dir_fd=root)
-        except OSError:
-            logger.warning("Workspace input folder %r is not a plain directory", workspace)
-            raise CorpusStageUnavailableError() from None
+        root = os.open(workspace_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        raise CorpusMutationInputError("local corpus source cannot be read") from None
+    try:
+        return _open_below(root, source.relative_to(workspace_root).parts), source.name
     finally:
         os.close(root)
-
-
-def _open_run_stage(
-    input_root: Path, workspace: str, run_id: str, *, exclusive: bool
-) -> tuple[int, Path]:
-    """Open ``input_root/<workspace>/.runs/<run_id>/sources`` without following links.
-
-    Returns the descriptor every staged file is written through and the path the
-    Run records for its ingest.
-    """
-    opened = [_open_workspace(input_root, workspace)]
-    try:
-        opened.append(_private_directory(opened[-1], ".runs", create=True))
-        opened.append(_private_directory(opened[-1], run_id, create=True, exclusive=exclusive))
-        sources = _private_directory(opened[-1], "sources", create=True)
-    finally:
-        for fd in opened:
-            os.close(fd)
-    return sources, input_root.resolve() / workspace / ".runs" / run_id / "sources"
-
-
-def _open_upload_staging(input_root: Path, workspace: str) -> int:
-    """Open the workspace's ``.staging`` folder, where an upload is written first.
-
-    It sits beside ``.runs``, so a half-written upload is never inside a Run's
-    sources, and it is as private as the stages themselves.
-    """
-    workspace_fd = _open_workspace(input_root, workspace)
-    try:
-        return _private_directory(workspace_fd, ".staging", create=True)
-    finally:
-        os.close(workspace_fd)
-
-
-def _stage_parents(stage: int, parts: Sequence[str]) -> int:
-    """Open, creating as needed, the private folders that hold one staged file."""
-    fd = os.dup(stage)
-    try:
-        for name in parts:
-            opened = _private_directory(fd, name, create=True)
-            os.close(fd)
-            fd = opened
-        return fd
-    except BaseException:
-        os.close(fd)
-        raise
 
 
 @dataclass(slots=True)
@@ -1400,7 +1337,7 @@ def _list_directory(
         if entry.is_symlink():
             raise CorpusMutationInputError("local corpus sources cannot contain symlinks")
         if is_dir:
-            if len(path) >= _MAX_LOCAL_DEPTH:
+            if len(path) > _MAX_LOCAL_DEPTH:
                 raise CorpusMutationInputError(
                     f"local corpus source nests folders more than {_MAX_LOCAL_DEPTH} deep"
                 )
@@ -1421,22 +1358,44 @@ def _list_directory(
             )
 
 
-def _list_local_tree(source: int, *, max_files: int) -> list[tuple[str, ...]]:
-    """List the files a scan of the copy would ingest, before anything is copied.
+def _local_source_members(
+    source: int, name: str, *, folder_allowed: bool, max_files: int
+) -> list[tuple[tuple[str, ...], str]]:
+    """List the files one opened local source contributes, before anything is copied.
 
-    Links and special files refuse, and so do a tree holding more files than the
-    request allows and one deeper or wider than a local source may be. Entries the
-    scan skips (dot entries, parser sidecars, staging) are left out, which also
-    keeps a workspace root from copying its own Run stages into themselves. Each
-    folder is opened once, holding one descriptor per level.
+    Each member is its path below ``source`` (empty for ``source`` itself) and its
+    file name. A folder is listed in full first: links and special files refuse,
+    and so do a tree with more files than the request allows and one deeper or
+    wider than a local source may be. Entries ingestion skips (dot entries and
+    parser or staging folders) are left out of the list but count as entries.
     """
+    mode = os.fstat(source).st_mode
+    if stat.S_ISREG(mode):
+        if max_files < 1:
+            raise CorpusMutationInputError(
+                f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
+            )
+        return [((), _stage_name(name))]
+    if not stat.S_ISDIR(mode):
+        raise CorpusMutationInputError("local corpus source is not a regular file or directory")
+    if not folder_allowed:
+        raise CorpusMutationInputError("each local manifest document must name a file")
     listing = _LocalListing(files=[])
     _list_directory(source, (), listing, max_files=max_files)
-    return sorted(listing.files)
+    if not listing.files:
+        raise CorpusMutationInputError("local corpus source contains no files to ingest")
+    return [(parts, _stage_name(parts[-1])) for parts in sorted(listing.files)]
 
 
-def _copy_regular_file(source: int, parent: int, name: str, target: Path) -> dict[str, Any]:
-    """Copy one opened regular file into a new 0600 file, hashing the bytes it writes."""
+def _stage_name(name: str) -> str:
+    try:
+        return safe_upload_basename(name)
+    except ValueError:
+        raise UnsafeUploadNameError(f"Unsafe filename: {name!r}") from None
+
+
+def _copy_regular_file(source: int, target: Path) -> dict[str, Any]:
+    """Copy one opened regular file to ``target``, hashing the bytes it writes."""
     status = os.fstat(source)
     if not stat.S_ISREG(status.st_mode):
         raise CorpusMutationInputError(
@@ -1444,128 +1403,13 @@ def _copy_regular_file(source: int, parent: int, name: str, target: Path) -> dic
         )
     digest = hashlib.sha256()
     size = 0
-    written = os.open(name, _CREATE_NO_FOLLOW, 0o600, dir_fd=parent)
-    try:
+    with target.open("xb") as written:
         while chunk := os.read(source, _UPLOAD_CHUNK_BYTES):
             digest.update(chunk)
-            view = memoryview(chunk)
-            while view:
-                view = view[os.write(written, view) :]
+            written.write(chunk)
             size += len(chunk)
-        os.utime(written, ns=(status.st_atime_ns, status.st_mtime_ns))
-    finally:
-        os.close(written)
+    os.utime(target, ns=(status.st_atime_ns, status.st_mtime_ns))
     return {"path": str(target), "content_sha256": digest.hexdigest(), "size_bytes": size}
-
-
-def _snapshot_local_source(
-    workspace_root: Path,
-    parts: Sequence[str],
-    stage: int,
-    name: str,
-    target: Path,
-    *,
-    max_files: int,
-) -> list[dict[str, Any]]:
-    """Copy one local source below ``workspace_root`` into the stage as ``name``.
-
-    Returns the manifest of what was copied. A directory is listed and counted in
-    full before anything is copied, then every file is reopened through its own
-    unfollowed path, so a folder swapped for a link after the listing refuses
-    instead of staging what the link points at. Only the folders that hold a
-    copied file are created, each 0700, and every file is written 0600.
-    """
-    root = os.open(workspace_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    try:
-        source = _open_below(root, parts)
-    finally:
-        os.close(root)
-    try:
-        mode = os.fstat(source).st_mode
-        if stat.S_ISREG(mode):
-            if max_files < 1:
-                raise CorpusMutationInputError(
-                    f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
-                )
-            return [_copy_regular_file(source, stage, name, target)]
-        if not stat.S_ISDIR(mode):
-            raise CorpusMutationInputError("local corpus source is not a regular file or directory")
-        files = _list_local_tree(source, max_files=max_files)
-        if not files:
-            raise CorpusMutationInputError("local corpus source contains no files to ingest")
-        copied = _private_directory(stage, name, create=True, exclusive=True)
-        try:
-            manifest = []
-            for path in files:
-                parent = _stage_parents(copied, path[:-1])
-                try:
-                    fd = _open_below(source, path)
-                    try:
-                        manifest.append(
-                            _copy_regular_file(fd, parent, path[-1], target.joinpath(*path))
-                        )
-                    finally:
-                        os.close(fd)
-                finally:
-                    os.close(parent)
-            return manifest
-        finally:
-            os.close(copied)
-    finally:
-        os.close(source)
-
-
-def _stage_matches_manifest(manifest: Sequence[Mapping[str, Any]]) -> bool:
-    """Whether a Run's stage holds exactly the files its manifest recorded.
-
-    The ingest scans the stage folder, so a file added beside the recorded ones, a
-    link anywhere, or a recorded file that changed would be read with them. The
-    stage is walked from its private folders without following links, and every
-    file the scan would ingest must be a recorded one with its recorded size and
-    digest.
-    """
-    paths = [Path(str(item.get("path") or "")) for item in manifest]
-    stages = set()
-    for path in paths:
-        parts = path.parts
-        if "sources" not in parts:
-            return False
-        index = parts.index("sources")
-        if index < 3 or parts[index - 2] != ".runs":
-            return False
-        stages.add(Path(*parts[: index + 1]))
-    if len(stages) != 1:
-        return False
-    stage = stages.pop()
-    expected = {
-        path.relative_to(stage).parts: item for path, item in zip(paths, manifest, strict=True)
-    }
-    workspace = os.open(stage.parents[2], os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    opened = [workspace]
-    try:
-        for name in (".runs", stage.parent.name, "sources"):
-            opened.append(_private_directory(opened[-1], name, create=False))
-        sources = opened[-1]
-        found = _list_local_tree(sources, max_files=len(expected))
-        if set(found) != set(expected):
-            return False
-        for parts, item in expected.items():
-            fd = _open_below(sources, parts)
-            try:
-                status = os.fstat(fd)
-                if not stat.S_ISREG(status.st_mode) or status.st_size != item.get("size_bytes"):
-                    return False
-                digest = hashlib.sha256()
-                while chunk := os.read(fd, _UPLOAD_CHUNK_BYTES):
-                    digest.update(chunk)
-                if digest.hexdigest() != item.get("content_sha256"):
-                    return False
-            finally:
-                os.close(fd)
-        return True
-    finally:
-        for fd in opened:
-            os.close(fd)
 
 
 def validate_corpus_mutation_prepared_input(
@@ -1626,9 +1470,12 @@ def validate_corpus_mutation_prepared_input(
                 or size < 0
             ):
                 raise ValueError("Corpus Mutation staged source manifest is invalid")
-        if spec.source_type == "local" and not staged_sources:
-            raise ValueError("local Corpus Mutation source manifest is unavailable")
-        if spec.source_type != "local" and staged_sources:
+        if spec.source_type == "local":
+            # A local Run ingests exactly the files it staged, listed in order.
+            listed = [document.path for document in spec.documents or ()]
+            if not staged_sources or listed != [item["path"] for item in staged_sources]:
+                raise ValueError("local Corpus Mutation must list exactly its staged sources")
+        elif staged_sources:
             raise ValueError("remote Corpus Mutation cannot contain staged sources")
         sources = raw.get("sources")
         if sources is not None and (
@@ -1764,21 +1611,9 @@ def _accepted_selector(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _local_source_complete(source: Mapping[str, Any], manifest: Any) -> bool:
-    paths = [str(source.get("path") or "")]
-    documents = source.get("documents")
-    if isinstance(documents, list):
-        paths = [str(item.get("path") or "") for item in documents if isinstance(item, Mapping)]
-    if not paths or not all(path and Path(path).exists() for path in paths):
-        return False
-    if not isinstance(manifest, list) or not manifest:
-        return False
-    if not all(isinstance(item, Mapping) for item in manifest):
-        return False
-    try:
-        return _stage_matches_manifest(manifest)
-    except OSError, ValueError, ApplicationError:
-        return False
+def _staged_sources_present(staged_sources: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether every file the Run staged is still there, checked before its handoff."""
+    return all(os.path.isfile(str(item["path"])) for item in staged_sources)
 
 
 def _public_upstream_state(value: Any) -> list[dict[str, str]]:

@@ -8,7 +8,8 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
     REMOTE_SOURCES_DIR_NAME,
     UPLOADS_DIR_NAME,
     discard_parser_input,
-    iter_ingestable_files,
+    document_name,
+    excluded_from_directory_scan,
     parser_input_path,
     place_parser_input,
     remote_ingest_batch_root,
@@ -18,34 +19,32 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
 )
 
 
-def test_iter_ingestable_files_skips_parser_upload_and_hidden_artifacts(tmp_path: Path) -> None:
-    root = tmp_path / "docs"
-    (root / "nested").mkdir(parents=True)
-    (root / PARSED_DIR_NAME / "report.pdf.parsed").mkdir(parents=True)
-    (root / UPLOADS_DIR_NAME / "old-batch").mkdir(parents=True)
-    (root / REMOTE_INGEST_DIR_NAME / "s3" / "batch").mkdir(parents=True)
-    (root / REMOTE_SOURCES_DIR_NAME / "s3").mkdir(parents=True)
-    (root / ".cache").mkdir(parents=True)
-
-    keep = root / "nested" / "keep.pdf"
-    keep.write_bytes(b"ok")
-    (root / PARSED_DIR_NAME / "report.pdf.parsed" / "report.blocks.jsonl").write_text("{}\n")
-    (root / UPLOADS_DIR_NAME / "old-batch" / "stale.pdf").write_bytes(b"stale")
-    (root / REMOTE_INGEST_DIR_NAME / "s3" / "batch" / "remote.pdf").write_bytes(b"remote")
-    (root / REMOTE_SOURCES_DIR_NAME / "s3" / "retained.pdf").write_bytes(b"retained")
-    (root / ".cache" / "hidden.pdf").write_bytes(b"hidden")
-    (root / ".hidden.pdf").write_bytes(b"hidden")
-
-    assert iter_ingestable_files(root) == [keep]
+@pytest.mark.parametrize(
+    ("name", "is_dir"),
+    [
+        (".cache", True),
+        (".hidden.pdf", False),
+        (PARSED_DIR_NAME, True),
+        (UPLOADS_DIR_NAME, True),
+        (REMOTE_INGEST_DIR_NAME, True),
+        (REMOTE_SOURCES_DIR_NAME, True),
+    ],
+)
+def test_a_local_source_listing_skips_dot_entries_and_parser_folders(
+    name: str, is_dir: bool
+) -> None:
+    assert excluded_from_directory_scan(name, is_dir=is_dir)
 
 
-def test_iter_ingestable_files_accepts_explicit_upload_batch(tmp_path: Path) -> None:
-    batch = tmp_path / "docs" / UPLOADS_DIR_NAME / "batch"
-    batch.mkdir(parents=True)
-    uploaded = batch / "uploaded.pdf"
-    uploaded.write_bytes(b"ok")
+@pytest.mark.parametrize(("name", "is_dir"), [("report.pdf", False), ("nested", True)])
+def test_a_local_source_listing_keeps_ordinary_entries(name: str, is_dir: bool) -> None:
+    assert not excluded_from_directory_scan(name, is_dir=is_dir)
 
-    assert iter_ingestable_files(batch) == [uploaded]
+
+def test_a_documents_name_is_its_basename_without_a_parser_hint() -> None:
+    """LightRAG derives a document's id from this name, so two files with it collide."""
+    assert document_name("/stage/0/report.[mineru].pdf") == document_name("a/report.pdf")
+    assert document_name("report.pdf") != document_name("report.docx")
 
 
 def test_a_parser_input_is_placed_flat_under_its_basename(tmp_path: Path) -> None:
