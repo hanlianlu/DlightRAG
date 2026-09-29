@@ -153,3 +153,64 @@ for (const [name, mount] of MENU_BUTTONS) {
     expect(document.activeElement).to.equal(trigger);
   });
 }
+
+for (const [name, mount] of MENU_BUTTONS) {
+  it(`${name} menu closes when focus leaves it, and only Escape sends focus back`, async () => {
+    const {trigger, menu} = await mount();
+    const elsewhere = document.createElement('button');
+    elsewhere.textContent = 'Elsewhere';
+    document.body.append(elsewhere);
+
+    await press('ArrowDown', trigger);
+    expect(open(menu())).to.equal(true);
+    const items = [...menu()!.querySelectorAll<HTMLElement>('[role^="menuitem"]')];
+    expect(items.map((item) => item.tabIndex), 'Tab never lands on an item').to.deep.equal(items.map(() => -1));
+    await press('Tab');
+    expect(open(menu()), 'Tab closes the menu').to.equal(false);
+    expect(document.activeElement === trigger, 'Tab does not send focus back to the button')
+      .to.equal(false);
+
+    await press('ArrowDown', trigger);
+    expect(open(menu())).to.equal(true);
+    elsewhere.focus();
+    await frame();
+    expect(open(menu()), 'focus leaving closes the menu').to.equal(false);
+    expect(document.activeElement === elsewhere, 'and focus stays where it went').to.equal(true);
+
+    await press('ArrowDown', trigger);
+    expect(open(menu())).to.equal(true);
+    // A press on the button focuses it before its click: the click, not the focus, closes the menu.
+    trigger.focus();
+    await frame();
+    expect(open(menu()), 'focus on the menu\'s own button keeps it open').to.equal(true);
+    trigger.click();
+    await frame();
+    expect(open(menu()), 'the button\'s click closes it').to.equal(false);
+  });
+}
+
+it('keeps a busy conversation\'s Delete in reach but inert', async () => {
+  const {trigger, menu} = await conversationActions();
+  const list = trigger.closest<DlConversationList>('dl-conversation-list')!;
+  const deletes: string[] = [];
+  list.addEventListener('dl-conversation-delete', (event) => { deletes.push(event.detail.conversationId); });
+  list.busy = true;
+  await list.updateComplete;
+
+  await press('ArrowUp', trigger);
+  expect(focusedLabel(), 'the busy item still takes focus').to.equal('Delete');
+  const remove = document.activeElement as HTMLButtonElement;
+  expect(remove.getAttribute('aria-disabled')).to.equal('true');
+  expect(remove.disabled).to.equal(false);
+  remove.click();
+  await frame();
+  expect(deletes).to.deep.equal([]);
+  expect(open(menu()), 'an inert item leaves the menu open').to.equal(true);
+
+  list.busy = false;
+  await list.updateComplete;
+  expect(remove.hasAttribute('aria-disabled')).to.equal(false);
+  remove.click();
+  await frame();
+  expect(deletes).to.deep.equal(['menu-contract']);
+});

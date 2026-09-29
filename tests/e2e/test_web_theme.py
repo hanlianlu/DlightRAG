@@ -117,6 +117,37 @@ def test_theme_menu_keyboard_navigation_and_escape_focus_restore(page: Page) -> 
 
 
 @pytest.mark.e2e
+def test_theme_menu_opens_on_its_first_item_with_a_saved_choice_and_tab_leaves_it(
+    page: Page,
+) -> None:
+    page.goto("/web/")
+    _wait_ui_ready(page)
+    _choose_theme(page, "dark")
+    page.reload()
+    _wait_ui_ready(page)
+
+    trigger = page.locator("#theme-trigger")
+    menu = page.locator("#theme-menu")
+    trigger.focus()
+    page.keyboard.press("Enter")
+    expect(menu).to_be_visible()
+    expect(menu.locator("[data-theme-value='dark']")).to_have_attribute("aria-checked", "true")
+    expect(menu.locator("[data-theme-value='system']")).to_be_focused()
+
+    page.keyboard.press("Escape")
+    expect(trigger).to_be_focused()
+    page.keyboard.press("ArrowUp")
+    expect(menu.locator("[data-theme-value='dark']")).to_be_focused()
+
+    # Tab moves on past the menu, which closes behind it.
+    page.keyboard.press("Tab")
+    expect(menu).to_be_hidden()
+    expect(trigger).to_have_attribute("aria-expanded", "false")
+    expect(trigger).not_to_be_focused()
+    assert page.evaluate("() => !document.activeElement?.closest('#theme-menu')")
+
+
+@pytest.mark.e2e
 def test_theme_selection_works_when_local_storage_unavailable(
     e2e_browser_context: BrowserContext,
 ) -> None:

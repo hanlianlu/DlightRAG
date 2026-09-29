@@ -8,6 +8,7 @@ import {
   DlSplitLayout,
   defineDesignSystemElements,
   icon,
+  type MenuDismissDetail,
   menuButtonFocus,
   rovingFocusKeydown,
 } from '../index.ts';
@@ -87,6 +88,79 @@ it('moves focus among slotted menuitems and dismisses on Escape', () => {
   expect(dismissed).to.deep.equal(['yes']);
 });
 
+/** A menu with its controlling button and a control elsewhere, recording each dismissal. */
+function dismissibleMenu() {
+  const button = document.createElement('button');
+  button.setAttribute('aria-controls', 'actions');
+  button.textContent = 'Actions';
+  const menu = document.createElement('dl-menu') as DlMenu;
+  menu.id = 'actions';
+  menu.innerHTML = '<button type="button" role="menuitem" tabindex="-1">Rename</button>'
+    + '<button type="button" role="menuitem" tabindex="-1">Delete</button>';
+  const elsewhere = document.createElement('button');
+  elsewhere.textContent = 'Elsewhere';
+  document.body.append(button, menu, elsewhere);
+  const dismissals: boolean[] = [];
+  menu.addEventListener('dl-menu-dismiss', (event: CustomEvent<MenuDismissDetail>) => {
+    dismissals.push(event.detail.restoreFocus);
+  });
+  const [rename, remove] = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  return {button, menu, elsewhere, rename: rename!, remove: remove!, dismissals};
+}
+
+it('closes on Tab and on focus leaving without asking for focus back; only Escape asks', () => {
+  const {button, menu, elsewhere, rename, remove, dismissals} = dismissibleMenu();
+  rename.focus();
+  const tab = new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true});
+  rename.dispatchEvent(tab);
+  expect(dismissals).to.deep.equal([false]);
+  expect(tab.defaultPrevented, 'the browser still moves focus on').to.equal(false);
+
+  remove.focus();
+  menu.focus();
+  expect(document.activeElement === menu, 'a press on the menu chrome keeps focus in the menu')
+    .to.equal(true);
+  rename.focus();
+  expect(dismissals, 'focus moving within the menu, its chrome included, keeps it open')
+    .to.deep.equal([false]);
+
+  button.focus();
+  expect(dismissals, 'its own button closes it on click instead').to.deep.equal([false]);
+
+  rename.focus();
+  elsewhere.focus();
+  expect(dismissals).to.deep.equal([false, false]);
+
+  menu.hidden = true;
+  rename.focus();
+  elsewhere.focus();
+  expect(dismissals, 'a closed menu asks nothing').to.deep.equal([false, false]);
+
+  menu.hidden = false;
+  rename.focus();
+  rename.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+  expect(dismissals).to.deep.equal([false, false, true]);
+});
+
+it('keeps an aria-disabled item in reach but never activates it', () => {
+  const {rename, remove} = dismissibleMenu();
+  const activated: string[] = [];
+  rename.addEventListener('click', () => { activated.push('rename'); });
+  remove.addEventListener('click', () => { activated.push('delete'); });
+  remove.setAttribute('aria-disabled', 'true');
+
+  rename.focus();
+  rename.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
+  expect(document.activeElement === remove, 'the disabled item takes focus').to.equal(true);
+  remove.click();
+  rename.click();
+  expect(activated).to.deep.equal(['rename']);
+
+  remove.removeAttribute('aria-disabled');
+  remove.click();
+  expect(activated).to.deep.equal(['rename', 'delete']);
+});
+
 it('keeps one menu contract across item roles, disabled items, and typeahead', () => {
   const menu = document.createElement('dl-menu') as DlMenu;
   menu.innerHTML = '<button type="button" role="menuitemradio" aria-checked="true">Auto</button>'
@@ -102,25 +176,64 @@ it('keeps one menu contract across item roles, disabled items, and typeahead', (
     return event.defaultPrevented;
   };
 
+  const [, , , finance] = [...menu.querySelectorAll<HTMLButtonElement>('button')];
+  const focused = (item: HTMLButtonElement | undefined): boolean => document.activeElement === item;
+
   menu.focusItem('last');
-  expect(document.activeElement).to.equal(research);
+  expect(focused(research)).to.equal(true);
   menu.focusItem('first');
-  expect(document.activeElement).to.equal(auto);
+  expect(focused(auto)).to.equal(true);
   key('ArrowDown');
-  expect(document.activeElement, 'disabled items are skipped').to.equal(fast);
+  expect(focused(fast), 'a natively disabled item cannot take focus').to.equal(true);
+  key('ArrowDown');
+  expect(focused(finance), 'an aria-disabled item still does').to.equal(true);
   key('ArrowUp');
   key('ArrowUp');
-  expect(document.activeElement, 'ArrowUp wraps').to.equal(research);
+  key('ArrowUp');
+  expect(focused(research), 'ArrowUp wraps').to.equal(true);
   key('a');
-  expect(document.activeElement, 'typeahead searches on from the current item').to.equal(auto);
+  expect(focused(auto), 'typeahead searches on from the current item').to.equal(true);
   key('f');
-  expect(document.activeElement, 'typeahead reads the accessible label').to.equal(fast);
+  expect(focused(fast), 'typeahead reads the accessible label').to.equal(true);
   key('f');
-  expect(document.activeElement, 'with no other match, the item keeps focus').to.equal(fast);
+  expect(focused(finance), 'typeahead moves on to the next match').to.equal(true);
+  key('f');
+  expect(focused(fast), 'and wraps to the first').to.equal(true);
   expect(key('r', {ctrlKey: true}), 'a shortcut is not typeahead').to.equal(false);
-  expect(document.activeElement).to.equal(fast);
+  expect(focused(fast)).to.equal(true);
   expect(key(' '), 'Space stays with the item').to.equal(false);
   expect(key('Enter'), 'Enter stays with the item').to.equal(false);
+});
+
+it('anchors a surface to its trigger wrapper along the writing direction', () => {
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position: relative; width: 200px; height: 40px; margin: 120px 80px;';
+  const surface = document.createElement('div');
+  surface.className = 'dl-anchored';
+  surface.style.cssText = 'width: 60px; height: 30px; --anchored-gap: 7px;';
+  wrapper.append(surface);
+  document.body.append(wrapper);
+  const place = (classes: string, dir: 'ltr' | 'rtl' = 'ltr') => {
+    surface.className = classes;
+    wrapper.dir = dir;
+    const outer = wrapper.getBoundingClientRect();
+    const inner = surface.getBoundingClientRect();
+    return {
+      start: dir === 'ltr' ? inner.left - outer.left : outer.right - inner.right,
+      end: dir === 'ltr' ? outer.right - inner.right : inner.left - outer.left,
+      below: inner.top - outer.bottom,
+      above: outer.top - inner.bottom,
+    };
+  };
+
+  for (const dir of ['ltr', 'rtl'] as const) {
+    const below = place('dl-anchored', dir);
+    expect([below.start, below.below], `${dir}: below, from the start edge`).to.deep.equal([0, 7]);
+    const end = place('dl-anchored dl-anchored--end', dir);
+    expect([end.end, end.below], `${dir}: aligned with the end edge`).to.deep.equal([0, 7]);
+    const above = place('dl-anchored dl-anchored--above dl-anchored--end', dir);
+    expect([above.end, above.above], `${dir}: opening upward`).to.deep.equal([0, 7]);
+  }
 });
 
 it('opens menus from their button with one key map', () => {

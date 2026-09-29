@@ -68,7 +68,7 @@
 
 :global(#new-conversation-btn:disabled),
 :global(.conversation-select:disabled),
-:global(.conversation-actions-menu button:disabled) {
+:global(.conversation-actions-menu button[aria-disabled='true']) {
     cursor: not-allowed;
     opacity: 0.46;
 }
@@ -176,18 +176,19 @@
     opacity: 1;
 }
 
+/* Anchored to its row: it overlaps the row's bottom edge, inset from its end. */
 :global(.conversation-actions-menu) {
+    --anchored-gap: calc(-1 * var(--space-inline));
+
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-popover);
     box-shadow: var(--shadow-menu);
     display: flex;
     flex-direction: column;
+    inset-inline-end: var(--space-inline);
     min-width: 132px;
     padding: var(--space-inline);
-    position: absolute;
-    right: var(--space-inline);
-    top: calc(100% - var(--space-inline));
     z-index: 5;
 }
 

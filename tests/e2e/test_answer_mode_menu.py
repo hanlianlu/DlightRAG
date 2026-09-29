@@ -2,7 +2,7 @@
 """Browser coverage for the composer Answer Mode menu."""
 
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -32,3 +32,19 @@ def test_mode_menu_selects_and_remembers_research(page: Page) -> None:
     # A reload restores the stored choice.
     _open_ready_page(page)
     assert page.locator("#composer-mode").inner_text() == "Research"
+
+
+def test_mode_menu_closes_when_tab_leaves_it(page: Page) -> None:
+    _open_ready_page(page)
+    trigger = page.locator("#composer-mode")
+    menu = page.locator("#composer-mode-menu")
+
+    trigger.focus()
+    page.keyboard.press("ArrowDown")
+    expect(menu.get_by_role("menuitemradio", name="Auto")).to_be_focused()
+
+    page.keyboard.press("Tab")
+    expect(menu).to_be_hidden()
+    expect(trigger).to_have_attribute("aria-expanded", "false")
+    expect(trigger).not_to_be_focused()
+    assert page.evaluate("() => !document.activeElement?.closest('#composer-mode-menu')")

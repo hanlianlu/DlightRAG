@@ -1,9 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Structural lock on the shared control layer.
 
- * Every <dialog> must carry one of the primitive dialog classes, and every
- * checkbox must live inside the .dl-dialog-checkbox primitive. New UI that
- * bypasses primitives fails here instead of shipping UA styling.
+ * Every <dialog> must carry one of the primitive dialog classes, every
+ * checkbox must live inside the .dl-dialog-checkbox primitive, and every menu
+ * or popover opened from a trigger takes its placement from .dl-anchored. New
+ * UI that bypasses primitives fails here instead of shipping UA styling.
  */
 
 import {readdirSync, readFileSync} from 'node:fs';
@@ -58,4 +59,24 @@ test('every checkbox lives inside the .dl-dialog-checkbox primitive', () => {
     }
     void labelPattern;
   }
+});
+
+test('every menu and popover opened from a trigger takes its placement from .dl-anchored', () => {
+  const surfaces: string[] = [];
+  for (const file of uiSourceFiles()) {
+    const source = readFileSync(file, 'utf8');
+    // Each surface names its class before its event bindings, whose arrow
+    // functions would end this tag match early.
+    for (const match of source.matchAll(/<(dl-menu|div)\b([^>]*)>/g)) {
+      const [, tag, attributes] = match;
+      const classes = /class="([^"]*)"/.exec(attributes!)?.[1]?.split(/\s+/) ?? [];
+      const popup = tag === 'dl-menu' || classes.includes('dl-popover') || /role="listbox"/.test(attributes!);
+      if (!popup) continue;
+      const name = `${file.split('/').at(-1)}: <${tag} class="${classes.join(' ')}">`;
+      surfaces.push(name);
+      assert.ok(classes.includes('dl-anchored'), `${name} must take its placement from .dl-anchored`);
+    }
+  }
+  // Theme, answer mode, agent effort, conversation actions, skills, workspaces, and upload target.
+  assert.equal(surfaces.length, 7, surfaces.join('\n'));
 });

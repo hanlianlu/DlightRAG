@@ -10,7 +10,13 @@ export {
 } from './icons/registry.generated.ts';
 export {defineDesignSystemElements} from './elements/define.ts';
 export {DlIconButton} from './elements/icon-button.ts';
-export {DlMenu, menuButtonFocus, rovingFocusKeydown, type MenuFocus} from './elements/menu.ts';
+export {
+  DlMenu,
+  menuButtonFocus,
+  rovingFocusKeydown,
+  type MenuDismissDetail,
+  type MenuFocus,
+} from './elements/menu.ts';
 export {
   DlSplitLayout,
   type SplitOrientation,

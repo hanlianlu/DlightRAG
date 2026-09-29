@@ -282,14 +282,13 @@ textarea.dl-dialog-input {
    keeps its own look, layer, and hidden state. */
 
 .dl-anchored {
-    left: 0;
+    inset-inline-start: 0;
     position: absolute;
     top: calc(100% + var(--anchored-gap, var(--space-3xs)));
 }
 
 .dl-anchored--end {
-    left: auto;
-    right: 0;
+    inset-inline: auto 0;
 }
 
 .dl-anchored--above {

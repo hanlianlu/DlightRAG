@@ -470,7 +470,7 @@ body.files-panel-open #files-btn {
 .skill-menu {
     --anchored-gap: var(--space-2xs);
 
-    right: 0;
+    inset-inline-end: 0;
     display: flex;
     flex-direction: column;
     max-height: 16rem;
@@ -815,7 +815,7 @@ dl-chat-composer {
     }
 
     #theme-menu {
-        right: calc(-1 * var(--space-inline));
+        inset-inline-end: calc(-1 * var(--space-inline));
     }
 
     .panel {

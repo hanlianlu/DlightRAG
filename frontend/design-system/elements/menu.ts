@@ -4,10 +4,13 @@
  *  A menu button opens its menu with ArrowDown, Enter, or Space on the first
  *  item and with ArrowUp on the last. Inside, ArrowDown and ArrowUp move with
  *  wrapping, Home and End jump to the ends, a printable character moves to
- *  the next item whose label starts with it, and Escape dismisses so the
- *  owner can return focus to the button. Enter and Space stay with each
- *  item's own activation. Pickers that are not menus reuse the same roving
- *  step through rovingFocusKeydown().
+ *  the next item whose label starts with it, and Enter and Space stay with
+ *  each item's own activation. An aria-disabled item still takes focus but
+ *  never activates. The menu asks its owner to close it with
+ *  dl-menu-dismiss: Escape asks for focus back on the menu button, while Tab,
+ *  or focus going anywhere but the menu or the button that controls it
+ *  (aria-controls), leaves focus where it went. Pickers that are not menus
+ *  reuse the same roving step through rovingFocusKeydown().
  *
  *  Slotted items stay Light DOM; the host is the menu chrome and keyboard.
  */
@@ -24,6 +27,11 @@ template.innerHTML = `
 const MENU_ITEMS = '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]';
 
 export type MenuFocus = 'first' | 'last';
+
+/** Why a menu asks to close: only Escape returns focus to its button. */
+export interface MenuDismissDetail {
+  readonly restoreFocus: boolean;
+}
 
 /** Which item a key on a menu button opens its menu on; null when the key is not the button's. */
 export function menuButtonFocus(event: KeyboardEvent): MenuFocus | null {
@@ -76,30 +84,72 @@ export class DlMenu extends HTMLElement {
     const shadow = this.attachShadow({mode: 'open'});
     shadow.append(template.content.cloneNode(true));
     this.addEventListener('keydown', this.#onKeydown);
+    this.addEventListener('focusout', this.#onFocusout);
+    // Capture runs before an item's own click handler, so a disabled item never activates.
+    this.addEventListener('click', this.#onClick, {capture: true});
   }
 
   connectedCallback(): void {
     if (!this.hasAttribute('role')) this.setAttribute('role', 'menu');
+    // A press on the menu's own chrome keeps focus inside it instead of leaving it.
+    if (!this.hasAttribute('tabindex')) this.tabIndex = -1;
   }
 
-  /** Focus the first or last enabled item, as the menu button's key asked. */
+  /** Focus the first or last item, as the menu button's key asked. */
   focusItem(which: MenuFocus): void {
     const items = this.#items();
     (which === 'first' ? items[0] : items.at(-1))?.focus();
   }
 
+  /** The items focus moves among: aria-disabled ones included, natively disabled ones cannot take it. */
   #items(): HTMLElement[] {
     return [...this.querySelectorAll<HTMLElement>(MENU_ITEMS)]
-      .filter((item) => !item.hasAttribute('disabled') && item.getAttribute('aria-disabled') !== 'true');
+      .filter((item) => !item.hasAttribute('disabled'));
+  }
+
+  #dismiss(restoreFocus: boolean): void {
+    this.dispatchEvent(new CustomEvent<MenuDismissDetail>('dl-menu-dismiss', {
+      bubbles: true,
+      composed: true,
+      detail: {restoreFocus},
+    }));
   }
 
   #onKeydown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      this.dispatchEvent(new CustomEvent('dl-menu-dismiss', {bubbles: true, composed: true}));
+      this.#dismiss(true);
+      return;
+    }
+    // Tab leaves the menu: the browser moves focus on and the menu closes behind it.
+    if (event.key === 'Tab') {
+      this.#dismiss(false);
       return;
     }
     rovingFocusKeydown(event, this.#items());
   };
+
+  #onFocusout = (event: FocusEvent): void => {
+    if (this.hidden || !this.isConnected) return;
+    const next = event.relatedTarget;
+    if (next instanceof Node && this.contains(next)) return;
+    // The menu's own button closes it on its click; closing here would reopen it there.
+    if (next instanceof Element && this.id
+        && (next.getAttribute('aria-controls') ?? '').split(/\s+/).includes(this.id)) return;
+    this.#dismiss(false);
+  };
+
+  #onClick = (event: MouseEvent): void => {
+    const item = event.target instanceof Element ? event.target.closest(MENU_ITEMS) : null;
+    if (!item || !this.contains(item) || item.getAttribute('aria-disabled') !== 'true') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+}
+
+declare global {
+  interface HTMLElementEventMap {
+    'dl-menu-dismiss': CustomEvent<MenuDismissDetail>;
+  }
 }

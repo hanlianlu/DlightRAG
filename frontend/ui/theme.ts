@@ -8,6 +8,7 @@ import {
   icon,
   type IconName,
   menuButtonFocus,
+  type MenuDismissDetail,
   type MenuFocus,
 } from '../design-system/index.ts';
 import {
@@ -105,7 +106,7 @@ export class DlThemeControl extends LightElement {
     const checked = this.preference === value;
     return html`
       <button type="button" role="menuitemradio" data-theme-value=${value} aria-label=${label}
-              aria-checked=${checked ? 'true' : 'false'} tabindex=${checked ? '0' : '-1'}
+              aria-checked=${checked ? 'true' : 'false'} tabindex="-1"
               @click=${() => this.#select(value)}>
         <span class="theme-menu-icon" aria-hidden="true">${icon(iconName, {size: 'sm'})}</span>
         <span class="theme-menu-label">${label}</span>
@@ -156,8 +157,8 @@ export class DlThemeControl extends LightElement {
     this.#open(focus);
   };
 
-  #menuDismissed = (): void => {
-    this.#close(true);
+  #menuDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
+    this.#close(event.detail.restoreFocus);
   };
 
   #mediaChanged = (): void => {

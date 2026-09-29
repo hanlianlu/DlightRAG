@@ -312,6 +312,34 @@ def test_new_select_rename_delete_survive_reload(page: Page) -> None:
 
 
 @pytest.mark.e2e
+def test_conversation_actions_menu_overlaps_its_row_from_the_end(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    active = page.locator("[aria-current='page']")
+    active.wait_for()
+
+    active.get_by_role("button", name="Conversation actions").click()
+    page.get_by_role("menuitem", name="Rename").wait_for()
+    geometry = page.evaluate(
+        """() => {
+            const menu = document.querySelector('.conversation-actions-menu');
+            const row = menu.closest('.conversation-row');
+            const menuBox = menu.getBoundingClientRect();
+            const rowBox = row.getBoundingClientRect();
+            return {
+                end: rowBox.right - menuBox.right,
+                overlap: rowBox.bottom - menuBox.top,
+                inset: parseFloat(getComputedStyle(row).paddingInlineEnd),
+            };
+        }"""
+    )
+    # The row's own inset: the menu hangs over its bottom edge, in from its end.
+    assert geometry["inset"] > 0
+    assert geometry["end"] == pytest.approx(geometry["inset"], abs=0.5)
+    assert geometry["overlap"] == pytest.approx(geometry["inset"], abs=0.5)
+
+
+@pytest.mark.e2e
 def test_new_chat_is_an_unpersisted_root_route(page: Page) -> None:
     state = _install_conversation_routes(page)
     page.goto("/web/")

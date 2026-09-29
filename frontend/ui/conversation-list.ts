@@ -4,7 +4,12 @@ import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
-import {menuButtonFocus} from '../design-system/index.ts';
+import {
+  type DlMenu,
+  menuButtonFocus,
+  type MenuDismissDetail,
+  type MenuFocus,
+} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {loadOlderControl} from './load-older.ts';
@@ -22,6 +27,10 @@ export interface ConversationRetryDetail {
 }
 
 const SKELETON_COUNT = 3;
+
+function actionsMenuId(conversationId: string): string {
+  return `conversation-actions-${conversationId}`;
+}
 
 /** Conversation rows, row accessibility, and item intent. */
 export class DlConversationList extends LightElement {
@@ -92,15 +101,11 @@ export class DlConversationList extends LightElement {
     );
   }
 
-  async #focusAfterRender(
-    selector: string,
-    conversationId: string,
-    last = false,
-  ): Promise<boolean> {
+  async #focusAfterRender(selector: string, conversationId: string): Promise<boolean> {
     await this.updateComplete;
-    const matches = this.#row(conversationId)?.querySelectorAll<HTMLElement>(selector);
-    if (!matches?.length) return false;
-    matches[last ? matches.length - 1 : 0].focus();
+    const target = this.#row(conversationId)?.querySelector<HTMLElement>(selector);
+    if (!target) return false;
+    target.focus();
     return true;
   }
 
@@ -108,10 +113,12 @@ export class DlConversationList extends LightElement {
     this.dispatchEvent(new CustomEvent<D>(type, {detail, bubbles: true, composed: true}));
   }
 
-  #openMenu(conversationId: string, last = false): void {
+  #openMenu(conversationId: string, focus: MenuFocus = 'first'): void {
     this.openMenuId = conversationId;
     this.renameId = null;
-    void this.#focusAfterRender('[role="menuitem"]:not([disabled])', conversationId, last);
+    void this.updateComplete.then(() => {
+      this.#row(conversationId)?.querySelector<DlMenu>('dl-menu')?.focusItem(focus);
+    });
   }
 
   #rowIdFromEvent(event: Event): string | null {
@@ -216,20 +223,25 @@ export class DlConversationList extends LightElement {
     const conversationId = conversation.conversationId;
     return html`
       <dl-menu
-        class="conversation-actions-menu"
+        id=${actionsMenuId(conversationId)}
+        class="conversation-actions-menu dl-anchored dl-anchored--end"
         aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActions'})}
-        @dl-menu-dismiss=${() => { this.closeMenu(true); }}
+        @dl-menu-dismiss=${(event: CustomEvent<MenuDismissDetail>) => {
+          this.closeMenu(event.detail.restoreFocus);
+        }}
       >
         <button
           type="button"
           role="menuitem"
+          tabindex="-1"
           @click=${() => { this.#startRename(conversationId); }}
         >${msg('Rename', {id: 'conversationList.rename'})}</button>
         <button
           type="button"
           role="menuitem"
+          tabindex="-1"
           class="conversation-delete-action"
-          ?disabled=${this.busy}
+          aria-disabled=${this.busy ? 'true' : nothing}
           @click=${() => {
             this.openMenuId = null;
             this.#emit<ConversationIntentDetail>('dl-conversation-delete', {conversationId});
@@ -276,6 +288,7 @@ export class DlConversationList extends LightElement {
           class="conversation-actions-button"
           aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActionsButton'})}
           aria-haspopup="menu"
+          aria-controls=${expanded ? actionsMenuId(conversationId) : nothing}
           aria-expanded=${expanded ? 'true' : 'false'}
           @click=${(event: MouseEvent) => {
             event.stopPropagation();
@@ -286,7 +299,7 @@ export class DlConversationList extends LightElement {
             const focus = menuButtonFocus(event);
             if (!focus) return;
             event.preventDefault();
-            this.#openMenu(conversationId, focus === 'last');
+            this.#openMenu(conversationId, focus);
           }}
         >•••</button>
         ${expanded ? this.#renderMenu(conversation) : nothing}

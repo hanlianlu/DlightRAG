@@ -8,6 +8,7 @@ import {
   icon,
   type IconName,
   menuButtonFocus,
+  type MenuDismissDetail,
   type MenuFocus,
 } from '../design-system/index.ts';
 import {listSkills, type SkillSummary} from '../api/skills.ts';
@@ -302,7 +303,8 @@ export class DlChatComposer extends LightElement {
             </div>
             <div class="composer-mode">
               <button type="button" class="composer-mode-trigger" id="composer-mode"
-                      aria-haspopup="menu" aria-expanded=${String(this.modeOpen)}
+                      aria-haspopup="menu" aria-controls="composer-mode-menu"
+                      aria-expanded=${String(this.modeOpen)}
                       aria-label=${msg(str`Answer mode: ${MODE_LABELS[this.mode]}`, {id: `chatComposer.modeAria.${this.mode}`})}
                       @click=${this.#toggleModeMenu} @keydown=${this.#modeTriggerKeydown}>
                 ${msg(MODE_LABELS[this.mode], {id: `chatComposer.mode.${this.mode}`})}
@@ -582,7 +584,8 @@ export class DlChatComposer extends LightElement {
     return html`
       <div class="composer-effort">
         <button type="button" class="composer-effort-trigger" id="composer-effort"
-                aria-haspopup="menu" aria-expanded=${String(this.effortOpen)}
+                aria-haspopup="menu" aria-controls="composer-effort-menu"
+                aria-expanded=${String(this.effortOpen)}
                 aria-label=${displayed
                   ? msg(str`Agent effort: ${EFFORT_LABELS[displayed]}`, {id: `chatComposer.effortAria.${displayed}`})
                   : msg('Agent effort', {id: 'chatComposer.effortAria'})}
@@ -639,9 +642,9 @@ export class DlChatComposer extends LightElement {
     this.#openPicker('effort', focus);
   };
 
-  #effortDismissed = (): void => {
+  #effortDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
     this.effortOpen = false;
-    this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
+    if (event.detail.restoreFocus) this.querySelector<HTMLButtonElement>('.composer-effort-trigger')?.focus();
   };
 
   #toggleModeMenu = (event: Event): void => {
@@ -685,9 +688,9 @@ export class DlChatComposer extends LightElement {
     this.#openPicker('mode', focus);
   };
 
-  #modeDismissed = (): void => {
+  #modeDismissed = (event: CustomEvent<MenuDismissDetail>): void => {
     this.modeOpen = false;
-    this.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.focus();
+    if (event.detail.restoreFocus) this.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.focus();
   };
 
   #closeMenus = (): void => {
