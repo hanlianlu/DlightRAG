@@ -379,6 +379,23 @@ async def test_a_subscriber_joining_during_the_reconnect_wait_cuts_it_short(
     await hub.aclose()
 
 
+def test_a_later_event_loop_is_served_once_the_first_one_ended() -> None:
+    """Ending a loop cancels the hub's task there; the next subscriber starts another."""
+    endpoint = ListenEndpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+
+    async def resynchronized() -> None:
+        received: list[str | None] = []
+        hub.subscribe(RUNS, received.append)
+        await until(lambda: received == [None])
+
+    asyncio.run(resynchronized())
+    asyncio.run(resynchronized())
+
+    assert len(endpoint.opened) == 2
+    assert endpoint.opened[0].is_closed()
+
+
 async def test_reconnects_back_off_until_a_connection_passes_a_keepalive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

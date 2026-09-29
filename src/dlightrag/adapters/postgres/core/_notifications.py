@@ -97,7 +97,7 @@ class PGNotificationHub:
             asyncio.get_running_loop().call_soon(self._welcome, channel, callback)
         elif self._backoff is not None:
             self._backoff.set()  # someone now waits for the hub: reconnect without delay
-        if self._task is None:
+        if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run(), name="dlightrag-pg-notifications")
 
     def unsubscribe(self, channel: str, callback: NotificationCallback) -> None:
