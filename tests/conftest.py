@@ -202,11 +202,13 @@ def _answer_envelope(
 # The operator's .env, config.yaml, shell settings, and home are deployment inputs,
 # not product contracts: a test that reads them asserts whatever this checkout is
 # tuned to. Tests that mean to exercise a YAML config or an environment set their
-# own. Only the suite gates stay visible; they choose what runs and set nothing.
-# They are named here rather than derived, so a new client or product name never
+# own. Only the suite gates stay visible: they choose which suites run and where a
+# suite keeps its own server and artifacts, and none configures the product. They
+# are named here rather than derived, so a new client or product name never
 # becomes visible to tests by accident.
 _SUITE_GATES = frozenset({"DLIGHTRAG_RUN_E2E_PG18", "DLIGHTRAG_RUN_LOAD"})
-# The PG18 smoke's own server, never the application's database.
+# The end-to-end suites' own inputs: the PG18 smoke's server, never the
+# application's database, and the browser suite's artifact folder.
 _SUITE_GATE_PREFIXES = ("DLIGHTRAG_E2E_",)
 # The config.yaml files present when the run starts: this checkout's and the
 # invocation directory's.
@@ -246,8 +248,8 @@ def _playwright_browsers(home: Path) -> Path:
     if sys.platform == "darwin":
         return home / "Library" / "Caches" / "ms-playwright"
     if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "ms-playwright"
-    return Path(os.environ.get("XDG_CACHE_HOME", home / ".cache")) / "ms-playwright"
+        return Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local") / "ms-playwright"
+    return Path(os.environ.get("XDG_CACHE_HOME") or home / ".cache") / "ms-playwright"
 
 
 # Applied once for the whole session, as this conftest loads and before any suite's

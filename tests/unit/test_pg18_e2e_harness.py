@@ -44,7 +44,10 @@ def test_pg18_harness_never_borrows_the_application_database_settings() -> None:
     kwargs = pg_conn_kwargs_from_env(
         {
             "DLIGHTRAG_STORAGE__POSTGRES__HOST": "primary",
+            "DLIGHTRAG_STORAGE__POSTGRES__PORT": "6543",
+            "DLIGHTRAG_STORAGE__POSTGRES__USER": "app-user",
             "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "app-secret",
+            "DLIGHTRAG_STORAGE__POSTGRES__DATABASE": "app-db",
         }
     )
 
