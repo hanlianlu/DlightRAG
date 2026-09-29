@@ -578,14 +578,18 @@ the answer wrote it otherwise — no image is fetched to make a rewrite possible
 `/web/conversations/{conversation_id}` selects a durable owner-scoped
 conversation. The URL is authoritative for reload and browser history.
 
-Every `/web/api/*` route answers a missing, expired, or rejected sign-in with
-HTTP 401 in the general envelope (`error_type: "auth"`), never a redirect or
-the login page, and leaves cookies alone. Only a page load under `/web` is
-redirected to `/web/login?next=…` (dropping a pasted-token cookie that stopped
-working); a bearer header, or an edge-asserted identity, is refused with the
-same 401 instead. The browser reads any 401 as the end of its sign-in: it
-replaces the page with one prompt to sign in again that returns to the current
-URL.
+A missing, expired, or rejected sign-in is answered by what the request is. A
+browser's top-level navigation (`Sec-Fetch-Mode: navigate`, GET, no
+`Authorization` header) is redirected to `/web/login?next=…` wherever it
+points, a download link under `/web/api` included, and drops a pasted-token
+cookie that stopped working. Every other request (`fetch`, a nested frame, a
+bearer header) gets HTTP 401 in the general envelope (`error_type: "auth"`),
+never a redirect or the login page, and its cookies are left alone. A client
+that sends no `Sec-Fetch-Mode` is judged by the path: `/web/api/*` answers the
+401 and any other `/web` page redirects. With an edge-asserted identity nothing
+redirects; the edge owns sign-in. The browser app reads any 401 as the end of
+its sign-in: it replaces the page with one prompt to sign in again that returns
+to the current URL.
 
 `POST /web/api/answer` accepts an optional conversation ID, query, attachments,
 and search workspaces. It returns HTTP 202 with canonical `{conversation, turn}`.

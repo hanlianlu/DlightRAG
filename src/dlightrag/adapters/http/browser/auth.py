@@ -209,21 +209,30 @@ def _reject_web_mutation(request: Request) -> bool:
     return origin is not None and not _has_exact_same_origin(request)
 
 
-def _unauthenticated(request: Request, detail: str = "Authentication required") -> Response:
-    """Send a browser's page load to sign in; refuse anything else with a 401 envelope.
+def _is_top_level_navigation(request: Request) -> bool:
+    """Whether the browser is loading this URL as the page it shows, a download included.
 
-    Only a page load can go to the login form: ``fetch`` follows a redirect without
-    telling the app, which would read the login page as its answer, so ``/web/api``
-    always refuses for the app to explain. A bearer header is a scripted client's
-    credential and is refused, never redirected. The page load drops a cookie that
-    stopped working; a 401 leaves cookies alone, so a request still in flight cannot
-    sign out another tab that has just signed in.
+    Fetch metadata says so, wherever the URL points; a client that sends none is
+    judged by the path, where only ``/web/api`` is not a page. A nested frame is
+    never top-level, and a bearer header is a scripted client's credential.
     """
-    if (
-        request.method.upper() == "GET"
-        and not request.url.path.startswith("/web/api/")
-        and "Authorization" not in request.headers
-    ):
+    if request.method.upper() != "GET" or "Authorization" in request.headers:
+        return False
+    mode = request.headers.get("Sec-Fetch-Mode")
+    if mode is None:
+        return not request.url.path.startswith("/web/api/")
+    return mode == "navigate" and request.headers.get("Sec-Fetch-Dest") not in {"iframe", "frame"}
+
+
+def _unauthenticated(request: Request, detail: str = "Authentication required") -> Response:
+    """Send a top-level navigation to sign in; refuse anything else with a 401 envelope.
+
+    ``fetch`` follows a redirect without telling the app, which would read the login
+    page as its answer, so every other request is refused for the app to explain.
+    The navigation drops a cookie that stopped working; a 401 leaves cookies alone,
+    so a request still in flight cannot sign out another tab that has just signed in.
+    """
+    if _is_top_level_navigation(request):
         response = RedirectResponse(_login_url(_request_next_path(request)), status_code=303)
         if WEB_AUTH_COOKIE in request.cookies:
             _clear_auth_cookie(response)

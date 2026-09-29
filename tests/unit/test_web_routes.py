@@ -383,7 +383,7 @@ class TestWebAuth:
         [
             ("GET", "/web/api/bootstrap"),
             ("POST", "/web/api/conversations"),
-            # A source download link is a Web API route too: never sent to the login page.
+            # Without fetch metadata the path decides, so even a download link is refused.
             ("GET", "/web/api/files/raw/doc-report?workspace=finance"),
         ],
     )
@@ -399,6 +399,43 @@ class TestWebAuth:
         assert response.status_code == 401
         assert response.json() == {"detail": "Authentication required", "error_type": "auth"}
         assert "location" not in response.headers
+
+    async def test_a_navigation_goes_to_sign_in_wherever_it_points_and_a_fetch_never_does(
+        self, test_config: DlightragConfig, mock_application
+    ) -> None:
+        import base64
+        from urllib.parse import parse_qs, urlsplit
+
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
+        download = "/web/api/files/raw/doc-report?workspace=finance"
+
+        async with _web_client_for(mock_application) as client:
+            client.cookies.set(
+                "dlightrag_web_auth", base64.urlsafe_b64encode(b"stale-token").decode().rstrip("=")
+            )
+            fetched = await client.get(
+                download, headers={"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
+            )
+            page_fetched = await client.get(
+                "/web/", headers={"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
+            )
+            # A nested frame is no top-level page: a login form inside it could never work.
+            framed = await client.get(
+                download, headers={"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"}
+            )
+            clicked = await client.get(
+                download, headers={"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+            )
+
+        for refused in (fetched, page_fetched, framed):
+            assert refused.status_code == 401
+            assert refused.json() == {"detail": "Invalid token", "error_type": "auth"}
+            assert "location" not in refused.headers
+            assert "set-cookie" not in refused.headers
+        assert clicked.status_code == 303
+        assert parse_qs(urlsplit(clicked.headers["location"]).query)["next"] == [download]
+        assert "dlightrag_web_auth=" in clicked.headers["set-cookie"]
 
     @pytest.mark.parametrize("method", ["GET", "POST"])
     async def test_expired_session_cookie_is_a_401_for_the_app_and_a_login_for_a_page(
