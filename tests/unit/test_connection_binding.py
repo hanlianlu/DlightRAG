@@ -232,3 +232,59 @@ async def test_concurrent_key_winner_replays_before_stale_rebind():
     assert result.replayed
     binder.assert_awaited_once()
     assert not store.created
+
+
+class _HeadLocks:
+    """The accepting transaction as the pin writer sees it; no Connection head exists."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    async def fetchrow(self, query: str, *args: object) -> None:
+        self.statements.append(query)
+        return None
+
+
+async def _validate_pins(conn: _HeadLocks, *, auth_mode: str, mode: str, pinned: bool) -> None:
+    from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
+
+    bindings = bound().bindings if pinned else ()
+    await PGConnectionPinWriter.validate_in(
+        conn,
+        owner_id="owner-1",
+        payload={
+            "auth_mode": auth_mode,
+            "mode": mode,
+            "run_connection_bindings": [binding.as_json() for binding in bindings],
+        },
+        bindings=bindings,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_mode", "mode"), [("simple", "research"), ("simple", "auto"), ("jwt", "fast")]
+)
+async def test_pin_writer_refuses_pins_for_an_ineligible_acceptance(auth_mode, mode):
+    """Only a personal owner's non-Fast acceptance may pin Connections.
+
+    Answer acceptance never binds for a shared ``simple`` owner or a Fast Run, so pins that
+    arrive anyway are refused before any head is locked; the same acceptance without pins
+    is an ordinary Run and passes untouched.
+    """
+    refused = _HeadLocks()
+    with pytest.raises(ValueError, match="eligible Research acceptance"):
+        await _validate_pins(refused, auth_mode=auth_mode, mode=mode, pinned=True)
+    assert refused.statements == []
+    unpinned = _HeadLocks()
+    await _validate_pins(unpinned, auth_mode=auth_mode, mode=mode, pinned=False)
+    assert unpinned.statements == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", ["jwt", "none"])
+async def test_pin_writer_checks_an_eligible_acceptance_against_its_heads(auth_mode):
+    heads = _HeadLocks()
+    with pytest.raises(StaleConnectionBindingError):
+        await _validate_pins(heads, auth_mode=auth_mode, mode="research", pinned=True)
+    assert len(heads.statements) == 1

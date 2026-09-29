@@ -758,8 +758,9 @@ dead refresher is modeled by durable lease expiry, not by killing a process.
 - `tests/unit/test_connection_presets.py`,
   `tests/unit/test_connection_client_metadata.py`: presets and the published
   metadata document.
-- `tests/unit/test_connection_binding.py`: the binding wire shape and the single
-  acceptance retry.
+- `tests/unit/test_connection_binding.py`: the binding wire shape, the single
+  acceptance retry, and the pin writer's refusal of pins for a `simple` owner or
+  a Fast Run before it locks any head.
 - `tests/unit/test_connections_transport.py`: address pinning, redirect and
   header rules, pagination, result limits, and effect-replay blocking.
 - `tests/unit/test_connection_oauth.py`,
