@@ -44,12 +44,13 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 )
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.paths import (
+    discard_parser_input,
     iter_ingestable_files,
     lightrag_archived_source_path,
+    parser_input_path,
     remote_ingest_batch_root,
     remote_parser_input_path,
     retained_remote_source_path,
-    stage_input_file,
     workspace_input_root,
 )
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
@@ -507,6 +508,7 @@ class WorkspaceRag:
                 metadata_index=self._metadata_index,
                 document_embedder=document_embedder,
                 workspace=self.workspace_id,
+                input_root=self._workspace_input_root(),
                 parser_rules=settings.parser_rules,
                 chunk_options=dict(settings.chunk_options),
                 image_margin=settings.image_margin,
@@ -735,7 +737,6 @@ class WorkspaceRag:
         file_paths: list[Path],
         *,
         replace: bool,
-        source_root: Path | None = None,
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -745,10 +746,7 @@ class WorkspaceRag:
         engine = self._require_ingestion_engine()
         if not file_paths:
             return {"processed": 0, "errors": [], "results": []}
-        items = [
-            await self._staged_local_item(file_path, relative_to=source_root)
-            for file_path in file_paths
-        ]
+        items = [self._local_item(file_path) for file_path in file_paths]
         return await engine.aingest_files(
             items,
             replace=replace,
@@ -774,14 +772,7 @@ class WorkspaceRag:
         for document in documents:
             if document.path is None:
                 raise ValueError("local manifest documents require a path")
-            file_path = Path(document.path)
-            items.append(
-                await self._staged_local_item(
-                    file_path,
-                    relative_to=self._local_manifest_relative_root(file_path),
-                    document=document,
-                )
-            )
+            items.append(self._local_item(Path(document.path), document=document))
         return await engine.aingest_files(
             items,
             replace=replace,
@@ -791,34 +782,23 @@ class WorkspaceRag:
             track_id=track_id,
         )
 
-    async def _staged_local_item(
-        self,
-        file_path: Path,
-        *,
-        relative_to: Path | None,
-        document: IngestDocument | None = None,
+    def _local_item(
+        self, file_path: Path, *, document: IngestDocument | None = None
     ) -> PreparedIngestFile:
-        """Stage one local source as parser input carrying its local provenance.
+        """Describe one local source whose flat parser input is its source of record.
 
-        A manifest ``document`` may name its own stable source URI, display
-        filename and metadata; otherwise the staged path identifies the source.
+        The engine copies ``file_path`` to that flat input, the path LightRAG parses
+        and archives, and keeps it: the download locator names it. A manifest
+        ``document`` may name its own stable source URI, display filename and
+        metadata; otherwise the flat input's name identifies the source.
         """
-        staged = await asyncio.to_thread(
-            stage_input_file,
-            input_root=self._workspace_input_root(),
-            file_path=file_path,
-            relative_to=relative_to,
-        )
+        parser_input = parser_input_path(self._workspace_input_root(), file_path)
         source_uri = None if document is None else document.source_uri
         display_filename = None if document is None else document.filename
         return PreparedIngestFile(
-            parser_path=staged,
-            source_uri=source_uri
-            or local_source_uri(
-                self.workspace_id,
-                staged.relative_to(self._workspace_input_root()),
-            ),
-            download_locator=str(staged),
+            parser_path=file_path,
+            source_uri=source_uri or local_source_uri(self.workspace_id, parser_input.name),
+            download_locator=str(parser_input),
             display_filename=display_filename,
             title=None if document is None else document.title,
             author=None if document is None else document.author,
@@ -830,14 +810,6 @@ class WorkspaceRag:
 
     def _workspace_input_root(self) -> Path:
         return workspace_input_root(self.settings.input_root, self.workspace_id)
-
-    def _local_manifest_relative_root(self, file_path: Path) -> Path | None:
-        input_root = self._workspace_input_root()
-        try:
-            file_path.resolve().relative_to(input_root.resolve())
-        except ValueError:
-            return None
-        return input_root
 
     async def _download_remote_to_prepared_item(
         self,
@@ -867,7 +839,7 @@ class WorkspaceRag:
                 # A transient parser copy is never adopted, so neither a partial
                 # download nor the copy an interrupted earlier attempt left in
                 # LightRAG's parsed archive may outlive this failed attempt.
-                _remove_parser_source(parser_path)
+                discard_parser_input(parser_path)
             raise
         return PreparedIngestFile(
             parser_path=parser_path,
@@ -1375,25 +1347,17 @@ class WorkspaceRag:
             path_str = kwargs.get("path")
             if not path_str:
                 raise ValueError("'path' is required for local source_type")
-            local_path = Path(path_str)
-            file_paths = await asyncio.to_thread(iter_ingestable_files, local_path)
-            common_kwargs = {
-                "replace": replace,
-                "title": kwargs.get("title"),
-                "author": kwargs.get("author"),
-                "metadata": kwargs.get("metadata"),
-                "track_id": track_id,
-            }
-            if local_path.is_file():
-                # One file is a one-item batch: a failed document settles as a
-                # per-document outcome, never as an exception the Corpus Mutation
-                # executor must treat as an ambiguous destructive handoff.
-                return await self._aingest_local_files([local_path], **common_kwargs)
-
+            file_paths = await asyncio.to_thread(iter_ingestable_files, Path(path_str))
+            # One file is a one-item batch: a failed document settles as a
+            # per-document outcome, never as an exception the Corpus Mutation
+            # executor must treat as an ambiguous destructive handoff.
             return await self._aingest_local_files(
                 file_paths,
-                source_root=local_path,
-                **common_kwargs,
+                replace=replace,
+                title=kwargs.get("title"),
+                author=kwargs.get("author"),
+                metadata=kwargs.get("metadata"),
+                track_id=track_id,
             )
 
         kwargs["_track_id"] = track_id
@@ -2524,20 +2488,7 @@ async def _aclose_retry_source(source: object) -> None:
 
 def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:
     for item in items:
-        _remove_parser_source(item.parser_path)
-
-
-def _remove_parser_source(parser_path: Path) -> None:
-    """Remove a transient parser copy and the copy LightRAG archived beside it."""
-    for candidate in (
-        parser_path,
-        parser_path.parent / PARSED_DIR_NAME / parser_path.name,
-    ):
-        try:
-            if candidate.exists() and candidate.is_file():
-                candidate.unlink()
-        except OSError:
-            logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
+        discard_parser_input(item.parser_path)
 
 
 __all__ = ["WorkspaceRag"]

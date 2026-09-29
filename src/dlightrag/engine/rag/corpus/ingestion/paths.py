@@ -8,6 +8,7 @@ ad-hoc directory handling.
 """
 
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -15,6 +16,8 @@ import uuid
 from pathlib import Path, PurePosixPath
 
 from lightrag.constants import PARSED_DIR_NAME
+
+logger = logging.getLogger(__name__)
 
 UPLOADS_DIR_NAME = "__uploads__"
 REMOTE_INGEST_DIR_NAME = "__remote_ingest__"
@@ -75,42 +78,50 @@ def _is_explicit_upload_batch_dir(path: Path) -> bool:
     return path.name != UPLOADS_DIR_NAME and UPLOADS_DIR_NAME in {p.name for p in path.parents}
 
 
-def staged_input_path(
-    *,
-    input_root: Path,
-    file_path: Path,
-    relative_to: Path | None = None,
-) -> Path:
-    """Return where a source file should live under the workspace input root."""
-    if relative_to is None:
-        relative_path = Path(file_path.name)
-    else:
-        try:
-            relative_path = file_path.resolve().relative_to(relative_to.resolve())
-        except ValueError:
-            relative_path = Path(file_path.name)
-        if not relative_path.parts:
-            relative_path = Path(file_path.name)
-    return input_root / relative_path
+def parser_input_path(input_root: Path, source: Path) -> Path:
+    """Where LightRAG resolves the parser input of ``source``: ``input_root/<basename>``.
+
+    LightRAG keeps only a document's basename (its document id is derived from it)
+    and, when it parses, looks the file up by that name in its workspace input
+    directory, before its other candidates: the workspace's ``__parsed__`` archive,
+    the input root itself, and a bare name or an ``inputs`` folder relative to the
+    current directory. A file anywhere below the workspace directory is never
+    found, so every parser input is placed flat, here.
+    """
+    return input_root / source.name
 
 
-def stage_input_file(
-    *,
-    input_root: Path,
-    file_path: Path,
-    relative_to: Path | None = None,
-) -> Path:
-    """Copy a source file into LightRAG's persistent workspace input root."""
-    source = file_path.resolve()
-    target = staged_input_path(input_root=input_root, file_path=file_path, relative_to=relative_to)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists() and target.resolve() == source:
+def place_parser_input(source: Path, input_root: Path) -> Path:
+    """Copy ``source`` to its flat parser-input path, unless it is already there.
+
+    The copy replaces an earlier input of the same name atomically: that name is
+    the same LightRAG document, which one Run at a time ingests in a Workspace.
+    """
+    target = parser_input_path(input_root, source)
+    if target.exists() and os.path.samefile(source, target):
         return target
-
-    tmp_target = target.with_name(f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
-    shutil.copy2(source, tmp_target)
-    os.replace(tmp_target, target)
+    input_root.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     return target
+
+
+def discard_parser_input(parser_path: Path) -> None:
+    """Remove a transient parser input and the copy LightRAG archived beside it.
+
+    The parser sidecar (``__parsed__/<name>.parsed/``) stays: retrieval reads it.
+    """
+    for candidate in (parser_path, lightrag_archived_source_path(parser_path)):
+        try:
+            if candidate.is_file():
+                candidate.unlink()
+        except OSError:
+            logger.debug("Failed to remove parser input: %s", candidate, exc_info=True)
 
 
 def remote_ingest_batch_root(

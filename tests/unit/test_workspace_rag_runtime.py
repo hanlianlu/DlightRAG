@@ -29,7 +29,6 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
     lightrag_archived_source_path,
     remote_parser_input_path,
     retained_remote_source_path,
-    stage_input_file,
 )
 from dlightrag.engine.rag.corpus.sources.base import AsyncDataSource, SourceDocument
 from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavailableError
@@ -2060,12 +2059,13 @@ class TestWorkspaceRagLightRAGMainPath:
         assert seen_items[0].parser_path.suffix == ".pdf"
         assert seen_items[0].display_filename == "report.pdf"
 
-    async def test_aingest_local_manifest_preserves_workspace_relative_path(
+    async def test_aingest_local_manifest_names_each_documents_flat_parser_input(
         self, test_config: DlightragConfig
     ) -> None:
         input_root = test_config.corpus_dir_path / test_config.deployment.workspace
-        source = input_root / "docs" / "report.pdf"
-        explicit = input_root / "docs" / "custom.pdf"
+        source = input_root / ".runs" / "run-1" / "sources" / "0" / "report.pdf"
+        explicit = input_root / ".runs" / "run-1" / "sources" / "1" / "custom.pdf"
+        explicit.parent.mkdir(parents=True)
         source.parent.mkdir(parents=True)
         source.write_bytes(b"%PDF-fake")
         explicit.write_bytes(b"%PDF-explicit")
@@ -2094,18 +2094,15 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result["processed"] == 2
         assert seen_items[0].parser_path == source
-        assert (
-            seen_items[0].source_uri
-            == f"local://{test_config.deployment.workspace}/docs/report.pdf"
-        )
-        assert seen_items[0].download_locator == str(source)
+        assert seen_items[0].source_uri == f"local://{test_config.deployment.workspace}/report.pdf"
+        assert seen_items[0].download_locator == str(input_root / "report.pdf")
         assert seen_items[0].metadata == {"asset_id": "local-a"}
         assert seen_items[0].source_uri_explicit is False
         assert seen_items[0].download_locator_explicit is False
         assert seen_items[0].display_filename_explicit is False
         assert seen_items[1].parser_path == explicit
         assert seen_items[1].source_uri == "local://custom/docs/custom.pdf"
-        assert seen_items[1].download_locator == str(explicit)
+        assert seen_items[1].download_locator == str(input_root / "custom.pdf")
         assert seen_items[1].display_filename == "renamed.pdf"
         assert seen_items[1].source_uri_explicit is True
         assert seen_items[1].download_locator_explicit is False
@@ -2306,7 +2303,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Local ingestion stages parser sources before delegating to the unified engine."""
+        """Local ingestion names each source's flat parser input, which the engine places."""
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
@@ -2323,12 +2320,11 @@ class TestWorkspaceRagLightRAGMainPath:
 
         result = await service.aingest(source_type="local", path=str(fake_pdf))
         service._ingestion_engine.aingest_files.assert_awaited_once()
-        staged = test_config.corpus_dir_path / test_config.deployment.workspace / "f.pdf"
+        parser_input = test_config.corpus_dir_path / test_config.deployment.workspace / "f.pdf"
         (item,) = service._ingestion_engine.aingest_files.call_args.args[0]
-        assert item.parser_path == staged
+        assert item.parser_path == fake_pdf
         assert item.source_uri == f"local://{test_config.deployment.workspace}/f.pdf"
-        assert item.download_locator == str(staged)
-        assert staged.read_bytes() == b"%PDF-fake"
+        assert item.download_locator == str(parser_input)
         assert result["results"][0]["doc_id"] == "d1"
         assert result["results"][0]["page_count"] == 3
         assert item.source_uri_explicit is False
@@ -2368,34 +2364,28 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result["processed"] == 3
         assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
-        staged_root = test_config.corpus_dir_path / test_config.deployment.workspace
+        input_root = test_config.corpus_dir_path / test_config.deployment.workspace
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
         items = list(await_args.args[0])
-        assert [item.parser_path for item in items] == [
-            staged_root / "a.docx",
-            staged_root / "b.pdf",
-            staged_root / "nested" / "c.pptx",
-        ]
+        assert [item.parser_path for item in items] == [docx, pdf, pptx]
         assert [item.source_uri for item in items] == [
             f"local://{test_config.deployment.workspace}/a.docx",
             f"local://{test_config.deployment.workspace}/b.pdf",
-            f"local://{test_config.deployment.workspace}/nested/c.pptx",
+            f"local://{test_config.deployment.workspace}/c.pptx",
         ]
+        # A nested file's parser input is flat too: LightRAG only looks there.
         assert [item.download_locator for item in items] == [
-            str(staged_root / "a.docx"),
-            str(staged_root / "b.pdf"),
-            str(staged_root / "nested" / "c.pptx"),
+            str(input_root / "a.docx"),
+            str(input_root / "b.pdf"),
+            str(input_root / "c.pptx"),
         ]
         assert all(item.source_uri_explicit is False for item in items)
         assert all(item.download_locator_explicit is False for item in items)
         assert all(item.display_filename_explicit is False for item in items)
-        assert (staged_root / "a.docx").read_bytes() == b"fake"
-        assert (staged_root / "b.pdf").read_bytes() == b"fake"
-        assert (staged_root / "nested" / "c.pptx").read_bytes() == b"fake"
 
-    async def test_aingest_local_directory_offloads_scan_and_staging(
+    async def test_aingest_local_directory_offloads_its_scan(
         self,
         test_config: DlightragConfig,
         tmp_path: Path,
@@ -2422,7 +2412,6 @@ class TestWorkspaceRagLightRAGMainPath:
         await service.aingest(source_type="local", path=str(docs_dir))
 
         assert iter_ingestable_files in calls
-        assert calls.count(stage_input_file) == 2
 
     async def test_aingest_explicit_upload_batch_directory_is_ingestable(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2443,15 +2432,14 @@ class TestWorkspaceRagLightRAGMainPath:
         result = await service.aingest(source_type="local", path=str(upload_dir))
 
         assert result["processed"] == 1
-        staged_root = test_config.corpus_dir_path / test_config.deployment.workspace
+        input_root = test_config.corpus_dir_path / test_config.deployment.workspace
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
         item = await_args.args[0][0]
-        assert item.parser_path == staged_root / "uploaded.pdf"
+        assert item.parser_path == pdf
         assert item.source_uri == f"local://{test_config.deployment.workspace}/uploaded.pdf"
-        assert item.download_locator == str(staged_root / "uploaded.pdf")
-        assert (staged_root / "uploaded.pdf").read_bytes() == b"%PDF-fake"
+        assert item.download_locator == str(input_root / "uploaded.pdf")
 
     async def test_aingest_replace_delegates_cleanup_to_ingestion_engine(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2824,6 +2812,7 @@ class TestWorkspaceRagLightRAGMainPath:
             metadata_index=metadata_index,
             document_embedder=document_embedder,
             workspace=test_config.deployment.workspace,
+            input_root=service._workspace_input_root(),
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
         )
@@ -2935,6 +2924,7 @@ class TestWorkspaceRagLightRAGMainPath:
             metadata_index=metadata_index,
             document_embedder=document_embedder,
             workspace=test_config.deployment.workspace,
+            input_root=service._workspace_input_root(),
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
         )
@@ -3308,6 +3298,7 @@ class TestWorkspaceRagLightRAGMainPath:
             metadata_index=metadata_index,
             document_embedder=document_embedder,
             workspace=test_config.deployment.workspace,
+            input_root=service._workspace_input_root(),
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
         )

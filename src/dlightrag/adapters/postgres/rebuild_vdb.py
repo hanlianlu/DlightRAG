@@ -31,6 +31,7 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     resolve_direct_image_embedding_enabled,
 )
 from dlightrag.engine.rag.corpus.ingestion.engine import UnifiedIngestionEngine
+from dlightrag.engine.rag.corpus.ingestion.paths import workspace_input_root
 from dlightrag.engine.rag.lightrag.models import build_lightrag_embedding
 from dlightrag.engine.rag.lightrag.stores import LightRAGStores
 from dlightrag.engine.rag.workspace.settings import RagSettings
@@ -266,6 +267,7 @@ async def restore_sidecar_image_vectors(
         metadata_index=None,
         document_embedder=document_embedder,
         workspace=workspace_id,
+        input_root=workspace_input_root(settings.input_root, workspace_id),
         parser_rules=settings.parser_rules,
         chunk_options={},
         telemetry=telemetry,

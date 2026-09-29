@@ -3,10 +3,10 @@
 
 import asyncio
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,6 +33,20 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 
 def _sha256(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+_PARSER_INPUT_ROOTS: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def parser_input_root(tmp_path: Path) -> Iterator[Path]:
+    """The Workspace's directory in LightRAG's INPUT_DIR, where engines place parser inputs."""
+    root = tmp_path / "corpus" / "default"
+    _PARSER_INPUT_ROOTS.append(root)
+    try:
+        yield root
+    finally:
+        _PARSER_INPUT_ROOTS.remove(root)
 
 
 def _one_file(
@@ -119,6 +133,7 @@ def _make_engine(**overrides):
         "metadata_index": AsyncMock(),
         "document_embedder": document_embedder,
         "workspace": "default",
+        "input_root": _PARSER_INPUT_ROOTS[-1],
         "parser_rules": "docx:native-iteP,*:mineru-iteP",
         "chunk_options": {},
     }
@@ -479,7 +494,9 @@ async def test_document_ingest_labels_bm25_chunk_languages(tmp_path: Path) -> No
     )
 
 
-async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Path) -> None:
+async def test_batch_document_ingest_uses_lightrag_staged_pipeline(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
     pdf = tmp_path / "b[mineru-iteP].pdf"
     docx = tmp_path / "a.docx"
     pdf.write_bytes(b"%PDF-1.4")
@@ -514,7 +531,10 @@ async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Pat
     assert [item["doc_id"] for item in result["results"]] == [docx_doc_id, pdf_doc_id]
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["input"] == ["", ""]
-    assert kwargs["file_paths"] == [str(docx), str(pdf)]
+    assert kwargs["file_paths"] == [
+        str(parser_input_root / docx.name),
+        str(parser_input_root / pdf.name),
+    ]
     assert kwargs["parse_engine"] == ["native", "mineru"]
     assert kwargs["process_options"] == ["iteP", "iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
@@ -568,7 +588,9 @@ async def test_batch_document_ingest_preserves_per_file_chunk_params(
     ]
 
 
-async def test_prepared_batch_uses_explicit_download_locator(tmp_path: Path) -> None:
+async def test_prepared_batch_uses_explicit_download_locator(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
     parser_source = tmp_path / "report__s3_abcd1234.pdf"
     parser_source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
@@ -597,7 +619,7 @@ async def test_prepared_batch_uses_explicit_download_locator(tmp_path: Path) -> 
 
     assert result["processed"] == 1
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["file_paths"] == [str(parser_source)]
+    assert kwargs["file_paths"] == [str(parser_input_root / parser_source.name)]
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["source_uri"] == "s3://bucket/team-a/report.pdf"
     assert saved["download_locator"] == "s3://bucket/team-a/report.pdf"
@@ -2121,23 +2143,39 @@ def test_resolve_sidecar_uri_rejects_everything_that_is_not_a_local_sidecar() ->
     assert resolve_sidecar_uri("") is None
 
 
-async def test_batch_rejects_duplicate_canonical_ids_before_mutation(tmp_path: Path) -> None:
+async def test_a_later_document_with_a_name_already_in_the_batch_is_refused_alone(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
+    """One flat parser input serves each name, and LightRAG's id is the name's hash."""
     first = tmp_path / "a" / "report.pdf"
-    second = tmp_path / "b" / "report.pdf"
+    second = tmp_path / "b" / "report.[mineru].pdf"
     first.parent.mkdir()
     second.parent.mkdir()
     first.write_bytes(b"one")
     second.write_bytes(b"two")
     engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        {"chunks_list": ["chunk-a"], "content_hash": "sha256:one", "status": "processed"},
+    ]
+    enqueued: list[bytes] = []
 
-    for paths in ([first, first], [first, second]):
-        with pytest.raises(ValueError, match="duplicate canonical document IDs"):
-            await engine.aingest_files(paths)
+    async def enqueue(**kwargs: Any) -> str:
+        enqueued.extend(Path(path).read_bytes() for path in kwargs["file_paths"])
+        return "track-1"
 
-    deps["stores"].get_doc_status.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+
+    result = await engine.aingest_files([first, second])
+
+    assert result["processed"] == 1
+    assert result["errors"] == [
+        "report._mineru_.pdf: another document in this batch has the same name"
+    ]
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["file_paths"] == [str(parser_input_root / "report.pdf")]
+    assert enqueued == [b"one"]
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
-    deps["metadata_index"].upsert.assert_not_awaited()
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
 async def test_final_delete_failure_with_missing_status_never_restores_zombie(
@@ -2974,30 +3012,52 @@ async def test_unrelated_candidate_does_not_collapse_when_external_owner_has_sta
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
-async def test_image_ingest_enqueues_a_padded_parser_input(tmp_path: Path) -> None:
+def _record_enqueued(deps: dict[str, Any]) -> list[bytes]:
+    """Read every parser input at enqueue time, as LightRAG's parse would."""
+    enqueued: list[bytes] = []
+
+    async def enqueue(**kwargs: Any) -> str:
+        enqueued.extend(Path(path).read_bytes() for path in kwargs["file_paths"])
+        return "track-1"
+
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+    return enqueued
+
+
+def _image_size(content: bytes) -> tuple[int, int]:
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(content)) as image:
+        return image.size
+
+
+async def test_image_ingest_enqueues_a_padded_parser_input(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
     """An image source gets page context, while its provenance stays the file
     the caller supplied."""
     from PIL import Image
 
-    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
-        PADDED_INPUT_DIR_NAME,
-    )
-
     source = tmp_path / "plate.jpg"
     Image.new("RGB", (400, 300), (5, 10, 15)).save(source)
     engine, deps = _make_engine()
+    enqueued = _record_enqueued(deps)
 
     await _ingest_one(engine, source)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    enqueued = Path(kwargs["file_paths"][0])
-    assert enqueued.name == source.name
-    assert enqueued.parent.name == PADDED_INPUT_DIR_NAME
     # Identity: LightRAG keys documents by the canonical basename.
+    assert kwargs["file_paths"] == [str(parser_input_root / source.name)]
+    (padded,) = enqueued
+    assert _image_size(padded) > (400, 300)
     assert kwargs["parse_engine"] == ["mineru"]
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["download_locator"] == str(source.resolve())
     assert source.exists()
+    # The padded copy is not the document's source, so it goes once LightRAG settled it.
+    assert not (parser_input_root / source.name).exists()
 
 
 async def test_padded_parser_input_is_removed_after_the_batch(tmp_path: Path) -> None:
@@ -3017,7 +3077,9 @@ async def test_padded_parser_input_is_removed_after_the_batch(tmp_path: Path) ->
     assert source.exists()
 
 
-async def test_zero_image_margin_enqueues_the_source_itself(tmp_path: Path) -> None:
+async def test_zero_image_margin_enqueues_the_source_bytes(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
     from PIL import Image
 
     from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
@@ -3027,16 +3089,50 @@ async def test_zero_image_margin_enqueues_the_source_itself(tmp_path: Path) -> N
     source = tmp_path / "plate.png"
     Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
     engine, deps = _make_engine(image_margin=0.0)
+    enqueued = _record_enqueued(deps)
 
     await _ingest_one(engine, source)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["file_paths"] == [str(source)]
+    assert kwargs["file_paths"] == [str(parser_input_root / source.name)]
+    assert enqueued == [source.read_bytes()]
     assert not (tmp_path / PADDED_INPUT_DIR_NAME).exists()
 
 
+async def test_a_local_image_is_parsed_as_supplied_and_kept_as_its_source(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
+    """LightRAG archives the flat input it parsed, which for a local source is its source."""
+    from PIL import Image
+
+    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
+        PADDED_INPUT_DIR_NAME,
+    )
+
+    source = tmp_path / "stage" / "plate.png"
+    source.parent.mkdir()
+    Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
+    engine, deps = _make_engine()
+    enqueued = _record_enqueued(deps)
+    parser_input = parser_input_root / source.name
+
+    await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=source,
+                source_uri="local://default/plate.png",
+                download_locator=str(parser_input),
+            )
+        ]
+    )
+
+    assert enqueued == [source.read_bytes()]
+    assert parser_input.read_bytes() == source.read_bytes()
+    assert not (source.parent / PADDED_INPUT_DIR_NAME).exists()
+
+
 async def test_image_padding_runs_off_the_event_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import threading
 
@@ -3059,7 +3155,7 @@ async def test_image_padding_runs_off_the_event_loop(
     await engine.aingest_files([_prepare_ingest_item(source, workspace="default")])
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert Path(kwargs["file_paths"][0]).parent.name == image_normalization.PADDED_INPUT_DIR_NAME
+    assert kwargs["file_paths"] == [str(parser_input_root / source.name)]
     assert threads and threads[0] is not threading.current_thread()
 
 
@@ -3077,13 +3173,183 @@ async def test_duplicate_documents_discard_their_padded_inputs(tmp_path: Path) -
         Image.new("RGB", (50, 50), (0, 0, 0)).save(source)
     engine, _deps = _make_engine()
 
-    with pytest.raises(ValueError, match="duplicate canonical document IDs"):
-        await engine.aingest_files(
-            [_prepare_ingest_item(path, workspace="default") for path in (first, second)]
-        )
+    result = await engine.aingest_files(
+        [_prepare_ingest_item(path, workspace="default") for path in (first, second)]
+    )
 
+    assert result["errors"] == ["plate.png: another document in this batch has the same name"]
     assert not (first.parent / PADDED_INPUT_DIR_NAME).exists()
     assert not (second.parent / PADDED_INPUT_DIR_NAME).exists()
+
+
+def _remote_item(source: Path) -> PreparedIngestFile:
+    return PreparedIngestFile(
+        parser_path=source,
+        source_uri="s3://bucket/report.pdf",
+        download_locator="s3://bucket/report.pdf",
+        display_filename="report.pdf",
+    )
+
+
+async def test_a_placed_copy_that_is_not_the_documents_source_goes_once_lightrag_settles(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
+    source = tmp_path / "download" / "report__abc.pdf"
+    source.parent.mkdir()
+    source.write_bytes(b"remote")
+    parser_input = parser_input_root / source.name
+    archived = parser_input_root / "__parsed__" / source.name
+    engine, deps = _make_engine()
+
+    async def parse_and_archive() -> None:
+        if parser_input.exists():
+            archived.parent.mkdir(parents=True, exist_ok=True)
+            parser_input.rename(archived)
+
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = parse_and_archive
+
+    await engine.aingest_files([_remote_item(source)])
+
+    assert not parser_input.exists()
+    assert not archived.exists()
+    assert source.read_bytes() == b"remote"
+
+
+async def test_a_retry_from_lightrags_archive_keeps_the_archive_as_the_documents_source(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
+    """A document LightRAG archived is replayed from its archive, which stays its copy."""
+    from PIL import Image
+
+    archived = parser_input_root / "__parsed__" / "plate.png"
+    archived.parent.mkdir(parents=True)
+    Image.new("RGB", (40, 40), (1, 2, 3)).save(archived)
+    original = archived.read_bytes()
+    engine, deps = _make_engine()
+    enqueued = _record_enqueued(deps)
+
+    await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=archived,
+                source_uri="local://default/plate.png",
+                download_locator=str(archived),
+            )
+        ]
+    )
+
+    assert enqueued == [original]
+    assert archived.read_bytes() == original
+    assert (parser_input_root / "plate.png").read_bytes() == original
+
+
+async def test_a_placed_copy_stays_while_lightrag_may_still_parse_it(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
+    source = tmp_path / "download" / "report__abc.pdf"
+    source.parent.mkdir()
+    source.write_bytes(b"remote")
+    engine, deps = _make_engine()
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = RuntimeError("worker died")
+
+    with pytest.raises(RuntimeError, match="worker died"):
+        await engine.aingest_files([_remote_item(source)])
+
+    assert (parser_input_root / source.name).read_bytes() == b"remote"
+
+
+async def test_a_parser_input_that_cannot_be_placed_deletes_nothing(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "status": "processed",
+        "chunks_list": ["chunk-old"],
+        "content_hash": "sha256:old",
+    }
+
+    with pytest.raises(FileNotFoundError):
+        await engine.aingest_files(
+            [
+                PreparedIngestFile(
+                    parser_path=tmp_path / "stage" / "report.pdf",
+                    source_uri="local://default/report.pdf",
+                    download_locator=str(parser_input_root / "report.pdf"),
+                )
+            ],
+            replace=True,
+        )
+
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_lightrag_parses_the_placed_input_before_any_same_named_decoy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LightRAG's own resolver finds our flat copy first while it processes the document.
+
+    With the process running in the working directory, LightRAG's fallbacks after
+    its input directory are a bare name there and ``inputs/<workspace>``, which is
+    then operators' source folder; a stale archive of the same name is another.
+    """
+    from lightrag.pipeline import _PipelineMixin
+
+    working_dir = tmp_path / "storage"
+    corpus = working_dir / "corpus"
+    input_root = corpus / "default"
+    decoys = (
+        working_dir / "report.pdf",
+        working_dir / "inputs" / "default" / "report.pdf",
+        input_root / "__parsed__" / "report.pdf",
+    )
+    for decoy in decoys:
+        decoy.parent.mkdir(parents=True, exist_ok=True)
+        decoy.write_bytes(b"decoy")
+    source = input_root / ".runs" / "run-1" / "sources" / "0" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"ours")
+    monkeypatch.setenv("INPUT_DIR", str(corpus))
+    monkeypatch.chdir(working_dir)
+    engine, deps = _make_engine(input_root=input_root)
+    enqueued: list[str] = []
+    parsed: list[Path] = []
+
+    async def enqueue(**kwargs: Any) -> str:
+        enqueued.extend(kwargs["file_paths"])
+        return "track-1"
+
+    async def process() -> None:
+        # What LightRAG keeps from the enqueue: the canonical basename as the
+        # document's file_path, and the enqueued basename as its source_file.
+        for path in enqueued:
+            parsed.append(
+                Path(
+                    _PipelineMixin._resolve_source_file_for_parser(
+                        cast(Any, SimpleNamespace(workspace="default")),
+                        normalize_document_file_path(path),
+                        source_file=Path(path).name,
+                    )
+                )
+            )
+
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+
+    await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=source,
+                source_uri="local://default/report.pdf",
+                download_locator=str(input_root / "report.pdf"),
+            )
+        ]
+    )
+
+    assert parsed == [input_root / "report.pdf"]
+    assert parsed[0].read_bytes() == b"ours"
+    assert all(decoy.read_bytes() == b"decoy" for decoy in decoys)
 
 
 async def test_partial_cleanup_removes_sidecars_off_the_event_loop(
@@ -3113,15 +3379,19 @@ async def test_partial_cleanup_removes_sidecars_off_the_event_loop(
     assert threads and threads[0] is not threading.current_thread()
 
 
-async def test_non_image_sources_are_not_normalized(tmp_path: Path) -> None:
+async def test_non_image_sources_are_not_normalized(
+    tmp_path: Path, parser_input_root: Path
+) -> None:
     source = tmp_path / "plain.pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
+    enqueued = _record_enqueued(deps)
 
     await engine.aingest_files([_prepare_ingest_item(source, workspace="default")])
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["file_paths"] == [str(source)]
+    assert kwargs["file_paths"] == [str(parser_input_root / source.name)]
+    assert enqueued == [b"%PDF-1.4"]
 
 
 async def test_source_options_survive_parser_failure_and_same_content_update(

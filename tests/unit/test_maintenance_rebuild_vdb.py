@@ -133,6 +133,7 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
             parser_min_image_pixel=80,
             embedding_func_max_async=4,
             parser_rules="*:mineru-iteP",
+            input_root=Path("/tmp/dlightrag-test/corpus"),
         ),
     )
     document_embedder = MagicMock()
