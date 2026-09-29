@@ -646,6 +646,7 @@ class CorpusMutationService:
         would become one document are refused before any is staged. A failed file
         removes the whole Run stage.
         """
+        self._require_writable("the upload")
         limits = self._upload_limits
         if not uploads:
             raise CorpusMutationInputError("at least one upload is required")
@@ -822,12 +823,14 @@ class CorpusMutationExecutor(RunExecutor):
         maintenance: CorpusMaintenanceStore,
         store: CorpusMutationStore,
         corpus_root: Path,
+        workspace_exists: Callable[[str], Awaitable[bool]],
         now: Callable[[], datetime.datetime] | None = None,
     ) -> None:
         self._pool = pool
         self._maintenance = maintenance
         self._store = store
         self._corpus_root = Path(corpus_root)
+        self._workspace_exists = workspace_exists
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
@@ -872,6 +875,23 @@ class CorpusMutationExecutor(RunExecutor):
             workspace=workspace,
             track_id=str(raw.get("track_id") or _track_id(session.run_id)),
         )
+        if action != "delete_workspace":
+            # Submission refuses an unlisted Workspace, but a Run accepted while
+            # its Workspace was being deleted is queued behind that delete: the
+            # lane orders this check after it, so the Run never writes into it.
+            try:
+                listed = await self._workspace_exists(workspace)
+            except Exception as exc:
+                component = classify_transient_dependency(exc, component_hint="corpus_storage")
+                if component is None:
+                    raise
+                return _deferred(checkpoint, component, now=self._now)
+            if not listed:
+                return Failed(
+                    "workspace_not_found",
+                    "The Workspace no longer exists.",
+                    result=_result(action, (), checkpoint),
+                )
         try:
             runtime = await self._pool.acquire(workspace)
             if _ACTIONS[action].tracks_upstream:

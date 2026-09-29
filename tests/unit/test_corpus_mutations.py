@@ -678,6 +678,7 @@ def _executor(
     maintenance: _Maintenance | None = None,
     store: Any = None,
     corpus_root: Path = _NO_CORPUS,
+    workspace_exists: Any = _registered,
 ):
     pool = SimpleNamespace(
         acquire=AsyncMock(side_effect=acquire_error, return_value=runtime),
@@ -689,6 +690,7 @@ def _executor(
         maintenance=cast(Any, maintenance or _Maintenance()),
         store=cast(Any, store),
         corpus_root=corpus_root,
+        workspace_exists=workspace_exists,
         now=now,
     )
     return executor, pool, store
@@ -1178,6 +1180,88 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
             f"corpus writes. Send {request} to a writer."
         )
     assert list(tmp_path.rglob("*")) == []
+
+
+async def test_a_reader_refuses_uploads_without_reading_the_catalog(tmp_path: Path) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
+
+    lookups: list[str] = []
+
+    async def exists(workspace: str) -> bool:
+        lookups.append(workspace)
+        return True
+
+    service = CorpusMutationService(
+        **_roots(tmp_path),
+        store=AsyncMock(),
+        coordinator=cast(Any, SimpleNamespace()),
+        upload_limits=_LIMITS,
+        workspace_exists=exists,
+        writable=False,
+    )
+
+    with pytest.raises(CorpusMutationUnavailableError):
+        await service.stage_uploads(
+            workspace="default", run_id=_RUN_ID, uploads=[("a.pdf", _Reader(b"a"))]
+        )
+    assert lookups == []
+
+
+_UNLISTED_RUNS = [
+    pytest.param(_local_payload, id="local-ingest"),
+    pytest.param(
+        lambda: _payload("delete", file_paths=[], filenames=[], document_ids=["doc-1"]),
+        id="delete",
+    ),
+    pytest.param(lambda: _payload("retry", document_ids=["doc-1"], selector=None), id="retry"),
+    pytest.param(lambda: _payload("reset", supersedes_run_id=None), id="reset"),
+]
+
+
+@pytest.mark.parametrize("prepared", _UNLISTED_RUNS)
+async def test_a_run_whose_workspace_is_gone_fails_before_any_effect(
+    tmp_path: Path, prepared: Any
+) -> None:
+    """A Run accepted while its Workspace was being deleted runs after that delete."""
+    stage, payload = _staged_run(tmp_path)
+    if prepared is not _local_payload:
+        payload = prepared()
+    runtime = _runtime()
+    executor, pool, _store = _executor(runtime, corpus_root=tmp_path, workspace_exists=_gone)
+    session = _Session(payload)
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Failed)
+    assert outcome.error_kind == "workspace_not_found"
+    assert session.handoff_started is False
+    pool.acquire.assert_not_awaited()
+    runtime.aingest.assert_not_awaited()
+    if prepared is _local_payload:
+        assert not stage.exists()
+
+
+async def test_workspace_delete_proceeds_once_its_workspace_is_unlisted() -> None:
+    """It unlists the Workspace itself, so its recovery must not refuse on that."""
+    runtime = _runtime()
+    executor, _pool, _store = _executor(runtime, store=_successor_store(()), workspace_exists=_gone)
+
+    outcome = await executor.execute(cast(Any, _workspace_delete_session()))
+
+    assert isinstance(outcome, Succeeded)
+    runtime.areset.assert_awaited_once_with()
+
+
+async def test_an_unreadable_catalog_defers_the_run() -> None:
+    async def unreadable(_workspace: str) -> bool:
+        raise ConnectionError("registry down")
+
+    executor, pool, _store = _executor(_runtime(), workspace_exists=unreadable)
+
+    outcome = await executor.execute(cast(Any, _Session(_payload("reset", supersedes_run_id=None))))
+
+    assert isinstance(outcome, Deferred)
+    pool.acquire.assert_not_awaited()
 
 
 def _run_record(run_id: str, *, status: str = "queued", run_kind: str = "corpus_mutation"):

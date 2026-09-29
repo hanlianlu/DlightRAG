@@ -779,8 +779,16 @@ paging. The response contains `workspaces`, `records`, and `next_cursor`. MCP
 Corpus deletion, reset, and Workspace Delete are durable Run actions rather than
 direct mutation routes. Every Corpus Mutation, ingest and uploads included,
 needs a Workspace the catalogue lists: one never created, or deleted, is refused
-with 404 before anything is staged, and an unreadable catalogue refuses with
-503. Reset preserves the Workspace registry, access scope, and history.
+before anything is staged, and an unreadable catalogue refuses with 503. REST
+and MCP refuse it as not found (404). The Web files routes (listing, upload,
+delete, and failed-file recovery) answer 409 from their own catalogue check,
+which the page reports as a Workspace that is no longer available. A retried idempotency key
+returns its Run first for a delete, retry, reset, Workspace Delete, or remote
+ingest; a local source or upload is identified by the bytes it stages, so a
+retry after its Workspace is gone is refused like a new submission. A Run
+accepted while its Workspace was being deleted runs after that delete and
+fails as `workspace_not_found` before any effect. Reset preserves the Workspace
+registry, access scope, and history.
 Workspace Delete also removes the Workspace from the catalogue and cancels
 mutations queued behind it; Runs and Conversations stay. Either may supersede
 one mutation waiting for repair. Web

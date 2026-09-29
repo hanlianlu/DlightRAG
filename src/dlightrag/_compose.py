@@ -437,6 +437,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             maintenance=corpus_backend.maintenance,
             store=run_store,
             corpus_root=config.corpus_dir_path,
+            workspace_exists=corpora.workspace_exists,
         )
 
     async def validate_active_runs() -> None:

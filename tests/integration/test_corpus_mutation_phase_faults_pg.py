@@ -51,6 +51,10 @@ def _projection_store() -> Any:
 _NO_CORPUS = Path("/nonexistent/dlightrag-test/corpus")
 
 
+async def _listed(_workspace: str) -> bool:
+    return True
+
+
 def _runtime(*, tracked: dict[str, Any] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         lightrag=SimpleNamespace(
@@ -140,6 +144,7 @@ async def test_ingest_owned_phase_faults_defer_without_leaking_capacity_or_diagn
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
             corpus_root=_NO_CORPUS,
+            workspace_exists=_listed,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -201,6 +206,7 @@ async def test_transient_ingest_recovers_the_same_track_with_exponential_checkpo
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
             corpus_root=_NO_CORPUS,
+            workspace_exists=_listed,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -277,6 +283,7 @@ async def test_ambiguous_destructive_phase_waits_for_repair_and_keeps_fifo(
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
             corpus_root=_NO_CORPUS,
+            workspace_exists=_listed,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -372,6 +379,7 @@ async def test_public_track_reconciliation_does_not_repeat_source_admission(acti
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
             corpus_root=_NO_CORPUS,
+            workspace_exists=_listed,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -422,6 +430,7 @@ async def test_missing_staged_source_fails_terminally_without_public_path() -> N
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
             corpus_root=_NO_CORPUS,
+            workspace_exists=_listed,
         )
         coordinator = RunCoordinator(
             store=store,
@@ -474,6 +483,7 @@ async def test_a_settled_local_run_removes_its_stage(tmp_path: Path) -> None:
             maintenance=cast(Any, _Maintenance()),
             store=cast(Any, _projection_store()),
             corpus_root=tmp_path,
+            workspace_exists=_listed,
         )
         coordinator = RunCoordinator(
             store=store,
