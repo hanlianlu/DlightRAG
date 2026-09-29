@@ -10,7 +10,7 @@ Resource of its Agent Session, so a later turn reads the version the conversatio
 published. The owner-and-Session admission rule, the alias semantics, and the
 filesystem-backed rejection recorded here are unchanged.
 
-Accepted and implemented for the handle-triggered adoption path. `bfc1c5ae` (a reused historical handle fails as a typed refusal) and `c4ee5f5b` (an attachment image may not cut a tool batch) are its landed prerequisites. `46f87e61` checks the stored conversion view before anything is registered and registers adopted bytes stored-view-only; `094b0947` settles every adoption of one document as one Resource and keeps an adoption whose retried call fails; `02aea936` lets recovery skip an adopted view whose adoption row never settled instead of failing the Run. This ADR narrows nothing already decided: the run-scoped meaning of a Resource Handle, the lineage authorization of attachment replay, and `replay`/never-reparse semantics all stand.
+Accepted and implemented for the handle-triggered adoption path. `bfc1c5ae` (a reused historical handle fails as a typed refusal) and `c4ee5f5b` (an attachment image may not cut a tool batch) are its landed prerequisites. `46f87e61` checks the stored conversion view before anything is registered and registers adopted bytes stored-view-only; `094b0947` settles every adoption of one document as one Resource and keeps an adoption whose retried call fails; recovery adopts again, through the lineage rule, the earlier Resource of a view whose adoption row never settled. This ADR narrows nothing already decided: the run-scoped meaning of a Resource Handle, the lineage authorization of attachment replay, and `replay`/never-reparse semantics all stand.
 
 ## Context
 

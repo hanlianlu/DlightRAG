@@ -181,7 +181,10 @@ from dlightrag.engine.answer.research.runtime import (
     _usage_from_snapshot_entries,
 )
 from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
-from dlightrag.engine.answer.resources.lineage import LineageResourceLoader
+from dlightrag.engine.answer.resources.lineage import (
+    LineageResourceLoader,
+    adopt_lineage_resource,
+)
 from dlightrag.engine.answer.resources.models import (
     ResourceManifestEntry,
     ResourceNotFoundError,
@@ -1654,6 +1657,7 @@ class AnswerExecutor:
                 ),
             )
 
+        lineage = self._lineage_loader(session, agent_session_id)
         run = await self.prepare_orchestrated_run(
             query=request.query,
             agent_effort=request.effort,
@@ -1672,7 +1676,7 @@ class AnswerExecutor:
             interactive_controls=interactive_controls,
             pinned_models=request.pinned_models,
             connection_tools=connection_tools,
-            lineage_loader=self._lineage_loader(session, agent_session_id),
+            lineage_loader=lineage,
             skills=(
                 self._skills_bundle_factory(session.owner_id, request.requested_skill)
                 if self._skills_bundle_factory is not None
@@ -1685,6 +1689,7 @@ class AnswerExecutor:
                 run.registry,
                 owner_id=session.owner_id,
                 run_id=str(session.run_id),
+                lineage=lineage,
             )
         retained_snapshots = await self._restore_selected_attachments(session, selected_snapshot)
         for resource_id, content in retained_snapshots.items():
@@ -2757,6 +2762,7 @@ class AnswerExecutor:
         *,
         owner_id: str,
         run_id: str,
+        lineage: LineageResourceLoader | None = None,
     ) -> dict[str, bytes]:
         attachment_snapshots: dict[str, bytes] = {}
         conversions: list[tuple[str, bytes]] = []
@@ -2840,14 +2846,7 @@ class AnswerExecutor:
             try:
                 original = await registry.materialize(parent_id)
             except ResourceNotFoundError:
-                # An adopted view whose adoption row never settled (its call was
-                # cancelled, or its result could not be recorded) describes no
-                # Resource of this Run; naming the earlier handle adopts it again.
-                logger.warning(
-                    "Skipping a stored view whose Resource was never recorded",
-                    extra={"run_id": run_id, "resource_id": parent_id},
-                )
-                continue
+                original = await _readopt_view_parent(registry, lineage, parent_id, snapshot)
             if hashlib.sha256(original).hexdigest() != snapshot.input_digest:
                 raise ValueError("conversion snapshot input digest mismatch")
             registry.adopt_conversion_snapshot(snapshot)
@@ -3198,6 +3197,28 @@ async def _close_execution_resources(
             logger.warning("Failed to close Answer resource registry", exc_info=True)
     if cancellation is not None:
         raise cancellation
+
+
+async def _readopt_view_parent(
+    registry: ResourceRegistry,
+    lineage: LineageResourceLoader | None,
+    parent_id: str,
+    snapshot: ConversionSnapshot,
+) -> bytes:
+    """Adopt again the earlier Resource an unsettled adoption left a stored view for.
+
+    An adoption whose call was cancelled, or whose result the Session could not
+    record, settles no adoption row, while a later call through its alias may have
+    settled the view. Recovery adopts the same earlier Resource again through this
+    Run's lineage rule, which mints the same canonical handle and binds the alias,
+    so the view attaches to it as before. A parent the lineage cannot supply with
+    the view's own input bytes is a real inconsistency and fails as it always has.
+    """
+    loaded = await lineage.load(parent_id) if lineage is not None else None
+    if loaded is None or hashlib.sha256(loaded.content).hexdigest() != snapshot.input_digest:
+        raise ResourceNotFoundError(f"unknown resource id: {parent_id}")
+    adopt_lineage_resource(registry, loaded)
+    return loaded.content
 
 
 def _require_resolved_mode(value: str | None) -> ResolvedMode:

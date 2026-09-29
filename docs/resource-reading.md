@@ -239,9 +239,12 @@ completeness, or untested platforms.
   adopted the handle is held, so an embedded-image handle the call cannot find
   is named as the missing one.
 - An adoption whose call was cancelled, or whose result the Session could not
-  record, leaves no adoption row. Recovery then skips any view later settled
-  under that earlier handle, with a warning, instead of failing the Run; naming
-  the handle again adopts it again under the same canonical handle.
+  record, leaves no adoption row, though a later call through its alias may
+  have settled the view. Recovery then adopts that earlier Resource again
+  through the lineage rule: the same canonical handle, the alias bound, and the
+  settled view attached, provided the lineage still supplies the view's input
+  bytes. A view whose Resource neither this Run nor its lineage can supply is a
+  real inconsistency and fails the resume.
 - Newly adopted bytes are registered stored-view-only, and this Run never
   converts them. A convertible document (PDF, DOCX, XLSX, PPTX, CSV, or HTML)
   reads text only through the view adopted or restored with it; other formats,

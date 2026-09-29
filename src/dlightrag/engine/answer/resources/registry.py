@@ -1157,7 +1157,11 @@ class ResourceRegistry:
             await self._ensure_converted(resource, effect_owner=effect_owner)
         asset = self._visual_assets.get((resource.resource_id, handle_id))
         if asset is None:
-            raise ResourceNotFoundError(f"unknown visual handle: {handle_id}")
+            # The Resource is held; only the handle inside it is unknown, which is
+            # a view it cannot give rather than a handle to look for elsewhere.
+            raise ResourceViewError(
+                f"unknown visual handle: {handle_id}; read the resource for the handles it holds"
+            )
         return asset
 
     async def aclose(self) -> None:

@@ -651,11 +651,10 @@ async def test_a_pdf_named_without_a_suffix_is_still_offered_its_pages(monkeypat
         assert "View its pages for pixels" in refused.text_content
 
 
-async def test_recovery_skips_a_stored_view_whose_resource_was_never_recorded() -> None:
-    """A view settled under an alias whose adoption row never settled blocks no resume."""
-    from tests.unit.test_answer_executor import _executor
-
-    loaded = viewed_document(EARLIER_HANDLE, pdf(), text="Stored text.")
+def orphaned_view_rows(
+    loaded: LineageResourceBytes,
+) -> tuple[tuple[RunFetchedResource, ...], dict[str, bytes]]:
+    """The rows a view settles under an alias whose adoption row never settled."""
     snapshot = next(
         effect
         for effect in ConversionSnapshot.restore(
@@ -663,8 +662,12 @@ async def test_recovery_skips_a_stored_view_whose_resource_was_never_recorded() 
         ).effects()
         if effect.resource_kind == SNAPSHOT_KIND
     )
-    orphan = ToolResult.text("x", effects=ToolEffects(attached_resources=(snapshot,)))
-    rows, blobs = settled_rows(orphan)
+    return settled_rows(ToolResult.text("x", effects=ToolEffects(attached_resources=(snapshot,))))
+
+
+def resuming_executor(rows: tuple[RunFetchedResource, ...], blobs: dict[str, bytes]):
+    from tests.unit.test_answer_executor import _executor
+
     executor = _executor()
     executor._store.list_fetched_resources = AsyncMock(return_value=rows)
 
@@ -673,11 +676,63 @@ async def test_recovery_skips_a_stored_view_whose_resource_was_never_recorded() 
         yield blobs[digest]
 
     executor._blob_store.stream = stream
-    async with ResourceRegistry() as resumed:
-        await executor._restore_registry_fetches(resumed, owner_id="owner", run_id="run")
+    return executor
 
+
+async def test_recovery_adopts_again_the_resource_an_orphaned_view_belongs_to(
+    monkeypatch,
+) -> None:
+    """The view's earlier handle is adopted again through the lineage, view and all."""
+    forbid_conversion(monkeypatch)
+    loaded = viewed_document(EARLIER_HANDLE, pdf(), text="Stored text.")
+    rows, blobs = orphaned_view_rows(loaded)
+    executor = resuming_executor(rows, blobs)
+    async with ResourceRegistry() as resumed:
+        await executor._restore_registry_fetches(
+            resumed, owner_id="owner", run_id="run", lineage=Loader(loaded)
+        )
+
+        result = await resumed.read(EARLIER_HANDLE, max_window_tokens=1000)
+        assert "Stored text." in result.content
+
+
+@pytest.mark.parametrize("lineage", ["none", "absent", "other-bytes"])
+async def test_recovery_still_fails_on_a_view_no_lineage_explains(lineage: str) -> None:
+    """A view whose parent the lineage cannot supply is a real inconsistency, not noise."""
+    loaded = viewed_document(EARLIER_HANDLE, pdf(), text="Stored text.")
+    rows, blobs = orphaned_view_rows(loaded)
+    loader = {
+        "none": None,
+        "absent": Loader(None),
+        "other-bytes": Loader(replace(loaded, content=pdf(pages=3))),
+    }[lineage]
+    async with ResourceRegistry() as resumed:
         with pytest.raises(ResourceNotFoundError):
-            resumed.canonical_resource_id(EARLIER_HANDLE)
+            await resuming_executor(rows, blobs)._restore_registry_fetches(
+                resumed, owner_id="owner", run_id="run", lineage=loader
+            )
+
+
+async def test_a_suffixless_pdf_viewed_then_read_is_offered_its_pages(monkeypatch) -> None:
+    """The registry's own refusal carries the declared type, not only the precheck's."""
+    forbid_conversion(monkeypatch)
+    lineage = Loader(
+        LineageResourceBytes(
+            resource_id=EARLIER_HANDLE,
+            origin_run_id="01a0a737-e1d3-7421-8e25-27ca8abd3dad",
+            filename="2401.12345",
+            media_type="application/pdf",
+            content=pdf(),
+        )
+    )
+    async with ResourceRegistry() as registry:
+        read, view = tools(registry, lineage=lineage)
+        assert (await call(view, resource_id=EARLIER_HANDLE)).is_error is False
+
+        refused = await call(read, resource_id=EARLIER_HANDLE)
+
+        assert refused.is_error is True
+        assert "View its pages for pixels" in refused.text_content
 
 
 def test_the_manifest_leaves_an_earlier_resource_id_to_adoption() -> None:
