@@ -100,7 +100,7 @@ def conversation_service(application: Any) -> Any:
 
 
 @pytest.fixture
-async def conversation_client(application: Any, conversation_service: AsyncMock):
+async def conversation_client(application: Any, conversation_service: Any):
     application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
     app = create_app(include_web_app=True)
     app.state.application = application
@@ -113,7 +113,7 @@ async def conversation_client(application: Any, conversation_service: AsyncMock)
 async def cookie_conversation_client(
     test_config: DlightragConfig,
     application: Any,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ):
     mutate_config(test_config, "access.auth_mode", "simple")
     mutate_config(test_config, "access.api_token", "secret-token")
@@ -137,7 +137,7 @@ async def cookie_conversation_client(
 
 async def test_create_ignores_client_identity_and_returns_server_uuid(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     response = await conversation_client.post(
         "/web/api/conversations",
@@ -153,7 +153,7 @@ async def test_create_ignores_client_identity_and_returns_server_uuid(
 
 async def test_list_returns_only_service_projection(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     response = await conversation_client.get("/web/api/conversations")
 
@@ -165,7 +165,7 @@ async def test_list_returns_only_service_projection(
 
 async def test_list_cursor_round_trips_as_paired_ordering_facts(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     updated_at = datetime.datetime(2026, 7, 12, 3, 4, 5, 123456, tzinfo=datetime.UTC)
     next_cursor = ConversationCursor(updated_at=updated_at, conversation_id=UUID(_CID))
@@ -204,7 +204,7 @@ async def test_list_cursor_round_trips_as_paired_ordering_facts(
 )
 async def test_invalid_page_inputs_are_422_before_the_service_runs(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
     query: str,
     expected_status: int,
 ) -> None:
@@ -216,7 +216,7 @@ async def test_invalid_page_inputs_are_422_before_the_service_runs(
 
 async def test_tampered_cursor_is_422_before_the_service_runs(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     cursor = conversation_service.cursor_codec.encode(
         ConversationCursor(
@@ -237,7 +237,7 @@ async def test_tampered_cursor_is_422_before_the_service_runs(
 
 async def test_history_of_other_principal_is_404(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     conversation_service.history.return_value = None
 
@@ -248,7 +248,7 @@ async def test_history_of_other_principal_is_404(
 
 async def test_history_cursor_round_trips_and_cross_conversation_is_422(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     cursor = ConversationHistoryCursor(conversation_id=UUID(_CID), before_turn_number=71)
     current = conversation_service.history.return_value
@@ -293,7 +293,7 @@ async def test_history_cursor_round_trips_and_cross_conversation_is_422(
 
 async def test_tampered_history_cursor_is_422(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     token = conversation_service.history_cursor_codec.encode(
         ConversationHistoryCursor(conversation_id=UUID(_CID), before_turn_number=2)
@@ -318,7 +318,7 @@ async def test_rename_validates_trimmed_title(conversation_client: AsyncClient) 
 
 async def test_rename_normalizes_whitespace(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     response = await conversation_client.patch(
         f"/web/api/conversations/{_CID}",
@@ -331,7 +331,7 @@ async def test_rename_normalizes_whitespace(
 
 async def test_delete_returns_204(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     response = await conversation_client.delete(f"/web/api/conversations/{_CID}")
 
@@ -342,7 +342,7 @@ async def test_delete_returns_204(
 
 async def test_delete_all_returns_204_when_no_conversations_exist(
     conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     conversation_service.delete_all.return_value = 0
 
@@ -390,7 +390,7 @@ _COOKIE_MUTATIONS = (
 )
 async def test_cookie_lifecycle_mutations_accept_exact_same_origin(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
     method: str,
     path: str,
     body: dict[str, str] | None,
@@ -413,7 +413,7 @@ async def test_cookie_lifecycle_mutations_accept_exact_same_origin(
 )
 async def test_cookie_lifecycle_mutations_reject_sibling_origin_before_service(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
     method: str,
     path: str,
     body: dict[str, str] | None,
@@ -433,7 +433,7 @@ async def test_cookie_lifecycle_mutations_reject_sibling_origin_before_service(
 
 async def test_cookie_lifecycle_mutation_rejects_missing_origin(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     response = await cookie_conversation_client.post("/web/api/conversations")
 
@@ -443,7 +443,7 @@ async def test_cookie_lifecycle_mutation_rejects_missing_origin(
 
 async def test_bearer_lifecycle_mutation_does_not_require_browser_origin(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     response = await cookie_conversation_client.post(
         "/web/api/conversations",
@@ -464,7 +464,7 @@ _WEB_ANSWER_BODY = {
 @pytest.mark.parametrize("content_type", ["application/json", "text/plain"])
 async def test_cookie_web_answer_accepts_exact_origin_independent_of_content_type(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
     content_type: str,
 ) -> None:
     conversation_service.start_answer.return_value = None
@@ -489,7 +489,7 @@ async def test_cookie_web_answer_accepts_exact_origin_independent_of_content_typ
 )
 async def test_cookie_web_answer_rejects_non_exact_origin_before_service(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
     origin: str | None,
 ) -> None:
     conversation_service.start_answer.return_value = None
@@ -509,7 +509,7 @@ async def test_cookie_web_answer_rejects_non_exact_origin_before_service(
 
 async def test_bearer_web_answer_does_not_require_browser_origin(
     cookie_conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
+    conversation_service: Any,
 ) -> None:
     conversation_service.start_answer.return_value = None
 

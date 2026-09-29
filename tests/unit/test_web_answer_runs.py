@@ -135,7 +135,7 @@ def application(test_config: DlightragConfig) -> Any:
 
 
 @pytest.fixture
-async def client(service: AsyncMock, application: AsyncMock):
+async def client(service: Any, application: Any):
     app = create_app(include_web_app=True)
     app.state.application = application
     transport = ASGITransport(app=app)
@@ -153,7 +153,7 @@ async def client(service: AsyncMock, application: AsyncMock):
 
 
 async def test_submission_admission_limit_is_typed_and_precedes_202(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.start_answer.side_effect = RunAdmissionLimitExceededError()
 
@@ -167,7 +167,7 @@ async def test_submission_admission_limit_is_typed_and_precedes_202(
 
 
 async def test_submission_returns_202_with_the_authoritative_turn(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     response = await client.post("/web/api/answer", json=_BODY)
 
@@ -186,7 +186,7 @@ async def test_submission_returns_202_with_the_authoritative_turn(
 
 
 async def test_submission_passes_the_submission_id_as_the_run_key(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     await client.post("/web/api/answer", json=_BODY)
 
@@ -198,7 +198,7 @@ async def test_submission_passes_the_submission_id_as_the_run_key(
 
 
 async def test_first_submission_can_atomically_create_its_conversation(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     created_conversation_id = "00000000-0000-4000-8000-000000000099"
     service.start_answer.return_value = web_answer_submission(
@@ -217,7 +217,7 @@ async def test_first_submission_can_atomically_create_its_conversation(
 
 async def test_submission_canonicalizes_display_workspaces_before_access_and_service(
     client: AsyncClient,
-    service: AsyncMock,
+    service: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     enforce = AsyncMock()
@@ -236,7 +236,7 @@ async def test_submission_canonicalizes_display_workspaces_before_access_and_ser
 
 
 async def test_replaying_a_submission_returns_the_authoritative_run(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.start_answer.return_value = web_answer_submission(
         conversation_id=_CID, run=answer_run(status="running")
@@ -252,7 +252,7 @@ async def test_replaying_a_submission_returns_the_authoritative_run(
 
 
 async def test_submission_lookup_recovers_the_same_owner_scoped_result(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.submission.return_value = web_answer_submission(conversation_id=_CID)
 
@@ -265,7 +265,7 @@ async def test_submission_lookup_recovers_the_same_owner_scoped_result(
 
 
 async def test_submission_lookup_hides_unknown_and_foreign_ids(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.submission.return_value = None
 
@@ -308,7 +308,7 @@ async def test_submission_lookup_rejects_a_malformed_id_before_storage() -> None
 
 
 async def test_submission_lookup_returns_typed_service_unavailable(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.submission.side_effect = WebConversationUnavailableError()
 
@@ -589,7 +589,7 @@ async def test_replaying_first_submission_returns_its_created_conversation_befor
     ids=["different-conversation", "different-input"],
 )
 async def test_reusing_a_submission_with_different_input_is_409(
-    client: AsyncClient, service: AsyncMock, error: Exception
+    client: AsyncClient, service: Any, error: Exception
 ) -> None:
     service.start_answer.side_effect = error
 
@@ -600,7 +600,7 @@ async def test_reusing_a_submission_with_different_input_is_409(
 
 
 async def test_changed_connections_ask_for_a_new_submission(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.start_answer.side_effect = AnswerConnectionsChangedError()
 
@@ -614,7 +614,7 @@ async def test_changed_connections_ask_for_a_new_submission(
 
 
 async def test_submission_to_an_unknown_conversation_is_404(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.start_answer.return_value = None
 
@@ -625,7 +625,7 @@ async def test_submission_to_an_unknown_conversation_is_404(
 
 
 async def test_a_rejected_answer_input_says_why_with_its_stable_kind(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.start_answer.side_effect = UnsupportedResourceCapabilityError()
 
@@ -640,7 +640,7 @@ async def test_a_rejected_answer_input_says_why_with_its_stable_kind(
 
 
 async def test_a_rejection_while_parsing_the_request_says_why_with_its_stable_kind(
-    client: AsyncClient, service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, service: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         chat_routes,
@@ -660,7 +660,7 @@ async def test_a_rejection_while_parsing_the_request_says_why_with_its_stable_ki
 
 
 async def test_an_unavailable_fork_is_a_typed_service_failure(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.fork_answer.side_effect = WebConversationUnavailableError()
 
@@ -674,7 +674,7 @@ async def test_an_unavailable_fork_is_a_typed_service_failure(
 
 
 async def test_an_answer_runtime_outage_before_acceptance_is_a_typed_failure(
-    client: AsyncClient, application: AsyncMock, service: AsyncMock
+    client: AsyncClient, application: Any, service: Any
 ) -> None:
     application.answers.capabilities.side_effect = ApplicationClosedError()
 
@@ -691,7 +691,7 @@ async def test_an_answer_runtime_outage_before_acceptance_is_a_typed_failure(
 
 
 async def test_a_fork_outside_the_callers_scope_is_a_typed_refusal(
-    client: AsyncClient, service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, service: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service.turn_for_run.return_value = linked_turn(
         answer_run(status="succeeded", result={"answer": "done"})
@@ -713,7 +713,7 @@ async def test_a_fork_outside_the_callers_scope_is_a_typed_refusal(
 
 
 async def test_a_fork_whose_parent_cannot_be_read_is_a_typed_service_failure(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.turn_for_run.side_effect = WebConversationUnavailableError()
 
@@ -742,7 +742,7 @@ async def test_a_fork_whose_parent_cannot_be_read_is_a_typed_service_failure(
     ids=["submit", "lookup"],
 )
 async def test_an_outage_after_acceptance_is_a_retryable_typed_failure(
-    client: AsyncClient, service: AsyncMock, method: str, path: str, message: str
+    client: AsyncClient, service: Any, method: str, path: str, message: str
 ) -> None:
     """Projecting an accepted submission can fail; the browser then reconciles."""
     service.submission.return_value = web_answer_submission(conversation_id=_CID)
@@ -755,7 +755,7 @@ async def test_an_outage_after_acceptance_is_a_retryable_typed_failure(
 
 
 async def test_a_submission_outside_the_callers_scope_is_scope_forbidden(
-    client: AsyncClient, service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, service: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         chat_routes,
@@ -795,7 +795,7 @@ async def test_a_refusal_outside_the_command_table_keeps_the_general_envelope(
     ids=["submit", "fork"],
 )
 async def test_a_reused_submission_id_names_what_it_collided_with(
-    client: AsyncClient, service: AsyncMock, path: str, operation: str, reused: str
+    client: AsyncClient, service: Any, path: str, operation: str, reused: str
 ) -> None:
     getattr(service, operation).side_effect = IdempotencyKeyConflict()
     body = (
@@ -816,9 +816,7 @@ async def test_a_reused_submission_id_names_what_it_collided_with(
     }
 
 
-async def test_a_fork_at_the_admission_limit_says_so(
-    client: AsyncClient, service: AsyncMock
-) -> None:
+async def test_a_fork_at_the_admission_limit_says_so(client: AsyncClient, service: Any) -> None:
     service.fork_answer.side_effect = RunAdmissionLimitExceededError()
 
     response = await client.post(
@@ -834,7 +832,7 @@ async def test_a_fork_at_the_admission_limit_says_so(
 
 
 async def test_an_invalid_request_is_an_editable_command_failure(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     from dlightrag.application.answer_runs import AnswerRequestError
 
@@ -852,7 +850,7 @@ async def test_an_invalid_request_is_an_editable_command_failure(
 
 
 async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.fork_answer.side_effect = UnsupportedAnswerModeError("fast")
 
@@ -870,7 +868,7 @@ async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
 
 
 async def test_an_empty_question_is_rejected_before_acceptance(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     response = await client.post("/web/api/answer", json={**_BODY, "query": "  "})
 
@@ -884,9 +882,7 @@ async def test_an_empty_question_is_rejected_before_acceptance(
 # ---------------------------------------------------------------------------
 
 
-async def test_web_projects_steer_and_child_roster(
-    client: AsyncClient, application: AsyncMock
-) -> None:
+async def test_web_projects_steer_and_child_roster(client: AsyncClient, application: Any) -> None:
     steered = await client.post(
         f"/web/api/answer/{RUN_ID}/steer", json={"content": "Focus on risks"}
     )
@@ -900,7 +896,7 @@ async def test_web_projects_steer_and_child_roster(
 
 
 async def test_web_child_roster_passes_a_validated_page_request(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     from uuid import UUID
 
@@ -938,7 +934,7 @@ async def test_web_child_roster_rejects_invalid_limit_and_malformed_cursor(
 
 
 async def test_web_child_roster_rejects_a_cursor_from_another_run(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     from uuid import UUID
 
@@ -957,7 +953,7 @@ async def test_web_child_roster_rejects_a_cursor_from_another_run(
 
 
 async def test_web_child_roster_unknown_run_is_404_before_cursor_validation(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     application.web_conversations.turn_for_run.return_value = None
 
@@ -967,9 +963,7 @@ async def test_web_child_roster_unknown_run_is_404_before_cursor_validation(
     application.answers.children.assert_not_awaited()
 
 
-async def test_web_observes_and_controls_a_child(
-    client: AsyncClient, application: AsyncMock
-) -> None:
+async def test_web_observes_and_controls_a_child(client: AsyncClient, application: Any) -> None:
     observation = SimpleNamespace(
         payload=lambda: {
             "run_id": RUN_ID,
@@ -1025,7 +1019,7 @@ async def test_web_observes_and_controls_a_child(
 
 
 async def test_web_child_control_terminal_is_conflict(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     application.answers.control_child.return_value = SimpleNamespace(
         run_id=RUN_ID,
@@ -1050,7 +1044,7 @@ async def test_web_child_control_terminal_is_conflict(
 
 async def test_the_browser_fork_returns_a_linked_descriptor(
     client: AsyncClient,
-    service: AsyncMock,
+    service: Any,
 ) -> None:
     response = await client.post(
         f"/web/api/answer/{RUN_ID}/fork",
@@ -1064,7 +1058,7 @@ async def test_the_browser_fork_returns_a_linked_descriptor(
 
 async def test_the_browser_offers_no_follow_up_route(
     client: AsyncClient,
-    service: AsyncMock,
+    service: Any,
 ) -> None:
     """A conversation continues through the composer; the browser has no line control."""
     response = await client.post(
@@ -1097,7 +1091,7 @@ async def test_status_projects_the_linked_turn_at_the_common_run_url(
     ],
 )
 async def test_a_run_this_principal_does_not_own_is_404(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock, path: str
+    client: AsyncClient, service: Any, application: Any, path: str
 ) -> None:
     service.turn_for_run.return_value = None
     application.runs.get.return_value = None
@@ -1108,7 +1102,7 @@ async def test_a_run_this_principal_does_not_own_is_404(
 
 
 async def test_general_artifact_route_returns_markdown_presentation(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     result = _with_artifact(
         stored_result(answer=""), answer=f"[View report](artifact:{_REPORT_RESOURCE})"
@@ -1131,7 +1125,7 @@ async def test_general_artifact_route_returns_markdown_presentation(
 
 
 async def test_markdown_artifact_uses_its_own_settled_bindings(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     result = _with_artifact(stored_result())
     target = "artifact:data.md"
@@ -1157,7 +1151,7 @@ async def test_markdown_artifact_uses_its_own_settled_bindings(
 
 
 async def test_markdown_artifact_presentation_projects_its_own_citation_sources(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     result = _with_artifact(stored_result(answer=""), answer="")
     descriptor = result["artifacts"][0]
@@ -1189,7 +1183,7 @@ async def test_markdown_artifact_presentation_projects_its_own_citation_sources(
 
 
 async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     result = _with_artifact(stored_result())
     result["artifacts"][0]["media_type"] = "text/html"
@@ -1213,7 +1207,7 @@ async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
 
 
 async def test_browser_svg_artifact_is_inline_only_under_an_inert_document_policy(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     result = _with_artifact(stored_result())
     result["artifacts"][0].update(
@@ -1239,7 +1233,7 @@ async def test_browser_svg_artifact_is_inline_only_under_an_inert_document_polic
 
 
 async def test_general_artifact_presentation_is_404_without_a_descriptor(
-    client: AsyncClient, service: AsyncMock
+    client: AsyncClient, service: Any
 ) -> None:
     service.turn_for_run.return_value = linked_turn(
         answer_run(status="succeeded", result=stored_result())
@@ -1251,7 +1245,7 @@ async def test_general_artifact_presentation_is_404_without_a_descriptor(
 
 
 async def test_general_artifact_presentation_rejects_an_unavailable_descriptor(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     result = _with_artifact(stored_result())
     result["artifacts"][0]["status"] = "unavailable"
@@ -1267,7 +1261,7 @@ async def test_general_artifact_presentation_rejects_an_unavailable_descriptor(
 
 
 async def test_cancelling_an_unowned_run_never_reaches_answer_service(
-    client: AsyncClient, service: AsyncMock, application: AsyncMock
+    client: AsyncClient, service: Any, application: Any
 ) -> None:
     service.turn_for_run.return_value = None
     application.runs.cancel.return_value = Mock(outcome="unknown", run=None)
@@ -1278,7 +1272,7 @@ async def test_cancelling_an_unowned_run_never_reaches_answer_service(
 
 
 async def test_cancelling_a_running_run_reports_the_pending_request(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     running = answer_run(status="running", cancel_requested_at=datetime.datetime.now(datetime.UTC))
     application.runs.cancel.return_value = Mock(outcome="pending", run=running)
@@ -1291,7 +1285,7 @@ async def test_cancelling_a_running_run_reports_the_pending_request(
 
 
 async def test_cancelling_a_terminal_run_is_a_200_no_op(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     application.runs.cancel.return_value = Mock(
         outcome="already_terminal", run=answer_run(status="succeeded", result=stored_result())
@@ -1303,7 +1297,7 @@ async def test_cancelling_a_terminal_run_is_a_200_no_op(
     assert response.json()["status"] == "succeeded"
 
 
-async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: AsyncMock) -> None:
+async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: Any) -> None:
     service.turn_for_run.return_value = linked_turn(
         answer_run(status="succeeded", events_trimmed_at=datetime.datetime.now(datetime.UTC))
     )
@@ -1314,7 +1308,7 @@ async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: AsyncMoc
 
 
 @pytest.fixture
-async def scoped_client(application: AsyncMock):
+async def scoped_client(application: Any):
     """A client whose conversation service is real, over a store that must not run."""
     store = AsyncMock()
     app = create_app(include_web_app=True)
@@ -1350,7 +1344,7 @@ async def scoped_client(application: AsyncMock):
     "run_id", ["not-a-uuid", "019", RUN_ID[:-1]], ids=["text", "short", "trunc"]
 )
 async def test_a_malformed_run_id_is_the_same_opaque_404(
-    scoped_client: AsyncClient, application: AsyncMock, method: str, path: str, run_id: str
+    scoped_client: AsyncClient, application: Any, method: str, path: str, run_id: str
 ) -> None:
     """An unparseable id is unknown, not a server fault, and never reaches storage."""
     application.runs.get.return_value = None
@@ -1375,7 +1369,7 @@ async def test_a_malformed_run_id_is_the_same_opaque_404(
 )
 async def test_the_resume_cursor_comes_from_either_form(
     client: AsyncClient,
-    application: AsyncMock,
+    application: Any,
     header: str | None,
     query: str | None,
     expected: int,
@@ -1402,7 +1396,7 @@ async def test_the_resume_cursor_comes_from_either_form(
 )
 async def test_an_unusable_cursor_never_subscribes(
     client: AsyncClient,
-    application: AsyncMock,
+    application: Any,
     header: str | None,
     query: str | None,
     status: int,
@@ -1594,7 +1588,7 @@ async def test_a_token_frame_carries_only_the_text() -> None:
 
 
 async def test_closing_the_event_stream_detaches_without_cancelling(
-    client: AsyncClient, application: AsyncMock
+    client: AsyncClient, application: Any
 ) -> None:
     """Disconnecting is a transport decision, never a decision about the run."""
     detached = asyncio.Event()

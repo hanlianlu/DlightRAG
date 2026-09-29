@@ -246,7 +246,7 @@ def _stored_result() -> dict[str, Any]:
 
 
 async def test_get_capabilities_reports_answer_image_capability(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from dlightrag.engine.answer.image_capability import AnswerImageCapability
 
@@ -275,7 +275,7 @@ async def test_get_capabilities_reports_answer_image_capability(
 
 
 async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     stored = _stored_result()
     stored["artifacts"] = [
@@ -339,7 +339,7 @@ async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
 
 
 async def test_list_answer_artifacts_does_not_invent_an_in_flight_outcome(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     mock_mcp_application.runs.get.return_value = _run_record(status="running", result=None)
 
@@ -352,7 +352,7 @@ async def test_list_answer_artifacts_does_not_invent_an_in_flight_outcome(
     )
 
 
-async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_application: Any) -> None:
     async with Client(mcp_server.mcp_app) as client:
         listing = await client.list_tools()
         result = await client.call_tool("list_runs", {})
@@ -370,7 +370,7 @@ async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_application: AsyncMo
     assert _tool_json(result)["runs"][0]["run_id"] == _RUN_ID
 
 
-async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_application: Any) -> None:
     mock_mcp_application.corpora.list_workspace_records_page.side_effect = RuntimeError(
         "database-secret"
     )
@@ -394,7 +394,7 @@ async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_application: Asy
     ids=["value-error", "os-permission"],
 )
 async def test_mcp_untyped_failures_stay_internal(
-    mock_mcp_application: AsyncMock, failure: Exception
+    mock_mcp_application: Any, failure: Exception
 ) -> None:
     mock_mcp_application.answers.create.side_effect = failure
 
@@ -408,7 +408,7 @@ async def test_mcp_untyped_failures_stay_internal(
 
 
 async def test_mcp_names_invalid_arguments_without_echoing_them(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "retry_files",
@@ -428,7 +428,7 @@ async def test_mcp_names_invalid_arguments_without_echoing_them(
     mock_mcp_application.corpus_mutations.create_retry.assert_not_awaited()
 
 
-async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: Any) -> None:
     from dlightrag.application.answer_runs import AnswerRequestError
 
     mock_mcp_application.answers.steer.side_effect = AnswerRequestError(
@@ -443,7 +443,7 @@ async def test_mcp_steering_input_errors_are_refusals(mock_mcp_application: Asyn
     assert _tool_text(result) == "Error: steer instruction exceeds 20000 characters"
 
 
-async def test_mcp_corpus_input_errors_are_refusals(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_corpus_input_errors_are_refusals(mock_mcp_application: Any) -> None:
     from dlightrag.application.corpus_admin import CorpusMutationInputError
 
     mock_mcp_application.corpus_mutations.create_delete.side_effect = CorpusMutationInputError(
@@ -458,7 +458,7 @@ async def test_mcp_corpus_input_errors_are_refusals(mock_mcp_application: AsyncM
 
 
 async def test_mcp_refuses_a_workspace_it_cannot_name_without_echoing_it(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "retrieve", {"query": "q", "workspaces": ["x" * 60 + "-SECRET-VALUE"]}
@@ -473,7 +473,7 @@ async def test_mcp_refuses_a_workspace_it_cannot_name_without_echoing_it(
 
 
 async def test_mcp_names_a_mistyped_argument_without_echoing_it(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     result = await mcp_server.mcp_app.call_tool("list_files", {"limit": "many-SECRET"})
 
@@ -483,7 +483,7 @@ async def test_mcp_names_a_mistyped_argument_without_echoing_it(
 
 
 async def test_mcp_a_stored_record_that_fails_its_model_is_internal(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from pydantic import BaseModel, ConfigDict
 
@@ -502,7 +502,7 @@ async def test_mcp_a_stored_record_that_fails_its_model_is_internal(
     mock_mcp_application.runs.get_global.assert_awaited_once_with(run_id=_RUN_ID)
 
 
-async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: Any) -> None:
     from dlightrag.application.access import AccessDeniedError
 
     mock_mcp_application.answers.create.side_effect = AccessDeniedError(
@@ -515,7 +515,7 @@ async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: A
 
 
 async def test_mcp_workspace_run_lookup_hides_a_denial_but_not_an_outage(
-    mock_mcp_application: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    mock_mcp_application: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dlightrag.adapters.mcp.errors import ToolRejection
 
@@ -643,7 +643,7 @@ async def test_mcp_exposes_knowledge_and_answer_tasks(auth_mode: str) -> None:
     ],
 )
 async def test_management_tools_cannot_be_called_through_mcp(
-    tool_name: str, mock_mcp_application: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    tool_name: str, mock_mcp_application: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ensure_application = AsyncMock(return_value=mock_mcp_application)
     monkeypatch.setattr(mcp_server, "_ensure_application", ensure_application)
@@ -736,7 +736,7 @@ async def test_mcp_retrieve_forwards_chunk_top_k(mock_mcp_application) -> None:
     assert request.chunk_top_k == 5
 
 
-async def test_mcp_retrieve_returns_run_descriptor(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_retrieve_returns_run_descriptor(mock_mcp_application: Any) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "retrieve", {"query": "x", "idempotency_key": "retrieval-1"}
     )
@@ -1137,7 +1137,7 @@ async def test_mcp_requests_stay_bound_to_running_application_config(
 
 @pytest.mark.parametrize("mode", ["auto", "fast", "research"])
 async def test_mcp_answer_returns_a_descriptor_without_waiting(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
     mode: str,
 ) -> None:
     result = await mcp_server.mcp_app.call_tool(
@@ -1190,7 +1190,7 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
 
 
 async def test_mcp_answer_reports_changed_connections(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from dlightrag.application.answer_runs import AnswerConnectionsChangedError
 
@@ -1204,7 +1204,7 @@ async def test_mcp_answer_reports_changed_connections(
 
 
 async def test_mcp_answer_reports_a_reused_key_with_different_input(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from dlightrag.application.runs import IdempotencyKeyConflict
 
@@ -1220,7 +1220,7 @@ async def test_mcp_answer_reports_a_reused_key_with_different_input(
 
 
 async def test_mcp_answer_projects_the_deployment_wide_admission_limit(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from dlightrag.application.runs import RunAdmissionLimitExceededError
 
@@ -1234,7 +1234,7 @@ async def test_mcp_answer_projects_the_deployment_wide_admission_limit(
 
 
 async def test_mcp_status_returns_the_canonical_result_and_sanitizes_contexts(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     mock_mcp_application.runs.get.return_value = _run_record(
         status="succeeded",
@@ -1254,7 +1254,7 @@ async def test_mcp_status_returns_the_canonical_result_and_sanitizes_contexts(
 
 
 async def test_mcp_status_keeps_the_recorded_evidence_image_transport_state(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     """An image the answer model never received must not read as if it had."""
     stored = _stored_result()
@@ -1277,7 +1277,7 @@ async def test_mcp_status_keeps_the_recorded_evidence_image_transport_state(
 
 
 async def test_mcp_artifacts_use_stable_uris_without_browser_cookie_urls(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     stored = _stored_result()
     stored["answer"] = "[Notes](artifact:artifact-1)"
@@ -1308,7 +1308,7 @@ async def test_mcp_artifacts_use_stable_uris_without_browser_cookie_urls(
 
 
 async def test_mcp_status_reports_a_failed_run_with_its_public_error(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     mock_mcp_application.runs.get.return_value = _run_record(
         status="failed",
@@ -1325,9 +1325,7 @@ async def test_mcp_status_reports_a_failed_run_with_its_public_error(
 
 
 @pytest.mark.parametrize("tool", ["get_run", "cancel_run"])
-async def test_mcp_never_reveals_another_owners_run(
-    mock_mcp_application: AsyncMock, tool: str
-) -> None:
+async def test_mcp_never_reveals_another_owners_run(mock_mcp_application: Any, tool: str) -> None:
     mock_mcp_application.runs.get.return_value = None
     mock_mcp_application.runs.cancel.return_value = SimpleNamespace(outcome="unknown", run=None)
 
@@ -1338,7 +1336,7 @@ async def test_mcp_never_reveals_another_owners_run(
     assert _tool_text(result) == f"Error: Run not found: {_RUN_ID}"
 
 
-async def test_mcp_cancel_reports_the_pending_request(mock_mcp_application: AsyncMock) -> None:
+async def test_mcp_cancel_reports_the_pending_request(mock_mcp_application: Any) -> None:
     running = _run_record(status="running", cancel_requested=True)
     mock_mcp_application.runs.cancel.return_value = SimpleNamespace(outcome="pending", run=running)
 
@@ -1350,7 +1348,7 @@ async def test_mcp_cancel_reports_the_pending_request(mock_mcp_application: Asyn
 
 
 async def test_mcp_answer_preserves_answer_input_error_kind(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from dlightrag.engine.answer.errors import (
         ANSWER_INPUT_OVERFLOW,
@@ -1369,7 +1367,7 @@ async def test_mcp_answer_preserves_answer_input_error_kind(
 
 
 async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from dlightrag.engine.answer.errors import (
@@ -1507,7 +1505,7 @@ async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_m
 
 
 async def test_mcp_list_workspaces_returns_the_bounded_first_page(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
 ) -> None:
     from dlightrag.application.corpus_admin import (
         WorkspaceCatalogCursor,
@@ -1558,7 +1556,7 @@ async def test_mcp_list_workspaces_returns_the_bounded_first_page(
     ],
 )
 async def test_retrieval_run_id_is_unknown_to_answer_only_mcp_tools(
-    mock_mcp_application: AsyncMock,
+    mock_mcp_application: Any,
     tool: str,
     arguments: dict[str, Any],
     expected: str,
