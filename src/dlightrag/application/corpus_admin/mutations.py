@@ -1543,14 +1543,18 @@ class _LocalListing:
 def _list_directory(
     fd: int, prefix: tuple[str, ...], listing: _LocalListing, *, max_files: int
 ) -> None:
+    # Counted as they are read, so a folder past the bound refuses before the
+    # rest of it is read, let alone sorted.
+    listed: list[os.DirEntry[str]] = []
     with os.scandir(fd) as entries:
-        listed = sorted(entries, key=lambda entry: entry.name)
-    for entry in listed:
-        listing.entries += 1
-        if listing.entries > _MAX_LOCAL_ENTRIES:
-            raise CorpusMutationInputError(
-                f"local corpus source holds more than {_MAX_LOCAL_ENTRIES} entries"
-            )
+        for entry in entries:
+            listing.entries += 1
+            if listing.entries > _MAX_LOCAL_ENTRIES:
+                raise CorpusMutationInputError(
+                    f"local corpus source holds more than {_MAX_LOCAL_ENTRIES} entries"
+                )
+            listed.append(entry)
+    for entry in sorted(listed, key=lambda entry: entry.name):
         if reserved_corpus_name(entry.name):
             continue
         is_dir = entry.is_dir(follow_symlinks=False)
@@ -1835,8 +1839,16 @@ def _accepted_selector(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _staged_sources_present(staged_sources: Sequence[Mapping[str, Any]]) -> bool:
-    """Whether every file the Run staged is still there, checked before its handoff."""
-    return all(os.path.isfile(str(item["path"])) for item in staged_sources)
+    """Whether every file the Run staged is still there, whole, checked before its handoff."""
+    return all(_staged_file_present(item) for item in staged_sources)
+
+
+def _staged_file_present(item: Mapping[str, Any]) -> bool:
+    try:
+        status = os.stat(str(item["path"]))
+    except OSError:
+        return False
+    return stat.S_ISREG(status.st_mode) and status.st_size == int(item["size_bytes"])
 
 
 def _public_upstream_state(value: Any) -> list[dict[str, str]]:

@@ -172,8 +172,9 @@ file as `<n>/<file name>`, and the Run records exactly that list, in order, with
 each file's size and digest. The Run ingests only the files it lists; nothing
 scans a folder. Right before a file is enqueued it is copied to
 `corpus/<workspace>/<file name>`, the one place LightRAG looks a document up.
-A listed file missing when the Run starts fails it as `corpus_source_unavailable`
-before any upstream effect, and so does one that cannot be copied there.
+A listed file missing or no longer of its recorded size when the Run starts
+fails it as `corpus_source_unavailable` before any upstream effect, and so does
+one that cannot be copied there.
 
 A stage belongs to its Run alone. The Run removes it once it ends: it succeeds,
 fails, or is cancelled before its handoff. It stays while the Run is deferred or

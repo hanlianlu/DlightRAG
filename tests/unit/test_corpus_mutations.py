@@ -646,7 +646,15 @@ def test_prepared_input_validator_accepts_workspace_delete() -> None:
 
 
 def _staged(*paths: str) -> list[dict[str, Any]]:
-    return [{"path": path, "content_sha256": "a" * 64, "size_bytes": 1} for path in paths]
+    """The Run's record of files it staged: a file on disk is recorded with its size."""
+    return [
+        {
+            "path": path,
+            "content_sha256": "a" * 64,
+            "size_bytes": Path(path).stat().st_size if Path(path).is_file() else 1,
+        }
+        for path in paths
+    ]
 
 
 def test_a_local_run_must_list_exactly_its_staged_files_in_order() -> None:
@@ -938,6 +946,27 @@ async def test_a_local_run_missing_a_staged_file_fails_before_its_handoff(tmp_pa
     runtime = _runtime()
     executor, _pool, _store = _executor(runtime)
     session = _Session(_local_payload(present, tmp_path / "1" / "gone.pdf"))
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Failed)
+    assert outcome.error_kind == "corpus_source_unavailable"
+    assert session.handoff_started is False
+    runtime.aingest.assert_not_awaited()
+
+
+async def test_a_local_run_whose_staged_file_changed_fails_before_its_handoff(
+    tmp_path: Path,
+) -> None:
+    """A stage holds what was accepted, whole; a file of another size is not it."""
+    staged = tmp_path / "0" / "a.pdf"
+    staged.parent.mkdir()
+    staged.write_bytes(b"accepted")
+    payload = _local_payload(staged)
+    staged.write_bytes(b"cut")
+    runtime = _runtime()
+    executor, _pool, _store = _executor(runtime)
+    session = _Session(payload)
 
     outcome = await executor.execute(cast(Any, session))
 
@@ -1837,6 +1866,41 @@ def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch
         service._snapshot_local_spec(
             "0199a0a0-0000-7000-8000-000000000002", "default", _local_spec(wide)
         )
+
+
+def test_a_local_folder_past_the_entry_bound_refuses_before_reading_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
+
+    folder = tmp_path / "inputs" / "default" / "wide"
+    folder.mkdir(parents=True)
+    for index in range(50):
+        (folder / f"{index:02d}.txt").write_text("x", encoding="utf-8")
+    scandir = os.scandir
+    read: list[str] = []
+
+    class _Counting:
+        def __init__(self, target: Any) -> None:
+            self._entries = scandir(target)
+
+        def __enter__(self) -> _Counting:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self._entries.close()
+
+        def __iter__(self) -> Any:
+            for entry in self._entries:
+                read.append(entry.name)
+                yield entry
+
+    monkeypatch.setattr(mutations, "_MAX_LOCAL_ENTRIES", 10)
+    monkeypatch.setattr(mutations.os, "scandir", _Counting)
+
+    with pytest.raises(CorpusMutationInputError, match="more than 10 entries"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
+    assert len(read) == 11
 
 
 def test_an_unreadable_local_source_is_the_callers_to_fix(tmp_path: Path) -> None:
