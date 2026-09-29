@@ -598,7 +598,7 @@ for an external vector adapter.
 |---|---|---|
 | `deployment.service_role` | `writer` | `writer` or `reader` |
 | `deployment.workspace` | `default` | Default workspace's display name. Its canonical id strips surrounding whitespace, replaces each character that is not an ASCII letter, digit, or `_` with `_`, lowercases the result, and prefixes a leading digit with `_`; the id must be 1-64 characters, or startup fails |
-| `deployment.working_dir` | `./dlightrag_storage` | Corpus/input/artifact root; resolved absolute |
+| `deployment.working_dir` | `./dlightrag_storage` | Corpus/input/artifact root; resolved absolute. Operators place local sources in `inputs/<workspace>`, which DlightRAG only reads; `corpus/` is DlightRAG's own |
 | `storage.lightrag.vector_storage` | `PGVectorStorage` | `PGVectorStorage` or explicit `MilvusVectorDBStorage` |
 | `storage.lightrag.milvus_uri` | unset | Optional `MILVUS_URI` bridge; may be a Milvus-compatible Zilliz URI |
 | `storage.lightrag.milvus_token` | unset | Optional secret `MILVUS_TOKEN` bridge |

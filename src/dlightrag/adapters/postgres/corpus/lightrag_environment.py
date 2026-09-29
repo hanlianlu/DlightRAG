@@ -76,8 +76,12 @@ def lightrag_sidecar_env(config: DlightragConfig) -> dict[str, str]:
 
 
 def lightrag_runtime_env(config: DlightragConfig) -> dict[str, str]:
-    """The parser routing rules and the input directory LightRAG reads sources from."""
-    return {"LIGHTRAG_PARSER": config.parser_rules, "INPUT_DIR": str(config.input_dir_path)}
+    """The parser routing rules and the directory LightRAG reads parser inputs from.
+
+    That is the service's own corpus directory, never the folder operators place
+    local sources in: LightRAG looks a document up there by its basename alone.
+    """
+    return {"LIGHTRAG_PARSER": config.parser_rules, "INPUT_DIR": str(config.corpus_dir_path)}
 
 
 def apply_lightrag_environment(config: DlightragConfig) -> None:

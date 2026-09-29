@@ -37,7 +37,7 @@ def _service(
 
 
 async def test_local_download_uses_exact_metadata_document(tmp_path: Path, test_config) -> None:
-    source = test_config.input_dir_path / "default" / "notes.md"
+    source = test_config.corpus_dir_path / "default" / "notes.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("notes", encoding="utf-8")
     metadata_index = AsyncMock()
@@ -64,7 +64,7 @@ async def test_local_download_rejects_path_outside_workspace(tmp_path: Path, tes
 
 
 async def test_missing_contained_local_file_is_not_found(test_config) -> None:
-    missing = test_config.input_dir_path / "default" / "missing.md"
+    missing = test_config.corpus_dir_path / "default" / "missing.md"
     metadata_index = AsyncMock()
     metadata_index.get.return_value = {"download_locator": str(missing)}
 
@@ -73,7 +73,7 @@ async def test_missing_contained_local_file_is_not_found(test_config) -> None:
 
 
 async def test_local_download_repairs_known_lightrag_archive_transition(test_config) -> None:
-    original = test_config.input_dir_path / "default" / "notes.md"
+    original = test_config.corpus_dir_path / "default" / "notes.md"
     archived = original.parent / "__parsed__" / original.name
     archived.parent.mkdir(parents=True, exist_ok=True)
     archived.write_text("notes", encoding="utf-8")

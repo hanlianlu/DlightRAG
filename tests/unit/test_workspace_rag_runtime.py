@@ -1529,7 +1529,7 @@ class TestWorkspaceRagLightRAGMainPath:
         assert item.parser_path.suffix == ".pdf"
         assert item.source_uri != item.download_locator
         assert item.parser_path.is_relative_to(
-            test_config.input_dir_path
+            test_config.corpus_dir_path
             / test_config.deployment.workspace
             / "__remote_sources__"
             / source_type
@@ -2063,7 +2063,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_aingest_local_manifest_preserves_workspace_relative_path(
         self, test_config: DlightragConfig
     ) -> None:
-        input_root = test_config.input_dir_path / test_config.deployment.workspace
+        input_root = test_config.corpus_dir_path / test_config.deployment.workspace
         source = input_root / "docs" / "report.pdf"
         explicit = input_root / "docs" / "custom.pdf"
         source.parent.mkdir(parents=True)
@@ -2323,7 +2323,7 @@ class TestWorkspaceRagLightRAGMainPath:
 
         result = await service.aingest(source_type="local", path=str(fake_pdf))
         service._ingestion_engine.aingest_files.assert_awaited_once()
-        staged = test_config.input_dir_path / test_config.deployment.workspace / "f.pdf"
+        staged = test_config.corpus_dir_path / test_config.deployment.workspace / "f.pdf"
         (item,) = service._ingestion_engine.aingest_files.call_args.args[0]
         assert item.parser_path == staged
         assert item.source_uri == f"local://{test_config.deployment.workspace}/f.pdf"
@@ -2368,7 +2368,7 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result["processed"] == 3
         assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
-        staged_root = test_config.input_dir_path / test_config.deployment.workspace
+        staged_root = test_config.corpus_dir_path / test_config.deployment.workspace
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
@@ -2443,7 +2443,7 @@ class TestWorkspaceRagLightRAGMainPath:
         result = await service.aingest(source_type="local", path=str(upload_dir))
 
         assert result["processed"] == 1
-        staged_root = test_config.input_dir_path / test_config.deployment.workspace
+        staged_root = test_config.corpus_dir_path / test_config.deployment.workspace
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None

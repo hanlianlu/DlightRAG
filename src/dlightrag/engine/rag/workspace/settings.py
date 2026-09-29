@@ -321,7 +321,8 @@ class RagSettings(FrozenSettings):
 
     models: ModelsSettings
     corpus: CorpusSettings
-    input_root: Path = Path("dlightrag_storage/inputs")
+    # LightRAG's INPUT_DIR: this service's private corpus directory.
+    input_root: Path = Path("dlightrag_storage/corpus")
     read_only: bool = False
 
     @property

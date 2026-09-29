@@ -480,7 +480,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     runs = RunService(store=run_store, scheduler=coordinator)
     corpus_mutations = CorpusMutationService(
-        input_root=config.input_dir_path,
+        source_root=config.input_dir_path,
+        corpus_root=config.corpus_dir_path,
         store=run_store,
         coordinator=coordinator,
         upload_limits=UploadLimits(

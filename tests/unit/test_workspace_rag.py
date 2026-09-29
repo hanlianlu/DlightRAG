@@ -162,6 +162,14 @@ def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None
     assert test_config.models.max_concurrency == 3
 
 
+def test_the_engine_reads_and_writes_only_the_private_corpus_directory(test_config) -> None:
+    """Operators' source folder is never LightRAG's input root, so nothing writes it."""
+    from dlightrag.application.settings import rag_settings
+
+    assert rag_settings(test_config).input_root == test_config.corpus_dir_path
+    assert test_config.corpus_dir_path != test_config.input_dir_path
+
+
 def test_ai_runtime_and_rag_concurrency_owners_vary_independently(test_config) -> None:
     from dlightrag.application.settings import rag_settings
 

@@ -134,7 +134,7 @@ Every mutation uses a stable LightRAG `track_id`, durable phase checkpoints, ide
 
 Cancellation is allowed only before the durable `handoff_started_at` compare-and-set. After that point the mutation is not cancellable because LightRAG may already have effects. Cancellation never promises rollback.
 
-Source bytes from multipart upload, URL, S3, or other supported acquisition land in the Workspace `input_dir` layout. They remain there after processing. Only an explicit delete/reset removes originals and sidecars, and requested physical deletion is a completion condition rather than best effort.
+Source bytes from multipart upload, a local source, URL, S3, or other supported acquisition land in the Workspace's corpus directory, `<working_dir>/corpus/<workspace>`, which is LightRAG's input directory. They remain there after processing. Only an explicit delete/reset removes originals and sidecars, and requested physical deletion is a completion condition rather than best effort. Neither ever deletes operators' files in `input_dir` (`<working_dir>/inputs`): DlightRAG only reads local sources there and never writes it.
 
 ### Ingest
 
@@ -212,7 +212,7 @@ The current explicit database credential/environment bridge remains. Resolved Dl
 
 DlightRAG owns narrow auxiliary persistence and behavior only: metadata governance/filtering, BM25 labels, visual fusion, source locators, authorization projection, federation, and composite completion. PostgreSQL may remain the first implementation for these narrow ports without becoming a universal corpus abstraction.
 
-Original sources, thumbnails, and parser sidecars use LightRAG/RAGAnything's `input_dir` and file lifecycle on a deployment-provided shared POSIX volume. DlightRAG adds locator/digest and authorization projections but no separate artifact-storage seam and no duplicate corpus copy in `RunBlobStore`.
+Original sources, thumbnails, and parser sidecars use LightRAG's input directory (DlightRAG's own `<working_dir>/corpus`) and file lifecycle on a deployment-provided shared POSIX volume. DlightRAG adds locator/digest and authorization projections but no separate artifact-storage seam and no duplicate corpus copy in `RunBlobStore`.
 
 Changing storage composition remains external operator/infrastructure responsibility. DlightRAG does not provision resources, dual-write, copy data, track transfer watermarks, or coordinate infrastructure cutover. Drain and cutover automation are not repository-owned scope.
 

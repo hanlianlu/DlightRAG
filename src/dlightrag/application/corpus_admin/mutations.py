@@ -172,12 +172,18 @@ class UploadLimits:
 
 
 class CorpusMutationService:
-    """Accept all product corpus writes as generic ``corpus_mutation`` Runs."""
+    """Accept all product corpus writes as generic ``corpus_mutation`` Runs.
+
+    Local sources are read from ``source_root/<workspace>``, the folder operators
+    place them in, which this service never writes. Every Run stage lives under
+    ``corpus_root``, this service's own corpus directory.
+    """
 
     def __init__(
         self,
         *,
-        input_root: Path,
+        source_root: Path,
+        corpus_root: Path,
         store: CorpusMutationStore,
         coordinator: CorpusMutationScheduler,
         upload_limits: UploadLimits,
@@ -185,7 +191,8 @@ class CorpusMutationService:
         writable: bool = True,
         default_workspace: str = "default",
     ) -> None:
-        self._input_root = Path(input_root)
+        self._source_root = Path(source_root)
+        self._corpus_root = Path(corpus_root)
         self._workspace_exists = workspace_exists
         self._store = store
         self._coordinator = coordinator
@@ -681,13 +688,13 @@ class CorpusMutationService:
             )
 
         stage, source_root = await asyncio.to_thread(
-            _open_run_stage, self._input_root, canonical, run_id, exclusive=False
+            _open_run_stage, self._corpus_root, canonical, run_id, exclusive=False
         )
         run_root = source_root.parent
         temporary = f"{run_id}.part"
         staging = parent = None
         try:
-            staging = await asyncio.to_thread(_open_upload_staging, self._input_root, canonical)
+            staging = await asyncio.to_thread(_open_upload_staging, self._corpus_root, canonical)
             parent = await asyncio.to_thread(_stage_parents, stage, safe_path.parts[:-1])
             try:
                 os.stat(safe_path.name, dir_fd=parent, follow_symlinks=False)
@@ -735,15 +742,15 @@ class CorpusMutationService:
         """Delete one unaccepted Run-exclusive upload stage without leaking layout."""
         canonical = require_canonical_workspace_id(workspace)
         safe_run_id = str(UUID(run_id))
-        run_root = self._input_root / canonical / ".runs" / safe_run_id
+        run_root = self._corpus_root / canonical / ".runs" / safe_run_id
         await asyncio.to_thread(shutil.rmtree, run_root, True)
 
     def _snapshot_local_spec(
         self, run_id: str, workspace: str, spec: IngestSpec
     ) -> tuple[IngestSpec, Path, list[dict[str, Any]]]:
         canonical = require_canonical_workspace_id(workspace)
-        workspace_root = (self._input_root / canonical).resolve()
-        stage, source_root = _open_run_stage(self._input_root, canonical, run_id, exclusive=True)
+        workspace_root = (self._source_root / canonical).resolve()
+        stage, source_root = _open_run_stage(self._corpus_root, canonical, run_id, exclusive=True)
         run_root = source_root.parent
         manifest: list[dict[str, Any]] = []
 

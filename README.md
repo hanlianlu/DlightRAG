@@ -118,8 +118,9 @@ DLIGHTRAG_CORPUS__SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210 \
 ```
 
 The checked-in config is Docker-first, so a native process overrides the parser
-host alias with loopback. Native managed inputs live under
-`./dlightrag_storage/inputs/<workspace>`.
+host alias with loopback. Put local sources under
+`./dlightrag_storage/inputs/<workspace>`; DlightRAG only reads them and keeps
+its own corpus files under `./dlightrag_storage/corpus/<workspace>`.
 
 ### Read-only replica
 

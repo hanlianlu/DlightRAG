@@ -1052,7 +1052,13 @@ class DlightragConfig(BaseSettings):
 
     @property
     def input_dir_path(self) -> Path:
+        """Where operators place local sources, per workspace; DlightRAG only reads it."""
         return self.working_dir_path / "inputs"
+
+    @property
+    def corpus_dir_path(self) -> Path:
+        """This service's own corpus files and Run stages: LightRAG's ``INPUT_DIR``."""
+        return self.working_dir_path / "corpus"
 
     @property
     def is_reader(self) -> bool:

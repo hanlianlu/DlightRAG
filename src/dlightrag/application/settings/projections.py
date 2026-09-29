@@ -223,7 +223,7 @@ def rag_settings(config: DlightragConfig) -> RagSettings:
     return RagSettings(
         models=config.models,
         corpus=config.corpus,
-        input_root=config.input_dir_path,
+        input_root=config.corpus_dir_path,
         read_only=config.is_reader,
     )
 

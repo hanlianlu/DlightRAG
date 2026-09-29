@@ -108,7 +108,7 @@ def test_configuration_alone_never_writes_the_lightrag_environment(
 
     assert environment["POSTGRES_WORKSPACE"] == ""
     assert environment["LIGHTRAG_PARSER"] == config.parser_rules
-    assert environment["INPUT_DIR"] == str(config.input_dir_path)
+    assert environment["INPUT_DIR"] == str(config.corpus_dir_path)
     assert environment["POSTGRES_HOST"] == config.storage.postgres.host
 
 

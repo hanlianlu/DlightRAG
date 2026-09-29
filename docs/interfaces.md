@@ -145,8 +145,16 @@ ingestion skips (dot entries, parser sidecars, and staging folders) are neither
 copied nor counted, and a link among them is ignored. A folder with nothing to
 ingest is refused too.
 
+`input_dir` (`<working_dir>/inputs`) belongs to operators: DlightRAG reads local
+sources from `input_dir/<workspace>` and never writes there. Every file
+DlightRAG writes for a Workspace (Run stages, parser inputs, LightRAG's archived
+sources and parser sidecars, fetched remote sources) lives in its own
+`<working_dir>/corpus/<workspace>`, which is LightRAG's input directory. Corpus
+Reset and Workspace Delete clear that directory; they never delete operators'
+files in `input_dir`.
+
 Stages (`.runs/<run>/sources` and the upload scratch folder `.staging` under
-the workspace folder) are this service's own: created 0700, with staged files
+`corpus/<workspace>`) are this service's own: created 0700, with staged files
 0600, opened without following links. A stage folder that is a link or belongs
 to another account makes the request fail as unavailable (503) and logs the
 folder. Before the ingest reads a stage, the stage must still hold exactly the

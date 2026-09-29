@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 from unittest.mock import AsyncMock, create_autospec
 
 import pytest
@@ -54,9 +54,19 @@ async def _registered(_workspace: str) -> bool:
     return True
 
 
+class _Roots(TypedDict):
+    source_root: Path
+    corpus_root: Path
+
+
+def _roots(tmp_path: Path) -> _Roots:
+    """Operators' source folder and this service's own corpus directory."""
+    return {"source_root": tmp_path / "inputs", "corpus_root": tmp_path / "corpus"}
+
+
 def _service(tmp_path: Path) -> CorpusMutationService:
     return CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
         upload_limits=_LIMITS,
@@ -76,7 +86,7 @@ async def test_reset_exposes_supersession_as_a_typed_run_envelope_field(
 
     coordinator = SimpleNamespace(is_started=True, admission=admission, wake=lambda: None)
     service = CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=store,
         coordinator=cast(Any, coordinator),
         upload_limits=_LIMITS,
@@ -104,7 +114,7 @@ def _accepting_service(
 
     coordinator = SimpleNamespace(is_started=True, admission=admission, wake=lambda: None)
     return CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=store,
         coordinator=cast(Any, coordinator),
         upload_limits=_LIMITS,
@@ -197,7 +207,7 @@ async def test_every_corpus_write_needs_a_created_workspace(tmp_path: Path, writ
 async def test_a_local_source_or_upload_for_a_missing_workspace_stages_nothing(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "reserch"
+    workspace = tmp_path / "inputs" / "reserch"
     (workspace / "docs").mkdir(parents=True)
     (workspace / "docs" / "a.txt").write_text("a", encoding="utf-8")
     service = _accepting_service(tmp_path, AsyncMock(), workspace_exists=_gone)
@@ -210,8 +220,7 @@ async def test_a_local_source_or_upload_for_a_missing_workspace_stages_nothing(
         await service.stage_uploads(
             workspace="reserch", run_id=_RUN_ID, uploads=[("a.pdf", _Reader(b"a"))]
         )
-    assert not (workspace / ".runs").exists()
-    assert not (workspace / ".staging").exists()
+    assert not (tmp_path / "corpus").exists()
 
 
 async def test_a_retried_ingest_key_replays_before_the_workspace_check(tmp_path: Path) -> None:
@@ -288,11 +297,11 @@ async def test_stage_upload_digest_mismatch_removes_the_run_exclusive_stage(
             content_sha256=hashlib.sha256(b"different").hexdigest(),
         )
 
-    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
 
 
 async def test_discard_staged_run_owns_the_private_stage_layout(tmp_path: Path) -> None:
-    run_root = tmp_path / "default" / ".runs" / _RUN_ID
+    run_root = tmp_path / "corpus" / "default" / ".runs" / _RUN_ID
     run_root.mkdir(parents=True)
     (run_root / "source").write_bytes(b"bytes")
 
@@ -310,7 +319,7 @@ async def test_stage_uploads_bounds_one_file_by_the_per_file_cap(tmp_path: Path)
             uploads=[("report.pdf", _Reader(b"x" * 11))],
         )
 
-    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
 
 
 async def test_stage_uploads_bounds_each_file_by_the_remaining_request_budget(
@@ -326,7 +335,7 @@ async def test_stage_uploads_bounds_each_file_by_the_remaining_request_budget(
         )
 
     # The failed file removes the whole Run-exclusive stage, earlier files included.
-    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
 
     staged = await service.stage_uploads(
         workspace="default",
@@ -352,7 +361,7 @@ async def test_stage_uploads_refuses_counts_and_digests_it_cannot_honour(tmp_pat
             uploads=[("a.pdf", _Reader(b"a")), ("b.pdf", _Reader(b"b"))],
             content_sha256=hashlib.sha256(b"a").hexdigest(),
         )
-    assert not (tmp_path / "default").exists()
+    assert not (tmp_path / "corpus" / "default").exists()
 
 
 async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> None:
@@ -367,11 +376,38 @@ async def test_stage_upload_preserves_a_safe_relative_folder_path(tmp_path) -> N
 
     assert staged.filename == "reports/annual.pdf"
     assert staged.path == (
-        tmp_path / "default" / ".runs" / _RUN_ID / "sources" / "reports" / "annual.pdf"
+        tmp_path / "corpus" / "default" / ".runs" / _RUN_ID / "sources" / "reports" / "annual.pdf"
     )
     assert staged.path.read_bytes() == content
     assert staged.content_sha256 == hashlib.sha256(content).hexdigest()
     assert staged.size_bytes == len(content)
+
+
+async def test_staging_never_writes_the_operators_source_folder(tmp_path: Path) -> None:
+    """Local snapshots and uploads stage only in the corpus directory, whatever their names."""
+    inputs = tmp_path / "inputs" / "default"
+    (inputs / "docs").mkdir(parents=True)
+    (inputs / "docs" / "report.pdf").write_bytes(b"operator copy")
+    (inputs / "report.pdf").write_bytes(b"operator original")
+    before = {path: path.read_bytes() for path in inputs.rglob("*") if path.is_file()}
+    service = _service(tmp_path)
+
+    _spec, run_root, manifest = service._snapshot_local_spec(
+        _RUN_ID, "default", _local_spec(inputs / "docs")
+    )
+    upload = await service.stage_upload(
+        workspace="default",
+        run_id="0199a0a0-0000-7000-8000-000000000002",
+        filename="report.pdf",
+        reader=_Reader(b"uploaded"),
+        max_bytes=1024,
+    )
+
+    assert {path: path.read_bytes() for path in inputs.rglob("*") if path.is_file()} == before
+    corpus = (tmp_path / "corpus").resolve()
+    assert run_root.is_relative_to(corpus)
+    assert all(Path(item["path"]).is_relative_to(corpus) for item in manifest)
+    assert upload.path.is_relative_to(corpus)
 
 
 @pytest.mark.parametrize(
@@ -849,7 +885,7 @@ async def test_a_reader_refuses_every_corpus_write_before_it_happens(tmp_path: P
     from dlightrag.application.corpus_admin import CorpusMutationUnavailableError
 
     service = CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
         upload_limits=_LIMITS,
@@ -992,7 +1028,7 @@ async def test_workspace_delete_with_reset_errors_waits_for_repair_and_keeps_ide
 async def test_workspace_delete_refuses_the_deployment_default(tmp_path: Path) -> None:
     store = AsyncMock()
     service = CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=store,
         coordinator=cast(Any, SimpleNamespace()),
         upload_limits=_LIMITS,
@@ -1017,7 +1053,7 @@ async def test_workspace_delete_is_accepted_as_a_workspace_scoped_mutation(
 
     coordinator = SimpleNamespace(is_started=True, admission=admission, wake=lambda: None)
     service = CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=store,
         coordinator=cast(Any, coordinator),
         upload_limits=_LIMITS,
@@ -1068,7 +1104,7 @@ async def test_an_oversized_corpus_request_is_the_callers_to_fix(
     monkeypatch.setattr("dlightrag.engine.runtime.records.MAX_PREPARED_INPUT_BYTES", 64)
     store = AsyncMock()
     service = CorpusMutationService(
-        input_root=tmp_path,
+        **_roots(tmp_path),
         store=store,
         coordinator=cast(Any, SimpleNamespace(is_started=True)),
         upload_limits=_LIMITS,
@@ -1088,7 +1124,7 @@ def test_a_local_folder_cannot_link_outside_its_workspace(tmp_path: Path) -> Non
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.txt").write_text("secret", encoding="utf-8")
-    folder = tmp_path / "default" / "docs"
+    folder = tmp_path / "inputs" / "default" / "docs"
     folder.mkdir(parents=True)
     (folder / "ok.txt").write_text("ok", encoding="utf-8")
     (folder / "leak.txt").symlink_to(outside / "secret.txt")
@@ -1097,13 +1133,13 @@ def test_a_local_folder_cannot_link_outside_its_workspace(tmp_path: Path) -> Non
         _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
 
     # Nothing was staged, least of all the linked file's bytes.
-    assert not (tmp_path / "default" / ".runs" / _RUN_ID).exists()
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
 
 
 def test_a_local_folder_may_hold_only_files_and_folders(tmp_path: Path) -> None:
     from dlightrag.application.corpus_admin import CorpusMutationInputError
 
-    folder = tmp_path / "default" / "docs"
+    folder = tmp_path / "inputs" / "default" / "docs"
     folder.mkdir(parents=True)
     os.mkfifo(folder / "pipe")
 
@@ -1117,10 +1153,10 @@ def test_a_missing_or_oversized_local_source_is_the_callers_to_fix(tmp_path: Pat
     service = _service(tmp_path)
     with pytest.raises(CorpusMutationInputError, match="does not exist"):
         service._snapshot_local_spec(
-            _RUN_ID, "default", _local_spec(tmp_path / "default" / "missing.pdf")
+            _RUN_ID, "default", _local_spec(tmp_path / "inputs" / "default" / "missing.pdf")
         )
 
-    folder = tmp_path / "default" / "many"
+    folder = tmp_path / "inputs" / "default" / "many"
     folder.mkdir(parents=True)
     for index in range(101):
         (folder / f"{index}.txt").write_text("x", encoding="utf-8")
@@ -1139,7 +1175,7 @@ def test_an_oversized_local_folder_refuses_before_copying(tmp_path: Path, monkey
         return real_copy(*args, **kwargs)
 
     monkeypatch.setattr(mutations, "_copy_regular_file", counting_copy)
-    folder = tmp_path / "default" / "many"
+    folder = tmp_path / "inputs" / "default" / "many"
     folder.mkdir(parents=True)
     for index in range(101):
         (folder / f"{index}.txt").write_text("x", encoding="utf-8")
@@ -1156,7 +1192,7 @@ def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monke
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.txt").write_text("secret", encoding="utf-8")
-    folder = tmp_path / "default" / "docs"
+    folder = tmp_path / "inputs" / "default" / "docs"
     (folder / "zsub").mkdir(parents=True)
     (folder / "a.txt").write_text("a", encoding="utf-8")
     (folder / "zsub" / "secret.txt").write_text("inside", encoding="utf-8")
@@ -1173,7 +1209,7 @@ def test_a_folder_swapped_for_a_link_while_copying_refuses(tmp_path: Path, monke
 
     with pytest.raises(CorpusMutationInputError):
         _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(folder))
-    staged = list((tmp_path / "default").rglob("secret.txt"))
+    staged = list((tmp_path / "corpus").rglob("secret.txt"))
     assert staged == [], "no byte behind the link was staged"
 
 
@@ -1212,10 +1248,11 @@ def test_a_run_stage_behind_a_link_refuses_and_writes_nothing_there(tmp_path: Pa
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    workspace = tmp_path / "default"
+    workspace = tmp_path / "inputs" / "default"
     (workspace / "docs").mkdir(parents=True)
     (workspace / "docs" / "a.txt").write_text("a", encoding="utf-8")
-    (workspace / ".runs").symlink_to(elsewhere, target_is_directory=True)
+    (tmp_path / "corpus" / "default").mkdir(parents=True)
+    (tmp_path / "corpus" / "default" / ".runs").symlink_to(elsewhere, target_is_directory=True)
 
     with pytest.raises(CorpusStageUnavailableError):
         _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(workspace / "docs"))
@@ -1227,8 +1264,8 @@ async def test_an_upload_scratch_folder_behind_a_link_refuses(tmp_path: Path) ->
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    (tmp_path / "default").mkdir()
-    (tmp_path / "default" / ".staging").symlink_to(elsewhere, target_is_directory=True)
+    (tmp_path / "corpus" / "default").mkdir(parents=True)
+    (tmp_path / "corpus" / "default" / ".staging").symlink_to(elsewhere, target_is_directory=True)
 
     with pytest.raises(CorpusStageUnavailableError):
         await _service(tmp_path).stage_upload(
@@ -1243,19 +1280,20 @@ async def test_an_upload_scratch_folder_behind_a_link_refuses(tmp_path: Path) ->
 
 async def test_staged_sources_are_private_to_this_service(tmp_path: Path) -> None:
     """Stage folders are 0700 and staged files 0600, including a stage made wider earlier."""
-    workspace = tmp_path / "default"
+    workspace = tmp_path / "inputs" / "default"
+    stages = tmp_path / "corpus" / "default"
     (workspace / "docs").mkdir(parents=True)
     source = workspace / "docs" / "a.txt"
     source.write_text("a", encoding="utf-8")
     source.chmod(0o644)
-    (workspace / ".runs").mkdir(mode=0o755)
-    (workspace / ".runs").chmod(0o755)
+    (stages / ".runs").mkdir(mode=0o755, parents=True)
+    (stages / ".runs").chmod(0o755)
 
     spec, run_root, manifest = _service(tmp_path)._snapshot_local_spec(
         _RUN_ID, "default", _local_spec(workspace / "docs")
     )
     staged = Path(manifest[0]["path"])
-    assert (workspace / ".runs").stat().st_mode & 0o777 == 0o700
+    assert (stages / ".runs").stat().st_mode & 0o777 == 0o700
     assert run_root.stat().st_mode & 0o777 == 0o700
     assert staged.parent.stat().st_mode & 0o777 == 0o700
     assert staged.stat().st_mode & 0o777 == 0o600
@@ -1269,7 +1307,7 @@ async def test_staged_sources_are_private_to_this_service(tmp_path: Path) -> Non
     )
     assert upload.path.read_bytes() == b"bytes"
     assert upload.path.stat().st_mode & 0o777 == 0o600
-    assert (workspace / ".staging").stat().st_mode & 0o777 == 0o700
+    assert (stages / ".staging").stat().st_mode & 0o777 == 0o700
 
 
 def test_a_stage_changed_after_acceptance_is_not_ingested(tmp_path: Path) -> None:
@@ -1278,7 +1316,7 @@ def test_a_stage_changed_after_acceptance_is_not_ingested(tmp_path: Path) -> Non
 
     outside = tmp_path / "secret.txt"
     outside.write_text("API_KEY=sk-secret", encoding="utf-8")
-    workspace = tmp_path / "default"
+    workspace = tmp_path / "inputs" / "default"
     (workspace / "docs").mkdir(parents=True)
     (workspace / "docs" / "a.txt").write_text("a", encoding="utf-8")
     spec, _run_root, manifest = _service(tmp_path)._snapshot_local_spec(
@@ -1303,7 +1341,7 @@ def test_a_stage_changed_after_acceptance_is_not_ingested(tmp_path: Path) -> Non
 def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch) -> None:
     from dlightrag.application.corpus_admin import CorpusMutationInputError, mutations
 
-    workspace = tmp_path / "default"
+    workspace = tmp_path / "inputs" / "default"
     deep = workspace / "deep"
     nested = deep.joinpath(*[f"d{index}" for index in range(mutations._MAX_LOCAL_DEPTH + 1)])
     nested.mkdir(parents=True)
@@ -1325,7 +1363,7 @@ def test_a_local_source_too_deep_or_too_wide_refuses(tmp_path: Path, monkeypatch
 def test_an_unreadable_local_source_is_the_callers_to_fix(tmp_path: Path) -> None:
     from dlightrag.application.corpus_admin import CorpusMutationInputError
 
-    locked = tmp_path / "default" / "locked"
+    locked = tmp_path / "inputs" / "default" / "locked"
     (locked / "inner").mkdir(parents=True)
     (locked / "inner" / "a.txt").write_text("a", encoding="utf-8")
     locked.chmod(0)
@@ -1344,7 +1382,7 @@ def test_a_linked_folder_refuses(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.txt").write_text("secret", encoding="utf-8")
-    folder = tmp_path / "default" / "docs"
+    folder = tmp_path / "inputs" / "default" / "docs"
     folder.mkdir(parents=True)
     (folder / "ok.txt").write_text("ok", encoding="utf-8")
     (folder / "linked").symlink_to(outside, target_is_directory=True)
@@ -1354,8 +1392,8 @@ def test_a_linked_folder_refuses(tmp_path: Path) -> None:
 
 
 def test_a_workspace_root_source_copies_only_what_a_scan_ingests(tmp_path: Path) -> None:
-    """Run stages, dot entries and parser sidecars stay out of the copy, and its count."""
-    workspace = tmp_path / "default"
+    """Dot entries and parser sidecars stay out of the copy, and its count."""
+    workspace = tmp_path / "inputs" / "default"
     (workspace / "reports").mkdir(parents=True)
     (workspace / "reports" / "q3.txt").write_text("quarter", encoding="utf-8")
     (workspace / "top.txt").write_text("top", encoding="utf-8")
@@ -1375,7 +1413,7 @@ def test_a_workspace_root_source_copies_only_what_a_scan_ingests(tmp_path: Path)
         "reports/q3.txt",
         "top.txt",
     ]
-    assert run_root == workspace.resolve() / ".runs" / _RUN_ID
+    assert run_root == (tmp_path / "corpus").resolve() / "default" / ".runs" / _RUN_ID
     assert {Path(item["path"]).name for item in manifest} == {"q3.txt", "top.txt"}
     top = next(item for item in manifest if item["path"].endswith("top.txt"))
     assert top["size_bytes"] == 3
@@ -1387,7 +1425,7 @@ def test_a_local_source_with_nothing_to_ingest_or_no_path_is_the_callers_to_fix(
 ) -> None:
     from dlightrag.application.corpus_admin import CorpusMutationInputError
 
-    workspace = tmp_path / "default"
+    workspace = tmp_path / "inputs" / "default"
     (workspace / "empty" / ".git").mkdir(parents=True)
     (workspace / "a.txt").write_text("a", encoding="utf-8")
     service = _service(tmp_path)

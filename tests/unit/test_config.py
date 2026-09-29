@@ -68,6 +68,7 @@ def test_defaults_preserve_runtime_contract(tmp_path: Path) -> None:
     assert config.corpus.promotion.chunk_threshold is None
     assert config.runtime.run_retention_days == 365
     assert config.input_dir_path == tmp_path / "inputs"
+    assert config.corpus_dir_path == tmp_path / "corpus"
 
 
 def test_session_notes_bounds_are_configurable_and_bounded(
