@@ -85,7 +85,8 @@ If both fail, retrieval raises the LightRAG error with BM25 chained. Trace
 
 Top-level Retrieval uses `planning` and `searching` durable phases. Corpus
 unavailability returns a deferred Runtime outcome with bounded exponential
-backoff, releasing Query execution capacity until `next_attempt_at`. The
+backoff, releasing Query execution capacity until `next_attempt_at`, at most
+ten times per Run before it fails as `dependency_unavailable`. The
 configured retrieval timeout bounds claimed planning/search execution and is a
 terminal `retrieval_timeout`; queue residence is not part of that timeout.
 Unexpected execution failures settle as sanitized `retrieval_failed` errors.

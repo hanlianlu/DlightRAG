@@ -861,6 +861,8 @@ Stable top-level Retrieval terminal error kinds are `retrieval_timeout`,
 `retrieval_failed`, `retrieval_model_changed`,
 `retrieval_context_policy_changed`, `retrieval_input_incompatible`, and
 `retrieval_input_missing`. `run_abandoned` is common to both durable Query kinds.
+`dependency_unavailable` ends any Run, Corpus Mutations included, whose
+dependency outages already deferred it ten times.
 
 Internal exception text and schema detail are not public.
 
@@ -877,7 +879,7 @@ has no application timeout. Top-level Retrieval applies
 execution and reports `retrieval_timeout` terminally. Explicit transient corpus
 or provider interruptions defer Retrieval and Answer with a durable bounded
 retry checkpoint, release Query compute capacity, and later resume the same
-Run. Authentication, unsupported configuration/schema, invalid input,
+Run; the eleventh would fail it as `dependency_unavailable` instead. Authentication, unsupported configuration/schema, invalid input,
 deterministic model rejection, context overflow, and unknown exceptions remain
 terminal. Attachment total-byte
 overflow returns HTTP 413 before buffering. Generic rate, connection, and

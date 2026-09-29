@@ -69,7 +69,7 @@ from dlightrag.engine.answer.publication import (
     prepare_artifact_attachment,
 )
 from dlightrag.engine.answer.resources import ResourceInput
-from dlightrag.engine.dependencies import ProviderUnavailableError
+from dlightrag.engine.dependencies import DependencyRetriesExhausted, ProviderUnavailableError
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved, RunSession
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
@@ -792,10 +792,28 @@ async def test_transient_answer_dependency_interruption_defers_same_run(
     outcome = await executor.execute(cast(RunSession, session))
 
     assert isinstance(outcome, Deferred)
-    assert outcome.checkpoint == {checkpoint_key: 3}
+    assert outcome.checkpoint == {checkpoint_key: 3, "dependency_deferrals": 1}
     assert (outcome.next_attempt_at - now).total_seconds() == 20
     session.check_cancelled.assert_awaited_once_with()
     session.reset_output.assert_awaited_once_with()
+
+
+async def test_an_answer_run_whose_outages_spent_its_deferrals_stops() -> None:
+    executor = _executor()
+    executor._execute = AsyncMock(side_effect=ProviderUnavailableError())  # type: ignore[method-assign]
+    session = MagicMock(
+        owner_id="owner",
+        run_id="same-run",
+        checkpoint={"providers_unavailable_attempt": 10, "dependency_deferrals": 10},
+    )
+    session.check_cancelled = AsyncMock()
+    session.reset_output = AsyncMock()
+
+    with pytest.raises(DependencyRetriesExhausted) as raised:
+        await executor.execute(cast(RunSession, session))
+
+    assert raised.value.kind == "dependency_unavailable"
+    assert raised.value.component == "providers"
 
 
 @pytest.mark.usefixtures("reset_langfuse_client")

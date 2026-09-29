@@ -20,6 +20,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol, assert_never
 
+from dlightrag.engine.dependencies import DependencyRetriesExhausted
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
@@ -805,7 +806,9 @@ class RunCoordinator:
             await self._finish_cancelled(session)
         except LeaseLostError:
             logger.info("Run %s lost its lease; leaving recovery to the next owner", session.run_id)
-        except RunExecutionError as exc:
+        except (RunExecutionError, DependencyRetriesExhausted) as exc:
+            # An executor's classified failure, or a Run whose dependency outages
+            # spent its deferrals: either way a public terminal error.
             await self._finish_failure(session, exc.kind, exc.public_message)
         except Exception:
             logger.warning(

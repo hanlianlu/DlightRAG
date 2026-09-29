@@ -28,6 +28,7 @@ from dlightrag.application.runs import (
 )
 from dlightrag.engine.dependencies import (
     DependencyComponent,
+    DependencyRetriesExhausted,
     classify_transient_dependency,
     next_dependency_retry,
 )
@@ -849,7 +850,7 @@ class CorpusMutationExecutor(RunExecutor):
         # leaves it to the next owner.
         try:
             outcome = await self._execute(session, raw, action, workspace)
-        except RunCancellationObserved:
+        except RunCancellationObserved, DependencyRetriesExhausted:
             if _ACTIONS[action].source_based:
                 await self._discard_stage(workspace, session.run_id)
             raise
@@ -921,11 +922,13 @@ class CorpusMutationExecutor(RunExecutor):
                 case _:
                     assert_never(action)
         except WorkspaceWriteFencedError, _TrackedPipelineNotSettled:
-            return _deferred(checkpoint, "corpus_storage", now=self._now)
+            # A write fence or an upstream pipeline still settling is a wait, not
+            # an outage: it keeps the backoff but spends none of the Run's retries.
+            return _deferred(checkpoint, "corpus_storage", now=self._now, outage=False)
         except RetryOutcomeUncertainError:
             if action in _DESTRUCTIVE_ACTIONS and session.handoff_started:
                 return WaitingForRepair(_repair_checkpoint(checkpoint, ()))
-            return _deferred(checkpoint, "corpus_storage", now=self._now)
+            return _deferred(checkpoint, "corpus_storage", now=self._now, outage=False)
         except FileNotFoundError:
             return Failed(
                 "corpus_source_unavailable",
@@ -1656,12 +1659,14 @@ def _deferred(
     component: DependencyComponent,
     *,
     now: Callable[[], datetime.datetime],
+    outage: bool = True,
 ) -> Deferred:
     retry_checkpoint, delay = next_dependency_retry(
         checkpoint,
         component,
         base_seconds=_DEFER_BASE_SECONDS,
         max_seconds=_DEFER_MAX_SECONDS,
+        outage=outage,
     )
     return Deferred(
         checkpoint={

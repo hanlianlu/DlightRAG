@@ -59,6 +59,33 @@ class ParserUnavailableError(TransientDependencyError):
         super().__init__("parser", "Document parser is temporarily unavailable")
 
 
+#: A Run that dependency outages defer this many times fails instead of deferring
+#: again. The count spans every component and belongs to the one Run: other and
+#: new Runs keep their own, and each deferral keeps its exponential backoff.
+MAX_DEPENDENCY_DEFERRALS = 10
+_DEFERRALS_KEY = "dependency_deferrals"
+
+_COMPONENT_NAMES: dict[DependencyComponent, str] = {
+    "corpus_storage": "Corpus storage",
+    "parser": "The document parser",
+    "providers": "The model provider",
+}
+
+
+class DependencyRetriesExhausted(RuntimeError):
+    """A Run spent its dependency deferrals; it fails with this public error."""
+
+    kind = "dependency_unavailable"
+
+    def __init__(self, component: DependencyComponent) -> None:
+        self.component: DependencyComponent = component
+        self.public_message = (
+            f"{_COMPONENT_NAMES[component]} stayed unavailable through "
+            f"{MAX_DEPENDENCY_DEFERRALS} retries, so this Run stopped. Try it again later."
+        )
+        super().__init__(self.public_message)
+
+
 _AUTH_STATUS_CODES = frozenset({401, 403})
 # 520-524 are an edge proxy (Cloudflare) reporting its origin failed, down,
 # unreachable, or slow; 529 is an overloaded provider (Anthropic). 409 is left
@@ -236,24 +263,40 @@ def next_dependency_retry(
     *,
     base_seconds: int = 5,
     max_seconds: int = 60,
+    outage: bool = True,
 ) -> tuple[dict[str, Any], int]:
-    """Build one bounded, secret-free durable retry checkpoint and delay."""
+    """Build one bounded, secret-free durable retry checkpoint and delay.
+
+    An outage counts toward the Run's ``MAX_DEPENDENCY_DEFERRALS``, and the one past
+    them raises ``DependencyRetriesExhausted`` instead. A wait that is no outage
+    (``outage=False``), such as a write fence, keeps its backoff and counts nothing.
+    """
 
     key = (
         "corpus_unavailable_attempt"
         if component == "corpus_storage"
         else f"{component}_unavailable_attempt"
     )
-    previous: Any = checkpoint.get(key) if isinstance(checkpoint, Mapping) else None
-    try:
-        attempt = max(1, int(previous or 0) + 1)
-    except TypeError, ValueError:
-        attempt = 1
+    attempt = _checkpoint_count(checkpoint, key) + 1
     # Bound the persisted counter as well as exponentiation.  Once the delay is
     # capped, a larger counter carries no scheduling information.
     capped_attempt = min(attempt, 32)
     delay = min(max_seconds, base_seconds * (2 ** (min(capped_attempt, 8) - 1)))
-    return ({key: capped_attempt}, delay)
+    retry: dict[str, Any] = {key: capped_attempt}
+    deferrals = _checkpoint_count(checkpoint, _DEFERRALS_KEY) + int(outage)
+    if deferrals > MAX_DEPENDENCY_DEFERRALS:
+        raise DependencyRetriesExhausted(component)
+    if deferrals:
+        retry[_DEFERRALS_KEY] = deferrals
+    return (retry, delay)
+
+
+def _checkpoint_count(checkpoint: Mapping[str, Any] | None, key: str) -> int:
+    value: Any = checkpoint.get(key) if isinstance(checkpoint, Mapping) else None
+    try:
+        return max(0, int(value or 0))
+    except TypeError, ValueError:
+        return 0
 
 
 def dependency_component_from_checkpoint(
@@ -378,7 +421,9 @@ def _status_code(exc: BaseException) -> int | None:
 
 
 __all__ = [
+    "MAX_DEPENDENCY_DEFERRALS",
     "DependencyComponent",
+    "DependencyRetriesExhausted",
     "ParserUnavailableError",
     "ProviderUnavailableError",
     "TransientDependencyError",

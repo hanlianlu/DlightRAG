@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 
 import dlightrag.engine.runtime.coordinator as coordinator_module
+from dlightrag.engine.dependencies import DependencyRetriesExhausted
 from dlightrag.engine.runtime.coordinator import (
     LeaseLostError,
     RunCancellationObserved,
@@ -1410,6 +1411,29 @@ class TestDurableProgress:
         assert store.events["run-a"][-1].payload == {
             "kind": "evidence_settlement_conflict",
             "message": "conflict",
+        }
+
+    async def test_a_run_whose_outages_spent_its_deferrals_fails(self) -> None:
+        store = _MemoryStore()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            raise DependencyRetriesExhausted("parser")
+
+        coordinator = _coordinator(store, _Executor(body), query_worker_concurrency=1)
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
+        finally:
+            await coordinator.aclose()
+
+        assert store.runs["run-a"]["error_kind"] == "dependency_unavailable"
+        assert store.events["run-a"][-1].payload == {
+            "kind": "dependency_unavailable",
+            "message": (
+                "The document parser stayed unavailable through 10 retries, "
+                "so this Run stopped. Try it again later."
+            ),
         }
 
     async def test_an_owner_classified_failure_keeps_its_actionable_message(self) -> None:

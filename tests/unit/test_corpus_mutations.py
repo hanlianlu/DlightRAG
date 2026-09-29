@@ -27,7 +27,12 @@ from dlightrag.application.corpus_admin.mutations import (
     validate_corpus_mutation_prepared_input,
 )
 from dlightrag.application.errors import ApplicationUnavailableError
-from dlightrag.engine.dependencies import TransientDependencyError
+from dlightrag.engine.dependencies import (
+    MAX_DEPENDENCY_DEFERRALS,
+    DependencyRetriesExhausted,
+    TransientDependencyError,
+)
+from dlightrag.engine.rag.workspace.ports import WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.runtime.records import (
     Deferred,
@@ -1062,6 +1067,38 @@ async def test_settled_delete_checkpoint_finishes_without_repeating_upstream() -
 
     assert isinstance(outcome, Succeeded)
     runtime.adelete_files.assert_not_awaited()
+
+
+async def test_a_local_run_whose_outages_spent_its_deferrals_removes_its_stage(
+    tmp_path: Path,
+) -> None:
+    stage, payload = _staged_run(tmp_path)
+    error = TransientDependencyError("corpus_storage", "temporarily unavailable")
+    executor, _pool, _store = _executor(_runtime(), acquire_error=error, corpus_root=tmp_path)
+    session = _Session(payload, checkpoint={"dependency_deferrals": MAX_DEPENDENCY_DEFERRALS})
+
+    with pytest.raises(DependencyRetriesExhausted):
+        await executor.execute(cast(Any, session))
+
+    assert not stage.exists()
+
+
+async def test_a_write_fence_defers_a_run_whose_outages_spent_its_deferrals() -> None:
+    """Waiting behind a fence is no outage, so it never ends the Run."""
+    now = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    payload = _payload(
+        "ingest",
+        source={"source_type": "s3", "bucket": "documents", "replace": False},
+        staged_sources=[],
+    )
+    fence = WorkspaceWriteFencedError(workspace="default", retry_after_seconds=30)
+    executor, _pool, _store = _executor(_runtime(), now=lambda: now, acquire_error=fence)
+    session = _Session(payload, checkpoint={"dependency_deferrals": MAX_DEPENDENCY_DEFERRALS})
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Deferred)
+    assert outcome.checkpoint["dependency_deferrals"] == MAX_DEPENDENCY_DEFERRALS
 
 
 async def test_transient_dependency_deferral_uses_bounded_exponential_backoff() -> None:

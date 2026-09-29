@@ -24,7 +24,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry
-from dlightrag.engine.dependencies import ProviderUnavailableError
+from dlightrag.engine.dependencies import DependencyRetriesExhausted, ProviderUnavailableError
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.records import (
@@ -457,8 +457,33 @@ async def test_executor_defers_provider_unavailability_with_bounded_backoff() ->
     )
 
     assert isinstance(outcome, Deferred)
-    assert outcome.checkpoint == {"providers_unavailable_attempt": 4}
+    assert outcome.checkpoint == {"providers_unavailable_attempt": 4, "dependency_deferrals": 1}
     assert (outcome.next_attempt_at - _NOW).total_seconds() == 40
+
+
+async def test_executor_stops_a_run_whose_outages_spent_its_deferrals() -> None:
+    operation = SimpleNamespace(
+        warm=Mock(),
+        prepare_query_images=AsyncMock(return_value=[]),
+        retrieve_result=AsyncMock(side_effect=ProviderUnavailableError()),
+    )
+    executor = RetrievalExecutor(
+        telemetry=NOOP_TELEMETRY,
+        operation=cast(Any, operation),
+        timeout_seconds=30,
+        model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
+        now=lambda: _NOW,
+    )
+    session = _Session(
+        _prepared(),
+        checkpoint={"providers_unavailable_attempt": 10, "dependency_deferrals": 10},
+    )
+
+    with pytest.raises(DependencyRetriesExhausted) as raised:
+        await executor.execute(session)  # type: ignore[arg-type]
+
+    assert raised.value.kind == "dependency_unavailable"
+    assert raised.value.component == "providers"
 
 
 async def test_executor_keeps_unknown_failure_terminal() -> None:
@@ -501,5 +526,5 @@ async def test_executor_defers_corpus_unavailability_with_bounded_backoff() -> N
     )
 
     assert isinstance(outcome, Deferred)
-    assert outcome.checkpoint == {"corpus_unavailable_attempt": 5}
+    assert outcome.checkpoint == {"corpus_unavailable_attempt": 5, "dependency_deferrals": 1}
     assert outcome.next_attempt_at == _NOW + datetime.timedelta(seconds=60)
