@@ -26,7 +26,7 @@ CANCEL = RUN_CANCEL_CHANNEL
 LISTEN_ALL = [f"LISTEN {channel}" for channel in CHANNELS]
 
 
-class _Connection:
+class ListenConnection:
     """The slice of an asyncpg connection the hub drives."""
 
     def __init__(self, *, delay: float = 0.0, dies_after_listen: bool = False) -> None:
@@ -85,26 +85,26 @@ class _Connection:
         self.listeners[channel](self, 4242, channel, payload)
 
 
-class _Endpoint:
+class ListenEndpoint:
     """Hands out fake connections and records which ones were given back."""
 
     def __init__(
         self, *, failures: int = 0, doomed: int = 0, delays: tuple[float, ...] = ()
     ) -> None:
-        self.opened: list[_Connection] = []
+        self.opened: list[ListenConnection] = []
         self.opened_at: list[float] = []
-        self.released: list[_Connection] = []
+        self.released: list[ListenConnection] = []
         self._failures = failures
         self._doomed = doomed  # how many connections, first to last, die once they LISTEN
         self._delays = delays  # per connection, first to last: how long statements take
 
     @asynccontextmanager
-    async def connect(self) -> AsyncIterator[_Connection]:
+    async def connect(self) -> AsyncIterator[ListenConnection]:
         if self._failures:
             self._failures -= 1
             raise ConnectionRefusedError("database starting up")
         index = len(self.opened)
-        connection = _Connection(
+        connection = ListenConnection(
             delay=self._delays[index] if index < len(self._delays) else 0.0,
             dies_after_listen=index < self._doomed,
         )
@@ -116,7 +116,7 @@ class _Endpoint:
             self.released.append(connection)
 
 
-async def _until(predicate: Callable[[], bool], *, timeout: float = 2.0) -> None:
+async def until(predicate: Callable[[], bool], *, timeout: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
         if asyncio.get_running_loop().time() > deadline:
@@ -130,13 +130,13 @@ def _fast_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_one_connection_listens_every_declared_channel_once_and_never_unlistens() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     first: list[str | None] = []
     second: list[str | None] = []
 
     hub.subscribe(RUNS, first.append)
-    await _until(lambda: first == [None])
+    await until(lambda: first == [None])
     hub.subscribe(RUNS, second.append)
     hub.subscribe(CATALOGUE, second.append)
     hub.unsubscribe(RUNS, first.append)
@@ -151,13 +151,13 @@ async def test_one_connection_listens_every_declared_channel_once_and_never_unli
 
 
 async def test_a_subscriber_receives_its_channel_and_none_once_the_hub_is_live() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     runs: list[str | None] = []
     catalogue: list[str | None] = []
 
     with hub.listen(RUNS, runs.append), hub.listen(CATALOGUE, catalogue.append):
-        await _until(lambda: runs == [None] and catalogue == [None])
+        await until(lambda: runs == [None] and catalogue == [None])
         connection = endpoint.opened[0]
         connection.notify(RUNS, "wake-1")
         connection.notify(CATALOGUE, "revision-2")
@@ -168,15 +168,15 @@ async def test_a_subscriber_receives_its_channel_and_none_once_the_hub_is_live()
 
 
 async def test_a_subscriber_joining_a_live_hub_is_resynchronized_on_its_own() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     first: list[str | None] = []
     joining: list[str | None] = []
     hub.subscribe(RUNS, first.append)
-    await _until(lambda: first == [None])
+    await until(lambda: first == [None])
 
     hub.subscribe(RUNS, joining.append)
-    await _until(lambda: joining == [None])
+    await until(lambda: joining == [None])
 
     assert first == [None]
     assert endpoint.opened[0].statements == LISTEN_ALL
@@ -184,43 +184,43 @@ async def test_a_subscriber_joining_a_live_hub_is_resynchronized_on_its_own() ->
 
 
 async def test_a_subscriber_that_leaves_before_its_resynchronization_gets_nothing() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     first: list[str | None] = []
     leaving: list[str | None] = []
     later: list[str | None] = []
     hub.subscribe(RUNS, first.append)
-    await _until(lambda: first == [None])
+    await until(lambda: first == [None])
 
     hub.subscribe(RUNS, leaving.append)
     hub.unsubscribe(RUNS, leaving.append)
     hub.subscribe(RUNS, later.append)
-    await _until(lambda: later == [None])  # resynchronizations are delivered in join order
+    await until(lambda: later == [None])  # resynchronizations are delivered in join order
 
     assert leaving == []
     await hub.aclose()
 
 
 async def test_nothing_reaches_a_subscriber_once_it_unsubscribed() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     staying: list[str | None] = []
     leaving: list[str | None] = []
     hub.subscribe(RUNS, staying.append)
     hub.subscribe(RUNS, leaving.append)
-    await _until(lambda: staying == [None] and leaving == [None])
+    await until(lambda: staying == [None] and leaving == [None])
 
     hub.unsubscribe(RUNS, leaving.append)
     endpoint.opened[0].notify(RUNS, "after leaving")
     endpoint.opened[0].terminate()
-    await _until(lambda: staying == [None, "after leaving", None])
+    await until(lambda: staying == [None, "after leaving", None])
 
     assert leaving == [None]
     await hub.aclose()
 
 
 async def test_an_undeclared_channel_is_refused() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
 
     with pytest.raises(ValueError, match="undeclared"):
@@ -238,14 +238,14 @@ async def test_each_passing_keepalive_resynchronizes_every_subscriber(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.01)
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     runs: list[str | None] = []
     catalogue: list[str | None] = []
     hub.subscribe(RUNS, runs.append)
     hub.subscribe(CATALOGUE, catalogue.append)
 
-    await _until(lambda: len(runs) >= 3 and len(catalogue) >= 3)
+    await until(lambda: len(runs) >= 3 and len(catalogue) >= 3)
 
     (connection,) = endpoint.opened
     assert set(runs) == set(catalogue) == {None}
@@ -255,14 +255,14 @@ async def test_each_passing_keepalive_resynchronizes_every_subscriber(
 
 
 async def test_a_lost_connection_is_replaced_listened_again_and_resynchronized() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
 
     with hub.listen(RUNS, received.append):
-        await _until(lambda: received == [None])
+        await until(lambda: received == [None])
         endpoint.opened[0].terminate()
-        await _until(lambda: received == [None, None])
+        await until(lambda: received == [None, None])
         replacement = endpoint.opened[1]
         assert replacement.statements == LISTEN_ALL
         replacement.notify(RUNS, "after reconnect")
@@ -276,15 +276,15 @@ async def test_a_failed_keepalive_terminates_the_connection_and_reconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.01)
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
     hub.subscribe(RUNS, received.append)
-    await _until(lambda: received == [None])
+    await until(lambda: received == [None])
     broken = endpoint.opened[0]
     broken.keepalive_error = OSError("connection reset")
 
-    await _until(lambda: len(endpoint.opened) == 2 and endpoint.opened[1].statements == LISTEN_ALL)
+    await until(lambda: len(endpoint.opened) == 2 and endpoint.opened[1].statements == LISTEN_ALL)
 
     assert broken.is_closed()
     assert broken.statements[-1] == "SELECT 1"
@@ -296,15 +296,15 @@ async def test_a_hung_keepalive_is_bounded_and_the_connection_replaced(
 ) -> None:
     monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.01)
     monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.05)
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
     hub.subscribe(RUNS, received.append)
-    await _until(lambda: received == [None])
+    await until(lambda: received == [None])
     half_open = endpoint.opened[0]
     half_open.hang.add("SELECT 1")
 
-    await _until(lambda: len(endpoint.opened) == 2 and endpoint.opened[1].statements == LISTEN_ALL)
+    await until(lambda: len(endpoint.opened) == 2 and endpoint.opened[1].statements == LISTEN_ALL)
 
     assert half_open.is_closed()
     await hub.aclose()
@@ -315,15 +315,15 @@ async def test_the_listens_of_a_new_connection_are_bounded_as_a_whole(
 ) -> None:
     """Every LISTEN within the bound is not enough when the batch as a whole outlasts it."""
     monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.15)
-    endpoint = _Endpoint(delays=(0.0, 0.05))  # the first replacement answers slowly
+    endpoint = ListenEndpoint(delays=(0.0, 0.05))  # the first replacement answers slowly
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
     hub.subscribe(RUNS, received.append)
-    await _until(lambda: received == [None])
+    await until(lambda: received == [None])
 
     endpoint.opened[0].terminate()
 
-    await _until(lambda: len(endpoint.opened) == 3 and received == [None, None])
+    await until(lambda: len(endpoint.opened) == 3 and received == [None, None])
     slow = endpoint.opened[1]
     assert slow.is_closed()
     assert len(slow.statements) < len(CHANNELS)
@@ -332,12 +332,12 @@ async def test_the_listens_of_a_new_connection_are_bounded_as_a_whole(
 
 
 async def test_a_refused_connection_is_retried_until_the_database_answers() -> None:
-    endpoint = _Endpoint(failures=2)
+    endpoint = ListenEndpoint(failures=2)
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
 
     with hub.listen(RUNS, received.append):
-        await _until(lambda: received == [None])
+        await until(lambda: received == [None])
 
     assert len(endpoint.opened) == 1
     await hub.aclose()
@@ -353,15 +353,15 @@ async def test_reconnects_back_off_until_a_connection_passes_a_keepalive(
     """
     monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 0.05)
     monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.02)
-    endpoint = _Endpoint(doomed=3)
+    endpoint = ListenEndpoint(doomed=3)
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
 
     hub.subscribe(RUNS, received.append)
-    await _until(lambda: len(endpoint.opened) == 4 and "SELECT 1" in endpoint.opened[3].statements)
+    await until(lambda: len(endpoint.opened) == 4 and "SELECT 1" in endpoint.opened[3].statements)
     lost_at = asyncio.get_running_loop().time()
     endpoint.opened[3].terminate()
-    await _until(lambda: len(endpoint.opened) == 5 and endpoint.opened[4].statements == LISTEN_ALL)
+    await until(lambda: len(endpoint.opened) == 5 and endpoint.opened[4].statements == LISTEN_ALL)
 
     waits = [later - earlier for earlier, later in pairwise(endpoint.opened_at[:4])]
     slack = 0.001  # the event loop may run a timer up to its clock resolution early
@@ -374,7 +374,7 @@ async def test_reconnects_back_off_until_a_connection_passes_a_keepalive(
 
 
 async def test_a_failing_subscriber_does_not_starve_the_others() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
 
@@ -383,7 +383,7 @@ async def test_a_failing_subscriber_does_not_starve_the_others() -> None:
 
     hub.subscribe(RUNS, broken)
     hub.subscribe(RUNS, received.append)
-    await _until(lambda: received == [None])
+    await until(lambda: received == [None])
     endpoint.opened[0].notify(RUNS, "still delivered")
 
     assert received == [None, "still delivered"]
@@ -391,11 +391,11 @@ async def test_a_failing_subscriber_does_not_starve_the_others() -> None:
 
 
 async def test_closing_the_hub_releases_its_connection_and_refuses_new_subscribers() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     received: list[str | None] = []
     hub.subscribe(RUNS, received.append)
-    await _until(lambda: received == [None])
+    await until(lambda: received == [None])
     connection = endpoint.opened[0]
 
     await hub.aclose()
@@ -410,10 +410,10 @@ async def test_a_dedicated_connection_that_never_finishes_closing_is_terminated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.05)
-    half_open = _Connection()
+    half_open = ListenConnection()
     half_open.hang.add("close")
 
-    async def connect(**_kwargs: Any) -> _Connection:
+    async def connect(**_kwargs: Any) -> ListenConnection:
         return half_open
 
     monkeypatch.setattr(asyncpg, "connect", connect)
@@ -427,7 +427,7 @@ async def test_a_dedicated_connection_that_never_finishes_closing_is_terminated(
 
 
 async def test_a_watcher_runs_once_the_channel_is_live_and_again_after_each_wake() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     runs = 0
 
@@ -441,7 +441,7 @@ async def test_a_watcher_runs_once_the_channel_is_live_and_again_after_each_wake
     assert runs == 1
 
     endpoint.opened[0].notify(CANCEL, "wake")
-    await _until(lambda: runs == 2)
+    await until(lambda: runs == 2)
     endpoint.opened[0].notify(RUNS, "another channel")
     await asyncio.sleep(0.01)
 
@@ -451,7 +451,7 @@ async def test_a_watcher_runs_once_the_channel_is_live_and_again_after_each_wake
 
 
 async def test_wakes_during_a_run_coalesce_into_one_more_run() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     release = asyncio.Event()
     runs = 0
@@ -467,11 +467,11 @@ async def test_wakes_during_a_run_coalesce_into_one_more_run() -> None:
     await asyncio.wait_for(watcher.ready.wait(), timeout=2)
     connection = endpoint.opened[0]
     connection.notify(CANCEL, "first")
-    await _until(lambda: runs == 2)
+    await until(lambda: runs == 2)
     for payload in ("second", "third", "fourth"):
         connection.notify(CANCEL, payload)
     release.set()
-    await _until(lambda: runs == 3)
+    await until(lambda: runs == 3)
     await asyncio.sleep(0.01)
 
     assert runs == 3
@@ -480,7 +480,7 @@ async def test_wakes_during_a_run_coalesce_into_one_more_run() -> None:
 
 
 async def test_a_watcher_is_ready_only_after_a_run_that_began_once_the_channel_was_live() -> None:
-    endpoint = _Endpoint(delays=(0.02,))  # the LISTENs take a while
+    endpoint = ListenEndpoint(delays=(0.02,))  # the LISTENs take a while
     hub = PGNotificationHub(connect=endpoint.connect)
     runs = 0
 
@@ -490,9 +490,9 @@ async def test_a_watcher_is_ready_only_after_a_run_that_began_once_the_channel_w
 
     watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
     await watcher.start()
-    await _until(lambda: bool(endpoint.opened) and CANCEL in endpoint.opened[0].listeners)
+    await until(lambda: bool(endpoint.opened) and CANCEL in endpoint.opened[0].listeners)
     endpoint.opened[0].notify(CANCEL, "before the hub is live")
-    await _until(lambda: runs == 1)
+    await until(lambda: runs == 1)
 
     assert not watcher.ready.is_set()
     await asyncio.wait_for(watcher.ready.wait(), timeout=2)
@@ -505,7 +505,7 @@ async def test_until_ready_a_failed_run_is_retried_with_a_doubling_delay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 0.05)
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     started: list[float] = []
 
@@ -529,7 +529,7 @@ async def test_once_ready_a_failed_run_waits_for_the_next_wake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 0.01)
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     runs = 0
 
@@ -543,18 +543,18 @@ async def test_once_ready_a_failed_run_waits_for_the_next_wake(
     await watcher.start()
     await asyncio.wait_for(watcher.ready.wait(), timeout=2)
     endpoint.opened[0].notify(CANCEL, "fails")
-    await _until(lambda: runs == 2)
+    await until(lambda: runs == 2)
     await asyncio.sleep(0.1)  # ten retry delays: none is taken
 
     assert runs == 2
     endpoint.opened[0].notify(CANCEL, "next wake")
-    await _until(lambda: runs == 3)
+    await until(lambda: runs == 3)
     await watcher.aclose()
     await hub.aclose()
 
 
 async def test_closing_a_watcher_unsubscribes_it_and_abandons_its_run() -> None:
-    endpoint = _Endpoint()
+    endpoint = ListenEndpoint()
     hub = PGNotificationHub(connect=endpoint.connect)
     entered = asyncio.Event()
     abandoned = asyncio.Event()

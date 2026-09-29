@@ -8,11 +8,12 @@ Public endpoint shapes live in
 in [PostgreSQL](postgresql.md).
 
 `dlightrag.engine.runtime` owns storage-neutral lifecycle records, store ports,
-fenced sessions, subscriptions, cancellation listening, and `RunCoordinator`.
+fenced sessions, subscriptions, and `RunCoordinator`.
 Composition registers operation-specific Retrieval, Answer, and Corpus Mutation
 executors; Runtime does not import their request models. `PGRunStore` implements the operational
-runtime port and `PGRunBlobStore` implements the immutable PostgreSQL `BYTEA`
-blob seam without creating an Engine dependency on PostgreSQL.
+runtime port, including the listener that carries a cancellation to the owning
+worker across processes, and `PGRunBlobStore` implements the immutable PostgreSQL
+`BYTEA` blob seam without creating an Engine dependency on PostgreSQL.
 
 ## Guarantees And Limits
 

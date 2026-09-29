@@ -344,15 +344,18 @@ Cross-process wake-ups use LISTEN/NOTIFY through one notification hub per
 process. The hub holds one connection of its own, outside `pg_pool`, LISTENs
 every channel declared in `adapters/postgres/core/_channels.py` on it once, and
 fans each channel out to its subscribers (the Connections scheduler and OAuth
-inbox, the model catalogue reload, and Answer child-guidance waits, however
-many are waiting); joining and leaving never touch the connection. A
-notification is only a wake hint: after every (re)connect, and after each
-30-second keepalive passes, the hub tells every subscriber to re-read its
-authoritative rows, and it tells a subscriber that joins a live hub once on its
-own. A connection that is lost, or whose LISTENs or keepalive fail or outlast
-five seconds, is terminated and replaced after one second, doubling with each
-further loss up to 30 seconds until a connection passes a keepalive. The
-run-cancellation listener keeps its own pooled connection.
+inbox, the model catalogue reload, the run-cancellation rescan, and Answer
+child-guidance waits, however many are waiting); joining and leaving never
+touch the connection. A notification is only a wake hint: after every
+(re)connect, and after each 30-second keepalive passes, the hub tells every
+subscriber to re-read its authoritative rows, and it tells a subscriber that
+joins a live hub once on its own. A connection that is lost, or whose LISTENs
+or keepalive fail or outlast five seconds, is terminated and replaced after one
+second, doubling with each further loss up to 30 seconds until a connection
+passes a keepalive. A cancellation request's NOTIFY therefore only wakes every
+process to rescan the cancel-pending leases it holds, and a process starts
+claiming Runs only once such a rescan after its channel went live has signalled
+everything it found.
 
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and

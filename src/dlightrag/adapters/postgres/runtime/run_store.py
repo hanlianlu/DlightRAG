@@ -36,9 +36,8 @@ from dlightrag.adapters.postgres.core._migrations import (
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
+from dlightrag.adapters.postgres.core._notifications import ChannelWatcher, PGNotificationHub
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.adapters.postgres.runtime._child import (
     _CONSUME_CHILD_CONTROLS,
     _CONSUME_PARENT_CONTROLS,
@@ -51,6 +50,7 @@ from dlightrag.adapters.postgres.runtime._child import (
     _SELECT_PENDING_PARENT_CONTROLS,
     PENDING_CONTROL_READ_LIMIT,
     ChildRunStoreMixin,
+    cancellation_notify_key,
 )
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.adapters.postgres.runtime._terminal import (
@@ -65,10 +65,6 @@ from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.lineage import ADOPTABLE_LINEAGE_KINDS
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
-from dlightrag.engine.runtime.cancellation import (
-    RunCancellationListener,
-    cancellation_notify_key,
-)
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase
 from dlightrag.engine.runtime.errors import RunSchemaError
 from dlightrag.engine.runtime.policy import (
@@ -3736,22 +3732,24 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         *,
         worker_id: str,
         on_cancel: Callable[[str, str], Awaitable[None]],
-    ) -> RunCancellationListener:
-        """Build the dedicated reconnecting LISTEN listener for this store."""
+    ) -> ChannelWatcher:
+        """Signal this worker's cancel-pending Runs whenever the cancel channel wakes.
 
-        async def _open_connection() -> Any:
-            if self._operation_pool is not None:
-                return await self._operation_pool.acquire().__aenter__()
-            pool = await pg_pool.get()
-            return await pool.acquire().__aenter__()
+        A wake digest names a Run but never authorizes: every wake rescans this
+        worker's live cancel-pending leases and signals each one. The listener is
+        ``ready`` once a rescan after the channel went live, and every signal it
+        sent, succeeded.
+        """
 
-        def _rescan() -> AsyncIterator[tuple[str, str]]:
-            return self.iter_cancel_pending(worker_id=worker_id)
+        async def rescan() -> None:
+            async for owner_id, run_id in self.iter_cancel_pending(worker_id=worker_id):
+                await on_cancel(owner_id, run_id)
 
-        return RunCancellationListener(
-            open_connection=_open_connection,
-            rescan=_rescan,
-            on_cancel=on_cancel,
+        return ChannelWatcher(
+            self._notification_hub,
+            RUN_CANCEL_CHANNEL,
+            rescan,
+            name="Run cancellation rescan",
         )
 
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome:

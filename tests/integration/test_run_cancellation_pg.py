@@ -1,11 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Integration tests for cross-process cancellation wake (Task 5)."""
+"""Integration tests for cross-process cancellation wake."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.engine.runtime.coordinator import RunCoordinator
 from dlightrag.engine.runtime.records import (
@@ -13,7 +16,7 @@ from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunExecutionOutcome,
 )
-from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
+from tests.support.pg import PG_CONN_KWARGS, drop_database, notification_hub, skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -39,6 +42,12 @@ async def pool():
     finally:
         await created.close()
         await drop_database(_TEST_DATABASE)
+
+
+@pytest.fixture
+async def hub(pool) -> AsyncIterator[PGNotificationHub]:
+    async with notification_hub(pool) as created:
+        yield created
 
 
 def _request(query: str = "why") -> dict[str, Any]:
@@ -73,8 +82,8 @@ async def _create(store: PGRunStore):
     )
 
 
-async def _claim(pool) -> tuple[PGRunStore, Any]:
-    store = PGRunStore(pool=pool)
+async def _claim(pool, hub: PGNotificationHub) -> tuple[PGRunStore, Any]:
+    store = PGRunStore(pool=pool, notifications=hub)
     await store.initialize()
     creation = await _create(store)
     claimed = await store.claim_next(worker_id="worker-1")
@@ -82,8 +91,8 @@ async def _claim(pool) -> tuple[PGRunStore, Any]:
     return store, creation.run.run_id
 
 
-async def test_listener_wakes_the_lease_owner_on_notify(pool) -> None:
-    store, run_id = await _claim(pool)
+async def test_listener_wakes_the_lease_owner_on_notify(pool, hub) -> None:
+    store, run_id = await _claim(pool, hub)
     woken: list[str] = []
 
     async def _on_cancel(owner_id: str, target: str) -> None:
@@ -92,8 +101,6 @@ async def test_listener_wakes_the_lease_owner_on_notify(pool) -> None:
     listener = store.build_cancellation_listener(worker_id="worker-1", on_cancel=_on_cancel)
     await listener.start()
     try:
-        import asyncio
-
         await asyncio.wait_for(listener.ready.wait(), timeout=5.0)
         outcome = await store.request_cancellation(owner_id="owner-a", run_id=run_id)
         assert outcome.outcome == "pending"
@@ -106,8 +113,8 @@ async def test_listener_wakes_the_lease_owner_on_notify(pool) -> None:
         await listener.aclose()
 
 
-async def test_second_connection_wake_reaches_a_running_coordinator(pool) -> None:
-    store = PGRunStore(pool=pool)
+async def test_second_connection_wake_reaches_a_running_coordinator(pool, hub) -> None:
+    store = PGRunStore(pool=pool, notifications=hub)
     await store.initialize()
     creation = await _create(store)
     run_id = creation.run.run_id
@@ -116,7 +123,7 @@ async def test_second_connection_wake_reaches_a_running_coordinator(pool) -> Non
     class _BlockedExecutor:
         async def execute(self, session: Any) -> RunExecutionOutcome:
             while True:
-                await __import__("asyncio").sleep(60)
+                await asyncio.sleep(60)
 
     coordinator = RunCoordinator(
         store=store,
@@ -133,8 +140,6 @@ async def test_second_connection_wake_reaches_a_running_coordinator(pool) -> Non
     await listener.start()
     await coordinator.start()
     try:
-        import asyncio
-
         await asyncio.wait_for(listener.ready.wait(), timeout=5.0)
         for _ in range(200):
             record = await store.get_run(owner_id="owner-a", run_id=run_id)

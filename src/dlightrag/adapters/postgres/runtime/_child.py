@@ -17,7 +17,6 @@ from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.application.answer_runs import ChildRosterPageRequest, ChildRosterRowPage
 from dlightrag.engine.agent.session.ids import OperationId
-from dlightrag.engine.runtime.cancellation import cancellation_notify_key
 from dlightrag.engine.runtime.policy import RUN_LEASE_SECONDS
 from dlightrag.engine.runtime.records import parse_run_id
 
@@ -493,6 +492,11 @@ SET status = $5, summary = $6, usage_json = $7, outcome_json = $8::jsonb,
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
   AND operation_id = $4 AND status = 'running'
 """
+
+
+def cancellation_notify_key(owner_id: str, run_id: str) -> str:
+    """The wake digest a Run's NOTIFY payloads carry: it names the Run, never authorizes."""
+    return hashlib.sha256(f"{owner_id}\0{run_id}".encode()).hexdigest()
 
 
 def _require_owner(owner_id: str) -> str:
