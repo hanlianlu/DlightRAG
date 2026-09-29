@@ -27,6 +27,7 @@ from dlightrag.adapters.postgres.answer.session_repository import (
 )
 from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
 from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
+from dlightrag.adapters.postgres.core._channels import RUN_CANCEL_CHANNEL
 from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
     IndexRequirement,
@@ -2102,7 +2103,7 @@ WITH updated AS (
       AND handoff_started_at IS NULL
     RETURNING 1
 ), notified AS (
-    SELECT pg_notify('dlightrag_run_cancel', $3) FROM updated
+    SELECT pg_notify($3, $4) FROM updated
 )
 SELECT count(*)::int FROM notified
 """
@@ -3779,6 +3780,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                     _REQUEST_CANCELLATION,
                     owner,
                     run_uuid,
+                    RUN_CANCEL_CHANNEL,
                     cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
                 )
                 if int(updated or 0) != 1:

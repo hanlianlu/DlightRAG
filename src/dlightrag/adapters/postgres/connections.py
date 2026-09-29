@@ -13,6 +13,10 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
+from dlightrag.adapters.postgres.core._channels import (
+    CONNECTION_OAUTH_CHANNEL,
+    CONNECTIONS_CHANGED_CHANNEL,
+)
 from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
     Migration,
@@ -46,10 +50,6 @@ from dlightrag.engine.answer.execution.connection_binding import (
 from dlightrag.engine.answer.owner import personal_owner
 
 logger = logging.getLogger(__name__)
-
-# Wake hints only: every waiter re-reads authoritative rows.
-_CHANGED_CHANNEL = "dlightrag_connections_changed"
-_OAUTH_CHANNEL = "dlightrag_connection_oauth"
 
 _SCHEMA = """
 CREATE TABLE dlightrag_connection_heads (
@@ -309,8 +309,8 @@ class PGConnectionsStore(PostgresOperationRunner):
             return
         self._listening = True
         hub = self._notification_hub()
-        await hub.subscribe(_OAUTH_CHANNEL, self._oauth_changed)
-        await hub.subscribe(_CHANGED_CHANNEL, self._changed)
+        await hub.subscribe(CONNECTION_OAUTH_CHANNEL, self._oauth_changed)
+        await hub.subscribe(CONNECTIONS_CHANGED_CHANNEL, self._changed)
         self._wake.set()  # The startup scan recovers anything published before now.
 
     def _changed(self, _payload: str | None) -> None:
@@ -340,8 +340,8 @@ class PGConnectionsStore(PostgresOperationRunner):
             return
         self._listening = False
         hub = self._notification_hub()
-        await hub.unsubscribe(_CHANGED_CHANNEL, self._changed)
-        await hub.unsubscribe(_OAUTH_CHANNEL, self._oauth_changed)
+        await hub.unsubscribe(CONNECTIONS_CHANGED_CHANNEL, self._changed)
+        await hub.unsubscribe(CONNECTION_OAUTH_CHANNEL, self._oauth_changed)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         async def operation(conn: Any) -> None:
@@ -834,7 +834,9 @@ class PGConnectionsStore(PostgresOperationRunner):
                         owner_id,
                         identity,
                     )
-                await conn.execute("SELECT pg_notify('dlightrag_connections_changed',$1)", owner_id)
+                await conn.execute(
+                    "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, owner_id
+                )
 
         await self._run_once(operation)
 
@@ -892,7 +894,9 @@ class PGConnectionsStore(PostgresOperationRunner):
                     connection_id,
                     generation,
                 )
-                await conn.execute("SELECT pg_notify('dlightrag_connections_changed',$1)", owner_id)
+                await conn.execute(
+                    "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, owner_id
+                )
 
         await self._run_once(operation)
 
@@ -983,7 +987,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                 )
                 if changed:
                     await conn.execute(
-                        "SELECT pg_notify('dlightrag_connections_changed',$1)", grant.owner_id
+                        "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, grant.owner_id
                     )
                 return bool(changed)
 
@@ -1061,7 +1065,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                 )
                 if changed:
                     await conn.execute(
-                        "SELECT pg_notify('dlightrag_connections_changed',$1)", grant.owner_id
+                        "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, grant.owner_id
                     )
                 return bool(changed)
 
@@ -1296,7 +1300,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                         "Authorization expired or invalid; restart from Settings", 400
                     )
                 await conn.execute(
-                    "SELECT pg_notify('dlightrag_connection_oauth',$1)", flow.flow_owner
+                    "SELECT pg_notify($1, $2)", CONNECTION_OAUTH_CHANNEL, flow.flow_owner
                 )
 
         await self._run_once(operation)
@@ -1414,7 +1418,9 @@ class PGConnectionsStore(PostgresOperationRunner):
                         "UPDATE dlightrag_connection_oauth_flows SET finished_at=now(),succeeded=TRUE,encrypted_credentials=NULL,encrypted_result=NULL WHERE flow_id=$1",
                         flow.flow_id,
                     )
-                await conn.execute("SELECT pg_notify('dlightrag_connections_changed',$1)", owner_id)
+                await conn.execute(
+                    "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, owner_id
+                )
 
         await self._run_once(operation)
 
@@ -1598,7 +1604,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                     failures,
                 )
                 await conn.execute(
-                    "SELECT pg_notify('dlightrag_connections_changed',$1)", item.owner_id
+                    "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, item.owner_id
                 )
                 return True
 

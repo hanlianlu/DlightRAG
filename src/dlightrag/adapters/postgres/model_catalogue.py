@@ -11,6 +11,7 @@ from contextlib import suppress
 from functools import partial
 from typing import Any
 
+from dlightrag.adapters.postgres.core._channels import MODEL_CATALOGUE_CHANNEL
 from dlightrag.adapters.postgres.core._migrations import (
     Migration,
     TableRequirement,
@@ -27,7 +28,6 @@ from dlightrag.application.model_catalogue import (
     StoredModelCatalogue,
 )
 
-MODEL_CATALOGUE_CHANNEL = "dlightrag_model_catalogue_changed"
 MODEL_CATALOGUE_MIGRATION_SCOPE = "model_catalogue"
 _RELOAD_RETRY_BASE_SECONDS = 1.0
 _RELOAD_RETRY_MAX_SECONDS = 30.0
@@ -252,7 +252,6 @@ class PGModelCatalogueStore(PostgresOperationRunner):
 
 
 __all__ = [
-    "MODEL_CATALOGUE_CHANNEL",
     "MODEL_CATALOGUE_MIGRATION_SCOPE",
     "MODEL_CATALOGUE_MIGRATIONS",
     "MODEL_CATALOGUE_SCHEMA_TABLES",

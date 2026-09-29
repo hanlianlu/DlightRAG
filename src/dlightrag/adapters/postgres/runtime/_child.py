@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from dlightrag.adapters.postgres.core._channels import RUN_ACTIVITY_CHANNEL
 from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
 from dlightrag.application.answer_runs import ChildRosterPageRequest, ChildRosterRowPage
@@ -19,7 +20,6 @@ from dlightrag.engine.runtime.cancellation import cancellation_notify_key
 from dlightrag.engine.runtime.policy import RUN_LEASE_SECONDS
 from dlightrag.engine.runtime.records import parse_run_id
 
-_RUN_ACTIVITY_CHANNEL = "dlightrag_run_activity"
 _MAX_PENDING_CHILD_CONTROLS = 100
 # One read locks at most this many pending controls. The parent inbox takes user
 # steers and mirrored interventions without a cap, and the consuming runtime polls
@@ -536,6 +536,15 @@ async def _mirror_child_intervention(
     )
 
 
+async def _notify_run_activity(conn: Any, owner_id: str, run_id: Any) -> None:
+    """Wake what waits on this Run's children, such as a guidance wait, once this commits."""
+    await conn.execute(
+        "SELECT pg_notify($1, $2)",
+        RUN_ACTIVITY_CHANNEL,
+        cancellation_notify_key(owner_id=owner_id, run_id=str(run_id)),
+    )
+
+
 def _parent_origin_holds_run(
     row: Mapping[str, Any] | Any,
     *,
@@ -785,10 +794,7 @@ class ChildRunStoreMixin:
                         cancellation_origin,
                     )
                 await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return requested is not None
 
         return await self._run_write(_operation)
@@ -1147,10 +1153,7 @@ class ChildRunStoreMixin:
                         submission_key=key,
                         content=text,
                     )
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return {
                     "outcome": "queued",
                     "control_sequence": sequence,
@@ -1260,10 +1263,7 @@ class ChildRunStoreMixin:
                         submission_key=key,
                         content=text,
                     )
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return {
                     "outcome": "accepted",
                     "operation_id": str(operation_id),
@@ -1380,10 +1380,7 @@ class ChildRunStoreMixin:
                     submission_key=key,
                     content="cancellation requested",
                 )
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return receipt
 
         return await self._run_write(_operation)
@@ -1489,10 +1486,7 @@ class ChildRunStoreMixin:
                         submission_key=key,
                         content=f"request {request_id}: {text}",
                     )
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return {
                     "outcome": "replied",
                     "request_id": request_id,
@@ -1587,10 +1581,7 @@ class ChildRunStoreMixin:
                     or str(stored["question"]) != text
                 ):
                     raise ValueError("guidance request id was reused with different input")
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return _guidance_row(stored)
 
         return await self._run_write(_operation)
@@ -1634,7 +1625,7 @@ class ChildRunStoreMixin:
                 wake.set()
 
         # Listen before the first read, so a reply that lands in between still wakes.
-        async with self._notification_hub().listen(_RUN_ACTIVITY_CHANNEL, _notified):
+        async with self._notification_hub().listen(RUN_ACTIVITY_CHANNEL, _notified):
             row = await self.load_child_guidance(
                 owner_id=owner_id, run_id=run_id, request_id=request_id
             )
@@ -1802,10 +1793,7 @@ class ChildRunStoreMixin:
                         outcome_json,
                     )
                 await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
-                await conn.execute(
-                    "SELECT pg_notify('dlightrag_run_activity', $1)",
-                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
-                )
+                await _notify_run_activity(conn, owner, run_uuid)
                 return True
 
         return await self._run_write(_operation)
