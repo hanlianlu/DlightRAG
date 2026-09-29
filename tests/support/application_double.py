@@ -13,6 +13,11 @@ rejects raises ``TypeError``.
 Services and their methods are built when a test first reaches them, so a double
 costs only what the test touches.
 
+A service property annotated with one of the application's own classes, such as a
+cursor codec, is autospecced from that class too. A property typed as a builtin
+or a generic alias (``bool``, ``str``, ``Mapping[...]``) stays a plain MagicMock,
+so a test that reads one assigns it a real value.
+
 Configure a service through its autospecced methods (``return_value``,
 ``side_effect``); assigning a plain mock or a lambda over one drops the signature
 check. Pass a service by keyword only when a test needs a real one. A stateful
@@ -72,6 +77,22 @@ def _service_types() -> dict[str, type]:
 SERVICE_TYPES = _service_types()
 
 
+def _class_properties(service_type: type) -> dict[str, type]:
+    """Map each property of a service annotated with an application class to that class."""
+    properties: dict[str, type] = {}
+    for name in dir(service_type):
+        member = inspect.getattr_static(service_type, name)
+        if name.startswith("_") or not isinstance(member, property):
+            continue
+        hint = typing.get_type_hints(member.fget).get("return")
+        if isinstance(hint, type) and hint.__module__ != "builtins":
+            properties[name] = hint
+    return properties
+
+
+_PROPERTY_CLASSES = {kind: _class_properties(kind) for kind in SERVICE_TYPES.values()}
+
+
 def _is_method(owner: type, name: str) -> bool:
     """Whether ``name`` is a method of ``owner`` other than a dunder, which mocks manage."""
     member = inspect.getattr_static(owner, name, None)
@@ -93,12 +114,17 @@ def _attach_method(parent: NonCallableMagicMock, owner: type, name: str) -> Any:
 
 
 class _ServiceDouble(NonCallableMagicMock):
-    """A service spec'd on its class whose methods are autospecced on first access."""
+    """A service spec'd on its class whose members are autospecced on first access."""
 
     def _get_child_mock(self, /, **kwargs: Any) -> Any:
         name = str(kwargs.get("_new_name"))
         if _is_method(self.__class__, name):
             return _attach_method(self, self.__class__, name)
+        value_class = _PROPERTY_CLASSES[self.__class__].get(name)
+        if value_class is not None:
+            value = create_autospec(value_class, instance=True, spec_set=True)
+            self.attach_mock(value, name)
+            return value
         return super()._get_child_mock(**kwargs)
 
 
