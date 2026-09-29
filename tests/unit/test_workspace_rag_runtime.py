@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
+from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.settings import rag_settings
@@ -3883,6 +3884,10 @@ class TestWorkspaceRagLightRAGMainPath:
                 batch_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
             ).name
         )
+        # An earlier attempt was interrupted after LightRAG archived its copy.
+        archived = parser_path.parent / PARSED_DIR_NAME / parser_path.name
+        archived.parent.mkdir(parents=True)
+        archived.write_bytes(b"%PDF-stale")
         source = MagicMock()
 
         async def fail_after_partial_write(_document: object, destination: Path) -> None:
@@ -3906,6 +3911,7 @@ class TestWorkspaceRagLightRAGMainPath:
             )
 
         assert not parser_path.exists()
+        assert not archived.exists()
         source.aclose.assert_awaited_once()
         service._ingestion_engine.aingest_files.assert_not_awaited()
 

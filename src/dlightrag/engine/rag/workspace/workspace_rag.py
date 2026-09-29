@@ -864,9 +864,10 @@ class WorkspaceRag:
             await source.amaterialize_document(document, parser_path)
         except BaseException:
             if not retain_source_file:
-                # A transient parser copy is never adopted, so a partial
-                # download must not outlive its failed attempt.
-                parser_path.unlink(missing_ok=True)
+                # A transient parser copy is never adopted, so neither a partial
+                # download nor the copy an interrupted earlier attempt left in
+                # LightRAG's parsed archive may outlive this failed attempt.
+                _remove_parser_source(parser_path)
             raise
         return PreparedIngestFile(
             parser_path=parser_path,
@@ -2523,16 +2524,20 @@ async def _aclose_retry_source(source: object) -> None:
 
 def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:
     for item in items:
-        parser_path = item.parser_path
-        for candidate in (
-            parser_path,
-            parser_path.parent / PARSED_DIR_NAME / parser_path.name,
-        ):
-            try:
-                if candidate.exists() and candidate.is_file():
-                    candidate.unlink()
-            except OSError:
-                logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
+        _remove_parser_source(item.parser_path)
+
+
+def _remove_parser_source(parser_path: Path) -> None:
+    """Remove a transient parser copy and the copy LightRAG archived beside it."""
+    for candidate in (
+        parser_path,
+        parser_path.parent / PARSED_DIR_NAME / parser_path.name,
+    ):
+        try:
+            if candidate.exists() and candidate.is_file():
+                candidate.unlink()
+        except OSError:
+            logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
 
 
 __all__ = ["WorkspaceRag"]
