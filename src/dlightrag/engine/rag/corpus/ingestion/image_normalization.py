@@ -43,6 +43,7 @@ import asyncio
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -137,22 +138,47 @@ async def apadded_parser_path(source: Path, *, margin: float) -> Path | None:
 
     Decoding and re-encoding a large image stalls a loop that also serves HTTP
     and Run leases. A cancelled caller never learns the derived path, so the
-    file is discarded as soon as the worker finishes instead of leaking.
+    file is discarded instead of leaking, even when a shutting-down loop
+    cancels the worker's task before the thread finishes.
     """
-    task = asyncio.ensure_future(asyncio.to_thread(padded_parser_path, source, margin=margin))
+    handoff = _PaddingHandoff()
+    task = asyncio.ensure_future(asyncio.to_thread(handoff.pad, source, margin))
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        task.add_done_callback(_discard_orphaned_padding)
+        handoff.abandon()
         raise
 
 
-def _discard_orphaned_padding(task: asyncio.Future[Path | None]) -> None:
-    if task.cancelled() or task.exception() is not None:
-        return
-    padded = task.result()
-    if padded is not None:
-        discard_padded_images([padded])
+class _PaddingHandoff:
+    """Hand one padded input to its caller, or discard it once the caller is gone.
+
+    The worker thread and the cancelled caller settle ownership under one lock,
+    whichever finishes last discarding the file, so neither depends on the
+    worker's task surviving to deliver its result.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._abandoned = False
+        self._padded: Path | None = None
+
+    def pad(self, source: Path, margin: float) -> Path | None:
+        padded = padded_parser_path(source, margin=margin)
+        with self._lock:
+            if not self._abandoned:
+                self._padded = padded
+                return padded
+        if padded is not None:
+            discard_padded_images([padded])
+        return None
+
+    def abandon(self) -> None:
+        with self._lock:
+            self._abandoned = True
+            padded, self._padded = self._padded, None
+        if padded is not None:
+            discard_padded_images([padded])
 
 
 def discard_padded_images(paths: list[Path]) -> None:

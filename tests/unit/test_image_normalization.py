@@ -186,3 +186,43 @@ async def test_cancelled_padding_discards_the_derived_input(
     assert not target.exists()
     assert not target.parent.exists()
     assert source.exists()
+
+
+def test_padding_orphaned_by_a_shutting_down_loop_is_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_solid(tmp_path / "art.png", (10, 10), (0, 0, 0))
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    pad = image_normalization.padded_parser_path
+
+    def slow(path: Path, *, margin: float) -> Path | None:
+        started.set()
+        release.wait(5)
+        try:
+            return pad(path, margin=margin)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(image_normalization, "padded_parser_path", slow)
+
+    async def ingest() -> None:
+        try:
+            await apadded_parser_path(source, margin=0.1)
+        except asyncio.CancelledError:
+            # The worker only writes its file once its caller is gone.
+            release.set()
+            raise
+
+    async def serve() -> None:
+        asyncio.get_running_loop().create_task(ingest())
+        await asyncio.to_thread(started.wait, 5)
+        # Returning shuts the loop down: asyncio.run cancels the caller and the
+        # worker's own task, and only then waits for the worker thread.
+
+    asyncio.run(serve())
+
+    assert finished.wait(5)
+    target = tmp_path / PADDED_INPUT_DIR_NAME / source.name
+    assert not target.exists()
+    assert not target.parent.exists()
+    assert source.exists()
