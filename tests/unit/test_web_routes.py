@@ -330,15 +330,10 @@ async def test_vendored_assets_allow_revalidation_caching(client):
     assert "no-store" not in resp.headers.get("cache-control", "")
 
 
-def _configure_web_application(application_double, cfg: DlightragConfig):
-    application_double.config = cfg
-    return application_double
-
-
-def _web_client_for(cfg: DlightragConfig, application_double):
-    application = create_app(include_web_app=True)
-    application.state.application = _configure_web_application(application_double, cfg)
-    transport = ASGITransport(app=application)
+def _web_client_for(application: Any) -> AsyncClient:
+    app = create_app(include_web_app=True)
+    app.state.application = application
+    transport = ASGITransport(app=app)
     return AsyncClient(
         transport=transport,
         base_url="http://test",
@@ -361,7 +356,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             resp = await c.get("/web/")
 
         assert resp.status_code == 303
@@ -376,7 +371,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.api_token", "secret-token")
         path = f"/web/conversations/{CONVERSATION_ID}"
 
-        async with _web_client_for(test_config, mock_application) as client:
+        async with _web_client_for(mock_application) as client:
             response = await client.get(path)
 
         assert response.status_code == 303
@@ -391,7 +386,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as client:
+        async with _web_client_for(mock_application) as client:
             response = await client.get(
                 "/web/api/files/raw/doc-report",
                 params={"workspace": "finance"},
@@ -407,7 +402,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             resp = await c.get(
                 "/web/api/files",
                 headers={"Authorization": "Bearer wrong-token"},
@@ -421,7 +416,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as client:
+        async with _web_client_for(mock_application) as client:
             response = await client.get(
                 "/web/login",
                 params={"next": f"/web/conversations/{CONVERSATION_ID}"},
@@ -442,7 +437,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.api_token", "secret-token")
         target = f"/web/conversations/{CONVERSATION_ID}"
 
-        async with _web_client_for(test_config, mock_application) as client:
+        async with _web_client_for(mock_application) as client:
             response = await client.post(
                 "/web/login",
                 data={"token": "wrong-token", "next": target},
@@ -458,7 +453,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             login = await c.post(
                 "/web/login",
                 data={"token": "secret-token", "next": "/web/"},
@@ -485,7 +480,7 @@ class TestWebAuth:
             filename="notes.md",
         )
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             await c.post(
                 "/web/login",
                 data={"token": "secret-token", "next": "/web/"},
@@ -512,7 +507,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             resp = await c.post(
                 "/web/login",
                 data={"token": "secret-token", "next": "https://evil.example/"},
@@ -527,7 +522,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             c.cookies.set("dlightrag_web_auth", "not base64!")
             resp = await c.get("/web/")
 
@@ -541,7 +536,7 @@ class TestWebAuth:
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             resp = await c.get(
                 "/web/api/files",
                 headers={"Authorization": "Bearer secret-token"},
@@ -559,7 +554,7 @@ class TestWebAuth:
             "test-jwt-verification-key-for-web-route-tests",
         )
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             resp = await c.get(
                 "/web/api/files",
                 headers={"Authorization": "Bearer not-a-jwt"},
@@ -585,7 +580,7 @@ class TestWebAuth:
             algorithm="HS256",
         )
 
-        async with _web_client_for(test_config, mock_application) as c:
+        async with _web_client_for(mock_application) as c:
             resp = await c.get(
                 "/web/api/files",
                 headers={"Authorization": f"Bearer {token}"},
