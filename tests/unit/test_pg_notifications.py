@@ -97,6 +97,7 @@ class ListenEndpoint:
     def __init__(
         self, *, failures: int = 0, doomed: int = 0, delays: tuple[float, ...] = ()
     ) -> None:
+        self.attempts = 0
         self.opened: list[ListenConnection] = []
         self.opened_at: list[float] = []
         self.released: list[ListenConnection] = []
@@ -106,6 +107,7 @@ class ListenEndpoint:
 
     @asynccontextmanager
     async def connect(self) -> AsyncIterator[ListenConnection]:
+        self.attempts += 1
         if self._failures:
             self._failures -= 1
             raise ConnectionRefusedError("database starting up")
@@ -357,6 +359,23 @@ async def test_a_refused_connection_is_retried_until_the_database_answers() -> N
         await until(lambda: received == [None])
 
     assert len(endpoint.opened) == 1
+    await hub.aclose()
+
+
+async def test_a_subscriber_joining_during_the_reconnect_wait_cuts_it_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 30.0)
+    endpoint = ListenEndpoint(failures=1)
+    hub = PGNotificationHub(connect=endpoint.connect)
+    first: list[str | None] = []
+    joining: list[str | None] = []
+    hub.subscribe(RUNS, first.append)
+    await until(lambda: endpoint.attempts == 1)  # refused: the hub now waits 30 s
+
+    hub.subscribe(CATALOGUE, joining.append)
+
+    await until(lambda: first == [None] and joining == [None])
     await hub.aclose()
 
 

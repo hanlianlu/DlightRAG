@@ -72,6 +72,7 @@ class PGNotificationHub:
         }
         self._live = False
         self._closed = False
+        self._backoff: asyncio.Event | None = None  # the wait before reconnecting
         self._task: asyncio.Task[None] | None = None
         self._reconnect_delay = _RECONNECT_BASE_SECONDS
 
@@ -94,6 +95,8 @@ class PGNotificationHub:
         callbacks.append(callback)
         if self._live:
             asyncio.get_running_loop().call_soon(self._welcome, channel, callback)
+        elif self._backoff is not None:
+            self._backoff.set()  # someone now waits for the hub: reconnect without delay
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="dlightrag-pg-notifications")
 
@@ -132,8 +135,11 @@ class PGNotificationHub:
             )
             # Every replacement waits, and the wait doubles until a connection passes a
             # keepalive, so one that dies right after its LISTENs cannot spin the hub
-            # through reconnects and resynchronizations.
-            await asyncio.sleep(self._reconnect_delay)
+            # through reconnects and resynchronizations. A subscriber that joins during
+            # the wait cuts it short, since it waits for the hub in turn.
+            self._backoff = asyncio.Event()
+            await _set_within(self._backoff, self._reconnect_delay)
+            self._backoff = None
             self._reconnect_delay = min(self._reconnect_delay * 2, _RECONNECT_MAX_SECONDS)
 
     async def _serve(self, connection: Any) -> None:
