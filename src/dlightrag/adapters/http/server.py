@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from dlightrag import create_application
-from dlightrag.adapters.http.errors import install_error_handlers
+from dlightrag.adapters.http.errors import INVALID_REQUEST_RESPONSES, install_error_handlers
 from dlightrag.adapters.http.rest.middleware import (
     RequestBodyLimitMiddleware,
     RequestIdMiddleware,
@@ -111,6 +111,7 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         description="DlightRAG - LightRAG-main unified multimodal RAG service",
         version=__import__("dlightrag").__version__,
         lifespan=lifespan,
+        responses=INVALID_REQUEST_RESPONSES,
     )
     application.state.config = cfg
 

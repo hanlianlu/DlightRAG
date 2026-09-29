@@ -75,6 +75,12 @@ class DeleteRequest(ClientContractModel):
     document_ids: list[str] | None = None
     workspace: str | None = None
 
+    @model_validator(mode="after")
+    def _names_a_document(self) -> Self:
+        if not any((self.file_paths, self.filenames, self.document_ids)):
+            raise ValueError("At least one exact identifier is required")
+        return self
+
 
 class RetryRequest(ClientContractModel):
     workspace: str | None = None
@@ -104,7 +110,7 @@ class WorkspaceDeleteRequest(ClientContractModel):
 
 
 class MetadataUpdateRequest(ClientContractModel):
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = Field(min_length=1)
 
 
 # ═══════════════════════════════════════════════════════════════════

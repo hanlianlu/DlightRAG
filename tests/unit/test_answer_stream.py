@@ -14,7 +14,7 @@ from functools import partial
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request
 
 import dlightrag.adapters.http.browser.answer_events as web_events
@@ -107,15 +107,24 @@ def test_the_resume_cursor_comes_from_either_form(
 
 
 @pytest.mark.parametrize(
-    ("header", "query"),
-    [("1", "2"), (None, "abc"), (None, "-1"), (None, "1.5"), (None, ""), ("abc", None)],
+    ("header", "query", "location"),
+    [
+        ("1", "2", ("query", "after")),
+        (None, "abc", ("query", "after")),
+        (None, "-1", ("query", "after")),
+        (None, "1.5", ("query", "after")),
+        (None, "", ("query", "after")),
+        ("abc", None, ("header", "Last-Event-ID")),
+    ],
     ids=["conflicting", "non-numeric", "negative", "fractional", "blank-after", "bad-header"],
 )
-def test_an_unusable_cursor_is_a_400(header: str | None, query: str | None) -> None:
-    with pytest.raises(HTTPException) as failure:
+def test_an_unusable_cursor_is_request_validation(
+    header: str | None, query: str | None, location: tuple[str, str]
+) -> None:
+    with pytest.raises(RequestValidationError) as failure:
         resume_cursor(_request(header=header, query=query))
 
-    assert failure.value.status_code == 400
+    assert [error["loc"] for error in failure.value.errors()] == [location]
 
 
 # ---------------------------------------------------------------------------

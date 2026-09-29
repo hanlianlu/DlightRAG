@@ -89,7 +89,8 @@ bounds: each file under `corpus.ingestion.max_upload_bytes`, the whole request
 under `interfaces.max_upload_size_mb`, and at most 100 files. A single upload may
 provide a 64-character hexadecimal
 `content_sha256`; mismatch rejects acceptance and deletes the Run-exclusive
-staging directory. Every REST mutation requires `Idempotency-Key`.
+staging directory. Every REST mutation requires `Idempotency-Key` (422 without
+it).
 
 ```bash
 curl -X POST http://localhost:8100/runs/corpus/ingest \
@@ -366,8 +367,8 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
 | `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
 | `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
-| `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 400 without `Idempotency-Key`; 422 for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
-| `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 400 without `Idempotency-Key`; 422 for invalid content or key; 404 if the request is unknown; 409 with the outcome otherwise. |
+| `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 422 without `Idempotency-Key` or for invalid content or key; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
+| `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 422 without `Idempotency-Key` or for invalid content or key; 404 if the request is unknown; 409 with the outcome otherwise. |
 
 Run status is `queued`, `running`, `succeeded`, `failed`, or `cancelled`. Phase is
 an executor-owned string. Retrieval uses `planning` and `searching`; Answer uses
@@ -405,8 +406,9 @@ No tool event carries stdout, stderr, arguments as such, or Tool output. The one
 producer-chosen fact that does cross is `object_label`: a bounded Tool Subject, never the
 argument payload, and a Tool reports it only when it names one thing.
 
-Each durable sequence is the SSE `id`. Supplying conflicting header/query
-cursors returns 400. Without a cursor, replay starts at sequence 1. Ten-second
+Each durable sequence is the SSE `id`. A cursor that is not a non-negative
+integer, or header and query cursors that disagree, return 422. Without a
+cursor, replay starts at sequence 1. Ten-second
 comment keepalives consume no sequence. Exactly one terminal event is committed.
 
 Canonical successful Retrieval result after reader projection:
@@ -853,7 +855,13 @@ General errors are `{detail, error_type, error_kind?}` where `error_type` is
 `unavailable`, `configuration`, or `internal`. A request that fails validation
 answers 422 whose `detail` names each invalid field and why, as
 `body.query: Field required`; submitted values are never
-echoed back. REST and MCP Run acceptance
+echoed back. That includes the parts a route reads by hand: multipart fields
+(`body.file`, `body.metadata`), event cursors (`query.after`,
+`header.Last-Event-ID`), and a missing `Idempotency-Key`
+(`header.Idempotency-Key: Field required`). OpenAPI documents every 422 with
+this `ErrorDetail` body, not FastAPI's list-shaped default. A refusal of
+well-formed input keeps the status documented beside its route, such as the
+Corpus Mutation refusals above (400). REST and MCP Run acceptance
 answer a reused idempotency key with `Idempotency key was reused with a
 different request` (HTTP 409 on REST); browser commands use their own envelope
 below. Stable answer error kinds are:

@@ -461,7 +461,7 @@ class TestCreate:
         assert response.status_code == 422
         body = response.json()
         assert body["error_type"] == "validation"
-        assert body["detail"].startswith("workspaces: ")
+        assert body["detail"].startswith("body.workspaces: ")
         assert "SECRET-NOT-A-LIST" not in response.text
         assert run_application.created == []
 
@@ -753,14 +753,18 @@ class TestEvents:
 
         assert run_application.subscriptions[0]["after_sequence"] == 1
 
-    async def test_conflicting_cursors_are_400(
+    async def test_conflicting_cursors_are_422(
         self, client: AsyncClient, run_application: _RunApplication
     ) -> None:
         response = await client.get(
             f"/runs/{_RUN_ID}/events?after=2", headers={"Last-Event-ID": "1"}
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 422
+        assert response.json() == {
+            "detail": "query.after: Last-Event-ID and 'after' request different cursors",
+            "error_type": "validation",
+        }
         assert not run_application.subscriptions
 
     async def test_matching_cursors_are_accepted(
@@ -776,12 +780,15 @@ class TestEvents:
         assert run_application.subscriptions[0]["after_sequence"] == 2
 
     @pytest.mark.parametrize("cursor", ["-1", "abc", "1.5", ""])
-    async def test_malformed_cursor_is_400(
+    async def test_malformed_cursor_is_422(
         self, client: AsyncClient, run_application: _RunApplication, cursor: str
     ) -> None:
         response = await client.get(f"/runs/{_RUN_ID}/events?after={cursor}")
 
-        assert response.status_code == 400
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "query.after: Event cursor must be a non-negative integer"
+        )
 
     async def test_empty_last_event_id_replays_from_the_beginning(
         self, client: AsyncClient, run_application: _RunApplication
@@ -795,12 +802,15 @@ class TestEvents:
         assert run_application.subscriptions[0]["after_sequence"] == 0
 
     @pytest.mark.parametrize("cursor", ["abc", "-1", "1.5"])
-    async def test_malformed_last_event_id_is_400(
+    async def test_malformed_last_event_id_is_422(
         self, client: AsyncClient, run_application: _RunApplication, cursor: str
     ) -> None:
         response = await client.get(f"/runs/{_RUN_ID}/events", headers={"Last-Event-ID": cursor})
 
-        assert response.status_code == 400
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "header.Last-Event-ID: Event cursor must be a non-negative integer"
+        )
         assert not run_application.subscriptions
 
     async def test_unknown_run_events_are_404(
@@ -1213,6 +1223,15 @@ class TestAgentControls:
             f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
             json={"action": "steer", "content": "focus"},
         )
+        unkeyed_reply = await client.post(
+            f"/answer/{_RUN_ID}/child-guidance/{_RUN_ID}/reply",
+            json={"content": "use the report"},
+        )
+        overlong = await client.post(
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
+            headers={"Idempotency-Key": "k" * 201},
+            json={"action": "steer", "content": "focus"},
+        )
         controlled = await client.post(
             f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
             headers={"Idempotency-Key": "child-steer-1"},
@@ -1224,7 +1243,14 @@ class TestAgentControls:
             json={"content": "use the report"},
         )
 
-        assert missing.status_code == 400
+        for refused in (missing, unkeyed_reply):
+            assert refused.status_code == 422
+            assert refused.json() == {
+                "detail": "header.Idempotency-Key: Field required",
+                "error_type": "validation",
+            }
+        assert overlong.status_code == 422
+        assert overlong.json()["detail"].startswith("header.Idempotency-Key: ")
         assert controlled.status_code == 202
         assert controlled.json() == {
             "run_id": _RUN_ID,

@@ -3,17 +3,21 @@
 
 Routes raise typed Application errors and let these handlers answer. A route
 catches only what it translates differently: a browser command envelope, or a
-refusal it deliberately masks as not found.
+refusal it deliberately masks as not found. A request part a route parses by
+hand is refused through ``invalid_request``/``invalid_body``, so every
+request-shape error is the same 422 FastAPI's own validation answers.
 """
 
 import logging
 import math
 from collections.abc import Mapping
+from typing import Any
 
 from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException
 
 from dlightrag.adapters.http.rest.models import ErrorDetail
@@ -41,6 +45,31 @@ _SCHEMA_ERRORS = (
     WebConversationSchemaError,
     ModelCatalogueSchemaError,
 )
+
+#: OpenAPI for every route's 422, registered once on the app: the envelope the
+#: handlers below answer, never FastAPI's list-shaped ``HTTPValidationError``.
+INVALID_REQUEST_RESPONSES: dict[int | str, dict[str, Any]] = {
+    422: {"model": ErrorDetail, "description": "Validation Error"},
+}
+
+
+def invalid_request(reason: str, *location: str) -> RequestValidationError:
+    """Refuse a request part a route reads itself as FastAPI refuses the parts it reads.
+
+    Multipart fields and event cursors are parsed by hand; raising this sends them
+    through the shared 422 handler, which names ``location`` and ``reason``.
+    """
+    return RequestValidationError([{"type": "value_error", "loc": location, "msg": reason}])
+
+
+def invalid_body(exc: ValidationError, *within: str) -> RequestValidationError:
+    """Refuse a body a route validated itself, locating each field as FastAPI does."""
+    return RequestValidationError(
+        [
+            {**error, "loc": ("body", *within, *error["loc"])}
+            for error in exc.errors(include_input=False, include_url=False)
+        ]
+    )
 
 
 def error_type_for_status(status: int) -> str:
@@ -215,4 +244,12 @@ def install_error_handlers(app: FastAPI) -> None:
         app.add_exception_handler(schema_error, schema_incompatible)
 
 
-__all__ = ["error_response", "error_type_for_status", "install_error_handlers", "invalid_fields"]
+__all__ = [
+    "INVALID_REQUEST_RESPONSES",
+    "error_response",
+    "error_type_for_status",
+    "install_error_handlers",
+    "invalid_body",
+    "invalid_fields",
+    "invalid_request",
+]

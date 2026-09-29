@@ -5,6 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from dlightrag.adapters.http.errors import invalid_body
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import (
     MetadataResponse,
@@ -12,7 +13,6 @@ from dlightrag.adapters.http.rest.models import (
     MetadataUpdateResponse,
     SearchMetadataResponse,
 )
-from dlightrag.adapters.validation_errors import invalid_fields
 from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.corpus_admin import (
     METADATA_SEARCH_PAGE_DEFAULT_LIMIT,
@@ -53,9 +53,7 @@ async def search_metadata(
     try:
         validated = MetadataFilter.model_validate(filters)
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=422, detail=f"Invalid metadata filter: {invalid_fields(exc)}"
-        ) from None
+        raise invalid_body(exc) from None
 
     try:
         decoded_cursor = (
@@ -108,9 +106,6 @@ async def update_metadata(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, str]:
     """Merge custom metadata dict into existing document's metadata JSONB."""
-    if not body.metadata:
-        raise HTTPException(status_code=400, detail="Empty 'metadata' dictionary")
-
     application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)

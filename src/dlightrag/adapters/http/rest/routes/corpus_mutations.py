@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from uuid import uuid7
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.datastructures import FormData
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from dlightrag.adapters.http.errors import invalid_request
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import (
     DeleteRequest,
@@ -39,10 +40,13 @@ from dlightrag.application.runs import (
     RunCreation,
 )
 
-from .deps import enforce_access, get_application, idempotency_key, resolve_workspace
+from .deps import enforce_access, get_application, resolve_workspace
 from .runs import run_descriptor
 
 router = APIRouter(prefix="/runs/corpus", tags=["Corpus Mutation Runs"])
+
+#: Every Corpus Mutation names its replay key; the Run records it as sent.
+IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1)]
 
 _MAX_FORM_FIELDS = 8
 _FORM_PART_MAX_BYTES = 1024 * 1024
@@ -50,13 +54,6 @@ _SINGLE_UPLOAD_FIELDS = frozenset(
     {"file", "workspace", "title", "author", "metadata", "content_sha256"}
 )
 _BATCH_UPLOAD_FIELDS = frozenset({"file", "workspace"})
-
-
-def _required_idempotency_key(request: Request) -> str:
-    value = idempotency_key(request)
-    if value is None:
-        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
-    return value
 
 
 async def _accept(call: Callable[[], Awaitable[RunCreation]]) -> dict[str, Any]:
@@ -88,6 +85,7 @@ async def _ingest_action(
     body: IngestRequest,
     request: Request,
     user: UserContext,
+    key: str,
     *,
     replace: bool,
 ) -> dict[str, Any]:
@@ -112,7 +110,6 @@ async def _ingest_action(
             spec = spec.model_copy(update={"path": path, "documents": documents})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-    key = _required_idempotency_key(request)
     return await _accept(
         lambda: application.corpus_mutations.create_ingest(
             workspace=workspace,
@@ -127,30 +124,30 @@ async def _ingest_action(
 async def ingest(
     body: IngestRequest,
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await _ingest_action(body, request, user, replace=False)
+    return await _ingest_action(body, request, user, key, replace=False)
 
 
 @router.post("/replace", response_model=RunDescriptor, status_code=202)
 async def replace(
     body: IngestRequest,
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await _ingest_action(body, request, user, replace=True)
+    return await _ingest_action(body, request, user, key, replace=True)
 
 
 @router.post("/delete", response_model=RunDescriptor, status_code=202)
 async def delete(
     body: DeleteRequest,
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     application, workspace, submitted_by = await _authorize(request, user, body.workspace, "delete")
-    if not any((body.file_paths, body.filenames, body.document_ids)):
-        raise HTTPException(status_code=400, detail="At least one exact identifier is required")
-    key = _required_idempotency_key(request)
     return await _accept(
         lambda: application.corpus_mutations.create_delete(
             workspace=workspace,
@@ -167,11 +164,11 @@ async def delete(
 async def retry(
     body: RetryRequest,
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     application, workspace, submitted_by = await _authorize(request, user, body.workspace, "retry")
     selector = None if body.document_ids else body.selector
-    key = _required_idempotency_key(request)
     return await _accept(
         lambda: application.corpus_mutations.create_retry(
             workspace=workspace,
@@ -187,10 +184,10 @@ async def retry(
 async def reset(
     body: ResetRequest,
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     application, workspace, submitted_by = await _authorize(request, user, body.workspace, "reset")
-    key = _required_idempotency_key(request)
     return await _accept(
         lambda: application.corpus_mutations.create_reset(
             workspace=workspace,
@@ -205,12 +202,12 @@ async def reset(
 async def delete_workspace(
     body: WorkspaceDeleteRequest,
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     application, workspace, submitted_by = await _authorize(
         request, user, body.workspace, "delete_workspace"
     )
-    key = _required_idempotency_key(request)
     return await _accept(
         lambda: application.corpus_mutations.create_workspace_delete(
             workspace=workspace,
@@ -226,7 +223,7 @@ def _text_field(form: FormData, name: str) -> str | None:
     if value in (None, ""):
         return None
     if not isinstance(value, str):
-        raise HTTPException(status_code=400, detail=f"{name} must be a text field")
+        raise invalid_request("Must be a text field, not a file", "body", name)
     return value
 
 
@@ -253,22 +250,19 @@ async def _parse_upload_form(
     unexpected = sorted({key for key, _ in form.multi_items()} - allowed)
     if unexpected:
         await form.close()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unexpected multipart field(s): {', '.join(unexpected)}",
-        )
+        raise invalid_request(f"Unexpected multipart field(s): {', '.join(unexpected)}", "body")
     return form
 
 
 async def _upload_action(
     request: Request,
     user: UserContext,
+    key: str,
     *,
     replace: bool,
     batch: bool,
 ) -> dict[str, Any]:
     form = await _parse_upload_form(request, batch=batch)
-    key = _required_idempotency_key(request)
     run_id = str(uuid7())
     application: Any | None = None
     staged_workspace: str | None = None
@@ -282,14 +276,13 @@ async def _upload_action(
         )
 
     try:
+        # The parser admits a single upload one file part, so only a missing file is left.
         files = form.getlist("file")
         if not files or any(not isinstance(item, StarletteUploadFile) for item in files):
-            raise HTTPException(status_code=400, detail="At least one file is required")
-        if not batch and len(files) != 1:
-            raise HTTPException(status_code=400, detail="Exactly one file is required")
+            raise invalid_request("At least one file is required", "body", "file")
         uploads = [cast(StarletteUploadFile, item) for item in files]
         if any(not item.filename for item in uploads):
-            raise HTTPException(status_code=400, detail="Every file requires a filename")
+            raise invalid_request("Every file requires a filename", "body", "file")
         authorized_application, workspace, submitted_by = await _authorize(
             request,
             user,
@@ -322,9 +315,9 @@ async def _upload_action(
             try:
                 decoded = json.loads(metadata_text)
             except json.JSONDecodeError:
-                raise HTTPException(status_code=400, detail="Invalid metadata JSON") from None
+                raise invalid_request("Invalid JSON", "body", "metadata") from None
             if not isinstance(decoded, dict):
-                raise HTTPException(status_code=400, detail="metadata must be a JSON object")
+                raise invalid_request("Must be a JSON object", "body", "metadata")
             metadata = decoded
         return await _accept(
             lambda: authorized_application.corpus_mutations.create_staged_ingest(
@@ -358,30 +351,34 @@ async def _upload_action(
 @router.post("/ingest/upload", response_model=RunDescriptor, status_code=202)
 async def ingest_upload(
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await _upload_action(request, user, replace=False, batch=False)
+    return await _upload_action(request, user, key, replace=False, batch=False)
 
 
 @router.post("/replace/upload", response_model=RunDescriptor, status_code=202)
 async def replace_upload(
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await _upload_action(request, user, replace=True, batch=False)
+    return await _upload_action(request, user, key, replace=True, batch=False)
 
 
 @router.post("/ingest/uploads", response_model=RunDescriptor, status_code=202)
 async def ingest_uploads(
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await _upload_action(request, user, replace=False, batch=True)
+    return await _upload_action(request, user, key, replace=False, batch=True)
 
 
 @router.post("/replace/uploads", response_model=RunDescriptor, status_code=202)
 async def replace_uploads(
     request: Request,
+    key: IdempotencyKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await _upload_action(request, user, replace=True, batch=True)
+    return await _upload_action(request, user, key, replace=True, batch=True)

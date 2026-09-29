@@ -1042,12 +1042,89 @@ class TestCorpusMutationEndpoints:
         self, client: AsyncClient, mock_application
     ) -> None:
         app.state.application = mock_application
-        response = await client.post(
+        json_request = await client.post(
             "/runs/corpus/ingest",
             json={"source_type": "local", "path": "file.pdf"},
         )
-        assert response.status_code == 400
+        upload = await client.post(
+            "/runs/corpus/ingest/upload",
+            files={"file": ("report.pdf", b"content", "application/pdf")},
+        )
+        for response in (json_request, upload):
+            assert response.status_code == 422
+            assert response.json() == {
+                "detail": "header.Idempotency-Key: Field required",
+                "error_type": "validation",
+            }
         mock_application.corpus_mutations.create_ingest.assert_not_awaited()
+        mock_application.corpus_mutations.stage_uploads.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("path", "form", "files", "detail"),
+        [
+            (
+                "/runs/corpus/ingest/upload",
+                {"extra": "x"},
+                {"file": ("report.pdf", b"content", "application/pdf")},
+                "body: Unexpected multipart field(s): extra",
+            ),
+            (
+                "/runs/corpus/ingest/upload",
+                {"workspace": "default"},
+                None,
+                "body.file: At least one file is required",
+            ),
+            (
+                "/runs/corpus/ingest/uploads",
+                None,
+                [
+                    ("file", ("report.pdf", b"content", "application/pdf")),
+                    ("workspace", ("workspace.txt", b"default", "text/plain")),
+                ],
+                "body.workspace: Must be a text field, not a file",
+            ),
+            (
+                "/runs/corpus/ingest/upload",
+                {"metadata": "{not json"},
+                {"file": ("report.pdf", b"content", "application/pdf")},
+                "body.metadata: Invalid JSON",
+            ),
+            (
+                "/runs/corpus/ingest/upload",
+                {"metadata": "[1, 2]"},
+                {"file": ("report.pdf", b"content", "application/pdf")},
+                "body.metadata: Must be a JSON object",
+            ),
+        ],
+        ids=["unexpected-field", "no-file", "file-as-text-field", "bad-json", "not-an-object"],
+    )
+    async def test_a_malformed_upload_form_is_request_validation(
+        self,
+        client: AsyncClient,
+        mock_application,
+        tmp_path: Path,
+        path: str,
+        form: dict[str, str] | None,
+        files: Any,
+        detail: str,
+    ) -> None:
+        source = tmp_path / "report.pdf"
+        source.write_bytes(b"content")
+        mock_application.corpus_mutations.stage_uploads.return_value = [
+            SimpleNamespace(
+                path=source, filename="report.pdf", size_bytes=7, content_sha256="a" * 64
+            )
+        ]
+        app.state.application = mock_application
+
+        response = await client.post(
+            path, headers={"Idempotency-Key": "upload-1"}, data=form, files=files
+        )
+
+        assert response.status_code == 422
+        assert response.json() == {"detail": detail, "error_type": "validation"}
+        mock_application.corpus_mutations.create_staged_ingest.assert_not_awaited()
+        mock_application.corpus_mutations.create_staged_batch.assert_not_awaited()
 
     @pytest.mark.usefixtures("_patch_application")
     async def test_legacy_ingest_and_job_routes_are_absent(self, client: AsyncClient) -> None:
@@ -1650,9 +1727,14 @@ class TestDeleteEndpoint:
         response = await client.post(
             "/runs/corpus/delete",
             headers={"Idempotency-Key": "delete-empty"},
-            json={},
+            json={"file_paths": []},
         )
-        assert response.status_code == 400
+        assert response.status_code == 422
+        assert response.json() == {
+            "detail": "body: At least one exact identifier is required",
+            "error_type": "validation",
+        }
+        mock_application.corpus_mutations.create_delete.assert_not_awaited()
 
     @pytest.mark.usefixtures("_patch_application")
     async def test_legacy_delete_route_is_not_a_mutator(self, client: AsyncClient) -> None:
@@ -1693,7 +1775,8 @@ class TestDeleteEndpoint:
             json={"workspace": "research"},
         )
         assert unnamed.status_code == 422
-        assert unkeyed.status_code == 400
+        assert unkeyed.status_code == 422
+        assert unkeyed.json()["detail"] == "header.Idempotency-Key: Field required"
         mock_application.corpus_mutations.create_workspace_delete.assert_not_awaited()
 
     async def test_workspace_delete_refusal_is_a_client_error(
@@ -1954,7 +2037,6 @@ class TestAnswerMultipart:
         missing = await client.post(
             "/answer", files=[("attachments", ("a.txt", b"x", "text/plain"))]
         )
-        assert missing.status_code == 400
 
         duplicate = await client.post(
             "/answer",
@@ -1970,7 +2052,12 @@ class TestAnswerMultipart:
                 )
             ],
         )
-        assert duplicate.status_code == 400
+        for response in (missing, duplicate):
+            assert response.status_code == 422
+            assert response.json() == {
+                "detail": "body.request: Exactly one JSON request part is required",
+                "error_type": "validation",
+            }
         mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_rejects_wrong_part_name(
@@ -1979,13 +2066,21 @@ class TestAnswerMultipart:
         import json as json_mod
 
         app.state.application = mock_application
-        resp = await client.post(
+        wrong_name = await client.post(
             "/answer",
             data={"request": json_mod.dumps({"query": "q"})},
             files=[("documents", ("a.txt", b"x", "text/plain"))],
         )
+        text_attachment = await client.post(
+            "/answer",
+            data={"request": json_mod.dumps({"query": "q"}), "attachments": "not a file"},
+            files=[("attachments", ("a.txt", b"x", "text/plain"))],
+        )
 
-        assert resp.status_code == 400
+        assert wrong_name.status_code == 422
+        assert wrong_name.json()["detail"] == "body: Unexpected multipart field(s): documents"
+        assert text_attachment.status_code == 422
+        assert text_attachment.json()["detail"] == "body.attachments: Must be an uploaded file"
         mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_malformed_request_part_is_422(
@@ -1999,6 +2094,8 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 422
+        # Located inside the request part, as the shared handler names every body field.
+        assert resp.json()["detail"].startswith("body.request: ")
         mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_enforces_count_limit(
@@ -2213,6 +2310,39 @@ class TestAPIContracts:
             == "#/components/schemas/WorkspacesResponse"
         )
 
+    async def test_openapi_documents_the_422_body_the_server_answers(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        """FastAPI's list-shaped HTTPValidationError is never what a 422 carries here."""
+        app.state.application = mock_application
+        # Web routes share the document and the handler, so the whole app is checked.
+        spec = create_app(include_web_app=True).openapi()
+
+        schemas = spec["components"]["schemas"]
+        assert "HTTPValidationError" not in schemas
+        assert "ValidationError" not in schemas
+        envelope = schemas["ErrorDetail"]
+        assert set(envelope["properties"]) == {"detail", "error_type", "error_kind"}
+        assert envelope["required"] == ["detail", "error_type"]
+        documented = {
+            f"{method.upper()} {path}": operation["responses"]["422"]
+            for path, operations in spec["paths"].items()
+            for method, operation in operations.items()
+            if "422" in operation["responses"]
+        }
+        assert {"POST /runs/corpus/ingest", "POST /answer", "POST /web/api/answer"} <= set(
+            documented
+        )
+        for response in documented.values():
+            assert response["content"]["application/json"]["schema"] == {
+                "$ref": "#/components/schemas/ErrorDetail"
+            }
+
+        # A real refusal carries exactly the documented envelope.
+        refused = await client.post("/runs/corpus/ingest", json={"source_type": "local"})
+        assert refused.status_code == 422
+        assert set(envelope["required"]) <= set(refused.json()) <= set(envelope["properties"])
+
 
 class TestMetadataAPI:
     @pytest.mark.usefixtures("_patch_application")
@@ -2248,10 +2378,24 @@ class TestMetadataAPI:
         resp = await client.post("/metadata/search", json={"nonsense": "SECRET-VALUE"})
 
         assert resp.status_code == 422
-        # The field is named; the submitted value is not echoed back.
-        assert resp.json()["detail"].startswith("Invalid metadata filter: nonsense: ")
+        # The field is named as every body field is; the submitted value is not echoed back.
+        assert resp.json()["detail"].startswith("body.nonsense: ")
         assert "SECRET-VALUE" not in resp.text
         mock_application.corpora.search_metadata.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_an_empty_metadata_update_is_request_validation(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        resp = await client.post("/metadata/doc-1", json={"metadata": {}})
+
+        assert resp.status_code == 422
+        assert resp.json()["error_type"] == "validation"
+        assert resp.json()["detail"].startswith("body.metadata: ")
+        mock_application.corpora.update_metadata.assert_not_awaited()
 
     @pytest.mark.usefixtures("_patch_application")
     async def test_search_pages_by_doc_id_with_an_opaque_round_tripped_cursor(
@@ -2650,7 +2794,10 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
         application,
         "/runs/corpus/ingest/upload",
         content=chunks(),
-        headers={"content-type": "multipart/form-data; boundary=test"},
+        headers={
+            "content-type": "multipart/form-data; boundary=test",
+            "idempotency-key": "huge-upload",
+        },
     )
 
     assert response.status_code == 413, response.text

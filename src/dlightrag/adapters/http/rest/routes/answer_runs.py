@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -25,6 +25,7 @@ from dlightrag.adapters.http.artifact_delivery import (
     artifact_range,
     artifact_response,
 )
+from dlightrag.adapters.http.errors import invalid_body, invalid_request
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
@@ -32,7 +33,6 @@ from dlightrag.adapters.http.rest.models import (
     AnswerResponse,
     RunDescriptor,
 )
-from dlightrag.adapters.validation_errors import invalid_fields
 from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
@@ -73,6 +73,9 @@ router = APIRouter()
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
+
+#: A Child Session command is replayed by the key its caller chose.
+ChildCommandKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
 
 
 class _AgentControlBody(BaseModel):
@@ -134,7 +137,7 @@ async def _parse_answer_body(
         try:
             body = AnswerRequest.model_validate_json(await request.body())
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=invalid_fields(exc)) from exc
+            raise invalid_body(exc) from exc
         _enforce_answer_attachment_count(len(body.attachments or []), answer_cfg.max_attachments)
         return body, []
 
@@ -157,16 +160,10 @@ async def _parse_answer_body(
     try:
         unexpected = sorted({key for key, _ in form.multi_items()} - _ALLOWED_ANSWER_PARTS)
         if unexpected:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unexpected multipart field(s): {', '.join(unexpected)}",
-            )
+            raise invalid_request(f"Unexpected multipart field(s): {', '.join(unexpected)}", "body")
         request_parts = form.getlist("request")
         if len(request_parts) != 1:
-            raise HTTPException(
-                status_code=400,
-                detail="multipart answer requires exactly one 'request' part",
-            )
+            raise invalid_request("Exactly one JSON request part is required", "body", "request")
         raw_request = request_parts[0]
         if isinstance(raw_request, StarletteUploadFile):
             if raw_request.size is not None and raw_request.size > ANSWER_REQUEST_PART_MAX_BYTES:
@@ -179,15 +176,13 @@ async def _parse_answer_body(
         try:
             body = AnswerRequest.model_validate_json(request_json)
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=invalid_fields(exc)) from exc
+            raise invalid_body(exc, "request") from exc
 
         uploads: list[_UploadedAttachment] = []
         total = 0
         for part in form.getlist("attachments"):
             if not isinstance(part, StarletteUploadFile):
-                raise HTTPException(
-                    status_code=400, detail="'attachments' parts must be uploaded files"
-                )
+                raise invalid_request("Must be an uploaded file", "body", "attachments")
             if part.size is not None and part.size > max_item:
                 raise HTTPException(
                     status_code=413, detail="An attachment exceeds the per-attachment size limit"
@@ -458,15 +453,9 @@ async def control_answer_child(
     child_session_id: UUID,
     body: _ChildControlBody,
     request: Request,
+    submission_key: ChildCommandKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    submission_key = idempotency_key(request)
-    if submission_key is None:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required")
-    if len(submission_key.strip()) > 200:
-        raise HTTPException(
-            status_code=422, detail="Idempotency-Key must be at most 200 characters"
-        )
     receipt = await get_application(request).answers.control_child(
         owner_id=owner_id_from_user(user),
         run_id=str(run_id),
@@ -489,15 +478,9 @@ async def reply_to_answer_child(
     request_id: UUID,
     body: _AgentControlBody,
     request: Request,
+    submission_key: ChildCommandKey,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    submission_key = idempotency_key(request)
-    if submission_key is None:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required")
-    if len(submission_key.strip()) > 200:
-        raise HTTPException(
-            status_code=422, detail="Idempotency-Key must be at most 200 characters"
-        )
     receipt = await get_application(request).answers.reply_to_child(
         owner_id=owner_id_from_user(user),
         run_id=str(run_id),

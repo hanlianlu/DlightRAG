@@ -16,8 +16,9 @@ import json
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
+from dlightrag.adapters.http.errors import invalid_request
 from dlightrag.application.runs import RunEvent
 from dlightrag.engine.answer.client_contracts import model_dump_json_safe
 
@@ -37,20 +38,20 @@ def resume_cursor(request: Request) -> int:
     """
     header = request.headers.get("Last-Event-ID")
     query = request.query_params.get("after")
-    from_header = _parse_cursor(header) if header else None
-    from_query = _parse_cursor(query) if query is not None else None
+    from_header = _parse_cursor(header, "header", "Last-Event-ID") if header else None
+    from_query = _parse_cursor(query, "query", "after") if query is not None else None
     if from_header is not None and from_query is not None and from_header != from_query:
-        raise HTTPException(
-            status_code=400, detail="Last-Event-ID and 'after' request different cursors"
+        raise invalid_request(
+            "Last-Event-ID and 'after' request different cursors", "query", "after"
         )
     if from_query is not None:
         return from_query
     return from_header or 0
 
 
-def _parse_cursor(value: str | None) -> int:
-    if value is None or not value.isdigit():
-        raise HTTPException(status_code=400, detail="Event cursor must be a non-negative integer")
+def _parse_cursor(value: str, *location: str) -> int:
+    if not value.isdigit():
+        raise invalid_request("Event cursor must be a non-negative integer", *location)
     return int(value)
 
 

@@ -1386,12 +1386,8 @@ async def test_the_resume_cursor_comes_from_either_form(
 
 
 @pytest.mark.parametrize(
-    ("header", "query", "status"),
-    [
-        ("2", "5", 400),
-        (None, "abc", 400),
-        (None, "-1", 400),
-    ],
+    ("header", "query"),
+    [("2", "5"), (None, "abc"), (None, "-1")],
     ids=["conflicting-cursors", "non-numeric", "negative"],
 )
 async def test_an_unusable_cursor_never_subscribes(
@@ -1399,7 +1395,6 @@ async def test_an_unusable_cursor_never_subscribes(
     application: Any,
     header: str | None,
     query: str | None,
-    status: int,
 ) -> None:
     url = f"/web/api/runs/{RUN_ID}/events" + (f"?after={query}" if query is not None else "")
 
@@ -1407,7 +1402,8 @@ async def test_an_unusable_cursor_never_subscribes(
         url, headers={"Last-Event-ID": header} if header is not None else None
     )
 
-    assert response.status_code == status
+    assert response.status_code == 422
+    assert response.json()["error_type"] == "validation"
     application.runs.subscribe.assert_not_called()
 
 
