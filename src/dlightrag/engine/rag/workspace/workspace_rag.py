@@ -1764,8 +1764,15 @@ class WorkspaceRag:
         Admitted documents replay together, up to ``_RETRY_BATCH_SIZE`` per
         pipeline pass. A replay that may retire another cohort document's row
         settles before that document is read, and replays that may retire the
-        same owner never share a pass, so every outcome matches a
+        same owner never share a pass, so every recorded outcome matches a
         one-document-at-a-time retry.
+
+        ``RetryOutcomeUncertainError`` ends the retry. Raised by a document's
+        preflight, it first replays the documents already admitted, as a
+        one-at-a-time retry would; raised while a pass prepares, runs, or
+        settles its documents, it drops that pass's unrecorded outcomes.
+        Retrying the same cohort converges either way: a document an
+        interrupted pass committed settles from its finalization marker.
         """
         self._require_writer("failed-document retry")
         self._ensure_initialized()
@@ -1857,7 +1864,8 @@ class WorkspaceRag:
                 request = await self._retry_preflight(entry, metadata, record)
             except RetryOutcomeUncertainError:
                 # Documents admitted before the uncertain one still replay, as
-                # they would have one at a time.
+                # they would have one at a time. (An uncertain pass cannot do
+                # the same for its own documents; see the docstring.)
                 await replay_pending()
                 raise
             if request is None:
@@ -2001,6 +2009,9 @@ class WorkspaceRag:
         Each outcome is the document's ingest result or the exception its
         replay raised. When the shared pass itself fails, every document
         replays alone, so one bad document cannot fail the others with it.
+        ``RetryOutcomeUncertainError`` from any document's preparation, the
+        pass, or a lone replay propagates at once, and the pass's other
+        outcomes are dropped with it.
         """
         outcomes: list[Mapping[str, Any] | Exception] = [_NO_RETRY_RESULT] * len(requests)
         admitted: list[tuple[int, PreparedIngestFile]] = []

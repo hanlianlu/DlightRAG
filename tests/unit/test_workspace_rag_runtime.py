@@ -4532,6 +4532,49 @@ async def test_uncertain_preflight_still_replays_documents_admitted_before_it(
     assert outcomes == [("doc-a", "succeeded")]
 
 
+async def test_an_uncertain_pass_drops_its_outcomes_and_the_same_cohort_converges(
+    test_config: DlightragConfig,
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+    from dlightrag.engine.rag.retrieval.metadata_fields import INGEST_FINALIZATION_COMPLETE_FIELD
+
+    service, metadata, doc_by_file = _local_retry_service(test_config, ["a", "b"])
+    engine, passes = _fake_engine(
+        doc_by_file,
+        # The first pass commits both documents but cannot report it.
+        fail=lambda _doc_ids: (
+            RetryOutcomeUncertainError("pass outcome unknown") if len(passes) == 1 else None
+        ),
+    )
+    service._ingestion_engine = engine  # type: ignore[assignment]
+    outcomes: list[tuple[str, str]] = []
+
+    async def outcome(doc_id: str, state: str, _summary: dict[str, Any]) -> None:
+        outcomes.append((doc_id, state))
+
+    with pytest.raises(RetryOutcomeUncertainError, match="pass outcome unknown"):
+        await service.aretry_failed_docs(outcome_callback=outcome)
+
+    assert passes == [["doc-a", "doc-b"]]
+    assert outcomes == []
+
+    for doc_id in ("doc-a", "doc-b"):
+        metadata[doc_id][INGEST_FINALIZATION_COMPLETE_FIELD] = True
+    stores = cast(AsyncMock, service._lightrag_stores)
+    stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: SimpleNamespace(status="processed", file_path=f"{doc_id[4:]}.pdf")
+        for doc_id in doc_ids
+    }
+
+    result = await service.aretry_failed_docs(
+        cohort_doc_ids=["doc-a", "doc-b"], outcome_callback=outcome
+    )
+
+    assert passes == [["doc-a", "doc-b"]]
+    assert outcomes == [("doc-a", "succeeded"), ("doc-b", "succeeded")]
+    assert (result["succeeded"], result["failed"]) == (2, 0)
+
+
 @pytest.mark.parametrize(
     "requested,configured,expected",
     [
