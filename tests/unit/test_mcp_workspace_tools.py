@@ -381,6 +381,8 @@ async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_application: Asy
     assert result.is_error is True
     assert _tool_text(result) == "Error: internal tool failure"
     assert "database-secret" not in _tool_text(result)
+    # The failure is the catalog's, not a call the real signature refused.
+    mock_mcp_application.corpora.list_workspace_records_page.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -401,6 +403,8 @@ async def test_mcp_untyped_failures_stay_internal(
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert _tool_text(result) == "Error: internal tool failure"
+    # The failure is the service's, not a call the real signature refused.
+    mock_mcp_application.answers.create.assert_awaited_once()
 
 
 async def test_mcp_names_invalid_arguments_without_echoing_them(

@@ -739,6 +739,8 @@ class TestWebBootstrap:
         }
         assert app_page.status_code == 200
         assert "<dl-app>" in app_page.text
+        # The 503 is the inventory's outage, not a call the real signature refused.
+        mock_application.corpora.alist_workspace_records.assert_awaited_once_with()
 
     @pytest.mark.parametrize(
         "old_path",
@@ -879,6 +881,8 @@ class TestWebFiles:
         response = await client.get("/web/api/files", params={"workspace": "cold-ws"})
 
         assert response.status_code == 200
+        # The route failed open on the registry's outage, not on a refused call.
+        mock_application.corpora.workspace_exists.assert_awaited_once_with("cold_ws")
         mock_application.corpora.file_panel_snapshot.assert_awaited_once()
         mock_application.corpora.list_workspaces.assert_not_awaited()
 
@@ -894,6 +898,8 @@ class TestWebFiles:
             "detail": "Files are temporarily unavailable",
             "error_type": "unavailable",
         }
+        # The 503 is the snapshot's outage, not a call the real signature refused.
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once()
 
     async def test_file_list_derives_display_name_from_path(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
@@ -1255,6 +1261,8 @@ class TestWebFiles:
         assert response.status_code == 503
         # An untyped failure never shows its own text.
         assert response.json()["detail"] == "Upload could not be accepted. Please retry."
+        # The failure is acceptance's, not a call the real signature refused.
+        mock_application.corpus_mutations.create_staged_batch.assert_awaited_once()
         mock_application.corpus_mutations.discard_staged_run.assert_awaited_once()
 
     async def test_upload_rejects_stale_workspace(
@@ -1608,7 +1616,7 @@ async def test_workspace_commands_hide_untyped_failures_behind_logged_advice(
     failure = RuntimeError("socket closed at 10.0.0.7")
     service = (
         mock_application.corpora
-        if failing in {"create_workspace", "workspace_exists"}
+        if failing == "create_workspace"
         else mock_application.corpus_mutations
     )
     getattr(service, failing).side_effect = failure
@@ -1622,6 +1630,8 @@ async def test_workspace_commands_hide_untyped_failures_behind_logged_advice(
     assert response.json()["detail"] == detail
     assert "10.0.0.7" not in response.text
     assert logged in caplog.text
+    # The advice covers the service's own failure, not a call the real signature refused.
+    getattr(service, failing).assert_awaited_once()
 
 
 async def test_workspace_commands_require_a_name(client: AsyncClient) -> None:
