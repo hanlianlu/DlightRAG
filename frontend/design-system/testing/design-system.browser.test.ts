@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {resetMouse, sendMouse} from '@web/test-runner-commands';
 import {render} from 'lit';
 import {
   DlIconButton,
@@ -140,6 +141,49 @@ it('closes on Tab and on focus leaving without asking for focus back; only Escap
   rename.focus();
   rename.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
   expect(dismissals).to.deep.equal([false, false, true]);
+});
+
+it('closes on a real click on its own button, whether or not the engine focuses the button', async () => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Actions';
+  button.setAttribute('aria-controls', 'owned');
+  const menu = document.createElement('dl-menu') as DlMenu;
+  menu.id = 'owned';
+  menu.innerHTML = '<button type="button" role="menuitem" tabindex="-1">Rename</button>';
+  document.body.append(button, menu);
+  // A minimal owner: its button toggles the menu and a dismissal closes it,
+  // with the surface's own [hidden] rule.
+  let open = false;
+  let opened = 0;
+  const show = (next: boolean): void => {
+    open = next;
+    menu.hidden = !next;
+    menu.style.display = next ? '' : 'none';
+    if (!next) return;
+    opened += 1;
+    menu.focusItem('first');
+  };
+  show(false);
+  button.addEventListener('click', () => { show(!open); });
+  menu.addEventListener('dl-menu-dismiss', () => { show(false); });
+  const box = button.getBoundingClientRect();
+  const center: [number, number] = [
+    Math.round(box.left + box.width / 2),
+    Math.round(box.top + box.height / 2),
+  ];
+
+  try {
+    await sendMouse({type: 'click', position: center});
+    expect(open, 'a press on the button opens the menu').to.equal(true);
+    expect(document.activeElement === menu.querySelector('[role="menuitem"]')).to.equal(true);
+    // WebKit leaves a pressed button unfocused: the item's focus lands on no element.
+    await sendMouse({type: 'click', position: center});
+    expect(open, 'a second press on its button closes the menu').to.equal(false);
+    expect(opened, 'and does not reopen it').to.equal(1);
+  } finally {
+    await resetMouse();
+  }
 });
 
 it('keeps an aria-disabled item in reach but never activates it', () => {

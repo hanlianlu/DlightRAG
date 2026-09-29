@@ -8,9 +8,12 @@
  *  each item's own activation. An aria-disabled item still takes focus but
  *  never activates. The menu asks its owner to close it with
  *  dl-menu-dismiss: Escape asks for focus back on the menu button, while Tab,
- *  or focus going anywhere but the menu or the button that controls it
- *  (aria-controls), leaves focus where it went. Pickers that are not menus
- *  reuse the same roving step through rovingFocusKeydown().
+ *  or focus moving to an element other than the menu or the button that
+ *  controls it (aria-controls), leaves focus where it went. Focus that lands
+ *  on no element stays the owner's to handle with its outside-click
+ *  dismissal: WebKit does not focus a pressed button, so a press on the
+ *  menu's own button reports none. Pickers that are not menus reuse the same
+ *  roving step through rovingFocusKeydown().
  *
  *  Slotted items stay Light DOM; the host is the menu chrome and keyboard.
  */
@@ -133,7 +136,10 @@ export class DlMenu extends HTMLElement {
   #onFocusout = (event: FocusEvent): void => {
     if (this.hidden || !this.isConnected) return;
     const next = event.relatedTarget;
-    if (next instanceof Node && this.contains(next)) return;
+    // No element: a press WebKit does not focus (the menu's own button among
+    // them) or the window losing focus. Closing here would let that button's
+    // click reopen the menu; the owner's outside-click dismissal decides.
+    if (!(next instanceof Node) || this.contains(next)) return;
     // The menu's own button closes it on its click; closing here would reopen it there.
     if (next instanceof Element && this.id
         && (next.getAttribute('aria-controls') ?? '').split(/\s+/).includes(this.id)) return;

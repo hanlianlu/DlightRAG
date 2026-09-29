@@ -28,6 +28,7 @@
     "@types/node": "^26.6.2",
     "@web/dev-server-esbuild": "^2.0.0",
     "@web/test-runner": "^1.0.0",
+    "@web/test-runner-commands": "^1.0.1",
     "@web/test-runner-playwright": "^1.0.0",
     "axe-core": "4.13.0",
     "lucide-static": "1.47.0",
