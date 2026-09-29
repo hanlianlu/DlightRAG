@@ -349,17 +349,19 @@ tells each subscriber to re-read its authoritative rows, and a periodic
 keepalive replaces a connection that died silently. Replacing a lost connection
 waits one second, doubling with each further loss up to 30 seconds until a
 connection passes a keepalive, so a connection that dies right after its LISTEN
-cannot spin the hub through reconnects. Each LISTEN, UNLISTEN, and
-keepalive is bounded to five seconds; one that fails, hangs, or is abandoned by
-a cancelled caller costs only the connection, which is replaced, and never
-leaves a subscriber registered on a channel nothing listens on. A subscriber
+cannot spin the hub through reconnects. Each LISTEN, UNLISTEN, and keepalive,
+and the whole batch of LISTENs a new connection starts with, is bounded to five
+seconds; one that fails, hangs, or is abandoned by a cancelled caller costs only
+the connection, which is replaced, and never leaves a subscriber registered on a
+channel nothing listens on. A subscriber
 that leaves is unregistered before it waits for the hub, so even an exit that
 is cancelled again while waiting leaves nothing registered. A waiting child
 also re-reads its guidance row every five seconds, so a hub that is
 reconnecting delays a reply by at most that much. The model catalogue
 listener uses a dedicated connection when it is given an explicit endpoint, as
-the service composition currently does, and the run-cancellation listener keeps
-its own pooled connection.
+the service composition currently does, and closing that connection gracefully
+is bounded the same way before it is terminated instead. The run-cancellation
+listener keeps its own pooled connection.
 
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and

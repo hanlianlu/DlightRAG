@@ -25,6 +25,7 @@ class _Connection:
         self.gates: dict[str, asyncio.Event] = {}  # statements that complete once opened
         self.entered: set[str] = set()  # hanging or gated statements that have started
         self.dies_after_listen = False  # the server drops it right after a LISTEN
+        self.delay = 0.0  # how long every statement takes
         self._termination: list[Callable[[Any], None]] = []
         self._closed = False
         self._detached = False
@@ -36,6 +37,8 @@ class _Connection:
     async def _statement(self, statement: str) -> None:
         self._check()
         self.statements.append(statement)
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if statement in self.hang or statement in self.gates:
             self.entered.add(statement)
             await self.gates.get(statement, asyncio.Event()).wait()
@@ -69,6 +72,10 @@ class _Connection:
         self._check()
         return self._closed
 
+    async def close(self) -> None:
+        await self._statement("close")
+        self._end()
+
     def terminate(self) -> None:
         self._check()
         self._end()
@@ -93,12 +100,15 @@ class _Connection:
 class _Endpoint:
     """Hands out fake connections and records which ones were given back."""
 
-    def __init__(self, *, failures: int = 0, doomed: int = 0) -> None:
+    def __init__(
+        self, *, failures: int = 0, doomed: int = 0, delays: tuple[float, ...] = ()
+    ) -> None:
         self.opened: list[_Connection] = []
         self.opened_at: list[float] = []
         self.released: list[_Connection] = []
         self._failures = failures
         self._doomed = doomed  # how many connections, first to last, die after a LISTEN
+        self._delays = delays  # per connection, first to last: how long statements take
 
     @asynccontextmanager
     async def connect(self) -> AsyncIterator[_Connection]:
@@ -106,7 +116,9 @@ class _Endpoint:
             self._failures -= 1
             raise ConnectionRefusedError("database starting up")
         connection = _Connection()
-        connection.dies_after_listen = len(self.opened) < self._doomed
+        index = len(self.opened)
+        connection.dies_after_listen = index < self._doomed
+        connection.delay = self._delays[index] if index < len(self._delays) else 0.0
         self.opened.append(connection)
         self.opened_at.append(asyncio.get_running_loop().time())
         try:
@@ -446,3 +458,48 @@ async def test_a_hung_keepalive_is_bounded_and_the_connection_replaced(
 
     assert half_open.is_closed()
     await hub.aclose()
+
+
+async def test_the_listen_batch_of_a_new_connection_is_bounded_as_a_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch holds the lock throughout, so each LISTEN within the bound is not enough."""
+    monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.15)
+    channels = ("a", "b", "c", "d", "e")
+    endpoint = _Endpoint(delays=(0.0, 0.05))  # the first replacement answers slowly
+    hub = PGNotificationHub(connect=endpoint.connect)
+    received: dict[str, list[str | None]] = {channel: [] for channel in channels}
+    for channel in channels:
+        await hub.subscribe(channel, received[channel].append)
+    await _until(lambda: all(sink == [None] for sink in received.values()))
+
+    endpoint.opened[0].terminate()
+
+    await _until(
+        lambda: len(endpoint.opened) == 3 and all(s == [None, None] for s in received.values())
+    )
+    slow = endpoint.opened[1]
+    assert slow.is_closed()
+    assert len(slow.statements) < len(channels)
+    assert endpoint.opened[2].statements == [f"LISTEN {channel}" for channel in channels]
+    await hub.aclose()
+
+
+async def test_a_dedicated_connection_that_never_finishes_closing_is_terminated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.05)
+    half_open = _Connection()
+    half_open.hang.add("close")
+
+    async def connect(**_kwargs: Any) -> _Connection:
+        return half_open
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+
+    async with asyncio.timeout(1):
+        async with _notifications.dedicated_connection({"host": "unused"}) as connection:
+            assert connection is half_open
+
+    assert half_open.entered == {"close"}
+    assert half_open.is_closed()

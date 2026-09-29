@@ -33,10 +33,11 @@ _RECONNECT_MAX_SECONDS = 30.0
 # the keepalive turns that into a reconnect and a resynchronization. A connection
 # that passes one has proven itself, which resets the reconnect delay.
 _KEEPALIVE_SECONDS = 30.0
-# Bounds every statement the hub runs: LISTEN, UNLISTEN, and the keepalive. They
-# run under the hub lock, because asyncpg runs one statement per connection at a
-# time, so this is also the longest a half-open socket can hold up subscribe and
-# unsubscribe before the connection is dropped and replaced.
+# Bounds everything the hub runs under its lock: one LISTEN or UNLISTEN, one
+# keepalive, or the whole batch of LISTENs a new connection starts with. asyncpg
+# runs one statement per connection at a time, so this is also the longest a
+# half-open socket can hold up subscribe and unsubscribe before the connection is
+# dropped and replaced. A dedicated connection's graceful close gets the same bound.
 _STATEMENT_TIMEOUT_SECONDS = 5.0
 
 
@@ -47,7 +48,12 @@ async def dedicated_connection(connect_kwargs: Mapping[str, Any]) -> AsyncIterat
     try:
         yield connection
     finally:
-        await connection.close()
+        # A graceful close waits for the server to hang up, which a half-open socket
+        # never does; past the bound the connection is terminated instead.
+        try:
+            await asyncio.wait_for(connection.close(), timeout=_STATEMENT_TIMEOUT_SECONDS)
+        except TimeoutError:
+            connection.terminate()
 
 
 class PGNotificationHub:
@@ -170,9 +176,9 @@ class PGNotificationHub:
             self._task = asyncio.create_task(self._run(), name="dlightrag-pg-notifications")
 
     async def _statement(self, connection: Any, statement: Callable[[], Awaitable[object]]) -> None:
-        """Run one statement on the connection; one that fails is never used again.
+        """Run one statement, or one batch of them, on the connection within the bound.
 
-        Callers hold the lock. A statement that fails, hangs past the timeout, or is
+        Callers hold the lock. A statement that fails, outlasts the bound, or is
         abandoned by a cancelled caller leaves the connection's state unknown, so the
         connection is dropped and terminated, which ends its serve loop.
         """
@@ -241,10 +247,8 @@ class PGNotificationHub:
     async def _listen_on(self, connection: Any, lost: asyncio.Event) -> bool:
         async with self._lock:
             self._connection = connection
-            for channel in tuple(self._subscribers):
-                await self._statement(
-                    connection, partial(connection.add_listener, channel, self._dispatch)
-                )
+            channels = tuple(self._subscribers)
+            await self._statement(connection, partial(self._listen_all, connection, channels))
         self._deliver_to_all(None)
         while self._subscribers and not self._closing:
             if lost.is_set():
@@ -259,6 +263,10 @@ class PGNotificationHub:
                     await self._statement(connection, partial(connection.fetchval, "SELECT 1"))
                 self._reconnect_delay = _RECONNECT_BASE_SECONDS
         return False
+
+    async def _listen_all(self, connection: Any, channels: tuple[str, ...]) -> None:
+        for channel in channels:
+            await connection.add_listener(channel, self._dispatch)
 
     def _dispatch(self, _connection: object, _pid: object, channel: str, payload: str) -> None:
         for callback in tuple(self._subscribers.get(channel, ())):
