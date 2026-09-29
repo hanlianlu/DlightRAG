@@ -169,7 +169,7 @@ from dlightrag.engine.answer.research.runtime import (
     _usage_from_snapshot_entries,
 )
 from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
-from dlightrag.engine.answer.resources.lineage import LineageResourceLoader
+from dlightrag.engine.answer.resources.lineage import LINEAGE_ADOPTION_KIND, LineageResourceLoader
 from dlightrag.engine.answer.resources.models import (
     ResourceRegistryError,
     TextWindowBudget,
@@ -2377,19 +2377,17 @@ class AnswerExecutor:
             if kind in {"tool_attachment", "conversion_asset"}:
                 continue
             raw_aliases = _resource_aliases(capabilities)
-            if kind == "lineage_adoption":
-                # An adopted Resource: this Run's own fetch of an earlier Run's bytes.
-                # The minted handle and the recorded one both stay resolvable, because
-                # the model may be holding either after a resume, and its text still
-                # reads only through the view restored with it.
-                registry.register(
-                    ResourceInput(
-                        filename=resource.filename,
-                        declared_mime=resource.mime_type,
-                        content=content,
-                    ),
-                    aliases=(resource.resource_id, *raw_aliases),
-                    stored_view_only=True,
+            if kind == LINEAGE_ADOPTION_KIND:
+                # An adopted Resource is durable Run state: it keeps the handle it was
+                # recorded under and every earlier handle, is charged but never
+                # refused, and its text still reads only through the view restored
+                # with it.
+                registry.restore_adopted(
+                    resource.resource_id,
+                    filename=resource.filename,
+                    mime_type=resource.mime_type,
+                    content=content,
+                    aliases=raw_aliases,
                 )
                 continue
             origin = str(capabilities.get("admission_origin") or "")

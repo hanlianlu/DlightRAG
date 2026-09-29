@@ -241,17 +241,22 @@ completeness, or untested platforms.
   viewable target, or a refused view, leaves the adoption in place, and the
   failure is a typed refusal of its own. Once adopted the handle is held, so an
   embedded-image handle the call cannot find is named as the missing one.
-- If that write fails, nothing is adopted: the handle stays unknown, no
-  attachment slot is spent, and asking again tries again. A lost lease stops the
-  call without writing anything; the Run's next claimant adopts afresh.
+- If that write fails, the running Run keeps nothing of it: the handle stays
+  unknown, no attachment slot is spent, and asking again tries again. A write
+  whose outcome is unknown, because the connection or the call ended while it
+  committed, may still have landed; the next resume then restores it like any
+  recorded adoption. A lost lease stops the call without writing anything; the
+  Run's next claimant adopts afresh.
 - A Run adopts one earlier Resource at a time. Two earlier handles for the same
   file (the same file name, declared MIME type, and SHA-256) are one Resource
   with one adoption row whose aliases are merged, and the first stored view
   adopted for it is its only view; the store refuses a different second view.
-- A resume restores adopted Resources from those rows like any other Resource of
-  the Run: both handles resolve and the view is back, without reading the
-  lineage. A stored view whose Resource no restored row names is a real
-  inconsistency and fails the resume.
+- A resume restores adopted Resources from those rows as the Run's durable
+  state, under the handle each was recorded with: both handles resolve and the
+  view is back, without reading the lineage. A restored adoption takes its
+  attachment slot and bytes but is never refused, even when an adoption whose
+  write landed unseen puts the Run past its allowance. A stored view whose
+  Resource no restored row names is a real inconsistency and fails the resume.
 - Newly adopted bytes are registered stored-view-only, and this Run never
   converts them. A convertible document (PDF, DOCX, XLSX, PPTX, CSV, or HTML)
   reads text only through a stored view: the one adopted or restored with it, or

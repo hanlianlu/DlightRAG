@@ -59,6 +59,7 @@ async def _seed_origin_run(
     session_id: str | None = None,
     document_id: str = "res-earlier-document",
     text: str = EARLIER_TEXT,
+    document: bytes = DOCUMENT,
 ) -> tuple[str, str]:
     """Write one earlier Run's document, its stored view, and its page asset.
 
@@ -74,7 +75,7 @@ async def _seed_origin_run(
     origin_run = str(accepted.run.run_id)
     snapshot = ConversionSnapshot(
         resource_id=document_id,
-        input_digest=hashlib.sha256(DOCUMENT).hexdigest(),
+        input_digest=hashlib.sha256(document).hexdigest(),
         text=text,
         visuals=(
             ExtractedVisual(
@@ -90,7 +91,7 @@ async def _seed_origin_run(
         converter_version="1",
     )
     rows = [
-        (document_id, "tool_attachment", "earlier.pdf", "application/pdf", DOCUMENT, document_id)
+        (document_id, "tool_attachment", "earlier.pdf", "application/pdf", document, document_id)
     ]
     for effect in snapshot.effects():
         rows.append(
@@ -199,13 +200,18 @@ async def _call(tool: Any, session_id: str, **args: Any) -> ToolResult:
 
 
 async def _resumed(
-    store: PGRunStore, db: Any, run_id: str, *, resource_secret: bytes | None = None
+    store: PGRunStore,
+    db: Any,
+    run_id: str,
+    *,
+    resource_secret: bytes | None = None,
+    max_attachments: int = 6,
 ) -> ResourceRegistry:
     """The Run's registry after a resume: its own rows only, no lineage loader at all."""
     executor = object.__new__(AnswerExecutor)
     executor._store = store
     executor._blob_store = PGRunBlobStore(pool=db)
-    registry = ResourceRegistry(resource_secret=resource_secret)
+    registry = ResourceRegistry(resource_secret=resource_secret, max_attachments=max_attachments)
     try:
         await executor._restore_registry_fetches(registry, owner_id=OWNER, run_id=run_id)
     except BaseException:
@@ -316,6 +322,74 @@ async def test_a_lost_lease_records_nothing() -> None:
             assert registry.manifest() == ()
 
         assert await _run_rows(db, claim.run_id) == []
+
+
+class _LandsThenFails:
+    """The store, except that its first adoption commits and then loses its connection."""
+
+    def __init__(self, store: PGRunStore) -> None:
+        self._store = store
+        self._landed = False
+
+    async def lineage_resource_rows(
+        self, *, owner_id: str, session_id: str, resource_id: str
+    ) -> tuple[Any, ...]:
+        return await self._store.lineage_resource_rows(
+            owner_id=owner_id, session_id=session_id, resource_id=resource_id
+        )
+
+    async def record_lineage_adoption(self, **write: Any) -> None:
+        await self._store.record_lineage_adoption(**write)
+        if not self._landed:
+            self._landed = True
+            raise ConnectionResetError("connection lost after COMMIT")
+
+
+async def test_an_adoption_that_landed_despite_an_error_is_restored_without_refusal() -> None:
+    """An adoption whose COMMIT landed unseen is durable, even past the allowance.
+
+    The live Run gave the slot back and adopted another document with it; the resume
+    restores both recorded adoptions as this Run's durable state, refusing neither.
+    """
+    async with isolated_run_runtime("resource_lineage_ambiguous") as (_, db):
+        store = await _store(db)
+        session_id, _ = await _seed_origin_run(db, store, document_id="res-earlier-a")
+        await _seed_origin_run(
+            db,
+            store,
+            session_id=session_id,
+            document_id="res-earlier-b",
+            text="The second document.",
+            document=b"%PDF-1.7 a second earlier document",
+        )
+        claim = await _claimed_run(store)
+        loader = RetainedResourceLoader(
+            store=_LandsThenFails(store),
+            blobs=PGRunBlobStore(pool=db),
+            owner_id=OWNER,
+            session_id=session_id,
+            run_id=claim.run_id,
+            worker_id=claim.worker_id,
+            fencing_epoch=claim.fencing_epoch,
+        )
+        async with ResourceRegistry(max_attachments=1) as registry:
+            read, _ = _tools(registry, loader)
+            with pytest.raises(ConnectionResetError):
+                await _call(read, session_id, resource_id="res-earlier-a")
+            assert registry.manifest() == ()
+            second = await _call(read, session_id, resource_id="res-earlier-b")
+            assert second.is_error is False, "the slot was given back and used again"
+
+        rows = await _run_rows(db, claim.run_id)
+        assert [_kind(row) for row in rows].count(LINEAGE_ADOPTION_KIND) == 2
+        resumed = await _resumed(store, db, claim.run_id, max_attachments=1)
+        try:
+            first = await resumed.read("res-earlier-a", max_window_tokens=1000)
+            assert EARLIER_TEXT in first.content
+            again = await resumed.read("res-earlier-b", max_window_tokens=1000)
+            assert "The second document." in again.content
+        finally:
+            await resumed.aclose()
 
 
 async def test_two_handles_for_one_document_record_one_row_with_both_aliases() -> None:

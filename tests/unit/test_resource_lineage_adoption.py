@@ -70,6 +70,8 @@ class Recorder:
         self.reads = 0
         self.recorded: list[tuple[ResourceAttachmentBytes, ...]] = []
         self.fails: BaseException | None = None
+        # A write that commits and then reports an error, once: its outcome is unknown.
+        self.lands_then_fails: BaseException | None = None
 
     async def record(
         self, resources: tuple[ResourceAttachmentBytes, ...], owner: ResourceEffectOwner
@@ -80,6 +82,9 @@ class Recorder:
         if self.fails is not None:
             raise self.fails
         self.recorded.append(resources)
+        landed, self.lands_then_fails = self.lands_then_fails, None
+        if landed is not None:
+            raise landed
 
 
 class Loader(Recorder):
@@ -528,10 +533,12 @@ def resuming_executor(rows: tuple[RunFetchedResource, ...], blobs: dict[str, byt
     return executor
 
 
-async def resumed_from(*writes: Sequence[ResourceAttachmentBytes]) -> ResourceRegistry:
+async def resumed_from(
+    *writes: Sequence[ResourceAttachmentBytes], max_attachments: int = 6
+) -> ResourceRegistry:
     """A fresh Run's registry restored from the rows these writes left, with no lineage."""
     rows, blobs = durable_rows(*writes)
-    resumed = ResourceRegistry()
+    resumed = ResourceRegistry(max_attachments=max_attachments)
     try:
         await resuming_executor(rows, blobs)._restore_registry_fetches(
             resumed, owner_id="owner", run_id="run"
@@ -597,6 +604,8 @@ async def test_an_adoption_is_durable_before_its_retried_call_fails(monkeypatch)
 
     resumed = await resumed_from(recorded, later.effects.attached_resources)
     try:
+        # The resumed registry mints with another secret; the recorded handle holds.
+        assert resumed.canonical_resource_id(EARLIER_HANDLE) == canonical
         for handle in (EARLIER_HANDLE, canonical):
             result = await resumed.read(handle, max_window_tokens=1000)
             assert "Stored text." in result.content
@@ -691,6 +700,38 @@ async def test_nothing_changes_here_until_the_adoption_is_recorded(failure) -> N
         assert adopted.is_error is False, "the one attachment slot was given back"
         assert _ADOPTED_TEXT in adopted.text_content
         assert len(lineage.recorded) == 1
+
+
+async def test_an_adoption_that_landed_despite_its_error_is_restored_without_refusal() -> None:
+    """A write whose outcome was unknown may have landed after its slot went elsewhere.
+
+    The live Run gave the slot back and spent it on another document; the resume
+    restores both recorded adoptions as durable state under the handles they were
+    recorded with, and refuses neither, although together they exceed the allowance.
+    """
+    first = adopted_product()
+    second = replace(
+        first, resource_id="artifact-5c1d2e3f4a5b6c7d8e9f", filename="notes.md", content=b"# b\n"
+    )
+    lineage = Loaders(first, second)
+    lineage.lands_then_fails = ConnectionResetError("connection lost after COMMIT")
+    async with ResourceRegistry(max_attachments=1) as registry:
+        read, _ = tools(registry, lineage=lineage)
+        with pytest.raises(ConnectionResetError):
+            await call(read, resource_id=first.resource_id)
+        assert registry.manifest() == ()
+        assert (await call(read, resource_id=second.resource_id)).is_error is False
+    handles = [write[0].resource_id for write in lineage.recorded]
+    assert len(handles) == 2
+
+    resumed = await resumed_from(*lineage.recorded, max_attachments=1)
+    try:
+        for loaded, handle in zip((first, second), handles, strict=True):
+            assert resumed.canonical_resource_id(loaded.resource_id) == handle
+            text = await resumed.read(loaded.resource_id, max_window_tokens=1000)
+            assert loaded.content.decode().strip() in text.content
+    finally:
+        await resumed.aclose()
 
 
 async def test_concurrent_adoptions_of_one_document_record_one_view(monkeypatch) -> None:

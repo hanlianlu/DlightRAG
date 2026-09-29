@@ -238,24 +238,9 @@ class ResourceRegistry:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    def register(
-        self,
-        resource: ResourceInput,
-        *,
-        aliases: tuple[str, ...] = (),
-        stored_view_only: bool = False,
-    ) -> str:
-        """Admit caller bytes; ``stored_view_only`` bytes are never converted here.
-
-        Identical bytes already admitted keep the state of their first admission,
-        so ``stored_view_only`` applies only to bytes this call admits first.
-        """
-        return self._register(
-            resource,
-            admission_origin="caller",
-            aliases=aliases,
-            stored_view_only=stored_view_only,
-        )
+    def register(self, resource: ResourceInput) -> str:
+        """Admit caller bytes, a link, or a lazily loaded upload."""
+        return self._register(resource, admission_origin="caller")
 
     def register_discovered_link(self, url: str) -> str | None:
         """Register one inert search-discovered public link outside caller count."""
@@ -285,9 +270,13 @@ class ResourceRegistry:
         *,
         admission_origin: Literal["caller", "search", "agent"],
         presentation: PublicHttpPresentation = PublicHttpPresentation(),
-        aliases: tuple[str, ...] = (),
         stored_view_only: bool = False,
     ) -> str:
+        """Admit one Resource; ``stored_view_only`` bytes are never converted here.
+
+        Identical bytes already admitted keep the state of their first admission,
+        so ``stored_view_only`` applies only to bytes this call admits first.
+        """
         self._ensure_open()
         filename = resource.filename
         provided = sum(
@@ -352,8 +341,6 @@ class ResourceRegistry:
                     registered.url = normalize_public_http_url_identity(resource.url)
                 if resource.filename:
                     registered.filename = safe_source_filename(resource.filename)
-            for alias in aliases:
-                self._bind_alias(alias, existing)
             return existing
 
         if byte_size is not None and self._total_bytes + byte_size > (
@@ -395,8 +382,6 @@ class ResourceRegistry:
         self._ids_by_dedup[dedup_key] = resource_id
         if byte_size is not None:
             self._total_bytes += byte_size
-        for alias in aliases:
-            self._bind_alias(alias, resource_id)
         return resource_id
 
     def _bind_alias(self, alias: str, canonical: str) -> None:
@@ -443,7 +428,9 @@ class ResourceRegistry:
         Nothing a later call can reach, the alias or the view, exists before
         ``record`` returns. The bytes themselves are admitted first, because
         lazily loaded uploads charge the same request total while the record is
-        written, and are withdrawn again when it does not complete.
+        written, and are withdrawn again when it does not complete. A record whose
+        outcome is unknown may still have landed; a resume then restores it with
+        ``restore_adopted``, as durable state rather than a new admission.
         """
         async with self._adoption_lock:
             if alias in self._aliases:
@@ -458,7 +445,7 @@ class ResourceRegistry:
                 and is_convertible(resource.filename, resource.declared_mime)
             ):
                 raise ResourceNotConvertedError(resource.filename or alias, resource.declared_mime)
-            canonical = self.register(resource, stored_view_only=True)
+            canonical = self._register(resource, admission_origin="caller", stored_view_only=True)
             try:
                 binds = self._alias_binds(alias, canonical)
                 adopted = (
@@ -490,6 +477,47 @@ class ResourceRegistry:
         self._ids_by_dedup.pop(key, None)
         self._caller_dedup.discard(key)
         self._total_bytes -= withdrawn.byte_size or 0
+
+    def restore_adopted(
+        self,
+        resource_id: str,
+        *,
+        filename: str,
+        mime_type: str,
+        content: bytes,
+        aliases: tuple[str, ...] = (),
+    ) -> None:
+        """Hydrate one recorded adoption under the handle it was recorded with.
+
+        A recorded adoption is durable Run state, like restored fetched bytes: it
+        takes its allowance slot and its bytes from the request total but is never
+        refused, even when a record whose outcome was unknown landed after the Run
+        had given its slot to another adoption. Bytes this Run already holds keep
+        their Resource and state, and gain the recorded handles as aliases.
+        """
+        self._ensure_open()
+        resource = ResourceInput(filename=filename, declared_mime=mime_type, content=content)
+        held = self._held_bytes(resource)
+        if held is None:
+            if resource_id in self._resources:
+                raise ResourceStateMismatchError("recorded adoption collides with another Resource")
+            key = _content_key(resource)
+            self._resources[resource_id] = _Registered(
+                resource_id=resource_id,
+                filename=filename,
+                declared_mime=mime_type,
+                source="bytes",
+                content=content,
+                url=None,
+                byte_size=len(content),
+                stored_view_only=True,
+            )
+            self._ids_by_dedup[key] = resource_id
+            self._caller_dedup.add(key)
+            self._total_bytes += len(content)
+        canonical = resource_id if held is None else held.resource_id
+        for alias in (resource_id, *aliases):
+            self._bind_alias(alias, canonical)
 
     def canonical_resource_id(self, resource_id: str) -> str:
         """Return the durable canonical handle for a known Resource alias."""
