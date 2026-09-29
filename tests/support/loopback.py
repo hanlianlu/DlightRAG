@@ -21,6 +21,8 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 type ConnectionHandler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
 
 
@@ -37,6 +39,29 @@ async def loopback_server(
     finally:
         server.close()
         await server.wait_closed()
+
+
+_PROXY_VARIABLES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def bypass_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep loopback requests off every proxy, the macOS system proxy included.
+
+    A client that trusts its environment follows HTTP(S)_PROXY, and on macOS the
+    system proxy settings when no proxy variable is set; NO_PROXY=* makes every
+    host bypass both.
+    """
+    for name in _PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("no_proxy", "*")
 
 
 async def reset_on_accept(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -120,6 +145,32 @@ def loopback_certificate(directory: Path) -> LoopbackCertificate:
     return LoopbackCertificate(certificate=certificate_path, key=key_path)
 
 
+def tls_handshake_succeeds(server: ssl.SSLContext, client: ssl.SSLContext) -> bool:
+    """Whether two contexts complete a TLS handshake, run in memory without sockets."""
+    server_in, server_out, client_in, client_out = (ssl.MemoryBIO() for _ in range(4))
+    sides = (
+        client.wrap_bio(client_in, client_out, server_hostname="127.0.0.1"),
+        server.wrap_bio(server_in, server_out, server_side=True),
+    )
+    done = [False, False]
+    for _ in range(10):
+        for index, side in enumerate(sides):
+            if done[index]:
+                continue
+            try:
+                side.do_handshake()
+            except ssl.SSLWantReadError:
+                continue
+            except ssl.SSLError:
+                return False
+            done[index] = True
+        if all(done):
+            return True
+        server_in.write(client_out.read())
+        client_in.write(server_out.read())
+    return False
+
+
 @contextmanager
 def alerting_tls_server(context: ssl.SSLContext) -> Iterator[int]:
     """Serve TLS handshakes from a thread that sends OpenSSL's alert on failure.
@@ -177,8 +228,10 @@ __all__ = [
     "ConnectionHandler",
     "LoopbackCertificate",
     "alerting_tls_server",
+    "bypass_proxies",
     "loopback_certificate",
     "loopback_server",
     "reset_on_accept",
     "tls_error",
+    "tls_handshake_succeeds",
 ]

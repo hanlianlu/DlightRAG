@@ -27,11 +27,18 @@ from dlightrag.engine.dependencies import (
 from tests.support.loopback import (
     LoopbackCertificate,
     alerting_tls_server,
+    bypass_proxies,
     loopback_certificate,
     loopback_server,
     reset_on_accept,
     tls_error,
+    tls_handshake_succeeds,
 )
+
+
+@pytest.fixture(autouse=True)
+def _loopback_without_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    bypass_proxies(monkeypatch)
 
 
 def _http_error(status: int) -> httpx.HTTPStatusError:
@@ -394,7 +401,7 @@ async def _get_failure(
     verify: ssl.SSLContext | bool = True,
     timeout: object = 5,
 ) -> BaseException:
-    async with client_module.AsyncClient(verify=verify, timeout=timeout) as client:
+    async with client_module.AsyncClient(verify=verify, timeout=timeout, trust_env=False) as client:
         try:
             await client.get(url)
         except Exception as exc:  # noqa: BLE001 - the failure is the subject
@@ -418,7 +425,7 @@ async def test_a_real_handshake_reset_through_the_sdk_is_a_provider_interruption
             api_key="test-key",
             base_url=f"https://127.0.0.1:{port}/v1",
             max_retries=0,
-            http_client=httpx2.AsyncClient(timeout=5),
+            http_client=httpx2.AsyncClient(timeout=5, trust_env=False),
         )
         try:
             with pytest.raises(openai.APIConnectionError) as raised:
@@ -518,6 +525,13 @@ def _server_picks_an_older_version(certificate: LoopbackCertificate) -> tuple[ss
             maximum=ssl.TLSVersion.TLSv1_1,
             ciphers=_LEGACY_CIPHERS,
         )
+        legacy_client = certificate.client_context(
+            minimum=ssl.TLSVersion.TLSv1_1,
+            maximum=ssl.TLSVersion.TLSv1_1,
+            ciphers=_LEGACY_CIPHERS,
+        )
+    if not ssl.HAS_TLSv1_1 or not tls_handshake_succeeds(legacy_server, legacy_client):
+        pytest.skip("the linked OpenSSL cannot negotiate TLS 1.1 even at security level 0")
     return (
         legacy_server,
         certificate.client_context(minimum=_V1_2, maximum=_V1_2, ciphers=_LEGACY_CIPHERS),
@@ -559,7 +573,7 @@ def _tls_reasons(error: BaseException) -> list[object]:
     ],
     ids=["protocol-version-alert", "unsupported-protocol", "no-protocols", "handshake-failure"],
 )
-async def test_a_real_tls_protocol_mismatch_is_misconfiguration(
+async def test_a_real_tls_handshake_rejection_is_classified_by_its_reason(
     contexts: Callable[[LoopbackCertificate], tuple[ssl.SSLContext, ...]],
     reason: str,
     transient: bool,

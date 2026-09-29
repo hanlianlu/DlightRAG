@@ -19,7 +19,13 @@ from dlightrag.engine.rag.corpus.ingestion.parser_transport import (
     apply_parser_outage_reporting,
     parser_unavailable_recorded,
 )
-from tests.support.loopback import loopback_server, reset_on_accept, tls_error
+from tests.support.loopback import bypass_proxies, loopback_server, reset_on_accept, tls_error
+
+
+@pytest.fixture(autouse=True)
+def _loopback_without_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    bypass_proxies(monkeypatch)
+
 
 type Handler = Callable[[httpx.Request], httpx.Response]
 

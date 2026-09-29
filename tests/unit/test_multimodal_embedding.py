@@ -32,7 +32,13 @@ from dlightrag.engine.ai.providers.embed_providers import (
     VoyageEmbedProvider as _VoyageEmbedProvider,
 )
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from tests.support.loopback import loopback_server, reset_on_accept
+from tests.support.loopback import bypass_proxies, loopback_server, reset_on_accept
+
+
+@pytest.fixture(autouse=True)
+def _loopback_without_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    bypass_proxies(monkeypatch)
+
 
 _TEST_FINGERPRINT = ModelEndpointFingerprint(
     provider="test",
