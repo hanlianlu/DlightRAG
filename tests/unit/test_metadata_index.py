@@ -207,7 +207,12 @@ class TestMetadataSQL:
             field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at"
         )
 
-        expected = (*public_fields, INGEST_FINALIZATION_COMPLETE_FIELD, "_dlightrag_source_options")
+        expected = (
+            *public_fields,
+            INGEST_FINALIZATION_COMPLETE_FIELD,
+            "_dlightrag_source_options",
+            "_dlightrag_parser_input_sha256",
+        )
         assert pg_metadata_index._UPSERT_FIELD_IDS == expected
 
         insert_columns = _UPSERT.split("VALUES", 1)[0]
@@ -301,6 +306,7 @@ class TestMetadataSQL:
                 "product_document_visibility",
                 "publish_legacy_processed_documents",
                 "source_retrieval_options",
+                "parser_input_sha256",
             }
             | {f"column_{field_id}" for field_id in declared}
             | {f"index_{field_id}_canonical" for field_id in declared}

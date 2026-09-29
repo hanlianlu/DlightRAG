@@ -14,7 +14,11 @@ import pytest
 from lightrag.base import DocStatus
 from lightrag.parser.routing import FilenameParserHintError
 from lightrag.utils import compute_mdhash_id
-from lightrag.utils_pipeline import doc_status_parse_failure_fields, normalize_document_file_path
+from lightrag.utils_pipeline import (
+    compute_text_content_hash,
+    doc_status_parse_failure_fields,
+    normalize_document_file_path,
+)
 from PIL import Image
 
 from dlightrag.engine.dependencies import ParserUnavailableError, classify_transient_dependency
@@ -31,10 +35,22 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
     _raw_path_source_uri,
 )
 from dlightrag.engine.rag.corpus.ingestion.errors import ParserInputPlacementError
+from dlightrag.engine.rag.retrieval.metadata_fields import PARSER_INPUT_SHA256_FIELD
 
 
 def _sha256(content: bytes) -> str:
+    """The parser-input digest ingestion records with a document."""
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _lightrag_content_hash(content: bytes) -> str:
+    """LightRAG's own ``content_hash``: an MD5 of the parsed text, not of the file."""
+    return compute_text_content_hash(content.decode("utf-8", "replace"))
+
+
+def _recorded(content: bytes, **fields: Any) -> dict[str, Any]:
+    """A finalized document's metadata row, recorded from these parser-input bytes."""
+    return {_FINALIZATION_COMPLETE_KEY: True, PARSER_INPUT_SHA256_FIELD: _sha256(content), **fields}
 
 
 _PARSER_INPUT_ROOTS: list[Path] = []
@@ -106,13 +122,13 @@ def _make_engine(**overrides):
     stores.get_doc_status.return_value = {
         "status": "processed",
         "chunks_list": ["chunk-a"],
-        "content_hash": "sha256:abc",
+        "content_hash": _lightrag_content_hash(b"abc"),
     }
     stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
         doc_id: {
             "status": "processed",
             "chunks_list": ["chunk-a"],
-            "content_hash": "sha256:abc",
+            "content_hash": _lightrag_content_hash(b"abc"),
         }
         for doc_id in doc_ids
     }
@@ -151,10 +167,10 @@ async def test_replace_false_keeps_idempotent_skip(tmp_path: Path) -> None:
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
 
     result = await _ingest_one(engine, source, replace=False)
 
@@ -169,9 +185,21 @@ async def test_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> None:
     source.write_bytes(content)
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
-        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
-        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
-        {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
+        {
+            "chunks_list": ["old-chunk"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["old-chunk"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["new-chunk"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
     ]
 
     result = await _ingest_one(engine, source, replace=True)
@@ -188,9 +216,21 @@ async def test_batch_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> No
     source.write_bytes(content)
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
-        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
-        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
-        {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
+        {
+            "chunks_list": ["old-chunk"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["old-chunk"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["new-chunk"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
     ]
 
     result = await engine.aingest_files([source], replace=True)
@@ -480,7 +520,7 @@ async def test_document_ingest_labels_bm25_chunk_languages(tmp_path: Path) -> No
     engine, deps = _make_engine(bm25_language_classifier=FakeClassifier())
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-zh", "chunk-en"],
-        "content_hash": "sha256:abc",
+        "content_hash": _lightrag_content_hash(b"abc"),
         "status": "processed",
     }
     deps["stores"].fetch_chunk_contents.return_value = [
@@ -509,8 +549,16 @@ async def test_batch_document_ingest_uses_lightrag_staged_pipeline(
     deps["stores"].get_doc_status.side_effect = [
         None,
         None,
-        {"chunks_list": ["chunk-docx"], "content_hash": "sha256:docx", "status": "processed"},
-        {"chunks_list": ["chunk-pdf"], "content_hash": "sha256:pdf", "status": "processed"},
+        {
+            "chunks_list": ["chunk-docx"],
+            "content_hash": _lightrag_content_hash(b"docx"),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["chunk-pdf"],
+            "content_hash": _lightrag_content_hash(b"pdf"),
+            "status": "processed",
+        },
     ]
     deps["stores"].get_full_doc.side_effect = [
         {
@@ -557,8 +605,16 @@ async def test_batch_document_ingest_preserves_per_file_chunk_params(
     deps["stores"].get_doc_status.side_effect = [
         None,
         None,
-        {"chunks_list": ["chunk-docx"], "content_hash": "sha256:docx", "status": "processed"},
-        {"chunks_list": ["chunk-pdf"], "content_hash": "sha256:pdf", "status": "processed"},
+        {
+            "chunks_list": ["chunk-docx"],
+            "content_hash": _lightrag_content_hash(b"docx"),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["chunk-pdf"],
+            "content_hash": _lightrag_content_hash(b"pdf"),
+            "status": "processed",
+        },
     ]
     deps["stores"].get_full_doc.side_effect = [
         {
@@ -598,7 +654,11 @@ async def test_prepared_batch_uses_explicit_download_locator(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
         None,
-        {"chunks_list": ["chunk-report"], "content_hash": "sha256:pdf", "status": "processed"},
+        {
+            "chunks_list": ["chunk-report"],
+            "content_hash": _lightrag_content_hash(b"pdf"),
+            "status": "processed",
+        },
     ]
     deps["stores"].get_full_doc.return_value = {
         "parse_engine": "mineru",
@@ -679,10 +739,10 @@ async def test_metadata_only_update_forwards_explicit_source_contract(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
     prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
     monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
 
@@ -718,10 +778,10 @@ async def test_single_hash_match_bypasses_parser_directives(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
 
     def fail_parser_directives(_path: Path) -> tuple[str, str, dict[str, object] | None]:
         raise AssertionError("parser directives should not be resolved for hash-match fast path")
@@ -742,10 +802,10 @@ async def test_batch_hash_match_skip_does_not_resolve_invalid_parser_directives(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
 
     result = await engine.aingest_files([source], replace=False)
     single_result = await _ingest_one(engine, source, replace=False)
@@ -779,8 +839,16 @@ async def test_batch_replace_validates_all_enqueue_candidates_before_cleanup(
     bad.write_bytes(b"%PDF-1.4 bad")
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
-        {"chunks_list": ["chunk-good"], "content_hash": "sha256:good", "status": "processed"},
-        {"chunks_list": ["chunk-bad"], "content_hash": "sha256:bad", "status": "processed"},
+        {
+            "chunks_list": ["chunk-good"],
+            "content_hash": _lightrag_content_hash(b"good"),
+            "status": "processed",
+        },
+        {
+            "chunks_list": ["chunk-bad"],
+            "content_hash": _lightrag_content_hash(b"bad"),
+            "status": "processed",
+        },
     ]
 
     with pytest.raises(FilenameParserHintError):
@@ -803,7 +871,11 @@ async def test_batch_hash_match_metadata_update_waits_for_enqueue_validation(
     bad.write_bytes(b"%PDF-1.4 bad")
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
-        {"chunks_list": ["chunk-first"], "content_hash": _sha256(content), "status": "processed"},
+        {
+            "chunks_list": ["chunk-first"],
+            "content_hash": _lightrag_content_hash(content),
+            "status": "processed",
+        },
         None,
     ]
     deps["metadata_index"].get.return_value = {
@@ -1098,7 +1170,11 @@ async def test_batch_partial_cleanup_waits_for_enqueue_validation(
     bad.write_bytes(b"%PDF-1.4 bad")
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
-        {"chunks_list": ["chunk-good"], "content_hash": "sha256:stale", "status": "analyzing"},
+        {
+            "chunks_list": ["chunk-good"],
+            "content_hash": _lightrag_content_hash(b"stale"),
+            "status": "analyzing",
+        },
         None,
     ]
 
@@ -1121,7 +1197,7 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
     deps["metadata_index"].get.return_value = {
@@ -1133,6 +1209,7 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
         "file_extension": "pdf",
         "custom_metadata": {},
         _FINALIZATION_COMPLETE_KEY: True,
+        PARSER_INPUT_SHA256_FIELD: _sha256(content),
     }
 
     result = await _ingest_one(
@@ -1168,10 +1245,10 @@ async def test_single_hash_match_local_noop_checks_finalization_marker(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
 
     result = await _ingest_one(engine, source, replace=False)
 
@@ -1195,10 +1272,10 @@ async def test_single_hash_match_internal_local_contract_checks_finalization_mar
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
 
     result = await _ingest_one(
         engine,
@@ -1230,7 +1307,7 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
     deps["metadata_index"].get.return_value = {
@@ -1242,6 +1319,7 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
         "file_extension": "pdf",
         "custom_metadata": {},
         _FINALIZATION_COMPLETE_KEY: True,
+        PARSER_INPUT_SHA256_FIELD: _sha256(content),
     }
 
     result = await _ingest_one(
@@ -1278,10 +1356,10 @@ async def test_batch_metadata_only_update_preserves_source_contract_and_chunks(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-report"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(content)
     prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
     monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
 
@@ -1380,6 +1458,7 @@ async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
             "custom_metadata": {},
             _FINALIZATION_COMPLETE_KEY: False,
             "_dlightrag_source_options": {},
+            PARSER_INPUT_SHA256_FIELD: _sha256(b"%PDF-1.4"),
         }
     ]
 
@@ -1480,7 +1559,7 @@ async def test_batch_finalization_aggregates_failed_and_processed_documents(
         {
             "status": DocStatus.PROCESSED,
             "chunks_list": ["chunk-second"],
-            "content_hash": "sha256:second",
+            "content_hash": _lightrag_content_hash(b"second"),
         },
     ]
 
@@ -1615,13 +1694,17 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
     # Simulate a partial record from an interrupted ingest.
     partial_status = {
         "chunks_list": ["old-chunk-1"],
-        "content_hash": "sha256:deadbeef",
+        "content_hash": _lightrag_content_hash(b"deadbeef"),
         "status": "analyzing",
     }
     deps["stores"].get_doc_status.side_effect = [
         partial_status,
         partial_status,
-        {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc", "status": "processed"},
+        {
+            "chunks_list": ["chunk-a"],
+            "content_hash": _lightrag_content_hash(b"abc"),
+            "status": "processed",
+        },
     ]
 
     async def get_full_doc(doc_id_arg: str) -> dict | None:
@@ -1672,7 +1755,7 @@ async def test_document_ingest_replaces_processed_hash_mismatch(tmp_path: Path) 
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-1"],
-        "content_hash": "sha256:abc",
+        "content_hash": _lightrag_content_hash(b"abc"),
         "status": "processed",
     }
 
@@ -1689,7 +1772,11 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
         None,
-        {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc", "status": "processed"},
+        {
+            "chunks_list": ["chunk-a"],
+            "content_hash": _lightrag_content_hash(b"abc"),
+            "status": "processed",
+        },
     ]
 
     result = await _ingest_one(engine, source, replace=False)
@@ -1745,7 +1832,7 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
         None,
         {
             "chunks_list": ["chunk-a", mm_chunk_id],
-            "content_hash": "sha256:parsed",
+            "content_hash": _lightrag_content_hash(b"parsed"),
             "status": "processed",
         },
     ]
@@ -1812,7 +1899,7 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
         None,
         {
             "chunks_list": ["chunk-a", mm_chunk_id],
-            "content_hash": "sha256:parsed",
+            "content_hash": _lightrag_content_hash(b"parsed"),
             "status": "processed",
         },
     ]
@@ -1841,8 +1928,16 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
 
     status_iter = iter(
         [
-            {"chunks_list": [], "content_hash": "sha256:dead", "status": "failed"},
-            {"chunks_list": ["chunk-1"], "content_hash": "sha256:abc", "status": "processing"},
+            {
+                "chunks_list": [],
+                "content_hash": _lightrag_content_hash(b"dead"),
+                "status": "failed",
+            },
+            {
+                "chunks_list": ["chunk-1"],
+                "content_hash": _lightrag_content_hash(b"abc"),
+                "status": "processing",
+            },
         ]
     )
 
@@ -1856,7 +1951,7 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
         except StopIteration:
             return {
                 "chunks_list": ["chunk-1"],
-                "content_hash": _sha256(b"%PDF-1.4"),
+                "content_hash": _lightrag_content_hash(b"%PDF-1.4"),
                 "status": "processed",
             }
 
@@ -1878,6 +1973,14 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
         return type("DeletionResult", (), {"status": "success"})()
 
     deps["lightrag"].adelete_by_doc_id = AsyncMock(side_effect=slow_delete)
+    # The second ingest reads what the first recorded: the same bytes, finalized.
+    recorded: dict[str, dict[str, Any]] = {}
+
+    async def upsert(doc_id: str, row: dict[str, Any]) -> None:
+        recorded[doc_id] = {**recorded.get(doc_id, {}), **row}
+
+    deps["metadata_index"].upsert.side_effect = upsert
+    deps["metadata_index"].get.side_effect = lambda doc_id: recorded.get(doc_id)
 
     async def ingest() -> dict:
         return await _ingest_one(engine, source, replace=False)
@@ -1895,13 +1998,12 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
     engine, deps = _make_engine()
     doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
 
-    current_hash = _file_sha256_static(source)
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-1", "chunk-2"],
-        "content_hash": current_hash,
+        "content_hash": _lightrag_content_hash(source.read_bytes()),
         "status": "processed",
     }
-    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
+    deps["metadata_index"].get.return_value = _recorded(source.read_bytes())
 
     result = await _ingest_one(engine, source, replace=False)
 
@@ -1921,7 +2023,7 @@ async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypat
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-1"],
-        "content_hash": _file_sha256_static(source),
+        "content_hash": _lightrag_content_hash(source.read_bytes()),
         "status": "processed",
     }
     calls = []
@@ -1937,26 +2039,17 @@ async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypat
     assert engine_module._file_sha256 in calls
 
 
-def _file_sha256_static(path: Path) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
 async def test_reingest_proceeds_when_content_hash_differs(tmp_path: Path) -> None:
-    """Re-ingesting with different content_hash must proceed normally."""
+    """Re-ingesting bytes other than the recorded ones must proceed normally."""
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-1"],
-        "content_hash": "sha256:different_hash",
+        "content_hash": _lightrag_content_hash(b"different_hash"),
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = _recorded(b"%PDF-1.3")
 
     result = await _ingest_one(engine, source, replace=False)
 
@@ -1970,17 +2063,17 @@ async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
 
-    current_hash = _file_sha256_static(source)
-    failed_status = {
-        "chunks_list": [],
-        "content_hash": current_hash,
-        "status": "failed",
-    }
+    failed_status = {"chunks_list": [], "content_hash": None, "status": "failed"}
     deps["stores"].get_doc_status.side_effect = [
         failed_status,
         failed_status,
-        {"chunks_list": ["chunk-a"], "content_hash": current_hash, "status": "processed"},
+        {
+            "chunks_list": ["chunk-a"],
+            "content_hash": _lightrag_content_hash(b"%PDF-1.4"),
+            "status": "processed",
+        },
     ]
+    deps["metadata_index"].get.return_value = _recorded(b"%PDF-1.4")
 
     result = await _ingest_one(engine, source, replace=False)
 
@@ -2158,7 +2251,11 @@ async def test_a_later_document_with_a_name_already_in_the_batch_is_refused_alon
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
         None,
-        {"chunks_list": ["chunk-a"], "content_hash": "sha256:one", "status": "processed"},
+        {
+            "chunks_list": ["chunk-a"],
+            "content_hash": _lightrag_content_hash(b"one"),
+            "status": "processed",
+        },
     ]
     enqueued: list[bytes] = []
 
@@ -2613,11 +2710,12 @@ async def test_incomplete_finalization_marker_replays_without_reenqueue(
     deps["stores"].get_doc_status.return_value = {
         "status": "processed",
         "chunks_list": ["chunk"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
     }
     deps["metadata_index"].get.return_value = {
         "filename": "report.pdf",
         _FINALIZATION_COMPLETE_KEY: False,
+        PARSER_INPUT_SHA256_FIELD: _sha256(content),
     }
     engine._overwrite_sidecar_image_vectors = AsyncMock()  # type: ignore[method-assign]
     engine._label_bm25_languages = AsyncMock()  # type: ignore[method-assign]
@@ -2884,7 +2982,7 @@ async def test_recovered_incomplete_replacement_retires_remaining_owner_before_c
         new_id: {
             "status": "processed",
             "chunks_list": ["new"],
-            "content_hash": _sha256(content),
+            "content_hash": _lightrag_content_hash(content),
         }
     }
     metadata: dict[str, dict[str, object]] = {
@@ -2892,6 +2990,7 @@ async def test_recovered_incomplete_replacement_retires_remaining_owner_before_c
             "download_locator": locator,
             "source_uri": source_uri,
             _FINALIZATION_COMPLETE_KEY: False,
+            PARSER_INPUT_SHA256_FIELD: _sha256(content),
         },
         old_id: {"download_locator": locator, "source_uri": source_uri},
     }
@@ -3472,18 +3571,23 @@ async def test_a_placed_copy_stays_while_lightrag_may_still_parse_it(
 async def test_a_parser_input_that_cannot_be_placed_deletes_nothing(
     tmp_path: Path, parser_input_root: Path
 ) -> None:
+    source = tmp_path / "stage" / "report.pdf"
+    source.parent.mkdir()
+    source.write_bytes(b"%PDF")
+    # A folder where the flat copy belongs: the copy cannot replace it.
+    (parser_input_root / "report.pdf").mkdir(parents=True)
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "status": "processed",
         "chunks_list": ["chunk-old"],
-        "content_hash": "sha256:old",
+        "content_hash": _lightrag_content_hash(b"old"),
     }
 
     with pytest.raises(ParserInputPlacementError):
         await engine.aingest_files(
             [
                 PreparedIngestFile(
-                    parser_path=tmp_path / "stage" / "report.pdf",
+                    parser_path=source,
                     source_uri="local://default/report.pdf",
                     download_locator=str(parser_input_root / "report.pdf"),
                 )
@@ -3637,7 +3741,7 @@ async def test_source_options_survive_parser_failure_and_same_content_update(
     }
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
     deps["metadata_index"].upsert.reset_mock()
@@ -3667,7 +3771,7 @@ async def test_metadata_only_update_preserves_routing_for_same_locator(
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
+        "content_hash": _lightrag_content_hash(content),
         "status": "processed",
     }
     deps["metadata_index"].get.return_value = {
@@ -3679,6 +3783,7 @@ async def test_metadata_only_update_preserves_routing_for_same_locator(
         "custom_metadata": {},
         _FINALIZATION_COMPLETE_KEY: True,
         SOURCE_RETRIEVAL_OPTIONS_FIELD: {"s3_region": "eu-north-1"},
+        PARSER_INPUT_SHA256_FIELD: _sha256(content),
     }
     result = await _ingest_one(
         engine,

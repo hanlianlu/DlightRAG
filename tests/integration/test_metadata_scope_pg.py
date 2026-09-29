@@ -237,16 +237,19 @@ async def test_finalization_marker_round_trips_and_partial_updates_preserve_true
     index = PGMetadataIndex(workspace="ms_finalization_marker")
     await index.clear()
 
+    digest = "sha256:" + "ab" * 32
     await index.upsert(
         "doc-marker",
         {
             "filename": "marker.pdf",
             "_dlightrag_finalization_complete": False,
+            "_dlightrag_parser_input_sha256": digest,
         },
     )
     first = await index.get("doc-marker")
     assert first is not None
     assert first["_dlightrag_finalization_complete"] is False
+    assert first["_dlightrag_parser_input_sha256"] == digest
 
     await index.upsert(
         "doc-marker",
@@ -261,6 +264,7 @@ async def test_finalization_marker_round_trips_and_partial_updates_preserve_true
     assert preserved is not None
     assert preserved["title"] == "partial update"
     assert preserved["_dlightrag_finalization_complete"] is True
+    assert preserved["_dlightrag_parser_input_sha256"] == digest
     await index.upsert("doc-unfinished", {"filename": "unfinished.pdf"})
 
     # Reproduce an already-partitioned pre-marker schema. Foundation validation

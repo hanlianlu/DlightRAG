@@ -26,6 +26,7 @@ from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     INGEST_FINALIZATION_COMPLETE_FIELD,
     METADATA_FIELD_IDS,
+    PARSER_INPUT_SHA256_FIELD,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -83,6 +84,7 @@ def _build_create_table() -> str:
         cols.append(f"    {f.field_id}    {f.pg_type}")
     cols.append(f"    {_FINALIZATION_COMPLETE_COLUMN}    BOOLEAN NOT NULL DEFAULT FALSE")
     cols.append(f"    {SOURCE_RETRIEVAL_OPTIONS_FIELD}    JSONB")
+    cols.append(f"    {PARSER_INPUT_SHA256_FIELD}    TEXT")
     cols.append("    PRIMARY KEY (workspace, doc_id)")
     return (
         "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n"
@@ -531,6 +533,16 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
+    migrations.append(
+        Migration(
+            "parser_input_sha256",
+            "Record the digest of the bytes each document was parsed from",
+            (
+                "ALTER TABLE dlightrag_doc_metadata "
+                f"ADD COLUMN IF NOT EXISTS {PARSER_INPUT_SHA256_FIELD} TEXT",
+            ),
+        )
+    )
     return tuple(migrations)
 
 
@@ -546,6 +558,7 @@ _SCHEMA_TABLES = (
             "custom_metadata_search",
             _FINALIZATION_COMPLETE_COLUMN,
             SOURCE_RETRIEVAL_OPTIONS_FIELD,
+            PARSER_INPUT_SHA256_FIELD,
         ),
         primary_key=("workspace", "doc_id"),
         indexes=(
@@ -572,6 +585,7 @@ _UPSERT_FIELD_IDS = (
     *(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at"),
     _FINALIZATION_COMPLETE_COLUMN,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
+    PARSER_INPUT_SHA256_FIELD,
 )
 
 

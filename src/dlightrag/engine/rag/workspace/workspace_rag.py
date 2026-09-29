@@ -72,6 +72,7 @@ from dlightrag.engine.rag.lightrag.status import lightrag_status
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
+    PARSER_INPUT_SHA256_FIELD,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
 )
 from dlightrag.engine.rag.retrieval.rerank import (
@@ -226,6 +227,7 @@ _INTERNAL_FIELDS = frozenset(
         "download_locator",
         SOURCE_RETRIEVAL_OPTIONS_FIELD,
         INGEST_FINALIZATION_COMPLETE_FIELD,
+        PARSER_INPUT_SHA256_FIELD,
     }
 )
 

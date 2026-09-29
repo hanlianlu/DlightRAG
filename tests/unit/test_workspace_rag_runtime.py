@@ -2651,7 +2651,10 @@ class TestWorkspaceRagLightRAGMainPath:
         import hashlib
 
         from lightrag.utils import compute_mdhash_id
-        from lightrag.utils_pipeline import normalize_document_file_path
+        from lightrag.utils_pipeline import (
+            compute_text_content_hash,
+            normalize_document_file_path,
+        )
 
         service = _service(test_config)
         source = service._workspace_input_root() / "report.pdf"
@@ -2667,7 +2670,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "status": "processed",
                 "file_path": locator,
                 "chunks_list": ["chunk-new"],
-                "content_hash": f"sha256:{hashlib.sha256(content).hexdigest()}",
+                "content_hash": compute_text_content_hash(content.decode()),
             }
         }
         metadata: dict[str, dict[str, object]] = {
@@ -2676,6 +2679,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "source_uri": source_uri,
                 "download_locator": locator,
                 "_dlightrag_finalization_complete": False,
+                "_dlightrag_parser_input_sha256": (f"sha256:{hashlib.sha256(content).hexdigest()}"),
             },
             old_id: {
                 "filename": "old-report.pdf",
@@ -2746,7 +2750,10 @@ class TestWorkspaceRagLightRAGMainPath:
         import hashlib
 
         from lightrag.utils import compute_mdhash_id
-        from lightrag.utils_pipeline import normalize_document_file_path
+        from lightrag.utils_pipeline import (
+            compute_text_content_hash,
+            normalize_document_file_path,
+        )
 
         service = _service(test_config)
         source_uri = "bynder://asset/1"
@@ -2771,7 +2778,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "status": "processed",
                 "file_path": str(parser_path),
                 "chunks_list": ["chunk-new"],
-                "content_hash": f"sha256:{hashlib.sha256(content).hexdigest()}",
+                "content_hash": compute_text_content_hash(content.decode()),
             }
         }
         metadata: dict[str, dict[str, object]] = {
@@ -2780,6 +2787,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "source_uri": source_uri,
                 "download_locator": primary_locator,
                 "_dlightrag_finalization_complete": False,
+                "_dlightrag_parser_input_sha256": (f"sha256:{hashlib.sha256(content).hexdigest()}"),
             },
             old_id: {
                 "filename": "old-report.pdf",

@@ -56,6 +56,7 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
 from dlightrag.engine.rag.lightrag.status import lightrag_status
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
+    PARSER_INPUT_SHA256_FIELD,
     SOURCE_RETRIEVAL_OPTIONS_FIELD,
     extract_system_metadata,
     normalize_user_metadata,
@@ -595,6 +596,10 @@ class UnifiedIngestionEngine:
         *,
         replace: bool,
     ) -> _DocumentIngestDecision:
+        # Recorded with the document, so a later ingest of the same bytes is known.
+        entry.metadata_record[PARSER_INPUT_SHA256_FIELD] = await asyncio.to_thread(
+            _file_sha256, entry.parser_path
+        )
         existing_status = await self._stores.get_doc_status(entry.doc_id)
         if existing_status is None:
             return _DocumentIngestDecision(enqueue=True)
@@ -621,15 +626,17 @@ class UnifiedIngestionEngine:
         entry: _PendingDocumentIngest,
         existing_status: Mapping[str, Any] | None,
     ) -> _DocumentIngestDecision | None:
-        stored_hash = _mapping_get(existing_status, "content_hash")
-        if lightrag_status(existing_status) != "processed" or not stored_hash:
+        if lightrag_status(existing_status) != "processed":
             return None
-        current_hash = await asyncio.to_thread(_file_sha256, entry.parser_path)
-        if current_hash != stored_hash:
+        persisted = await self._metadata_index.get(entry.doc_id)
+        if (
+            not isinstance(persisted, Mapping)
+            or persisted.get(PARSER_INPUT_SHA256_FIELD)
+            != entry.metadata_record[PARSER_INPUT_SHA256_FIELD]
+        ):
             return None
 
         chunks = list(_mapping_get(existing_status, "chunks_list") or [])
-        persisted = await self._metadata_index.get(entry.doc_id)
         # Metadata-only edits do not silently discard accepted routing. An
         # explicitly declared choice (including SDK discovery) still replaces
         # it, while a changed locator starts with its own options.
