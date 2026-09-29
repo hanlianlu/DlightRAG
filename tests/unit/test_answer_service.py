@@ -7,7 +7,7 @@ import datetime
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pytest
 
@@ -1425,8 +1425,10 @@ async def test_artifact_readers_serve_only_published_artifacts_on_every_transpor
     async def stream() -> AsyncIterator[bytes]:
         yield b"report"
 
-    service.open_run_resource = AsyncMock(side_effect=lambda **_: stream())  # type: ignore[method-assign]
-    service.run_resource_size = AsyncMock(return_value=6)  # type: ignore[method-assign]
+    open_run_resource = create_autospec(service.open_run_resource, side_effect=lambda **_: stream())
+    run_resource_size = create_autospec(service.run_resource_size, return_value=6)
+    service.open_run_resource = open_run_resource  # type: ignore[method-assign]
+    service.run_resource_size = run_resource_size  # type: ignore[method-assign]
 
     for resource_id in ("artifact-draft", "res-upload-0"):
         assert (
@@ -1441,8 +1443,8 @@ async def test_artifact_readers_serve_only_published_artifacts_on_every_transpor
             await service.artifact_size(owner_id=_OWNER, run_id="run-1", resource_id=resource_id)
             is None
         )
-    service.open_run_resource.assert_not_awaited()
-    service.run_resource_size.assert_not_awaited()
+    open_run_resource.assert_not_awaited()
+    run_resource_size.assert_not_awaited()
 
     published = "artifact-report"
     assert (
@@ -1525,7 +1527,8 @@ async def test_retrieval_id_is_unknown_to_every_answer_only_interface() -> None:
     store.transcript_rows = ({"role": "assistant", "content": "fabricated"},)
     store.child_page_rows = ({"child_session_id": "fabricated"},)
     service = _service(store=store)
-    service.create = AsyncMock()  # type: ignore[method-assign]
+    create = create_autospec(service.create)
+    service.create = create  # type: ignore[method-assign]
 
     assert await service.steer(owner_id=_OWNER, run_id="run-1", instruction="continue") is None
     assert await service.transcript_tail(owner_id=_OWNER, run_id="run-1") is None
@@ -1569,7 +1572,7 @@ async def test_retrieval_id_is_unknown_to_every_answer_only_interface() -> None:
         )
         is None
     )
-    service.create.assert_not_awaited()
+    create.assert_not_awaited()
     assert store.controls == []
     assert store.artifact_reads == []
 
@@ -1881,7 +1884,8 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
     )
     service = _service(store=_Store(run=terminal))
     created = RunCreation(run=_record(run_id="next"), replayed=False)
-    service.create = AsyncMock(return_value=created)  # type: ignore[method-assign]
+    create = create_autospec(service.create, return_value=created)
+    service.create = create  # type: ignore[method-assign]
 
     follow = await service.follow_up(
         owner_id=_OWNER,
@@ -1889,16 +1893,16 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
         query="next question",
         authorized_workspaces=("finance",),
     )
-    assert service.create.await_args is not None
-    follow_request = service.create.await_args.kwargs["request"]
+    assert create.await_args is not None
+    follow_request = create.await_args.kwargs["request"]
     fork = await service.fork(
         owner_id=_OWNER,
         run_id="run-1",
         query="other branch",
         authorized_workspaces=("finance",),
     )
-    assert service.create.await_args is not None
-    fork_request = service.create.await_args.kwargs["request"]
+    assert create.await_args is not None
+    fork_request = create.await_args.kwargs["request"]
 
     assert follow == created and fork == created
     # The parent recorded an Agent Session, so the fold at the branch point is
