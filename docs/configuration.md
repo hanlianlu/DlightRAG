@@ -751,8 +751,9 @@ answer image count is clamped to the query model's discovered capability.
 
 `lineage_adoption` lets a Run adopt a Resource that an earlier Run on the same
 Agent Session registered, when the model names its handle. Newly adopted bytes
-take an attachment slot, and their text reads only through the conversion view
-stored with them; the adopting Run never converts them. See
+take an attachment slot, and the adopting Run never converts them: a convertible
+document reads text only through the conversion view stored with it, and other
+formats are decoded from the adopted bytes. See
 [Resource Reading](resource-reading.md#earlier-runs).
 
 ## Research Agent

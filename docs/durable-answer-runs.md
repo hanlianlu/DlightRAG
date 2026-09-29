@@ -324,10 +324,11 @@ the existing resource/blob Effect Settlement path; same-Run recovery reuses the
 adopted view instead of reparsing. Raw image bytes remain separate from typed
 Session parts. New follow-up/fork Runs atomically retain exact selected-lineage
 attachment references under the consuming Run fence before hydration. Missing,
-mismatched, or unauthorized replay bytes fail explicitly; hydration alone
-registers no earlier handle in the new Run, which can use an earlier handle only
-through lineage adoption. See [Resource Reading](resource-reading.md) for the
-retention contract.
+mismatched, or unauthorized replay bytes fail explicitly. Retention and
+hydration register no earlier handle in the new Run; a handle the model names
+can still be adopted under
+[ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md). See
+[Resource Reading](resource-reading.md) for the retention contract.
 
 ### `dlightrag_answer_artifact_attachments`
 
@@ -426,7 +427,9 @@ retained references in the current Run, under its owner and lease fence. The sam
 closed occurrence binding checks apply as for selected-lineage adoption; missing
 or mismatched pins, references, or bytes fail explicitly. This read neither
 adopts another Run's references nor registers historical resource handles or
-cursors. Prior-Run occurrences must first pass selected-ancestry fenced adoption.
+cursors; only a handle the model names can reach an earlier Run's Resource,
+through lineage adoption (ADR 0013). Prior-Run occurrences must first pass
+selected-ancestry fenced adoption.
 Recovered pixels preserve original/derivative provenance and consume the image
 budget, with capability and context checks against the actual Child model.
 

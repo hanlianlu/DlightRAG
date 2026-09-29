@@ -544,9 +544,12 @@ Text, assets, status, converter/version, fallback reason, known OCR pages and
 input/output digests settle as one adopted Resource view. Same-Run reads, cursors
 and recovery reuse it without reparsing. Selected-lineage follow-up/fork retention
 and pinned Child Session hydration preserve original occurrence identity and
-charge the actual consuming model; they register no earlier resource handle. An
-earlier handle becomes usable only through lineage adoption, whose adopted bytes
-read text only through the conversion view stored with them.
+charge the actual consuming model, and they register no earlier resource
+handle. A handle the model names can still be adopted under
+[ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md). The adopting
+Run never converts newly adopted bytes: a convertible document reads text only
+through its stored conversion view, and other formats are decoded from the
+adopted bytes.
 
 Each route has known limits:
 
