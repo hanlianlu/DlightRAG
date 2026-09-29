@@ -220,47 +220,56 @@ completeness, or untested platforms.
 - Lineage adoption is on by default (`answer.generation.lineage_adoption`). When
   `read` or `view` names an unknown handle, the loader looks in the same owner
   and Agent Session for a retained row with that handle and an adoptable kind: a
-  fetched Web body, a tool attachment, or a Published Artifact. Its Blob digest
-  must match.
+  fetched Web body, a tool attachment, a Published Artifact, or a Resource an
+  earlier turn adopted. Its Blob digest must match.
 - A stored conversion view is checked before anything is registered: it must
   decode, name the same handle, and match the input digest of the bytes. A view
   that fails any check refuses the adoption ("the document was not converted
   again"), and because nothing was registered, asking again refuses again.
-- The bytes then become a Resource of this Run under a new canonical handle, the
-  earlier handle becomes its alias, and the stored view is adopted verbatim. The
-  bytes, view, and images settle as this Run's own Resources under its fence, so
-  cleanup of the origin Run cannot invalidate them. The adoption row is located
-  by the canonical handle and carries every alias bound to it, so two earlier
-  handles for the same file (the same file name, declared MIME type, and
-  SHA-256) settle one Resource with merged aliases.
-- The adoption settles even when the retried `read` or `view` then fails, for
-  example on a stale cursor, a document with no viewable target, or a refused
-  view: the failure returns as a typed refusal that carries the adoption. Once
-  adopted the handle is held, so an embedded-image handle the call cannot find
-  is named as the missing one.
-- An adoption whose call was cancelled, or whose result the Session could not
-  record, leaves no adoption row, though a later call through its alias may
-  have settled the view. Recovery then adopts that earlier Resource again
-  through the lineage rule: the same canonical handle, the alias bound, and the
-  settled view attached, provided the lineage still supplies the view's input
-  bytes. A view whose Resource neither this Run nor its lineage can supply is a
-  real inconsistency and fails the resume.
+- The bytes then become a Resource of this Run under a new canonical handle, and
+  the earlier handle becomes its alias. The stored view becomes the view of that
+  Resource: its text, images, and conversion facts are the earlier Run's,
+  unchanged, and only the Resource it names is now this Run's canonical handle.
+  That is the handle the call prints, so a later turn adopts the Resource again
+  by it.
+- Before the earlier handle resolves, the adoption is written as this Run's own
+  Resources: the adoption row (the canonical handle, the bytes, and the earlier
+  handle as an alias), the view, and its images, in one transaction under the
+  Run's lease. Cleanup of the origin Run cannot invalidate them, and the
+  adoption holds whatever the call that asked for it does next: a cancelled call,
+  or a retried `read` or `view` that fails on a stale cursor, a document with no
+  viewable target, or a refused view, leaves the adoption in place, and the
+  failure is a typed refusal of its own. Once adopted the handle is held, so an
+  embedded-image handle the call cannot find is named as the missing one.
+- If that write fails, nothing is adopted: the handle stays unknown, no
+  attachment slot is spent, and asking again tries again. A lost lease stops the
+  call without writing anything; the Run's next claimant adopts afresh.
+- A Run adopts one earlier Resource at a time. Two earlier handles for the same
+  file (the same file name, declared MIME type, and SHA-256) are one Resource
+  with one adoption row whose aliases are merged, and the first stored view
+  adopted for it is its only view; the store refuses a different second view.
+- A resume restores adopted Resources from those rows like any other Resource of
+  the Run: both handles resolve and the view is back, without reading the
+  lineage. A stored view whose Resource no restored row names is a real
+  inconsistency and fails the resume.
 - Newly adopted bytes are registered stored-view-only, and this Run never
   converts them. A convertible document (PDF, DOCX, XLSX, PPTX, CSV, or HTML)
-  reads text only through the view adopted or restored with it; other formats,
-  such as a Markdown Published Artifact or a fetched text page, are decoded from
-  the adopted bytes. `read` of a convertible document whose earlier Run never
-  extracted text refuses, and names the remedy: re-read it from its URL or a
-  fresh attachment, or, for a PDF only (by file name or declared type), view its
-  pages as pixels. `view` can
-  still adopt such a document for pixels that need no conversion, such as PDF
-  pages, but a later `read` through the earlier handle or this Run's handle
-  refuses the same way, and recovery keeps it so.
+  reads text only through a stored view: the one adopted or restored with it, or
+  one this Run already holds for the same bytes through another handle. Other
+  formats, such as a Markdown Published Artifact or a fetched text page, are
+  decoded from the adopted bytes. `read` of a convertible document with no such
+  view refuses without adopting it, and names the remedy: re-read it from its
+  URL or a fresh attachment, or, for a PDF only (by file name or declared type),
+  view its pages as pixels. `view` can still adopt such a document for pixels
+  that need no conversion, such as PDF pages, but a later `read` through the
+  earlier handle or this Run's handle refuses the same way, and recovery keeps
+  it so.
 - Adopted bytes that match a Resource this Run already holds by file name,
-  declared MIME type, and SHA-256, such as the same file attached again, keep
-  that Resource's state from its first admission. A view it already has stays
-  and no second view is adopted; a Resource without a view adopts the stored
-  view, if there is one. Follow-up uploads re-registered from an earlier Run
+  declared MIME type, and SHA-256, such as the same image attached again, keep
+  that Resource's state from its first admission: bytes this Run can convert
+  itself keep their own conversion and never take an earlier view, and a
+  Resource adopted without a view takes the first stored view adopted for the
+  same bytes. Uploaded documents, current or re-registered from an earlier Run,
   load lazily and never match adopted bytes.
 - Newly adopted bytes take one `answer.generation.max_attachments` slot and
   count toward the upload byte limits. An adoption past the allowance refuses as
@@ -288,12 +297,17 @@ completeness, or untested platforms.
 - `tests/unit/test_resource_snapshot_runtime.py`: settled snapshots and located
   pixels restored through the Answer host and Agent runtime.
 - `tests/unit/test_resource_lineage_adoption.py` and the recovery test in
-  `tests/unit/test_answer_executor.py`: adoption checks, stored-view-only
-  adopted bytes, decoding of unconverted formats, the same file under two
-  earlier handles, settlement when the retried call fails, the attachment
-  allowance, and the manifest wording.
+  `tests/unit/test_answer_executor.py`: adoption checks, the adoption written
+  before its handle resolves and kept when the retried call is refused or
+  cancelled, nothing adopted when the write fails, one view under concurrent
+  adoptions, stored-view-only adopted bytes, decoding of unconverted formats, a
+  view held through another handle, the same file under two earlier handles,
+  resumes without the lineage, the attachment allowance, and the manifest
+  wording.
 - `tests/integration/test_resource_lineage_pg.py`,
-  `tests/integration/test_agent_session_pg.py` (one adoption row with both
-  aliases), `tests/integration/test_attachment_replay_pg.py`,
-  `tests/integration/test_resource_review_regressions_pg.py`: adoption,
-  selected-lineage replay, and durable settlement against PostgreSQL.
+  `tests/integration/test_attachment_replay_pg.py`,
+  `tests/integration/test_resource_review_regressions_pg.py`: adoption under the
+  Run lease (a lost lease writes nothing, a conflicting view rolls back whole),
+  one adoption row with both aliases, a later turn adopting an earlier turn's
+  adoption, an adoption outliving its origin Run, selected-lineage replay, and
+  durable settlement against PostgreSQL.
