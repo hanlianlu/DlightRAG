@@ -244,8 +244,9 @@ Grants, and removes the old key only after its counts reach zero; see
   would push an enabled Connection past `max_enabled_tools`, the refresh records
   a `quota` error instead of publishing.
 - `NOTIFY dlightrag_connections_changed` wakes refresh loops and in-flight
-  watchers. Loops also wake at least once a second, and every listener
-  (re)connect triggers a scan, so a missed notification only delays work.
+  watchers. Loops also wake at least once a second, and every resynchronization
+  of the notification hub triggers a scan, so a missed notification only delays
+  work.
 - New tools and schema or description changes reach future Runs through
   publication, with no restart and no per-tool consent. Existing pins never
   change.
