@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from functools import partial
@@ -415,6 +416,45 @@ async def test_a_second_view_for_one_resource_rolls_the_whole_adoption_back() ->
             await loader.record((adoption, *other.effects()), owner)
 
         assert await _run_rows(db, claim.run_id) == before, "the alias merge rolled back too"
+
+
+async def test_a_later_turn_adopts_through_the_handle_an_adoption_printed() -> None:
+    """Turn 3 names the handle turn 2's read printed, and resumes without the lineage.
+
+    Turn 2 printed its own canonical handle for the document turn 1 attached. That
+    adoption's row and view are turn 2's, stamped with the Session, so turn 3 adopts
+    them by that handle like any other Resource the conversation holds.
+    """
+    async with isolated_run_runtime("resource_lineage_chain") as (_, db):
+        store = await _store(db)
+        session_id, _ = await _seed_origin_run(db, store)
+
+        second = await _claimed_run(store)
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, second))
+            shown = await _call(read, session_id, resource_id="res-earlier-document")
+        assert shown.is_error is False
+        printed = re.search(r"\[resource: (res-[0-9a-f]+)", shown.text_content)
+        assert printed is not None
+        handle = printed.group(1)
+        assert handle != "res-earlier-document"
+
+        third = await _claimed_run(store)
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, third))
+            result = await _call(read, session_id, resource_id=handle)
+            assert result.is_error is False, result.text_content
+            assert EARLIER_TEXT in result.text_content
+            canonical = registry.canonical_resource_id(handle)
+            assert canonical not in {handle, "res-earlier-document"}
+
+        resumed = await _resumed(store, db, third.run_id)
+        try:
+            for name in (handle, canonical):
+                text = await resumed.read(name, max_window_tokens=1000)
+                assert EARLIER_TEXT in text.content
+        finally:
+            await resumed.aclose()
 
 
 async def test_an_adoption_outlives_the_run_it_came_from() -> None:

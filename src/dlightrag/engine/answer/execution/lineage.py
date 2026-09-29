@@ -42,9 +42,14 @@ logger = logging.getLogger(__name__)
 #: digest-addressed bytes that outlive the Run that produced them, and a
 #: conversation that keeps working on one deliverable must be able to read the
 #: version it published earlier.
+#:
+#: An earlier adoption is here because the handle a turn prints for an adopted
+#: Resource is its own canonical handle, and that turn recorded the bytes and the
+#: view under exactly that handle: the next turn names what it was shown.
 ADOPTABLE_LINEAGE_KINDS: tuple[tuple[str, str], ...] = (
     ("web", "fetched_blob"),
     ("tool_attachment", "fetched_blob"),
+    ("lineage_adoption", "fetched_blob"),
     ("published_artifact", "published_artifact"),
 )
 
