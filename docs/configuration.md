@@ -54,6 +54,29 @@ align its mount. For infrastructure endpoints such as PostgreSQL Service DNS,
 the deployment manifest may own the typed setting; do not also place that value
 in its mounted `config.yaml`.
 
+### Service URLs carry no credentials
+
+A configured service URL must not embed userinfo (`https://user:password@host`).
+URLs are logged, and some are returned or published: the model catalogue lists
+every entry's `base_url` to any authenticated caller, and OAuth metadata
+carries the callback URL. Startup therefore refuses userinfo in every URL
+setting, with an error that names the field and never repeats the value:
+
+- `models.chat.default.base_url`, `models.chat.roles.*.base_url`,
+  `models.catalogue[].base_url`, `models.embedding.base_url`, and
+  `models.rerank.base_url`
+- `corpus.sidecars.mineru.official_endpoint`, `.local_endpoint`, and
+  `corpus.sidecars.docling.endpoint`
+- `storage.lightrag.milvus_uri`
+- `access.jwt_issuer`, `access.jwt_jwks_url`, `access.web_identity.issuer`, and
+  `access.web_identity.jwks_url`
+- `interfaces.mcp.resource_server_url` and `observability.langfuse_host`
+- `answer.agent.connections.oauth_callback_url`
+
+Put the credential in the service's own secret setting instead (`api_key`,
+`api_token`, `milvus_token`, and so on). A model catalogue entry published at
+runtime is refused the same way.
+
 ## What Belongs In `config.yaml`
 
 Keep model/provider settings, parser sidecars, workspace identity,

@@ -5,13 +5,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_serializer,
     field_validator,
     model_validator,
@@ -64,6 +66,32 @@ def thaw_settings_value(value: Any) -> Any:
     return value
 
 
+def reject_url_credentials(value: str, field: str) -> str:
+    """Return a service URL, refusing one whose authority carries userinfo.
+
+    A URL is logged, and some are returned or published (the model catalogue lists
+    ``base_url``; OAuth metadata carries the callback), so a ``user:password@``
+    written into one travels with it. Every service takes its credential from its
+    own secret setting instead. The error names the field and never the value.
+    """
+    try:
+        authority = urlsplit(value).netloc
+    except ValueError:
+        raise ValueError(f"{field} must be a valid URL") from None
+    if "@" in authority:
+        raise ValueError(f"{field} must not include credentials (user:password@)")
+    return value
+
+
+def _credential_free_url(value: str, info: ValidationInfo) -> str:
+    return reject_url_credentials(value, info.field_name or "URL")
+
+
+#: A configured service URL: any URL setting DlightRAG calls, verifies against, or
+#: publishes. It never carries credentials (see ``reject_url_credentials``).
+ServiceUrl = Annotated[str, AfterValidator(_credential_free_url)]
+
+
 def _canonical_provider(value: Any) -> Any:
     return value.strip().lower() if isinstance(value, str) else value
 
@@ -82,7 +110,7 @@ class ModelSettings(FrozenSettings):
     provider: ChatProvider = "openai"
     model: str
     api_key: str | None = Field(default=None, repr=False)
-    base_url: str | None = None
+    base_url: ServiceUrl | None = None
     api_family: ApiFamily = "chat_completion"
     structured_output: Literal["auto", "json_schema", "json_object"] = "auto"
     temperature: float | None = Field(default=None, ge=0)
@@ -206,7 +234,7 @@ class ModelCatalogueEntrySettings(FrozenSettings):
 
     provider: ChatProvider
     model: str
-    base_url: str | None
+    base_url: ServiceUrl | None
     profile: ModelCatalogueProfileSettings
 
     @field_validator("provider", mode="before")
@@ -324,7 +352,7 @@ class EmbeddingSettings(FrozenSettings):
     ] = "voyage"
     model: str = "voyage-multimodal-3.5"
     api_key: str | None = Field(default=None, repr=False)
-    base_url: str | None = None
+    base_url: ServiceUrl | None = None
     dim: int = Field(default=1024, ge=1)
     max_token_size: int = Field(default=8192, ge=1)
     input_modality: InputModality = "auto"
@@ -340,7 +368,7 @@ class RerankSettings(FrozenSettings):
     provider: ChatProvider | None = None
     model: str | None = None
     api_key: str | None = Field(default=None, repr=False)
-    base_url: str | None = None
+    base_url: ServiceUrl | None = None
     input_modality: InputModality = "auto"
     score_threshold: float | None = Field(default=None, ge=0)
     max_concurrency: int = Field(default=8, ge=1)
@@ -407,6 +435,8 @@ __all__ = [
     "ModelsSettings",
     "RerankSettings",
     "RerankStrategy",
+    "ServiceUrl",
     "freeze_settings_value",
+    "reject_url_credentials",
     "thaw_settings_value",
 ]

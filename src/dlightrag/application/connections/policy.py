@@ -3,10 +3,12 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.engine.ai.settings import ServiceUrl
+
 
 class ConnectionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-    oauth_callback_url: str | None = Field(default=None, max_length=2048)
+    oauth_callback_url: ServiceUrl | None = Field(default=None, max_length=2048)
     oauth_timeout: float = Field(default=300, ge=30, le=600)
     max_connections: int = Field(default=20, ge=1, le=100)
     max_enabled_tools: int = Field(default=256, ge=1, le=1024)

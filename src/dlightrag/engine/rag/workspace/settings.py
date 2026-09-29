@@ -12,6 +12,7 @@ from pydantic import Field, field_serializer, field_validator, model_validator
 from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
+    ServiceUrl,
     freeze_settings_value,
     thaw_settings_value,
 )
@@ -91,8 +92,8 @@ class VLMSidecarSettings(FrozenSettings):
 class MinerUSidecarSettings(FrozenSettings):
     api_mode: Literal["local", "official"] = "local"
     api_token: str | None = Field(default=None, repr=False)
-    official_endpoint: str = "https://mineru.net"
-    local_endpoint: str = "http://127.0.0.1:8210"
+    official_endpoint: ServiceUrl = "https://mineru.net"
+    local_endpoint: ServiceUrl = "http://127.0.0.1:8210"
     language: Literal[
         "ch",
         "ch_server",
@@ -123,7 +124,7 @@ class MinerUSidecarSettings(FrozenSettings):
 
 
 class DoclingSidecarSettings(FrozenSettings):
-    endpoint: str = "http://127.0.0.1:5001"
+    endpoint: ServiceUrl = "http://127.0.0.1:5001"
     do_formula_enrichment: bool = True
     force_ocr: bool = True
     code_formula_preset: str | None = "granite_docling"

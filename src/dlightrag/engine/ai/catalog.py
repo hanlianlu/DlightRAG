@@ -23,6 +23,7 @@ from dlightrag.engine.ai.reasoning import (
     ReasoningProfile,
     best_effort_reasoning_profile,
 )
+from dlightrag.engine.ai.settings import reject_url_credentials
 
 _logger = logging.getLogger(__name__)
 
@@ -419,7 +420,9 @@ def parse_catalogue_entry(value: object, *, path: str = "entry") -> CatalogueEnt
         endpoint_fingerprint = normalized_endpoint_fingerprint(base_url)
         if endpoint_fingerprint is None:
             raise RuntimeError(f"{path}.base_url must be null or a valid HTTP(S) URL")
-        canonical_base_url = cast(str, base_url)
+        # Any authenticated caller reads the catalogue back, so an entry published at
+        # runtime is held to the rule its startup configuration already is.
+        canonical_base_url = reject_url_credentials(cast(str, base_url), f"{path}.base_url")
     profile = _validated_profile(item["profile"], path=f"{path}.profile")
     fingerprint = ModelEndpointFingerprint(
         provider=provider,

@@ -39,6 +39,7 @@ from dlightrag.application.connections.policy import ConnectionPolicy
 from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
+    ServiceUrl,
     freeze_settings_value,
     thaw_settings_value,
 )
@@ -136,8 +137,6 @@ def _validate_oauth_endpoint_url(value: str, field_name: str) -> None:
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
         raise ValueError(f"{field_name} must be an absolute HTTP(S) URL")
-    if parsed.username or parsed.password:
-        raise ValueError(f"{field_name} must not include credentials")
     if parsed.query or parsed.fragment:
         raise ValueError(f"{field_name} must not include query or fragment components")
     if parsed.scheme != "https" and parsed.hostname not in _LOCAL_API_HOSTS:
@@ -609,7 +608,7 @@ class WebIdentitySettings(BaseModel):
             "login (development/operator hatch)."
         ),
     )
-    issuer: str | None = Field(
+    issuer: ServiceUrl | None = Field(
         default=None,
         description=(
             "Expected edge-token issuer: https://<team>.cloudflareaccess.com for "
@@ -621,7 +620,7 @@ class WebIdentitySettings(BaseModel):
         default=None,
         description="Expected edge-token audience (Cloudflare AUD tag; AAD client id).",
     )
-    jwks_url: str | None = Field(
+    jwks_url: ServiceUrl | None = Field(
         default=None,
         description=(
             "JWKS endpoint for edge-token signing keys. Optional: Cloudflare "
@@ -741,7 +740,7 @@ class LightRAGStorageSettings(FrozenSettings):
     graph_storage: Literal["PGTableGraphStorage"] = "PGTableGraphStorage"
     kv_storage: Literal["PGKVStorage"] = "PGKVStorage"
     doc_status_storage: Literal["PGDocStatusStorage"] = "PGDocStatusStorage"
-    milvus_uri: str | None = Field(default=None, repr=False)
+    milvus_uri: ServiceUrl | None = Field(default=None, repr=False)
     milvus_token: str | None = Field(default=None, repr=False)
     milvus_db_name: str | None = None
     vector_db_kwargs: Mapping[str, Any] = Field(default_factory=dict)
@@ -831,8 +830,8 @@ class AccessSectionSettings(FrozenSettings):
     api_token: str | None = Field(default=None, repr=False)
     allow_insecure_no_auth: bool = False
     jwt_verification_key: str | None = Field(default=None, repr=False)
-    jwt_jwks_url: str | None = None
-    jwt_issuer: str | None = None
+    jwt_jwks_url: ServiceUrl | None = None
+    jwt_issuer: ServiceUrl | None = None
     jwt_audience: Annotated[str | tuple[str, ...] | None, NoDecode] = None
     jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = "HS256"
     cors_allow_origins: tuple[str, ...] = ("*",)
@@ -871,7 +870,7 @@ class McpInterfaceSettings(FrozenSettings):
     port: int = Field(default=8101, ge=1, le=65535)
     allowed_hosts: tuple[str, ...] = tuple(_LOCAL_MCP_ALLOWED_HOSTS)
     allowed_origins: tuple[str, ...] = tuple(_LOCAL_MCP_ALLOWED_ORIGINS)
-    resource_server_url: str | None = None
+    resource_server_url: ServiceUrl | None = None
 
 
 class InterfacesSettings(FrozenSettings):
@@ -884,7 +883,7 @@ class ObservabilitySettings(FrozenSettings):
     log_level: str = "info"
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = Field(default=None, repr=False)
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_host: ServiceUrl = "https://cloud.langfuse.com"
     langfuse_export_external_spans: bool = False
     langfuse_trace_sensitive_data: bool = True
     langfuse_environment: str | None = Field(

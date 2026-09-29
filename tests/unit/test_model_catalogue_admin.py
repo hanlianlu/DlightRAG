@@ -268,6 +268,19 @@ async def test_update_that_breaks_a_configured_reasoning_role_is_not_published()
 
 
 @pytest.mark.asyncio
+async def test_upsert_refuses_a_base_url_that_carries_credentials() -> None:
+    """Any authenticated caller reads the catalogue, so a credential in it would leak."""
+    admin, store, _catalogue_instance, _invalidations = await _admin()
+    entry = {**_entry(), "base_url": "https://operator:never-echo-me@api.example.test/v1"}
+
+    with pytest.raises(ModelCatalogueValidationError) as caught:
+        await admin.upsert(entry, expected_revision=admin.revision, actor="a")
+
+    assert str(caught.value) == "entry.base_url must not include credentials (user:password@)"
+    assert store.publishes == []
+
+
+@pytest.mark.asyncio
 async def test_failed_store_cas_reloads_authoritative_revision_before_conflict() -> None:
     admin, store, catalogue, _invalidations = await _admin()
     concurrent: CatalogueEntry = parse_catalogue_entry(_entry(context=150_000))
