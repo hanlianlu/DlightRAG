@@ -344,6 +344,16 @@ FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND run_id = $2 AND resource_id = $3
 """
 
+# Blob cleanup deletes only Blobs it can lock (FOR UPDATE SKIP LOCKED) and no committed
+# row names; rows this transaction is writing are invisible to it until the commit.
+_HOLD_BLOBS = """
+SELECT 1
+FROM dlightrag_blobs
+WHERE owner_id = $1 AND digest = ANY($2::text[])
+ORDER BY digest
+FOR KEY SHARE
+"""
+
 
 class _EvidenceIdentityConflict(Exception):
     """Rolls back the current settlement transaction as an EvidenceConflict."""
@@ -430,11 +440,17 @@ async def write_fetched_resources(
 ) -> None:
     """Write fetched Resources and their complete Blobs as rows of one Run.
 
-    New Blob identities take one canonical lock order across transactions; rows
-    keep the caller's order. A row already stored under the same identity and
-    bytes only merges its aliases, and one naming other bytes is an identity
-    conflict that rolls the caller's transaction back.
+    The Blobs that already exist are held first, so a cleanup that sees no
+    committed row naming one skips it instead of deleting it before these rows
+    commit; one it deleted already is written again. New Blob identities take one
+    canonical lock order across transactions; rows keep the caller's order. A row
+    already stored under the same identity and bytes only merges its aliases, and
+    one naming other bytes is an identity conflict that rolls the caller's
+    transaction back.
     """
+    digests = sorted({update.complete_blob.digest for update in updates})
+    if digests:
+        await conn.execute(_HOLD_BLOBS, owner_id, digests)
     for update in sorted(updates, key=lambda item: item.complete_blob.digest):
         blob = update.complete_blob
         try:

@@ -584,6 +584,46 @@ async def test_an_adoption_outlives_the_run_it_came_from() -> None:
             await resumed.aclose()
 
 
+async def test_a_purge_of_the_origin_during_the_adoption_write_keeps_the_blobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A purge that commits while the adoption is written cannot take its Blobs.
+
+    The purge sees no committed row naming the adopted Blobs yet; without the hold it
+    deleted the bytes the adoption's rows then named, and the resume failed.
+    """
+    from dlightrag.adapters.postgres.answer import session_repository
+
+    async with isolated_run_runtime("resource_lineage_purge") as (_, db):
+        store = await _store(db)
+        session_id, origin_run = await _seed_origin_run(db, store)
+        claim = await _claimed_run(store)
+        written = session_repository.write_fetched_resources
+        purges: list[Any] = []
+
+        async def write_then_purge_the_origin(conn: Any, **write: Any) -> None:
+            await written(conn, **write)
+            # Retention purges the origin Run in its own transaction before this commit.
+            purges.append(await delete_runs(db, store, owner_id=OWNER, run_ids=[origin_run]))
+
+        monkeypatch.setattr(
+            session_repository, "write_fetched_resources", write_then_purge_the_origin
+        )
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, claim))
+            assert (
+                await _call(read, session_id, resource_id="res-earlier-document")
+            ).is_error is False
+        assert [purge.runs for purge in purges] == [1]
+
+        resumed = await _resumed(store, db, claim.run_id)
+        try:
+            text = await resumed.read("res-earlier-document", max_window_tokens=1000)
+            assert EARLIER_TEXT in text.content
+        finally:
+            await resumed.aclose()
+
+
 async def test_adopts_the_artifact_a_conversation_published_earlier() -> None:
     """A published product is a Resource: the next turn reads the version it published.
 

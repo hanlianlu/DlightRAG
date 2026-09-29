@@ -237,12 +237,13 @@ completeness, or untested platforms.
   handle as an alias), the view, and its images, in one transaction under the
   Run's lease. The rows belong to the conversation's Agent Session also when a
   Child's call adopted, so a later turn can adopt them in turn. Cleanup of the
-  origin Run cannot invalidate them, and the
-  adoption holds whatever the call that asked for it does next: a cancelled call,
-  or a retried `read` or `view` that fails on a stale cursor, a document with no
-  viewable target, or a refused view, leaves the adoption in place, and the
-  failure is a typed refusal of its own. Once adopted the handle is held, so an
-  embedded-image handle the call cannot find is named as the missing one.
+  origin Run cannot invalidate them, also while they are written: the write
+  holds the Blobs it names until it commits, so a concurrent purge skips them.
+  The adoption holds whatever the call that asked for it does next: a cancelled
+  call, or a retried `read` or `view` that fails on a stale cursor, a document
+  with no viewable target, or a refused view, leaves the adoption in place, and
+  the failure is a typed refusal of its own. Once adopted the handle is held, so
+  an embedded-image handle the call cannot find is named as the missing one.
 - If that write fails, the running Run keeps nothing of it: the handle stays
   unknown, no attachment slot is spent, and asking again tries again. A write
   whose outcome is unknown, because the connection or the call ended while it
