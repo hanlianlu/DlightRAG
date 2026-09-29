@@ -100,10 +100,17 @@ def is_secret_key(key: object) -> bool:
 def hides_secret_value(value: object) -> bool:
     """Whether a value under a secret name must be hidden.
 
-    Non-empty text and containers can carry the secret; numbers and flags (for
-    example ``max_tokens``) stay readable.
+    Anything that can carry the secret hides unless it is empty: text, bytes,
+    containers, models and other objects alike, so a value type nobody listed
+    cannot slip out. Only numbers and flags stay readable, which keeps counts such
+    as ``max_tokens`` visible under names that merely contain "token".
     """
-    return bool(value) and isinstance(value, str | bytes | dict | list | tuple)
+    if value is None or isinstance(value, bool | int | float):
+        return False
+    try:
+        return bool(value)
+    except TypeError, ValueError:  # an ambiguous truth value still hides
+        return True
 
 
 def safe_log_text(value: object, *, max_length: int = 240) -> str:

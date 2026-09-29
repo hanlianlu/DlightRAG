@@ -57,6 +57,42 @@ def test_langfuse_masking_shares_the_settings_secret_names() -> None:
     }
 
 
+def test_langfuse_masking_hides_every_non_empty_value_under_a_secret_name() -> None:
+    """A secret name hides whatever it holds, whatever its type, except a count or a flag."""
+    from dataclasses import dataclass
+
+    from pydantic import BaseModel
+
+    class Credential(BaseModel):
+        value: str
+
+    @dataclass
+    class Login:
+        password: str
+
+    masked = mask_langfuse_payload(
+        {
+            "auth_token": Credential(value="sk-live"),
+            "password": Login(password="hunter2"),
+            "tokens": frozenset({"sk-a", "sk-b"}),
+            "authorization": bytearray(b"Bearer sk-live"),
+            "api_key": "",
+            "max_tokens": 128,
+            "include_token": True,
+        }
+    )
+
+    assert masked == {
+        "auth_token": "[redacted]",
+        "password": "[redacted]",
+        "tokens": "[redacted]",
+        "authorization": "[redacted]",
+        "api_key": "",
+        "max_tokens": 128,
+        "include_token": True,
+    }
+
+
 def test_langfuse_masking_bounds_large_text() -> None:
     masked = mask_langfuse_payload("x" * 5000)
 
