@@ -63,7 +63,7 @@ from dlightrag.engine.answer.research.persistence import (
     RenewChild,
     ResearchRunStore,
 )
-from dlightrag.engine.answer.research.resource_settlement import attached_resource_update
+from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
     FetchedResourceBytes,

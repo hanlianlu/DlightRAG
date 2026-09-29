@@ -1162,7 +1162,7 @@ async def test_attached_resources_pin_their_earlier_handles_for_recovery() -> No
     import hashlib
 
     from dlightrag.engine.agent.tools import ResourceAttachmentBytes
-    from dlightrag.engine.answer.research.resource_settlement import attached_resource_update
+    from dlightrag.engine.answer.resource_settlement import attached_resource_update
 
     content = b"%PDF-1.7 adopted"
     fetched = attached_resource_update(

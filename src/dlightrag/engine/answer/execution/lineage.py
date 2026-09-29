@@ -18,9 +18,10 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
-from dlightrag.engine.answer.research.resource_settlement import attached_resource_update
+from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
+    LINEAGE_ADOPTION_KIND,
     SNAPSHOT_KIND,
     LineageResourceBytes,
 )
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 ADOPTABLE_LINEAGE_KINDS: tuple[tuple[str, str], ...] = (
     ("web", "fetched_blob"),
     ("tool_attachment", "fetched_blob"),
-    ("lineage_adoption", "fetched_blob"),
+    (LINEAGE_ADOPTION_KIND, "fetched_blob"),
     ("published_artifact", "published_artifact"),
 )
 
