@@ -18,6 +18,10 @@ cursor codec, is autospecced from that class too. A property typed as a builtin
 or a generic alias (``bool``, ``str``, ``Mapping[...]``) stays a plain MagicMock,
 so a test that reads one assigns it a real value.
 
+The double models Application's shape, not its lifecycle: access after
+``aclose``, and the branches where ``connections``, ``model_catalogue``, or
+``corpus_mutations`` are unavailable, are not simulated.
+
 Configure a service through its autospecced methods (``return_value``,
 ``side_effect``); assigning a plain mock or a lambda over one drops the signature
 check. Pass a service by keyword only when a test needs a real one. A stateful
@@ -64,17 +68,19 @@ _PUBLIC_ATTRIBUTES = sorted(name for name in dir(Application) if not name.starts
 
 
 def _service_types() -> dict[str, type]:
-    """Map each service property of Application to the type it is annotated to return."""
+    """Map each service property of Application to the class it is annotated to return."""
     services: dict[str, type] = {}
     for name in _PUBLIC_ATTRIBUTES:
         member = inspect.getattr_static(Application, name)
         if isinstance(member, property) and name != "config":
-            hints = typing.get_type_hints(member.fget, localns=_ANNOTATED_TYPES)
-            services[name] = hints["return"]
+            hint = typing.get_type_hints(member.fget, localns=_ANNOTATED_TYPES)["return"]
+            if not isinstance(hint, type):
+                raise TypeError(f"Application.{name} is annotated {hint!r}, not one class")
+            services[name] = hint
     return services
 
 
-SERVICE_TYPES = _service_types()
+_SERVICE_TYPES = _service_types()
 
 
 def _class_properties(service_type: type) -> dict[str, type]:
@@ -90,7 +96,7 @@ def _class_properties(service_type: type) -> dict[str, type]:
     return properties
 
 
-_PROPERTY_CLASSES = {kind: _class_properties(kind) for kind in SERVICE_TYPES.values()}
+_PROPERTY_CLASSES = {kind: _class_properties(kind) for kind in _SERVICE_TYPES.values()}
 
 
 def _is_method(owner: type, name: str) -> bool:
@@ -133,8 +139,8 @@ class _ApplicationDouble(NonCallableMagicMock):
 
     def _get_child_mock(self, /, **kwargs: Any) -> Any:
         name = str(kwargs.get("_new_name"))
-        if name in SERVICE_TYPES:
-            return _ServiceDouble(spec_set=SERVICE_TYPES[name], **kwargs)
+        if name in _SERVICE_TYPES:
+            return _ServiceDouble(spec_set=_SERVICE_TYPES[name], **kwargs)
         if _is_method(Application, name):
             return _attach_method(self, Application, name)
         return super()._get_child_mock(**kwargs)
@@ -148,7 +154,7 @@ def application_double(config: DlightragConfig, **services: object) -> Any:
     access: async methods are AsyncMocks and sync methods MagicMocks, both bound to
     the real signatures. ``astart`` and ``aclose`` are autospecced the same way.
     """
-    unknown = sorted(services.keys() - SERVICE_TYPES.keys())
+    unknown = sorted(services.keys() - _SERVICE_TYPES.keys())
     if unknown:
         raise TypeError(f"Application has no service named {', '.join(unknown)}")
     double = _ApplicationDouble(spec_set=_PUBLIC_ATTRIBUTES, name="application")
@@ -163,10 +169,17 @@ def delegate(service: Any, behaviour: object, *methods: str) -> None:
 
     The call still meets the real signature first, so a hand-built fake keeps its
     state and behaviour without accepting calls the real service would refuse. A
-    name the real service lacks raises ``AttributeError``.
+    name the real service lacks raises ``AttributeError``. A property, or an async
+    fake for a sync method, raises ``TypeError``: neither would ever answer a call.
     """
+    service_type = service.__class__
     for name in methods:
-        getattr(service, name).side_effect = getattr(behaviour, name)
-
-
-__all__ = ["SERVICE_TYPES", "application_double", "delegate"]
+        member = inspect.getattr_static(service_type, name)
+        if isinstance(member, property):
+            raise TypeError(f"{service_type.__name__}.{name} is a property; assign it a value")
+        answer = getattr(behaviour, name)
+        if inspect.iscoroutinefunction(answer) and not inspect.iscoroutinefunction(member):
+            raise TypeError(
+                f"{service_type.__name__}.{name} is sync; nothing would await an async fake"
+            )
+        getattr(service, name).side_effect = answer
