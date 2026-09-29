@@ -684,9 +684,13 @@ async def test_nothing_changes_here_until_the_adoption_is_recorded(failure) -> N
     A lost lease stops the call without a refusal of its own: this worker may
     persist nothing further, and the Run's next claimant adopts afresh.
     """
-    lineage = Loader(adopted_document(with_snapshot=True))
+    document = adopted_document(with_snapshot=True)
+    lineage = Loader(document)
     lineage.fails = failure
-    async with ResourceRegistry(max_attachments=1) as registry:
+    # Room for exactly this one document, by count and by bytes.
+    async with ResourceRegistry(
+        max_attachments=1, max_total_attachment_bytes=len(document.content)
+    ) as registry:
         read, _ = tools(registry, lineage=lineage)
         with pytest.raises(type(failure)):
             await call(read, resource_id=EARLIER_HANDLE)
@@ -698,9 +702,33 @@ async def test_nothing_changes_here_until_the_adoption_is_recorded(failure) -> N
         lineage.fails = None
         adopted = await call(read, resource_id=EARLIER_HANDLE)
 
-        assert adopted.is_error is False, "the one attachment slot was given back"
+        assert adopted.is_error is False, "the slot and the bytes were both given back"
         assert _ADOPTED_TEXT in adopted.text_content
         assert len(lineage.recorded) == 1
+
+
+async def test_a_failed_write_keeps_the_bytes_an_earlier_adoption_holds(monkeypatch) -> None:
+    """Only bytes this adoption admitted are withdrawn when its write fails."""
+    forbid_conversion(monkeypatch)
+    content = pdf()
+    lineage = Loaders(
+        viewed_document("res-earlier-one", content, text="View one."),
+        viewed_document("res-earlier-two", content, text="View two."),
+    )
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+        assert (await call(read, resource_id="res-earlier-one")).is_error is False
+        manifest = registry.manifest()
+        lineage.fails = RuntimeError("storage unavailable")
+        with pytest.raises(RuntimeError):
+            await call(read, resource_id="res-earlier-two")
+        lineage.fails = None
+
+        assert registry.manifest() == manifest
+        again = await call(read, resource_id="res-earlier-one")
+        assert "View one." in again.text_content
+        with pytest.raises(ResourceNotFoundError):
+            registry.canonical_resource_id("res-earlier-two")
 
 
 async def test_a_conflicting_adoption_is_refused_in_the_tools_own_words() -> None:
