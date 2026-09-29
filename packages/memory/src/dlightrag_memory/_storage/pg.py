@@ -13,10 +13,13 @@ implemented here behind the neutral ports:
 
 Dense is opt-in: with the NullEmbedder the adapter runs exact + sparse only.
 A changed embedder fingerprint leaves old rows out of the dense leg (exact and
-sparse still reach them); rows are not re-embedded automatically. Undo copies
-the restored record's vector and fingerprint from the row it restores inside
-the settlement transaction, so a restored record is exactly as reachable by
-the dense leg as the original was, without an embedding call.
+sparse still reach them); rows are never re-embedded in bulk. A remember that
+restates an active record gives it the current vector when the dense leg
+cannot read it: a row without a vector, whatever fingerprint it claims, or a
+vector from a retired model. Undo copies the restored record's vector and
+fingerprint from the row it restores inside the settlement transaction, so a
+restored record is exactly as reachable by the dense leg as the original was,
+without an embedding call.
 """
 
 from __future__ import annotations
@@ -382,6 +385,16 @@ class PostgresMemoryStore:
                 if operation.supersedes_id and duplicate.memory_id != operation.supersedes_id
                 else "unchanged"
             )
+            if outcome == "unchanged" and embedding is not None:
+                # The restatement's vector embeds the same normalized fact, so a
+                # record the dense leg cannot read heals without an extra call.
+                await conn.execute(
+                    _REFRESH_UNREADABLE_EMBEDDING,
+                    operation.owner_id,
+                    _uuid(duplicate.memory_id, label="memory_id"),
+                    self._embedder_fingerprint(),
+                    _vector_text(embedding),
+                )
             return (
                 operation_receipt(
                     operation,
@@ -1251,6 +1264,16 @@ _MARK_SUPERSEDED = """
 UPDATE dlightrag_memory_records
 SET status = 'superseded', updated_at = NOW()
 WHERE owner_id = $1 AND memory_id = $2 AND status = 'active'
+"""
+
+# The exact negation of what the dense leg reads: a missing vector counts as
+# unreadable whatever fingerprint the row claims. Content is unchanged, so
+# updated_at is too.
+_REFRESH_UNREADABLE_EMBEDDING = """
+UPDATE dlightrag_memory_records
+SET embedding_fingerprint = $3, embedding = $4::halfvec
+WHERE owner_id = $1 AND memory_id = $2
+  AND (embedding IS NULL OR embedding_fingerprint IS DISTINCT FROM $3)
 """
 
 _SELECT_ONE = f"""

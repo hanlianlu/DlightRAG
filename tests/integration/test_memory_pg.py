@@ -1110,6 +1110,81 @@ async def test_pg_dense_undo_keeps_each_restored_vector_in_its_own_space(
     assert await _dense_ids(store, "tea") == [restored[current.memory_id]]
 
 
+@pytest.mark.parametrize(
+    "unreadable",
+    [
+        # What earlier undo settlements wrote: the bound space's label, no vector.
+        pytest.param("embedding = NULL", id="labelled-without-vector"),
+        pytest.param("embedding_fingerprint = NULL, embedding = NULL", id="never-embedded"),
+        pytest.param("embedding_fingerprint = 'test:retired@local'", id="retired-model"),
+    ],
+)
+async def test_pg_restating_a_record_heals_a_vector_the_dense_leg_cannot_read(
+    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder], unreadable: str
+) -> None:
+    store, embedder = dense_store
+    memory = Memory(store)
+    remembered = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Prefers green tea.",
+        provenance=_provenance(),
+        idempotency_key="remember-1",
+    )
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            f"UPDATE dlightrag_memory_records SET {unreadable} WHERE memory_id = $1",  # noqa: S608
+            uuid.UUID(remembered.memory_id),
+        )
+    assert await _dense_ids(store, "tea") == []
+
+    restated = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="prefers  GREEN tea.",
+        provenance=_provenance("run-2"),
+        idempotency_key="remember-2",
+    )
+
+    assert restated.outcome == "unchanged"
+    assert restated.memory_ids == (remembered.memory_id,)
+    assert await _dense_ids(store, "tea") == [remembered.memory_id]
+    fingerprint, vector = await _dense_state(store, remembered.memory_id)
+    assert fingerprint == embedder.embedding_fingerprint
+    assert vector is not None
+
+
+async def test_pg_restating_a_record_keeps_a_vector_the_dense_leg_reads(
+    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder],
+) -> None:
+    store, _embedder = dense_store
+    memory = Memory(store)
+    remembered = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Prefers green tea.",
+        provenance=_provenance(),
+        idempotency_key="remember-1",
+    )
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            "UPDATE dlightrag_memory_records SET embedding = '[1,0.5,0.5]' WHERE memory_id = $1",
+            uuid.UUID(remembered.memory_id),
+        )
+    before = await _dense_state(store, remembered.memory_id)
+
+    restated = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Prefers green tea.",
+        provenance=_provenance("run-2"),
+        idempotency_key="remember-2",
+    )
+
+    assert restated.outcome == "unchanged"
+    assert await _dense_state(store, remembered.memory_id) == before
+
+
 async def test_pg_list_active_page_traverses_ties_and_over_hundred_rows(
     store: PostgresMemoryStore,
 ) -> None:
