@@ -41,9 +41,10 @@ class ResourceNotConvertedError(ResourceRegistryError):
     converting it here would record a view the Run that registered it never had.
     """
 
-    def __init__(self, filename: str) -> None:
+    def __init__(self, filename: str, media_type: str | None = None) -> None:
         super().__init__(f"{filename} has no stored conversion view")
         self.filename = filename
+        self.media_type = media_type
 
 
 @dataclass(slots=True)

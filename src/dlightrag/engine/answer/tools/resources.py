@@ -81,14 +81,14 @@ def _stale_cursor_refusal(exc: ResourceCursorError) -> str:
     )
 
 
-def _unconverted_refusal(filename: str) -> str:
+def _unconverted_refusal(filename: str, media_type: str | None) -> str:
     """Reading an earlier document whose view this Session never built.
 
     Converting it now would select a parser and produce a view the earlier Run never
     recorded, so the model is told what is true instead: a PDF's pages are adoptable
     as pixels, and no format's text is.
     """
-    pages = conversion_format(filename, None) == "pdf"
+    pages = conversion_format(filename, media_type) == "pdf"
     return (
         f"The earlier Run never extracted text from {filename}, and this Run does not "
         "build a text view the earlier Run never had. "
@@ -128,7 +128,9 @@ async def _adopt_earlier_then_retry(
         and loaded.conversion_snapshot is None
         and is_convertible(loaded.filename, loaded.media_type)
     ):
-        return ToolResult.text(_unconverted_refusal(loaded.filename), is_error=True)
+        return ToolResult.text(
+            _unconverted_refusal(loaded.filename, loaded.media_type), is_error=True
+        )
     try:
         adopted = adopt_lineage_resource(registry, loaded)
     except LineageSnapshotError as exc:
@@ -157,10 +159,14 @@ async def _adopt_earlier_then_retry(
     # the Run would fail to resume.
     try:
         result = await retry()
-    except ResourceNotFoundError:
-        result = ToolResult.text(refusal, is_error=True)
+    except ResourceNotFoundError as exc:
+        # The handle is held now, so what the retried call did not find is inside
+        # it, such as an embedded-image handle.
+        result = ToolResult.text(
+            f"{exc}. Read the resource again for the handles it holds.", is_error=True
+        )
     except ResourceNotConvertedError as exc:
-        result = ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
+        result = ToolResult.text(_unconverted_refusal(exc.filename, exc.media_type), is_error=True)
     except ResourceCursorError as exc:
         result = ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
     except ResourceRegistryError as exc:
@@ -248,7 +254,9 @@ def make_resource_reader(
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
         except ResourceNotConvertedError as exc:
-            return ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
+            return ToolResult.text(
+                _unconverted_refusal(exc.filename, exc.media_type), is_error=True
+            )
 
     return read
 
@@ -407,7 +415,11 @@ def make_resource_viewer(
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
         except ResourceNotConvertedError as exc:
-            return ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
+            return ToolResult.text(
+                _unconverted_refusal(exc.filename, exc.media_type), is_error=True
+            )
+        except ResourceViewError as exc:
+            return ToolResult.text(str(exc), is_error=True)
 
     return view
 

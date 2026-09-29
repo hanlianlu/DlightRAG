@@ -12,7 +12,7 @@ from PIL import Image
 
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.tool_content import decode_tool_content, encode_tool_content
-from dlightrag.engine.agent.tools import ToolResult
+from dlightrag.engine.agent.tools import ToolEffects, ToolResult
 from dlightrag.engine.agent.tools.files import PreparedImageAttachment, read_tool, view_tool
 from dlightrag.engine.ai.media import decode_image_base64
 from dlightrag.engine.answer.research.context import _resource_manifest_context
@@ -560,6 +560,124 @@ async def test_an_unconverted_document_refuses_embedded_images_without_offering_
         assert embedded.is_error is True
         assert "never extracted text from notes.docx" in embedded.text_content
         assert "View its pages" not in embedded.text_content
+
+
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def earlier_docx(*, handle_id: str | None) -> LineageResourceBytes:
+    """An earlier Run's DOCX, with a stored view holding one embedded image or none."""
+    content = b"PK\x03\x04 an earlier run's document"
+    snapshot: bytes | None = None
+    assets: dict[str, bytes] = {}
+    if handle_id is not None:
+        effects = ConversionSnapshot(
+            resource_id=EARLIER_HANDLE,
+            input_digest=hashlib.sha256(content).hexdigest(),
+            text="Stored text.",
+            visuals=(
+                ExtractedVisual(
+                    handle_id=handle_id,
+                    anchor="page 1",
+                    origin_part=None,
+                    media_type="image/png",
+                    data=png(),
+                ),
+            ),
+            extraction_status="complete",
+            converter="fixture",
+            converter_version="1",
+        ).effects()
+        snapshot = next(e.content for e in effects if e.resource_kind == SNAPSHOT_KIND)
+        assets = {e.resource_id: e.content for e in effects if e.resource_kind == ASSET_KIND}
+    return LineageResourceBytes(
+        resource_id=EARLIER_HANDLE,
+        origin_run_id="01a0a737-e1d3-7421-8e25-27ca8abd3dad",
+        filename="notes.docx",
+        media_type=DOCX,
+        content=content,
+        conversion_snapshot=snapshot,
+        assets=assets,
+    )
+
+
+def adoption_settles(result: ToolResult) -> bool:
+    return any(
+        effect.resource_kind == LINEAGE_ADOPTION_KIND
+        for effect in result.effects.attached_resources
+    )
+
+
+async def test_an_embedded_image_of_an_unconverted_adoption_refuses_on_the_first_call(
+    monkeypatch,
+) -> None:
+    """The first call adopts and fails inside the retry; the refusal still settles it."""
+    forbid_conversion(monkeypatch)
+    async with ResourceRegistry() as registry:
+        _, view = tools(registry, lineage=Loader(earlier_docx(handle_id=None)))
+        refused = await call(view, resource_id=EARLIER_HANDLE, locator="vis-0123456789abcdef")
+
+        assert refused.is_error is True
+        assert "never extracted text from notes.docx" in refused.text_content
+        assert "View its pages" not in refused.text_content
+        assert adoption_settles(refused)
+
+
+async def test_an_unknown_embedded_image_of_an_adopted_document_names_what_is_missing() -> None:
+    """Once adopted, the handle is held: only the image handle inside it is unknown."""
+    async with ResourceRegistry() as registry:
+        _, view = tools(registry, lineage=Loader(earlier_docx(handle_id="vis-embedded")))
+        missing = await call(view, resource_id=EARLIER_HANDLE, locator="vis-not-there")
+        found = await call(view, resource_id=EARLIER_HANDLE, locator="vis-embedded")
+
+        assert missing.is_error is True
+        assert "unknown visual handle: vis-not-there" in missing.text_content
+        assert "neither holds" not in missing.text_content
+        assert adoption_settles(missing)
+        assert found.is_error is False
+
+
+async def test_a_pdf_named_without_a_suffix_is_still_offered_its_pages(monkeypatch) -> None:
+    """The declared type decides it is a PDF, as a URL without an extension leaves it."""
+    forbid_conversion(monkeypatch)
+    loaded = replace(
+        adopted_document(with_snapshot=False), filename="2401.12345", media_type="application/pdf"
+    )
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=Loader(loaded))
+        refused = await call(read, resource_id=EARLIER_HANDLE)
+
+        assert refused.is_error is True
+        assert "View its pages for pixels" in refused.text_content
+
+
+async def test_recovery_skips_a_stored_view_whose_resource_was_never_recorded() -> None:
+    """A view settled under an alias whose adoption row never settled blocks no resume."""
+    from tests.unit.test_answer_executor import _executor
+
+    loaded = viewed_document(EARLIER_HANDLE, pdf(), text="Stored text.")
+    snapshot = next(
+        effect
+        for effect in ConversionSnapshot.restore(
+            loaded.conversion_snapshot or b"", dict(loaded.assets)
+        ).effects()
+        if effect.resource_kind == SNAPSHOT_KIND
+    )
+    orphan = ToolResult.text("x", effects=ToolEffects(attached_resources=(snapshot,)))
+    rows, blobs = settled_rows(orphan)
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(return_value=rows)
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, kwargs
+        yield blobs[digest]
+
+    executor._blob_store.stream = stream
+    async with ResourceRegistry() as resumed:
+        await executor._restore_registry_fetches(resumed, owner_id="owner", run_id="run")
+
+        with pytest.raises(ResourceNotFoundError):
+            resumed.canonical_resource_id(EARLIER_HANDLE)
 
 
 def test_the_manifest_leaves_an_earlier_resource_id_to_adoption() -> None:

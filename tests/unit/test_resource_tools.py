@@ -154,8 +154,9 @@ async def test_pdf_overview_actual_coverage_aggregate_budget_and_signed_recovery
         result = await call(view, resource_id=resource)
         assert "physical pages 1-1 of 3 only" in result.text_content
         cursor = result.protected_text.split("cursor='")[1].split("'")[0]
-        with pytest.raises(ResourceRegistryError, match="remaining model image budget"):
-            await call(view, resource_id=resource, cursor=cursor)
+        spent = await call(view, resource_id=resource, cursor=cursor)
+        assert spent.is_error is True
+        assert "remaining model image budget" in spent.text_content
     async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as recovered:
         assert recovered.register(ResourceInput(filename="paper.pdf", content=data)) == resource
         _, view = tools(recovered, max_images=1)

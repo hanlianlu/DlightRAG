@@ -1216,8 +1216,9 @@ async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool
         )
 
 
+@pytest.mark.parametrize("order", ["one-then-two", "two-then-one"])
 async def test_two_adoptions_of_the_same_bytes_settle_one_row_with_both_aliases(
-    pool,
+    pool, order: str
 ) -> None:
     """Two earlier handles for identical bytes are one Resource of the adopting Run.
 
@@ -1269,7 +1270,9 @@ async def test_two_adoptions_of_the_same_bytes_settle_one_row_with_both_aliases(
             ),
         )
 
-    async with ResourceRegistry() as registry:
+    # A Run mints the same handles after a resume: its Resource secret is its own.
+    run_secret = b"one run's resource secret"
+    async with ResourceRegistry(resource_secret=run_secret) as registry:
         settlements = []
         for handle in ("res-earlier-one", "res-earlier-two"):
             loaded = earlier(handle)
@@ -1277,6 +1280,8 @@ async def test_two_adoptions_of_the_same_bytes_settle_one_row_with_both_aliases(
             settlements.append(lineage_adoption_effects(loaded, adopted))
         canonical = registry.canonical_resource_id("res-earlier-one")
 
+    if order == "two-then-one":
+        settlements.reverse()
     for effects in settlements:
         intent_id = IntentId.new()
         update = _build_effect_host_update(
@@ -1313,6 +1318,21 @@ async def test_two_adoptions_of_the_same_bytes_settle_one_row_with_both_aliases(
     assert [row.resource_id for row in adoptions] == [canonical]
     assert adoptions[0].source_locator == canonical.encode()
     assert adoptions[0].capabilities["resource_aliases"] == ["res-earlier-one", "res-earlier-two"]
+
+    from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
+    from dlightrag.engine.answer.execution.executor import AnswerExecutor
+
+    resuming = object.__new__(AnswerExecutor)
+    resuming._store = await _store(pool)
+    resuming._blob_store = PGRunBlobStore(pool=pool)
+    async with ResourceRegistry(resource_secret=run_secret) as resumed:
+        await resuming._restore_registry_fetches(
+            resumed, owner_id=_OWNER, run_id=claimed.run.run_id
+        )
+        for handle in ("res-earlier-one", "res-earlier-two"):
+            assert resumed.canonical_resource_id(handle) == canonical
+        restored = await resumed.read("res-earlier-two", max_window_tokens=1000)
+        assert "View stored for res-earlier-one." in restored.content
 
 
 async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:

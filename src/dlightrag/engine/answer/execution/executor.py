@@ -184,6 +184,7 @@ from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
 from dlightrag.engine.answer.resources.lineage import LineageResourceLoader
 from dlightrag.engine.answer.resources.models import (
     ResourceManifestEntry,
+    ResourceNotFoundError,
     ResourceRegistryError,
     TextWindowBudget,
 )
@@ -2836,7 +2837,17 @@ class AnswerExecutor:
                 raise ValueError("conversion snapshot parent mismatch")
             # Recovery must verify durable source bytes, including lazy inputs.
             # Registry adoption separately guards any already-materialized source.
-            original = await registry.materialize(parent_id)
+            try:
+                original = await registry.materialize(parent_id)
+            except ResourceNotFoundError:
+                # An adopted view whose adoption row never settled (its call was
+                # cancelled, or its result could not be recorded) describes no
+                # Resource of this Run; naming the earlier handle adopts it again.
+                logger.warning(
+                    "Skipping a stored view whose Resource was never recorded",
+                    extra={"run_id": run_id, "resource_id": parent_id},
+                )
+                continue
             if hashlib.sha256(original).hexdigest() != snapshot.input_digest:
                 raise ValueError("conversion snapshot input digest mismatch")
             registry.adopt_conversion_snapshot(snapshot)

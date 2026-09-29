@@ -920,7 +920,9 @@ class ResourceRegistry:
         if cached is not None:
             return cached
         if resource.stored_view_only:
-            raise ResourceNotConvertedError(resource.filename or resource.resource_id)
+            raise ResourceNotConvertedError(
+                resource.filename or resource.resource_id, resource.declared_mime
+            )
         if content is None:
             content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         task = self._conversion_tasks.get(resource.resource_id)
