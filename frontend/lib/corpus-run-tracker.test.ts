@@ -99,15 +99,18 @@ test('a followed Run is read at once, polled while active, and settled once with
 });
 
 test('a repair wait parks the Run until an explicit resume, then reading continues', async () => {
-  const {tracker, reads, settled} = harness([waiting(), status('succeeded')], [status('queued')]);
+  const {tracker, reads, settled} = harness([waiting(), waiting(), status('succeeded')], [status('queued')]);
 
   tracker.follow(receipt());
   await settle();
   assert.equal(tracker.waitingForRepair, true);
   assert.equal(tracker.run?.repairReason, 'Upstream state is ambiguous.');
+  await settle();
+  assert.equal(reads.length, 1, 'a parked Run is not polled');
   tracker.wake();
   await settle();
-  assert.equal(reads.length, 1, 'a parked Run is not read again');
+  assert.equal(reads.length, 2, 'waking reads a parked Run once');
+  assert.equal(tracker.waitingForRepair, true);
 
   const resumed = tracker.resume();
   assert.equal(tracker.resuming, true);
@@ -119,19 +122,38 @@ test('a repair wait parks the Run until an explicit resume, then reading continu
   await settle();
 
   assert.equal(settled[0]?.status, 'succeeded');
-  assert.equal(reads.length, 2);
+  assert.equal(reads.length, 3);
 });
 
-test('a failed resume leaves the Run parked and retryable', async () => {
-  const {tracker} = harness([waiting()], [new ApiError(503, {detail: 'Writer unavailable'})]);
+test('a failed resume reads the Run again and stays retryable while it is still parked', async () => {
+  const {tracker, reads} = harness(
+    [waiting(), waiting()],
+    [new ApiError(503, {detail: 'Writer unavailable'})],
+  );
   tracker.follow(receipt());
   await settle();
 
   assert.equal(await tracker.resume(), 'failed');
-  assert.equal(tracker.waitingForRepair, true);
   assert.equal(tracker.resuming, false);
+  await settle();
+  assert.equal(reads.length, 2, 'the refusal is checked against the Run itself');
+  assert.equal(tracker.waitingForRepair, true);
   assert.equal(await tracker.resume(), 'accepted');
   tracker.clear();
+});
+
+test('a resume refused because the Run moved on shows where it went', async () => {
+  const {tracker, settled} = harness(
+    [waiting(), status('succeeded')],
+    [new ApiError(409, {detail: 'Run is not waiting for repair', errorType: 'conflict'})],
+  );
+  tracker.follow(receipt());
+  await settle();
+
+  assert.equal(await tracker.resume(), 'failed');
+  await settle();
+  assert.equal(tracker.waitingForRepair, false);
+  assert.equal(settled[0]?.status, 'succeeded');
 });
 
 test('a refused status read stops tracking; any other failure is retried', async () => {

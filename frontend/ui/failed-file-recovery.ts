@@ -12,7 +12,7 @@ import {
 } from '../api/files.ts';
 import {ApiError} from '../api/wire.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
-import {isAbortError} from '../lib/errors.ts';
+import {authRefusalMessage, isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {KeysetPager} from '../lib/paged.ts';
 import {corpusRepairNotice, resumeRepairLabel, resumeRepairResult} from './corpus-repair.ts';
@@ -40,7 +40,8 @@ function refusalStatus(error: unknown): number | null {
 function recoveryRequestError(error: unknown, fallback: string): string {
   const status = refusalStatus(error);
   if (status === null) return fallback;
-  if (status === 401 || status === 403) {
+  if (status === 401) return authRefusalMessage(status);
+  if (status === 403) {
     return msg('You do not have permission to recover documents in this workspace.', {
       id: 'inspectorFiles.recovery.forbidden',
     });

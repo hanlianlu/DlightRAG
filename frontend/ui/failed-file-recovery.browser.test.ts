@@ -158,6 +158,24 @@ it('stops polling a status the Corpus Run API refuses', async () => {
   expect(recovery.error).to.equal('Document recovery status is no longer available.');
 });
 
+it('asks a reader whose session ended to sign in again', async () => {
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url.startsWith('/web/api/files/retry')) return Response.json(receipt(), {status: 202});
+    if (url === '/web/api/corpus-runs/run-retry-1') {
+      return Response.json({detail: 'Not authenticated', error_type: 'auth'}, {status: 401});
+    }
+    return Response.json(failedPage());
+  };
+  const recovery = mount();
+  await waitFor(() => recovery.page?.failed.length === 1);
+  await confirmRetryAll(recovery);
+
+  await waitFor(() => recovery.error !== null);
+  expect(recovery.error).to.equal('Your session has ended. Sign in again to continue.');
+});
+
 function waitingRun() {
   return {
     ...receipt(),
@@ -245,6 +263,62 @@ it('offers Retry all again once a recovery Run settles with documents still fail
   expect(recovery.recovery?.status).to.equal('failed');
   expect(retry.textContent?.trim()).to.equal('Retry all');
   expect(retry.disabled).to.equal(false);
+});
+
+it('keeps Resume available while a repair wait lists no failed rows', async () => {
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  let listed = true;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url.startsWith('/web/api/files/retry')) return Response.json(receipt(), {status: 202});
+    if (url === '/web/api/corpus-runs/run-retry-1') return Response.json(waitingRun());
+    return Response.json(failedPage('personel', listed));
+  };
+  const recovery = mount();
+  await waitFor(() => recovery.page?.failed.length === 1);
+  await confirmRetryAll(recovery);
+  await waitFor(() => recovery.textContent?.includes('Resume after repair') ?? false);
+
+  listed = false;
+  await recovery.refresh(false);
+  await recovery.updateComplete;
+  const resume = recovery.querySelector<HTMLButtonElement>('.failed-file-retry')!;
+  expect(resume.textContent?.trim()).to.equal('Resume after repair');
+  expect(resume.disabled).to.equal(false);
+});
+
+it('reads the parked Run again after a refused resume and follows where it went', async () => {
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  const toasts: string[] = [];
+  let resumeRefused = false;
+  window.fetch = async (input) => {
+    const url = String(input);
+    if (url.startsWith('/web/api/files/retry')) return Response.json(receipt(), {status: 202});
+    if (url === '/web/api/corpus-runs/run-retry-1/resume') {
+      resumeRefused = true;
+      return Response.json(
+        {detail: 'Run is not waiting for repair', error_type: 'conflict'},
+        {status: 409},
+      );
+    }
+    if (url === '/web/api/corpus-runs/run-retry-1') {
+      // Another operator resumed it; this reader only learns so by asking.
+      return Response.json(resumeRefused ? terminalRun() : waitingRun());
+    }
+    return Response.json(failedPage());
+  };
+  const recovery = mount();
+  recovery.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+  await waitFor(() => recovery.page?.failed.length === 1);
+  await confirmRetryAll(recovery);
+  await waitFor(() => recovery.textContent?.includes('Resume after repair') ?? false);
+
+  recovery.querySelector<HTMLButtonElement>('.failed-file-retry')!.click();
+  await waitFor(() => toasts.includes('Document recovery finished.'));
+
+  expect(toasts.indexOf('Corpus repair resume failed.'))
+    .to.be.lessThan(toasts.indexOf('Document recovery finished.'));
+  expect(recovery.recovery?.status).to.equal('succeeded');
 });
 
 it('clears workspace-scoped state before loading the next workspace', async () => {

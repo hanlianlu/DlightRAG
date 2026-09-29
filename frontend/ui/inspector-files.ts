@@ -11,7 +11,8 @@ import {
 } from '../api/files.ts';
 import {icon} from '../design-system/index.ts';
 import {CorpusRunTracker, type TrackedCorpusRun} from '../lib/corpus-run-tracker.ts';
-import {apiErrorMessage, isAbortError} from '../lib/errors.ts';
+import {ApiError} from '../api/wire.ts';
+import {apiErrorMessage, authRefusalMessage, isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {KeysetPager, type PageLoadState} from '../lib/paged.ts';
 import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
@@ -75,7 +76,7 @@ export class DlInspectorFiles extends LightElement {
   readonly #tracker = new CorpusRunTracker({
     onChange: () => { this.requestUpdate(); },
     onSettled: (run) => { void this.#mutationSettled(run); },
-    onLost: () => { void this.#mutationLost(); },
+    onLost: (error) => { void this.#mutationLost(error); },
   });
   readonly #olderFiles = new KeysetPager<WebFilePanelSnapshot>(async (cursor, signal) => {
     const workspace = this.#workspace;
@@ -240,6 +241,9 @@ export class DlInspectorFiles extends LightElement {
     this.#workspace = workspace;
     const {controller, generation} = this.#startRequest();
     this.#beginMutation();
+    // A followed Run settling now would reload the list and abort this request.
+    this.#tracker.pause();
+    let followed = false;
     this.uploading = true;
     this.error = null;
     const name = uploadLabel(files, label);
@@ -253,6 +257,7 @@ export class DlInspectorFiles extends LightElement {
         duration: 3000,
       });
       this.#tracker.follow(receipt);
+      followed = true;
     } catch (error) {
       if (
         isAbortError(error)
@@ -270,6 +275,7 @@ export class DlInspectorFiles extends LightElement {
         this.uploading = false;
         this.loading = false;
       }
+      if (!followed) this.#resumeFollowing();
     }
   }
 
@@ -297,6 +303,8 @@ export class DlInspectorFiles extends LightElement {
     this.#invalidateOlderFiles();
     const {controller, generation} = this.#startRequest();
     this.#beginMutation();
+    this.#tracker.pause();
+    let followed = false;
     this.error = null;
     try {
       const receipt = await deleteFileRequest(workspace, filePath, controller.signal);
@@ -306,6 +314,7 @@ export class DlInspectorFiles extends LightElement {
         duration: 3000,
       });
       this.#tracker.follow(receipt);
+      followed = true;
     } catch (error) {
       if (
         isAbortError(error)
@@ -320,15 +329,15 @@ export class DlInspectorFiles extends LightElement {
     } finally {
       this.#finishMutation();
       if (this.#session.finishRequest(controller)) this.loading = false;
+      if (!followed) this.#resumeFollowing();
     }
   }
 
   async #mutationSettled(run: TrackedCorpusRun): Promise<void> {
-    const workspace = this.handles.ingest.workspace;
     this.acceptedFiles = 0;
     if (run.runId === this.#deleteRunId) {
       this.#deleteRunId = null;
-      await this.#settleWorkspaceDelete(workspace, run.status === 'succeeded');
+      await this.#settleWorkspaceDelete(run.workspace, run.status === 'succeeded');
       return;
     }
     requestToast(this, {
@@ -343,16 +352,25 @@ export class DlInspectorFiles extends LightElement {
   }
 
   /** The accepted Run's status is refused now; show the Corpus as it is. */
-  async #mutationLost(): Promise<void> {
+  async #mutationLost(error: unknown): Promise<void> {
     this.acceptedFiles = 0;
     this.#deleteRunId = null;
     requestToast(this, {
-      message: msg('Corpus update status is no longer available.', {
-        id: 'inspectorFiles.corpusRunStatusUnavailable',
-      }),
+      message: error instanceof ApiError && error.errorType === 'auth'
+        ? authRefusalMessage(error.status)
+        : msg('Corpus update status is no longer available.', {
+          id: 'inspectorFiles.corpusRunStatusUnavailable',
+        }),
       duration: 3000,
     });
     await this.reload(false);
+    const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
+    await recovery?.refresh(false);
+  }
+
+  /** A mutation that followed no new Run hands polling back to the one this panel still follows. */
+  #resumeFollowing(): void {
+    if (!this.#session.mutating && this.active && this.isConnected) this.#tracker.wake();
   }
 
   async #resumeRepair(): Promise<void> {

@@ -280,63 +280,205 @@ it('deletion reloads the first page after its durable Run succeeds', async () =>
   expect(panel.querySelector('[data-load-older="files"]')).not.to.equal(null);
 });
 
-it('stops polling a deletion whose status the Corpus Run API refuses', async () => {
-  let statusReads = 0;
-  const originalSetTimeout = window.setTimeout;
-  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+/** A Files panel whose one deletion's Run status answers `status` for as long as it is read. */
+async function refusedDeletion(status: number, body: Record<string, unknown>) {
+  const reads = {status: 0, files: 0, failed: 0};
+  const toasts: string[] = [];
   window.fetch = async (input, init) => {
     const url = new URL(String(input), window.location.origin);
     if (init?.method === 'DELETE') {
-      // Only this panel's deletion names the refused Run.
-      const runId = url.searchParams.get('file_path') === '/keep' ? 'run-gone' : 'run-other';
-      return new Response(JSON.stringify(corpusReceipt(runId)), {
+      return new Response(JSON.stringify(corpusReceipt('run-gone')), {
         status: 202,
         headers: {'Content-Type': 'application/json'},
       });
     }
     if (url.pathname === '/web/api/corpus-runs/run-gone') {
-      statusReads += 1;
-      return new Response(JSON.stringify({detail: 'Corpus Mutation Run not found'}), {
-        status: 404,
+      reads.status += 1;
+      return new Response(JSON.stringify(body), {
+        status,
         headers: {'Content-Type': 'application/json'},
       });
     }
-    if (url.pathname.endsWith('/files')) {
-      return new Response(JSON.stringify(snapshot([{file_name: 'Keep', file_path: '/keep'}], null)), {
+    if (url.pathname.endsWith('/files/failed')) {
+      reads.failed += 1;
+      return new Response(JSON.stringify({workspace: 'default', failed: [], next_cursor: null}), {
         headers: {'Content-Type': 'application/json'},
       });
     }
-    return new Response(JSON.stringify({workspace: 'default', failed: [], next_cursor: null}), {
+    reads.files += 1;
+    // The list after the refusal differs, so only a reload can show it.
+    const files = reads.status === 0
+      ? [{file_name: 'Keep', file_path: '/keep'}]
+      : [{file_name: 'Now', file_path: '/now'}];
+    return new Response(JSON.stringify(snapshot(files, null)), {
       headers: {'Content-Type': 'application/json'},
     });
   };
   const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
-  const toasts: string[] = [];
   panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
   panel.active = true;
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
-
+  await ticks();
+  const listed = reads.files;
+  const checked = reads.failed;
   panel.querySelector<HTMLButtonElement>('[data-file-delete]')!.click();
   await panel.updateComplete;
   confirmDeleteDialog(panel, 'confirm');
-  let reads = 0;
+  return {panel, reads, toasts, listed, checked};
+}
+
+async function withImmediateTimers(run: () => Promise<void>): Promise<void> {
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
   try {
-    await waitFor(() => statusReads > 0 && panel.mutationRun === null);
-    reads = statusReads;
-    for (let tick = 0; tick < 20; tick += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
+    await run();
   } finally {
     window.setTimeout = originalSetTimeout;
   }
+}
 
-  expect(statusReads).to.equal(reads);
-  expect(panel.mutationRun).to.equal(null);
-  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/keep']);
-  expect(toasts.at(-1)).to.equal('Corpus update status is no longer available.');
-  await panel.updateComplete;
-  expect(panel.querySelector('#ingest-progress')).to.equal(null);
+async function ticks(count = 20): Promise<void> {
+  for (let tick = 0; tick < count; tick += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+it('stops polling a deletion whose status the Corpus Run API refuses', async () => {
+  await withImmediateTimers(async () => {
+    // The route answers a bare 404 for a Run this reader no longer sees.
+    const {panel, reads, toasts, checked} = await refusedDeletion(404, {detail: 'Corpus Mutation Run not found'});
+    await waitFor(() => panel.snapshot?.files[0]?.filePath === '/now' && !panel.loading);
+    const statusReads = reads.status;
+    await ticks();
+
+    expect(reads.status).to.equal(statusReads);
+    expect(panel.mutationRun).to.equal(null);
+    expect(toasts.at(-1)).to.equal('Corpus update status is no longer available.');
+    await waitFor(() => reads.failed > checked);
+    await panel.updateComplete;
+    expect(panel.querySelector('#ingest-progress')).to.equal(null);
+  });
+});
+
+it('tells a reader who lost access why the deletion is no longer followed', async () => {
+  await withImmediateTimers(async () => {
+    const {panel, toasts} = await refusedDeletion(403, {
+      detail: 'Access denied for action=workspace.list_files workspace=default',
+      error_type: 'auth',
+    });
+    await waitFor(() => panel.snapshot?.files[0]?.filePath === '/now' && !panel.loading);
+
+    expect(toasts.at(-1)).to.equal('You do not have permission to do that.');
+    expect(toasts.join(' ')).not.to.contain('Access denied');
+  });
+});
+
+it('keeps polling a status that fails for any reason but a refusal', async () => {
+  await withImmediateTimers(async () => {
+    const {panel, reads, listed} = await refusedDeletion(503, {detail: 'Service unavailable', error_type: 'unavailable'});
+    await waitFor(() => reads.status >= 3);
+
+    expect(panel.mutationRun?.runId).to.equal('run-gone');
+    expect(reads.files, 'a retried status never reloads the list').to.equal(listed);
+    panel.pause();
+  });
+});
+
+it('keeps a second upload alive while the Run it replaces settles', async () => {
+  await withImmediateTimers(async () => {
+    const uploadSignals: AbortSignal[] = [];
+    const toasts: string[] = [];
+    let statusReads = 0;
+    let releaseStatus!: () => void;
+    const statusGate = new Promise<void>((resolve) => { releaseStatus = resolve; });
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    window.fetch = async (input, init) => {
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname.endsWith('/files/upload')) {
+        uploadSignals.push(init!.signal!);
+        if (uploadSignals.length === 1) return Response.json(corpusReceipt('run-1'), {status: 202});
+        return new Promise<Response>((resolve, reject) => {
+          init!.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+          void uploadGate.then(() => resolve(Response.json(corpusReceipt('run-2'), {status: 202})));
+        });
+      }
+      if (url.pathname === '/web/api/corpus-runs/run-1') {
+        statusReads += 1;
+        if (statusReads === 1) return Response.json(corpusReceipt('run-1', 'running'));
+        await statusGate;
+        return Response.json(corpusReceipt('run-1', 'succeeded'));
+      }
+      if (url.pathname === '/web/api/corpus-runs/run-2') return Response.json(corpusReceipt('run-2', 'running'));
+      if (url.pathname.endsWith('/files/failed')) {
+        return Response.json({workspace: 'default', failed: [], next_cursor: null});
+      }
+      return Response.json(snapshot([], null));
+    };
+    const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+    panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+    document.body.appendChild(panel);
+    panel.active = true;
+    await waitFor(() => panel.loading === false);
+
+    await panel.upload([new File(['one'], 'one.pdf', {type: 'application/pdf'})]);
+    await waitFor(() => statusReads === 2);
+    const second = panel.upload([new File(['two'], 'two.pdf', {type: 'application/pdf'})]);
+    await waitFor(() => uploadSignals.length === 2);
+    releaseStatus();
+    await ticks();
+    releaseUpload();
+    await second;
+    await ticks();
+
+    expect(uploadSignals[1]!.aborted, 'the settle reload never aborts the upload').to.equal(false);
+    expect(panel.mutationRun?.runId).to.equal('run-2');
+    expect(toasts).not.to.include('Corpus update finished.');
+    panel.pause();
+  });
+});
+
+it('hands polling back to the followed Run when a later upload is refused', async () => {
+  await withImmediateTimers(async () => {
+    const toasts: string[] = [];
+    let statusReads = 0;
+    let uploads = 0;
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    window.fetch = async (input) => {
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname.endsWith('/files/upload')) {
+        uploads += 1;
+        if (uploads === 1) return Response.json(corpusReceipt('run-1'), {status: 202});
+        await uploadGate;
+        return Response.json({detail: 'Corpus writes are paused', error_type: 'unavailable'}, {status: 503});
+      }
+      if (url.pathname === '/web/api/corpus-runs/run-1') {
+        statusReads += 1;
+        return Response.json(corpusReceipt('run-1', statusReads < 3 ? 'running' : 'succeeded'));
+      }
+      if (url.pathname.endsWith('/files/failed')) {
+        return Response.json({workspace: 'default', failed: [], next_cursor: null});
+      }
+      return Response.json(snapshot([], null));
+    };
+    const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+    panel.addEventListener('dl-toast-request', (event) => { toasts.push(event.detail.message); });
+    document.body.appendChild(panel);
+    panel.active = true;
+    await waitFor(() => panel.loading === false);
+
+    await panel.upload([new File(['one'], 'one.pdf', {type: 'application/pdf'})]);
+    await waitFor(() => statusReads === 1);
+    const refused = panel.upload([new File(['two'], 'two.pdf', {type: 'application/pdf'})]);
+    await ticks();
+    expect(statusReads, 'the followed Run waits while the upload is pending').to.equal(1);
+    releaseUpload();
+    await refused;
+    await waitFor(() => toasts.includes('Corpus update finished.'));
+
+    expect(toasts).to.include('Corpus writes are paused');
+    expect(panel.mutationRun?.status).to.equal('succeeded');
+  });
 });
 
 it('cancelling the delete dialog keeps the file and restores trigger focus', async () => {

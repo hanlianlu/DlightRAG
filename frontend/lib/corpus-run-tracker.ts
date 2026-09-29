@@ -98,10 +98,10 @@ export class CorpusRunTracker {
     void this.#readStatus();
   }
 
-  /** Read again now when the Run is still moving and nothing is already scheduled. */
+  /** Read again now unless a read is already due; a Run parked for repair is read once. */
   wake(): void {
     if (this.#read || this.#timer !== null || this.#resume) return;
-    if (!this.active || this.waitingForRepair) return;
+    if (!this.active) return;
     void this.#readStatus();
   }
 
@@ -140,7 +140,10 @@ export class CorpusRunTracker {
       if (this.#resume !== controller) return 'stale';
       this.#resume = null;
       this.#options.onChange();
-      return isAbortError(error) ? 'stale' : 'failed';
+      if (isAbortError(error)) return 'stale';
+      // The refusal may mean the Run moved on (resumed elsewhere, or settled); ask it.
+      void this.#readStatus();
+      return 'failed';
     }
   }
 
