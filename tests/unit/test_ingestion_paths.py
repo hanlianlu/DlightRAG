@@ -76,6 +76,20 @@ def test_a_parser_input_with_the_longest_name_the_folder_allows_is_placed(
     assert sorted(path.name for path in input_root.iterdir()) == [source.name]
 
 
+@pytest.mark.parametrize("name", [RUN_STAGES_DIR_NAME, PARSED_DIR_NAME, ".hidden.pdf"])
+def test_a_parser_input_never_takes_a_corpus_entrys_place(tmp_path: Path, name: str) -> None:
+    input_root = workspace_input_root(tmp_path / "corpus", "default")
+    (input_root / RUN_STAGES_DIR_NAME).mkdir(parents=True)
+    source = tmp_path / "stage" / name
+    source.parent.mkdir()
+    source.write_bytes(b"%PDF")
+
+    with pytest.raises(ValueError, match="reserved"):
+        place_parser_input(source, input_root)
+
+    assert sorted(path.name for path in input_root.iterdir()) == [RUN_STAGES_DIR_NAME]
+
+
 def test_placing_replaces_the_same_documents_earlier_input_and_keeps_one_in_place(
     tmp_path: Path,
 ) -> None:

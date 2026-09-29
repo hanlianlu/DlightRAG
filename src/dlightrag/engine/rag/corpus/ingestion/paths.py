@@ -71,8 +71,12 @@ def place_parser_input(source: Path, input_root: Path) -> Path:
     """Copy ``source`` to its flat parser-input path, unless it is already there.
 
     The copy replaces an earlier input of the same name atomically: that name is
-    the same LightRAG document, which one Run at a time ingests in a Workspace.
+    the same LightRAG document, which one Run at a time ingests in a Workspace. A
+    name the corpus directory keeps for itself is refused: the copy would take
+    that entry's place.
     """
+    if reserved_corpus_name(source.name):
+        raise ValueError(f"a document cannot be named {source.name!r}: the name is reserved")
     target = parser_input_path(input_root, source)
     if target.exists() and os.path.samefile(source, target):
         return target
