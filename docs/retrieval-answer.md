@@ -556,10 +556,10 @@ Each route has known limits:
 - PDF text uses AnyDoc, and physical-page viewing uses PDFium independently of
   it. A scanned PDF returns `known_incomplete` with the pages AnyDoc reports as
   needing OCR. A PDF that AnyDoc cannot represent returns `known_incomplete`
-  without page metadata, even when it carries text, as a text-plus-raster page
-  does. The fallback does not rescue such a result, because its partial text
-  would still omit the raster content; the physical-page overview of `view`
-  locates the relevant page instead.
+  without page metadata, even when it carries text, as the tested
+  text-plus-raster page does. The fallback does not rescue such a result,
+  because its partial text would still omit the raster content; the
+  physical-page overview of `view` locates the relevant page instead.
 - XLSX text uses AnyDoc display values: authored formula caches are read, an
   uncached formula cell stays empty, and nothing is recalculated. Images come
   from openpyxl with `Sheet!Cell` anchors, one handle per occurrence. The
