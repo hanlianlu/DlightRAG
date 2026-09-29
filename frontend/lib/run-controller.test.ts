@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {ConversationTurn} from '../api/conversations.ts';
+import {onSignedOut} from '../api/wire.ts';
 import {RunController, type AnswerRunEvent} from './run-controller.ts';
 import {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
 
@@ -259,6 +260,33 @@ test('RunController settles an exhausted stream from the authoritative run row',
   assert.equal(result.kind === 'retryable' ? result.stored.status : '', 'running');
   controller.finish(runId);
   answerEventCursorStore.clear(conversationId);
+});
+
+test('RunController signs the page out when the event stream refuses its sign-in', async () => {
+  const conversationId = 'run-controller-signed-out';
+  const runId = 'run-signed-out';
+  answerEventCursorStore.trackRun(conversationId, runId);
+  let signedOut = 0;
+  const stop = onSignedOut(() => { signedOut += 1; });
+  const controller = new RunController({
+    cursorStore: answerEventCursorStore,
+    fetch: (async () => Response.json(
+      {detail: 'Token expired', error_type: 'auth'},
+      {status: 401},
+    )) as typeof fetch,
+    getRun: async () => { throw new Error('a refused stream is not reconciled'); },
+  });
+  controller.beginFollow(runId, false);
+
+  try {
+    const result = await controller.follow(conversationId, runId, () => {});
+    assert.equal(result.kind, 'error');
+    assert.equal(signedOut, 1);
+  } finally {
+    stop();
+    controller.finish(runId);
+    answerEventCursorStore.clear(conversationId);
+  }
 });
 
 test('RunController flushes a pending frame at stream end and stream failure', async () => {

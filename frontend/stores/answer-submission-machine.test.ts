@@ -125,6 +125,24 @@ test('every typed request correction remains editable without reconciliation', a
   }
 });
 
+test('a sign-in refusal was never accepted, so it stays editable without reconciliation', async () => {
+  let lookups = 0;
+  const adapter: AnswerSubmissionAdapter = {
+    submit: async () => { throw new AnswerSubmissionError(401, 'ambiguous', ''); },
+    lookup: async () => {
+      lookups += 1;
+      return null;
+    },
+  };
+  const actor = createAnswerSubmissionActor({intent, lease: lease(), adapter});
+  actor.start();
+  await waitFor(actor, (snapshot) => !snapshot.matches('submitting'));
+
+  assert.equal(answerSubmissionSnapshot(actor).status, 'editable');
+  assert.equal(lookups, 0);
+  actor.send({type: 'DISCARD'});
+});
+
 test('editable failures restore the same lease only after Edit', async () => {
   const held = lease();
   const adapter: AnswerSubmissionAdapter = {

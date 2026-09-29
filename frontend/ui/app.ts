@@ -5,8 +5,10 @@ import {html, nothing, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import type {MemoryOperationEvent} from '../api/memory.ts';
+import {onSignedOut} from '../api/wire.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
+import {authRefusalMessage} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import '../styles/layout.css';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
@@ -79,6 +81,7 @@ export class DlApp extends LightElement {
   static properties = {
     handles: {attribute: false},
     bootState: {state: true},
+    signedOut: {state: true},
     hasMessages: {state: true},
     conversationExpanded: {state: true},
     conversationCompact: {state: true},
@@ -96,6 +99,8 @@ export class DlApp extends LightElement {
 
   declare handles: AppHandles;
   declare bootState: 'loading' | 'ready' | 'error';
+  /** The server no longer accepts this page's sign-in; nothing else renders. */
+  declare signedOut: boolean;
   declare hasMessages: boolean;
   declare conversationExpanded: boolean;
   declare conversationCompact: boolean;
@@ -113,6 +118,7 @@ export class DlApp extends LightElement {
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
   readonly #nativeModalOwners = new Set<HTMLElement>();
   #controller: AbortController | null = null;
+  #stopHearingSignOut: (() => void) | null = null;
   #pendingFork: string | null = null;
   readonly #ready: Promise<WebBootstrap>;
   #resolveReady!: (bootstrap: WebBootstrap) => void;
@@ -123,6 +129,7 @@ export class DlApp extends LightElement {
     updateWhenLocaleChanges(this);
     this.handles = productionHandles();
     this.bootState = 'loading';
+    this.signedOut = false;
     this.hasMessages = false;
     this.conversationExpanded = false;
     this.conversationCompact = false;
@@ -145,11 +152,14 @@ export class DlApp extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this.#stopHearingSignOut ??= onSignedOut(() => { this.signedOut = true; });
     if (!this.#controller && this.bootState !== 'ready') void this.#load();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.#stopHearingSignOut?.();
+    this.#stopHearingSignOut = null;
     this.#controller?.abort();
     this.#controller = null;
     this.#nativeModalOwners.clear();
@@ -215,6 +225,7 @@ export class DlApp extends LightElement {
   }
 
   protected override render(): TemplateResult {
+    if (this.signedOut) return this.#signedOutStatus();
     const bootstrap = this.#bootstrap;
     const attachments = bootstrap.answerAttachments;
     const ready = this.bootState === 'ready';
@@ -554,6 +565,22 @@ export class DlApp extends LightElement {
       <button type="button" @click=${() => { void this.#load(); }}>
         ${msg('Retry', {id: 'bootstrap.retry'})}
       </button>
+    </div>`;
+  }
+
+  /** The way back in once the server stops accepting this page's sign-in.
+
+   * No Feature can do anything without it, so the shell stops rendering them:
+   * a request that failed with the same 401 has nowhere left to report a
+   * failure of its own. Signing in returns the reader to this page.
+   */
+  #signedOutStatus(): TemplateResult {
+    const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    return html`<div class="bootstrap-status" role="alert">
+      <span>${authRefusalMessage(401)}</span>
+      <a class="dl-btn" href=${`/web/login?next=${encodeURIComponent(here)}`}>
+        ${msg('Sign in', {id: 'app.signIn'})}
+      </a>
     </div>`;
   }
 

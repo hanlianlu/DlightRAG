@@ -97,11 +97,6 @@ function childCommandAmbiguous(error: unknown): boolean {
   return true;
 }
 
-function loginHref(): string {
-  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  return `/web/login?next=${encodeURIComponent(next)}`;
-}
-
 function optimisticTurn(
   submissionId: string,
   query: string,
@@ -427,24 +422,18 @@ export class DlChatFeature extends LightElement {
   #submissionFailureControls(): TemplateResult {
     if (!this.#submissionActor) return html``;
     const snapshot = answerSubmissionSnapshot(this.#submissionActor);
-    if (!['editable', 'retryable', 'conflict', 'login'].includes(snapshot.status)) return html``;
+    if (!['editable', 'retryable', 'conflict'].includes(snapshot.status)) return html``;
     return html`
       <div role="alert" class="submission-failure">
         <span>${submissionErrorText(snapshot.error)}</span>
-        ${snapshot.status === 'login' ? html`
-          <a class="dl-btn" href=${loginHref()} @click=${this.#loginSubmission}>
-            ${msg('Sign in', {id: 'chatFeature.submissionSignIn'})}
-          </a>
-        ` : html`
-          ${snapshot.status === 'retryable' ? html`
-            <button class="dl-btn" type="button" @click=${this.#retrySubmission}>
-              ${msg('Retry', {id: 'chatFeature.submissionRetry'})}
-            </button>
-          ` : null}
-          <button class="dl-btn" type="button" @click=${this.#editSubmission}>
-            ${msg('Edit', {id: 'chatFeature.submissionEdit'})}
+        ${snapshot.status === 'retryable' ? html`
+          <button class="dl-btn" type="button" @click=${this.#retrySubmission}>
+            ${msg('Retry', {id: 'chatFeature.submissionRetry'})}
           </button>
-        `}
+        ` : null}
+        <button class="dl-btn" type="button" @click=${this.#editSubmission}>
+          ${msg('Edit', {id: 'chatFeature.submissionEdit'})}
+        </button>
         <button class="dl-btn" type="button" @click=${this.#discardSubmission}>
           ${msg('Discard', {id: 'chatFeature.submissionDiscard'})}
         </button>
@@ -675,7 +664,6 @@ export class DlChatFeature extends LightElement {
 
   #editSubmission = (): void => this.#finishFailedSubmission('EDIT');
   #discardSubmission = (): void => this.#finishFailedSubmission('DISCARD');
-  #loginSubmission = (): void => this.#finishFailedSubmission('DISCARD');
 
   #finishFailedSubmission(type: 'EDIT' | 'DISCARD'): void {
     const actor = this.#submissionActor;

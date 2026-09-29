@@ -18,6 +18,7 @@ from dlightrag.adapters.http.browser.edge_identity import (
     EdgeIdentityError,
     edge_identity_provider,
 )
+from dlightrag.adapters.http.errors import error_response
 from dlightrag.application.access import (
     AuthenticationError,
     UserContext,
@@ -125,14 +126,12 @@ def _bearer_from_header(request: Request) -> str | None:
     return None
 
 
-def _token_from_request(request: Request) -> tuple[str | None, str | None]:
+def _token_from_request(request: Request) -> str | None:
     raw = _bearer_from_header(request)
     if raw is not None:
-        return raw, "header"
+        return raw
     raw = request.cookies.get(WEB_AUTH_COOKIE)
-    if raw:
-        return _decode_cookie_token(raw), "cookie"
-    return None, None
+    return _decode_cookie_token(raw) if raw else None
 
 
 def _encode_cookie_token(token: str) -> str:
@@ -210,10 +209,26 @@ def _reject_web_mutation(request: Request) -> bool:
     return origin is not None and not _has_exact_same_origin(request)
 
 
-def _browser_missing_auth_response(request: Request) -> Response:
-    if request.method.upper() == "GET":
-        return RedirectResponse(_login_url(_request_next_path(request)), status_code=303)
-    return PlainTextResponse("Authentication required", status_code=401)
+def _unauthenticated(request: Request, detail: str = "Authentication required") -> Response:
+    """Send a browser's page load to sign in; refuse anything else with a 401 envelope.
+
+    Only a page load can go to the login form: ``fetch`` follows a redirect without
+    telling the app, which would read the login page as its answer, so ``/web/api``
+    always refuses for the app to explain. A bearer header is a scripted client's
+    credential and is refused, never redirected. The page load drops a cookie that
+    stopped working; a 401 leaves cookies alone, so a request still in flight cannot
+    sign out another tab that has just signed in.
+    """
+    if (
+        request.method.upper() == "GET"
+        and not request.url.path.startswith("/web/api/")
+        and "Authorization" not in request.headers
+    ):
+        response = RedirectResponse(_login_url(_request_next_path(request)), status_code=303)
+        if WEB_AUTH_COOKIE in request.cookies:
+            _clear_auth_cookie(response)
+        return response
+    return error_response(401, detail)
 
 
 class WebAuthMiddleware(BaseHTTPMiddleware):
@@ -257,30 +272,20 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if cfg.access.web_identity.edge is not None:
             return await self._dispatch_edge_identity(cfg, request, call_next)
 
-        source: str | None = None
         try:
-            raw_token, source = _token_from_request(request)
+            raw_token = _token_from_request(request)
             if not raw_token:
-                if source == "cookie" and request.method.upper() == "GET":
-                    response = RedirectResponse(
-                        _login_url(_request_next_path(request)), status_code=303
-                    )
-                    _clear_auth_cookie(response)
-                    return response
-                return _browser_missing_auth_response(request)
+                return _unauthenticated(request)
             request.state.user_context = _authenticate_bearer(
                 raw_token,
                 cfg,
                 default_user_id=request.headers.get("X-User-Id", "anonymous"),
             )
         except HTTPException as exc:
-            if source == "cookie" and request.method.upper() == "GET":
-                response = RedirectResponse(
-                    _login_url(_request_next_path(request)), status_code=303
-                )
-                _clear_auth_cookie(response)
-                return response
-            return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
+            if exc.status_code != 401:
+                # A misconfigured verifier is the server's fault, not the caller's sign-in.
+                return error_response(exc.status_code, str(exc.detail))
+            return _unauthenticated(request, str(exc.detail))
 
         if _reject_web_mutation(request):
             return PlainTextResponse("Cross-origin request rejected", status_code=403)
@@ -293,11 +298,10 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             provider = edge_identity_provider(cfg.access.web_identity)
             identity = provider.authenticate(request)
         except EdgeIdentityError as exc:
-            status = 500 if exc.kind == "misconfigured" else 401
-            return PlainTextResponse(
-                "Authentication required" if status == 401 else str(exc),
-                status_code=status,
-            )
+            if exc.kind == "misconfigured":
+                return error_response(500, str(exc))
+            # The edge owns sign-in, so not even a page load goes to the paste form.
+            return error_response(401, "Authentication required")
         request.state.user_context = UserContext(
             user_id=identity.subject,
             auth_mode="jwt",

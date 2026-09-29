@@ -3,6 +3,7 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt } from '../api/conversations.ts';
+import {apiError} from '../api/wire.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {tabbables, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
@@ -288,7 +289,7 @@ export class DlArtifactCanvas extends LightElement {
             : undefined,
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error('Artifact data failed');
+        if (!response.ok) throw await apiError(response);
         const textPreview = await response.text();
         if (this.#controller !== controller) return;
         this.textPreview = textPreview;

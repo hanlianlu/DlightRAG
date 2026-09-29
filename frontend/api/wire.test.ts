@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as v from 'valibot';
-import {ApiError, apiError, apiErrorFromBody, parseWire} from './wire.ts';
+import {webCommandError} from './web-command-error.ts';
+import {ApiError, apiError, apiErrorFromBody, onSignedOut, parseWire} from './wire.ts';
 
 const schema = v.pipe(
   v.object({run_id: v.string()}),
@@ -79,4 +80,29 @@ test('parseWire hands a refusal to the route family parser it is given', async (
     parseWire(new Response('', {status: 409}), schema, async () => new Distinct()),
     Distinct,
   );
+});
+
+test('every refusal reader signs the page out on a 401, and only on a 401', async () => {
+  let signedOut = 0;
+  const stop = onSignedOut(() => { signedOut += 1; });
+  const expired = () => Response.json({detail: 'Token expired', error_type: 'auth'}, {status: 401});
+  try {
+    assert.equal((await apiError(expired())).status, 401);
+    assert.equal(signedOut, 1);
+    await assert.rejects(parseWire(expired(), schema), ApiError);
+    assert.equal(signedOut, 2);
+    // The answer commands meet a sign-in refusal in the general envelope too.
+    assert.equal((await webCommandError(expired())).status, 401);
+    assert.equal(signedOut, 3);
+
+    for (const status of [400, 403, 404, 409, 422, 500, 503]) {
+      await apiError(Response.json({detail: 'Refused.', error_type: 'auth'}, {status}));
+      await webCommandError(Response.json({kind: 'scope_forbidden', message: 'No.'}, {status}));
+    }
+    assert.equal(signedOut, 3);
+  } finally {
+    stop();
+  }
+  await apiError(expired());
+  assert.equal(signedOut, 3, 'a listener that stopped hears nothing');
 });

@@ -8,6 +8,8 @@
  * never invents user-visible copy.
  */
 
+import {noteRefusal} from './wire.ts';
+
 const WEB_COMMAND_ERROR_KINDS = [
   'invalid_request',
   'attachment_rejected',
@@ -41,6 +43,7 @@ export class AnswerSubmissionError extends Error {
 
 /** Parse one failed command response; an empty message leaves the UI's fallback. */
 export async function webCommandError(response: Response): Promise<AnswerSubmissionError> {
+  noteRefusal(response.status);
   let value: unknown;
   try {
     value = await response.json();

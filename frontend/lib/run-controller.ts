@@ -9,6 +9,7 @@ import {
   parseMemoryOperationEvent,
   type MemoryOperationEvent,
 } from '../api/memory.ts';
+import {noteRefusal} from '../api/wire.ts';
 import {createSSEParser, parseData} from './sse.ts';
 import type {AnswerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
 
@@ -236,7 +237,10 @@ export class RunController {
           continue;
         }
         if (response.status === 404 || response.status === 410) break;
-        if (!response.ok) return {kind: 'error', message: 'Service error. Please try again.'};
+        if (!response.ok) {
+          noteRefusal(response.status);
+          return {kind: 'error', message: 'Service error. Please try again.'};
+        }
 
         let terminal = false;
         try {

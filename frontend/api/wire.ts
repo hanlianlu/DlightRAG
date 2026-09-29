@@ -5,11 +5,28 @@
  * client function: the schema is the runtime check, the inferred type, and the
  * one place snake_case Wire Format is translated. Failures cross the same edge:
  * a refusal answering the general envelope `{detail, error_type, error_kind?}`
- * becomes one `ApiError`, parsed here and nowhere else. See
+ * becomes one `ApiError`, parsed here and nowhere else, and every refusal's
+ * status is noted here, so a 401 from any route signs the page out once. See
  * docs/adr/0002-browser-wire-validation.md.
  */
 
 import * as v from 'valibot';
+
+const signIn = new EventTarget();
+
+/** Hear that the server no longer accepts this page's sign-in; returns the unsubscribe. */
+export function onSignedOut(listener: () => void): () => void {
+  signIn.addEventListener('signed-out', listener);
+  return () => signIn.removeEventListener('signed-out', listener);
+}
+
+/** Every reader of a refused response notes its status here, whatever envelope
+ *  the body answers. A 401 from any Web route means the browser's sign-in
+ *  expired or was never there: the shell then asks the reader to sign in again,
+ *  so no caller handles a 401 of its own. */
+export function noteRefusal(status: number): void {
+  if (status === 401) signIn.dispatchEvent(new Event('signed-out'));
+}
 
 /** The server's public `error_type` vocabulary (docs/interfaces.md). */
 const API_ERROR_TYPES = [
@@ -61,9 +78,10 @@ function envelopeOf(value: unknown): Record<string, unknown> {
     : {};
 }
 
-/** Read a refusal body already parsed as JSON (null when it was not); a body
- *  that is not the envelope keeps only its status. */
+/** Read a refusal body already parsed as JSON (null when it was not), noting its
+ *  status; a body that is not the envelope keeps only its status. */
 export function apiErrorFromBody(status: number, body: unknown): ApiError {
+  noteRefusal(status);
   const {detail, error_type: errorType, error_kind: errorKind} = envelopeOf(body);
   return new ApiError(status, {
     // FastAPI's own request validation answers a list here; that is no reason.

@@ -669,34 +669,6 @@ it('hands accepted work to RunController without announcing a false idle gap', a
   feature.detachRun();
 });
 
-it('exits a 401 submission through the login flow without retaining its actor', async () => {
-  window.fetch = async () => new Response('Authentication required', {status: 401});
-  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
-  feature.view = {kind: 'new'};
-  document.body.appendChild(feature);
-  await settle(feature);
-
-  const input = feature.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
-  input.value = 'Question after session expiry';
-  input.dispatchEvent(new Event('input', {bubbles: true}));
-  await feature.querySelector('dl-chat-composer')?.updateComplete;
-  feature.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
-  await waitFor(() => feature.turns.at(-1)?.state === 'failed');
-  await settle(feature);
-
-  const signIn = feature.querySelector<HTMLAnchorElement>('.submission-failure a');
-  expect(signIn?.textContent?.trim()).to.equal('Sign in');
-  expect(signIn?.getAttribute('href')).to.match(/^\/web\/login\?next=/);
-  document.addEventListener('click', (event) => event.preventDefault(), {
-    capture: true,
-    once: true,
-  });
-  signIn?.click();
-  await settle(feature);
-  expect(answerSubmissionRegistry.list()).to.have.length(0);
-  expect(feature.turns).to.have.length(0);
-});
-
 it('Composer owns draft, attachment, mode, and typed submission intent', async () => {
   const composer = document.createElement('dl-chat-composer') as DlChatComposer;
   composer.attachmentPolicy = policy;

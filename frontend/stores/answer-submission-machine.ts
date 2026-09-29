@@ -24,7 +24,6 @@ export type AnswerSubmissionStatus =
   | 'editable'
   | 'retryable'
   | 'conflict'
-  | 'login'
   | 'accepted'
   | 'handedOff'
   | 'edited'
@@ -72,6 +71,8 @@ export const answerSubmissionMachine = setup({
     }) => input.adapter.lookup(input.intent.submissionId, signal)),
   },
   guards: {
+    // Refused before acceptance. A 401 among them signs the whole page out (api/wire.ts),
+    // so the shell, not this submission, offers the way back in.
     editableFailure: ({event}) => {
       const error = actorError(event);
       return [
@@ -80,11 +81,10 @@ export const answerSubmissionMachine = setup({
         'scope_forbidden',
         'conversation_missing',
       ].includes(error.kind)
-        || error.status === 400 || error.status === 403
+        || error.status === 400 || error.status === 401 || error.status === 403
         || error.status === 413 || error.status === 422;
     },
     conflictFailure: ({event}) => actorError(event).status === 409,
-    loginFailure: ({event}) => actorError(event).status === 401,
     lookupMissing: ({event}) => actorError(event).status === 404,
     lookupFound: ({event}) => actorOutput(event) !== null,
   },
@@ -114,7 +114,6 @@ export const answerSubmissionMachine = setup({
         onError: [
           {guard: 'editableFailure', target: 'editable', actions: 'rememberError'},
           {guard: 'conflictFailure', target: 'conflict', actions: 'rememberError'},
-          {guard: 'loginFailure', target: 'login', actions: 'rememberError'},
           {target: 'reconciling', actions: 'rememberError'},
         ],
       },
@@ -129,7 +128,6 @@ export const answerSubmissionMachine = setup({
           {target: 'retryable'},
         ],
         onError: [
-          {guard: 'loginFailure', target: 'login', actions: 'rememberError'},
           {guard: 'lookupMissing', target: 'retryable', actions: 'rememberError'},
           {target: 'retryable', actions: 'rememberError'},
         ],
@@ -138,7 +136,6 @@ export const answerSubmissionMachine = setup({
     editable: {on: {EDIT: 'edited', DISCARD: 'discarded'}},
     retryable: {on: {RETRY: 'submitting', EDIT: 'edited', DISCARD: 'discarded'}},
     conflict: {on: {EDIT: 'edited', DISCARD: 'discarded'}},
-    login: {on: {EDIT: 'edited', DISCARD: 'discarded'}},
     accepted: {on: {HANDOFF: 'handedOff'}},
     handedOff: {type: 'final', entry: 'acceptLease'},
     edited: {type: 'final', entry: 'restoreLease'},

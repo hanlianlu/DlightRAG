@@ -530,9 +530,13 @@ class TestWebEdgeMiddleware:
 
     def test_missing_assertion_is_401_with_no_login_redirect(self, jwks) -> None:
         client = TestClient(self._app(self._jwt_config()))
-        response = client.get("/web/")
-        assert response.status_code == 401
-        assert response.text == "Authentication required"
+        for response in (
+            client.get("/web/", follow_redirects=False),
+            client.get("/web/api/bootstrap", follow_redirects=False),
+            client.post("/web/api/conversations", follow_redirects=False),
+        ):
+            assert response.status_code == 401
+            assert response.json() == {"detail": "Authentication required", "error_type": "auth"}
 
     def test_azure_missing_id_token_is_401_through_the_middleware(self, jwks) -> None:
         cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]

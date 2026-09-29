@@ -158,24 +158,6 @@ it('stops polling a status the Corpus Run API refuses', async () => {
   expect(recovery.error).to.equal('Document recovery status is no longer available.');
 });
 
-it('asks a reader whose session ended to sign in again', async () => {
-  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
-  window.fetch = async (input) => {
-    const url = String(input);
-    if (url.startsWith('/web/api/files/retry')) return Response.json(receipt(), {status: 202});
-    if (url === '/web/api/corpus-runs/run-retry-1') {
-      return Response.json({detail: 'Not authenticated', error_type: 'auth'}, {status: 401});
-    }
-    return Response.json(failedPage());
-  };
-  const recovery = mount();
-  await waitFor(() => recovery.page?.failed.length === 1);
-  await confirmRetryAll(recovery);
-
-  await waitFor(() => recovery.error !== null);
-  expect(recovery.error).to.equal('Your session has ended. Sign in again to continue.');
-});
-
 function waitingRun() {
   return {
     ...receipt(),

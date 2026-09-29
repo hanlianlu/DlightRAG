@@ -139,6 +139,7 @@ export const templates: Record<
   'app.artifactCanvasLabel': '工件画布',
   'app.answerNotificationsLabel': '回答通知',
   'app.waitForFileChange': '请等待文件变更完成后再打开会话。',
+  'app.signIn': '登录',
 
   // Chat feature
   'chatFeature.continuationFailed': '后续对话无法开始。',
@@ -182,7 +183,6 @@ export const templates: Record<
   'chatFeature.answerReady': '回答已就绪',
   'chatFeature.submissionFailed': '回答无法提交。',
   'chatFeature.submissionRetry': '重试',
-  'chatFeature.submissionSignIn': '登录',
   'chatFeature.submissionEdit': '编辑',
   'chatFeature.submissionDiscard': '放弃',
 

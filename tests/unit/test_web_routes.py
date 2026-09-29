@@ -378,23 +378,63 @@ class TestWebAuth:
         query = parse_qs(urlsplit(response.headers["location"]).query)
         assert query["next"] == [path]
 
-    async def test_source_download_login_redirect_preserves_workspace(
-        self, test_config: DlightragConfig, mock_application
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("GET", "/web/api/bootstrap"),
+            ("POST", "/web/api/conversations"),
+            # A source download link is a Web API route too: never sent to the login page.
+            ("GET", "/web/api/files/raw/doc-report?workspace=finance"),
+        ],
+    )
+    async def test_web_api_refuses_a_missing_session_in_the_error_envelope(
+        self, test_config: DlightragConfig, mock_application, method: str, path: str
     ) -> None:
-        from urllib.parse import parse_qs, urlsplit
-
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(mock_application) as client:
-            response = await client.get(
-                "/web/api/files/raw/doc-report",
-                params={"workspace": "finance"},
-            )
+            response = await client.request(method, path)
 
-        assert response.status_code == 303
-        query = parse_qs(urlsplit(response.headers["location"]).query)
-        assert query["next"] == ["/web/api/files/raw/doc-report?workspace=finance"]
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Authentication required", "error_type": "auth"}
+        assert "location" not in response.headers
+
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    async def test_expired_session_cookie_is_a_401_for_the_app_and_a_login_for_a_page(
+        self, test_config: DlightragConfig, mock_application, method: str
+    ) -> None:
+        import base64
+        from urllib.parse import parse_qs, urlsplit
+
+        key = "test-jwt-verification-key-for-web-route-tests"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(test_config, "access.jwt_verification_key", key)
+        expired = jwt.encode(
+            {
+                "sub": "user-1",
+                "exp": datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=1),
+            },
+            key,
+            algorithm="HS256",
+        )
+        page = f"/web/conversations/{CONVERSATION_ID}"
+
+        async with _web_client_for(mock_application) as client:
+            client.cookies.set(
+                "dlightrag_web_auth",
+                base64.urlsafe_b64encode(expired.encode()).decode().rstrip("="),
+            )
+            api = await client.request(method, "/web/api/conversations")
+            navigation = await client.get(page)
+
+        assert api.status_code == 401
+        assert api.json() == {"detail": "Token expired", "error_type": "auth"}
+        # Only a page load drops the cookie, so a request in flight cannot sign out another tab.
+        assert "set-cookie" not in api.headers
+        assert navigation.status_code == 303
+        assert parse_qs(urlsplit(navigation.headers["location"]).query)["next"] == [page]
+        assert "dlightrag_web_auth=" in navigation.headers["set-cookie"]
 
     async def test_simple_invalid_bearer_rejected(
         self, test_config: DlightragConfig, mock_application

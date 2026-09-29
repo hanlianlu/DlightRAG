@@ -18,6 +18,7 @@ import type {ImageOpenDetail} from './image-lightbox.ts';
 import type {DlContinuationDialog} from './run-dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
+import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
 import {waitFor} from '../testing/dom.ts';
 
 const bootstrap = {
@@ -626,6 +627,64 @@ it('fails closed and resolves the same ready promise after an explicit retry', a
   await app.ready;
   expect(attempts).to.equal(2);
   expect(app.bootState).to.equal('ready');
+});
+
+it('answers an expired sign-in with the way back to this page, not a load failure', async () => {
+  const previous = window.location.href;
+  window.history.replaceState(null, '', '?view=files#latest');
+  window.fetch = async () => response({detail: 'Token expired', error_type: 'auth'}, 401);
+  try {
+    const app = document.createElement('dl-app') as DlApp;
+    document.body.appendChild(app);
+    await waitFor(() => app.signedOut);
+    await app.updateComplete;
+
+    const status = app.querySelector<HTMLElement>('.bootstrap-status');
+    expect(status?.getAttribute('role')).to.equal('alert');
+    expect(status?.textContent).to.contain('Your session has ended. Sign in again to continue.');
+    expect(status?.textContent).not.to.contain('could not load');
+    const signIn = status?.querySelector<HTMLAnchorElement>('a');
+    expect(signIn?.textContent?.trim()).to.equal('Sign in');
+    const target = new URL(signIn!.href);
+    expect(target.pathname).to.equal('/web/login');
+    expect(target.searchParams.get('next')).to.equal(`${window.location.pathname}?view=files#latest`);
+    expect(app.querySelector('#app')).to.equal(null);
+  } finally {
+    window.history.replaceState(null, '', previous);
+  }
+});
+
+it('signs out the whole page when a Feature request meets a 401, with no failure of its own', async () => {
+  let refused = false;
+  window.fetch = async (input, init) => {
+    if (String(input) === '/web/api/answer' && init?.method === 'POST') {
+      refused = true;
+      return response({detail: 'Token expired', error_type: 'auth'}, 401);
+    }
+    return bootstrapResponse(input);
+  };
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  try {
+    const input = app.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+    input.value = 'Question after the sign-in expired';
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    await app.querySelector('dl-chat-composer')?.updateComplete;
+    app.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    await waitFor(() => app.signedOut);
+    await app.updateComplete;
+
+    expect(refused).to.equal(true);
+    expect(app.querySelector('.bootstrap-status')?.textContent)
+      .to.contain('Your session has ended. Sign in again to continue.');
+    // The Features are gone, so the refused submission reports nothing of its own.
+    expect(app.querySelector('dl-chat-feature')).to.equal(null);
+    expect(app.querySelector('.submission-failure')).to.equal(null);
+    expect(app.textContent).not.to.contain('could not be submitted');
+  } finally {
+    answerSubmissionRegistry.dispose();
+  }
 });
 
 it('opens Connections after the fixed OAuth return without starting authorization', async () => {
