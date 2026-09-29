@@ -72,6 +72,8 @@ export class DlInspectorFiles extends LightElement {
 
   #workspace = '';
   #requestGeneration = 0;
+  /** A list refresh asked for while a mutation held the request slot. */
+  #reloadDeferred = false;
   readonly #session = new InspectorFilesSession();
   readonly #tracker = new CorpusRunTracker({
     onChange: () => { this.requestUpdate(); },
@@ -150,6 +152,7 @@ export class DlInspectorFiles extends LightElement {
 
   async reload(showLoading = true): Promise<void> {
     const workspace = this.handles.ingest.workspace;
+    this.#reloadDeferred = false;
     this.#invalidateOlderFiles();
     if (workspace !== this.#workspace) {
       // Hide the old Workspace before any new-Workspace I/O. A failed load must
@@ -276,6 +279,7 @@ export class DlInspectorFiles extends LightElement {
         this.loading = false;
       }
       if (!followed) this.#resumeFollowing();
+      this.#reloadIfDeferred();
     }
   }
 
@@ -330,6 +334,7 @@ export class DlInspectorFiles extends LightElement {
       this.#finishMutation();
       if (this.#session.finishRequest(controller)) this.loading = false;
       if (!followed) this.#resumeFollowing();
+      this.#reloadIfDeferred();
     }
   }
 
@@ -371,6 +376,23 @@ export class DlInspectorFiles extends LightElement {
   /** A mutation that followed no new Run hands polling back to the one this panel still follows. */
   #resumeFollowing(): void {
     if (!this.#session.mutating && this.active && this.isConnected) this.#tracker.wake();
+  }
+
+  /** Show news from elsewhere (a recovery Run settling) without cancelling
+   *  the reader's own upload, deletion, or Workspace action: a reload takes the
+   *  request slot and would abort it, so it waits until the mutation ends. */
+  #reloadAfterMutations(): void {
+    if (this.#session.mutating) {
+      this.#reloadDeferred = true;
+      return;
+    }
+    void this.reload(false);
+  }
+
+  #reloadIfDeferred(): void {
+    if (!this.#reloadDeferred || this.#session.mutating) return;
+    this.#reloadDeferred = false;
+    if (this.active && this.isConnected) void this.reload(false);
   }
 
   async #resumeRepair(): Promise<void> {
@@ -575,6 +597,7 @@ export class DlInspectorFiles extends LightElement {
           this.querySelector<HTMLInputElement>('#workspace-action-confirm-input')?.focus();
         }
       }
+      this.#reloadIfDeferred();
     }
   };
 
@@ -685,7 +708,7 @@ export class DlInspectorFiles extends LightElement {
       <dl-failed-file-recovery
         .workspace=${this.handles.ingest.workspace}
         .active=${this.active}
-        @dl-failed-file-recovery-complete=${() => { void this.reload(false); }}
+        @dl-failed-file-recovery-complete=${() => { this.#reloadAfterMutations(); }}
       ></dl-failed-file-recovery>
       ${this.loading ? html`
         <div class=${fileStyles['file-status']}><div class=${fileStyles.spinner}></div><span>${msg('Loading files...', {id: 'inspectorFiles.loadingFiles'})}</span></div>

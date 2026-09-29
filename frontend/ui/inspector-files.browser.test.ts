@@ -481,6 +481,62 @@ it('hands polling back to the followed Run when a later upload is refused', asyn
   });
 });
 
+for (const mutation of ['upload', 'delete'] as const) {
+  it(`keeps an in-flight ${mutation} alive when a document recovery finishes, then reloads`, async () => {
+    const signals: AbortSignal[] = [];
+    let listReads = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    window.fetch = async (input, init) => {
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname.endsWith('/files/upload') || init?.method === 'DELETE') {
+        signals.push(init!.signal!);
+        return new Promise<Response>((resolve, reject) => {
+          init!.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+          void gate.then(() => resolve(Response.json(corpusReceipt('run-mutation'), {status: 202})));
+        });
+      }
+      if (url.pathname === '/web/api/corpus-runs/run-mutation') {
+        return Response.json(corpusReceipt('run-mutation', 'running'));
+      }
+      if (url.pathname.endsWith('/files/failed')) {
+        return Response.json({workspace: 'default', failed: [], next_cursor: null});
+      }
+      listReads += 1;
+      return Response.json(snapshot([{file_name: 'Keep', file_path: '/keep'}], null));
+    };
+    const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+    panel.active = true;
+    document.body.appendChild(panel);
+    await waitFor(() => panel.loading === false);
+    await ticks();
+    const readsBefore = listReads;
+
+    let settled: Promise<void> = Promise.resolve();
+    if (mutation === 'upload') {
+      settled = panel.upload([new File(['one'], 'one.pdf', {type: 'application/pdf'})]);
+    } else {
+      panel.querySelector<HTMLButtonElement>('[data-file-delete]')!.click();
+      await panel.updateComplete;
+      confirmDeleteDialog(panel, 'confirm');
+    }
+    await waitFor(() => signals.length === 1);
+    panel.querySelector('dl-failed-file-recovery')!.dispatchEvent(new CustomEvent(
+      'dl-failed-file-recovery-complete',
+      {bubbles: true, composed: true},
+    ));
+    await ticks();
+    expect(signals[0]!.aborted, `the recovery's reload leaves the ${mutation} running`).to.equal(false);
+    expect(listReads, 'and waits for it').to.equal(readsBefore);
+
+    release();
+    await settled;
+    await waitFor(() => panel.mutationRun?.runId === 'run-mutation' && listReads === readsBefore + 1);
+    expect(signals[0]!.aborted).to.equal(false);
+    panel.pause();
+  });
+}
+
 it('cancelling the delete dialog keeps the file and restores trigger focus', async () => {
   window.fetch = async (_input, init) => {
     if (init?.method === 'DELETE') {
