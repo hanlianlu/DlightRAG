@@ -1,5 +1,5 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Visible index window for conversation turns. Streaming turns stay mounted. */
+/** Visible index window for conversation turns. The caller's alwaysOn turns stay mounted. */
 
 export const TURN_WINDOW_PAD = 20;
 export const TURN_PLACEHOLDER_MIN_PX = 96;
@@ -51,8 +51,4 @@ export function visibleTurnWindow(input: TurnWindowInput): TurnWindow {
     end = Math.max(end, index);
   }
   return {start, end};
-}
-
-export function turnIsLive(state: string): boolean {
-  return state === 'pending' || state === 'streaming' || state === 'retryable';
 }

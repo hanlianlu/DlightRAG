@@ -15,11 +15,7 @@ import {LightElement} from '../lib/lit-host.ts';
 import type {KeysetPagerStatus} from '../lib/paged.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
 import {rowDurationMs, toolRowText, type ToolRow} from '../lib/tool-events.ts';
-import {
-  TURN_PLACEHOLDER_MIN_PX,
-  turnIsLive,
-  visibleTurnWindow,
-} from '../lib/turn-window.ts';
+import {TURN_PLACEHOLDER_MIN_PX, visibleTurnWindow} from '../lib/turn-window.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
 import './answer-presentation.ts';
@@ -235,10 +231,11 @@ export class DlChatMessageList extends LightElement {
     if (this.#recomputeWindow()) this.requestUpdate();
   };
 
+  /** Turns whose Run has not settled stay mounted however far they scroll away. */
   #liveIndices(): Set<number> {
     const indices = new Set<number>();
     this.turns.forEach((turn, index) => {
-      if (turnIsLive(turn.state)) indices.add(index);
+      if (!isTerminalTurnState(turn.state)) indices.add(index);
     });
     return indices;
   }

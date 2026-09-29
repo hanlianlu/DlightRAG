@@ -6,7 +6,6 @@ import assert from 'node:assert/strict';
 import {
   TURN_PLACEHOLDER_MIN_PX,
   TURN_WINDOW_PAD,
-  turnIsLive,
   visibleTurnWindow,
 } from './turn-window.ts';
 
@@ -47,9 +46,4 @@ test('uses placeholder height when a turn has not been measured', () => {
   assert.ok(window.start >= 40 - TURN_WINDOW_PAD - 2);
   assert.ok(window.start <= 40);
   assert.ok(window.end >= 42);
-});
-
-test('live states stay mounted', () => {
-  assert.equal(turnIsLive('streaming'), true);
-  assert.equal(turnIsLive('succeeded'), false);
 });
