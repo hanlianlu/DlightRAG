@@ -447,23 +447,23 @@ it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async 
     loader,
     'cursor-1',
   );
-  expect(workspaceStore.morePages.hasOlder).to.equal(true);
+  expect(workspaceStore.moreWorkspaces.hasOlder).to.equal(true);
 
   const flight = workspaceStore.loadMoreWorkspaces();
   expect(workspaceStore.loadMoreWorkspaces()).to.equal(flight);
   await flight;
-  expect(workspaceStore.morePages.state).to.equal('error');
+  expect(workspaceStore.moreWorkspaces.state).to.equal('error');
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['default']);
 
   await workspaceStore.loadMoreWorkspaces();
-  expect(workspaceStore.morePages.state).to.equal('idle');
+  expect(workspaceStore.moreWorkspaces.state).to.equal('idle');
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal([
     'default', 'finance', 'research',
   ]);
-  expect(workspaceStore.morePages.hasOlder).to.equal(true);
+  expect(workspaceStore.moreWorkspaces.hasOlder).to.equal(true);
 
   await workspaceStore.loadMoreWorkspaces();
-  expect(workspaceStore.morePages.hasOlder).to.equal(false);
+  expect(workspaceStore.moreWorkspaces.hasOlder).to.equal(false);
   expect(workspaceStore.records).to.have.length(3);
   expect(olderRequests).to.equal(3);
 });
@@ -495,8 +495,8 @@ it('rejects stale load-more pages after a fresh init invalidates the flight', as
   await flight;
 
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['fresh']);
-  expect(workspaceStore.morePages.hasOlder).to.equal(true);
-  expect(workspaceStore.morePages.state).to.equal('idle');
+  expect(workspaceStore.moreWorkspaces.hasOlder).to.equal(true);
+  expect(workspaceStore.moreWorkspaces.state).to.equal('idle');
 });
 
 it('renders an accessible load-more workspaces control in the picker', async () => {

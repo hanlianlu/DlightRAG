@@ -96,11 +96,6 @@
     border-color: var(--color-border-strong);
 }
 
-.file-page-control button:disabled {
-    cursor: wait;
-    opacity: 0.65;
-}
-
 
 /* === Ingest Queue Notice === */
 

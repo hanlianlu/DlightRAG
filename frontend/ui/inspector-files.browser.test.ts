@@ -118,7 +118,7 @@ it('appends older files with coalescing, overlap dedup, and accessible exhaustio
   const flight = panel.loadOlderFiles();
   expect(panel.loadOlderFiles()).to.equal(flight);
   await panel.updateComplete;
-  expect(button.disabled).to.equal(true);
+  expect(button.getAttribute('aria-disabled')).to.equal('true');
   expect(button.getAttribute('aria-busy')).to.equal('true');
   expect(olderRequests).to.equal(1);
 

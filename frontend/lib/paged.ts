@@ -4,7 +4,8 @@ import {isAbortError} from './errors.ts';
 
 export type PageLoadState = 'idle' | 'loading' | 'error';
 
-/** How the latest next-page load ended; null while none has since the last start. */
+/** How the latest next-page load ended: null while any load runs, and until
+ *  a next-page load ends after start(), cancel(), or reset(). */
 export type NextPageOutcome = 'loaded' | 'failed' | null;
 
 /** Any keyset page: what it holds is its owner's, its cursor the pager's. */
@@ -22,6 +23,10 @@ export type KeysetPageLoader<P extends KeysetPage> = (
 export interface KeysetPagerStatus {
   /** The latest load, the first page's included. */
   readonly state: PageLoadState;
+  /** A first page is loading: the list is about to be replaced, not extended. */
+  readonly starting: boolean;
+  /** A next page exists. While a first page loads, this is still the answer
+   *  for the list it will replace. */
   readonly hasOlder: boolean;
   readonly outcome: NextPageOutcome;
 }
@@ -30,13 +35,17 @@ export interface KeysetPagerStatus {
  *  The owner keeps its own collection: start() replaces it with the first
  *  page and loadNext() adds the next one, each through onPage. The pager owns
  *  the cursor, load state, request abort, and stale-flight rejection; onPage
- *  and onError fire only for results that are still current. An owner that
- *  loads its first page itself anchors the pager with reset(nextCursor).
- *  notify reports load progress; cancel and reset are silent, because the
- *  owner that drops work publishes its own change. */
+ *  and onError fire only for results that are still current.
+ *  A start leaves the list it replaces whole until the first page lands: that
+ *  list's cursor still answers hasOlder, and no next page loads meanwhile. An
+ *  owner that loads its first page itself anchors the pager with
+ *  reset(nextCursor), and one that drops its collection resets to null.
+ *  notify reports load progress and a load that cancel() drops; reset() is
+ *  silent, because the owner re-anchoring the pager publishes its own change. */
 export class KeysetPager<P extends KeysetPage> implements KeysetPagerStatus {
   #cursor: string | null = null;
   #state: PageLoadState = 'idle';
+  #starting = false;
   #outcome: NextPageOutcome = null;
   #flight: Promise<void> | null = null;
   #controller: AbortController | null = null;
@@ -52,6 +61,10 @@ export class KeysetPager<P extends KeysetPage> implements KeysetPagerStatus {
     return this.#state;
   }
 
+  get starting(): boolean {
+    return this.#starting;
+  }
+
   get hasOlder(): boolean {
     return this.#cursor !== null;
   }
@@ -62,40 +75,56 @@ export class KeysetPager<P extends KeysetPage> implements KeysetPagerStatus {
 
   /** A copy of this status that later loads leave unchanged. */
   snapshot(): KeysetPagerStatus {
-    return {state: this.#state, hasOlder: this.hasOlder, outcome: this.#outcome};
+    return {
+      state: this.#state,
+      starting: this.#starting,
+      hasOlder: this.hasOlder,
+      outcome: this.#outcome,
+    };
   }
 
   /** Drop in-flight work and keep the cursor. */
   cancel(): void {
-    this.#controller?.abort();
-    this.#controller = null;
-    this.#flight = null;
-    this.#state = 'idle';
-    this.#outcome = null;
+    if (this.#drop()) this.#notify();
   }
 
   /** Drop in-flight work and re-anchor the cursor (null clears older pages). */
   reset(cursor: string | null): void {
-    this.cancel();
+    this.#drop();
     this.#cursor = cursor;
   }
 
   /** Load the first page in place of everything before it; the newest start wins. */
   start(onPage: (page: P) => void, onError: (error: unknown) => void = () => {}): Promise<void> {
-    this.reset(null);
-    return this.#fetch(null, onPage, onError);
+    this.#drop();
+    return this.#track(this.#fetch(null, onPage, onError));
   }
 
-  /** Load the next page; resolves with any concurrent flight. */
+  /** Load the next page; resolves with any flight already running, a first page's included. */
   loadNext(onPage: (page: P) => void, onError: (error: unknown) => void = () => {}): Promise<void> {
     if (this.#flight !== null) return this.#flight;
     if (this.#cursor === null) return Promise.resolve();
-    const flight = this.#fetch(this.#cursor, onPage, onError);
+    return this.#track(this.#fetch(this.#cursor, onPage, onError));
+  }
+
+  #track(flight: Promise<void>): Promise<void> {
     this.#flight = flight;
     void flight.finally(() => {
       if (this.#flight === flight) this.#flight = null;
     });
     return flight;
+  }
+
+  /** Abort the running load and forget how the last one ended; true when a load was running. */
+  #drop(): boolean {
+    const dropped = this.#controller !== null;
+    this.#controller?.abort();
+    this.#controller = null;
+    this.#flight = null;
+    this.#state = 'idle';
+    this.#starting = false;
+    this.#outcome = null;
+    return dropped;
   }
 
   async #fetch(
@@ -107,6 +136,7 @@ export class KeysetPager<P extends KeysetPage> implements KeysetPagerStatus {
     const controller = new AbortController();
     this.#controller = controller;
     this.#state = 'loading';
+    this.#starting = cursor === null;
     this.#outcome = null;
     this.#notify();
     const next = cursor !== null;
@@ -116,10 +146,12 @@ export class KeysetPager<P extends KeysetPage> implements KeysetPagerStatus {
       if (controller !== this.#controller) return;
       this.#cursor = page.nextCursor;
       this.#state = 'idle';
+      this.#starting = false;
       if (next) this.#outcome = 'loaded';
       onPage(page);
     } catch (error) {
       if (controller !== this.#controller) return;
+      this.#starting = false;
       if (isAbortError(error)) {
         this.#state = 'idle';
       } else {

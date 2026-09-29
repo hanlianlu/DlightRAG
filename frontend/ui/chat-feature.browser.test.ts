@@ -1809,7 +1809,7 @@ it('Message List exposes an accessible retryable Load older messages control', a
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   list.view = {
     kind: 'ready', conversationId: 'paged', history: [storedTurn()], lineage: null,
-    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
+    olderMessages: {state: 'idle', starting: false, hasOlder: true, outcome: null},
   };
   list.turns = [];
   document.body.appendChild(list);
@@ -1826,7 +1826,7 @@ it('Message List exposes an accessible retryable Load older messages control', a
   expect(button.getAttribute('aria-busy')).to.equal('false');
   expect(requests).to.equal(1);
 
-  list.view = {...list.view, olderMessages: {state: 'error', hasOlder: true, outcome: 'failed'}};
+  list.view = {...list.view, olderMessages: {state: 'error', starting: false, hasOlder: true, outcome: 'failed'}};
   await list.updateComplete;
   expect(list.querySelector('[data-load-older="messages"]')?.textContent).to.contain('Retry');
   expect(list.querySelector('[data-load-older-status="messages"]')?.textContent).to.contain(
@@ -1839,7 +1839,7 @@ it('Message List keeps the final older-page announcement and moves focus into th
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   list.view = {
     kind: 'ready', conversationId: 'last-page', history: [storedTurn()], lineage: null,
-    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
+    olderMessages: {state: 'idle', starting: false, hasOlder: true, outcome: null},
   };
   list.turns = [storedTurnView(storedTurn())];
   document.body.appendChild(list);
@@ -1848,9 +1848,9 @@ it('Message List keeps the final older-page announcement and moves focus into th
   button.focus();
   button.click();
 
-  list.view = {...list.view, olderMessages: {state: 'loading', hasOlder: true, outcome: null}};
+  list.view = {...list.view, olderMessages: {state: 'loading', starting: false, hasOlder: true, outcome: null}};
   await list.updateComplete;
-  list.view = {...list.view, olderMessages: {state: 'idle', hasOlder: false, outcome: 'loaded'}};
+  list.view = {...list.view, olderMessages: {state: 'idle', starting: false, hasOlder: false, outcome: 'loaded'}};
   await list.updateComplete;
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
@@ -1862,7 +1862,7 @@ it('Message List keeps the final older-page announcement and moves focus into th
 
   list.view = {
     kind: 'ready', conversationId: 'another-page', history: [storedTurn()], lineage: null,
-    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
+    olderMessages: {state: 'idle', starting: false, hasOlder: true, outcome: null},
   };
   await list.updateComplete;
   expect(list.querySelector('[data-load-older-status="messages"]')?.textContent?.trim()).to.equal('');
@@ -1875,7 +1875,7 @@ it('Message List anchors the existing viewport when an older page is prepended',
   };
   list.view = {
     kind: 'ready', conversationId: 'anchor', history: [existing], lineage: null,
-    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
+    olderMessages: {state: 'idle', starting: false, hasOlder: true, outcome: null},
   };
   list.turns = [storedTurnView(existing)];
   document.body.appendChild(list);
@@ -1887,13 +1887,13 @@ it('Message List anchors the existing viewport when an older page is prepended',
   const before = existingElement.getBoundingClientRect().top - area.getBoundingClientRect().top;
 
   list.querySelector<HTMLButtonElement>('[data-load-older="messages"]')!.click();
-  list.view = {...list.view, olderMessages: {state: 'loading', hasOlder: true, outcome: null}};
+  list.view = {...list.view, olderMessages: {state: 'loading', starting: false, hasOlder: true, outcome: null}};
   await list.updateComplete;
   const older = {
     ...storedTurn(), turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1',
   };
   list.turns = [storedTurnView(older), storedTurnView(existing)];
-  list.view = {...list.view, olderMessages: {state: 'idle', hasOlder: true, outcome: 'loaded'}};
+  list.view = {...list.view, olderMessages: {state: 'idle', starting: false, hasOlder: true, outcome: 'loaded'}};
   await list.updateComplete;
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
@@ -1957,7 +1957,7 @@ it('Chat Feature preserves a non-terminal live projection across history republi
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
     kind: 'ready', conversationId: 'same-running', history: [running], lineage: null,
-    olderMessages: {state: 'idle', hasOlder: true, outcome: null},
+    olderMessages: {state: 'idle', starting: false, hasOlder: true, outcome: null},
   };
   document.body.appendChild(feature);
   await settle(feature);
@@ -1969,7 +1969,7 @@ it('Chat Feature preserves a non-terminal live projection across history republi
 
   feature.view = {
     ...feature.view,
-    olderMessages: {state: 'loading', hasOlder: true, outcome: null},
+    olderMessages: {state: 'loading', starting: false, hasOlder: true, outcome: null},
   };
   await settle(feature);
 

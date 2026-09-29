@@ -168,11 +168,6 @@
     text-decoration: underline;
 }
 
-.failed-file-more-button:disabled {
-    cursor: wait;
-    opacity: 0.65;
-}
-
 .failed-file-recovery-note {
     color: var(--color-text-muted);
     font-size: var(--font-size-caption);

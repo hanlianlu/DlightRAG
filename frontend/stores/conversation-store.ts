@@ -139,7 +139,6 @@ export class ConversationStore extends Store {
   }
 
   loadOlder(): Promise<void> {
-    if (this.#listState === 'loading') return Promise.resolve();
     return this.#listPages.loadNext((page) => {
       this.#conversations = this.#merge(this.#conversations, page.items);
     });
@@ -160,7 +159,8 @@ export class ConversationStore extends Store {
   ): Promise<ConversationOpenResult> {
     const sameConversation = this.#activeConversationId === conversationId;
     const hadHistory = sameConversation && this.#history !== null;
-    this.#abortView();
+    // A refresh in place keeps an older page the reader already asked for.
+    this.#abortView({keepOlderMessages: hadHistory});
     const controller = new AbortController();
     const generation = this.#viewGeneration;
     this.#viewController = controller;
@@ -185,12 +185,13 @@ export class ConversationStore extends Store {
       const turns = sameConversation && this.#history !== null && !replaceHistory
         ? this.#mergeTurns(this.#history.turns, recent.turns, true)
         : this.#mergeTurns([], recent.turns, true);
-      // A refresh that joins the loaded range keeps paging from its oldest page.
+      // A refresh that joins the loaded range keeps paging from its oldest
+      // page, and any older page in flight still extends it.
       const nextCursor = hadHistory && !replaceHistory
         ? this.#history?.nextCursor ?? null
         : recent.nextCursor ?? null;
       this.#history = {...recent, turns, nextCursor};
-      this.#olderMessages.reset(nextCursor);
+      if (!hadHistory || replaceHistory) this.#olderMessages.reset(nextCursor);
       this.#activeConversationId = conversationId;
       this.#upsert(recent.conversation);
       this.#viewState = 'ready';
@@ -344,10 +345,10 @@ export class ConversationStore extends Store {
     this.changed();
   }
 
-  #abortView(): void {
+  #abortView({keepOlderMessages = false}: {keepOlderMessages?: boolean} = {}): void {
     this.#viewController?.abort();
     this.#viewController = null;
-    this.#olderMessages.cancel();
+    if (!keepOlderMessages) this.#olderMessages.cancel();
     this.#viewGeneration += 1;
   }
 

@@ -55,7 +55,7 @@ export class WorkspaceStore extends Store {
   }
 
   /** The picker's next-page control reads this. */
-  get morePages(): KeysetPagerStatus {
+  get moreWorkspaces(): KeysetPagerStatus {
     return this.#pager.snapshot();
   }
 

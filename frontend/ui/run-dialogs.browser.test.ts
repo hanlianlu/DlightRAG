@@ -70,7 +70,7 @@ it('paged roster renders the newest page and appends older pages with dedup', as
   const flight = panel.loadOlderChildren();
   expect(panel.loadOlderChildren()).to.equal(flight);
   await panel.updateComplete;
-  expect(button.disabled).to.equal(true);
+  expect(button.getAttribute('aria-disabled')).to.equal('true');
   expect(button.getAttribute('aria-busy')).to.equal('true');
   expect(olderRequests).to.equal(1);
 

@@ -22,23 +22,28 @@ export interface LoadOlderControl {
 
 function status(control: LoadOlderControl): string {
   const {pages} = control;
-  if (pages.state === 'loading' && pages.hasOlder) return control.loading;
+  // A first page replaces the list rather than extending it: the list's own
+  // status speaks for that load, so only a next page is announced here.
+  if (pages.state === 'loading' && !pages.starting) return control.loading;
   if (pages.outcome === 'loaded') return control.loaded;
   if (pages.outcome === 'failed') return control.failed;
   return '';
 }
 
-/** A busy-aware next-page button plus the polite status that outlives it. */
+/** A busy-aware next-page button plus the polite status that outlives it.
+ *  While any page loads the button is aria-disabled and ignores activation;
+ *  it is never natively disabled, which would drop the reader's focus. */
 export function loadOlderControl(control: LoadOlderControl): TemplateResult {
   const {pages} = control;
-  const loading = pages.state === 'loading';
+  const busy = pages.state === 'loading';
   return html`
     ${pages.hasOlder ? html`
       <div class=${control.rowClass ?? nothing}>
         <button type="button" class=${control.buttonClass ?? nothing}
                 data-load-older=${control.list}
-                aria-busy=${loading ? 'true' : 'false'} ?disabled=${loading}
-                @click=${control.onLoad}>
+                aria-busy=${busy ? 'true' : 'false'}
+                aria-disabled=${busy ? 'true' : nothing}
+                @click=${(event: Event) => { if (!busy) control.onLoad(event); }}>
           ${pages.outcome === 'failed' ? control.retryLabel : control.label}
         </button>
       </div>

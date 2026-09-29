@@ -22,7 +22,7 @@ import './answer-presentation.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import {loadOlderControl} from './load-older.ts';
 
-const NO_OLDER_PAGES: KeysetPagerStatus = {state: 'idle', hasOlder: false, outcome: null};
+const NO_OLDER_PAGES: KeysetPagerStatus = {state: 'idle', starting: false, hasOlder: false, outcome: null};
 
 export type ChatView =
   | {kind: 'new'}

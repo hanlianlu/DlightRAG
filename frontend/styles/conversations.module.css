@@ -276,11 +276,6 @@
     padding: var(--space-component);
 }
 
-:global(.conversation-load-older:disabled) {
-    cursor: wait;
-    opacity: 0.6;
-}
-
 :global(.conversation-skeleton) {
     animation: conversation-pulse 1.5s ease-in-out infinite;
     background: var(--color-bg-hover);

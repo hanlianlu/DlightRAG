@@ -304,6 +304,97 @@ test('a recent refresh replaces a disconnected loaded range and restores its old
   assert.equal(store.history?.nextCursor, 'before-51');
 });
 
+for (const asked of ['before', 'during'] as const) {
+  for (const landing of ['refresh first', 'older page first'] as const) {
+    test(`a background refresh keeps an older page asked for ${asked} it (${landing})`, async () => {
+      let recentRequests = 0;
+      const refresh = deferred<ConversationHistory>();
+      const older = deferred<ConversationHistory>();
+      let olderSignal: AbortSignal | undefined;
+      const store = new ConversationStore(api({
+        history: async (id, cursor, _limit, signal) => {
+          if (cursor === null) {
+            recentRequests += 1;
+            if (recentRequests === 1) {
+              return {conversation: summary(id), turns: [turn(41), turn(42)], nextCursor: 'before-41'};
+            }
+            return refresh.promise;
+          }
+          olderSignal = signal;
+          return older.promise;
+        },
+      }));
+      await store.open('one');
+
+      let olderLoad: Promise<void>;
+      let refreshing: Promise<unknown>;
+      if (asked === 'before') {
+        olderLoad = store.loadOlderMessages();
+        refreshing = store.refreshActive();
+      } else {
+        refreshing = store.refreshActive();
+        olderLoad = store.loadOlderMessages();
+      }
+      const landRefresh = async (): Promise<void> => {
+        refresh.resolve({conversation: summary('one'), turns: [turn(42), turn(43)], nextCursor: 'before-42'});
+        assert.equal(await refreshing, 'ready');
+      };
+      const landOlder = async (): Promise<void> => {
+        older.resolve({conversation: summary('one'), turns: [turn(40)], nextCursor: null});
+        await olderLoad;
+      };
+      if (landing === 'refresh first') {
+        await landRefresh();
+        assert.equal(store.olderMessages.state, 'loading', 'the older page is still on its way');
+        await landOlder();
+      } else {
+        await landOlder();
+        await landRefresh();
+      }
+
+      assert.equal(olderSignal?.aborted, false);
+      assert.deepEqual(store.history?.turns.map((item) => item.turnNumber), [40, 41, 42, 43]);
+      assert.equal(store.history?.nextCursor, null);
+      assert.equal(store.olderMessages.hasOlder, false);
+      assert.equal(store.olderMessages.outcome, 'loaded');
+    });
+  }
+}
+
+test('a refresh that cannot join the loaded range drops the older page it was extending', async () => {
+  let recentRequests = 0;
+  const refresh = deferred<ConversationHistory>();
+  const older = deferred<ConversationHistory>();
+  let olderSignal: AbortSignal | undefined;
+  const store = new ConversationStore(api({
+    history: async (id, cursor, _limit, signal) => {
+      if (cursor === null) {
+        recentRequests += 1;
+        if (recentRequests === 1) {
+          return {conversation: summary(id), turns: [turn(41), turn(42)], nextCursor: 'before-41'};
+        }
+        return refresh.promise;
+      }
+      olderSignal = signal;
+      return older.promise;
+    },
+  }));
+  await store.open('one');
+
+  const refreshing = store.refreshActive();
+  const olderLoad = store.loadOlderMessages();
+  refresh.resolve({conversation: summary('one'), turns: [turn(90), turn(91)], nextCursor: 'before-90'});
+  await refreshing;
+  older.resolve({conversation: summary('one'), turns: [turn(40)], nextCursor: null});
+  await olderLoad;
+
+  assert.equal(olderSignal?.aborted, true);
+  assert.deepEqual(store.history?.turns.map((item) => item.turnNumber), [90, 91]);
+  assert.equal(store.olderMessages.state, 'idle');
+  assert.equal(store.olderMessages.hasOlder, true);
+  assert.equal(store.history?.nextCursor, 'before-90');
+});
+
 test('missing and malformed route ids share one unavailable state', async () => {
   for (const status of [404, 422]) {
     const store = new ConversationStore(api({

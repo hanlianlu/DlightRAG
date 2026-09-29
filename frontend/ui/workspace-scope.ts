@@ -52,7 +52,7 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   protected override willUpdate(_changed: PropertyValues<this>): void {
-    const {state} = this.handles.workspaces.morePages;
+    const {state} = this.handles.workspaces.moreWorkspaces;
     if (this.#lastLoadMoreState === 'loading' && state !== 'loading') this.#settledFocusRestore = true;
     this.#lastLoadMoreState = state;
   }
@@ -155,7 +155,7 @@ export class DlWorkspaceScope extends LightElement {
         ${repeat(sorted, (record) => record.workspace, (record) => this.#option(record))}
         ${loadOlderControl({
           list: 'workspaces',
-          pages: this.handles.workspaces.morePages,
+          pages: this.handles.workspaces.moreWorkspaces,
           label: msg('Load more workspaces', {id: 'workspaceScope.loadMore'}),
           retryLabel: msg('Retry loading workspaces', {id: 'workspaceScope.retryLoadMore'}),
           loading: msg('Loading workspaces…', {id: 'workspaceScope.loadingMore'}),

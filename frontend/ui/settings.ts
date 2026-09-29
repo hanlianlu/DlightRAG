@@ -412,7 +412,7 @@ export class DlSettingsDialog extends LightElement {
             </li>
           `)}
         </ul>
-        <p class="settings-note" role="status">${firstPage && pager.state === 'loading'
+        <p class="settings-note" role="status">${pager.starting
           ? msg('Loading memories…', {id: 'settings.memory.listLoading'})
           : firstPage && pager.state === 'error'
             ? msg('Could not load memories.', {id: 'settings.memory.listFailed'})
@@ -446,6 +446,8 @@ export class DlSettingsDialog extends LightElement {
 
   #reloadMemoryList(): void {
     if (!this.memoryListOpen || !this.memory?.enabled || !this.#dialog()?.open) return;
+    // The list is dropped, not refreshed in place, so its next page goes with it.
+    this.#memoryPager.reset(null);
     this.memoryRecords = null;
     void this.#memoryPager.start((page) => { this.#addMemories(page.items); });
   }

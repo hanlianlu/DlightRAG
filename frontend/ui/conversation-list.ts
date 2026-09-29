@@ -320,7 +320,7 @@ export class DlConversationList extends LightElement {
             'new',
           )
         : nothing}
-      <div class="conversation-items" role="list" aria-live="polite"
+      <div class="conversation-items" role="list"
            @click=${this.#selectFromPointer}
            @dblclick=${this.#renameFromPointer}>
         ${repeat(

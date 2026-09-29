@@ -385,3 +385,40 @@ it('pages more failed documents through the shared control and announces each pa
   expect(status()).to.equal('Loaded 1 more failed document.');
   expect(recovery.textContent).to.contain('2 documents need attention');
 });
+
+it('refreshes in place without dropping Load more, its count, or the reader\'s focus', async () => {
+  let lists = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  window.fetch = async () => {
+    lists += 1;
+    if (lists > 1) await gate;
+    return Response.json({...failedPage(), next_cursor: 'more-1'});
+  };
+  const recovery = mount();
+  await waitFor(() => recovery.page !== null);
+  await recovery.updateComplete;
+  recovery.querySelector<HTMLDetailsElement>('details')!.open = true;
+  const more = () => recovery.querySelector<HTMLButtonElement>('[data-load-older="failed-documents"]');
+  const status = () => recovery.querySelector('[data-load-older-status="failed-documents"]')
+    ?.textContent?.trim();
+  more()!.focus();
+
+  const refreshing = recovery.refresh(false);
+  await recovery.updateComplete;
+  // Compare identities: a failing DOM-node equality would stall the reporter.
+  expect(more() !== null && more() === document.activeElement, 'the list keeps its next page and focus')
+    .to.equal(true);
+  expect(more()!.getAttribute('aria-busy')).to.equal('true');
+  expect(more()!.getAttribute('aria-disabled')).to.equal('true');
+  expect(status(), 'a first page is not announced as a next page').to.equal('');
+  expect(recovery.textContent).to.contain('1+ documents need attention');
+
+  release();
+  await refreshing;
+  await recovery.updateComplete;
+  expect(lists).to.equal(2);
+  expect(more() !== null && more() === document.activeElement, 'focus stays after the page lands')
+    .to.equal(true);
+  expect(more()!.hasAttribute('aria-disabled')).to.equal(false);
+});
