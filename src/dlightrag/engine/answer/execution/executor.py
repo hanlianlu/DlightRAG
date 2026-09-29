@@ -147,6 +147,7 @@ from dlightrag.engine.answer.publication import (
     PublicationLimits,
     PublicationPlan,
     is_empty_answer,
+    run_artifact_check,
     validate_publication,
 )
 from dlightrag.engine.answer.research.persistence import ResearchRunStore
@@ -2865,7 +2866,7 @@ async def _publication_plan(
         return PublicationPlan(answer=answer)
     # Validation scans the Agent Workspace and decodes every candidate file;
     # the writer's event loop keeps serving HTTP, SSE and Run leases meanwhile.
-    return await asyncio.to_thread(
+    return await run_artifact_check(
         validate_publication,
         root,
         answer=answer,

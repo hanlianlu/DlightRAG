@@ -2279,6 +2279,7 @@ async def test_publication_plan_validates_off_the_event_loop(
 
     assert [item.relative_path for item in plan.artifacts] == ["report.md"]
     assert threads and threads[0] is not threading.current_thread()
+    assert threads[0].name.startswith("artifact-check")
 
 
 @pytest.mark.parametrize(

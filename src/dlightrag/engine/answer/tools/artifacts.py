@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Model-facing attachment of completed Agent Workspace artifacts."""
 
-import asyncio
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +15,7 @@ from dlightrag.engine.answer.publication import (
     artifact_read_call,
     artifact_resource_id,
     prepare_artifact_attachment,
+    run_artifact_check,
 )
 
 
@@ -65,7 +65,7 @@ def attach_artifact_tool(
         async with scheduler.hold(WorkspaceAccess()):
             try:
                 # The check scans the Agent Workspace and decodes the file.
-                attachment = await asyncio.to_thread(
+                attachment = await run_artifact_check(
                     prepare_artifact_attachment,
                     artifacts_root,
                     path=attachment_args.path,

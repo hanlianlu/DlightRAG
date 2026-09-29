@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Artifact publication validates structured roots and relative dependency links."""
 
+import asyncio
 import base64
 import hashlib
+import threading
 from io import BytesIO
 from pathlib import Path
 
@@ -285,6 +287,47 @@ def test_pdf_validation_holds_the_process_pdfium_lock(
     # across documents, so its checks share the resource renderer's lock.
     assert [item.relative_path for item in plan.artifacts] == ["document.pdf"]
     assert lock.entered >= 1
+
+
+async def test_artifact_checks_queue_on_their_own_bounded_pool() -> None:
+    from dlightrag.engine.answer import publication
+
+    guard = threading.Lock()
+    release = threading.Event()
+    running: list[str] = []
+    peak = 0
+
+    def check(position: int) -> int:
+        nonlocal peak
+        with guard:
+            running.append(threading.current_thread().name)
+            peak = max(peak, len(running))
+        release.wait(timeout=10)
+        with guard:
+            running.remove(threading.current_thread().name)
+        return position
+
+    checks = [
+        asyncio.ensure_future(publication.run_artifact_check(check, position))
+        for position in range(publication._CHECK_THREADS + 2)
+    ]
+    names: list[str] = []
+    for _ in range(500):
+        with guard:
+            names = list(running)
+        if len(names) == publication._CHECK_THREADS:
+            break
+        await asyncio.sleep(0.01)
+    # A full pool holds the remaining checks back instead of borrowing the
+    # event loop's default executor threads.
+    assert len(names) == publication._CHECK_THREADS
+    assert all(name.startswith("artifact-check") for name in names)
+    assert sum(item.done() for item in checks) == 0
+
+    release.set()
+
+    assert await asyncio.gather(*checks) == list(range(publication._CHECK_THREADS + 2))
+    assert peak == publication._CHECK_THREADS
 
 
 def test_malformed_pdf_artifact_is_rejected_as_media_mismatch(tmp_path: Path) -> None:

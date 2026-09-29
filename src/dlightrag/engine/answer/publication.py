@@ -8,12 +8,15 @@ stable resource ids without rewriting model-authored Markdown or HTML.
 
 Validation scans the Agent Workspace and reads and decodes every candidate file,
 so an event-loop caller runs ``validate_publication`` and
-``prepare_artifact_attachment`` in a worker thread. PDF checks take the process
-PDFium lock for that reason.
+``prepare_artifact_attachment`` through ``run_artifact_check``, in a small thread
+pool of their own. PDF checks take the process PDFium lock for that reason.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import functools
 import hashlib
 import json
 import re
@@ -22,7 +25,8 @@ import threading
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -123,6 +127,21 @@ _VIDEO_MEDIA = frozenset({"video/mp4", "video/quicktime", "video/webm"})
 _MEDIA_IDENTIFIER: Any = None
 _MEDIA_IDENTIFIER_LOCK = threading.Lock()
 _ANSWER_MARKDOWN = answer_markdown()
+# A check can hold its thread through a whole Workspace scan, so checks queue
+# on a pool of their own rather than take the event loop's default executor
+# from short work such as DNS lookups and embedding request planning.
+_CHECK_THREADS = 4
+_CHECK_POOL = ThreadPoolExecutor(max_workers=_CHECK_THREADS, thread_name_prefix="artifact-check")
+
+
+async def run_artifact_check[**P, T](
+    check: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+) -> T:
+    """Run one publication or attachment check in the bounded check pool."""
+    context = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        _CHECK_POOL, functools.partial(context.run, check, *args, **kwargs)
+    )
 
 
 def _identify_media_type(content: bytes) -> str:
@@ -970,5 +989,6 @@ __all__ = [
     "artifact_link",
     "is_empty_answer",
     "prepare_artifact_attachment",
+    "run_artifact_check",
     "validate_publication",
 ]

@@ -72,6 +72,7 @@ async def test_attach_artifact_validates_off_the_event_loop(
 
     assert result.is_error is False
     assert threads and threads[0] is not threading.current_thread()
+    assert threads[0].name.startswith("artifact-check")
 
 
 @pytest.mark.asyncio
