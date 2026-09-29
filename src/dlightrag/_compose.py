@@ -143,7 +143,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         catalogue_overlay_revision,
         parse_catalogue_overlay,
     )
-    from dlightrag.engine.ai.fingerprints import model_invocation_fingerprint
+    from dlightrag.engine.ai.fingerprints import (
+        ModelInvocationFingerprint,
+        model_invocation_fingerprint,
+    )
     from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.settings import (
@@ -310,7 +313,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     model_selectors: dict[str, ChatModelSelector] = {name: name for name in CHAT_MODEL_SELECTORS}
 
-    def fingerprint_for_role(role: str):
+    def fingerprint_for_role(role: str) -> ModelInvocationFingerprint:
         """The invocation fingerprint a pinned role resolves to; unknown roles refuse."""
         selector = model_selectors.get(role)
         if selector is None:
