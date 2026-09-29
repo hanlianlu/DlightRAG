@@ -2530,7 +2530,7 @@ async def test_incomplete_finalization_marker_replays_without_reenqueue(
 
 @pytest.mark.parametrize("original", [RuntimeError("vectors failed"), asyncio.CancelledError()])
 async def test_finalizer_failure_preserves_upstream_status_and_original_error(
-    tmp_path: Path, original: BaseException
+    tmp_path: Path, original: BaseException, caplog: pytest.LogCaptureFixture
 ) -> None:
 
     source = tmp_path / "report.pdf"
@@ -2547,12 +2547,22 @@ async def test_finalizer_failure_preserves_upstream_status_and_original_error(
     deps["stores"].doc_status.upsert.side_effect = RuntimeError("status store down")
 
     if isinstance(original, asyncio.CancelledError):
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError) as raised:
             await engine.aingest_files([_one_file(source)])
+        assert raised.value is original
     else:
         batch = await engine.aingest_files([_one_file(source)])
         assert batch["errors"] == ["report.pdf: document processing failed"]
         assert batch["results"] == []
+        # The batch reports a fixed reason; the finalizer's own error is what
+        # the log keeps, whatever settling the failure ran into afterwards.
+        (reported,) = [
+            record
+            for record in caplog.records
+            if record.getMessage() == "Document finalization failed for report.pdf"
+        ]
+        assert reported.exc_info is not None
+        assert reported.exc_info[1] is original
 
     assert statuses[doc_id]["status"] == "processed"
     first_metadata = deps["metadata_index"].upsert.await_args_list[0].args[1]
