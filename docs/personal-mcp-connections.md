@@ -67,7 +67,7 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 
 | Module | Responsibility |
 |---|---|
-| `engine/answer/owner.py` | `personal_owner`: the eligibility rule (JWT or `none`), shared with Profile Memory, the Run pin writer, and the bootstrap capability |
+| `engine/answer/owner.py` | `is_personal_auth_mode`: the eligibility rule (JWT or `none`), shared with Profile Memory, the Run pin writer, and the bootstrap capability |
 | `application/connections/service.py` | `Connections`: Settings commands, catalogue validation, refresh scheduling, Research binding and restore, dispatch, OAuth flows, maintenance |
 | `application/connections/models.py`, `policy.py`, `presets.py`, `client_metadata.py` | Commands, redacted views, and the store, MCP, and OAuth ports; `ConnectionPolicy`; presets; the Client ID Metadata Document |
 | `application/connections/credentials.py` | `CredentialCipher`: key-ring validation and AES-256-GCM envelopes; access-token checks |

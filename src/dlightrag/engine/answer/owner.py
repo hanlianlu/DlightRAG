@@ -7,12 +7,10 @@ single user of a deployment without authentication. ``simple`` is a shared
 password bucket, not a personal identity (ADR 0012).
 """
 
-PERSONAL_AUTH_MODES = frozenset({"jwt", "none"})
 
-
-def personal_owner(auth_mode: str) -> bool:
+def is_personal_auth_mode(auth_mode: str) -> bool:
     """Whether an owner authenticated this way is one person's identity."""
-    return auth_mode in PERSONAL_AUTH_MODES
+    return auth_mode in {"jwt", "none"}
 
 
-__all__ = ["PERSONAL_AUTH_MODES", "personal_owner"]
+__all__ = ["is_personal_auth_mode"]

@@ -18,7 +18,7 @@ from dlightrag.engine.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryCapability,
 )
-from dlightrag.engine.answer.owner import personal_owner
+from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 from .errors import MemoryDisabledError
 from .memory_list import (
@@ -276,7 +276,7 @@ class MemoryService:
 
     @staticmethod
     def _require_owner(auth_mode: str) -> None:
-        if not personal_owner(auth_mode):
+        if not is_personal_auth_mode(auth_mode):
             raise MemoryUnavailableError()
 
 

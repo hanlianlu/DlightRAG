@@ -26,7 +26,7 @@ from dlightrag_memory.policy import (
     evaluate_memory_operation,
 )
 
-from dlightrag.engine.answer.owner import personal_owner
+from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +81,7 @@ def reserved_auto_recall_text() -> str:
 
 def standing_memory_for_acceptance(auth_mode: str) -> str:
     """Reserve full auto-recall at accept so execute cannot overflow after 202."""
-    if not personal_owner(auth_mode):
+    if not is_personal_auth_mode(auth_mode):
         return ""
     return reserved_auto_recall_text()
 

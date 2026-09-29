@@ -41,11 +41,11 @@ def test_remember_passes() -> None:
 
 
 def test_owner_eligibility_is_root_policy() -> None:
-    from dlightrag.engine.answer.owner import personal_owner
+    from dlightrag.engine.answer.owner import is_personal_auth_mode
 
-    assert personal_owner("jwt")
-    assert personal_owner("none")
-    assert not personal_owner("simple")
+    assert is_personal_auth_mode("jwt")
+    assert is_personal_auth_mode("none")
+    assert not is_personal_auth_mode("simple")
 
 
 def test_empty_oversized_cited_and_credential_bodies_are_rejected() -> None:

@@ -17,7 +17,7 @@ from dlightrag_memory import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
-from dlightrag.engine.answer.owner import personal_owner
+from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 MemoryKindInput = Literal["preference", "fact"]
 _MEMORY_MUTATION_LIMIT = 10
@@ -59,7 +59,7 @@ class MemoryHost:
 
 
 async def _available(host: MemoryHost, *, settlement: object | None = None) -> bool:
-    if not personal_owner(host.auth_mode) or not host.enabled:
+    if not is_personal_auth_mode(host.auth_mode) or not host.enabled:
         return False
     if host.capability_current is None:
         return True
@@ -93,7 +93,7 @@ def remember_declaration() -> ToolDeclaration:
 def remember_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
-        if not personal_owner(host.auth_mode):
+        if not is_personal_auth_mode(host.auth_mode):
             return _rejected("remember", "Long-term memory requires a personal or local owner.")
         if not await _available(host):
             return _rejected("remember", "Profile Memory is not active for this owner.")
@@ -128,7 +128,7 @@ def forget_declaration() -> ToolDeclaration:
 def forget_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
-        if not personal_owner(host.auth_mode):
+        if not is_personal_auth_mode(host.auth_mode):
             return _rejected("forget", "Long-term memory requires a personal or local owner.")
         if not await _available(host):
             return _rejected("forget", "Profile Memory is not active for this owner.")
@@ -165,7 +165,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         args = raw if isinstance(raw, RecallInput) else RecallInput.model_validate(raw)
         if host.memory is None:
             return ToolResult.text("Memory store is not bound.", is_error=True)
-        if not personal_owner(host.auth_mode):
+        if not is_personal_auth_mode(host.auth_mode):
             return ToolResult.text(
                 "Long-term memory requires a personal or local owner.", is_error=True
             )

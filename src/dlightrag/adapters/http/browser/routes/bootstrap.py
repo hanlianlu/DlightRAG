@@ -26,7 +26,7 @@ from dlightrag.engine.answer.client_contracts import (
     ClientContractModel,
 )
 from dlightrag.engine.answer.image_capability import ImageCapabilityStatus
-from dlightrag.engine.answer.owner import personal_owner
+from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 router = APIRouter()
 
@@ -149,7 +149,7 @@ async def build_web_bootstrap(
     extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
     attachment_limit = application.config.answer.generation.max_attachment_bytes
     return WebBootstrap(
-        personal_mcp_connections=personal_owner(request.state.user_context.auth_mode),
+        personal_mcp_connections=is_personal_auth_mode(request.state.user_context.auth_mode),
         workspaces=workspaces,
         workspaces_next_cursor=next_cursor,
         primary_workspace=primary,
