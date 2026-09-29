@@ -226,8 +226,10 @@ async def retain_attachment_occurrences(
             locator = reference.source_locator
             locator_digest = hashlib.sha256(locator).hexdigest()
             row = rows[0]
-            # The existing owner-scoped Blob FK protects the retained bytes after
-            # this insert, including when cleanup deletes the original Run.
+            # No foreign key protects the Blob. The source rows locked FOR SHARE above
+            # keep a deletion of their Run waiting until this insert commits, after
+            # which Blob cleanup sees it and keeps the bytes; a deletion that committed
+            # first leaves no source row, and the retention fails as missing.
             await conn.execute(
                 _INSERT_OCCURRENCE,
                 owner_id,
