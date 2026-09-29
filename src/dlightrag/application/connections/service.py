@@ -60,6 +60,13 @@ from .presets import PRESETS
 
 logger = logging.getLogger(__name__)
 
+# A refresh loop with nothing to claim sleeps until the next refresh falls due or the store wakes
+# it on a change. The bound covers what no wake reports, such as a claim that lapsed or a change
+# made while wakes could not be delivered: it waits at most this long.
+_MAX_REFRESH_SLEEP_SECONDS = 30.0
+# How soon a loop retries a store that failed.
+_STORE_RETRY_SECONDS = 1.0
+
 # The catalogue is static, so the projection is built once and shared by every read.
 _PRESET_VIEWS: tuple[PresetView, ...] = tuple(
     PresetView(
@@ -891,6 +898,7 @@ class Connections:
 
     async def _refresh_forever(self) -> None:
         while True:
+            sleep = _STORE_RETRY_SECONDS
             try:
                 claim = await self._store.claim(
                     worker_id=self._worker, lease_seconds=2 * self._policy.discovery_timeout + 5
@@ -898,11 +906,17 @@ class Connections:
                 if claim is not None:
                     await self._refresh(claim)
                     continue
+                due = await self._store.seconds_until_refresh()
+                sleep = (
+                    _MAX_REFRESH_SLEEP_SECONDS
+                    if due is None
+                    else min(due, _MAX_REFRESH_SLEEP_SECONDS)
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.warning("Connection refresh store unavailable; retrying")
-            await self._store.wait_refresh(min(1.0, self._policy.refresh_seconds))
+            await self._store.wait_refresh(sleep)
 
     async def stop_refresh(self) -> None:
         tasks, self._tasks = [*self._tasks, *self._authorizations.values()], []

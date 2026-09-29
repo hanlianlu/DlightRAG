@@ -247,9 +247,14 @@ Grants, and removes the old key only after its counts reach zero; see
   would push an enabled Connection past `max_enabled_tools`, the refresh records
   a `quota` error instead of publishing.
 - `NOTIFY dlightrag_connections_changed` wakes refresh loops and in-flight
-  watchers. Loops also wake at least once a second, and every resynchronization
-  of the notification hub triggers a scan, so a missed notification only delays
-  work.
+  watchers, and so does every resynchronization of the notification hub. A loop
+  that finds nothing to claim reads when the earliest enabled head it could
+  claim falls due and sleeps until then, until a wake, or for 30 seconds,
+  whichever comes first; a loop whose store fails retries after a second. A
+  head under a live claim is left out of that time, because its holder's
+  publication wakes the loops, so only a claim released or lapsed without a
+  publication, or a notification missed while the hub was down, waits for the
+  30-second bound.
 - New tools and schema or description changes reach future Runs through
   publication, with no restart and no per-tool consent. Existing pins never
   change.
@@ -760,6 +765,8 @@ dead refresher is modeled by durable lease expiry, not by killing a process.
 - `tests/unit/test_connection_oauth.py`,
   `tests/unit/test_connection_tool_labels.py`: SDK OAuth against in-process
   servers, and Tool Activity labels.
+- `tests/unit/test_connection_refresh_loop.py`: an idle refresh loop sleeps
+  until the next refresh falls due, at most 30 seconds.
 - `tests/integration/test_connections_pg.py`, `test_connection_binding_pg.py`,
   `test_connection_dispatch_pg.py`, `test_connection_authorization_pg.py`,
   `test_connection_lifecycle_pg.py`, `test_connections_web_pg.py`: the owner

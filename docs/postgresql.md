@@ -359,10 +359,12 @@ five seconds, is terminated and replaced after one second, doubling with each
 further loss up to 30 seconds until a connection passes a keepalive; a
 subscriber that joins during that wait cuts it short. Since the hub
 resynchronizes only while connected, a waiting child also re-reads its guidance
-row every 30 seconds on its own. A cancellation request's NOTIFY only wakes
-every process to rescan the cancel-pending leases it holds, and a process
-starts claiming Runs only once such a rescan after its channel went live has
-signalled everything it found, however long after startup that is.
+row every 30 seconds on its own, and an idle Connections refresh loop scans
+again when its next refresh falls due and at least every 30 seconds. A
+cancellation request's NOTIFY only wakes every process to rescan the
+cancel-pending leases it holds, and a process starts claiming Runs only once
+such a rescan after its channel went live has signalled everything it found,
+however long after startup that is.
 
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and

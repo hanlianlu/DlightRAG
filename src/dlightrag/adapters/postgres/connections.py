@@ -307,6 +307,13 @@ async def _owner_lock(conn: Any, owner: str) -> None:
     await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 71421))", owner)
 
 
+# Heads a refresh claim may take: not deleted, not revoked, and under no live claim, whether a
+# refresh's or a pending authorization's. The claim and the report of the next due refresh
+# share it, so a head the claim would skip is never reported due.
+_UNCLAIMED_HEAD = """tombstoned_at IS NULL AND observed_status<>'revoked'
+ AND (refresh_expires_at IS NULL OR refresh_expires_at<now())"""
+
+
 class PGConnectionsStore(PostgresOperationRunner):
     def __init__(
         self,
@@ -1598,10 +1605,9 @@ class PGConnectionsStore(PostgresOperationRunner):
         async def operation(conn: Any) -> RefreshClaim | None:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    """SELECT owner_id,connection_id FROM dlightrag_connection_heads
-                    WHERE tombstoned_at IS NULL AND observed_status<>'revoked'
-                    AND (refresh_expires_at IS NULL OR refresh_expires_at < now())
-                    AND (($1::text IS NULL AND enabled AND refresh_due_at<=now())
+                    "SELECT owner_id,connection_id FROM dlightrag_connection_heads WHERE "  # noqa: S608 - joins only the constant _UNCLAIMED_HEAD
+                    + _UNCLAIMED_HEAD
+                    + """ AND (($1::text IS NULL AND enabled AND refresh_due_at<=now())
                         OR (owner_id=$1 AND connection_id=$2))
                     ORDER BY refresh_due_at,owner_id,connection_id FOR UPDATE SKIP LOCKED LIMIT 1""",
                     owner_id,
@@ -1627,6 +1633,23 @@ class PGConnectionsStore(PostgresOperationRunner):
                 return RefreshClaim(_stored(loaded), worker_id, epoch)
 
         return await self._run_once(operation)
+
+    async def seconds_until_refresh(self) -> float | None:
+        """Seconds until a background claim could take the next due head; None if none waits.
+
+        A head that is already due reports zero. A head under a live claim is left out: its
+        holder's publication wakes the loops, whose bounded sleep also finds a claim that ends
+        without one.
+        """
+
+        async def operation(conn: Any) -> float | None:
+            seconds = await conn.fetchval(
+                "SELECT extract(epoch FROM min(refresh_due_at)-now()) FROM dlightrag_connection_heads WHERE enabled AND "  # noqa: S608 - joins only the constant _UNCLAIMED_HEAD
+                + _UNCLAIMED_HEAD
+            )
+            return None if seconds is None else max(0.0, float(seconds))
+
+        return await self._run(operation)
 
     async def publish(
         self,

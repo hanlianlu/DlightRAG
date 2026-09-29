@@ -447,6 +447,64 @@ async def test_expired_worker_loses_publication_to_new_claim():
 
 
 @pytest.mark.asyncio
+async def test_next_refresh_counts_only_heads_a_background_claim_could_take():
+    """The idle refresh loops sleep until this report, so it must never name a head they skip.
+
+    A disabled head is never refreshed in the background, and a head under a live claim, a
+    refresh's or a pending authorization's, comes back through its holder's publication.
+    """
+    from dlightrag.application.connections import ConnectionPolicy
+    from dlightrag.application.connections.models import OAuthFlow
+
+    async with isolated_run_runtime("connection_schedule") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        policy = ConnectionPolicy(refresh_seconds=600)
+        service = Connections(store=store, mcp=FakeMcp(), policy=policy)
+        owner = dict(owner_id="a", auth_mode="jwt")
+        assert await store.seconds_until_refresh() is None
+        view = await service.change(
+            **owner,
+            expected_revision="0",
+            command=ConnectionCommand(
+                kind="create", label="Fixture", endpoint="https://example.com/mcp"
+            ),
+        )
+        identity = view.connections[0].connection_id
+        view = await service.change(
+            **owner,
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="probe", connection_id=identity),
+        )
+        assert await store.seconds_until_refresh() is None
+        view = await service.change(
+            **owner,
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
+        )
+        assert await store.seconds_until_refresh() == 0.0
+        claim = await store.claim(worker_id="loop", lease_seconds=30)
+        assert claim is not None
+        assert await store.seconds_until_refresh() is None
+        assert await store.publish(
+            claim=claim,
+            catalogue=claim.connection.catalogue,
+            error=None,
+            retry_seconds=policy.refresh_seconds,
+            policy=policy,
+        )
+        due = await store.seconds_until_refresh()
+        assert due is not None and 590 < due <= 600
+        await store.create_oauth_flow(
+            flow=OAuthFlow("flow", "a", identity, "worker", "https://example.com/mcp"),
+            expected_revision=(await service.read(**owner)).revision,
+            lifetime=60,
+            lease=10,
+        )
+        assert await store.seconds_until_refresh() is None
+
+
+@pytest.mark.asyncio
 async def test_endpoint_candidate_failure_keeps_enabled_head_and_success_preserves_epoch():
     class EndpointMcp(FakeMcp):
         async def discover(self, **kwargs):
