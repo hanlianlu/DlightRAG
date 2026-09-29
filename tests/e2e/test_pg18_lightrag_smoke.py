@@ -280,6 +280,11 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         ready_download = await downloads.prepare(doc_id)
         assert isinstance(ready_download, LocalDownloadTarget)
         assert ready_download.path.is_file()
+        # The replacement was archived under the document's own name, where its
+        # locator points, and not beside the version it replaced.
+        assert [path.name for path in ready_download.path.parent.iterdir() if path.is_file()] == [
+            doc_path.name
+        ]
         ready_files = await PGFilePanelStore().list_processed_files(
             workspace,
             page=FilePanelPageRequest(limit=10),
