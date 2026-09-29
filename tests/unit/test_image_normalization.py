@@ -178,8 +178,10 @@ async def test_cancelled_padding_discards_the_derived_input(
     release.set()
     await asyncio.to_thread(finished.wait, 5)
     target = tmp_path / PADDED_INPUT_DIR_NAME / source.name
-    for _ in range(200):
-        if not target.exists():
+    # The worker removes the file and then its folder, after it returns; wait
+    # for the folder, which goes last.
+    for _ in range(500):
+        if not target.parent.exists():
             break
         await asyncio.sleep(0.01)
 
