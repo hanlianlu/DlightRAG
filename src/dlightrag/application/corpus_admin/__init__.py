@@ -14,6 +14,7 @@ from dlightrag.engine.rag.workspace.workspaces import (
 from .errors import (
     CorpusMutationInputError,
     CorpusMutationUnavailableError,
+    CorpusStageUnavailableError,
     LocalDownloadTarget,
     LocalIngestPathError,
     MetadataValidationError,
@@ -135,6 +136,7 @@ __all__ = [
     "SourceDownloadUnavailableError",
     "CorpusMutationInputError",
     "CorpusMutationUnavailableError",
+    "CorpusStageUnavailableError",
     "UnsafeUploadNameError",
     "UploadLimits",
     "UploadTooLargeError",

@@ -56,6 +56,19 @@ class SourceDownloadUnavailableError(ApplicationUnavailableError):
     """A remote source adapter cannot currently sign a download."""
 
 
+class CorpusStageUnavailableError(ApplicationUnavailableError):
+    """A workspace's Run stage is not a private directory of this service.
+
+    Sources are staged only into directories this service owns and alone can write,
+    opened without following a link; a stage anyone else could redirect or add to
+    would let staged bytes leave, or foreign files enter, the ingest. Callers see a
+    fixed message; the server log names the directory.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("The workspace's corpus stage is unavailable; see the server log.")
+
+
 class CorpusMutationUnavailableError(ApplicationUnavailableError):
     """This deployment cannot accept corpus writes, because it is a read-only replica.
 

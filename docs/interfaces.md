@@ -136,12 +136,22 @@ never carry access keys.
 
 A `local` source is copied into the Run's own stage before it is accepted, so
 later edits under `input_dir` never change what the Run ingests. The copy never
-follows a link: a source holding a symlink or anything but regular files and
-folders is refused with 422, even when the link is swapped in while the copy
-runs. A folder is listed before anything is copied; it may hold at most 100
-files that ingestion would read, and entries ingestion skips (dot entries,
-parser sidecars, and staging folders) are neither copied nor counted. A folder
-with nothing to ingest is refused too.
+follows a link: among the entries ingestion would read, a symlink or anything
+but a regular file or folder refuses the source as the caller's to fix, even
+when the link is swapped in while the copy runs. A folder is listed before
+anything is copied; it may hold at most 100 files that ingestion would read,
+nest folders at most 32 deep, and hold at most 10,000 entries in all. Entries
+ingestion skips (dot entries, parser sidecars, and staging folders) are neither
+copied nor counted, and a link among them is ignored. A folder with nothing to
+ingest is refused too.
+
+Stages (`.runs/<run>/sources` and the upload scratch folder `.staging` under
+the workspace folder) are this service's own: created 0700, with staged files
+0600, opened without following links. A stage folder that is a link or belongs
+to another account makes the request fail as unavailable (503) and logs the
+folder. Before the ingest reads a stage, the stage must still hold exactly the
+recorded files with their recorded sizes and digests; anything added, changed,
+or linked since fails the Run as `corpus_source_unavailable`.
 
 Per-document metadata uses a manifest:
 

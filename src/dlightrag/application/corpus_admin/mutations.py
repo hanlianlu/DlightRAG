@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import errno
 import hashlib
+import logging
 import os
 import shutil
 import stat
@@ -59,6 +61,7 @@ from dlightrag.engine.runtime.records import (
 from .errors import (
     CorpusMutationInputError,
     CorpusMutationUnavailableError,
+    CorpusStageUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
     WorkspaceNotFoundError,
@@ -102,6 +105,8 @@ _ACTIONS: Mapping[CorpusMutationAction, _ActionSpec] = MappingProxyType(
 
 _REPAIR_REASON = "The upstream corpus outcome is not safe to repeat automatically."
 _REPAIR_REMEDY = "Inspect the public LightRAG state, repair it, then resume this Run."
+logger = logging.getLogger(__name__)
+
 _MAX_RESULT_DOCUMENTS = 100
 _DESTRUCTIVE_ACTIONS = frozenset(action for action, spec in _ACTIONS.items() if spec.destructive)
 _SUCCESSOR_PAGE_LIMIT = 100
@@ -662,20 +667,25 @@ class CorpusMutationService:
                 "content_sha256 must be a lowercase or uppercase SHA-256 hex digest"
             )
 
-        run_root = self._input_root / canonical / ".runs" / run_id
-        source_root = run_root / "sources"
-        staging_root = self._input_root / canonical / ".staging"
-        source_root.mkdir(parents=True, exist_ok=True)
-        staging_root.mkdir(parents=True, exist_ok=True)
-        temporary = staging_root / f"{run_id}.part"
-        target = source_root / safe_path
-        if target.exists():
-            raise CorpusMutationInputError("upload contains duplicate source filenames")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256()
-        size = 0
+        stage, source_root = await asyncio.to_thread(
+            _open_run_stage, self._input_root, canonical, run_id, exclusive=False
+        )
+        run_root = source_root.parent
+        temporary = f"{run_id}.part"
+        staging = parent = None
         try:
-            with temporary.open("xb") as stream:
+            staging = await asyncio.to_thread(_open_upload_staging, self._input_root, canonical)
+            parent = await asyncio.to_thread(_stage_parents, stage, safe_path.parts[:-1])
+            try:
+                os.stat(safe_path.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise CorpusMutationInputError("upload contains duplicate source filenames")
+            digest = hashlib.sha256()
+            size = 0
+            written = os.open(temporary, _CREATE_NO_FOLLOW, 0o600, dir_fd=staging)
+            with os.fdopen(written, "wb") as stream:
                 while True:
                     chunk = await reader.read(_UPLOAD_CHUNK_BYTES)
                     if not chunk:
@@ -690,17 +700,23 @@ class CorpusMutationService:
             actual = digest.hexdigest()
             if expected is not None and actual != expected:
                 raise CorpusMutationInputError("content_sha256 does not match the uploaded bytes")
-            os.replace(temporary, target)
+            os.replace(temporary, safe_path.name, src_dir_fd=staging, dst_dir_fd=parent)
             return StagedCorpusSource(
-                path=target,
+                path=source_root / safe_path,
                 filename=safe_path.as_posix(),
                 content_sha256=actual,
                 size_bytes=size,
             )
         except BaseException:
-            temporary.unlink(missing_ok=True)
+            if staging is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(temporary, dir_fd=staging)
             await asyncio.to_thread(shutil.rmtree, run_root, True)
             raise
+        finally:
+            for fd in (parent, staging, stage):
+                if fd is not None:
+                    os.close(fd)
 
     async def discard_staged_run(self, *, workspace: str, run_id: str) -> None:
         """Delete one unaccepted Run-exclusive upload stage without leaking layout."""
@@ -714,9 +730,8 @@ class CorpusMutationService:
     ) -> tuple[IngestSpec, Path, list[dict[str, Any]]]:
         canonical = require_canonical_workspace_id(workspace)
         workspace_root = (self._input_root / canonical).resolve()
-        run_root = workspace_root / ".runs" / run_id
-        source_root = run_root / "sources"
-        source_root.mkdir(parents=True, exist_ok=False)
+        stage, source_root = _open_run_stage(self._input_root, canonical, run_id, exclusive=True)
+        run_root = source_root.parent
         manifest: list[dict[str, Any]] = []
 
         def copy_source(raw: str, ordinal: int) -> str:
@@ -724,6 +739,8 @@ class CorpusMutationService:
                 source = Path(raw).resolve(strict=True)
             except FileNotFoundError, NotADirectoryError:
                 raise CorpusMutationInputError("local corpus source does not exist") from None
+            except OSError:
+                raise CorpusMutationInputError("local corpus source cannot be read") from None
             if not source.is_relative_to(workspace_root):
                 raise CorpusMutationInputError(
                     "local corpus sources must stay under input_dir/<workspace>"
@@ -737,6 +754,8 @@ class CorpusMutationService:
                 _snapshot_local_source(
                     workspace_root,
                     source.relative_to(workspace_root).parts,
+                    stage,
+                    name,
                     target,
                     max_files=_MAX_RESULT_DOCUMENTS - len(manifest),
                 )
@@ -755,6 +774,8 @@ class CorpusMutationService:
         except BaseException:
             shutil.rmtree(run_root, ignore_errors=True)
             raise
+        finally:
+            os.close(stage)
 
 
 class _TrackedPipelineNotSettled(RuntimeError):
@@ -1191,16 +1212,22 @@ async def _join_public_operation[T](operation: Awaitable[T]) -> T:
         return await asyncio.shield(task)
 
 
-# Every local source path component is opened relative to its parent's descriptor
-# and never through a link, so no swap made while the copy runs can reach outside
-# the workspace input root. O_NONBLOCK keeps a FIFO that replaced a file from
-# stalling the open; its type check then refuses it.
-_NO_FOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+# Every local source and stage path component is opened relative to its parent's
+# descriptor and never through a link, so no swap made while a copy runs can reach
+# outside the workspace input root or move the stage elsewhere. O_NONBLOCK keeps a
+# FIFO that replaced a file from stalling the open; its type check then refuses it.
+_READ_NO_FOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+_DIRECTORY_NO_FOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_CREATE_NO_FOLLOW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+#: A local source is a folder tree an operator placed under input_dir; these bound
+#: the listing so a pathological tree cannot occupy a worker thread for minutes.
+_MAX_LOCAL_DEPTH = 32
+_MAX_LOCAL_ENTRIES = 10_000
 
 
 def _open_no_follow(parent: int, name: str, *, directory: bool = False) -> int:
     try:
-        return os.open(name, _NO_FOLLOW | (os.O_DIRECTORY if directory else 0), dir_fd=parent)
+        return os.open(name, _READ_NO_FOLLOW | (os.O_DIRECTORY if directory else 0), dir_fd=parent)
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise CorpusMutationInputError("local corpus sources cannot contain symlinks") from None
@@ -1210,6 +1237,12 @@ def _open_no_follow(parent: int, name: str, *, directory: bool = False) -> int:
             ) from None
         if exc.errno == errno.EACCES:
             raise CorpusMutationInputError("local corpus source cannot be read") from None
+        if exc.errno == errno.ENXIO:
+            raise CorpusMutationInputError(
+                "local corpus sources may contain only regular files and folders"
+            ) from None
+        if exc.errno == errno.ENAMETOOLONG:
+            raise CorpusMutationInputError("local corpus source has a name too long") from None
         raise
 
 
@@ -1228,79 +1261,201 @@ def _open_below(root: int, parts: Sequence[str], *, directory: bool = False) -> 
         raise
 
 
-def _list_local_tree(
-    source: int, *, max_files: int
-) -> tuple[list[tuple[str, ...]], list[tuple[str, ...]]]:
-    """List the directories and files a scan of the copy would ingest, before copying.
+def _private_directory(parent: int, name: str, *, create: bool, exclusive: bool = False) -> int:
+    """Open one stage directory this service alone owns and writes.
 
-    Links and special files refuse, and so does a tree holding more files than the
-    request allows, before a byte of it is copied. Entries the scan skips (dot
-    entries, parser sidecars, staging) are left out, which also keeps a workspace
-    root from copying its own Run stages into themselves.
+    It is created 0700 when absent, and one this service created earlier with a
+    wider mode is narrowed to 0700. A link, a missing directory that was not to be
+    created, or a directory another account owns refuses: whoever could redirect or
+    write the stage could read what it stages or add files the ingest would read.
     """
-    directories: list[tuple[str, ...]] = []
-    files: list[tuple[str, ...]] = []
-    pending: list[tuple[str, ...]] = [()]
-    while pending:
-        prefix = pending.pop()
-        fd = _open_below(source, prefix, directory=True)
+    if create:
         try:
-            with os.scandir(fd) as entries:
-                listed = sorted(entries, key=lambda entry: entry.name)
-            for entry in listed:
-                is_dir = entry.is_dir(follow_symlinks=False)
-                if excluded_from_directory_scan(entry.name, is_dir=is_dir):
-                    continue
-                path = (*prefix, entry.name)
-                if entry.is_symlink():
-                    raise CorpusMutationInputError("local corpus sources cannot contain symlinks")
-                if is_dir:
-                    directories.append(path)
-                    pending.append(path)
-                elif entry.is_file(follow_symlinks=False):
-                    files.append(path)
-                    if len(files) > max_files:
-                        raise CorpusMutationInputError(
-                            f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
-                        )
-                else:
-                    raise CorpusMutationInputError(
-                        "local corpus sources may contain only regular files and folders"
-                    )
-        finally:
-            os.close(fd)
-    return sorted(directories), sorted(files)
-
-
-def _copy_regular_file(fd: int, target: Path) -> dict[str, Any]:
-    """Copy one opened regular file, hashing the same bytes it writes."""
+            os.mkdir(name, 0o700, dir_fd=parent)
+        except FileExistsError:
+            if exclusive:
+                raise
+    try:
+        fd = os.open(name, _DIRECTORY_NO_FOLLOW, dir_fd=parent)
+    except OSError as exc:
+        logger.warning("Corpus stage directory %r cannot be opened as a directory: %s", name, exc)
+        raise CorpusStageUnavailableError() from None
     status = os.fstat(fd)
+    if status.st_uid != os.geteuid():
+        os.close(fd)
+        logger.warning("Corpus stage directory %r is owned by uid %d", name, status.st_uid)
+        raise CorpusStageUnavailableError()
+    if status.st_mode & 0o077:
+        os.fchmod(fd, 0o700)
+    return fd
+
+
+def _open_workspace(input_root: Path, workspace: str) -> int:
+    """Open ``input_root/<workspace>``, creating it, never through a link at the workspace.
+
+    The workspace folder may be shared with the operator who places sources there;
+    only the stages below it are this service's own.
+    """
+    input_root.mkdir(parents=True, exist_ok=True)
+    root = os.open(input_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(workspace, dir_fd=root)
+        try:
+            return os.open(workspace, _DIRECTORY_NO_FOLLOW, dir_fd=root)
+        except OSError:
+            logger.warning("Workspace input folder %r is not a plain directory", workspace)
+            raise CorpusStageUnavailableError() from None
+    finally:
+        os.close(root)
+
+
+def _open_run_stage(
+    input_root: Path, workspace: str, run_id: str, *, exclusive: bool
+) -> tuple[int, Path]:
+    """Open ``input_root/<workspace>/.runs/<run_id>/sources`` without following links.
+
+    Returns the descriptor every staged file is written through and the path the
+    Run records for its ingest.
+    """
+    opened = [_open_workspace(input_root, workspace)]
+    try:
+        opened.append(_private_directory(opened[-1], ".runs", create=True))
+        opened.append(_private_directory(opened[-1], run_id, create=True, exclusive=exclusive))
+        sources = _private_directory(opened[-1], "sources", create=True)
+    finally:
+        for fd in opened:
+            os.close(fd)
+    return sources, input_root.resolve() / workspace / ".runs" / run_id / "sources"
+
+
+def _open_upload_staging(input_root: Path, workspace: str) -> int:
+    """Open the workspace's ``.staging`` folder, where an upload is written first.
+
+    It sits beside ``.runs``, so a half-written upload is never inside a Run's
+    sources, and it is as private as the stages themselves.
+    """
+    workspace_fd = _open_workspace(input_root, workspace)
+    try:
+        return _private_directory(workspace_fd, ".staging", create=True)
+    finally:
+        os.close(workspace_fd)
+
+
+def _stage_parents(stage: int, parts: Sequence[str]) -> int:
+    """Open, creating as needed, the private folders that hold one staged file."""
+    fd = os.dup(stage)
+    try:
+        for name in parts:
+            opened = _private_directory(fd, name, create=True)
+            os.close(fd)
+            fd = opened
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@dataclass(slots=True)
+class _LocalListing:
+    files: list[tuple[str, ...]]
+    entries: int = 0
+
+
+def _list_directory(
+    fd: int, prefix: tuple[str, ...], listing: _LocalListing, *, max_files: int
+) -> None:
+    with os.scandir(fd) as entries:
+        listed = sorted(entries, key=lambda entry: entry.name)
+    for entry in listed:
+        listing.entries += 1
+        if listing.entries > _MAX_LOCAL_ENTRIES:
+            raise CorpusMutationInputError(
+                f"local corpus source holds more than {_MAX_LOCAL_ENTRIES} entries"
+            )
+        is_dir = entry.is_dir(follow_symlinks=False)
+        if excluded_from_directory_scan(entry.name, is_dir=is_dir):
+            continue
+        path = (*prefix, entry.name)
+        if entry.is_symlink():
+            raise CorpusMutationInputError("local corpus sources cannot contain symlinks")
+        if is_dir:
+            if len(path) >= _MAX_LOCAL_DEPTH:
+                raise CorpusMutationInputError(
+                    f"local corpus source nests folders more than {_MAX_LOCAL_DEPTH} deep"
+                )
+            child = _open_no_follow(fd, entry.name, directory=True)
+            try:
+                _list_directory(child, path, listing, max_files=max_files)
+            finally:
+                os.close(child)
+        elif entry.is_file(follow_symlinks=False):
+            listing.files.append(path)
+            if len(listing.files) > max_files:
+                raise CorpusMutationInputError(
+                    f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
+                )
+        else:
+            raise CorpusMutationInputError(
+                "local corpus sources may contain only regular files and folders"
+            )
+
+
+def _list_local_tree(source: int, *, max_files: int) -> list[tuple[str, ...]]:
+    """List the files a scan of the copy would ingest, before anything is copied.
+
+    Links and special files refuse, and so do a tree holding more files than the
+    request allows and one deeper or wider than a local source may be. Entries the
+    scan skips (dot entries, parser sidecars, staging) are left out, which also
+    keeps a workspace root from copying its own Run stages into themselves. Each
+    folder is opened once, holding one descriptor per level.
+    """
+    listing = _LocalListing(files=[])
+    _list_directory(source, (), listing, max_files=max_files)
+    return sorted(listing.files)
+
+
+def _copy_regular_file(source: int, parent: int, name: str, target: Path) -> dict[str, Any]:
+    """Copy one opened regular file into a new 0600 file, hashing the bytes it writes."""
+    status = os.fstat(source)
     if not stat.S_ISREG(status.st_mode):
         raise CorpusMutationInputError(
             "local corpus sources may contain only regular files and folders"
         )
     digest = hashlib.sha256()
     size = 0
-    with target.open("xb") as stream:
-        while chunk := os.read(fd, _UPLOAD_CHUNK_BYTES):
+    written = os.open(name, _CREATE_NO_FOLLOW, 0o600, dir_fd=parent)
+    try:
+        while chunk := os.read(source, _UPLOAD_CHUNK_BYTES):
             digest.update(chunk)
-            stream.write(chunk)
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(written, view) :]
             size += len(chunk)
-    os.utime(target, ns=(status.st_atime_ns, status.st_mtime_ns))
+        os.utime(written, ns=(status.st_atime_ns, status.st_mtime_ns))
+    finally:
+        os.close(written)
     return {"path": str(target), "content_sha256": digest.hexdigest(), "size_bytes": size}
 
 
 def _snapshot_local_source(
-    workspace_root: Path, parts: Sequence[str], target: Path, *, max_files: int
+    workspace_root: Path,
+    parts: Sequence[str],
+    stage: int,
+    name: str,
+    target: Path,
+    *,
+    max_files: int,
 ) -> list[dict[str, Any]]:
-    """Copy one local source below ``workspace_root`` into ``target`` without links.
+    """Copy one local source below ``workspace_root`` into the stage as ``name``.
 
     Returns the manifest of what was copied. A directory is listed and counted in
     full before anything is copied, then every file is reopened through its own
     unfollowed path, so a folder swapped for a link after the listing refuses
-    instead of staging what the link points at.
+    instead of staging what the link points at. Only the folders that hold a
+    copied file are created, each 0700, and every file is written 0600.
     """
-    root = os.open(workspace_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    root = os.open(workspace_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         source = _open_below(root, parts)
     finally:
@@ -1312,25 +1467,85 @@ def _snapshot_local_source(
                 raise CorpusMutationInputError(
                     f"local corpus source contains more than {_MAX_RESULT_DOCUMENTS} files"
                 )
-            return [_copy_regular_file(source, target)]
+            return [_copy_regular_file(source, stage, name, target)]
         if not stat.S_ISDIR(mode):
             raise CorpusMutationInputError("local corpus source is not a regular file or directory")
-        directories, files = _list_local_tree(source, max_files=max_files)
+        files = _list_local_tree(source, max_files=max_files)
         if not files:
             raise CorpusMutationInputError("local corpus source contains no files to ingest")
-        target.mkdir()
-        for directory in directories:
-            target.joinpath(*directory).mkdir()
-        manifest = []
-        for path in files:
-            fd = _open_below(source, path)
-            try:
-                manifest.append(_copy_regular_file(fd, target.joinpath(*path)))
-            finally:
-                os.close(fd)
-        return manifest
+        copied = _private_directory(stage, name, create=True, exclusive=True)
+        try:
+            manifest = []
+            for path in files:
+                parent = _stage_parents(copied, path[:-1])
+                try:
+                    fd = _open_below(source, path)
+                    try:
+                        manifest.append(
+                            _copy_regular_file(fd, parent, path[-1], target.joinpath(*path))
+                        )
+                    finally:
+                        os.close(fd)
+                finally:
+                    os.close(parent)
+            return manifest
+        finally:
+            os.close(copied)
     finally:
         os.close(source)
+
+
+def _stage_matches_manifest(manifest: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether a Run's stage holds exactly the files its manifest recorded.
+
+    The ingest scans the stage folder, so a file added beside the recorded ones, a
+    link anywhere, or a recorded file that changed would be read with them. The
+    stage is walked from its private folders without following links, and every
+    file the scan would ingest must be a recorded one with its recorded size and
+    digest.
+    """
+    paths = [Path(str(item.get("path") or "")) for item in manifest]
+    stages = set()
+    for path in paths:
+        parts = path.parts
+        if "sources" not in parts:
+            return False
+        index = parts.index("sources")
+        if index < 3 or parts[index - 2] != ".runs":
+            return False
+        stages.add(Path(*parts[: index + 1]))
+    if len(stages) != 1:
+        return False
+    stage = stages.pop()
+    expected = {
+        path.relative_to(stage).parts: item for path, item in zip(paths, manifest, strict=True)
+    }
+    workspace = os.open(stage.parents[2], os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    opened = [workspace]
+    try:
+        for name in (".runs", stage.parent.name, "sources"):
+            opened.append(_private_directory(opened[-1], name, create=False))
+        sources = opened[-1]
+        found = _list_local_tree(sources, max_files=len(expected))
+        if set(found) != set(expected):
+            return False
+        for parts, item in expected.items():
+            fd = _open_below(sources, parts)
+            try:
+                status = os.fstat(fd)
+                if not stat.S_ISREG(status.st_mode) or status.st_size != item.get("size_bytes"):
+                    return False
+                digest = hashlib.sha256()
+                while chunk := os.read(fd, _UPLOAD_CHUNK_BYTES):
+                    digest.update(chunk)
+                if digest.hexdigest() != item.get("content_sha256"):
+                    return False
+            finally:
+                os.close(fd)
+        return True
+    finally:
+        for fd in opened:
+            os.close(fd)
 
 
 def validate_corpus_mutation_prepared_input(
@@ -1440,14 +1655,6 @@ def _track_id(run_id: str) -> str:
     return f"dlightrag-corpus-{run_id}"
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(_UPLOAD_CHUNK_BYTES):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _staged_source_record(source: StagedCorpusSource) -> dict[str, Any]:
     return {
         "path": str(source.path),
@@ -1546,20 +1753,12 @@ def _local_source_complete(source: Mapping[str, Any], manifest: Any) -> bool:
         return False
     if not isinstance(manifest, list) or not manifest:
         return False
-    for item in manifest:
-        if not isinstance(item, Mapping):
-            return False
-        path = Path(str(item.get("path") or ""))
-        digest = str(item.get("content_sha256") or "")
-        size = item.get("size_bytes")
-        if not isinstance(size, int):
-            return False
-        try:
-            if not path.is_file() or path.stat().st_size != size or _file_sha256(path) != digest:
-                return False
-        except OSError, TypeError, ValueError:
-            return False
-    return True
+    if not all(isinstance(item, Mapping) for item in manifest):
+        return False
+    try:
+        return _stage_matches_manifest(manifest)
+    except OSError, ValueError, ApplicationError:
+        return False
 
 
 def _public_upstream_state(value: Any) -> list[dict[str, str]]:
