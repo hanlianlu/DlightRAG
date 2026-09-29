@@ -78,7 +78,11 @@ def test_langfuse_masking_hides_every_non_empty_value_under_a_secret_name() -> N
             "authorization": bytearray(b"Bearer sk-live"),
             "api_key": "",
             "max_tokens": 128,
+            "chunk_token_size": 1200,
             "include_token": True,
+            "password_pin": 12345678,
+            "otp_token": 654321,
+            "client_secret": 1.5,
         }
     )
 
@@ -89,8 +93,46 @@ def test_langfuse_masking_hides_every_non_empty_value_under_a_secret_name() -> N
         "authorization": "[redacted]",
         "api_key": "",
         "max_tokens": 128,
+        "chunk_token_size": 1200,
         "include_token": True,
+        "password_pin": "[redacted]",
+        "otp_token": "[redacted]",
+        "client_secret": "[redacted]",
     }
+
+
+def test_a_value_whose_truth_cannot_be_read_still_hides() -> None:
+    class Opaque:
+        def __bool__(self) -> bool:
+            raise RuntimeError("ambiguous")
+
+    assert mask_langfuse_payload({"api_key": Opaque()}) == {"api_key": "[redacted]"}
+
+
+def test_every_numeric_secret_named_setting_is_a_token_count() -> None:
+    """The settings dump shows these numbers, so each must be a count, not a credential."""
+    from pydantic import BaseModel
+
+    from dlightrag.application.config import DlightragConfig
+    from dlightrag.engine.ai.telemetry import hides_secret_value, is_secret_key
+
+    def numeric_secret_fields(model: type[BaseModel], seen: set[type]) -> list[str]:
+        if model in seen:
+            return []
+        seen.add(model)
+        found: list[str] = []
+        for name, field in model.model_fields.items():
+            annotation = field.annotation
+            for candidate in getattr(annotation, "__args__", ()) or (annotation,):
+                if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+                    found.extend(numeric_secret_fields(candidate, seen))
+                elif candidate in {int, float} and is_secret_key(name):
+                    found.append(name)
+        return found
+
+    names = numeric_secret_fields(DlightragConfig, set())
+    assert names, "the walk found the token-count fields it guards"
+    assert not [name for name in names if hides_secret_value(name, 1)]
 
 
 def test_langfuse_masking_bounds_large_text() -> None:

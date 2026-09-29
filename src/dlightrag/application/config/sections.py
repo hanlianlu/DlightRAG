@@ -563,7 +563,7 @@ def _redact_dict(data: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in data.items():
         if is_secret_key(key):
-            result[key] = "***" if hides_secret_value(value) else value
+            result[key] = "***" if hides_secret_value(key, value) else value
         elif isinstance(value, dict):
             result[key] = _redact_dict(value)
         elif isinstance(value, list | tuple):

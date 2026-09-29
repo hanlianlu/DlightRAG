@@ -97,20 +97,31 @@ def is_secret_key(key: object) -> bool:
     return any(pattern in normalized for pattern in SECRET_KEY_PATTERNS)
 
 
-def hides_secret_value(value: object) -> bool:
-    """Whether a value under a secret name must be hidden.
+def hides_secret_value(key: object, value: object) -> bool:
+    """Whether a value under the secret name ``key`` must be hidden.
 
     Anything that can carry the secret hides unless it is empty: text, bytes,
     containers, models and other objects alike, so a value type nobody listed
-    cannot slip out. Only numbers and flags stay readable, which keeps counts such
-    as ``max_tokens`` visible under names that merely contain "token".
+    cannot slip out. A flag stays readable, since one bit carries no credential.
+    A number stays readable only as a count under a name that merely contains
+    "token" (``max_tokens``, ``chunk_token_size``); under any other secret name,
+    or a name that ends in "token" (``otp_token``), a number can be the
+    credential itself.
     """
-    if value is None or isinstance(value, bool | int | float):
+    if value is None or isinstance(value, bool):
         return False
+    if isinstance(value, int | float):
+        return not _names_a_token_count(key)
     try:
         return bool(value)
-    except TypeError, ValueError:  # an ambiguous truth value still hides
+    except Exception:  # a truth value that cannot be read still hides
         return True
+
+
+def _names_a_token_count(key: object) -> bool:
+    normalized = str(key).lower()
+    matched = {pattern for pattern in SECRET_KEY_PATTERNS if pattern in normalized}
+    return matched == {"token"} and not normalized.endswith("token")
 
 
 def safe_log_text(value: object, *, max_length: int = 240) -> str:

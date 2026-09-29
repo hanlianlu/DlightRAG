@@ -17,7 +17,7 @@ def mask_langfuse_payload(data: Any, **kwargs: Any) -> Any:  # noqa: ARG001
             return {"type": "image_url", "image_url": "[image omitted]"}
         return {
             key: "[redacted]"
-            if is_secret_key(key) and hides_secret_value(value)
+            if is_secret_key(key) and hides_secret_value(key, value)
             else mask_langfuse_payload(value)
             for key, value in data.items()
         }
