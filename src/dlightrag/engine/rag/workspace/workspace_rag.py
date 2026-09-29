@@ -5,7 +5,6 @@ import asyncio
 import heapq
 import itertools
 import logging
-import uuid
 from collections.abc import (
     AsyncIterable,
     AsyncIterator,
@@ -45,9 +44,7 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     discard_parser_input,
-    lightrag_archived_source_path,
     parser_input_path,
-    remote_ingest_batch_root,
     remote_parser_input_path,
     retained_remote_source_path,
     workspace_input_root,
@@ -679,15 +676,7 @@ class WorkspaceRag:
             source_uri=source_uri,
             key=key,
         )
-        return tuple(
-            dict.fromkeys(
-                (
-                    primary_locator,
-                    str(retained_locator),
-                    str(lightrag_archived_source_path(retained_locator)),
-                )
-            )
-        )
+        return tuple(dict.fromkeys((primary_locator, str(retained_locator))))
 
     async def _replacement_owners_for_locators(
         self,
@@ -791,16 +780,21 @@ class WorkspaceRag:
         document: SourceDocument,
         source_uri: str,
         download_locator: str,
-        batch_root: Path,
         retain_source_file: bool,
         source_options: SourceRetrievalOptions | None = None,
     ) -> PreparedIngestFile:
+        """Download one remote document to its parser input.
+
+        A retained source is its own locator; any other download goes straight to
+        the flat parser input, where LightRAG reads it, and is removed once the
+        ingest settles.
+        """
         key = document.display_filename or document.key
         if retain_source_file:
             parser_path = Path(download_locator)
         else:
             parser_path = remote_parser_input_path(
-                batch_root=batch_root,
+                input_root=self._workspace_input_root(),
                 source_uri=source_uri,
                 key=key,
             )
@@ -864,11 +858,6 @@ class WorkspaceRag:
             if batch_index < resume_from_window:
                 continue
 
-            batch_root = remote_ingest_batch_root(
-                input_root=self._workspace_input_root(),
-                source_type=source_type,
-                batch_id=f"{batch_index:04d}-{uuid.uuid4().hex}",
-            )
             prepared_items: list[PreparedIngestFile] = []
             window_errors: list[str] = []
             remote_primary_locators: dict[int, str] = {}
@@ -876,7 +865,6 @@ class WorkspaceRag:
             async def _download(
                 document: SourceDocument,
                 *,
-                current_batch_root: Path = batch_root,
                 current_primary_locators: dict[int, str] = remote_primary_locators,
             ) -> PreparedIngestFile | _RemoteDownloadFailure:
                 safe_source_id = _safe_remote_source_id(document)
@@ -956,7 +944,6 @@ class WorkspaceRag:
                         document=document,
                         source_uri=source_uri,
                         download_locator=download_locator,
-                        batch_root=current_batch_root,
                         retain_source_file=retain_source_files,
                         # An explicit mirror locator has its own routing. Do
                         # not stamp the original provider's options onto it.
@@ -1074,11 +1061,6 @@ class WorkspaceRag:
             finally:
                 if not retain_source_files:
                     await asyncio.to_thread(_remove_remote_parser_sources, prepared_items)
-                await asyncio.to_thread(
-                    _remove_empty_parents,
-                    batch_root,
-                    self._workspace_input_root(),
-                )
 
         if not saw_documents:
             return {"processed": 0, "errors": [], "results": []}
@@ -2304,14 +2286,11 @@ class WorkspaceRag:
             else:
                 source = factory.azure(str(parts["container_name"]))
         cleanup.push_async_callback(_aclose_retry_source, source)
-        # Same-ID replay keeps the original parser location: the transient copy
-        # sits directly under the workspace input root.
         prepared = await self._download_remote_to_prepared_item(
             source=source,
             document=source_document,
             source_uri=stable_source_uri,
             download_locator=download_locator,
-            batch_root=self._workspace_input_root(),
             retain_source_file=False,
             source_options=source_options,
         )
@@ -2419,17 +2398,6 @@ async def _aiter_items[T](items: Iterable[T] | AsyncIterable[T]) -> AsyncIterato
         return
     for item in items:
         yield item
-
-
-def _remove_empty_parents(path: Path, stop: Path) -> None:
-    stop = stop.resolve()
-    current = path.resolve()
-    while current != stop and current.is_relative_to(stop):
-        try:
-            current.rmdir()
-        except OSError:
-            return
-        current = current.parent
 
 
 async def _aclose_source(source: object) -> None:

@@ -113,35 +113,20 @@ def discard_parser_input(parser_path: Path) -> None:
             logger.debug("Failed to remove parser input: %s", candidate, exc_info=True)
 
 
-def remote_ingest_batch_root(
-    *,
-    input_root: Path,
-    source_type: str,
-    batch_id: str,
-) -> Path:
-    """Return the remote parser input root for one ingest batch.
-
-    The directory lives under the workspace input root because LightRAG writes
-    parser sidecars relative to the source file parent. DlightRAG removes the
-    temporary source file after parsing and keeps only the generated artifacts.
-    """
-    return input_root / REMOTE_INGEST_DIR_NAME / source_type / batch_id
-
-
 def remote_parser_input_path(
     *,
-    batch_root: Path,
+    input_root: Path,
     source_uri: str,
     key: str,
 ) -> Path:
-    """Return an extension-preserving, URI-stable parser input path.
+    """Return the extension-preserving, URI-stable flat parser input of a download.
 
     LightRAG 1.5 pending-parse APIs still require local files and derive doc
     IDs from canonicalized file names. Hashing the full remote URI avoids
     collisions for same-basename objects in different prefixes while keeping
     parser routing extension-based.
     """
-    return batch_root / _remote_source_filename(source_uri=source_uri, key=key)
+    return input_root / _remote_source_filename(source_uri=source_uri, key=key)
 
 
 def retained_remote_source_path(

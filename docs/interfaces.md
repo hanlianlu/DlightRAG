@@ -149,7 +149,8 @@ count toward the 10,000. A folder with nothing to ingest is refused too.
 A document's parser input takes its file name in the Workspace's corpus
 directory, so a name that directory keeps for itself cannot be a document's:
 one starting with a dot (Run stages, temporary copies) or one of its folders
-(`__parsed__`, `__remote_sources__`, `__remote_ingest__`, `__uploads__`). A
+(`__parsed__`, `__remote_sources__`, and the `__remote_ingest__` and
+`__uploads__` staging folders of earlier releases). A
 folder listing and an upload skip such an entry, with everything below it
 (`.DS_Store`, `.git/`), and an upload left with nothing to ingest is refused
 with 400; so is a local file of such a name, or a manifest entry naming one.

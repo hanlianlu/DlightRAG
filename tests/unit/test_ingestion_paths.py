@@ -12,7 +12,6 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
     document_name,
     parser_input_path,
     place_parser_input,
-    remote_ingest_batch_root,
     remote_parser_input_path,
     reserved_corpus_name,
     retained_remote_source_path,
@@ -109,21 +108,16 @@ def test_discarding_a_parser_input_keeps_its_sidecar(tmp_path: Path) -> None:
     assert sidecar.is_dir()
 
 
-def test_remote_parser_input_path_uses_ephemeral_hash_name(tmp_path: Path) -> None:
-    root = remote_ingest_batch_root(
-        input_root=tmp_path / "inputs" / "default",
-        source_type="s3",
-        batch_id="batch-1",
-    )
-    assert root == tmp_path / "inputs" / "default" / "__remote_ingest__" / "s3" / "batch-1"
+def test_remote_parser_input_path_is_flat_and_named_by_its_uri(tmp_path: Path) -> None:
+    root = workspace_input_root(tmp_path / "corpus", "default")
 
     first = remote_parser_input_path(
-        batch_root=root,
+        input_root=root,
         source_uri="s3://bucket/team-a/report.pdf",
         key="team-a/report.pdf",
     )
     second = remote_parser_input_path(
-        batch_root=root,
+        input_root=root,
         source_uri="s3://bucket/team-b/report.pdf",
         key="team-b/report.pdf",
     )
@@ -136,7 +130,7 @@ def test_remote_parser_input_path_uses_ephemeral_hash_name(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="remote object key is empty"):
         remote_parser_input_path(
-            batch_root=root,
+            input_root=root,
             source_uri="s3://bucket/",
             key="../",
         )

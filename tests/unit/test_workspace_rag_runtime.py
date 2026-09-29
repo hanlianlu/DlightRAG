@@ -24,8 +24,6 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
 )
 from dlightrag.engine.rag.corpus.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag.engine.rag.corpus.ingestion.paths import (
-    REMOTE_INGEST_DIR_NAME,
-    lightrag_archived_source_path,
     remote_parser_input_path,
     retained_remote_source_path,
 )
@@ -1915,18 +1913,14 @@ class TestWorkspaceRagLightRAGMainPath:
             )
             for asset_id in ("1", "2")
         }
-        archived_locators = {
-            asset_id: str(lightrag_archived_source_path(Path(retained_locator)))
-            for asset_id, retained_locator in retained_locators.items()
-        }
 
         async def find_exact(locator: str) -> list[str]:
             if locator == "https://cdn.example.com/assets/1/report.pdf":
                 return ["doc-exact"]
-            if locator == archived_locators["1"]:
-                return ["doc-archived-1"]
-            if locator == archived_locators["2"]:
-                return ["doc-archived-2"]
+            if locator == retained_locators["1"]:
+                return ["doc-retained-1"]
+            if locator == retained_locators["2"]:
+                return ["doc-retained-2"]
             return []
 
         service._metadata_index.find_by_download_locator.side_effect = find_exact
@@ -1948,25 +1942,23 @@ class TestWorkspaceRagLightRAGMainPath:
         assert locator_calls == [
             call("https://cdn.example.com/assets/1/report.pdf"),
             call(retained_locators["1"]),
-            call(archived_locators["1"]),
             call("https://cdn.example.com/assets/2/report.pdf"),
             call(retained_locators["2"]),
-            call(archived_locators["2"]),
         ]
         first_items = service._ingestion_engine.aingest_files.await_args_list[0].args[0]
         second_items = service._ingestion_engine.aingest_files.await_args_list[1].args[0]
-        assert first_items[0].replacement_doc_ids == ("doc-exact", "doc-archived-1")
+        assert first_items[0].replacement_doc_ids == ("doc-exact", "doc-retained-1")
         assert first_items[0].replacement_ownership == (
             (
                 "doc-exact",
                 "https://cdn.example.com/assets/1/report.pdf",
                 "bynder://asset/1",
             ),
-            ("doc-archived-1", archived_locators["1"], "bynder://asset/1"),
+            ("doc-retained-1", retained_locators["1"], "bynder://asset/1"),
         )
-        assert second_items[0].replacement_doc_ids == ("doc-archived-2",)
+        assert second_items[0].replacement_doc_ids == ("doc-retained-2",)
         assert second_items[0].replacement_ownership == (
-            ("doc-archived-2", archived_locators["2"], "bynder://asset/2"),
+            ("doc-retained-2", retained_locators["2"], "bynder://asset/2"),
         )
         assert all(
             awaited.kwargs["replace"] is True
@@ -2299,9 +2291,8 @@ class TestWorkspaceRagLightRAGMainPath:
             )
 
         assert staged, "the batch must have staged a parser input"
-        assert REMOTE_INGEST_DIR_NAME in staged[0].parts
+        assert staged[0].parent == service._workspace_input_root()
         assert not staged[0].exists()
-        assert not (service._workspace_input_root() / REMOTE_INGEST_DIR_NAME).exists()
 
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2744,7 +2735,7 @@ class TestWorkspaceRagLightRAGMainPath:
         lightrag.apipeline_enqueue_documents.assert_not_awaited()
         lightrag.apipeline_process_enqueue_documents.assert_not_awaited()
 
-    async def test_remote_recovered_processed_replay_retires_archived_retained_owner(
+    async def test_remote_recovered_processed_replay_retires_retained_owner(
         self, test_config: DlightragConfig
     ) -> None:
         import hashlib
@@ -2760,19 +2751,18 @@ class TestWorkspaceRagLightRAGMainPath:
         primary_locator = "https://cdn.example.com/assets/1/report.pdf"
         display_filename = "report.pdf"
         parser_filename = remote_parser_input_path(
-            batch_root=Path(), source_uri=source_uri, key=display_filename
+            input_root=Path(), source_uri=source_uri, key=display_filename
         ).name
         parser_path = service._workspace_input_root() / parser_filename
         content = b"%PDF-1.4 remote recovered"
         candidate_id = compute_mdhash_id(normalize_document_file_path(parser_path), prefix="doc-")
-        old_id = "doc-archived-owner"
+        old_id = "doc-retained-owner"
         retained_locator = retained_remote_source_path(
             input_root=service._workspace_input_root(),
             source_type="url",
             source_uri=source_uri,
             key=display_filename,
         )
-        archived_locator = str(lightrag_archived_source_path(retained_locator))
         statuses: dict[str, dict[str, object]] = {
             candidate_id: {
                 "status": "processed",
@@ -2792,7 +2782,7 @@ class TestWorkspaceRagLightRAGMainPath:
             old_id: {
                 "filename": "old-report.pdf",
                 "source_uri": source_uri,
-                "download_locator": archived_locator,
+                "download_locator": str(retained_locator),
             },
         }
         events: list[tuple[str, str, object]] = []
@@ -2810,7 +2800,7 @@ class TestWorkspaceRagLightRAGMainPath:
         async def find_owners(locator: str) -> list[str]:
             if locator == primary_locator:
                 return [candidate_id]
-            if locator == archived_locator:
+            if locator == str(retained_locator):
                 return [old_id]
             return []
 
@@ -2878,7 +2868,6 @@ class TestWorkspaceRagLightRAGMainPath:
         assert metadata_index.find_by_download_locator.await_args_list == [
             call(primary_locator),
             call(str(retained_locator)),
-            call(archived_locator),
         ]
         assert call(old_id) in metadata_index.get.await_args_list
         lightrag.apipeline_enqueue_documents.assert_not_awaited()
@@ -3302,7 +3291,7 @@ class TestWorkspaceRagLightRAGMainPath:
         assert len(seen_items) == 1
         item = seen_items[0]
         expected_parser_path = remote_parser_input_path(
-            batch_root=service._workspace_input_root(),  # type: ignore[attr-defined]
+            input_root=service._workspace_input_root(),  # type: ignore[attr-defined]
             source_uri="bynder://asset/1",
             key="report.pdf",
         )
@@ -3773,7 +3762,7 @@ class TestWorkspaceRagLightRAGMainPath:
         expected_parser_path = (
             service._workspace_input_root()
             / remote_parser_input_path(
-                batch_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
+                input_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
             ).name
         )
         assert item.parser_path == expected_parser_path
@@ -3791,7 +3780,7 @@ class TestWorkspaceRagLightRAGMainPath:
         parser_path = (
             service._workspace_input_root()
             / remote_parser_input_path(
-                batch_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
+                input_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
             ).name
         )
         # An earlier attempt was interrupted after LightRAG archived its copy.
