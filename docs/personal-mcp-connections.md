@@ -421,6 +421,16 @@ new Settings authorization and a new Grant. Each worker runs at most four
 authorizations, and PostgreSQL allows an owner at most four live flows and 128
 unexpired flows; beyond these, the request fails with 429.
 
+An authorization carries the owner revision read when it began, and completing
+it is a CAS on that revision. Every published background refresh of any of the
+owner's Connections changes the revision, and refresh claims do not wait for a
+pending authorization. A refresh that publishes during the authorization window,
+which can last up to `oauth_timeout`, therefore fails the authorization with
+"Connections revision changed", and the user has to start again. The more
+enabled Connections an owner has, the likelier this is: each refreshes
+`refresh_seconds` after a success, and while it keeps failing, after a backoff
+that starts at about two seconds.
+
 ### Client registration
 
 The MCP authorization specification orders client registration: a client the
@@ -462,8 +472,13 @@ refresh finds it expired:
   requests to the stored token endpoint's origin, at most six, and closes the
   SDK's auth generator when it yields the original MCP request, which is never
   sent. A missing refresh token or token endpoint, a rejected refresh, a scope
-  beyond the consented scopes, or any other failure becomes an authentication
-  failure (`needs-auth`). Refresh never enters discovery, registration, or
+  beyond the consented scopes, or any other failure of the token request,
+  including its own connect or idle timeout, an admission refusal, a network
+  error, or a server error, becomes an authentication failure (`needs-auth`).
+  Only a refresh preflight that exceeds `discovery_timeout` as a whole, or a
+  gate refusal, is recorded as `degraded` instead. With the default
+  `idle_timeout` below `discovery_timeout`, a hung token endpoint therefore
+  records `needs-auth`. Refresh never enters discovery, registration, or
   consent.
 - Saving the new token is a CAS on Grant id, active status, lease owner, live
   lease, refresh epoch, and expected secret version; losing the CAS discards the
@@ -571,12 +586,17 @@ Management is a Web projection only:
   authorization, and every published background refresh, successful or failed,
   changes it; refresh claims and call observations do not. While a refresh keeps
   failing, its backoff starts at a few seconds, so a command can get 409 between
-  the 5-second polls; Settings then asks for a reload. Mutations need the Web
-  session plus the CSRF double-submit header and same-origin checks, in `none`
-  mode as well. Validation errors return a generic 422 that echoes no input, and
-  another owner's `connection_id` returns 404. An ineligible auth mode gets 403,
-  and the bootstrap capability `personal_mcp_connections` is false, which hides
-  the feature; the projection carries no eligibility flag of its own.
+  the 5-second polls; Settings then asks for a reload. Commands that discover
+  before they publish carry the revision they started with through the network
+  work, so a refresh published in between fails them too: an endpoint edit or a
+  bearer save that includes the endpoint within `discovery_timeout`, and an
+  OAuth authorization within `oauth_timeout` (see
+  [OAuth](#oauth-and-credential-lifecycle)). Mutations need the Web session plus
+  the CSRF double-submit header and same-origin checks, in `none` mode as well.
+  Validation errors return a generic 422 that echoes no input, and another
+  owner's `connection_id` returns 404. An ineligible auth mode gets 403, and the
+  bootstrap capability `personal_mcp_connections` is false, which hides the
+  feature; the projection carries no eligibility flag of its own.
 - `POST .../oauth` and the callback's 303 redirect send
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. The callback
   relies on the authenticated owner and SDK state instead of CSRF, because a
@@ -642,13 +662,13 @@ row.
   result.
 - Every exit after the first gate tries to record an observation: `ready` after
   a successful call, `needs-auth` after an authentication failure (HTTP 401 or
-  403, a token refresh the provider rejects or widens beyond the consented
-  scopes, or a refresh that lost its Grant), and `degraded` after anything else.
-  That includes transport and protocol faults, an oversized or unsupported
-  result, a remote tool error, a missing remote tool, a token refresh that times
-  out or that the gate refuses, and Run cancellation, lease loss, or shutdown.
-  Recording is best effort: it gets two seconds, and a failure to record only
-  logs a warning.
+  403, or any failed token request, including one that times out, is refused
+  admission, or meets a network or server error), and `degraded` after anything
+  else. That includes transport and protocol faults, an oversized or unsupported
+  result, a remote tool error, a missing remote tool, a refresh preflight that
+  exceeds `discovery_timeout` as a whole or that the gate refuses, and Run
+  cancellation, lease loss, or shutdown. Recording is best effort: it gets two
+  seconds, and a failure to record only logs a warning.
 - An observation is recorded only while the call's generation is still the head
   generation, the head is still enabled at the same activation epoch, and the
   Grant is still active at the same secret version. A call stopped by revoke,

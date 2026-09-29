@@ -231,7 +231,8 @@ completeness, or untested platforms.
   bytes, view, and images settle as this Run's own Resources under its fence, so
   cleanup of the origin Run cannot invalidate them. The adoption row is located
   by the canonical handle and carries every alias bound to it, so two earlier
-  handles for identical bytes settle one Resource with merged aliases.
+  handles for the same file (the same file name, declared MIME type, and
+  SHA-256) settle one Resource with merged aliases.
 - The adoption settles even when the retried `read` or `view` then fails, for
   example on a stale cursor, a document with no viewable target, or a refused
   view: the failure returns as a typed refusal that carries the adoption.
@@ -278,7 +279,7 @@ completeness, or untested platforms.
   pixels restored through the Answer host and Agent runtime.
 - `tests/unit/test_resource_lineage_adoption.py` and the recovery test in
   `tests/unit/test_answer_executor.py`: adoption checks, stored-view-only
-  adopted bytes, decoding of unconverted formats, identical bytes under two
+  adopted bytes, decoding of unconverted formats, the same file under two
   earlier handles, settlement when the retried call fails, the attachment
   allowance, and the manifest wording.
 - `tests/integration/test_resource_lineage_pg.py`,
