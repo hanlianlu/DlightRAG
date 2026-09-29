@@ -414,23 +414,6 @@ async def test_runner_addresses_the_workspace_by_its_canonical_id(
     assert bm25_args.kwargs["config"].deployment.workspace == "my_space"
 
 
-@pytest.mark.parametrize("label", ["   ", "w" * 65])
-async def test_runner_refuses_a_label_without_a_canonical_id(
-    monkeypatch: pytest.MonkeyPatch, label: str
-) -> None:
-    from dlightrag.adapters.postgres import rebuild_vdb as module
-
-    config = _fake_config()
-    mutate_config(config, "deployment.workspace", label)
-    create_embedding_model = MagicMock()
-    monkeypatch.setattr(module, "create_embedding_model", create_embedding_model)
-
-    with pytest.raises(SystemExit, match="does not normalize to a workspace id"):
-        await module.run_rebuild(config=config, target="check")
-
-    create_embedding_model.assert_not_called()
-
-
 def _fake_config():
     from dlightrag.application.config import DlightragConfig
 

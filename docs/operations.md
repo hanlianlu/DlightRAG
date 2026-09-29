@@ -271,9 +271,10 @@ Vector rebuild targets `chunks` and `all` already run this maintenance.
 
 `dlightrag-rebuild-bm25` and `dlightrag-rebuild-vdb` address
 `deployment.workspace` by the canonical id the service stores that workspace
-under, so the label `My Space` rebuilds `my_space`. A label with no canonical
-id (empty, or longer than 64 characters once normalized) is refused before any
-storage is opened.
+under (`deployment.workspace_id`), so the label `My Space` rebuilds
+`my_space`. A label with no canonical id (empty, or longer than 64 characters
+once normalized) is refused when the configuration loads, so neither command
+opens any storage for it.
 
 ## Offline Vector Storage Rebuild
 

@@ -22,7 +22,7 @@ def _config(*, enabled: bool = True, reader: bool = False) -> SimpleNamespace:
     )
     return SimpleNamespace(
         corpus=SimpleNamespace(retrieval=retrieval),
-        deployment=SimpleNamespace(workspace="research"),
+        deployment=SimpleNamespace(workspace="research", workspace_id="research"),
         is_reader=reader,
     )
 
@@ -159,13 +159,3 @@ async def test_bm25_rebuild_addresses_the_workspace_by_its_canonical_id(
     assert backend_workspaces == ["research_team"]
     assert rebuilt_workspaces == ["research_team"]
     assert config.deployment.workspace == "Research Team"
-
-
-async def test_bm25_rebuild_refuses_a_label_without_a_canonical_id() -> None:
-    from dlightrag.adapters.postgres.rebuild_bm25 import run_rebuild_bm25
-
-    config = _config()
-    config.deployment.workspace = " "
-
-    with pytest.raises(SystemExit, match="does not normalize to a workspace id"):
-        await run_rebuild_bm25(config=cast(Any, config), assume_yes=True)
