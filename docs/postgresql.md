@@ -346,7 +346,10 @@ listens, that fans each channel out to its subscribers (the Connections
 scheduler and OAuth inbox, and Answer child-guidance waits, however many are
 waiting). A notification is only a wake hint. After every reconnect the hub
 tells each subscriber to re-read its authoritative rows, and a periodic
-keepalive replaces a connection that died silently. Each LISTEN, UNLISTEN, and
+keepalive replaces a connection that died silently. Replacing a lost connection
+waits one second, doubling with each further loss up to 30 seconds until a
+connection passes a keepalive, so a connection that dies right after its LISTEN
+cannot spin the hub through reconnects. Each LISTEN, UNLISTEN, and
 keepalive is bounded to five seconds; one that fails, hangs, or is abandoned by
 a cancelled caller costs only the connection, which is replaced, and never
 leaves a subscriber registered on a channel nothing listens on. A subscriber

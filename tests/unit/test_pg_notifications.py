@@ -4,6 +4,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from itertools import pairwise
 from typing import Any
 
 import asyncpg
@@ -23,6 +24,7 @@ class _Connection:
         self.hang: set[str] = set()  # statements that never complete
         self.gates: dict[str, asyncio.Event] = {}  # statements that complete once opened
         self.entered: set[str] = set()  # hanging or gated statements that have started
+        self.dies_after_listen = False  # the server drops it right after a LISTEN
         self._termination: list[Callable[[Any], None]] = []
         self._closed = False
         self._detached = False
@@ -41,6 +43,8 @@ class _Connection:
     async def add_listener(self, channel: str, callback: Callable[..., None]) -> None:
         await self._statement(f"LISTEN {channel}")
         self.listeners[channel] = callback
+        if self.dies_after_listen:
+            asyncio.get_running_loop().call_soon(self._end)
 
     async def remove_listener(self, channel: str, _callback: Callable[..., None]) -> None:
         await self._statement(f"UNLISTEN {channel}")
@@ -89,10 +93,12 @@ class _Connection:
 class _Endpoint:
     """Hands out fake connections and records which ones were given back."""
 
-    def __init__(self, *, failures: int = 0) -> None:
+    def __init__(self, *, failures: int = 0, doomed: int = 0) -> None:
         self.opened: list[_Connection] = []
+        self.opened_at: list[float] = []
         self.released: list[_Connection] = []
         self._failures = failures
+        self._doomed = doomed  # how many connections, first to last, die after a LISTEN
 
     @asynccontextmanager
     async def connect(self) -> AsyncIterator[_Connection]:
@@ -100,7 +106,9 @@ class _Endpoint:
             self._failures -= 1
             raise ConnectionRefusedError("database starting up")
         connection = _Connection()
+        connection.dies_after_listen = len(self.opened) < self._doomed
         self.opened.append(connection)
+        self.opened_at.append(asyncio.get_running_loop().time())
         try:
             yield connection
         finally:
@@ -209,6 +217,36 @@ async def test_a_refused_connection_is_retried_until_the_database_answers() -> N
         await _until(lambda: received == [None])
 
     assert len(endpoint.opened) == 1
+    await hub.aclose()
+
+
+async def test_reconnects_back_off_until_a_connection_passes_a_keepalive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection the server drops right after its LISTEN must not spin the hub.
+
+    Each replacement waits twice as long as the one before, until a connection
+    passes a keepalive; losing that one costs only the base delay again.
+    """
+    monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 0.05)
+    monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.02)
+    endpoint = _Endpoint(doomed=3)
+    hub = PGNotificationHub(connect=endpoint.connect)
+    received: list[str | None] = []
+
+    await hub.subscribe("runs", received.append)
+    await _until(lambda: len(endpoint.opened) == 4 and "SELECT 1" in endpoint.opened[3].statements)
+    lost_at = asyncio.get_running_loop().time()
+    endpoint.opened[3].terminate()
+    await _until(lambda: len(endpoint.opened) == 5 and len(received) == 5)
+
+    waits = [later - earlier for earlier, later in pairwise(endpoint.opened_at[:4])]
+    slack = 0.001  # the event loop may run a timer up to its clock resolution early
+    expected = (0.05, 0.1, 0.2)
+    assert all(w >= e - slack for w, e in zip(waits, expected, strict=True)), waits
+    # The passed keepalive reset the delay, which would otherwise have reached 0.4 s.
+    assert 0.05 - slack <= endpoint.opened_at[4] - lost_at < 0.3
+    assert received == [None] * 5
     await hub.aclose()
 
 

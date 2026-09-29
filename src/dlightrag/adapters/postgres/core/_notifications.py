@@ -8,10 +8,10 @@ asks the subscriber to re-read its authoritative state. Notifications are wake
 hints, never authority. Callbacks run on the event loop and must not block.
 
 The hub holds its connection only while something subscribes, replaces a lost
-connection (termination, or a failed or hung statement) with bounded exponential
-backoff, and releases the connection when the last subscriber leaves. A
-registered subscriber is always LISTENed on the current connection, or will be
-by the next one.
+connection (termination, or a failed or hung statement) after a delay that
+doubles until a connection passes a keepalive, and releases the connection when
+the last subscriber leaves. A registered subscriber is always LISTENed on the
+current connection, or will be by the next one.
 """
 
 import asyncio
@@ -30,7 +30,8 @@ type NotificationCallback = Callable[[str | None], None]
 _RECONNECT_BASE_SECONDS = 1.0
 _RECONNECT_MAX_SECONDS = 30.0
 # A LISTEN connection is otherwise idle, so a half-open socket would go unnoticed;
-# the keepalive turns that into a reconnect and a resynchronization.
+# the keepalive turns that into a reconnect and a resynchronization. A connection
+# that passes one has proven itself, which resets the reconnect delay.
 _KEEPALIVE_SECONDS = 30.0
 # Bounds every statement the hub runs: LISTEN, UNLISTEN, and the keepalive. They
 # run under the hub lock, because asyncpg runs one statement per connection at a
@@ -60,6 +61,7 @@ class PGNotificationHub:
         self._changed = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._closing = False
+        self._reconnect_delay = _RECONNECT_BASE_SECONDS
 
     @asynccontextmanager
     async def listen(self, channel: str, callback: NotificationCallback) -> AsyncIterator[None]:
@@ -186,25 +188,33 @@ class PGNotificationHub:
             raise
 
     async def _run(self) -> None:
-        backoff = _RECONNECT_BASE_SECONDS
+        self._reconnect_delay = _RECONNECT_BASE_SECONDS
         while self._subscribers and not self._closing:
             try:
-                await self._serve()
-                backoff = _RECONNECT_BASE_SECONDS
-            except asyncio.CancelledError:
-                raise
+                lost = await self._serve()
             except Exception:
                 if not self._subscribers or self._closing:
                     return
                 logger.warning(
                     "PostgreSQL notification connection failed; reconnecting in %.1fs",
-                    backoff,
+                    self._reconnect_delay,
                     exc_info=True,
                 )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, _RECONNECT_MAX_SECONDS)
+            else:
+                if not lost or not self._subscribers or self._closing:
+                    continue  # released while idle; serve again only if someone came back
+                logger.warning(
+                    "PostgreSQL notification connection was lost; reconnecting in %.1fs",
+                    self._reconnect_delay,
+                )
+            # Every replacement waits, and the wait doubles until a connection passes a
+            # keepalive, so one that dies right after its LISTEN cannot spin the hub
+            # through reconnects and resynchronizations.
+            await asyncio.sleep(self._reconnect_delay)
+            self._reconnect_delay = min(self._reconnect_delay * 2, _RECONNECT_MAX_SECONDS)
 
-    async def _serve(self) -> None:
+    async def _serve(self) -> bool:
+        """Serve the subscribers on one connection; return whether it was lost, not released."""
         async with self._connect() as connection:
             lost = asyncio.Event()
 
@@ -214,7 +224,7 @@ class PGNotificationHub:
 
             connection.add_termination_listener(_terminated)
             try:
-                await self._listen_on(connection, lost)
+                return await self._listen_on(connection, lost)
             finally:
                 async with self._lock:
                     if self._connection is connection:
@@ -228,7 +238,7 @@ class PGNotificationHub:
                         # cleaning it up, which is what frees its pool slot.
                         connection.terminate()
 
-    async def _listen_on(self, connection: Any, lost: asyncio.Event) -> None:
+    async def _listen_on(self, connection: Any, lost: asyncio.Event) -> bool:
         async with self._lock:
             self._connection = connection
             for channel in tuple(self._subscribers):
@@ -236,15 +246,19 @@ class PGNotificationHub:
                     connection, partial(connection.add_listener, channel, self._dispatch)
                 )
         self._deliver_to_all(None)
-        while self._subscribers and not lost.is_set() and not self._closing:
+        while self._subscribers and not self._closing:
+            if lost.is_set():
+                return True
             self._changed.clear()
             try:
                 await asyncio.wait_for(self._changed.wait(), timeout=_KEEPALIVE_SECONDS)
             except TimeoutError:
                 async with self._lock:
                     if self._connection is not connection:
-                        return  # dropped by a failed statement; the next one replaces it
+                        return True  # dropped by a failed statement; the next one replaces it
                     await self._statement(connection, partial(connection.fetchval, "SELECT 1"))
+                self._reconnect_delay = _RECONNECT_BASE_SECONDS
+        return False
 
     def _dispatch(self, _connection: object, _pid: object, channel: str, payload: str) -> None:
         for callback in tuple(self._subscribers.get(channel, ())):
