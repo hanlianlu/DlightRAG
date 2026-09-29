@@ -1404,7 +1404,7 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
   }
 });
 
-it('announces child activity for child-tool events and the run end, not for every streamed frame', async () => {
+it('announces child activity for every tool event once a run has children, and for its end', async () => {
   const originalRequestFrame = window.requestAnimationFrame;
   const originalCancelFrame = window.cancelAnimationFrame;
   let nextFrame = 1;
@@ -1424,11 +1424,15 @@ it('announces child activity for child-tool events and the run end, not for ever
   const conversationId = 'conversation-child-activity';
   const runId = 'run-child-activity';
   const chunks = [
-    'id: 1\nevent: tool_start\ndata: {"tool_name":"spawn_agent","call_id":"child-1"}\n\n',
-    'id: 2\nevent: token\ndata: "Deleg"\n\n',
-    'id: 3\nevent: token\ndata: "ated"\n\n',
-    'id: 4\nevent: tool_start\ndata: {"tool_name":"search_corpus","call_id":"search-1"}\n\n',
-    'id: 5\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
+    // Before any child exists a tool call is the parent's own: nothing to announce.
+    'id: 1\nevent: tool_start\ndata: {"tool_name":"search_corpus","call_id":"search-0"}\n\n',
+    'id: 2\nevent: tool_start\ndata: {"tool_name":"spawn_agent","call_id":"child-1"}\n\n',
+    'id: 3\nevent: token\ndata: "Deleg"\n\n',
+    'id: 4\nevent: token\ndata: "ated"\n\n',
+    'id: 5\nevent: progress\ndata: {"phase":"searching"}\n\n',
+    // A child's own call reaches the parent's stream without a child id.
+    'id: 6\nevent: tool_start\ndata: {"tool_name":"search_corpus","call_id":"search-1"}\n\n',
+    'id: 7\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
   ];
   const encoder = new TextEncoder();
   let chunkIndex = 0;
@@ -1480,10 +1484,159 @@ it('announces child activity for child-tool events and the run end, not for ever
     runFrames();
 
     expect(feature.turns[0].streamText).to.equal('Delegated');
-    expect(activity).to.deep.equal([runId, runId]);
+    // spawn_agent, the child's search, and the Run's end; never tokens or progress.
+    expect(activity).to.deep.equal([runId, runId, runId]);
   } finally {
     window.requestAnimationFrame = originalRequestFrame;
     window.cancelAnimationFrame = originalCancelFrame;
+  }
+});
+
+it('announces the end of a run with children that its stored row reports', async () => {
+  const originalSetTimeout = window.setTimeout;
+  // The reconnect delay after the stream closes runs at once.
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  const conversationId = 'conversation-child-stored-end';
+  const runId = 'run-child-stored-end';
+  const turnId = 'turn-child-stored-end';
+  let eventRequests = 0;
+  window.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith('/events')) {
+      eventRequests += 1;
+      if (eventRequests > 1) return Promise.resolve(new Response('', {status: 410}));
+      // The stream shows a child, then closes without a done event.
+      return Promise.resolve(new Response(
+        'id: 1\nevent: tool_start\ndata: {"tool_name":"spawn_agent","call_id":"child-1"}\n\n',
+        {status: 200, headers: {'Content-Type': 'text/event-stream'}},
+      ));
+    }
+    if (url === `/web/api/runs/${runId}`) {
+      return Promise.resolve(new Response(JSON.stringify(turnWire({
+        ...storedTurn(),
+        answerRunId: runId,
+        turnId,
+      })), {status: 200, headers: {'Content-Type': 'application/json'}}));
+    }
+    return Promise.resolve(new Response('{}', {status: 503}));
+  }) as typeof fetch;
+  conversationStore.adoptCreatedConversation({
+    conversationId,
+    title: 'Child stored end',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  });
+
+  try {
+    const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+    const activity: string[] = [];
+    feature.addEventListener('dl-child-activity', (event) => {
+      activity.push((event as CustomEvent<{runId: string}>).detail.runId);
+    });
+    feature.view = {
+      kind: 'ready',
+      conversationId,
+      lineage: null,
+      history: [{...storedTurn(), answerRunId: runId, turnId, status: 'running', presentation: null}],
+    };
+    document.body.appendChild(feature);
+
+    await waitFor(() => feature.turns[0]?.state === 'succeeded');
+
+    expect(eventRequests).to.equal(2);
+    // spawn_agent, then the settled row: the only word of the Run's end.
+    expect(activity).to.deep.equal([runId, runId]);
+  } finally {
+    window.setTimeout = originalSetTimeout;
+  }
+});
+
+/** A followed Run that has shown a child, with its stream held open and its intervals recorded. */
+async function runWithChildren(name: string) {
+  const originalSetInterval = window.setInterval;
+  const originalClearInterval = window.clearInterval;
+  const intervals = new Map<number, {handler: () => void; delay: number}>();
+  const cleared: number[] = [];
+  window.setInterval = ((handler: TimerHandler, delay?: number) => {
+    const id = intervals.size + 1;
+    intervals.set(id, {handler: handler as () => void, delay: delay ?? 0});
+    return id;
+  }) as typeof window.setInterval;
+  window.clearInterval = ((id?: number) => {
+    if (id !== undefined) cleared.push(id);
+  }) as typeof window.clearInterval;
+  const restore = (): void => {
+    window.setInterval = originalSetInterval;
+    window.clearInterval = originalClearInterval;
+  };
+  const conversationId = `conversation-${name}`;
+  const runId = `run-${name}`;
+  const encoder = new TextEncoder();
+  let stream: ReadableStreamDefaultController<Uint8Array> | null = null;
+  window.fetch = ((input: RequestInfo | URL) => {
+    if (!String(input).endsWith('/events')) return Promise.resolve(new Response('{}', {status: 503}));
+    return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(controller): void { stream = controller; },
+    }), {status: 200, headers: {'Content-Type': 'text/event-stream'}}));
+  }) as typeof fetch;
+  conversationStore.adoptCreatedConversation({
+    conversationId,
+    title: name,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  });
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  const activity: string[] = [];
+  feature.addEventListener('dl-child-activity', (event) => {
+    activity.push((event as CustomEvent<{runId: string}>).detail.runId);
+  });
+  feature.view = {
+    kind: 'ready',
+    conversationId,
+    lineage: null,
+    history: [{...storedTurn(), answerRunId: runId, turnId: `turn-${name}`, status: 'running', presentation: null}],
+  };
+  document.body.appendChild(feature);
+  await waitFor(() => stream !== null);
+  const pulses = () => [...intervals.entries()].filter(([, {delay}]) => delay === 5000);
+  const send = (chunk: string): void => { stream!.enqueue(encoder.encode(chunk)); };
+  expect(pulses(), 'no pulse before the Run shows a child').to.have.length(0);
+  send('id: 1\nevent: tool_start\ndata: {"tool_name":"spawn_agent","call_id":"child-1"}\n\n');
+  await waitFor(() => feature.turns[0]?.sawChildren === true);
+  await feature.updateComplete;
+  return {feature, runId, activity, cleared, pulses, send, restore};
+}
+
+it('pulses a live run with children every five seconds until the run ends', async () => {
+  const run = await runWithChildren('child-pulse');
+  try {
+    expect(run.pulses()).to.have.length(1);
+    const [pulseId, pulse] = run.pulses()[0]!;
+    const before = run.activity.length;
+    pulse.handler();
+    expect(run.activity.slice(before)).to.deep.equal([run.runId]);
+
+    run.send('id: 2\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n');
+    await waitFor(() => run.cleared.includes(pulseId));
+    await run.feature.updateComplete;
+    expect(run.pulses(), 'the settled Run starts no second pulse').to.have.length(1);
+  } finally {
+    run.restore();
+  }
+});
+
+it('stops the child pulse when the chat leaves the page', async () => {
+  const run = await runWithChildren('child-pulse-leaves');
+  try {
+    const [pulseId] = run.pulses()[0]!;
+    run.feature.remove();
+    expect(run.cleared).to.include(pulseId);
+  } finally {
+    run.restore();
   }
 });
 

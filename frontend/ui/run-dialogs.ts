@@ -238,7 +238,6 @@ export class DlChildrenRoster extends LightElement {
   }
 
   #followRefresh(): void {
-    this.#lastFollowRefresh = performance.now();
     this.#refreshQueued = true;
     void this.#flushRefresh();
   }
@@ -264,6 +263,8 @@ export class DlChildrenRoster extends LightElement {
 
   async refresh(): Promise<void> {
     if (!this.#pageFetcher) return;
+    // Opening, the Refresh button, and followed activity share one throttle window.
+    this.#lastFollowRefresh = performance.now();
     this.#announcement = '';
     this.#failed = false;
     await this.#pager.start((page) => {

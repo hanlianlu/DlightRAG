@@ -20,7 +20,7 @@ import {ApiError} from '../api/wire.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {localizedErrorKind} from '../lib/run-errors.ts';
-import {applyAnswerEvent, isChildToolEvent} from '../lib/turn-projection.ts';
+import {applyAnswerEvent} from '../lib/turn-projection.ts';
 import {
   RunController,
   type AnswerRunEvent,
@@ -57,6 +57,9 @@ import {requestToast} from './toast-request.ts';
 import {webRouter} from './router.ts';
 
 export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat-message-list.ts';
+
+/** How often an open roster hears from a live Run whose children may change without an event. */
+const CHILD_PULSE_MS = 5000;
 
 /** Why a command failed: localized kind copy, the server's reason, or the fallback. */
 function commandErrorText(error: unknown, fallback: string): string {
@@ -156,6 +159,7 @@ export class DlChatFeature extends LightElement {
   #announcedActive = false;
   #announcedHasMessages: boolean | null = null;
   #childSubmissions = new Map<string, {fingerprint: string; submissionId: string}>();
+  #childPulse: {runId: string; timer: ReturnType<typeof setInterval>} | null = null;
 
   constructor() {
     super();
@@ -192,6 +196,7 @@ export class DlChatFeature extends LightElement {
     super.disconnectedCallback();
     this.#abortContinuation();
     this.#runController.disconnect();
+    this.#stopChildPulse();
   }
 
   detachRun(): void {
@@ -373,6 +378,7 @@ export class DlChatFeature extends LightElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
+    this.#syncChildPulse();
     const hasMessages = this.turns.length > 0;
     if (hasMessages !== this.#announcedHasMessages) {
       this.#announcedHasMessages = hasMessages;
@@ -484,6 +490,7 @@ export class DlChatFeature extends LightElement {
 
   #runStateChanged(): void {
     this.runRevision += 1;
+    this.#syncChildPulse();
     const active = this.#runController.active || this.submissionPending;
     if (active === this.#announcedActive) return;
     this.#announcedActive = active;
@@ -797,24 +804,53 @@ export class DlChatFeature extends LightElement {
     const nextTurns = [...this.turns];
     nextTurns[turnIndex] = projected;
     this.turns = nextTurns;
-    // Tokens stream every frame; only child-tool events and the run's end move the roster.
-    const childActivity = events.some((event) => isChildToolEvent(event)
-      || (projected.sawChildren && (event.kind === 'done' || event.kind === 'error')));
-    if (projected.runId && childActivity) {
-      this.dispatchEvent(new CustomEvent<ChatChildActivityDetail>('dl-child-activity', {
-        bubbles: true,
-        composed: true,
-        detail: {runId: projected.runId},
-      }));
-    }
+    // Tokens stream every frame, but once a Run has children any tool event may be theirs.
+    this.#noteChildActivity(turn, projected, events.some((event) => event.kind === 'tool'));
+  }
+
+  /** Tell an open roster its Run's children may have moved: a tool event once
+   *  children exist, or the Run settling however that became known. */
+  #noteChildActivity(previous: ChatTurnView, next: ChatTurnView, toolEvent: boolean): void {
+    const runId = next.runId || previous.runId;
+    if (!runId || !(previous.sawChildren || next.sawChildren)) return;
+    const ended = !isTerminalTurnState(previous.state) && isTerminalTurnState(next.state);
+    if (toolEvent || ended) this.#announceChildActivity(runId);
+  }
+
+  #announceChildActivity(runId: string): void {
+    this.dispatchEvent(new CustomEvent<ChatChildActivityDetail>('dl-child-activity', {
+      bubbles: true,
+      composed: true,
+      detail: {runId},
+    }));
+  }
+
+  /** A child can finish without any event on the parent's stream, so while
+   *  the followed Run is live with children an open roster also gets a slow pulse. */
+  #syncChildPulse(): void {
+    const runId = this.#runController.active ? this.#runController.runId : null;
+    const live = runId !== null && this.turns.some((turn) => (
+      turn.runId === runId && turn.sawChildren && !isTerminalTurnState(turn.state)
+    ));
+    if (this.#childPulse && (!live || this.#childPulse.runId !== runId)) this.#stopChildPulse();
+    if (!live || runId === null || this.#childPulse) return;
+    this.#childPulse = {
+      runId,
+      timer: setInterval(() => { this.#announceChildActivity(runId); }, CHILD_PULSE_MS),
+    };
+  }
+
+  #stopChildPulse(): void {
+    if (this.#childPulse) clearInterval(this.#childPulse.timer);
+    this.#childPulse = null;
   }
 
   #replaceStoredTurn(turnId: string, stored: ConversationTurn): void {
-    this.turns = this.turns.map((turn) => {
-      if (turn.id !== turnId) return turn;
-      const replacement = storedTurnView(stored);
-      return {...replacement, id: turnId, steeringMessages: turn.steeringMessages};
-    });
+    this.#updateTurn(turnId, (turn) => ({
+      ...storedTurnView(stored),
+      id: turnId,
+      steeringMessages: turn.steeringMessages,
+    }));
   }
 
   #setTurnError(turnId: string, message: string): void {
@@ -822,7 +858,18 @@ export class DlChatFeature extends LightElement {
   }
 
   #setTurn(turnId: string, patch: Partial<ChatTurnView>): void {
-    this.turns = this.turns.map((turn) => turn.id === turnId ? {...turn, ...patch} : turn);
+    this.#updateTurn(turnId, (turn) => ({...turn, ...patch}));
+  }
+
+  #updateTurn(turnId: string, change: (turn: ChatTurnView) => ChatTurnView): void {
+    const index = this.turns.findIndex((turn) => turn.id === turnId);
+    if (index < 0) return;
+    const previous = this.turns[index]!;
+    const next = change(previous);
+    const turns = [...this.turns];
+    turns[index] = next;
+    this.turns = turns;
+    this.#noteChildActivity(previous, next, false);
   }
 }
 

@@ -24,7 +24,17 @@ function roster(): DlChildrenRoster {
   return element;
 }
 
+const originalSetTimeout = window.setTimeout;
+const originalClearTimeout = window.clearTimeout;
+
+/** Followed-activity refreshes share a one-second window with opening; run it at once. */
+function immediateFollowRefreshes(): void {
+  window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+}
+
 afterEach(() => {
+  window.setTimeout = originalSetTimeout;
+  window.clearTimeout = originalClearTimeout;
   document.body.replaceChildren();
 });
 
@@ -301,6 +311,7 @@ async function openInteractive(
 }
 
 it('preserves steer draft and focus across an SSE observation refresh', async () => {
+  immediateFollowRefreshes();
   let observes = 0;
   const panel = roster();
   panel.open(
@@ -335,6 +346,7 @@ it('preserves steer draft and focus across an SSE observation refresh', async ()
 });
 
 it('does not restore a stale capture over text typed during an in-flight refresh', async () => {
+  immediateFollowRefreshes();
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let observes = 0;
@@ -377,37 +389,71 @@ it('does not restore a stale capture over text typed during an in-flight refresh
   expect(document.activeElement).to.equal(after);
 });
 
-it('refetches a followed roster at most once per interval with one trailing refresh', async () => {
-  const originalSetTimeout = window.setTimeout;
-  const timers: Array<{handler: () => void; delay: number}> = [];
+/** Record the roster's timers instead of running them. */
+function recordTimers() {
+  const timers = new Map<number, {handler: () => void; delay: number}>();
+  const cleared: number[] = [];
   window.setTimeout = ((handler: TimerHandler, delay?: number) => {
-    timers.push({handler: handler as () => void, delay: delay ?? 0});
-    return timers.length;
+    const id = timers.size + 1;
+    timers.set(id, {handler: handler as () => void, delay: delay ?? 0});
+    return id;
   }) as typeof window.setTimeout;
+  window.clearTimeout = ((id?: number) => { if (id !== undefined) cleared.push(id); }) as typeof window.clearTimeout;
+  return {timers, cleared};
+}
+
+it('refetches a followed roster at most once per interval, counting its opening', async () => {
+  const {timers} = recordTimers();
   let pages = 0;
-  try {
-    const panel = roster();
+  const panel = roster();
+  panel.open(async () => {
+    pages += 1;
+    return {children: [entry('a', 'running')], nextCursor: null};
+  }, {runId: 'run-1'} as NonNullable<Parameters<DlChildrenRoster['open']>[1]>);
+  await waitFor(() => pages === 1);
+
+  for (let activity = 0; activity < 30; activity += 1) panel.refreshIfFollowing('run-1');
+  panel.refreshIfFollowing('another-run');
+  await new Promise<void>((resolve) => { originalSetTimeout(resolve, 20); });
+
+  expect(pages).to.equal(1, 'activity right after opening waits for the window');
+  const trailing = [...timers.values()].filter(({delay}) => delay > 0);
+  expect(trailing).to.have.length(1, 'one trailing refresh carries it all');
+  expect(trailing[0]!.delay).to.be.at.most(1000);
+  trailing[0]!.handler();
+  await waitFor(() => pages === 2);
+
+  panel.querySelector<HTMLButtonElement>('.dl-dialog-actions .dl-btn')!.click();
+  await waitFor(() => pages === 3);
+  panel.refreshIfFollowing('run-1');
+  expect([...timers.values()].filter(({delay}) => delay > 0), 'Refresh opens a new window')
+    .to.have.length(2);
+});
+
+it('drops a pending trailing refresh when the dialog closes or the roster leaves', async () => {
+  const {timers, cleared} = recordTimers();
+  let pages = 0;
+  const panel = roster();
+  const open = async (): Promise<void> => {
     panel.open(async () => {
       pages += 1;
       return {children: [entry('a', 'running')], nextCursor: null};
     }, {runId: 'run-1'} as NonNullable<Parameters<DlChildrenRoster['open']>[1]>);
-    await waitFor(() => pages === 1);
+    await waitFor(() => Boolean(panel.querySelector<HTMLDialogElement>('dialog')?.open));
+  };
+  await open();
+  await waitFor(() => pages === 1);
+  panel.refreshIfFollowing('run-1');
+  const closing = [...timers.keys()].at(-1)!;
+  panel.querySelector('dialog')!.close();
+  await waitFor(() => cleared.includes(closing));
 
-    panel.refreshIfFollowing('run-1');
-    await waitFor(() => pages === 2);
-    for (let activity = 0; activity < 30; activity += 1) panel.refreshIfFollowing('run-1');
-    panel.refreshIfFollowing('another-run');
-    await new Promise<void>((resolve) => { originalSetTimeout(resolve, 20); });
-
-    expect(pages).to.equal(2, 'activity inside the interval waits for one trailing refresh');
-    const trailing = timers.filter(({delay}) => delay > 0);
-    expect(trailing).to.have.length(1);
-    expect(trailing[0]!.delay).to.be.at.most(1000);
-    trailing[0]!.handler();
-    await waitFor(() => pages === 3);
-  } finally {
-    window.setTimeout = originalSetTimeout;
-  }
+  await open();
+  await waitFor(() => pages === 2);
+  panel.refreshIfFollowing('run-1');
+  const leaving = [...timers.keys()].at(-1)!;
+  panel.remove();
+  expect(cleared).to.include(leaving);
 });
 
 it('keeps child B free of child A\'s late steer receipt and busy state', async () => {
@@ -755,6 +801,7 @@ it('a failed first page says the children could not be loaded', async () => {
 });
 
 it('closing forgets the run so a queued refresh never reloads it', async () => {
+  immediateFollowRefreshes();
   type Page = {children: ChildRosterEntry[]; nextCursor: string | null};
   const calls: Array<{resolve: (page: Page) => void}> = [];
   const fetchA = (_cursor: string | null, signal?: AbortSignal): Promise<Page> =>

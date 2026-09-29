@@ -26,7 +26,11 @@ const CHILD_TOOL_NAMES = new Set([
   'subagent_status',
 ]);
 
-/** An event about a child agent: the only kind that can change the child roster. */
+/**
+ * A child-agent management call: the event that shows a run has children.
+ * Once it has, children report through the parent's own event stream, so
+ * their tool events arrive without a child id; see sawChildren.
+ */
 export function isChildToolEvent(event: AnswerRunEvent): boolean {
   if (event.kind !== 'tool') return false;
   const name = (event.payload as {tool_name?: unknown} | null)?.tool_name;
