@@ -9,11 +9,13 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
+import aiohttp
 import anthropic
 import httpx
 import httpx2
 import openai
 import pytest
+from google import genai
 
 from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.dependencies import (
@@ -570,3 +572,125 @@ async def test_a_real_tls_protocol_mismatch_is_misconfiguration(
     assert reason in _tls_reasons(failure)
     assert is_transient_request_failure(failure) is transient
     assert (classify_transient_dependency(failure) == "providers") is transient
+
+
+# google-genai sends its async requests through aiohttp, so Gemini failures are
+# aiohttp's own connection errors and must follow the same rules.
+
+
+class _AsyncioWithoutPauses(ModuleType):
+    """asyncio as google-genai's client sees it, minus its sleeps."""
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(asyncio, name)
+
+    @staticmethod
+    async def sleep(_delay: float, result: object = None) -> object:
+        return result
+
+
+@pytest.fixture
+def gemini_reconnects_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the 1-10 s pause before google-genai's one hard-coded aiohttp reconnect."""
+    from google.genai import _api_client
+
+    monkeypatch.setattr(_api_client, "asyncio", _AsyncioWithoutPauses("asyncio"))
+
+
+async def _gemini_failure(base_url: str) -> BaseException:
+    client = genai.Client(
+        api_key="test-key",
+        http_options=genai.types.HttpOptions(
+            base_url=base_url,
+            timeout=5_000,
+            retry_options=genai.types.HttpRetryOptions(attempts=1),
+        ),
+    )
+    try:
+        await client.aio.models.generate_content(model="gemini-test", contents="hi")
+    except Exception as exc:  # noqa: BLE001 - the failure is the subject
+        return exc
+    finally:
+        await client.aio.aclose()
+    raise AssertionError("the request did not fail")
+
+
+async def _close_after_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    await reader.read(65_536)
+    writer.close()
+
+
+@pytest.mark.usefixtures("gemini_reconnects_at_once")
+async def test_a_real_gemini_connection_reset_is_a_provider_interruption() -> None:
+    async with loopback_server(reset_on_accept) as port:
+        failure = await _gemini_failure(f"https://127.0.0.1:{port}")
+
+    assert isinstance(failure, aiohttp.ClientConnectorError)
+    assert classify_transient_dependency(failure) == "providers"
+    assert classify_transient_dependency(failure, component_hint="providers") == "providers"
+
+
+@pytest.mark.usefixtures("gemini_reconnects_at_once")
+async def test_a_real_gemini_dns_failure_is_a_provider_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # aiohttp resolves through socket.getaddrinfo; a stopped service's name does
+    # not resolve until it is back.
+    resolve = socket.getaddrinfo
+
+    def unresolvable(host: object, *args: object, **kwargs: object) -> object:
+        if host == "gemini.invalid":
+            raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided")
+        return resolve(host, *args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(socket, "getaddrinfo", unresolvable)
+    failure = await _gemini_failure("https://gemini.invalid")
+
+    assert isinstance(failure, aiohttp.ClientConnectorDNSError)
+    assert classify_transient_dependency(failure) == "providers"
+    assert classify_transient_dependency(failure, component_hint="providers") == "providers"
+
+
+@pytest.mark.usefixtures("gemini_reconnects_at_once")
+async def test_a_real_gemini_server_disconnect_is_a_provider_interruption() -> None:
+    async with loopback_server(_close_after_request) as port:
+        failure = await _gemini_failure(f"http://127.0.0.1:{port}")
+
+    assert isinstance(failure, aiohttp.ServerDisconnectedError)
+    assert classify_transient_dependency(failure) == "providers"
+
+
+@pytest.mark.usefixtures("gemini_reconnects_at_once")
+async def test_a_real_gemini_misconfigured_endpoint_is_not_an_outage(tmp_path: Path) -> None:
+    server_tls = loopback_certificate(tmp_path).server_context()
+    async with loopback_server(_close_after_request, tls=server_tls) as port:
+        untrusted = await _gemini_failure(f"https://127.0.0.1:{port}")
+    async with loopback_server(_plain_http) as port:
+        plain_http = await _gemini_failure(f"https://127.0.0.1:{port}")
+
+    assert isinstance(untrusted, aiohttp.ClientConnectorCertificateError)
+    assert isinstance(plain_http, aiohttp.ClientConnectorSSLError)
+    for failure in (untrusted, plain_http):
+        assert classify_transient_dependency(failure) is None
+        assert classify_transient_dependency(failure, component_hint="providers") is None
+
+
+async def test_a_real_aiohttp_socket_read_timeout_is_transient() -> None:
+    release = asyncio.Event()
+
+    async def stall(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read(1024)
+        await release.wait()
+        writer.close()
+
+    async with loopback_server(stall) as port:
+        try:
+            timeout = aiohttp.ClientTimeout(sock_read=0.2)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                with pytest.raises(aiohttp.ServerTimeoutError) as raised:
+                    async with session.get(f"http://127.0.0.1:{port}/") as response:
+                        await response.read()
+        finally:
+            release.set()
+
+    assert classify_transient_dependency(raised.value) == "providers"

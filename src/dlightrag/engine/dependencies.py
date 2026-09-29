@@ -27,6 +27,22 @@ except ImportError:  # pragma: no cover - installed with the provider SDKs
 else:
     _HTTP_CLIENTS.append(httpx2)
 
+# google-genai sends its async requests through aiohttp when it is importable, and
+# raises aiohttp's own connection errors. ClientOSError covers every connector
+# failure (refused, reset, DNS, proxy, and TLS, whose misconfigured cases the
+# endpoint rule still vetoes).
+_AIOHTTP_TRANSIENT_ERRORS: tuple[type[Exception], ...] = ()
+try:
+    import aiohttp
+except ImportError:  # pragma: no cover - installed with google-genai
+    pass
+else:
+    _AIOHTTP_TRANSIENT_ERRORS = (
+        aiohttp.ClientOSError,
+        aiohttp.ServerDisconnectedError,
+        aiohttp.ServerTimeoutError,
+    )
+
 type DependencyComponent = Literal["corpus_storage", "parser", "providers"]
 
 
@@ -72,15 +88,18 @@ _RETRYABLE_STATUS_CODES = frozenset(
 # proxy that dropped or refused the connection. An unsupported URL scheme or a
 # local protocol violation is configuration or a client bug and stays
 # non-retryable.
-_TRANSIENT_HTTPX_ERRORS = tuple(
-    error
-    for client in _HTTP_CLIENTS
-    for error in (
-        client.TimeoutException,
-        client.NetworkError,
-        client.RemoteProtocolError,
-        client.ProxyError,
-    )
+_TRANSIENT_TRANSPORT_ERRORS = (
+    *(
+        error
+        for client in _HTTP_CLIENTS
+        for error in (
+            client.TimeoutException,
+            client.NetworkError,
+            client.RemoteProtocolError,
+            client.ProxyError,
+        )
+    ),
+    *_AIOHTTP_TRANSIENT_ERRORS,
 )
 _HTTP_STATUS_ERRORS = tuple(client.HTTPStatusError for client in _HTTP_CLIENTS)
 # OpenSSL reasons for a TLS protocol mismatch, such as an https URL for a
@@ -172,7 +191,7 @@ def classify_transient_dependency(
             return item.component
         if isinstance(item, TimeoutError | ConnectionError) and component_hint is not None:
             return component_hint
-        if isinstance(item, _TRANSIENT_HTTPX_ERRORS):
+        if isinstance(item, _TRANSIENT_TRANSPORT_ERRORS):
             if misconfigured:
                 continue
             return component_hint or "providers"
@@ -222,7 +241,8 @@ def is_transient_request_failure(exc: BaseException, *, text_vetoes: bool = True
     ):
         return False
     return any(
-        isinstance(item, _TRANSIENT_HTTPX_ERRORS) or _status_code(item) in _RETRYABLE_STATUS_CODES
+        isinstance(item, _TRANSIENT_TRANSPORT_ERRORS)
+        or _status_code(item) in _RETRYABLE_STATUS_CODES
         for item in chain
     )
 
@@ -298,10 +318,11 @@ def _is_misconfigured_endpoint(exc: BaseException) -> bool:
     """A TLS certificate that fails verification, or a TLS protocol mismatch.
 
     Both surface as a connection failure, yet resending cannot help. Only these
-    named failures count: any other TLS error in a chain, such as the
-    SSLWantReadError a peer resetting the handshake leaves behind, and any DNS
-    failure (a stopped Compose service does not resolve until it restarts)
-    stay transient.
+    named failures count as misconfiguration. Any other TLS error in a chain,
+    such as the SSLWantReadError a peer resetting the handshake leaves behind,
+    and any DNS failure (a stopped Compose service does not resolve until it
+    restarts) are not, so the transport error carrying them decides whether
+    the failure is transient.
     """
 
     if isinstance(exc, ssl.SSLCertVerificationError):
