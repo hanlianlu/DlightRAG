@@ -21,7 +21,8 @@ class _Connection:
         self.statements: list[str] = []
         self.keepalive_error: Exception | None = None
         self.hang: set[str] = set()  # statements that never complete
-        self.entered: set[str] = set()  # hanging statements that have started
+        self.gates: dict[str, asyncio.Event] = {}  # statements that complete once opened
+        self.entered: set[str] = set()  # hanging or gated statements that have started
         self._termination: list[Callable[[Any], None]] = []
         self._closed = False
         self._detached = False
@@ -33,9 +34,9 @@ class _Connection:
     async def _statement(self, statement: str) -> None:
         self._check()
         self.statements.append(statement)
-        if statement in self.hang:
+        if statement in self.hang or statement in self.gates:
             self.entered.add(statement)
-            await asyncio.Event().wait()
+            await self.gates.get(statement, asyncio.Event()).wait()
 
     async def add_listener(self, channel: str, callback: Callable[..., None]) -> None:
         await self._statement(f"LISTEN {channel}")
@@ -274,6 +275,76 @@ async def test_a_subscribe_cancelled_during_its_listen_leaves_nothing_registered
     replacement.notify("runs", "reply")
     assert later == ["reply"]
     assert abandoned == []
+    await hub.aclose()
+
+
+async def test_a_listener_cancelled_again_while_its_exit_waits_leaves_nothing_registered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An enclosing timeout can cancel listen()'s exit while a hung keepalive holds the lock.
+
+    A registration left behind would keep the hub, and its pool connection, forever
+    and call a dead callback on every NOTIFY.
+    """
+    monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.01)
+    monkeypatch.setattr(_notifications, "_STATEMENT_TIMEOUT_SECONDS", 0.5)
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    kept: list[str | None] = []
+    await hub.subscribe("keep", kept.append)
+    await _until(lambda: kept == [None])
+    first = endpoint.opened[0]
+    abandoned: list[str | None] = []
+    inside = asyncio.Event()
+
+    async def wait_for_runs() -> None:
+        async with hub.listen("runs", abandoned.append):
+            inside.set()
+            await asyncio.Event().wait()
+
+    waiter = asyncio.create_task(wait_for_runs())
+    await inside.wait()
+    first.hang.add("SELECT 1")
+    await _until(lambda: "SELECT 1" in first.entered)
+    waiter.cancel()
+    await asyncio.sleep(0.01)  # listen()'s exit now waits for the lock
+    waiter.cancel()
+    await asyncio.gather(waiter, return_exceptions=True)
+
+    assert hub._subscribers == {"keep": [kept.append]}  # noqa: SLF001
+    # The hung keepalive costs its connection; the replacement LISTENs what is left.
+    await _until(lambda: len(endpoint.opened) == 2 and kept == [None, None])
+    assert endpoint.opened[1].statements == ["LISTEN keep"]
+    await hub.unsubscribe("keep", kept.append)
+    await _until(lambda: endpoint.released == endpoint.opened)
+    assert abandoned == []  # not even the replacement's resynchronization
+    await hub.aclose()
+
+
+async def test_a_channel_subscribed_again_before_its_unlisten_runs_stays_listened() -> None:
+    """The newcomer's LISTEN found the channel still LISTENed, so the UNLISTEN must yield."""
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    leaving: list[str | None] = []
+    await hub.subscribe("runs", leaving.append)
+    await _until(lambda: leaving == [None])
+    connection = endpoint.opened[0]
+    gate = connection.gates.setdefault("LISTEN other", asyncio.Event())
+    other: list[str | None] = []
+    holder = asyncio.create_task(hub.subscribe("other", other.append))
+    await _until(lambda: "LISTEN other" in connection.entered)
+    arriving: list[str | None] = []
+    arrival = asyncio.create_task(hub.subscribe("runs", arriving.append))
+    await asyncio.sleep(0)  # the newcomer waits for the lock first
+    departure = asyncio.create_task(hub.unsubscribe("runs", leaving.append))
+    await asyncio.sleep(0)
+    gate.set()
+    await asyncio.gather(holder, arrival, departure)
+
+    assert "UNLISTEN runs" not in connection.statements
+    connection.notify("runs", "still heard")
+    assert arriving == ["still heard"]
+    assert leaving == [None]
     await hub.aclose()
 
 

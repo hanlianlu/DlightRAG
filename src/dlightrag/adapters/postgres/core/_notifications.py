@@ -100,30 +100,36 @@ class PGNotificationHub:
                 except BaseException:
                     # A registration without a LISTEN would swallow this channel for
                     # every later subscriber, since only the first one LISTENs.
-                    del self._subscribers[channel]
+                    self._unregister(channel, callback)
                     raise
         self._ensure_running()
 
     async def unsubscribe(self, channel: str, callback: NotificationCallback) -> None:
-        """Stop delivering ``channel`` to ``callback``; the last one out releases the hub."""
-        async with self._lock:
-            callbacks = self._subscribers.get(channel)
-            if not callbacks or callback not in callbacks:
-                return
-            callbacks.remove(callback)
-            if callbacks:
-                return
-            del self._subscribers[channel]
-            connection = self._connection
-            if connection is not None:
+        """Stop delivering ``channel`` to ``callback``; the last one out releases the hub.
+
+        The callback is unregistered before anything is awaited, so an unsubscribe
+        cancelled while it waits for the lock, which a hung statement holds for up to
+        the statement bound, still leaves nothing behind. The channel's UNLISTEN
+        follows under the lock unless the channel was subscribed again meanwhile: that
+        subscriber's LISTEN found the channel still LISTENed and issued none, so an
+        UNLISTEN now would leave it deaf.
+        """
+        if not self._unregister(channel, callback):
+            return
+        try:
+            async with self._lock:
+                connection = self._connection
+                if connection is None or channel in self._subscribers:
+                    return
                 # A failed UNLISTEN only costs the connection: the replacement LISTENs
                 # the channels still registered, which no longer include this one.
                 with suppress(Exception):
                     await self._statement(
                         connection, partial(connection.remove_listener, channel, self._dispatch)
                     )
-        if not self._subscribers:
-            self._changed.set()
+        finally:
+            if not self._subscribers:
+                self._changed.set()  # the last one out releases the hub
 
     async def aclose(self) -> None:
         """Stop listening and release the connection; the hub cannot be reused."""
@@ -145,6 +151,17 @@ class PGNotificationHub:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+    def _unregister(self, channel: str, callback: NotificationCallback) -> bool:
+        """Drop one registration without awaiting; return whether it emptied ``channel``."""
+        callbacks = self._subscribers.get(channel)
+        if not callbacks or callback not in callbacks:
+            return False
+        callbacks.remove(callback)
+        if callbacks:
+            return False
+        del self._subscribers[channel]
+        return True
 
     def _ensure_running(self) -> None:
         if not self._closing and (self._task is None or self._task.done()):

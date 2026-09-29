@@ -349,7 +349,9 @@ tells each subscriber to re-read its authoritative rows, and a periodic
 keepalive replaces a connection that died silently. Each LISTEN, UNLISTEN, and
 keepalive is bounded to five seconds; one that fails, hangs, or is abandoned by
 a cancelled caller costs only the connection, which is replaced, and never
-leaves a subscriber registered on a channel nothing listens on. A waiting child
+leaves a subscriber registered on a channel nothing listens on. A subscriber
+that leaves is unregistered before it waits for the hub, so even an exit that
+is cancelled again while waiting leaves nothing registered. A waiting child
 also re-reads its guidance row every five seconds, so a hub that is
 reconnecting delays a reply by at most that much. The model catalogue
 listener uses a dedicated connection when it is given an explicit endpoint, as
