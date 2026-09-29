@@ -200,6 +200,22 @@ it('distinguishes revoked and refreshing from a plain disabled Connection', asyn
   expect(metas).to.deep.equal(['OAuth · Revoked', 'None · Refreshing']);
 });
 
+it('tells a changed Connection from a failed authorization, and both ask to authorize again', async () => {
+  const notes: Record<string, string> = {};
+  for (const outcome of ['failed', 'changed'] as const) {
+    window.fetch = replies([{...draft, authentication: 'oauth', authorization_status: outcome}]);
+    const feature = mount();
+    await openCard(feature, 'fixture');
+    const note = feature.querySelector('[role=alert]')!;
+    notes[outcome] = note.textContent!.trim();
+    feature.remove();
+  }
+  expect(notes.failed).to.equal('Authorization failed or expired. Authorize again to use this server.');
+  expect(notes.changed).to.equal(
+    'This connection changed while you were authorizing, so nothing was saved. Authorize again.',
+  );
+});
+
 it('asks before deleting, names the Connection, and offers no revoke control', async () => {
   const commands: Wire[] = [];
   window.fetch = replies([{...draft, enabled: true, status: 'ready', authentication: 'bearer'}], commands);

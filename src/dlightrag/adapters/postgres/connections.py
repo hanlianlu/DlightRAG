@@ -100,14 +100,17 @@ CREATE TABLE dlightrag_answer_connection_pins (
 );
 CREATE INDEX connection_generation_pins ON dlightrag_answer_connection_pins(owner_id,connection_id,generation);
 """
+# head_revision is the authorized head's revision when the flow began; the flow publishes only
+# onto that revision. outcome records what a finished flow did beyond failing: 'succeeded', or
+# 'changed' when its Connection had moved on and it published nothing.
 _OAUTH_SCHEMA = """
 CREATE TABLE dlightrag_connection_oauth_flows (
  flow_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, connection_id TEXT NOT NULL,
  flow_owner TEXT NOT NULL, flow_lease_expires_at TIMESTAMPTZ NOT NULL,
- endpoint TEXT NOT NULL, expected_revision TEXT NOT NULL,
+ endpoint TEXT NOT NULL, head_revision BIGINT NOT NULL,
  state_hash TEXT UNIQUE, encrypted_result TEXT, encrypted_credentials TEXT,
  expires_at TIMESTAMPTZ NOT NULL, deposited_at TIMESTAMPTZ, consumed_at TIMESTAMPTZ,
- finished_at TIMESTAMPTZ, succeeded BOOLEAN NOT NULL DEFAULT FALSE,
+ finished_at TIMESTAMPTZ, outcome TEXT CHECK(outcome IN ('succeeded','changed')),
  FOREIGN KEY(owner_id,connection_id) REFERENCES dlightrag_connection_heads(owner_id,connection_id)
 );
 CREATE INDEX connection_oauth_expiry ON dlightrag_connection_oauth_flows(expires_at);
@@ -116,6 +119,13 @@ _MIGRATIONS = (
     Migration("personal_connections", "Owner Connections and immutable catalogues", (_SCHEMA,)),
     Migration("answer_connection_pins", "Atomic owner Run generation pins", (_PIN_SCHEMA,)),
     Migration("connection_oauth_inbox", "Live initiator encrypted OAuth inbox", (_OAUTH_SCHEMA,)),
+    # The inbox holds only flows that live for minutes and whose PKCE state never outlives
+    # the initiating process, so an older inbox is replaced rather than migrated.
+    Migration(
+        "connection_oauth_head_revision",
+        "Complete an OAuth flow only on the head revision it began at",
+        ("DROP TABLE IF EXISTS dlightrag_connection_oauth_flows", _OAUTH_SCHEMA),
+    ),
 )
 _TABLES = (
     TableRequirement(
@@ -126,7 +136,7 @@ _TABLES = (
             "connection_id",
             "flow_owner",
             "endpoint",
-            "expected_revision",
+            "head_revision",
             "flow_lease_expires_at",
             "state_hash",
             "encrypted_result",
@@ -135,7 +145,7 @@ _TABLES = (
             "deposited_at",
             "consumed_at",
             "finished_at",
-            "succeeded",
+            "outcome",
         ),
         primary_key=("flow_id",),
         unique=(("state_hash",),),
@@ -240,7 +250,7 @@ _TABLES = (
 )
 _SELECT = """SELECT h.*, g.endpoint_json, g.catalogue_json, g.created_at,
  g.grant_id, r.kind, r.secret_version, r.encrypted_envelope, r.refresh_epoch AS grant_refresh_epoch,
- (SELECT CASE WHEN f.succeeded THEN 'succeeded'
+ (SELECT CASE WHEN f.outcome IS NOT NULL THEN f.outcome
      WHEN f.finished_at IS NOT NULL OR f.expires_at<=clock_timestamp() OR f.flow_lease_expires_at<=clock_timestamp() THEN 'failed'
      ELSE 'pending' END FROM dlightrag_connection_oauth_flows f
      WHERE f.owner_id=h.owner_id AND f.connection_id=h.connection_id ORDER BY f.expires_at DESC LIMIT 1) AS authorization_status
@@ -1172,18 +1182,27 @@ class PGConnectionsStore(PostgresOperationRunner):
             pass
         wake.clear()
 
-    async def create_oauth_flow(self, *, flow: OAuthFlow, lifetime: float, lease: float) -> None:
+    async def create_oauth_flow(
+        self, *, flow: OAuthFlow, expected_revision: str, lifetime: float, lease: float
+    ) -> None:
+        """Begin a flow at the owner's ``expected_revision``, bound to its head's revision now.
+
+        The flow also takes the head's refresh claim for its lifetime: a refresh already running
+        loses it and cannot publish, and none starts until the flow finishes, because either
+        would move the head the flow must find where it began.
+        """
+
         async def operation(conn: Any) -> None:
             async with conn.transaction():
                 await _owner_lock(conn, flow.owner_id)
-                found = await conn.fetchval(
-                    "SELECT 1 FROM dlightrag_connection_heads WHERE owner_id=$1 AND connection_id=$2 AND tombstoned_at IS NULL FOR UPDATE",
+                head_revision = await conn.fetchval(
+                    "SELECT revision FROM dlightrag_connection_heads WHERE owner_id=$1 AND connection_id=$2 AND tombstoned_at IS NULL FOR UPDATE",
                     flow.owner_id,
                     flow.connection_id,
                 )
-                if not found:
+                if head_revision is None:
                     raise ConnectionsError("Connection not found", 404)
-                if await _revision(conn, flow.owner_id) != flow.expected_revision:
+                if await _revision(conn, flow.owner_id) != expected_revision:
                     raise ConnectionsError("Connections revision changed")
                 recent = await conn.fetchval(
                     "SELECT count(*) FROM dlightrag_connection_oauth_flows WHERE owner_id=$1 AND expires_at>clock_timestamp()",
@@ -1205,18 +1224,26 @@ class PGConnectionsStore(PostgresOperationRunner):
                     flow.owner_id,
                     flow.connection_id,
                 )
-                await conn.execute(
+                expires_at = await conn.fetchval(
                     """INSERT INTO dlightrag_connection_oauth_flows
-                    (flow_id,owner_id,connection_id,flow_owner,endpoint,expected_revision,flow_lease_expires_at,expires_at)
-                    VALUES($1,$2,$3,$4,$5,$6,clock_timestamp()+$7*interval '1 second',clock_timestamp()+$8*interval '1 second')""",
+                    (flow_id,owner_id,connection_id,flow_owner,endpoint,head_revision,flow_lease_expires_at,expires_at)
+                    VALUES($1,$2,$3,$4,$5,$6,clock_timestamp()+$7*interval '1 second',clock_timestamp()+$8*interval '1 second')
+                    RETURNING expires_at""",
                     flow.flow_id,
                     flow.owner_id,
                     flow.connection_id,
                     flow.flow_owner,
                     flow.endpoint,
-                    flow.expected_revision,
+                    head_revision,
                     lease,
                     lifetime,
+                )
+                await conn.execute(
+                    "UPDATE dlightrag_connection_heads SET refresh_owner=$3,refresh_epoch=refresh_epoch+1,refresh_expires_at=$4 WHERE owner_id=$1 AND connection_id=$2",
+                    flow.owner_id,
+                    flow.connection_id,
+                    flow.flow_id,
+                    expires_at,
                 )
 
         await self._run_once(operation)
@@ -1272,7 +1299,7 @@ class PGConnectionsStore(PostgresOperationRunner):
     async def oauth_callback_flow(self, *, owner_id: str, state_hash: str) -> OAuthFlow:
         async def operation(conn: Any) -> OAuthFlow:
             row = await conn.fetchrow(
-                """SELECT flow_id,owner_id,connection_id,flow_owner,endpoint,expected_revision
+                """SELECT flow_id,owner_id,connection_id,flow_owner,endpoint
                 FROM dlightrag_connection_oauth_flows WHERE owner_id=$1 AND state_hash=$2
                 AND deposited_at IS NULL AND finished_at IS NULL AND flow_lease_expires_at>clock_timestamp() AND expires_at>clock_timestamp()""",
                 owner_id,
@@ -1335,12 +1362,21 @@ class PGConnectionsStore(PostgresOperationRunner):
 
     async def finish_oauth_flow(self, *, flow: OAuthFlow) -> None:
         async def operation(conn: Any) -> None:
-            await conn.execute(
-                "UPDATE dlightrag_connection_oauth_flows SET finished_at=coalesce(finished_at,now()),encrypted_result=NULL,encrypted_credentials=NULL WHERE flow_id=$1 AND owner_id=$2 AND flow_owner=$3",
-                flow.flow_id,
-                flow.owner_id,
-                flow.flow_owner,
-            )
+            async with conn.transaction():
+                # Hand the head's refresh claim back unless a command, a newer flow, or this
+                # flow's own publication already took it. Head before flow, as everywhere.
+                await conn.execute(
+                    "UPDATE dlightrag_connection_heads SET refresh_owner=NULL,refresh_expires_at=NULL WHERE owner_id=$1 AND connection_id=$2 AND refresh_owner=$3",
+                    flow.owner_id,
+                    flow.connection_id,
+                    flow.flow_id,
+                )
+                await conn.execute(
+                    "UPDATE dlightrag_connection_oauth_flows SET finished_at=coalesce(finished_at,now()),encrypted_result=NULL,encrypted_credentials=NULL WHERE flow_id=$1 AND owner_id=$2 AND flow_owner=$3",
+                    flow.flow_id,
+                    flow.owner_id,
+                    flow.flow_owner,
+                )
 
         await self._run_once(operation)
 
@@ -1358,8 +1394,9 @@ class PGConnectionsStore(PostgresOperationRunner):
         scopes: tuple[str, ...],
         catalogue: tuple[CatalogueTool, ...],
         policy: ConnectionPolicy,
-        flow: OAuthFlow | None = None,
     ) -> None:
+        """Publish a new Grant as a Settings command at the owner's ``expected_revision``."""
+
         async def operation(conn: Any) -> None:
             async with conn.transaction():
                 await _owner_lock(conn, owner_id)
@@ -1373,61 +1410,139 @@ class PGConnectionsStore(PostgresOperationRunner):
                     raise ConnectionsError("Connection not found", 404)
                 if await _revision(conn, owner_id) != expected_revision:
                     raise ConnectionsError("Connections revision changed")
-                if flow is not None:
-                    valid = await conn.fetchval(
-                        "SELECT 1 FROM dlightrag_connection_oauth_flows WHERE flow_id=$1 AND owner_id=$2 AND flow_owner=$3 AND flow_lease_expires_at>clock_timestamp() AND expires_at>clock_timestamp() AND finished_at IS NULL AND consumed_at IS NOT NULL FOR UPDATE",
-                        flow.flow_id,
-                        owner_id,
-                        flow.flow_owner,
-                    )
-                    if not valid:
-                        raise ConnectionsError("Authorization expired; restart from Settings")
-                if row["enabled"]:
-                    await self._check_tool_quota(
-                        conn, owner_id, connection_id, len(catalogue), policy
-                    )
-                await conn.execute(
-                    "UPDATE dlightrag_connection_grants SET status='retired',encrypted_envelope=NULL,secret_version=secret_version+1,refresh_epoch=refresh_epoch+1 WHERE owner_id=$1 AND connection_id=$2",
-                    owner_id,
-                    connection_id,
+                await self._install_grant(
+                    conn,
+                    row,
+                    grant_id=grant_id,
+                    kind=kind,
+                    endpoint=endpoint,
+                    key_id=key_id,
+                    envelope=envelope,
+                    scopes=scopes,
+                    catalogue=catalogue,
+                    policy=policy,
                 )
-                await conn.execute(
-                    """INSERT INTO dlightrag_connection_grants
-                    (owner_id,connection_id,grant_id,kind,audience_digest,encrypted_envelope,key_id,consented_scopes)
-                    VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)""",
-                    owner_id,
-                    connection_id,
-                    grant_id,
-                    kind,
-                    hashlib.sha256(endpoint.encode()).hexdigest(),
-                    envelope,
-                    key_id,
-                    json.dumps(scopes),
-                )
-                generation = row["head_generation"] + 1
-                await self._generation(
-                    conn, owner_id, connection_id, generation, endpoint, grant_id, catalogue
-                )
-                await conn.execute(
-                    """UPDATE dlightrag_connection_heads SET head_generation=$3,revision=revision+1,
-                    refresh_epoch=refresh_epoch+1,refresh_owner=NULL,refresh_expires_at=NULL,
-                    refresh_due_at=now()+$4*interval '1 second',observed_status=CASE WHEN enabled THEN 'ready' ELSE 'disabled' END,last_error_kind=NULL
-                    WHERE owner_id=$1 AND connection_id=$2""",
-                    owner_id,
-                    connection_id,
-                    generation,
-                    policy.refresh_seconds,
-                )
-                if flow is not None:
-                    await conn.execute(
-                        "UPDATE dlightrag_connection_oauth_flows SET finished_at=now(),succeeded=TRUE,encrypted_credentials=NULL,encrypted_result=NULL WHERE flow_id=$1",
-                        flow.flow_id,
-                    )
                 await conn.execute(
                     "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, owner_id
                 )
 
         await self._run_once(operation)
+
+    async def complete_authorization(
+        self,
+        *,
+        flow: OAuthFlow,
+        key_id: str,
+        envelope: str,
+        scopes: tuple[str, ...],
+        catalogue: tuple[CatalogueTool, ...],
+        policy: ConnectionPolicy,
+    ) -> None:
+        """Publish a finished flow's Grant onto the head revision the flow began at.
+
+        Any command on the Connection since then (an edit, enable, disable, delete, revoke,
+        probe, or new credential) moved its head, and the owner's later word stands: the flow
+        publishes nothing and ends as ``changed``. Commands on the owner's other Connections
+        leave this head alone. A flow that is no longer live raises instead.
+        """
+
+        async def operation(conn: Any) -> None:
+            async with conn.transaction():
+                await _owner_lock(conn, flow.owner_id)
+                row = await conn.fetchrow(
+                    _SELECT
+                    + " WHERE h.owner_id=$1 AND h.connection_id=$2 AND h.tombstoned_at IS NULL FOR UPDATE OF h",
+                    flow.owner_id,
+                    flow.connection_id,
+                )
+                began = await conn.fetchval(
+                    """SELECT head_revision FROM dlightrag_connection_oauth_flows
+                    WHERE flow_id=$1 AND owner_id=$2 AND flow_owner=$3 AND finished_at IS NULL
+                    AND consumed_at IS NOT NULL AND flow_lease_expires_at>clock_timestamp()
+                    AND expires_at>clock_timestamp() FOR UPDATE""",
+                    flow.flow_id,
+                    flow.owner_id,
+                    flow.flow_owner,
+                )
+                if began is None:
+                    raise ConnectionsError("Authorization expired; restart from Settings")
+                outcome = "changed"
+                if row is not None and row["revision"] == began:
+                    await self._install_grant(
+                        conn,
+                        row,
+                        grant_id=flow.flow_id,
+                        kind="oauth",
+                        endpoint=flow.endpoint,
+                        key_id=key_id,
+                        envelope=envelope,
+                        scopes=scopes,
+                        catalogue=catalogue,
+                        policy=policy,
+                    )
+                    outcome = "succeeded"
+                await conn.execute(
+                    "UPDATE dlightrag_connection_oauth_flows SET finished_at=now(),outcome=$2,encrypted_credentials=NULL,encrypted_result=NULL WHERE flow_id=$1",
+                    flow.flow_id,
+                    outcome,
+                )
+                if outcome == "succeeded":
+                    await conn.execute(
+                        "SELECT pg_notify($1, $2)", CONNECTIONS_CHANGED_CHANNEL, flow.owner_id
+                    )
+
+        await self._run_once(operation)
+
+    async def _install_grant(
+        self,
+        conn: Any,
+        row: Any,
+        *,
+        grant_id: str,
+        kind: str,
+        endpoint: str,
+        key_id: str,
+        envelope: str,
+        scopes: tuple[str, ...],
+        catalogue: tuple[CatalogueTool, ...],
+        policy: ConnectionPolicy,
+    ) -> None:
+        """Replace the locked head's Grants with a new one and publish its first generation."""
+        owner_id, connection_id = row["owner_id"], row["connection_id"]
+        if row["enabled"]:
+            await self._check_tool_quota(conn, owner_id, connection_id, len(catalogue), policy)
+        await conn.execute(
+            "UPDATE dlightrag_connection_grants SET status='retired',encrypted_envelope=NULL,secret_version=secret_version+1,refresh_epoch=refresh_epoch+1 WHERE owner_id=$1 AND connection_id=$2",
+            owner_id,
+            connection_id,
+        )
+        await conn.execute(
+            """INSERT INTO dlightrag_connection_grants
+            (owner_id,connection_id,grant_id,kind,audience_digest,encrypted_envelope,key_id,consented_scopes)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)""",
+            owner_id,
+            connection_id,
+            grant_id,
+            kind,
+            hashlib.sha256(endpoint.encode()).hexdigest(),
+            envelope,
+            key_id,
+            json.dumps(scopes),
+        )
+        generation = row["head_generation"] + 1
+        await self._generation(
+            conn, owner_id, connection_id, generation, endpoint, grant_id, catalogue
+        )
+        await conn.execute(
+            """UPDATE dlightrag_connection_heads SET head_generation=$3,revision=revision+1,
+            refresh_epoch=refresh_epoch+1,refresh_owner=NULL,refresh_expires_at=NULL,
+            refresh_due_at=now()+$4*interval '1 second',observed_status=CASE WHEN enabled THEN 'ready' ELSE 'disabled' END,last_error_kind=NULL
+            WHERE owner_id=$1 AND connection_id=$2""",
+            owner_id,
+            connection_id,
+            generation,
+            policy.refresh_seconds,
+        )
 
     async def _generation(
         self,

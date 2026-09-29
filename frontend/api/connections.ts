@@ -8,7 +8,7 @@ const connection = v.pipe(v.strictObject({
   connection_id: v.string(), label: v.string(), endpoint: v.string(), enabled: v.boolean(),
   activation_epoch: v.number(), generation: v.number(),
   authentication: v.picklist(['none', 'bearer', 'oauth']),
-  authorization_status: v.nullable(v.picklist(['pending', 'succeeded', 'failed'])),
+  authorization_status: v.nullable(v.picklist(['pending', 'succeeded', 'failed', 'changed'])),
   status: v.picklist(['disabled', 'ready', 'refreshing', 'degraded', 'needs-auth', 'revoked']),
 }), v.transform((w) => ({connectionId: w.connection_id, label: w.label, endpoint: w.endpoint,
   enabled: w.enabled, activationEpoch: w.activation_epoch, generation: w.generation,

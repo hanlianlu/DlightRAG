@@ -217,6 +217,12 @@ export class DlSettingsConnections extends LightElement {
   }
 
   #note(connection: Connection): TemplateResult | typeof nothing {
+    if (connection.authorizationStatus === 'changed') {
+      return html`<p class=${styles.note} role="alert">${msg(
+        'This connection changed while you were authorizing, so nothing was saved. Authorize again.',
+        {id: 'connections.oauthChanged'},
+      )}</p>`;
+    }
     if (connection.authorizationStatus === 'failed') {
       return html`<p class=${styles.note} role="alert">${msg(
         'Authorization failed or expired. Authorize again to use this server.',

@@ -498,15 +498,16 @@ class Connections:
             )
         candidate = endpoint if endpoint is not None else item.endpoint
         self._validate_endpoint(candidate)
-        flow = OAuthFlow(
-            uuid.uuid4().hex, owner_id, connection_id, self._worker, candidate, expected_revision
-        )
+        flow = OAuthFlow(uuid.uuid4().hex, owner_id, connection_id, self._worker, candidate)
         # Fail missing keys before any external registration or flow mutation.
         self._cipher.encrypt(
             SecretStr("{}"), owner_id=owner_id, connection_id=connection_id, grant_id=flow.flow_id
         )
         await self._store.create_oauth_flow(
-            flow=flow, lifetime=self._policy.oauth_timeout, lease=10
+            flow=flow,
+            expected_revision=expected_revision,
+            lifetime=self._policy.oauth_timeout,
+            lease=10,
         )
         ready: asyncio.Future[AuthorizationStart] = asyncio.get_running_loop().create_future()
         task = asyncio.create_task(self._authorize_flow(flow, callback_url, ready))
@@ -626,19 +627,15 @@ class Connections:
                     connection_id=flow.connection_id,
                     grant_id=flow.flow_id,
                 )
-                await self._store.publish_authorization(
-                    owner_id=flow.owner_id,
-                    connection_id=flow.connection_id,
-                    expected_revision=flow.expected_revision,
-                    endpoint=flow.endpoint,
-                    grant_id=flow.flow_id,
-                    kind="oauth",
+                # Publishes only if the Connection is still where the flow began; otherwise the
+                # flow ends as changed and the owner's later command stands.
+                await self._store.complete_authorization(
+                    flow=flow,
                     key_id=key_id,
                     envelope=envelope,
                     scopes=result.scopes,
                     catalogue=catalogue,
                     policy=self._policy,
-                    flow=flow,
                 )
         except Exception, asyncio.CancelledError:
             if not ready.done():

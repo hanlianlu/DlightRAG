@@ -210,7 +210,7 @@ class ConnectionsStore(Protocol):
 
     async def wait_oauth_callback(self, *, worker_id: str, timeout: float) -> None: ...
     async def create_oauth_flow(
-        self, *, flow: OAuthFlow, lifetime: float, lease: float
+        self, *, flow: OAuthFlow, expected_revision: str, lifetime: float, lease: float
     ) -> None: ...
     async def renew_oauth_flow(self, *, flow: OAuthFlow, lease: float) -> bool: ...
     async def oauth_redirect(self, *, flow: OAuthFlow, state_hash: str) -> None: ...
@@ -235,7 +235,16 @@ class ConnectionsStore(Protocol):
         scopes: tuple[str, ...],
         catalogue: tuple[CatalogueTool, ...],
         policy: ConnectionPolicy,
-        flow: OAuthFlow | None = None,
+    ) -> None: ...
+    async def complete_authorization(
+        self,
+        *,
+        flow: OAuthFlow,
+        key_id: str,
+        envelope: str,
+        scopes: tuple[str, ...],
+        catalogue: tuple[CatalogueTool, ...],
+        policy: ConnectionPolicy,
     ) -> None: ...
 
     async def dispatch_gate(
@@ -319,7 +328,6 @@ class OAuthFlow:
     connection_id: str
     flow_owner: str
     endpoint: str
-    expected_revision: str
 
 
 @dataclass(frozen=True)

@@ -397,10 +397,10 @@ async def test_gc_preserves_live_claims_and_expires_callback_ciphertext():
         )
         assert claim is not None
         assert (await service.maintain())["collected"] == 0
-        flow = OAuthFlow(
-            "flow", "a", identity, "flow-worker", "https://example.com/mcp", view.revision
+        flow = OAuthFlow("flow", "a", identity, "flow-worker", "https://example.com/mcp")
+        await store.create_oauth_flow(
+            flow=flow, expected_revision=view.revision, lifetime=30, lease=10
         )
-        await store.create_oauth_flow(flow=flow, lifetime=30, lease=10)
         await store.oauth_credentials(flow=flow, envelope="encrypted-fixture")
         assert (await service.maintain())["collected"] == 0
         async with pool.acquire() as conn:
@@ -946,13 +946,15 @@ async def test_owner_authorization_quota_is_durable_across_workers():
             )
             revision = view.revision
         for number, item in enumerate(view.connections):
-            flow = OAuthFlow(
-                str(number), "a", item.connection_id, "worker-a", item.endpoint, revision
-            )
+            flow = OAuthFlow(str(number), "a", item.connection_id, "worker-a", item.endpoint)
             if number < 4:
-                await a.create_oauth_flow(flow=flow, lifetime=30, lease=10)
+                await a.create_oauth_flow(
+                    flow=flow, expected_revision=revision, lifetime=30, lease=10
+                )
             else:
                 with pytest.raises(ConnectionsError, match="quota"):
-                    await b.create_oauth_flow(flow=flow, lifetime=30, lease=10)
+                    await b.create_oauth_flow(
+                        flow=flow, expected_revision=revision, lifetime=30, lease=10
+                    )
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT count(*) FROM dlightrag_connection_oauth_flows") == 4

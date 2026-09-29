@@ -3,6 +3,9 @@
 
 import base64
 import json
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from pydantic import SecretStr
@@ -23,6 +26,101 @@ def cipher():
             )
         )
     )
+
+
+_CALLBACK_URL = "https://app.example/web/oauth/connections/mcp/callback"
+_OWNER = {"owner_id": "a", "auth_mode": "jwt"}
+
+
+@asynccontextmanager
+async def _authorizing_owner(prefix, server):
+    """Connections for one owner with an enabled bearer Connection and a draft beside it.
+
+    ``a`` initiates authorizations against ``server``; ``b`` is a second worker that
+    receives the provider callback, as a load balancer may route it.
+    """
+    import httpx2
+
+    from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
+    from dlightrag.application.connections import ConnectionPolicy
+
+    async with isolated_run_runtime(prefix) as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        policy = ConnectionPolicy(oauth_callback_url=_CALLBACK_URL)
+        a = Connections(
+            store=store,
+            mcp=FakeMcp(),
+            cipher=cipher(),
+            policy=policy,
+            oauth=PersonalOAuthClient(transport_factory=lambda: httpx2.MockTransport(server)),
+        )
+        b = Connections(
+            store=PGConnectionsStore(pool=pool), mcp=FakeMcp(), cipher=cipher(), policy=policy
+        )
+        view = await a.change(
+            **_OWNER,
+            expected_revision="0",
+            command=ConnectionCommand(
+                kind="create", label="Target", endpoint="https://old.example/mcp"
+            ),
+        )
+        target = view.connections[0].connection_id
+        view = await a.replace_bearer(**_OWNER, connection_id=target, bearer=SecretStr("old-token"))
+        view = await a.change(
+            **_OWNER,
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="enable", connection_id=target, consent_version=1),
+        )
+        view = await a.change(
+            **_OWNER,
+            expected_revision=view.revision,
+            command=ConnectionCommand(
+                kind="create", label="Other", endpoint="https://other.example/mcp"
+            ),
+        )
+        other = next(item.connection_id for item in view.connections if item.label == "Other")
+        try:
+            yield SimpleNamespace(
+                pool=pool, store=store, policy=policy, a=a, b=b, target=target, other=other
+            )
+        finally:
+            await a.aclose()
+            await b.aclose()
+
+
+async def _begin(fixture, server):
+    """Begin authorizing the target at the owner's current revision; return the SDK state."""
+    from urllib.parse import parse_qs, urlsplit
+
+    current = await fixture.a.read(**_OWNER)
+    start = await fixture.a.begin_authorization(
+        **_OWNER,
+        connection_id=fixture.target,
+        expected_revision=current.revision,
+        endpoint="https://mcp.example/mcp",
+    )
+    server.authorization = parse_qs(urlsplit(start.authorization_url).query)
+    return server.authorization["state"][0]
+
+
+async def _finished_flow(pool):
+    """The latest authorization flow row once its initiator has finished with it."""
+    import asyncio
+
+    async with asyncio.timeout(10):
+        while True:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT * FROM dlightrag_connection_oauth_flows ORDER BY expires_at DESC LIMIT 1"
+                )
+            if row is not None and row["finished_at"] is not None:
+                return row
+            await asyncio.sleep(0.02)
+
+
+def _item(view, connection_id):
+    return next(item for item in view.connections if item.connection_id == connection_id)
 
 
 @pytest.mark.asyncio
@@ -237,7 +335,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure",
-    ["expired", "dead-worker", "denied", "issuer", "restart", "stale-candidate", "discovery"],
+    ["expired", "dead-worker", "denied", "issuer", "restart", "discovery"],
 )
 async def test_authorization_failure_never_retires_enabled_head_and_requires_restart(
     failure, monkeypatch
@@ -312,14 +410,6 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
                 with pytest.raises(ConnectionsError):
                     await b.authorization_callback(**owner, state=state, code="test-code")
             else:
-                if failure == "stale-candidate":
-                    view = await a.change(
-                        **owner,
-                        expected_revision=view.revision,
-                        command=ConnectionCommand(
-                            kind="edit", connection_id=identity, label="Changed"
-                        ),
-                    )
                 server.fail_discovery = failure == "discovery"
                 await b.authorization_callback(
                     **owner,
@@ -349,6 +439,141 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
             if failure in {"expired", "dead-worker", "denied", "issuer", "restart"}:
                 assert not any(r.url.path == "/token" for r in server.requests)
             assert not any("old-token" in str(r.headers) for r in server.requests)
+            # A failed flow hands its head's refresh claim back; a restarted one keeps it.
+            if failure == "restart":
+                assert await store.claim(worker_id="loop", lease_seconds=30) is None
+            else:
+                await _finished_flow(pool)
+                claim = await store.claim(worker_id="loop", lease_seconds=30)
+                assert claim is not None and claim.connection.connection_id == identity
         finally:
             await a.aclose()
             await b.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change", ["other-refresh", "other-command", "own-refresh", "refresh-in-flight"]
+)
+async def test_authorization_completes_through_changes_made_elsewhere(change, monkeypatch):
+    """Only a change to the authorized Connection itself can void its authorization.
+
+    A background refresh or a Settings command on another of the owner's Connections leaves
+    the authorized head where the flow began, and so does the head's own background refresh:
+    none runs while the flow is live, and one already running when it began cannot publish.
+    """
+    from tests.support.dns import public_dns
+    from tests.unit.test_connection_oauth import FakeAuthorizationServer
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    server = FakeAuthorizationServer()
+    async with _authorizing_owner("oauth_elsewhere", server) as fixture:
+        store, policy = fixture.store, fixture.policy
+        in_flight = None
+        if change == "refresh-in-flight":
+            in_flight = await store.claim(worker_id="loop", lease_seconds=30)
+            assert in_flight is not None
+            assert in_flight.connection.connection_id == fixture.target
+        state = await _begin(fixture, server)
+        if change == "other-refresh":
+            claim = await store.claim(
+                worker_id="loop", lease_seconds=30, owner_id="a", connection_id=fixture.other
+            )
+            assert claim is not None
+            assert await store.publish(
+                claim=claim, catalogue=None, error="discovery", retry_seconds=300, policy=policy
+            )
+        elif change == "other-command":
+            await fixture.a.change(
+                **_OWNER,
+                expected_revision=(await fixture.a.read(**_OWNER)).revision,
+                command=ConnectionCommand(
+                    kind="edit", connection_id=fixture.other, label="Renamed"
+                ),
+            )
+        elif change == "own-refresh":
+            # The target is enabled and due: a refresh loop would publish whatever it claims.
+            claim = await store.claim(worker_id="loop", lease_seconds=30)
+            if claim is not None:
+                await store.publish(
+                    claim=claim,
+                    catalogue=claim.connection.catalogue,
+                    error=None,
+                    retry_seconds=300,
+                    policy=policy,
+                )
+        else:
+            assert in_flight is not None
+            assert not await store.publish(
+                claim=in_flight,
+                catalogue=in_flight.connection.catalogue,
+                error=None,
+                retry_seconds=300,
+                policy=policy,
+            )
+        await fixture.b.authorization_callback(
+            **_OWNER, state=state, code="test-code", issuer="https://as.example"
+        )
+        await _finished_flow(fixture.pool)
+        target = _item(await fixture.a.read(**_OWNER), fixture.target)
+        assert target.authorization_status == "succeeded"
+        assert target.authentication == "oauth"
+        assert target.endpoint == "https://mcp.example/mcp"
+        assert target.status == "ready"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["edit", "disable", "bearer", "delete"])
+async def test_authorization_publishes_nothing_once_its_connection_changed(change, monkeypatch):
+    """A change to the authorized Connection wins, and Settings says the flow must restart.
+
+    The flow completes its token exchange and discovery against the head revision it began
+    at; the owner's later edit, disable, credential, or delete moved that head, so the flow
+    publishes no Grant or generation and ends as ``changed`` instead of a generic failure.
+    """
+    from tests.support.dns import public_dns
+    from tests.unit.test_connection_oauth import FakeAuthorizationServer
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    server = FakeAuthorizationServer()
+    async with _authorizing_owner("oauth_changed", server) as fixture:
+        a = fixture.a
+        state = await _begin(fixture, server)
+        revision = (await a.read(**_OWNER)).revision
+        if change == "bearer":
+            changed = await a.replace_bearer(
+                **_OWNER,
+                connection_id=fixture.target,
+                expected_revision=revision,
+                bearer=SecretStr("new-token"),
+                endpoint="https://old.example/mcp",
+            )
+        else:
+            changed = await a.change(
+                **_OWNER,
+                expected_revision=revision,
+                command=ConnectionCommand(
+                    kind=change,
+                    connection_id=fixture.target,
+                    label="Changed" if change == "edit" else None,
+                ),
+            )
+        await fixture.b.authorization_callback(
+            **_OWNER, state=state, code="test-code", issuer="https://as.example"
+        )
+        flow = await _finished_flow(fixture.pool)
+        assert flow["outcome"] == "changed"
+        assert any(r.url.path == "/token" for r in server.requests)
+        async with fixture.pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM dlightrag_connection_grants WHERE kind='oauth'"
+                )
+                == 0
+            )
+        after = await a.read(**_OWNER)
+        if change == "delete":
+            assert fixture.target not in {item.connection_id for item in after.connections}
+        else:
+            expected = replace(_item(changed, fixture.target), authorization_status="changed")
+            assert _item(after, fixture.target) == expected

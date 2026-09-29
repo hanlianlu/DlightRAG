@@ -154,10 +154,11 @@ Every foreign key and owner lookup includes `owner_id`.
   activation_epoch, catalogue_digest)`: composite foreign keys to the Run
   (`ON DELETE CASCADE`) and to the pinned generation.
 - `dlightrag_connection_oauth_flows(flow_id, owner_id, connection_id,
-  flow_owner, flow_lease_expires_at, endpoint, expected_revision, state_hash,
+  flow_owner, flow_lease_expires_at, endpoint, head_revision, state_hash,
   encrypted_result, encrypted_credentials, expires_at, deposited_at,
-  consumed_at, finished_at, succeeded)`: a short-lived callback inbox, not a
-  workflow runtime.
+  consumed_at, finished_at, outcome)`: a short-lived callback inbox, not a
+  workflow runtime. `head_revision` is the authorized head's revision when the
+  flow began, and `outcome` is `succeeded`, `changed`, or null.
 
 Policy quotas bound each generation's catalogue JSON. The normalized pin table,
 not the bindings in a Run's accepted input, is what keeps GC from deleting a
@@ -228,12 +229,14 @@ Grants, and removes the old key only after its counts reach zero; see
   rejects the candidate. The server's `initialize` instructions are discarded.
 - **Refresh.** Each worker runs `discovery_concurrency` refresh loops. A loop
   claims one enabled, due head that is not deleted, not revoked, and not under a
-  live claim, using `FOR UPDATE SKIP LOCKED`. The claim increments
-  `refresh_epoch`, takes a lease of `2 × discovery_timeout + 5` seconds, sets
-  status `refreshing`, and commits before any network I/O. Publication requires
-  the same claim owner and epoch, the head revision seen at claim time, the same
-  generation Grant, and that Grant's secret version and refresh epoch, so a late
-  worker cannot overwrite a newer edit, disable, or credential change.
+  live claim, using `FOR UPDATE SKIP LOCKED`; a pending OAuth authorization
+  holds its head's claim too (see [OAuth](#oauth-and-credential-lifecycle)).
+  The claim increments `refresh_epoch`, takes a lease of
+  `2 × discovery_timeout + 5` seconds, sets status `refreshing`, and commits
+  before any network I/O. Publication requires the same claim owner and
+  epoch, the head revision seen at claim time, the same generation Grant, and
+  that Grant's secret version and refresh epoch, so a late worker cannot
+  overwrite a newer edit, disable, or credential change.
 - A successful refresh publishes a new generation, even when the catalogue is
   unchanged, sets `ready`, and schedules the next refresh `refresh_seconds`
   later. A failed refresh publishes no generation and keeps the last-good one.
@@ -391,9 +394,9 @@ refresh. DlightRAG supplies only the product integration:
    `/web/oauth/connections/mcp/callback` with no query, the key ring can
    encrypt, and any existing envelope can be read.
 2. A flow row records the initiating worker as `flow_owner`, the endpoint, the
-   expected revision, and a lifetime of `oauth_timeout`. The initiator renews a
-   10-second lease every 2 seconds. Starting again supersedes the Connection's
-   pending flow.
+   Connection head's revision, and a lifetime of `oauth_timeout`. The initiator
+   renews a 10-second lease every 2 seconds. Starting again supersedes the
+   Connection's pending flow.
 3. The SDK discovers the protected resource and authorization server, registers
    or identifies the client, and calls the redirect hook. The hook accepts one
    redirect per flow; a later step-up needs a new flow. It validates the
@@ -412,7 +415,8 @@ refresh. DlightRAG supplies only the product integration:
    DlightRAG then publishes the Grant, holding the encrypted tokens, client
    information, expiry, and authorization-server and protected-resource
    metadata, together with a generation for the new catalogue in one
-   revision-CAS transaction, and marks the flow succeeded.
+   transaction that requires the head to still be at the flow's revision, and
+   marks the flow `succeeded`.
 
 The SDK's pending PKCE verifier and state live only in the initiating process.
 If that worker dies or its lease lapses, no other worker resumes the exchange;
@@ -422,16 +426,19 @@ new Settings authorization and a new Grant. Each worker runs at most four
 authorizations, and PostgreSQL allows an owner at most four live flows and 128
 unexpired flows; beyond these, the request fails with 429.
 
-An authorization carries the owner revision read when it began, and completing
-it is a CAS on that revision. Every published background refresh of any of the
-owner's Connections changes the revision, as does any Settings command on
-another of them, and refresh claims do not wait for a pending authorization.
-Any such change published during the authorization window, which can last up
-to `oauth_timeout`, therefore fails the authorization's final CAS; Settings
-shows it as an authorization that failed or expired, and the user has to start
-again. The more enabled Connections an owner has, the likelier this is: each
-refreshes `refresh_seconds` after a success, and while it keeps failing, after
-a backoff that starts at about two seconds.
+Beginning an authorization is a Settings command at the owner revision, but
+completing it is a CAS on the authorized Connection's own head: the flow records
+the head's revision when it begins and publishes only if the head is still
+there. Any command on that Connection in between (an edit, enable, disable,
+delete, revoke, probe, or bearer save) moves the head, and the owner's later
+word stands: the flow publishes nothing and ends as `changed`, which Settings
+reports as a Connection that changed during authorization and must be
+authorized again. Changes to the owner's other Connections leave the head
+alone. So does the Connection's own background refresh: beginning the flow
+takes the head's refresh claim for the flow's lifetime, so a refresh already
+running loses its claim and cannot publish, and none starts until the flow
+finishes and hands the claim back. A flow whose initiator dies keeps it until
+`oauth_timeout` runs out.
 
 ### Client registration
 
@@ -590,11 +597,11 @@ Management is a Web projection only:
   authorization, and every published background refresh, successful or failed,
   changes it; refresh claims and call observations do not. While a refresh keeps
   failing, its backoff starts at a few seconds, so a command can get 409 between
-  the 5-second polls; Settings then asks for a reload. Commands that discover
-  before they publish carry the revision they started with through the network
-  work, so a refresh published in between fails them too: an endpoint edit or a
-  bearer save that includes the endpoint within `discovery_timeout`, and an
-  OAuth authorization within `oauth_timeout` (see
+  the 5-second polls; Settings then asks for a reload. An endpoint edit and a
+  bearer save that includes the endpoint discover before they publish and carry
+  the revision they started with through the network work, so a refresh
+  published within their `discovery_timeout` fails them too. An OAuth
+  authorization instead completes against its own Connection's head (see
   [OAuth](#oauth-and-credential-lifecycle)). Mutations need the Web session plus
   the CSRF double-submit header and same-origin checks, in `none` mode as well.
   Validation errors return a generic 422 that echoes no input, and another
@@ -611,9 +618,9 @@ Each Connection in the projection carries `connection_id`, `label`, `endpoint`,
 `enabled`, `authentication` (`none`, `bearer`, or `oauth`), `status`
 (`disabled`, `refreshing`, `ready`, `degraded`, `needs-auth`, or `revoked`),
 `authorization_status` of its latest OAuth flow (`pending`, `succeeded`,
-`failed`, or null), `activation_epoch`, and `generation`. `enabled` is
-authoritative, and `status` is the last observation. The projection carries no
-tool names, schemas, catalogue age, or raw error kinds, and Settings renders
+`failed`, `changed`, or null), `activation_epoch`, and `generation`. `enabled`
+is authoritative, and `status` is the last observation. The projection carries
+no tool names, schemas, catalogue age, or raw error kinds, and Settings renders
 neither the epoch nor the generation: Settings answers whether a server is
 reachable and authorized, and the Agent is the only consumer of what the server
 offers.
@@ -629,7 +636,9 @@ In Settings:
   `ready` leaves it off. A new catalogue never asks again.
 - The bearer field is write-only and saves with the current endpoint. OAuth
   shows a link to continue at the provider, and authorization must finish in the
-  same session. Only an unauthenticated Connection edits its endpoint in place.
+  same session. A failed or expired authorization and one whose Connection
+  changed meanwhile each get their own note, and both ask to authorize again.
+  Only an unauthenticated Connection edits its endpoint in place.
 - Delete asks for confirmation and removes the endpoint, label, and credential.
   Settings offers no revoke action, because delete already retires the Grant and
   erases its ciphertext; the `revoke` route remains for a surface that must keep
@@ -705,9 +714,12 @@ row.
 ## Operational lifecycle
 
 - Writer startup applies the Connections migrations (`personal_connections`,
-  `answer_connection_pins`, `connection_oauth_inbox`). Readers verify the
-  tables, columns, keys, and indexes without creating or altering anything. An
-  incompatible schema is a startup error, never a reset.
+  `answer_connection_pins`, `connection_oauth_inbox`,
+  `connection_oauth_head_revision`). The last one replaces an older OAuth inbox,
+  whose flows cannot outlive their initiating process anyway, instead of
+  migrating it. Readers verify the tables, columns, keys, and indexes without
+  creating or altering anything. An incompatible schema is a startup error,
+  never a reset.
 - Readers and writers both run refresh loops and owner commands; only writers
   run maintenance. Maintenance runs at startup and then at most 60 seconds apart
   (`min(60, refresh_seconds)`). Each pass re-encrypts up to 100 Grants that are
@@ -752,8 +764,9 @@ dead refresher is modeled by durable lease expiry, not by killing a process.
   `test_connection_dispatch_pg.py`, `test_connection_authorization_pg.py`,
   `test_connection_lifecycle_pg.py`, `test_connections_web_pg.py`: the owner
   lifecycle, atomic pins across Application, REST, MCP, and Web, the gate and
-  revoke races, cross-worker OAuth, refresh leases, re-encryption, GC, reader
-  startup, and Web authentication and CSRF against PostgreSQL.
+  revoke races, cross-worker OAuth and its completion against a changed or
+  unchanged head, refresh leases, re-encryption, GC, reader startup, and Web
+  authentication and CSRF against PostgreSQL.
 - `frontend/api/connections.test.ts`,
   `frontend/ui/settings-connections.browser.test.ts`: the browser wire and
   Settings behavior.

@@ -58,6 +58,7 @@ export const templates: Record<
   'connections.oauthRestart': '授权需在本次会话内完成。令牌会在已同意的权限范围内自动刷新。',
   'connections.oauthPending': '正在等待授权。',
   'connections.oauthFailed': '授权失败或已过期。请重新授权后再使用此服务。',
+  'connections.oauthChanged': '授权期间此连接已被更改，本次授权未保存。请重新授权。',
   'connections.reauthorize': '需重新授权才能再次使用此服务。',
   'connections.lastConfirmed': 'Research 会继续使用最近一次确认的配置。',
   'connections.delete': '删除',
