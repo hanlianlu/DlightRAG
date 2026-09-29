@@ -165,7 +165,10 @@ async def test_pdf_overview_actual_coverage_aggregate_budget_and_signed_recovery
         assert attachment.source.page == 2
         tampered = await call(view, resource_id=resource, cursor=cursor + "x")
         assert tampered.is_error is True
-        assert "read the resource again for a current continuation" in tampered.text_content
+        assert (
+            "call read or view on the resource again for a current continuation"
+            in tampered.text_content
+        )
 
 
 def docx_images(count):

@@ -27,6 +27,7 @@ from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReadReques
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     UnsafeArchiveError,
+    conversion_format,
     is_convertible,
 )
 from dlightrag.engine.answer.resources.formatting import (
@@ -44,6 +45,7 @@ from dlightrag.engine.answer.resources.models import (
     ResourceCursorError,
     ResourceNotConvertedError,
     ResourceNotFoundError,
+    ResourceRegistryError,
     TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
@@ -65,17 +67,17 @@ def _run_scoped_handle_refusal(exc: ResourceNotFoundError) -> str:
     an unknown internal failure would invite.
     """
     return (
-        f"{exc}. Resource ids and cursors belong to the run that registered them, so a "
-        "handle from an earlier turn is historical and cannot be read or viewed here. "
-        "Re-attach the document, or work from the images already replayed in this context."
+        f"{exc}. This run neither holds that handle nor can adopt it from an earlier "
+        "turn of this conversation, so it cannot be read or viewed here. Re-attach the "
+        "document, or work from the images already replayed in this context."
     )
 
 
 def _stale_cursor_refusal(exc: ResourceCursorError) -> str:
     """Cursors are this Run's own view state, never a durable handle."""
     return (
-        f"{exc}. A cursor continues this Run's own view of a Resource; read the resource "
-        "again for a current continuation."
+        f"{exc}. A cursor continues this Run's own view of a Resource; call read or view "
+        "on the resource again for a current continuation."
     )
 
 
@@ -83,13 +85,15 @@ def _unconverted_refusal(filename: str) -> str:
     """Reading an earlier document whose view this Session never built.
 
     Converting it now would select a parser and produce a view the earlier Run never
-    recorded, so the model is told what is true instead: the pixels are adoptable,
-    the text is not.
+    recorded, so the model is told what is true instead: a PDF's pages are adoptable
+    as pixels, and no format's text is.
     """
+    pages = conversion_format(filename, None) == "pdf"
     return (
-        f"The earlier Run never extracted text from {filename}, so this Run will not "
-        "convert it again. View its pages for pixels, or re-read it from its URL or a "
-        "fresh attachment."
+        f"The earlier Run never extracted text from {filename}, and this Run does not "
+        "build a text view the earlier Run never had. "
+        + ("View its pages for pixels, or re-read" if pages else "Re-read")
+        + " it from its URL or a fresh attachment."
     )
 
 
@@ -143,16 +147,24 @@ async def _adopt_earlier_then_retry(
             "origin_run_id": loaded.origin_run_id,
             "filename": loaded.filename,
             "source_url": loaded.source_url,
-            "reused_conversion_view": adopted.snapshot is not None,
+            "reused_conversion_view": registry.has_conversion_snapshot(adopted.resource_id),
         },
     )
     effects = lineage_adoption_effects(loaded, adopted)
+    # The adoption is bound in this Run's registry whatever the retried call does
+    # next, so its effects settle with a refusal too: a later call through the
+    # alias could otherwise settle a view whose parent no durable row names, and
+    # the Run would fail to resume.
     try:
         result = await retry()
     except ResourceNotFoundError:
-        return ToolResult.text(refusal, is_error=True)
+        result = ToolResult.text(refusal, is_error=True)
     except ResourceNotConvertedError as exc:
-        return ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
+        result = ToolResult.text(_unconverted_refusal(exc.filename), is_error=True)
+    except ResourceCursorError as exc:
+        result = ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
+    except ResourceRegistryError as exc:
+        result = ToolResult.text(str(exc), is_error=True)
     return replace(
         result,
         effects=replace(

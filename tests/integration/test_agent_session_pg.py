@@ -1216,6 +1216,105 @@ async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool
         )
 
 
+async def test_two_adoptions_of_the_same_bytes_settle_one_row_with_both_aliases(
+    pool,
+) -> None:
+    """Two earlier handles for identical bytes are one Resource of the adopting Run.
+
+    Each adoption settles that Resource's row again under the same locator, so
+    settlement merges the aliases instead of refusing the second row as a
+    conflicting identity, and both earlier handles stay resolvable after a resume.
+    """
+    from dlightrag.engine.agent.session.effects import EffectIntent
+    from dlightrag.engine.agent.tools import ToolEffects
+    from dlightrag.engine.answer.research.runtime import (
+        FetchedResourceBuffer,
+        _build_effect_host_update,
+    )
+    from dlightrag.engine.answer.resources.lineage import (
+        LINEAGE_ADOPTION_KIND,
+        SNAPSHOT_KIND,
+        LineageResourceBytes,
+        adopt_lineage_resource,
+        lineage_adoption_effects,
+    )
+    from dlightrag.engine.answer.resources.registry import ResourceRegistry
+    from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
+
+    claimed = await _claim(pool)
+    repository = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(repository, session_id, epoch)
+    content = b"%PDF-1.7 one document fetched in two turns"
+
+    def earlier(handle: str) -> LineageResourceBytes:
+        effects = ConversionSnapshot(
+            resource_id=handle,
+            input_digest=hashlib.sha256(content).hexdigest(),
+            text=f"View stored for {handle}.",
+            visuals=(),
+            extraction_status="complete",
+            converter="fixture",
+            converter_version="1",
+        ).effects()
+        return LineageResourceBytes(
+            resource_id=handle,
+            origin_run_id=str(uuid.uuid7()),
+            filename="report.pdf",
+            media_type="application/pdf",
+            content=content,
+            conversion_snapshot=next(
+                effect.content for effect in effects if effect.resource_kind == SNAPSHOT_KIND
+            ),
+        )
+
+    async with ResourceRegistry() as registry:
+        settlements = []
+        for handle in ("res-earlier-one", "res-earlier-two"):
+            loaded = earlier(handle)
+            adopted = adopt_lineage_resource(registry, loaded)
+            settlements.append(lineage_adoption_effects(loaded, adopted))
+        canonical = registry.canonical_resource_id("res-earlier-one")
+
+    for effects in settlements:
+        intent_id = IntentId.new()
+        update = _build_effect_host_update(
+            session_id=session_id,
+            intent=EffectIntent(
+                intent_id=intent_id,
+                tool_name="read",
+                replay_policy="never",
+                contract_version=1,
+                input_schema_digest="a" * 64,
+                canonical_input="{}",
+            ),
+            ledger_state=lambda: "{}",
+            fetched_buffer=FetchedResourceBuffer(),
+            execution_scope="parent",
+            tool_effects=ToolEffects(attached_resources=effects),
+        )
+        outcome = await _append_transaction_entry(
+            repository,
+            session_id,
+            _tool_result(session_id, intent_id),
+            fencing_epoch=epoch,
+            intent_id=intent_id,
+            host_delta=update,
+        )
+        assert isinstance(outcome, TransactionCommit)
+
+    catalog = await (await _store(pool)).list_fetched_resources(
+        owner_id=_OWNER, run_id=claimed.run.run_id
+    )
+    adoptions = [
+        row for row in catalog if row.capabilities.get("resource_kind") == LINEAGE_ADOPTION_KIND
+    ]
+    assert [row.resource_id for row in adoptions] == [canonical]
+    assert adoptions[0].source_locator == canonical.encode()
+    assert adoptions[0].capabilities["resource_aliases"] == ["res-earlier-one", "res-earlier-two"]
+
+
 async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
     store = await _store(pool)
     content = b"%PDF-accepted"

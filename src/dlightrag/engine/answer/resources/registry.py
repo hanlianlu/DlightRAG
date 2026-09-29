@@ -245,8 +245,8 @@ class ResourceRegistry:
     ) -> str:
         """Admit caller bytes; ``stored_view_only`` bytes are never converted here.
 
-        Identical bytes already admitted keep their own state, so an adoption that
-        matches this Run's own attachment stays convertible like that attachment.
+        Identical bytes already admitted keep the state of their first admission,
+        so ``stored_view_only`` applies only to bytes this call admits first.
         """
         return self._register(
             resource,
@@ -419,6 +419,17 @@ class ResourceRegistry:
         if alias in self._resources:
             raise ResourceStateMismatchError("Resource alias collides with another Resource")
         self._aliases[alias] = canonical
+
+    def aliases_of(self, resource_id: str) -> tuple[str, ...]:
+        """Every earlier handle bound to this Resource's canonical handle, sorted."""
+        canonical = self._canonical_resource_id(resource_id)
+        return tuple(
+            sorted(
+                alias
+                for alias in self._aliases
+                if alias != canonical and self._canonical_resource_id(alias) == canonical
+            )
+        )
 
     def canonical_resource_id(self, resource_id: str) -> str:
         """Return the durable canonical handle for a known Resource alias."""

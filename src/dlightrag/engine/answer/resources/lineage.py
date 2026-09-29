@@ -73,10 +73,15 @@ class LineageSnapshotError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class AdoptedLineageResource:
-    """This Run's canonical handle for adopted bytes, and the view adopted with them."""
+    """This Run's canonical handle for adopted bytes, and the view adopted with them.
+
+    ``aliases`` is every earlier handle bound to that canonical handle so far: two
+    earlier Runs may have registered identical bytes under different handles.
+    """
 
     resource_id: str
     snapshot: ConversionSnapshot | None = None
+    aliases: tuple[str, ...] = ()
 
 
 def adopt_lineage_resource(
@@ -106,10 +111,11 @@ def adopt_lineage_resource(
         aliases=(loaded.resource_id,),
         stored_view_only=True,
     )
+    aliases = registry.aliases_of(adopted)
     if snapshot is None or registry.has_conversion_snapshot(adopted):
-        return AdoptedLineageResource(adopted)
+        return AdoptedLineageResource(adopted, aliases=aliases)
     registry.adopt_conversion_snapshot(snapshot)
-    return AdoptedLineageResource(adopted, snapshot)
+    return AdoptedLineageResource(adopted, snapshot, aliases)
 
 
 def _restore_snapshot(loaded: LineageResourceBytes) -> ConversionSnapshot | None:
@@ -138,16 +144,23 @@ def lineage_adoption_effects(
     never invalidate what this Run adopted, and recovery re-materializes them
     through the same restore path a same-Run fetch already uses. The adopted view
     names its own assets, so nothing here re-reads the stored JSON.
+
+    The adoption row is located by this Run's canonical handle, not the earlier
+    one: a second earlier handle for identical bytes settles the same row again,
+    and settlement merges the aliases instead of refusing a second locator. Each
+    settlement carries every alias bound so far, so a view settled under one
+    earlier handle stays resolvable after a resume even when that handle's own
+    adoption never settled.
     """
     effects = [
         ResourceAttachmentBytes(
             resource_id=adopted.resource_id,
             filename=loaded.filename,
             mime_type=loaded.media_type,
-            source_locator=loaded.resource_id,
+            source_locator=adopted.resource_id,
             content=loaded.content,
             resource_kind=LINEAGE_ADOPTION_KIND,
-            aliases=(loaded.resource_id,),
+            aliases=adopted.aliases or (loaded.resource_id,),
         )
     ]
     if adopted.snapshot is None or loaded.conversion_snapshot is None:

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 from dataclasses import replace
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -31,6 +32,7 @@ from dlightrag.engine.answer.resources.models import (
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
+from dlightrag.engine.runtime.records import RunFetchedResource
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
 
@@ -258,7 +260,7 @@ async def test_an_unauthorized_handle_keeps_the_typed_refusal() -> None:
             await call(view, resource_id="res-foreign"),
         ):
             assert result.is_error is True
-            assert "earlier turn is historical" in result.text_content
+            assert "neither holds that handle nor can adopt it" in result.text_content
         assert lineage.reads == 2
 
 
@@ -392,6 +394,172 @@ async def test_viewing_an_unconverted_adoption_never_opens_it_to_conversion(monk
             assert refused.is_error is True
             assert "never extracted text from scan.pdf" in refused.text_content
         assert lineage.reads == 1, "the alias answers the later calls"
+
+
+class Loaders:
+    """Several earlier Runs' Resources, by the handle each was printed under."""
+
+    def __init__(self, *loaded: LineageResourceBytes) -> None:
+        self.by_id = {item.resource_id: item for item in loaded}
+        self.reads = 0
+
+    async def load(self, resource_id: str) -> LineageResourceBytes | None:
+        self.reads += 1
+        return self.by_id.get(resource_id)
+
+
+def viewed_document(handle: str, content: bytes, *, text: str) -> LineageResourceBytes:
+    """An earlier Run's PDF together with the text view that Run stored for it."""
+    effects = ConversionSnapshot(
+        resource_id=handle,
+        input_digest=hashlib.sha256(content).hexdigest(),
+        text=text,
+        visuals=(),
+        extraction_status="complete",
+        converter="fixture",
+        converter_version="1",
+    ).effects()
+    return LineageResourceBytes(
+        resource_id=handle,
+        origin_run_id="01a0a737-e1d3-7421-8e25-27ca8abd3dad",
+        filename="report.pdf",
+        media_type="application/pdf",
+        content=content,
+        conversion_snapshot=next(e.content for e in effects if e.resource_kind == SNAPSHOT_KIND),
+    )
+
+
+def forbid_conversion(monkeypatch) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("an adopted document is never converted here")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", forbidden)
+
+
+async def test_two_earlier_handles_for_the_same_bytes_settle_as_one_resource(
+    monkeypatch,
+) -> None:
+    """The same URL fetched in two turns gives two handles for one document.
+
+    Both adoptions settle the one Resource under one locator, so settlement merges
+    their aliases rather than refusing a second row for the same Resource.
+    """
+    forbid_conversion(monkeypatch)
+    content = pdf()
+    lineage = Loaders(
+        viewed_document("res-earlier-one", content, text="View one."),
+        viewed_document("res-earlier-two", content, text="View two."),
+    )
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+        one = await call(read, resource_id="res-earlier-one")
+        two = await call(read, resource_id="res-earlier-two")
+
+        assert (one.is_error, two.is_error) == (False, False)
+        canonical = registry.canonical_resource_id("res-earlier-one")
+        assert registry.canonical_resource_id("res-earlier-two") == canonical
+        assert "View one." in two.text_content, "one Resource keeps the view it adopted first"
+        adoptions = [
+            effect
+            for result in (one, two)
+            for effect in result.effects.attached_resources
+            if effect.resource_kind == LINEAGE_ADOPTION_KIND
+        ]
+        assert {effect.resource_id for effect in adoptions} == {canonical}
+        assert {effect.source_locator for effect in adoptions} == {canonical}
+        assert adoptions[-1].aliases == ("res-earlier-one", "res-earlier-two")
+
+
+def settled_rows(*results: ToolResult) -> tuple[tuple[RunFetchedResource, ...], dict[str, bytes]]:
+    """The catalog settlement leaves: one row per Resource, aliases merged."""
+    rows: dict[str, RunFetchedResource] = {}
+    blobs: dict[str, bytes] = {}
+    for result in results:
+        for effect in result.effects.attached_resources:
+            digest = hashlib.sha256(effect.content).hexdigest()
+            blobs[digest] = effect.content
+            earlier = rows.get(effect.resource_id)
+            aliases = sorted(
+                {
+                    *effect.aliases,
+                    *(earlier.capabilities.get("resource_aliases", []) if earlier else []),
+                }
+            )
+            rows[effect.resource_id] = RunFetchedResource(
+                resource_id=effect.resource_id,
+                ordinal=0,
+                digest=digest,
+                filename=effect.filename,
+                mime_type=effect.mime_type,
+                source_locator=effect.source_locator.encode(),
+                capabilities={"resource_kind": effect.resource_kind, "resource_aliases": aliases},
+            )
+    return tuple(rows.values()), blobs
+
+
+async def test_an_adoption_whose_retried_call_fails_still_settles(monkeypatch) -> None:
+    """The alias is bound either way, so the adoption must settle with the refusal.
+
+    Otherwise a later call through the alias settles a view whose parent handle no
+    durable row names, and the Run cannot resume.
+    """
+    from tests.unit.test_answer_executor import _executor
+
+    forbid_conversion(monkeypatch)
+    loaded = viewed_document(EARLIER_HANDLE, pdf(), text="Stored text.")
+    async with ResourceRegistry() as registry:
+        read, view = tools(registry, lineage=Loader(loaded))
+        refused = await call(view, resource_id=EARLIER_HANDLE, cursor="overview.not-a-cursor")
+
+        assert refused.is_error is True
+        assert "call read or view on the resource again" in refused.text_content
+        kinds = {effect.resource_kind for effect in refused.effects.attached_resources}
+        assert {LINEAGE_ADOPTION_KIND, SNAPSHOT_KIND} <= kinds
+        later = await call(read, resource_id=EARLIER_HANDLE)
+        assert later.is_error is False
+
+    rows, blobs = settled_rows(refused, later)
+    executor = _executor()
+    executor._store.list_fetched_resources = AsyncMock(return_value=rows)
+
+    async def stream(*, owner_id: str, digest: str, **kwargs: object):
+        del owner_id, kwargs
+        yield blobs[digest]
+
+    executor._blob_store.stream = stream
+    async with ResourceRegistry() as resumed:
+        await executor._restore_registry_fetches(resumed, owner_id="owner", run_id="run")
+        result = await resumed.read(EARLIER_HANDLE, max_window_tokens=1000)
+        assert "Stored text." in result.content
+
+
+async def test_an_unconverted_document_refuses_embedded_images_without_offering_pages(
+    monkeypatch,
+) -> None:
+    """Only a PDF has pages to view; a document's embedded images need its text view."""
+    forbid_conversion(monkeypatch)
+    lineage = Loader(
+        LineageResourceBytes(
+            resource_id=EARLIER_HANDLE,
+            origin_run_id="01a0a737-e1d3-7421-8e25-27ca8abd3dad",
+            filename="notes.docx",
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            content=b"PK\x03\x04 an earlier run's document",
+        )
+    )
+    async with ResourceRegistry() as registry:
+        _, view = tools(registry, lineage=lineage)
+        whole = await call(view, resource_id=EARLIER_HANDLE)
+        embedded = await call(view, resource_id=EARLIER_HANDLE, locator="vis-0123456789abcdef")
+
+        assert whole.is_error is True
+        assert any(
+            effect.resource_kind == LINEAGE_ADOPTION_KIND
+            for effect in whole.effects.attached_resources
+        )
+        assert embedded.is_error is True
+        assert "never extracted text from notes.docx" in embedded.text_content
+        assert "View its pages" not in embedded.text_content
 
 
 def test_the_manifest_leaves_an_earlier_resource_id_to_adoption() -> None:
