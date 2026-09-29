@@ -227,6 +227,7 @@ def test_models_accept_complete_startup_catalogue_entries() -> None:
 
 
 def test_postgres_projection_and_reader_settings() -> None:
+    from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
     from dlightrag.adapters.postgres.core._session_settings import (
         lightrag_pool_server_settings,
     )
@@ -237,7 +238,7 @@ def test_postgres_projection_and_reader_settings() -> None:
             postgres=PostgresSettings(host="db", port=5433, user="u", password="p", database="d")
         ),
     )
-    assert config.pg_connection_kwargs() == {
+    assert pg_connection_kwargs(config.storage.postgres) == {
         "host": "db",
         "port": 5433,
         "user": "u",

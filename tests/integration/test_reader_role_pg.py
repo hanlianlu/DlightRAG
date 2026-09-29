@@ -20,6 +20,7 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._migrations import (
     Migration,
     TableRequirement,
@@ -124,7 +125,7 @@ def _config(database: str, *, service_role: str) -> DlightragConfig:
 
 async def _pool(config: DlightragConfig, settings: dict[str, str]) -> Any:
     return await asyncpg.create_pool(
-        **config.pg_connection_kwargs(),
+        **pg_connection_kwargs(config.storage.postgres),
         min_size=1,
         max_size=2,
         server_settings=settings,

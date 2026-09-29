@@ -2,7 +2,7 @@
 """Tests for PostgreSQL corpus maintenance behavior."""
 
 import hashlib
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -37,9 +37,11 @@ class _Pool:
         return _Acquire(self._conn)
 
 
-def _maintenance_store(config: MagicMock, conn: object) -> PGCorpusMaintenanceStore:
+def _maintenance_store(
+    connection_kwargs: dict[str, object], conn: object
+) -> PGCorpusMaintenanceStore:
     return PGCorpusMaintenanceStore(
-        config.pg_connection_kwargs(),
+        connection_kwargs,
         workspace_registry=PGWorkspaceRegistry(pool=_Pool(conn)),
     )
 
@@ -76,26 +78,24 @@ class _Conn:
 
 
 @pytest.fixture()
-def config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.pg_connection_kwargs.return_value = {
+def connection_kwargs() -> dict[str, object]:
+    return {
         "host": "localhost",
         "port": 5432,
         "user": "dlightrag",
         "password": "test",
         "database": "dlightrag",
     }
-    return cfg
 
 
 async def test_workspace_exists_uses_the_operational_registry_point_lookup(
-    monkeypatch, config
+    monkeypatch, connection_kwargs
 ) -> None:
     conn = _Conn()
     connect = AsyncMock(side_effect=AssertionError("registry operations must not connect directly"))
     monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", connect)
 
-    store = _maintenance_store(config, conn)
+    store = _maintenance_store(connection_kwargs, conn)
     assert await store.workspace_exists("research") is True
 
     assert len(conn.fetchvals) == 1
@@ -106,7 +106,9 @@ async def test_workspace_exists_uses_the_operational_registry_point_lookup(
     connect.assert_not_awaited()
 
 
-async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, config) -> None:
+async def test_clean_orphan_tables_quotes_public_table_identifiers(
+    monkeypatch, connection_kwargs
+) -> None:
     class Conn:
         def __init__(self) -> None:
             self.executed: list[tuple[str, tuple[object, ...]]] = []
@@ -140,12 +142,12 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
     conn = Conn()
 
     async def fake_connect(**kwargs):
-        assert kwargs == config.pg_connection_kwargs.return_value
+        assert kwargs == connection_kwargs
         return conn
 
     monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
-    store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
+    store = PGCorpusMaintenanceStore(connection_kwargs)
     cleaned = await store.clean_orphan_rows("research")
 
     assert cleaned == 1
@@ -164,7 +166,7 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
 
 
 async def test_clean_orphan_tables_never_drops_migration_managed_tables(
-    monkeypatch, config
+    monkeypatch, connection_kwargs
 ) -> None:
     """Reset clears corpus rows but preserves operational identity tables."""
 
@@ -204,7 +206,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
 
     monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
-    store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
+    store = PGCorpusMaintenanceStore(connection_kwargs)
     cleaned = await store.clean_orphan_rows("default")
 
     assert cleaned == 1
@@ -218,7 +220,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
 
 
 async def test_clean_orphan_rows_resets_workspace_state_even_without_orphans(
-    monkeypatch, config
+    monkeypatch, connection_kwargs
 ) -> None:
     """Earlier phases usually leave no orphans; the promotion and counter reset still runs once."""
 
@@ -252,7 +254,7 @@ async def test_clean_orphan_rows_resets_workspace_state_even_without_orphans(
 
     monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
-    store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
+    store = PGCorpusMaintenanceStore(connection_kwargs)
     cleaned = await store.clean_orphan_rows("research")
 
     assert cleaned == 0
@@ -265,7 +267,7 @@ async def test_clean_orphan_rows_resets_workspace_state_even_without_orphans(
 
 
 async def test_list_workspace_records_page_delegates_to_the_operational_registry(
-    monkeypatch, config
+    monkeypatch, connection_kwargs
 ) -> None:
     conn = _Conn()
     connect = AsyncMock(side_effect=AssertionError("registry operations must not connect directly"))
@@ -282,7 +284,7 @@ async def test_list_workspace_records_page_delegates_to_the_operational_registry
         ),
     )
 
-    store = _maintenance_store(config, conn)
+    store = _maintenance_store(connection_kwargs, conn)
     rows, has_more = await store.list_workspace_records_page(
         after_workspace="default",
         limit=50,

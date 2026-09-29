@@ -13,6 +13,7 @@ from typing import Any
 import asyncpg
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
 from dlightrag.adapters.postgres.core._locks import advisory_lock_key
 from dlightrag.adapters.postgres.core._pool import pg_pool
@@ -621,7 +622,7 @@ def build_pg_corpus_backend(config: DlightragConfig) -> WorkspaceCorpusBackend:
         required_extensions = required_extensions + required_postgres_extensions(
             profiles_from_config(config.corpus.retrieval.bm25_profiles)
         )
-    connection_kwargs = config.pg_connection_kwargs()
+    connection_kwargs = pg_connection_kwargs(config.storage.postgres)
     return WorkspaceCorpusBackend(
         workspace_id=config.deployment.workspace,
         read_only=config.is_reader,

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import ssl
 from typing import Any, cast, get_args
 
 import pytest
@@ -296,23 +295,6 @@ def test_milvus_rejects_postgres_only_promotion_configuration() -> None:
                 promotion={"chunk_threshold": 100},  # type: ignore[arg-type]
             ),
         )
-
-
-def test_postgres_ssl_modes_project_to_asyncpg() -> None:
-    required = DlightragConfig(
-        storage=StorageSettings(postgres=PostgresSettings(ssl_mode="require"))
-    )
-    disabled = DlightragConfig(
-        storage=StorageSettings(postgres=PostgresSettings(ssl_mode="disable"))
-    )
-    verified = DlightragConfig(
-        storage=StorageSettings(postgres=PostgresSettings(ssl_mode="verify-full"))
-    )
-    assert required.pg_connection_kwargs()["ssl"] is True
-    assert disabled.pg_connection_kwargs()["ssl"] is False
-    context = verified.pg_connection_kwargs()["ssl"]
-    assert isinstance(context, ssl.SSLContext)
-    assert context.check_hostname is True
 
 
 def test_bm25_defaults_cover_languages_and_one_fallback() -> None:

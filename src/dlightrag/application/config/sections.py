@@ -8,14 +8,14 @@ Configuration sources (highest → lowest precedence):
     4. config.yaml (structured app settings)
     5. Default values
 
-LightRAG reads backend-specific env vars directly — model_post_init bridges
-DLIGHTRAG_* → backend env vars so both modes work seamlessly.
+Configuration only holds validated settings. Turning them into connections, TLS
+contexts, or LightRAG's environment variables belongs to the adapters that use
+them, so constructing a configuration never mutates the process environment.
 """
 
 import json
 import math
 import os
-import ssl
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -1071,45 +1071,3 @@ class DlightragConfig(BaseSettings):
     @property
     def parser_rules(self) -> str:
         return self.corpus.parser_rules
-
-    def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
-        pg = self.storage.postgres
-        if pg.ssl_mode is None:
-            return None
-        if pg.ssl_mode in {"require", "prefer"}:
-            return True
-        if pg.ssl_mode == "disable":
-            return False
-        if pg.ssl_mode == "allow":
-            return None
-        try:
-            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            context.check_hostname = pg.ssl_mode == "verify-full"
-            if pg.ssl_root_cert and Path(pg.ssl_root_cert).exists():
-                context.load_verify_locations(cafile=pg.ssl_root_cert)
-            if (
-                pg.ssl_cert
-                and pg.ssl_key
-                and Path(pg.ssl_cert).exists()
-                and Path(pg.ssl_key).exists()
-            ):
-                context.load_cert_chain(pg.ssl_cert, pg.ssl_key)
-            if pg.ssl_crl and Path(pg.ssl_crl).exists():
-                context.verify_flags |= ssl.VERIFY_CRL_CHECK_LEAF
-                context.load_verify_locations(cafile=pg.ssl_crl)
-            return context
-        except Exception as exc:
-            raise ValueError(f"PostgreSQL SSL configuration error: {exc}") from exc
-
-    def pg_connection_kwargs(self) -> dict[str, Any]:
-        pg = self.storage.postgres
-        kwargs: dict[str, Any] = {
-            "host": pg.host,
-            "port": pg.port,
-            "user": pg.user,
-            "password": pg.password,
-            "database": pg.database,
-        }
-        if (ssl_value := self._pg_ssl_value()) is not None:
-            kwargs["ssl"] = ssl_value
-        return kwargs

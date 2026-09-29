@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._session_settings import (
     domain_pool_server_settings,
     lightrag_pool_server_settings,
@@ -78,7 +79,7 @@ class TestReaderPoolSessionModes:
     def test_reader_domain_pool_stays_writable(self) -> None:
         cfg = _config(service_role="reader")
         assert "default_transaction_read_only" not in domain_pool_server_settings(cfg)
-        assert "server_settings" not in cfg.pg_connection_kwargs()
+        assert "server_settings" not in pg_connection_kwargs(cfg.storage.postgres)
 
     def test_reader_corpus_pool_is_read_only(self) -> None:
         cfg = _config(service_role="reader")
@@ -92,7 +93,7 @@ class TestReaderPoolSessionModes:
         cfg = _config()
         assert "default_transaction_read_only" not in domain_pool_server_settings(cfg)
         assert "default_transaction_read_only" not in lightrag_pool_server_settings(cfg)
-        assert "server_settings" not in cfg.pg_connection_kwargs()
+        assert "server_settings" not in pg_connection_kwargs(cfg.storage.postgres)
 
     def test_reader_corpus_read_only_cannot_be_overridden_by_session_setting(self) -> None:
         cfg = _config(

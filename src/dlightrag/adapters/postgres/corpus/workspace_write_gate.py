@@ -36,6 +36,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.engine.rag.workspace.ports import WorkspaceWriteFencedError
 
@@ -130,7 +131,7 @@ async def _acquire_connection() -> Any:
     import asyncpg
 
     config = pg_pool._active_config()
-    return await asyncpg.connect(**config.pg_connection_kwargs())
+    return await asyncpg.connect(**pg_connection_kwargs(config.storage.postgres))
 
 
 async def _release_connection(conn: Any, *, hard: bool) -> None:

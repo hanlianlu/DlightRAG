@@ -23,6 +23,7 @@ from typing import Any, TypeVar
 
 import asyncpg
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
 from dlightrag.adapters.postgres.core._notifications import (
     PGNotificationHub,
@@ -103,8 +104,7 @@ class PGPool:
 
             min_size = getattr(config.storage.postgres, "pool_min_size", _DEFAULT_MIN_SIZE)
             max_size = getattr(config.storage.postgres, "pool_max_size", _DEFAULT_MAX_SIZE)
-            endpoint = config.pg_connection_kwargs()
-            pool_kwargs: dict[str, Any] = dict(endpoint)
+            pool_kwargs = pg_connection_kwargs(config.storage.postgres)
             pool_kwargs["min_size"] = min_size
             pool_kwargs["max_size"] = max_size
             statement_cache_size = getattr(config.storage.postgres, "statement_cache_size", None)
@@ -137,7 +137,7 @@ class PGPool:
         config = self._active_config()
         server_settings = domain_pool_server_settings(config)
         return dedicated_connection(
-            {**config.pg_connection_kwargs(), "server_settings": server_settings}
+            {**pg_connection_kwargs(config.storage.postgres), "server_settings": server_settings}
         )
 
     async def run(

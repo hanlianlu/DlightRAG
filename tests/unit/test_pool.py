@@ -18,6 +18,13 @@ def _session_settings(
     mutate_config(mock_config, "storage.postgres.session_settings", dict(extra or {}))
 
 
+def _endpoint(mock_config: MagicMock, *, ssl_mode: str | None = None, **endpoint: object) -> None:
+    """Give the mock config the PostgreSQL endpoint and TLS mode the pool connects with."""
+    fields = {"host": "h", "port": 5432, "user": "u", "password": "p", "database": "db"}
+    for name, value in {**fields, **endpoint, "ssl_mode": ssl_mode}.items():
+        mutate_config(mock_config, f"storage.postgres.{name}", value)
+
+
 class TestPGPoolGet:
     """Tests for PGPool.get()."""
 
@@ -30,23 +37,14 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mutate_config(mock_config, "storage.postgres.host", "testhost")
-        mutate_config(mock_config, "storage.postgres.port", 5432)
-        mutate_config(mock_config, "storage.postgres.user", "testuser")
-        mutate_config(mock_config, "storage.postgres.password", "testpass")
-        mutate_config(mock_config, "storage.postgres.database", "testdb")
         mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
         mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
         mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mutate_config(mock_config, "storage.postgres.command_timeout", None)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "testhost",
-            "port": 5432,
-            "user": "testuser",
-            "password": "testpass",
-            "database": "testdb",
-        }
+        _endpoint(
+            mock_config, host="testhost", user="testuser", password="testpass", database="testdb"
+        )
 
         with (
             patch(
@@ -78,20 +76,9 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mutate_config(mock_config, "storage.postgres.host", "localhost")
-        mutate_config(mock_config, "storage.postgres.port", 5432)
-        mutate_config(mock_config, "storage.postgres.user", "u")
-        mutate_config(mock_config, "storage.postgres.password", "p")
-        mutate_config(mock_config, "storage.postgres.database", "db")
         mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "localhost",
-            "port": 5432,
-            "user": "u",
-            "password": "p",
-            "database": "db",
-        }
+        _endpoint(mock_config, host="localhost")
 
         with (
             patch(
@@ -140,20 +127,9 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mutate_config(mock_config, "storage.postgres.host", "localhost")
-        mutate_config(mock_config, "storage.postgres.port", 5432)
-        mutate_config(mock_config, "storage.postgres.user", "u")
-        mutate_config(mock_config, "storage.postgres.password", "p")
-        mutate_config(mock_config, "storage.postgres.database", "db")
         mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "localhost",
-            "port": 5432,
-            "user": "u",
-            "password": "p",
-            "database": "db",
-        }
+        _endpoint(mock_config, host="localhost")
 
         with (
             patch(
@@ -184,13 +160,9 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.statement_cache_size", 128)
         mutate_config(mock_config, "storage.postgres.command_timeout", None)
         _session_settings(mock_config, ef_search=384, extra={"application_name": "dlightrag"})
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "primary",
-            "port": 5432,
-            "user": "writer",
-            "password": "secret",
-            "database": "dlightrag",
-        }
+        _endpoint(
+            mock_config, host="primary", user="writer", password="secret", database="dlightrag"
+        )
 
         with (
             patch(
@@ -231,14 +203,14 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mutate_config(mock_config, "storage.postgres.command_timeout", None)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "primary",
-            "port": 5432,
-            "user": "writer",
-            "password": "secret",
-            "database": "dlightrag",
-            "ssl": True,
-        }
+        _endpoint(
+            mock_config,
+            host="primary",
+            user="writer",
+            password="secret",
+            database="dlightrag",
+            ssl_mode="require",
+        )
 
         with (
             patch(
@@ -284,13 +256,9 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.connection_retries", 2)
         mutate_config(mock_config, "storage.postgres.connection_retry_backoff", 0)
         mutate_config(mock_config, "storage.postgres.connection_retry_backoff_max", 0)
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "primary",
-            "port": 5432,
-            "user": "writer",
-            "password": "secret",
-            "database": "dlightrag",
-        }
+        _endpoint(
+            mock_config, host="primary", user="writer", password="secret", database="dlightrag"
+        )
 
         calls = 0
 
@@ -333,7 +301,7 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.command_timeout", None)
         mutate_config(mock_config, "storage.postgres.acquire_timeout", 12.5)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+        _endpoint(mock_config)
 
         calls = 0
 
@@ -373,13 +341,9 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mutate_config(mock_config, "storage.postgres.command_timeout", 60.0)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {
-            "host": "primary",
-            "port": 5432,
-            "user": "writer",
-            "password": "secret",
-            "database": "dlightrag",
-        }
+        _endpoint(
+            mock_config, host="primary", user="writer", password="secret", database="dlightrag"
+        )
 
         with (
             patch(
@@ -407,7 +371,7 @@ class TestPGPoolGet:
         mutate_config(mock_config, "storage.postgres.acquire_timeout", 12.5)
         mutate_config(mock_config, "storage.postgres.connection_retries", 1)
         _session_settings(mock_config)
-        mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+        _endpoint(mock_config)
 
         async def operation(conn):  # noqa: ANN001, ANN202
             return "ok"
@@ -458,7 +422,7 @@ class TestPGPoolGet:
         connection.close = AsyncMock()
         pool = PGPool()
         mock_config = MagicMock()
-        mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+        _endpoint(mock_config)
         _session_settings(mock_config, extra={"idle_session_timeout": "0"})
         pool.bind(mock_config)
         received: list[str | None] = []
@@ -478,6 +442,9 @@ class TestPGPoolGet:
         connect.assert_awaited_once_with(
             host="h",
             port=5432,
+            user="u",
+            password="p",
+            database="db",
             server_settings={"hnsw.ef_search": "256", "idle_session_timeout": "0"},
         )
         create_pool.assert_not_called()

@@ -111,11 +111,15 @@ constructed; that adapter owns the whole LightRAG environment bridge
 (PostgreSQL, Milvus, parser sidecars, parser rules, input directory). The
 session settings both pools use are rendered in one place, the PostgreSQL
 adapter core (`adapters/postgres/core/_session_settings.py`): the domain pool
-applies them directly and the bridge hands them to LightRAG. DlightRAG's
-domain-store pool, maintenance adapter, and readiness adapter use the same
-`pg_connection_kwargs()` path, so managed PostgreSQL deployments do not need a
-second SSL configuration surface. Constructing configuration alone does not
-mutate LightRAG's process environment.
+applies them directly and the bridge hands them to LightRAG. Every connection
+DlightRAG opens itself (the domain-store pool, the notification listener, the
+maintenance and readiness adapters, and the workspace write gate) takes its
+endpoint, credentials, and TLS context from one adapter-core helper,
+`pg_connection_kwargs()` in `adapters/postgres/core/_connection.py`, which the
+bridge also reads its endpoint from, so managed PostgreSQL deployments do not
+need a second SSL configuration surface. Configuration only holds the validated
+settings: constructing it builds no TLS context and does not mutate LightRAG's
+process environment.
 
 Connection budgets are split deliberately:
 

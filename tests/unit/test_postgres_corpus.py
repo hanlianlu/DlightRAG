@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._session_settings import (
     domain_pool_server_settings,
     lightrag_pool_server_settings,
@@ -78,7 +79,7 @@ async def test_connection_budget_warning_is_owned_by_coordination(
 ) -> None:
     monkeypatch.setenv("WEB_CONCURRENCY", "2")
     coordination = PGCorpusCoordination(
-        connection_kwargs=test_config.pg_connection_kwargs(),
+        connection_kwargs=pg_connection_kwargs(test_config.storage.postgres),
         workspace=test_config.deployment.workspace,
         reader=False,
         require_halfvec=False,

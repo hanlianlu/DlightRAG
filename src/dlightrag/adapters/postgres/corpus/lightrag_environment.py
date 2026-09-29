@@ -10,6 +10,7 @@ configuration only holds the settings and never mutates the environment.
 import os
 from urllib.parse import urlencode
 
+from dlightrag.adapters.postgres.core._connection import pg_connection_kwargs
 from dlightrag.adapters.postgres.core._session_settings import (
     lightrag_pool_server_settings,
     setting_text,
@@ -26,7 +27,7 @@ def lightrag_backend_env(config: DlightragConfig) -> dict[str, str]:
     is unset (SSL files, Milvus fields) is omitted, leaving an inherited value.
     """
     pg, vector = config.storage.postgres, config.storage.lightrag
-    endpoint = config.pg_connection_kwargs()
+    endpoint = pg_connection_kwargs(pg)
     values: dict[str, str | int | float | None] = {
         "POSTGRES_WORKSPACE": "",
         "POSTGRES_HOST": endpoint["host"],
