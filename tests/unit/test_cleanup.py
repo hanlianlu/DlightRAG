@@ -215,6 +215,25 @@ class TestRemoveDeletedFiles:
         assert removed == len(artifact_dirs)
         assert all(not artifact_dir.exists() for artifact_dir in artifact_dirs)
 
+    def test_a_parser_hinted_source_goes_with_the_document_lightrag_stores_it_as(
+        self, tmp_path
+    ) -> None:
+        """LightRAG stores ``report.[native].md`` as ``report.md``; its bytes keep the hint."""
+        workspace_input = tmp_path / "corpus" / "default"
+        archived = workspace_input / "__parsed__" / "report.[native].md"
+        kept_input = workspace_input / "report.[native].md"
+        other = workspace_input / "__parsed__" / "report.[native].pdf"
+        for path in (archived, kept_input, other):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"bytes")
+
+        removed = remove_deleted_files({"report.md"}, str(workspace_input))
+
+        assert removed == 2
+        assert not archived.exists()
+        assert not kept_input.exists()
+        assert other.exists()
+
     def test_nested_remote_parser_path_removes_artifacts_not_remote_source(self, tmp_path) -> None:
         workspace_input = tmp_path / "inputs" / "default"
         batch_root = workspace_input / "__remote_ingest__" / "s3" / "batch-1"

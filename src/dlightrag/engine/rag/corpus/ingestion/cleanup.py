@@ -2,6 +2,7 @@
 """LightRAG deletion helpers."""
 
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from inspect import isawaitable
@@ -244,11 +245,18 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
             parsed_roots.append(default_parsed_root)
 
         # 1. Remove the source file (may be in input_dir/ or moved into
-        #    __parsed__/ by LightRAG after ingest).
+        #    __parsed__/ by LightRAG after ingest), also under a parser-hinted
+        #    name LightRAG stores as this one (``report.[native].md``).
         source_candidates = [source_root / filename]
         if path.is_absolute():
             source_candidates.insert(0, path)
         source_candidates.extend(parsed_root / filename for parsed_root in parsed_roots)
+        for root in dict.fromkeys((source_root, *parsed_roots)):
+            try:
+                source_candidates.extend(_hinted_sources(root, filename))
+            except OSError as exc:
+                failures.append(exc)
+                logger.warning("Failed to scan source folder: %s", root, exc_info=True)
         for candidate in dict.fromkeys(source_candidates):
             try:
                 if candidate.exists() and candidate.is_file():
@@ -288,6 +296,23 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     if failures:
         raise OSError("one or more requested corpus source files could not be removed")
     return removed
+
+
+def _hinted_sources(root: Path, name: str) -> list[Path]:
+    """Files in ``root`` under a parser-hinted name that LightRAG stores as ``name``."""
+    from dlightrag.engine.rag.corpus.ingestion.paths import document_name
+
+    try:
+        entries = list(os.scandir(root))
+    except FileNotFoundError, NotADirectoryError:
+        return []
+    return [
+        Path(entry.path)
+        for entry in entries
+        if entry.name != name
+        and document_name(entry.name) == name
+        and entry.is_file(follow_symlinks=False)
+    ]
 
 
 def _is_remote_source_path(path: str) -> bool:

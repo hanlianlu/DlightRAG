@@ -39,6 +39,7 @@ from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
 from dlightrag.engine.rag.corpus.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.engine.rag.corpus.ingestion.parser_transport import parser_unavailable_recorded
 from dlightrag.engine.rag.corpus.ingestion.paths import (
+    clear_archived_source,
     discard_parser_input,
     lightrag_archived_source_path,
     parser_input_path,
@@ -130,7 +131,8 @@ class UnifiedIngestionEngine:
     document's source of record (its ``download_locator`` names it, or LightRAG's
     archive of it); any other copy (a remote download, a retained remote source, a
     padded image) is removed, with the copy LightRAG archived, once LightRAG has
-    settled the document.
+    settled the document. LightRAG archives an input under its own name only while
+    that name is free, so whatever holds it goes right before the enqueue.
     """
 
     def __init__(
@@ -377,6 +379,13 @@ class UnifiedIngestionEngine:
                     chunk_options = self._batch_chunk_options(enqueue_entries)
                     for entry in enqueue_entries:
                         await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
+                    # Each document's locator names the archive LightRAG makes under
+                    # the document's own name, which the cleanup above freed of the
+                    # old version's document but not of its bytes.
+                    await asyncio.to_thread(
+                        _clear_archived_sources,
+                        [parser_inputs[entry.index] for entry in enqueue_entries],
+                    )
                     await self._lightrag.apipeline_enqueue_documents(
                         input=[""] * len(enqueue_entries),
                         file_paths=[str(parser_inputs[entry.index]) for entry in enqueue_entries],
@@ -1164,6 +1173,11 @@ def _is_source_of_record(download_locator: object, parser_input: Path) -> bool:
 def _discard_parser_inputs(parser_inputs: Sequence[Path]) -> None:
     for parser_input in parser_inputs:
         discard_parser_input(parser_input)
+
+
+def _clear_archived_sources(parser_inputs: Sequence[Path]) -> None:
+    for parser_input in parser_inputs:
+        clear_archived_source(parser_input)
 
 
 def _entry_filename(entry: _PendingDocumentIngest) -> str:

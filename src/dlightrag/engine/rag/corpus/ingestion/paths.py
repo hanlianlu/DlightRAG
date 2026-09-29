@@ -84,6 +84,18 @@ def place_parser_input(source: Path, input_root: Path) -> Path:
     return target
 
 
+def clear_archived_source(parser_input: Path) -> None:
+    """Remove the file that holds LightRAG's archive name for ``parser_input``.
+
+    LightRAG archives a parsed input to ``__parsed__/<name>``, or to
+    ``__parsed__/<stem>_001<ext>`` while that name is taken, and a document's
+    locator names the former. Right before an input is enqueued, what holds that
+    name is an earlier version of the same document, already deleted, or an
+    orphan; when it was the input's own source, it was already copied out.
+    """
+    lightrag_archived_source_path(parser_input).unlink(missing_ok=True)
+
+
 def discard_parser_input(parser_path: Path) -> None:
     """Remove a transient parser input and the copy LightRAG archived beside it.
 

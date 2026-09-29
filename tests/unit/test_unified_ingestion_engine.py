@@ -3283,20 +3283,159 @@ async def test_a_placed_copy_that_is_not_the_documents_source_goes_once_lightrag
     assert source.read_bytes() == b"remote"
 
 
-async def test_a_retry_from_lightrags_archive_keeps_the_archive_as_the_documents_source(
-    tmp_path: Path, parser_input_root: Path
+def _archiving_engine(
+    input_root: Path, monkeypatch: pytest.MonkeyPatch, **overrides: Any
+) -> tuple[UnifiedIngestionEngine, dict[str, Any], dict[str, Any]]:
+    """An engine whose LightRAG looks up and archives parser inputs as LightRAG does.
+
+    Each enqueued document is found with LightRAG's own resolver and archived with
+    its own ``move_file_to_parsed_dir``. The returned state holds the doc_status
+    rows (``status``), the metadata rows (``metadata``) and, per document, the
+    bytes LightRAG parsed (``parsed``).
+    """
+    from lightrag.pipeline import _PipelineMixin
+    from lightrag.utils import move_file_to_parsed_dir
+
+    input_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("INPUT_DIR", str(input_root.parent))
+    monkeypatch.chdir(input_root.parent)
+    workspace = input_root.name
+    engine, deps = _make_engine(input_root=input_root, workspace=workspace, **overrides)
+    state: dict[str, Any] = {"status": {}, "metadata": {}, "parsed": {}}
+    queue: list[str] = []
+
+    async def enqueue(**kwargs: Any) -> str:
+        for path in kwargs["file_paths"]:
+            doc_id = compute_mdhash_id(normalize_document_file_path(path), prefix="doc-")
+            state["status"][doc_id] = {"status": "pending", "chunks_list": []}
+            queue.append(Path(path).name)
+        return "track-1"
+
+    async def process() -> None:
+        while queue:
+            name = queue.pop(0)
+            doc_id = compute_mdhash_id(normalize_document_file_path(name), prefix="doc-")
+            source = Path(
+                _PipelineMixin._resolve_source_file_for_parser(
+                    cast(Any, SimpleNamespace(workspace=workspace)),
+                    normalize_document_file_path(name),
+                    source_file=name,
+                )
+            )
+            state["parsed"][doc_id] = source.read_bytes()
+            await move_file_to_parsed_dir(source, skip_if_already_parsed=True)
+            state["status"][doc_id] = {"status": "processed", "chunks_list": [f"chunk-{doc_id}"]}
+
+    def delete(doc_id: str, **_kwargs: Any) -> SimpleNamespace:
+        state["status"].pop(doc_id, None)
+        return SimpleNamespace(status="success")
+
+    def upsert(doc_id: str, record: Mapping[str, Any]) -> None:
+        state["metadata"][doc_id] = {**state["metadata"].get(doc_id, {}), **record}
+
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["stores"].get_doc_status.side_effect = state["status"].get
+    deps["stores"].get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: state["status"][doc_id] for doc_id in doc_ids if doc_id in state["status"]
+    }
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = state["metadata"].get
+    deps["metadata_index"].upsert.side_effect = upsert
+    deps["metadata_index"].delete.side_effect = lambda doc_id: state["metadata"].pop(doc_id, None)
+    return engine, deps, state
+
+
+def _staged_local_item(source: Path, input_root: Path) -> PreparedIngestFile:
+    """A staged local source as WorkspaceRag describes it: its flat input is its copy."""
+    return PreparedIngestFile(
+        parser_path=source,
+        source_uri=f"local://{input_root.name}/{source.name}",
+        download_locator=str(input_root / source.name),
+    )
+
+
+def _staged_versions(tmp_path: Path, name: str, *versions: bytes) -> list[Path]:
+    staged = []
+    for index, content in enumerate(versions):
+        path = tmp_path / "stage" / str(index) / name
+        path.parent.mkdir(parents=True)
+        path.write_bytes(content)
+        staged.append(path)
+    return staged
+
+
+@pytest.mark.parametrize("replace", [True, False], ids=["replace", "changed-bytes"])
+async def test_a_new_version_is_archived_where_its_locator_points(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch, replace: bool
 ) -> None:
-    """A document LightRAG archived is replayed from its archive, which stays its copy."""
+    """LightRAG archives an input as ``<stem>_001<ext>`` while its name is taken.
+
+    Deleting the old version's document leaves the old archive under that name, so
+    the new version would be downloaded, and retried, as the old bytes.
+    """
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    first, second = _staged_versions(tmp_path, "report.md", b"# one\n", b"# two\n")
+
+    await engine.aingest_files([_staged_local_item(first, parser_input_root)])
+    result = await engine.aingest_files(
+        [_staged_local_item(second, parser_input_root)], replace=replace
+    )
+
+    assert not result["errors"]
+    (row,) = state["metadata"].values()
+    assert Path(row["download_locator"]).read_bytes() == b"# two\n"
+    assert sorted(path.name for path in (parser_input_root / "__parsed__").iterdir()) == [
+        "report.md"
+    ]
+
+
+async def test_a_replacement_that_fails_to_finalize_is_retried_from_its_own_bytes(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry reads the document's archive, which must hold the version it replays."""
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+
+    engine, deps, state = _archiving_engine(
+        parser_input_root,
+        monkeypatch,
+        bm25_language_classifier=SimpleNamespace(detect=lambda _text: "en"),
+    )
+    first, second = _staged_versions(tmp_path, "report.md", b"# one\n", b"# two\n")
+    await engine.aingest_files([_staged_local_item(first, parser_input_root)])
+    deps["stores"].fetch_chunk_contents.side_effect = RuntimeError("chunk store unavailable")
+
+    result = await engine.aingest_files(
+        [_staged_local_item(second, parser_input_root)], replace=True
+    )
+
+    assert result["errors"] == ["report.md: document processing failed"]
+    (row,) = state["metadata"].values()
+    retried = WorkspaceRag._retry_local_source_path(
+        cast(Any, SimpleNamespace(_workspace_input_root=lambda: parser_input_root)),
+        row["download_locator"],
+    )
+    assert retried.read_bytes() == b"# two\n"
+
+
+async def test_a_retry_from_lightrags_archive_is_archived_back_in_its_place(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document LightRAG archived is replayed from its archive, which stays its copy.
+
+    The replay parses a flat copy of it as supplied (a local image is not padded),
+    which LightRAG archives back under the document's name.
+    """
     from PIL import Image
 
     archived = parser_input_root / "__parsed__" / "plate.png"
     archived.parent.mkdir(parents=True)
     Image.new("RGB", (40, 40), (1, 2, 3)).save(archived)
     original = archived.read_bytes()
-    engine, deps = _make_engine()
-    enqueued = _record_enqueued(deps)
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
 
-    await engine.aingest_files(
+    result = await engine.aingest_files(
         [
             PreparedIngestFile(
                 parser_path=archived,
@@ -3306,9 +3445,12 @@ async def test_a_retry_from_lightrags_archive_keeps_the_archive_as_the_documents
         ]
     )
 
-    assert enqueued == [original]
+    assert not result["errors"]
+    assert list(state["parsed"].values()) == [original]
+    assert sorted(path.name for path in archived.parent.iterdir()) == ["plate.png"]
     assert archived.read_bytes() == original
-    assert (parser_input_root / "plate.png").read_bytes() == original
+    (row,) = state["metadata"].values()
+    assert row["download_locator"] == str(archived)
 
 
 async def test_a_placed_copy_stays_while_lightrag_may_still_parse_it(
@@ -3360,7 +3502,7 @@ async def test_lightrag_parses_the_placed_input_before_any_same_named_decoy(
 
     With the process running in the working directory, LightRAG's fallbacks after
     its input directory are a bare name there and ``inputs/<workspace>``, which is
-    then operators' source folder; a stale archive of the same name is another.
+    then operators' source folder.
     """
     from lightrag.pipeline import _PipelineMixin
 
@@ -3370,7 +3512,6 @@ async def test_lightrag_parses_the_placed_input_before_any_same_named_decoy(
     decoys = (
         working_dir / "report.pdf",
         working_dir / "inputs" / "default" / "report.pdf",
-        input_root / "__parsed__" / "report.pdf",
     )
     for decoy in decoys:
         decoy.parent.mkdir(parents=True, exist_ok=True)
