@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
-    from dlightrag.application.health import ApplicationHealth
+    from dlightrag.application.health import ApplicationHealth, HealthComponentName
     from dlightrag.application.memory import MemoryService
     from dlightrag.application.model_catalogue import ModelCatalogueAdmin
     from dlightrag.application.retrieval import RetrievalService
@@ -24,6 +24,11 @@ if TYPE_CHECKING:
     from dlightrag.application.web_conversations import WebConversationService
 
 logger = logging.getLogger(__name__)
+
+#: How long startup waits for the cancellation listener before it reports the
+#: process not ready and leaves the Run coordinator to start once the listener is.
+_LISTENER_STARTUP_WAIT_SECONDS = 30.0
+_LATE_COORDINATOR_START = "Run coordinator start after a late cancellation listener"
 
 
 def _noop_initialize_process(_config: DlightragConfig) -> None:
@@ -87,6 +92,7 @@ class Application:
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
         self._memory_janitor: asyncio.Task[None] | None = None
+        self._late_coordinator_start: asyncio.Task[None] | None = None
 
     @property
     def config(self) -> DlightragConfig:
@@ -353,39 +359,77 @@ class Application:
         """Begin executing accepted runs once startup validated their schema.
 
         The cancellation listener's initial LISTEN and locally leased rescan
-        must succeed before the coordinator claims work; connection failure
-        keeps readiness false while the listener retries and never permits
-        heartbeat-only claiming.
+        must succeed before the coordinator claims work. A listener still
+        retrying after the startup wait keeps readiness false and never permits
+        heartbeat-only claiming; the coordinator starts, and readiness returns,
+        in the background once the listener is ready.
         """
         if not self._runs_ready:
             return
+        listener = self._components.cancellation_listener
         try:
-            await self._components.cancellation_listener.start()
-            await asyncio.wait_for(
-                self._components.cancellation_listener.ready.wait(), timeout=30.0
-            )
+            await listener.start()
         except Exception as exc:
-            self._runs_ready = False
-            self._components.health.mark_component_degraded("cancellation_listener")
-            self._components.health.mark_component_degraded("operational_state")
+            self._degrade_runs("cancellation_listener")
             logger.warning(
                 "Run cancellation listener failed to start",
                 extra={"error_type": type(exc).__name__},
             )
             return
+        try:
+            await asyncio.wait_for(listener.ready.wait(), timeout=_LISTENER_STARTUP_WAIT_SECONDS)
+        except TimeoutError:
+            self._degrade_runs("cancellation_listener")
+            logger.warning(
+                "Run cancellation listener is not ready; the Run coordinator starts once it is"
+            )
+            self._late_coordinator_start = asyncio.create_task(
+                self._start_run_coordinator_once_listener_ready(),
+                name=_LATE_COORDINATOR_START,
+            )
+            return
+        await self._start_coordinator()
+
+    async def _start_run_coordinator_once_listener_ready(self) -> None:
+        """Finish the Run startup a slow cancellation listener outlasted."""
+        await self._components.cancellation_listener.ready.wait()
+        if self._closed or not await self._start_coordinator():
+            return
+        self._runs_ready = True
+        await self._initialize_web_conversations()
+        self._components.health.mark_ready()
+        logger.info("Run cancellation listener is ready; the Run coordinator started")
+
+    async def _start_coordinator(self) -> bool:
+        """Start claiming work behind a ready cancellation listener."""
         self._components.health.mark_component_healthy("cancellation_listener")
         try:
             await self._components.coordinator.start()
         except Exception as exc:
-            self._runs_ready = False
-            self._components.health.mark_component_degraded("run_coordinator")
-            self._components.health.mark_component_degraded("operational_state")
+            self._degrade_runs("run_coordinator")
             logger.warning(
                 "Run coordinator failed to start",
                 extra={"error_type": type(exc).__name__},
             )
-        else:
-            self._components.health.mark_component_healthy("run_coordinator")
+            return False
+        self._components.health.mark_component_healthy("run_coordinator")
+        return True
+
+    def _degrade_runs(self, component: HealthComponentName) -> None:
+        self._runs_ready = False
+        self._components.health.mark_component_degraded(component)
+        self._components.health.mark_component_degraded("operational_state")
+
+    async def _stop_late_coordinator_start(self) -> None:
+        task = self._late_coordinator_start
+        self._late_coordinator_start = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
 
     async def _initialize_web_conversations(self) -> None:
         if not self._web_enabled:
@@ -462,6 +506,7 @@ class Application:
                 else _noop_close_process,
             ),
             ("memory janitor", self._stop_memory_janitor),
+            ("the late Run coordinator start", self._stop_late_coordinator_start),
             ("corpus admin promotion worker", components.corpora.aclose),
             ("the durable run coordinator", components.coordinator.aclose),
             ("Agent execution", components.close_agent_execution),

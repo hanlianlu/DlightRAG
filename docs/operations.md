@@ -109,6 +109,11 @@ Workspaces in a running deployment. Neither delegates to the other.
   Use `GET /health` for I/O-free liveness and the bounded corpus/parser/provider
   degradation view. A corpus or provider outage does not remove readiness:
   accepted eligible Runs defer durably while their lane's admission limit has room.
+- A process whose Run cancellation listener is not ready within 30 seconds of
+  startup (PostgreSQL LISTEN or the first cancel-pending rescan keeps failing)
+  reports not ready, with `cancellation_listener` degraded, and keeps waiting:
+  once the listener is ready it starts claiming Runs and becomes ready without a
+  restart. It never claims a Run before then.
 
 Run the repository-owned failure matrix, fake-model PG18 convergence gate, and
 opt-in fake-only load campaign with `make validate-runtime`. `runtime-faults`

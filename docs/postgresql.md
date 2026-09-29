@@ -362,7 +362,7 @@ resynchronizes only while connected, a waiting child also re-reads its guidance
 row every 30 seconds on its own. A cancellation request's NOTIFY only wakes
 every process to rescan the cancel-pending leases it holds, and a process
 starts claiming Runs only once such a rescan after its channel went live has
-signalled everything it found.
+signalled everything it found, however long after startup that is.
 
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and

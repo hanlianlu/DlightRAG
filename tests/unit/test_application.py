@@ -12,6 +12,7 @@ from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 from dlightrag.application import Application, ApplicationClosedError
+from dlightrag.application import application as application_module
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.application import _ApplicationComponents
 from dlightrag.application.config import DlightragConfig
@@ -180,9 +181,15 @@ class _CancellationListener:
     def __init__(self, recorder: _Recorder) -> None:
         self.recorder = recorder
         self.ready = asyncio.Event()
+        self.ready_on_start = True
 
     async def start(self) -> None:
         self.recorder.add("listener:start")
+        if self.ready_on_start:
+            self.ready.set()
+
+    def become_ready(self) -> None:
+        self.recorder.add("listener:ready")
         self.ready.set()
 
     async def aclose(self) -> None:
@@ -790,6 +797,63 @@ async def test_a_coordinator_start_failure_degrades_the_application(
     assert "Run coordinator unavailable" in application.health.warnings
     assert application.health.is_ready is False
     assert parts.coordinator.is_started is False
+
+
+async def test_a_late_cancellation_listener_starts_the_coordinator_once_ready(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Startup stops waiting for the listener; the coordinator does not stop with it."""
+    monkeypatch.setattr(application_module, "_LISTENER_STARTUP_WAIT_SECONDS", 0.01)
+    parts = _Parts()
+    parts.cancellation_listener.ready_on_start = False
+    application = parts.application(test_config)
+
+    await application.astart()
+
+    assert "coordinator:start" not in parts.recorder.started()
+    assert application.health.is_ready is False
+    assert application.health.warnings == (
+        "Operational State unavailable",
+        "Run cancellation listener unavailable",
+    )
+
+    parts.cancellation_listener.become_ready()
+    async with asyncio.timeout(2):
+        while not application.health.is_ready:
+            await asyncio.sleep(0)
+
+    # Claiming begins only behind the ready listener, then what startup skipped.
+    assert parts.recorder.started()[-3:] == [
+        "listener:ready",
+        "coordinator:start",
+        "web_conversations:start_retention",
+    ]
+    assert application.health.warnings == ()
+    await application.aclose()
+
+
+@pytest.mark.parametrize("ready_during_close", [False, True], ids=["never-ready", "ready-at-close"])
+async def test_closing_while_the_listener_is_late_never_starts_the_coordinator(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, ready_during_close: bool
+) -> None:
+    monkeypatch.setattr(application_module, "_LISTENER_STARTUP_WAIT_SECONDS", 0.01)
+    parts = _Parts()
+    parts.cancellation_listener.ready_on_start = False
+    application = parts.application(test_config)
+    await application.astart()
+
+    if ready_during_close:
+        parts.cancellation_listener.become_ready()
+    await application.aclose()
+
+    assert "coordinator:start" not in parts.recorder.started()
+    assert parts.recorder.closed() == _CLOSE_ORDER
+    late_starts = [
+        task
+        for task in asyncio.all_tasks()
+        if task.get_name() == application_module._LATE_COORDINATOR_START
+    ]
+    assert late_starts == []
 
 
 async def test_config_is_read_only_application_state(test_config: DlightragConfig) -> None:
