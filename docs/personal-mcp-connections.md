@@ -67,7 +67,8 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 
 | Module | Responsibility |
 |---|---|
-| `application/connections/service.py` | `Connections`: eligibility, Settings commands, catalogue validation, refresh scheduling, Research binding and restore, dispatch, OAuth flows, maintenance |
+| `engine/answer/owner.py` | `personal_owner`: the eligibility rule (JWT or `none`), shared with Profile Memory, the Run pin writer, and the bootstrap capability |
+| `application/connections/service.py` | `Connections`: Settings commands, catalogue validation, refresh scheduling, Research binding and restore, dispatch, OAuth flows, maintenance |
 | `application/connections/models.py`, `policy.py`, `presets.py`, `client_metadata.py` | Commands, redacted views, and the store, MCP, and OAuth ports; `ConnectionPolicy`; presets; the Client ID Metadata Document |
 | `application/connections/credentials.py` | `CredentialCipher`: key-ring validation and AES-256-GCM envelopes; access-token checks |
 | `adapters/postgres/connections.py` | `PGConnectionsStore`: schema, owner-scoped state, claims and leases, revision CAS, NOTIFY, dispatch gate, GC. `PGConnectionPinWriter`: validation and pin insertion inside an accepting transaction |
@@ -179,8 +180,11 @@ The value is JSON:
 `{"active":"<key-id>","keys":{"<key-id>":"<base64url 32-byte key>"}}`. Only
 those two members are allowed, duplicate JSON keys are rejected, key IDs match
 `[A-Za-z0-9_-]{1,64}`, every key decodes canonically to exactly 32 bytes, and
-`active` names a listed key. Validation errors never echo a value. `_compose.py`
-passes the field only to `CredentialCipher`.
+`active` names a listed key. Validation errors never echo a value. Only
+`CredentialCipher` unwraps the secret. `_compose.py` also passes the whole
+`answer.agent.connections` settings object, as the policy, to `Connections`,
+which hands it to the PostgreSQL store and the MCP and OAuth adapters; they hold
+the excluded `SecretStr` without reading it.
 
 Encryption is AES-256-GCM from `cryptography`, with a fresh 12-byte nonce and
 associated data that binds the owner, Connection, and Grant or OAuth flow. The
@@ -562,16 +566,17 @@ Management is a Web projection only:
 | `GET /web/oauth/connections/mcp/client-metadata` | Public Client ID Metadata Document |
 
 - Every command carries `expected_revision`; a stale revision returns 409. The
-  revision covers all of the owner's heads, and every change to a head
-  increments it, including each background refresh, successful or failed. While
-  a refresh keeps failing, its backoff starts at a few seconds, so a command can
-  get 409 between the 5-second polls; Settings then asks for a reload. Mutations
-  need the Web session plus the CSRF double-submit header and same-origin
-  checks, in `none` mode as well. Validation errors return a generic 422 that
-  echoes no input, and another owner's `connection_id` returns 404. An
-  ineligible auth mode gets 403, and the bootstrap capability
-  `personal_mcp_connections` is false, which hides the feature; the projection
-  carries no eligibility flag of its own.
+  revision is a digest of each head's `(connection_id, revision)`. Every command
+  that writes a Connection, including a probe and a completed OAuth
+  authorization, and every published background refresh, successful or failed,
+  changes it; refresh claims and call observations do not. While a refresh keeps
+  failing, its backoff starts at a few seconds, so a command can get 409 between
+  the 5-second polls; Settings then asks for a reload. Mutations need the Web
+  session plus the CSRF double-submit header and same-origin checks, in `none`
+  mode as well. Validation errors return a generic 422 that echoes no input, and
+  another owner's `connection_id` returns 404. An ineligible auth mode gets 403,
+  and the bootstrap capability `personal_mcp_connections` is false, which hides
+  the feature; the projection carries no eligibility flag of its own.
 - `POST .../oauth` and the callback's 303 redirect send
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. The callback
   relies on the authenticated owner and SDK state instead of CSRF, because a
@@ -622,20 +627,28 @@ row.
 
 ## Fault behavior
 
-- An oversized argument, or a denial by the first gate, sends nothing, records
-  no status, and returns a failed result saying that no call was sent.
+- An oversized argument sends nothing, records no status, and returns a failed
+  result saying that no call was sent. So does a denial by the first gate, and a
+  `call_timeout` that expires while the call waits for a `call_concurrency` slot
+  or inside the first gate.
+- A second call, in the same process, for an intent the restored tool has
+  already run returns a failed result saying that the outcome may be unknown,
+  before any gate, and records nothing.
 - Any failure after the first gate returns a failed result saying that the
   outcome may be unknown: the endpoint recheck, credential decryption, a token
   refresh, a denial by the second gate, the call itself, a timeout, or a
   cancellation of the call by the in-flight watcher or by shutdown. If the Run's
   own cancellation or lease check fires first, the Run stops without receiving a
   result.
-- Every exit after the first gate records an observation: `ready` after a
-  successful call, `needs-auth` after an authentication failure (HTTP 401 or
-  403, or a failed token refresh), and `degraded` after anything else. That
-  includes transport and protocol faults, an oversized or unsupported result, a
-  remote tool error, a missing remote tool, and Run cancellation, lease loss, or
-  shutdown.
+- Every exit after the first gate tries to record an observation: `ready` after
+  a successful call, `needs-auth` after an authentication failure (HTTP 401 or
+  403, a token refresh the provider rejects or widens beyond the consented
+  scopes, or a refresh that lost its Grant), and `degraded` after anything else.
+  That includes transport and protocol faults, an oversized or unsupported
+  result, a remote tool error, a missing remote tool, a token refresh that times
+  out or that the gate refuses, and Run cancellation, lease loss, or shutdown.
+  Recording is best effort: it gets two seconds, and a failure to record only
+  logs a warning.
 - An observation is recorded only while the call's generation is still the head
   generation, the head is still enabled at the same activation epoch, and the
   Grant is still active at the same secret version. A call stopped by revoke,
@@ -644,8 +657,8 @@ row.
   built-in tools stay callable. The failed result names the local tool, says
   whether no call was sent or the outcome may be unknown, forbids automatic
   retry, and tells the final Answer to identify the unfinished part.
-- A failed catalogue refresh publishes nothing and keeps the last-good
-  generation. A Connection without a published catalogue cannot be enabled.
+- A failed catalogue refresh publishes no generation and keeps the last-good
+  one. A Connection without a published catalogue cannot be enabled.
 - Store failures and pin or digest inconsistencies are internal errors and can
   fail the Run; an ordinary remote fault does not.
 - A remote rejection of an older pinned schema is reported as a failed call; the
@@ -683,8 +696,10 @@ row.
   no old-key ciphertext remains. The rotation guide verifies counts before
   removing a key.
 - Re-encryption runs before collection in each pass. If a live Grant names a key
-  that is no longer in the ring, every pass fails at that Grant and only logs a
-  warning, so GC stops for every owner until the key is back in the ring.
+  that is no longer in the ring, every background pass fails at that Grant and
+  only logs a warning, and an on-demand `maintain()` raises. GC then stops for
+  every owner until the key is back in the ring or that Grant is retired by
+  delete, revoke, or a new credential.
 - The Web middleware keeps callback query strings out of the application's own
   logs. Upstream proxies and external tracing sit outside the application and
   record those query strings unless the deployment redacts them there.
