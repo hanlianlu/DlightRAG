@@ -65,7 +65,10 @@ class AnswerModeRouter:
         *,
         resources: Sequence[ModeResource] = (),
         valid_modes: Sequence[str] = ("fast", "research"),
+        web_search: bool = False,
     ) -> Callable[..., int]:
+        """Measure the request :meth:`choose` sends for the same facts."""
+
         def measure(
             history: list[dict[str, Any]],
             projected_summary: str = "",
@@ -78,8 +81,7 @@ class AnswerModeRouter:
                     history=history,
                     resources=resources,
                     valid_modes=valid_modes,
-                    tool_categories=(),
-                    has_images=False,
+                    web_search=web_search,
                 )
             )
 
@@ -91,8 +93,7 @@ class AnswerModeRouter:
         query: str,
         history: Sequence[Mapping[str, Any]] = (),
         resources: Sequence[ModeResource] = (),
-        tool_categories: Sequence[str] = (),
-        has_images: bool = False,
+        web_search: bool = False,
         valid_modes: Sequence[str],
     ) -> ResolvedMode:
         raw = await self._llm(
@@ -101,8 +102,7 @@ class AnswerModeRouter:
                 history=[dict(item) for item in history],
                 resources=resources,
                 valid_modes=valid_modes,
-                tool_categories=tool_categories,
-                has_images=has_images,
+                web_search=web_search,
             ),
             structured_output=ROUTER_STRUCTURED_OUTPUT,
         )
@@ -120,11 +120,13 @@ class AnswerModeRouter:
         history: list[dict[str, Any]],
         resources: Sequence[ModeResource],
         valid_modes: Sequence[str],
-        tool_categories: Sequence[str],
-        has_images: bool,
+        web_search: bool,
     ) -> list[dict[str, Any]]:
         roles = ",".join(resource.role for resource in resources) or "none"
-        tools = ",".join(tool_categories) or "none"
+        has_images = any(resource.role == "image" for resource in resources)
+        tools = ",".join(
+            ("search_knowledge_base", "search_web") if web_search else ("search_knowledge_base",)
+        )
         allowed = ",".join(valid_modes)
         allowed_outputs = " or ".join(f'{{"mode":"{mode}"}}' for mode in valid_modes)
         system = (

@@ -901,10 +901,10 @@ async def test_service_enforces_image_ceiling_before_query_capability() -> None:
 async def test_auto_removes_fast_before_persisting_routing_when_40k_cannot_fit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import dlightrag.application.answer_runs.service as service_module
+    import dlightrag.engine.answer.execution.acceptance as acceptance
 
     monkeypatch.setattr(
-        service_module,
+        acceptance,
         "research_history_input_measure",
         lambda **_kwargs: lambda _history, _summary="": 0,
     )
@@ -928,7 +928,7 @@ async def test_auto_fast_capacity_includes_profile_memory(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    import dlightrag.application.answer_runs.service as service_module
+    import dlightrag.engine.answer.execution.acceptance as acceptance
 
     caplog.set_level(logging.INFO)
     observed_fast_memory: list[str] = []
@@ -938,21 +938,20 @@ async def test_auto_fast_capacity_includes_profile_memory(
         _query: str,
         memory_text: str = "",
         episodic_summary: str = "",
+        current_images: object = None,
     ) -> Any:
-        del episodic_summary
+        del episodic_summary, current_images
         observed_fast_memory.append(memory_text)
         return lambda _history, _summary="": 50 + len(memory_text)
 
+    monkeypatch.setattr(acceptance, "standing_memory_for_acceptance", lambda _auth: "m" * 10_000)
     monkeypatch.setattr(
-        service_module, "standing_memory_for_acceptance", lambda _auth: "m" * 10_000
-    )
-    monkeypatch.setattr(
-        service_module.AnswerSynthesizer,
+        acceptance.AnswerSynthesizer,
         "history_input_measure",
         history_measure,
     )
     monkeypatch.setattr(
-        service_module,
+        acceptance,
         "research_history_input_measure",
         lambda **_kwargs: lambda _history, _summary="": 0,
     )

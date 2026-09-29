@@ -328,6 +328,18 @@ frozen into it; the proactive compaction trigger is what bounds the request as a
 whole. Provider output is limited by both model output capacity and remaining
 physical context.
 
+Acceptance fits the caller's history to every model call the Run can still reach,
+each measured as it will be sent and against the model that serves it: Fast's
+planning (`extract`) and generation (`query`) calls, which must keep the full
+dynamic-context reserve with no history at all; Research's planning call
+(`extract`) and first Agent request (`query`); and, when `auto` has both modes
+valid, the routing call on the `keyword` model. An explicit Fast request that
+cannot keep its reserve is refused; `auto` resolves without Fast instead, and a
+routing call that cannot fit makes `auto` unsupported. A Fast Run measures its
+durable Session history against the same Fast calls before it compacts. Both
+sides build these calls in `engine/answer/execution/acceptance.py`, so they
+cannot disagree about which calls exist or how each is measured.
+
 A Research request is the previous request plus new material, so a provider prefix
 cache can reuse it: the Session fold only appends, admitted Evidence text is frozen
 into the Tool result that produced it, and nothing is composed per turn. No system

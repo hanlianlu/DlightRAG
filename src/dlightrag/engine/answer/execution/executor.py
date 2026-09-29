@@ -109,6 +109,12 @@ from dlightrag.engine.answer.errors import (
     classify_answer_error,
     reasoning_control_rejection_message,
 )
+from dlightrag.engine.answer.execution.acceptance import (
+    AnswerHistoryBudget,
+    RetrievalPlanning,
+    reserved_memory_text,
+    routing_resources,
+)
 from dlightrag.engine.answer.execution.connection_binding import (
     ResearchConnectionToolResolver,
     ResearchToolClaim,
@@ -131,14 +137,11 @@ from dlightrag.engine.answer.fast import (
     projection_from_compaction_at,
 )
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
-from dlightrag.engine.answer.history import HistoryInputMeasure, HistoryProjectionTarget
+from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.answer.links.cards import collect_link_cards
 from dlightrag.engine.answer.media import evidence_images_from_sources
-from dlightrag.engine.answer.memory import (
-    render_auto_recall,
-    standing_memory_for_acceptance,
-)
-from dlightrag.engine.answer.mode import ModeResource, ResolvedMode, resource_role
+from dlightrag.engine.answer.memory import render_auto_recall
+from dlightrag.engine.answer.mode import ResolvedMode
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.owner import is_personal_auth_mode
@@ -333,7 +336,6 @@ class AnswerExecutionStore(
     ) -> tuple[RunFetchedResource, ...]: ...
 
 
-type PlannerHistoryInputMeasureFactory = Callable[..., Awaitable[HistoryInputMeasure]]
 type WorkspaceWarmer = Callable[[Sequence[str]], None]
 type WorkspaceInventoryLoader = Callable[[str, str], Awaitable[tuple[InventoryPathRecord, ...]]]
 
@@ -401,7 +403,7 @@ class AnswerExecutor:
         pool: WorkspacePool,
         warm: WorkspaceWarmer,
         retrieve: RawRetrieval,
-        planner_history_input_measure: PlannerHistoryInputMeasureFactory,
+        planning: RetrievalPlanning,
         models: AnswerModelRuntime,
         capabilities: AnswerCapabilityCoordinator,
         resources: AnswerResourceResolver,
@@ -434,7 +436,7 @@ class AnswerExecutor:
         #: its own exit hook records the Fork Point and then dropped.
         self._settled_views: dict[str, AgentSessionSnapshot] = {}
         self._retrieve_result = retrieve
-        self._planner_history_input_measure = planner_history_input_measure
+        self._planning = planning
         self._models = models
         self._capabilities = capabilities
         self._resources = resources
@@ -963,21 +965,13 @@ class AnswerExecutor:
     ) -> str:
         model, _telemetry = self._models.new_highlight_model()
         router = AnswerModeRouter(model)
-        resources = tuple(
-            ModeResource(role=resource_role(filename=item.filename, mime_type=item.mime_type))
-            for item in (*request.attachments, *request.history_attachments)
-        )
-        tools = ["search_knowledge_base"]
         web_sources = self._models.web_sources()
-        if web_sources is not None and web_sources.search_enabled:
-            tools.append("search_web")
         try:
             return await router.choose(
                 query=request.query,
                 history=history,
-                resources=resources,
-                tool_categories=tools,
-                has_images=any(item.role == "image" for item in resources),
+                resources=routing_resources(request.attachments, request.history_attachments),
+                web_search=web_sources is not None and web_sources.search_enabled,
                 valid_modes=valid_modes,
             )
         except asyncio.CancelledError:
@@ -2133,42 +2127,18 @@ class AnswerExecutor:
             image_descriptions = list(pinned_image_descriptions)
             fast_history_targets: tuple[HistoryProjectionTarget, ...] = ()
             if resolved_mode == "fast":
-                planner_measure = await self._planner_history_input_measure(
+                # The calls acceptance fitted, measured again over the durable
+                # Session history this Run actually continues.
+                fast_history_targets = AnswerHistoryBudget(
                     query=query,
-                    workspaces=tuple(workspaces),
-                    model_profile=models.extract,
-                    current_image_descriptions=image_descriptions,
-                    preserve_query=None,
-                )
-                synthesizer = self._models.answer_synthesizer(models.query)
-                # The standing memory block joins this envelope because generation
-                # injects it; measuring without it would under-count the request by
-                # the worst-case recall and quietly spend the difference on chunks.
-                generation_measure = (
-                    synthesizer.history_input_measure(
-                        query,
-                        memory_text=worst_case_memory,
-                        current_images=resolved.current_images,
-                    )
-                    if resolved.current_images
-                    else synthesizer.history_input_measure(query, memory_text=worst_case_memory)
-                )
-                fast_history_targets = (
-                    HistoryProjectionTarget(
-                        "planner",
-                        models.extract,
-                        planner_measure,
-                        proactive_compaction=True,
-                        require_full_dynamic_reserve=True,
-                    ),
-                    HistoryProjectionTarget(
-                        "fast_generation",
-                        models.query,
-                        generation_measure,
-                        proactive_compaction=True,
-                        require_full_dynamic_reserve=True,
-                    ),
-                )
+                    profiles=model_profiles,
+                    planner_for=self._planning.planner_for,
+                    schema=await self._planning.schema_for(workspaces),
+                    answer_image_policy=self._capabilities.answer_image_policy,
+                    image_descriptions=image_descriptions,
+                    current_images=resolved.current_images,
+                    memory_text=worst_case_memory,
+                ).fast_targets()
             orchestrated_run: OrchestratorRun | None = None
 
             async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
@@ -2568,20 +2538,12 @@ def _measure_fast_history_targets(
     for target in targets:
         if target.name in measured:
             raise ValueError(f"duplicate Fast history target: {target.name}")
-        limit = (
-            CONTEXT_POLICY.compaction_trigger(
-                target.profile,
-                require_full_dynamic_reserve=target.require_full_dynamic_reserve,
-            )
-            if target.proactive_compaction
-            else CONTEXT_POLICY.hard_input_limit(target.profile)
-        )
         measured[target.name] = {
             "input_tokens": target.measure_input(
                 history.messages,
                 history.episodic_summary,
             ),
-            "input_limit_tokens": limit,
+            "input_limit_tokens": target.acceptance_limit(CONTEXT_POLICY),
         }
     return measured
 
@@ -2894,17 +2856,16 @@ def answer_trace_output(
 
 
 def _worst_case_recall_block(prepared_input: Mapping[str, Any] | None) -> str:
-    """Return the largest standing memory block one prepared input could inject.
+    """Return the standing memory block acceptance reserved for this Run.
 
-    Mirrors acceptance's own reservation, minus the per-owner capability read that
-    only the execute path performs: an owner whose memory is disabled, or whose
-    auth mode owns nothing, reserves nothing.
+    The reservation is acceptance's, read back from what it recorded: an owner
+    whose memory was disabled, or whose auth mode owns nothing, reserved nothing.
     """
     prepared = prepared_input if isinstance(prepared_input, Mapping) else {}
-    if not bool(prepared.get("profile_memory_enabled", True)):
-        return ""
-    auth_mode = str(prepared.get("auth_mode") or "none")
-    return standing_memory_for_acceptance(auth_mode) if is_personal_auth_mode(auth_mode) else ""
+    return reserved_memory_text(
+        auth_mode=str(prepared.get("auth_mode") or "none"),
+        enabled=bool(prepared.get("profile_memory_enabled", True)),
+    )
 
 
 def _trailing_unanswered_host_turn(entries: Sequence[SessionEntry]) -> EntryId | None:

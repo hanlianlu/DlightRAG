@@ -37,6 +37,20 @@ class HistoryProjectionTarget:
         if self.require_full_dynamic_reserve and not self.proactive_compaction:
             raise ValueError("a full dynamic reserve requires proactive compaction")
 
+    def acceptance_limit(self, context_policy: ContextPolicy = CONTEXT_POLICY) -> int:
+        """The input this call is accepted and compacted against.
+
+        A proactively compacting call stops at its compaction trigger, so the
+        history it is handed leaves room for the output it still has to produce;
+        any other call may use its model's whole hard input limit.
+        """
+        if self.proactive_compaction:
+            return context_policy.compaction_trigger(
+                self.profile,
+                require_full_dynamic_reserve=self.require_full_dynamic_reserve,
+            )
+        return context_policy.hard_input_limit(self.profile)
+
 
 class HistoryProjectionOverflowError(ValueError):
     """A reachable call's zero-history fixed envelope cannot be accepted."""
@@ -183,15 +197,7 @@ def _resolve_target(
     target: HistoryProjectionTarget,
     context_policy: ContextPolicy,
 ) -> _ResolvedTarget:
-    hard_limit = context_policy.hard_input_limit(target.profile)
-    acceptance_limit = (
-        context_policy.compaction_trigger(
-            target.profile,
-            require_full_dynamic_reserve=target.require_full_dynamic_reserve,
-        )
-        if target.proactive_compaction
-        else hard_limit
-    )
+    acceptance_limit = target.acceptance_limit(context_policy)
     fixed_input = target.measure_input([], "")
     if fixed_input > acceptance_limit:
         raise HistoryProjectionOverflowError(

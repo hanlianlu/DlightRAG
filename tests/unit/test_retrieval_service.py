@@ -75,44 +75,6 @@ async def _execute_request(service: RetrievalService, request: RetrieveRequest) 
     )
 
 
-async def test_planner_history_measure_uses_execution_schema_images_and_mode() -> None:
-    planner = Mock()
-    measure = Mock(return_value=17)
-    planner.history_input_measure.return_value = measure
-    schema_lookup = AsyncMock(return_value={"author": {"type": "string"}})
-    service = RetrievalService(
-        pool=AsyncMock(),
-        planners=_Planners(planner),
-        schema_lookup=schema_lookup,
-        image_preparer=AsyncMock(return_value=[]),
-        projector=Mock(),
-        settings=RetrievalSettings(
-            default_top_k=8,
-            default_chunk_top_k=5,
-            timeout_seconds=30,
-            query_image_limit=4,
-        ),
-        telemetry=NoopTelemetry(),
-    )
-    profile = ModelProfile(context_window_tokens=64_000)
-
-    returned = await service.planner_history_input_measure(
-        query="report",
-        workspaces=("finance",),
-        model_profile=profile,
-        current_image_descriptions=("Image 1: chart",),
-        preserve_query=None,
-    )
-
-    assert returned is measure
-    planner.history_input_measure.assert_called_once_with(
-        "report",
-        schema={"author": {"type": "string"}},
-        current_image_descriptions=["Image 1: chart"],
-        preserve_query=None,
-    )
-
-
 async def test_explicit_filters_and_bm25_override_planner_inference() -> None:
     inferred = MetadataFilter(author="Planner")
     explicit = MetadataFilter(author="Caller")

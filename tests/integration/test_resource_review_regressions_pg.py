@@ -54,7 +54,6 @@ from dlightrag.engine.answer.execution.resources import (
 )
 from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
-from dlightrag.engine.answer.history import HistoryInputMeasure
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.model_runtime import (
     AnswerModelRuntime,
@@ -609,11 +608,19 @@ def _fast_executor(pg, provider: _FastProjectionProvider, profile):
     async def retrieve(*args, **kwargs):
         return RetrievalResult()
 
-    async def planner_history_input_measure(**kwargs) -> HistoryInputMeasure:
-        def measure(messages: list[dict[str, Any]], projected_summary: str = "") -> int:
-            return 1
+    class Planning:
+        """A planner whose request is one token whatever history it is handed."""
 
-        return measure
+        @staticmethod
+        def planner_for(_profile=None):
+            def measure(messages: list[dict[str, Any]], projected_summary: str = "") -> int:
+                return 1
+
+            return SimpleNamespace(history_input_measure=lambda *_args, **_kwargs: measure)
+
+        @staticmethod
+        async def schema_for(_workspaces):
+            return {}
 
     return AnswerExecutor(
         store=pg[0],
@@ -621,7 +628,7 @@ def _fast_executor(pg, provider: _FastProjectionProvider, profile):
         pool=cast(Any, SimpleNamespace()),
         warm=lambda _workspaces: None,
         retrieve=retrieve,
-        planner_history_input_measure=planner_history_input_measure,
+        planning=cast(Any, Planning()),
         models=cast(Any, models),
         capabilities=cast(Any, capabilities),
         resources=AnswerResourceResolver(

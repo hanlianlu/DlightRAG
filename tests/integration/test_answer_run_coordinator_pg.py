@@ -2502,7 +2502,7 @@ def _answer_runtime(
         pool=components.pool,
         warm=components.retrieval.warm,
         retrieve=components.retrieval.retrieve_result,
-        planner_history_input_measure=components.retrieval.planner_history_input_measure,
+        planning=components.retrieval,
         models=components.models,
         capabilities=components.capabilities,
         resources=AnswerResourceResolver(

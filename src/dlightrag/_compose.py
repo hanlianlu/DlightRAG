@@ -401,7 +401,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         pool=pool,
         warm=retrieval.warm,
         retrieve=retrieval.retrieve_result,
-        planner_history_input_measure=retrieval.planner_history_input_measure,
+        planning=retrieval,
         models=models,
         capabilities=capabilities,
         resources=resources,

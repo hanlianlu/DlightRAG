@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable answer runs over already-authorized canonical workspaces."""
 
-import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
@@ -22,23 +21,19 @@ from dlightrag.application.runs import (
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.tools import ToolDeclaration
-from dlightrag.engine.ai.capacity import (
-    CONTEXT_POLICY,
-    CONTEXT_POLICY_REVISION,
-    ModelProfile,
-)
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.client_contracts import AnswerEffort, offered_answer_efforts
-from dlightrag.engine.answer.errors import (
-    AnswerInputOverflowError,
-    UnsupportedAnswerModeError,
-)
-from dlightrag.engine.answer.execution import (
-    ResolvedAnswerResources,
-    research_history_input_measure,
+from dlightrag.engine.answer.execution import ResolvedAnswerResources
+from dlightrag.engine.answer.execution.acceptance import (
+    AnswerHistoryBudget,
+    ResearchSeed,
+    accept_history,
+    reserved_memory_text,
+    routing_resources,
 )
 from dlightrag.engine.answer.execution.connection_binding import (
     RunConnectionBinding,
@@ -55,14 +50,8 @@ from dlightrag.engine.answer.execution.input import (
     in_memory_attachment_loader,
     model_reasoning_settings,
 )
-from dlightrag.engine.answer.history import (
-    HistoryProjectionOverflowError,
-    HistoryProjectionTarget,
-    project_history,
-)
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
-from dlightrag.engine.answer.memory import standing_memory_for_acceptance
 from dlightrag.engine.answer.mode import (
     AnswerMode,
     ModeCapability,
@@ -79,7 +68,6 @@ from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.results import AnswerResult, restore_answer_result
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
-from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import (
     ResearchToolDeclarations,
     research_tool_declarations,
@@ -124,8 +112,6 @@ from .child_roster import (
     child_result_lineage,
     public_child_status,
 )
-
-logger = logging.getLogger(__name__)
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
 _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
@@ -1938,11 +1924,9 @@ class AnswerService:
     ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
         """Resolve the exact shared-history envelopes without building the run rig."""
         model_profiles = self._capabilities.current_profiles()
-        models = self._capabilities.request_model_context(model_profiles)
-        planner = self._retrieval.planner_for(models.extract)
         resolved = await self._resources.resolve(
             resources,
-            models=models,
+            models=self._capabilities.request_model_context(model_profiles),
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
             resolved_mode=("research" if "research" in allowed_modes else "fast"),
         )
@@ -1961,101 +1945,25 @@ class AnswerService:
                 if resolved.current_images
                 else ()
             )
-            schema = await self._retrieval.schema_for(workspaces)
+            budget = AnswerHistoryBudget(
+                query=request.query,
+                profiles=model_profiles,
+                planner_for=self._retrieval.planner_for,
+                schema=await self._retrieval.schema_for(workspaces),
+                answer_image_policy=self._capabilities.answer_image_policy,
+                image_descriptions=image_descriptions,
+                current_images=resolved.current_images,
+                memory_text=reserved_memory_text(auth_mode=auth_mode, enabled=memory_enabled),
+                episodic_summary=request.episodic_summary,
+            )
+            web_search = resolved.web_sources is not None and resolved.web_sources.search_enabled
 
             async def project(connection_tools: Sequence[ToolDeclaration]) -> _AcceptanceProjection:
-                agent_run_plan: AgentRunPlan | None = None
-                memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
-                effective_modes = allowed_modes
-                fast_targets: list[HistoryProjectionTarget] = []
-                if "fast" in effective_modes:
-                    fast_targets.append(
-                        HistoryProjectionTarget(
-                            "fast_planner",
-                            models.extract,
-                            planner.history_input_measure(
-                                request.query,
-                                schema=schema,
-                                current_image_descriptions=list(image_descriptions) or None,
-                                preserve_query=None,
-                            ),
-                            proactive_compaction=True,
-                            require_full_dynamic_reserve=True,
-                        )
-                    )
-                    synthesizer = AnswerSynthesizer(
-                        image_policy=self._capabilities.answer_image_policy(models.query),
-                        model_profile=models.query,
-                        context_policy=CONTEXT_POLICY,
-                        model_func=None,
-                    )
-                    fast_generation_measure = (
-                        synthesizer.history_input_measure(
-                            request.query,
-                            memory_text=memory_text,
-                            episodic_summary=request.episodic_summary,
-                            current_images=resolved.current_images,
-                        )
-                        if resolved.current_images
-                        else synthesizer.history_input_measure(
-                            request.query,
-                            memory_text=memory_text,
-                            episodic_summary=request.episodic_summary,
-                        )
-                    )
-                    fast_targets.append(
-                        HistoryProjectionTarget(
-                            "fast_generation",
-                            models.query,
-                            fast_generation_measure,
-                            proactive_compaction=True,
-                            require_full_dynamic_reserve=True,
-                        )
-                    )
-                    try:
-                        project_history([], targets=fast_targets)
-                    except HistoryProjectionOverflowError as exc:
-                        if requested_mode == "fast":
-                            raise AnswerInputOverflowError(str(exc)) from exc
-                        # Observability for ADR 0020's residual: a reserved standing
-                        # memory block can be what makes Fast unviable, and only a line
-                        # like this says whether that ever happens.
-                        logger.info(
-                            "Fast is not viable for this request; resolving without it",
-                            extra={
-                                "target": exc.target,
-                                "fixed_input_tokens": exc.fixed_input_tokens,
-                                "acceptance_limit_tokens": exc.acceptance_limit_tokens,
-                                "memory_chars": len(memory_text),
-                                "requested_mode": requested_mode,
-                            },
-                        )
-                        effective_modes = cast(
-                            frozenset[ResolvedMode],
-                            frozenset(mode for mode in effective_modes if mode != "fast"),
-                        )
-                        if not effective_modes:
-                            raise UnsupportedAnswerModeError(requested_mode) from exc
-
                 pinned_models = self._pin_model_profiles(model_profiles)
-                targets: list[HistoryProjectionTarget] = []
-                if "research" in effective_modes:
-                    targets.append(
-                        HistoryProjectionTarget(
-                            "research_planner",
-                            models.extract,
-                            planner.history_input_measure(
-                                request.query,
-                                schema=schema,
-                                current_image_descriptions=list(image_descriptions) or None,
-                                preserve_query=True,
-                            ),
-                        )
-                    )
-                    web_search = (
-                        resolved.web_sources is not None and resolved.web_sources.search_enabled
-                    )
-                    tools = list(
+                agent_run_plan: AgentRunPlan | None = None
+                research: ResearchSeed | None = None
+                if "research" in allowed_modes:
+                    tools = (
                         self._research_tool_declarations(
                             web_search=web_search,
                             memory=memory_enabled,
@@ -2074,72 +1982,30 @@ class AnswerService:
                         model_identity=asdict(self._model_invocation_fingerprint_for_role("query")),
                         model_profile=asdict(models.query),
                     )
-                    measure = research_history_input_measure(
-                        model_profile=models.query,
-                        context_policy=CONTEXT_POLICY,
-                        query=request.query,
+                    research = ResearchSeed(
+                        tools=tools,
                         query_images=resolved.query_images,
                         resource_manifest=resolved.resource_manifest,
                         image_budget=resolved.image_budget,
-                        tools=tools,
-                        memory_text=memory_text,
-                        episodic_summary=request.episodic_summary,
                     )
-                    targets.append(
-                        HistoryProjectionTarget(
-                            "research_seed",
-                            models.query,
-                            measure,
-                            proactive_compaction=True,
-                        )
-                    )
-                if "fast" in effective_modes:
-                    targets.extend(fast_targets)
-                if requested_mode == "auto" and effective_modes >= {"fast", "research"}:
-                    from dlightrag.engine.answer.router import AnswerModeRouter
-
-                    async def _unused_router(**_kwargs: Any) -> str:
-                        raise RuntimeError("acceptance router measure never calls the model")
-
-                    router = AnswerModeRouter(_unused_router)
-                    mode_resources = tuple(
-                        ModeResource(
-                            role=resource_role(filename=item.filename, mime_type=item.mime_type)
-                        )
-                        for item in (*request.attachments, *request.history_attachments)
-                    )
-                    targets.append(
-                        HistoryProjectionTarget(
-                            "router",
-                            models.query,
-                            router.history_input_measure(
-                                request.query,
-                                resources=mode_resources,
-                                valid_modes=tuple(sorted(effective_modes)),
-                            ),
-                        )
-                    )
-                try:
-                    history = project_history(
-                        [dict(message) for message in request.history],
-                        targets=targets,
-                    )
-                except HistoryProjectionOverflowError as exc:
-                    if exc.target == "router":
-                        raise UnsupportedAnswerModeError("auto") from exc
-                    raise AnswerInputOverflowError(str(exc)) from exc
-                episodic_parts = [
-                    item.strip()
-                    for item in (request.episodic_summary, history.episodic_summary)
-                    if item.strip()
-                ]
+                accepted = accept_history(
+                    budget,
+                    history=request.history,
+                    requested_mode=requested_mode,
+                    allowed_modes=allowed_modes,
+                    research=research,
+                    mode_resources=routing_resources(
+                        request.attachments, request.history_attachments
+                    ),
+                    web_search=web_search,
+                )
                 return _AcceptanceProjection(
-                    history=tuple(dict(message) for message in history.messages),
-                    episodic_summary="\n\n".join(dict.fromkeys(episodic_parts)),
+                    history=accepted.history,
+                    episodic_summary=accepted.episodic_summary,
                     image_descriptions=image_descriptions,
                     pinned_models=pinned_models,
                     agent_run_plan=agent_run_plan,
-                    valid_modes=effective_modes,
+                    valid_modes=accepted.valid_modes,
                 )
 
             yield project
