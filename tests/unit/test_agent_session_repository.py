@@ -3,10 +3,12 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
 from dlightrag.engine.agent.session.entries import UserMessageEntry
+from dlightrag.engine.agent.session.graph import AgentSessionGraph
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
 from dlightrag.engine.agent.session.operation import OperationMeta, ReadyForProvider
 from dlightrag.engine.agent.session.registers import (
@@ -265,6 +267,40 @@ async def test_snapshot_views_are_built_once_and_follow_each_snapshot() -> None:
     assert contents(branch.graph.ancestry()) == ["root"]
     assert contents(snapshot.tree.ancestry(branch_id)) == ["root"]
     assert branch.graph.head_entry_id == snapshot.tree.lane(branch_id).head_entry_id
+
+
+@pytest.mark.asyncio
+async def test_snapshot_graph_reuses_the_lane_tree_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    await _seed(store, session_id)
+    loaded = await store.load(session_id)
+    build = AgentSessionGraph.from_entries.__func__  # type: ignore[attr-defined]
+    validations: list[SessionId] = []
+
+    def counted(cls: type[AgentSessionGraph], session: SessionId, *args: Any, **kwargs: Any):
+        validations.append(session)
+        return build(cls, session, *args, **kwargs)
+
+    monkeypatch.setattr(AgentSessionGraph, "from_entries", classmethod(counted))
+    snapshot = replace(loaded)
+
+    assert snapshot.graph.nodes is snapshot.tree.graph.nodes
+    assert validations == [session_id]
+
+    # Lane registers that cannot form a tree still leave the Entry graph.
+    headless = replace(
+        loaded,
+        registers=tuple(
+            record for record in loaded.registers if not isinstance(record.value, LaneState)
+        ),
+    )
+    with pytest.raises(ValueError, match="incomplete"):
+        _ = headless.tree
+    assert headless.graph.entries == loaded.graph.entries
+    assert headless.graph.head_entry_id == loaded.graph.head_entry_id
 
 
 async def test_refresh_rejects_malformed_or_regressed_cursors() -> None:

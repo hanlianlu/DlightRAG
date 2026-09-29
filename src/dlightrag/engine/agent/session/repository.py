@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical Agent Session repository/store read and transaction contract."""
 
+import contextlib
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
@@ -87,7 +88,18 @@ class AgentSessionSnapshot:
         return graph
 
     def _selected_graph(self) -> AgentSessionGraph:
-        graph = AgentSessionGraph.from_entries(self.session_id, self.entries)
+        if self._tree is None:
+            # The Lane tree validates these Entries into the same graph, so
+            # share it rather than validate them twice. A snapshot whose Lane
+            # registers cannot form a tree still has its Entry graph.
+            with contextlib.suppress(ValueError):
+                _ = self.tree
+        tree = self._tree
+        graph = (
+            tree.graph
+            if tree is not None
+            else AgentSessionGraph.from_entries(self.session_id, self.entries)
+        )
         for record in self.registers:
             if (
                 isinstance(record.value, LaneHead)

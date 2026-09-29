@@ -1,7 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Immutable parent-linked views over one canonical Agent Session Tree."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from dlightrag.engine.agent.session.entries import SessionEntry
 from dlightrag.engine.agent.session.ids import EntryId, SessionId
@@ -25,9 +27,9 @@ class AgentSessionGraph:
     session_id: SessionId
     nodes: tuple[SessionNode, ...]
     head_entry_id: EntryId | None = None
-    # Entry index over the immutable nodes, built on first use and shared by
-    # every Head selected from this graph.
-    _by_id: dict[EntryId, SessionNode] | None = field(
+    # Entry index over the immutable nodes, built on first use and shared,
+    # read-only, by every Head selected from this graph.
+    _by_id: Mapping[EntryId, SessionNode] | None = field(
         default=None, init=False, repr=False, compare=False
     )
 
@@ -81,10 +83,10 @@ class AgentSessionGraph:
         object.__setattr__(selected, "_by_id", by_id)
         return selected
 
-    def _index(self) -> dict[EntryId, SessionNode]:
+    def _index(self) -> Mapping[EntryId, SessionNode]:
         by_id = self._by_id
         if by_id is None:
-            by_id = {node.entry.entry_id: node for node in self.nodes}
+            by_id = MappingProxyType({node.entry.entry_id: node for node in self.nodes})
             object.__setattr__(self, "_by_id", by_id)
         return by_id
 
