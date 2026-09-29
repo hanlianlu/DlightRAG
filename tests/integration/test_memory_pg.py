@@ -645,6 +645,83 @@ async def test_pg_multi_row_forget_undo_deterministic_id_collision_rolls_back(
     assert await store.count_active(owner_id="alpha") == 3
 
 
+async def test_pg_supersede_undo_deterministic_id_collision_rolls_back(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    original = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Drinks tea.",
+        provenance=_provenance(),
+        idempotency_key="remember-1",
+    )
+    replacement = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="Drinks coffee.",
+        provenance=_provenance(),
+        idempotency_key="remember-2",
+        supersedes_id=original.memory_id,
+    )
+    undo_change_id = operation_change_id(
+        MemoryOperation(
+            owner_id="alpha",
+            idempotency_key="undo-1",
+            action="undo",
+            provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+            target_change_id=replacement.change_id,
+        )
+    )
+    squatter_id = operation_record_id("alpha", undo_change_id)
+    await store.insert(_record(body="Squatter.", memory_id=squatter_id))
+
+    with pytest.raises(ValueError, match="already exists"):
+        await _undo(memory, replacement.change_id, key="undo-1")
+
+    # The transaction rolled back, including superseding the replacement: it is
+    # still the active record, and nothing marks the remember undone.
+    assert replacement.memory_id is not None
+    current = await store.get(owner_id="alpha", memory_id=replacement.memory_id)
+    squatter = await store.get(owner_id="alpha", memory_id=squatter_id)
+    assert current is not None and current.status == "active"
+    assert squatter is not None and squatter.body == "Squatter."
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM dlightrag_memory_records "
+                "WHERE owner_id = 'alpha' AND origin_kind = 'undo'"
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT undone_by IS NULL FROM dlightrag_memory_operations "
+                "WHERE owner_id = 'alpha' AND change_id = $1",
+                uuid.UUID(replacement.change_id),
+            )
+            is True
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM dlightrag_memory_operations WHERE owner_id = 'alpha'"
+            )
+            == 2
+        )
+
+    # Clearing the collision leaves the same undo idempotency key settleable.
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            "DELETE FROM dlightrag_memory_records WHERE owner_id = 'alpha' AND memory_id = $1",
+            uuid.UUID(squatter_id),
+        )
+    retry = await _undo(memory, replacement.change_id, key="undo-1")
+    assert retry.outcome == "changed"
+    assert retry.memory_ids == (squatter_id,)
+    restored = await store.get(owner_id="alpha", memory_id=squatter_id)
+    assert restored is not None and restored.body == "Drinks tea."
+
+
 async def _rewrite_before_records(
     store: PostgresMemoryStore, forgotten: Any, before_records: list[dict[str, Any]]
 ) -> None:
