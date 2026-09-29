@@ -930,6 +930,7 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
         return {
             "status": "succeeded",
             "summary": "Persisted child finding.",
+            "parent_call_id": "call-1",
             "host_state": {
                 "terminal_outcome": {
                     "status": "succeeded",
@@ -981,8 +982,65 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
     assert len(ledger.contexts["chunks"]) == 1
     assert handles[0] == handles[1] == list(ledger.citation_handles())
     assert merge_evidence.call_count == 2
+    assert {call.args[2] for call in merge_evidence.call_args_list} == {"call-1"}
     run_child.assert_not_awaited()
     finish.assert_not_awaited()
+
+
+@pytest.mark.parametrize("path", ["notification", "status", "wait", "cancel"])
+async def test_every_adoption_path_labels_child_evidence_with_the_dispatching_call(
+    path: str,
+) -> None:
+    parent_id = SessionId.new()
+    child_id = child_session_id(
+        run_id="run", parent_session_id=parent_id, parent_intent_id=IntentId.new()
+    ).value
+    evidence_state = {
+        "contexts": {
+            "chunks": [{"chunk_id": "c1", "content": "finding"}],
+            "entities": [],
+            "relationships": [],
+        }
+    }
+    outcome = ChildOutcome(
+        status="succeeded",
+        summary="Child finding.",
+        child_session_id=child_id,
+        evidence_state=evidence_state,
+    )
+    row = {
+        "child_session_id": child_id,
+        "parent_call_id": "call-dispatch",
+        "parent_intent_id": "intent-1",
+        "status": "succeeded",
+        "host_state": {"terminal_outcome": outcome.durable_payload()},
+    }
+    merge_evidence = MagicMock(return_value=("[1] finding",))
+
+    async def load_child(**_kwargs: Any) -> dict[str, Any]:
+        return row
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return (row,)
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id="run",
+        owner_id="owner",
+        load_child=load_child,
+        list_children=list_children,
+        merge_evidence=merge_evidence,
+    )
+    if path == "notification":
+        assert await host.completed_dispatch_notifications(seen=set())
+    else:
+        tool = {"status": 1, "wait": 2, "cancel": 3}[path]
+        await subagent_tools(host=host)[tool].execute(
+            ChildControlInput(child_session_id=child_id),
+            tool_runtime(call_id="call-control", tool_name=f"{path}_subagent"),
+        )
+
+    merge_evidence.assert_called_once_with(evidence_state, child_id, "call-dispatch")
 
 
 async def test_wait_reports_child_outcome_and_usage() -> None:
@@ -1081,8 +1139,7 @@ async def test_wait_adopts_child_evidence_into_the_parent() -> None:
     )
 
     assert "[2] child source" in result.text_content
-    adopted.assert_called_once()
-    assert adopted.call_args.args[:2] == (child_state, child_id)
+    adopted.assert_called_once_with(child_state, child_id, "call-adopt")
 
 
 async def test_failed_child_is_recorded_failed() -> None:

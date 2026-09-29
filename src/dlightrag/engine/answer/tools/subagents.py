@@ -307,6 +307,9 @@ class SubagentHost:
     merge_evidence: Callable[[Mapping[str, Any], str, str], tuple[str, ...]] | None = None
     tasks: dict[str, asyncio.Task[ChildOutcome]] = field(default_factory=dict)
     outcomes: dict[str, ChildOutcome] = field(default_factory=dict)
+    # The parent call that dispatched each Child started in this process; the
+    # durable roster row records the same call for every accepted Child.
+    parent_call_ids: dict[str, str] = field(default_factory=dict)
     _semaphore: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
     _detaching: bool = field(default=False, init=False, repr=False)
     _cancel_requested: set[str] = field(default_factory=set, init=False, repr=False)
@@ -564,19 +567,24 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     async def status(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
+        current, parent_call_id = await _roster_status(host, args.child_session_id)
         return _result_with_guidance(
             host,
-            await _status(host, args.child_session_id),
+            current,
             await _pending_guidance_for_child(host, args.child_session_id),
+            parent_call_id=parent_call_id,
         )
 
     async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        current = await _status(host, args.child_session_id)
+        current, parent_call_id = await _roster_status(host, args.child_session_id)
         if current.status != "running":
             return _result_with_guidance(
-                host, current, await _pending_guidance_for_child(host, args.child_session_id)
+                host,
+                current,
+                await _pending_guidance_for_child(host, args.child_session_id),
+                parent_call_id=parent_call_id,
             )
         await host.restore_pending()
         pending = await _pending_guidance_for_child(host, args.child_session_id)
@@ -585,20 +593,16 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             if task is not None and not task.done():
                 await host.wait_for_activity(child_id=args.child_session_id)
             pending = await _pending_guidance_for_child(host, args.child_session_id)
-        return _result_with_guidance(
-            host,
-            await _status(host, args.child_session_id),
-            pending,
-        )
+        current, parent_call_id = await _roster_status(host, args.child_session_id)
+        return _result_with_guidance(host, current, pending, parent_call_id=parent_call_id)
 
     async def cancel(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        current = await _status(host, args.child_session_id)
-        if current.status != "running":
-            return _single_result(_adopt_outcome(host, current))
-        outcome = await _cancel_child(host, args.child_session_id)
-        return _single_result(_adopt_outcome(host, outcome))
+        current, parent_call_id = await _roster_status(host, args.child_session_id)
+        if current.status == "running":
+            current = await _cancel_child(host, args.child_session_id)
+        return _single_result(_adopt_outcome(host, current, parent_call_id=parent_call_id))
 
     async def steer(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildMessageInput, raw)
@@ -837,6 +841,7 @@ def _start_child_task(
         return existing
     if existing is not None:
         host.tasks.pop(child_id.value, None)
+    host.parent_call_ids[child_id.value] = parent_call_id
     task = asyncio.create_task(
         _run_one(host, child_id, request, parent_call_id, context_snapshot),
         name=f"agent-child:{child_id.value}",
@@ -1084,6 +1089,12 @@ async def _load_terminal_child(host: SubagentHost, child_id: str) -> ChildOutcom
 
 
 async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
+    outcome, _parent_call_id = await _roster_status(host, child_id)
+    return outcome
+
+
+async def _roster_status(host: SubagentHost, child_id: str) -> tuple[ChildOutcome, str]:
+    """Return one Child's current outcome and the parent call that dispatched it."""
     if host.load_child is not None:
         row = await host.load_child(
             owner_id=host.owner_id,
@@ -1091,26 +1102,37 @@ async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
             child_session_id=child_id,
         )
         if row is not None:
+            parent_call_id = str(row.get("parent_call_id") or "")
             if str(row.get("status") or "failed") != "running":
-                return _terminal_outcome_from_row(row, child_id)
-            return ChildOutcome(
-                status="running",
-                summary="Child session is running.",
-                child_session_id=child_id,
-                operation_id=str(row.get("operation_id") or ""),
+                return _terminal_outcome_from_row(row, child_id), parent_call_id
+            return (
+                ChildOutcome(
+                    status="running",
+                    summary="Child session is running.",
+                    child_session_id=child_id,
+                    operation_id=str(row.get("operation_id") or ""),
+                ),
+                parent_call_id,
             )
     else:
+        parent_call_id = host.parent_call_ids.get(child_id, "")
         task = host.tasks.get(child_id)
         if task is not None:
             if task.done():
-                return task.result()
-            return ChildOutcome(
-                status="running", summary="Child session is running.", child_session_id=child_id
+                return task.result(), parent_call_id
+            return (
+                ChildOutcome(
+                    status="running",
+                    summary="Child session is running.",
+                    child_session_id=child_id,
+                ),
+                parent_call_id,
             )
         if child_id in host.outcomes:
-            return host.outcomes[child_id]
-    return ChildOutcome(
-        status="failed", summary="Unknown child session.", child_session_id=child_id
+            return host.outcomes[child_id], parent_call_id
+    return (
+        ChildOutcome(status="failed", summary="Unknown child session.", child_session_id=child_id),
+        "",
     )
 
 
@@ -1129,9 +1151,14 @@ def _adopt_outcome(
     host: SubagentHost,
     outcome: ChildOutcome,
     *,
-    parent_call_id: str = "",
+    parent_call_id: str,
 ) -> ChildOutcome:
-    """Idempotently admit one durable outcome into the live parent materializer."""
+    """Idempotently admit one durable outcome into the live parent materializer.
+
+    ``parent_call_id`` is the call that dispatched the Child, as its roster
+    row records it; whichever path adopts first labels the admitted evidence,
+    so every path passes the same one.
+    """
     if outcome.evidence_state is None or host.merge_evidence is None:
         return outcome
     return replace(
@@ -1195,8 +1222,10 @@ def _result_with_guidance(
     host: SubagentHost,
     outcome: ChildOutcome,
     questions: tuple[Mapping[str, Any], ...],
+    *,
+    parent_call_id: str,
 ) -> ToolResult:
-    result = _single_result(_adopt_outcome(host, outcome))
+    result = _single_result(_adopt_outcome(host, outcome, parent_call_id=parent_call_id))
     notice = _guidance_notice(questions)
     if not notice:
         return result
