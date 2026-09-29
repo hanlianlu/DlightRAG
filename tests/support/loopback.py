@@ -15,8 +15,9 @@ import ipaddress
 import socket
 import ssl
 import struct
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+import threading
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -119,6 +120,43 @@ def loopback_certificate(directory: Path) -> LoopbackCertificate:
     return LoopbackCertificate(certificate=certificate_path, key=key_path)
 
 
+@contextmanager
+def alerting_tls_server(context: ssl.SSLContext) -> Iterator[int]:
+    """Serve TLS handshakes from a thread that sends OpenSSL's alert on failure.
+
+    asyncio's TLS server drops the alert of a failed handshake, so its client only
+    sees an EOF; a blocking server flushes the alert, as a real endpoint does.
+    """
+    listener = socket.create_server(("127.0.0.1", 0))
+    listener.settimeout(0.05)
+    stopping = threading.Event()
+
+    def serve() -> None:
+        while not stopping.is_set():
+            try:
+                connection, _address = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with connection:
+                connection.settimeout(5)
+                try:
+                    with context.wrap_socket(connection, server_side=True) as tls:
+                        tls.recv(1024)
+                except OSError:
+                    pass
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        stopping.set()
+        thread.join(5)
+        listener.close()
+
+
 def _limit(
     context: ssl.SSLContext,
     *,
@@ -138,6 +176,7 @@ def _limit(
 __all__ = [
     "ConnectionHandler",
     "LoopbackCertificate",
+    "alerting_tls_server",
     "loopback_certificate",
     "loopback_server",
     "reset_on_accept",

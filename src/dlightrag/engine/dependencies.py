@@ -89,7 +89,7 @@ _TLS_PROTOCOL_MISMATCH_REASONS = frozenset(
     {
         "NO_PROTOCOLS_AVAILABLE",
         "TLSV1_ALERT_PROTOCOL_VERSION",
-        "UNKNOWN_PROTOCOL",
+        "UNKNOWN_PROTOCOL",  # OpenSSL 1.0's reason, kept for older builds
         "UNSUPPORTED_PROTOCOL",
         "WRONG_VERSION_NUMBER",
     }

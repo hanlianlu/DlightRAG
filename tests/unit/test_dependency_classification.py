@@ -4,6 +4,8 @@
 import asyncio
 import socket
 import ssl
+import warnings
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -21,6 +23,8 @@ from dlightrag.engine.dependencies import (
     is_transient_request_failure,
 )
 from tests.support.loopback import (
+    LoopbackCertificate,
+    alerting_tls_server,
     loopback_certificate,
     loopback_server,
     reset_on_accept,
@@ -381,8 +385,14 @@ async def _hold_open(reader: asyncio.StreamReader, writer: asyncio.StreamWriter)
     writer.close()
 
 
-async def _get_failure(client_module: ModuleType, url: str) -> BaseException:
-    async with client_module.AsyncClient(timeout=5) as client:
+async def _get_failure(
+    client_module: ModuleType,
+    url: str,
+    *,
+    verify: ssl.SSLContext | bool = True,
+    timeout: object = 5,
+) -> BaseException:
+    async with client_module.AsyncClient(verify=verify, timeout=timeout) as client:
         try:
             await client.get(url)
         except Exception as exc:  # noqa: BLE001 - the failure is the subject
@@ -442,3 +452,121 @@ async def test_a_real_https_url_for_plain_http_is_misconfiguration(
 
     assert is_transient_request_failure(failure) is False
     assert classify_transient_dependency(failure, component_hint="providers") is None
+
+
+@pytest.mark.parametrize("client_module", [httpx, httpx2], ids=["httpx", "httpx2"])
+@pytest.mark.parametrize("stage", ["read", "handshake"])
+async def test_a_real_https_timeout_is_transient(
+    client_module: ModuleType,
+    stage: str,
+    tmp_path: Path,
+) -> None:
+    # A timed-out TLS read or handshake leaves the SSLWantReadError it was waiting
+    # on at the end of the chain (Timeout <- TimeoutError <- CancelledError <-
+    # SSLWantReadError), the widest chain a negative TLS rule once misread.
+    certificate = loopback_certificate(tmp_path)
+    release = asyncio.Event()
+
+    async def stall(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read(1024)
+        await release.wait()
+        writer.close()
+
+    if stage == "read":
+        server_tls: ssl.SSLContext | None = certificate.server_context()
+        timeout = client_module.Timeout(5, read=0.2)
+        expected: type[Exception] = client_module.ReadTimeout
+    else:
+        # A plain TCP peer never answers the ClientHello.
+        server_tls = None
+        timeout = client_module.Timeout(5, connect=0.2)
+        expected = client_module.ConnectTimeout
+    async with loopback_server(stall, tls=server_tls) as port:
+        try:
+            failure = await _get_failure(
+                client_module,
+                f"https://127.0.0.1:{port}/",
+                verify=certificate.client_context(),
+                timeout=timeout,
+            )
+        finally:
+            release.set()
+
+    assert isinstance(failure, expected)
+    assert is_transient_request_failure(failure) is True
+    assert classify_transient_dependency(failure) == "providers"
+
+
+_V1_2 = ssl.TLSVersion.TLSv1_2
+_V1_3 = ssl.TLSVersion.TLSv1_3
+_LEGACY_CIPHERS = "DEFAULT:@SECLEVEL=0"
+
+
+def _tls_versions_disagree(certificate: LoopbackCertificate) -> tuple[ssl.SSLContext, ...]:
+    # The server alerts that the client's only version is one it does not speak.
+    return certificate.server_context(maximum=_V1_2), certificate.client_context(minimum=_V1_3)
+
+
+def _server_picks_an_older_version(certificate: LoopbackCertificate) -> tuple[ssl.SSLContext, ...]:
+    # A legacy server answers with TLS 1.1, below the client's only version.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)  # enabling TLS 1.0/1.1
+        legacy_server = certificate.server_context(
+            minimum=ssl.TLSVersion.TLSv1,
+            maximum=ssl.TLSVersion.TLSv1_1,
+            ciphers=_LEGACY_CIPHERS,
+        )
+    return (
+        legacy_server,
+        certificate.client_context(minimum=_V1_2, maximum=_V1_2, ciphers=_LEGACY_CIPHERS),
+    )
+
+
+def _client_enables_no_version(certificate: LoopbackCertificate) -> tuple[ssl.SSLContext, ...]:
+    return certificate.server_context(), certificate.client_context(minimum=_V1_3, maximum=_V1_2)
+
+
+def _no_shared_cipher(certificate: LoopbackCertificate) -> tuple[ssl.SSLContext, ...]:
+    return (
+        certificate.server_context(maximum=_V1_2, ciphers="ECDHE-ECDSA-CHACHA20-POLY1305"),
+        certificate.client_context(maximum=_V1_2, ciphers="ECDHE-ECDSA-AES128-GCM-SHA256"),
+    )
+
+
+def _tls_reasons(error: BaseException) -> list[object]:
+    reasons: list[object] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            reasons.append(getattr(current, "reason", None))
+        current = current.__cause__ or current.__context__
+    return reasons
+
+
+@pytest.mark.parametrize(
+    ("contexts", "reason", "transient"),
+    [
+        (_tls_versions_disagree, "TLSV1_ALERT_PROTOCOL_VERSION", False),
+        (_server_picks_an_older_version, "UNSUPPORTED_PROTOCOL", False),
+        (_client_enables_no_version, "NO_PROTOCOLS_AVAILABLE", False),
+        # A handshake the server refuses for another reason is not named
+        # misconfiguration, so it stays transient.
+        (_no_shared_cipher, "SSLV3_ALERT_HANDSHAKE_FAILURE", True),
+    ],
+    ids=["protocol-version-alert", "unsupported-protocol", "no-protocols", "handshake-failure"],
+)
+async def test_a_real_tls_protocol_mismatch_is_misconfiguration(
+    contexts: Callable[[LoopbackCertificate], tuple[ssl.SSLContext, ...]],
+    reason: str,
+    transient: bool,
+    tmp_path: Path,
+) -> None:
+    server_tls, client_tls = contexts(loopback_certificate(tmp_path))
+    with alerting_tls_server(server_tls) as port:
+        failure = await _get_failure(httpx, f"https://127.0.0.1:{port}/", verify=client_tls)
+
+    assert reason in _tls_reasons(failure)
+    assert is_transient_request_failure(failure) is transient
+    assert (classify_transient_dependency(failure) == "providers") is transient
