@@ -1404,6 +1404,20 @@ async def test_a_run_whose_workspace_is_gone_fails_before_any_effect(
         assert not stage.exists()
 
 
+async def test_an_unreadable_catalog_leaves_a_recovered_destructive_run_to_repair() -> None:
+    """A Run that may have changed the corpus before it stopped is never failed blind."""
+
+    async def refused(_workspace: str) -> bool:
+        raise RuntimeError("permission denied for table dlightrag_workspaces")
+
+    executor, _pool, _store = _executor(_runtime(), workspace_exists=refused)
+    session = _Session(_payload("reset", supersedes_run_id=None), handoff_started=True)
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, WaitingForRepair)
+
+
 async def test_workspace_delete_proceeds_once_its_workspace_is_unlisted() -> None:
     """It unlists the Workspace itself, so its recovery must not refuse on that."""
     runtime = _runtime()
