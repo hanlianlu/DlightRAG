@@ -7,6 +7,7 @@ Run with:
 
 import asyncio
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -505,6 +506,101 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         assert chunk_id not in {
             row.get("chunk_id") for row in after_delete.contexts.get("chunks", [])
         }
+    finally:
+        if service._initialized:
+            await service.areset()
+        await service.aclose()
+        await pg_pool.close()
+
+
+async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_decoy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder source staged by a Run reaches LightRAG's real parser file by file.
+
+    LightRAG looks a document up by its basename alone; running in the working
+    directory, its fallbacks include operators' ``inputs/<workspace>``. Decoys of
+    the same names there and in the working directory are never parsed, and the
+    operators' folder is left exactly as it was.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.core._pool import pg_pool
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
+    from dlightrag.application.corpus_admin import IngestSpec
+    from dlightrag.application.corpus_admin.mutations import CorpusMutationService, UploadLimits
+    from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+
+    conn_kwargs = pg_conn_kwargs_from_env()
+    workspace = make_workspace_name("nested")
+    working_dir = tmp_path / "storage"
+    cfg = make_e2e_config(working_dir=working_dir, workspace=workspace, conn_kwargs=conn_kwargs)
+    set_config(cfg)
+    install_fake_model_functions(monkeypatch, dim=cfg.models.embedding.dim)
+    operators = cfg.input_dir_path / workspace
+    sources = {
+        operators / "reports" / "q1" / "alpha.md": "# Alpha\n\nThe alpha ledger balances.\n",
+        operators / "reports" / "q2" / "deep" / "beta.md": "# Beta\n\nThe beta survey closes.\n",
+    }
+    for path, text in sources.items():
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding="utf-8")
+    decoys = (operators / "alpha.md", working_dir / "beta.md")
+    for decoy in decoys:
+        decoy.write_text("# Decoy\n\nA decoy must never be parsed.\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in operators.rglob("*") if path.is_file()}
+    monkeypatch.chdir(working_dir)
+
+    async def listed(_workspace: str) -> bool:
+        return True
+
+    mutations = CorpusMutationService(
+        source_root=cfg.input_dir_path,
+        corpus_root=cfg.corpus_dir_path,
+        store=AsyncMock(),
+        coordinator=cast(Any, SimpleNamespace()),
+        upload_limits=UploadLimits(file_bytes=1_000_000, request_bytes=1_000_000),
+        workspace_exists=listed,
+    )
+    spec, manifest = mutations._snapshot_local_spec(
+        "0199a0a0-0000-7000-8000-000000000001",
+        workspace,
+        IngestSpec(source_type="local", path=str(operators / "reports")),
+    )
+    service = await WorkspaceRag.acreate(
+        workspace_id=workspace,
+        settings=rag_settings(cfg),
+        backend=build_pg_corpus_backend(cfg),
+        scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
+        telemetry=LangfuseTelemetry(),
+    )
+    try:
+        batch = await service.aingest(
+            source_type="local",
+            documents=[document.model_dump(exclude_none=True) for document in spec.documents or ()],
+            replace=True,
+        )
+
+        assert batch["errors"] == []
+        assert len(batch["results"]) == len(manifest) == 2
+        assert service._lightrag_stores is not None
+        parsed = []
+        for result in batch["results"]:
+            chunks = await service._lightrag_stores.get_text_chunks(result["chunks"])
+            parsed.append(" ".join(str(chunk["content"]) for chunk in chunks))
+        assert "alpha ledger" in parsed[0]
+        assert "beta survey" in parsed[1]
+        assert not any("decoy" in text.lower() for text in parsed)
+        assert {path: path.read_bytes() for path in operators.rglob("*") if path.is_file()} == (
+            before
+        )
+        # LightRAG archived each flat input in the Workspace's corpus directory.
+        archived = cfg.corpus_dir_path / workspace / "__parsed__"
+        assert {"alpha.md", "beta.md"} <= {path.name for path in archived.iterdir()}
     finally:
         if service._initialized:
             await service.areset()
