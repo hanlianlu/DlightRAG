@@ -445,7 +445,11 @@ class TestPGPoolGet:
 
     @pytest.mark.asyncio
     async def test_notifications_listen_on_a_connection_of_their_own(self) -> None:
-        """The process hub connects to the bound endpoint directly and holds no pool slot."""
+        """The process hub connects to the bound endpoint directly and holds no pool slot.
+
+        It carries the pool's session settings, such as a relaxed idle-session timeout that
+        would otherwise end the idle LISTEN connection between keepalives.
+        """
         from dlightrag.adapters.postgres.core._channels import RUN_CANCEL_CHANNEL
         from dlightrag.adapters.postgres.core._pool import PGPool
 
@@ -455,6 +459,7 @@ class TestPGPoolGet:
         pool = PGPool()
         mock_config = MagicMock()
         mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+        _session_settings(mock_config, extra={"idle_session_timeout": "0"})
         pool.bind(mock_config)
         received: list[str | None] = []
 
@@ -470,6 +475,10 @@ class TestPGPoolGet:
                     await asyncio.sleep(0.005)
             await pool.close()
 
-        connect.assert_awaited_once_with(host="h", port=5432)
+        connect.assert_awaited_once_with(
+            host="h",
+            port=5432,
+            server_settings={"hnsw.ef_search": "256", "idle_session_timeout": "0"},
+        )
         create_pool.assert_not_called()
         connection.close.assert_awaited_once()

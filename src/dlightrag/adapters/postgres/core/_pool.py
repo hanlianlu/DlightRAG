@@ -132,7 +132,13 @@ class PGPool:
         return self._notifications
 
     def _listener_connection(self) -> AbstractAsyncContextManager[Any]:
-        return dedicated_connection(self._active_config().pg_connection_kwargs())
+        # The pool's session settings too: among them may be the idle-session timeout a
+        # deployment relaxes for DlightRAG, and no connection idles more than this one.
+        config = self._active_config()
+        server_settings = domain_pool_server_settings(config)
+        return dedicated_connection(
+            {**config.pg_connection_kwargs(), "server_settings": server_settings}
+        )
 
     async def run(
         self,
