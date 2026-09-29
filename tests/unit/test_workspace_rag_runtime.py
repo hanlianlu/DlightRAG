@@ -929,8 +929,9 @@ class TestDirectImageEmbeddingCapability:
             return runtime
 
         pool = WorkspacePool(build=build, clock=lambda: now)
-        with pytest.raises(WorkspaceUnavailableError, match="ConnectError"):
+        with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable") as failed:
             await pool.acquire("research")
+        assert isinstance(failed.value.__cause__, httpx.ConnectError)
         with pytest.raises(WorkspaceUnavailableError, match="backoff"):
             await pool.acquire("research")
         assert settled == []

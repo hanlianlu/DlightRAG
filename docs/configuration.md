@@ -241,13 +241,18 @@ vector; it never creates a second visual document vector.
 
 Only a definitive probe outcome settles a workspace runtime's mode. A failure
 the shared dependency classification treats as transient (a connection error,
-a timeout, or a retryable status such as 429 or 503) settles nothing: the
-workspace is reported unavailable and its construction is retried with
-backoff, so a provider blip never makes a runtime embed documents text-only
-beside the corpus's fused vectors. Every other failure is definitive, including
-5xx statuses outside that retryable set (for example 501, 505, or 507): the
-probe settles the runtime, leaving both image paths off under `auto` and
-failing the runtime's construction under `multimodal`.
+a timeout, or a retryable status such as 429 or 503) settles nothing, and the
+workspace stays unavailable rather than falling back to text-only, so a
+provider blip never makes a runtime embed documents text-only beside the
+corpus's fused vectors. While it is unavailable, requests that need the
+workspace are refused as temporarily unavailable (HTTP 503) and Runs that need
+it are deferred. The runtime is not rebuilt on every request: the first
+failure opens a 15-second backoff window that doubles with each consecutive
+failure up to 5 minutes, and the first request after the window rebuilds the
+runtime and probes again. Every other failure is definitive, including 5xx
+statuses outside that retryable set (for example 501, 505, or 507): the probe
+settles the runtime, leaving both image paths off under `auto` and failing the
+runtime's construction under `multimodal`.
 
 ```yaml
 models:

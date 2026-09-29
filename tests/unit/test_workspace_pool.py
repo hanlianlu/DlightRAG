@@ -62,8 +62,10 @@ async def test_retryable_failure_backs_off_then_success_clears_it() -> None:
         return runtime
 
     pool = _pool(build, clock=lambda: now)
-    with pytest.raises(WorkspaceUnavailableError, match="ConnectionError"):
+    with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable") as failed:
         await pool.acquire("research")
+    assert "ConnectionError" not in str(failed.value)
+    assert isinstance(failed.value.__cause__, ConnectionError)
     with pytest.raises(WorkspaceUnavailableError, match="backoff"):
         await pool.acquire("research")
 
@@ -114,7 +116,7 @@ async def test_retryable_failure_backoff_grows_and_caps_at_five_minutes() -> Non
 
     pool = _pool(build, clock=lambda: now)
     for expected_interval in (15, 30, 60, 120, 240, 300, 300):
-        with pytest.raises(WorkspaceUnavailableError, match="ConnectionError"):
+        with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable"):
             await pool.acquire("research")
         calls_after_failure = calls
         with pytest.raises(
@@ -151,7 +153,7 @@ async def test_stale_flight_callback_cannot_remove_a_retry_flight() -> None:
     await first_started.wait()
     first_flight = pool._workspace_flights["research"]
     release_first.set()
-    with pytest.raises(WorkspaceUnavailableError, match="ConnectionError"):
+    with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable"):
         await first_waiter
 
     now = 16.0
@@ -346,7 +348,7 @@ async def test_warm_failure_does_not_cancel_an_independent_workspace_flight() ->
         raise AssertionError("unreachable")
 
     pool = _pool(build)
-    with pytest.raises(WorkspaceUnavailableError, match="ConnectionError"):
+    with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable"):
         await pool.warm(["failed", "sibling"])
 
     assert not sibling_cancelled.is_set()

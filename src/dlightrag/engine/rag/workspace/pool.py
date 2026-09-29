@@ -196,7 +196,7 @@ class WorkspacePool:
                     )
                     self._notify_workspace_state(self._on_workspace_unavailable, workspace)
                     raise WorkspaceUnavailableError(
-                        f"Workspace '{workspace}' is temporarily unavailable ({type(exc).__name__})"
+                        f"Workspace '{workspace}' is temporarily unavailable"
                     ) from exc
                 if self._closed:
                     await self._close_unpublished_runtime(workspace, runtime)
