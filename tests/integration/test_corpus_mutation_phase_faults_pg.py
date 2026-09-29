@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.application.corpus_admin.mutations import CorpusMutationExecutor
+from dlightrag.application.corpus_admin.mutations import (
+    CorpusMutationExecutor,
+    CorpusStageReclaimer,
+)
 from dlightrag.engine.dependencies import ParserUnavailableError, TransientDependencyError
 from dlightrag.engine.runtime.coordinator import RunCoordinator
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
@@ -503,3 +506,81 @@ async def test_a_settled_local_run_removes_its_stage(tmp_path: Path) -> None:
         runtime.aingest.assert_awaited_once()
         assert runtime.aingest.await_args.kwargs["documents"] == [{"path": str(staged)}]
         assert not stage.exists()
+
+
+async def test_a_run_an_executor_error_fails_removes_its_stage(tmp_path: Path) -> None:
+    """The coordinator fails the Run for good, so its stage goes with it."""
+    workspace = "failed_stage"
+    runtime = _runtime()
+    runtime.aingest.side_effect = RuntimeError("LightRAG refused the enqueue")
+    run_id = str(uuid.uuid7())
+    stage = tmp_path / workspace / ".runs" / run_id
+    staged = stage / "sources" / "0" / "report.pdf"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"%PDF")
+    async with isolated_run_runtime("mutation_stage_failed") as (store, _pool):
+        envelope = run_envelope(
+            "corpus_mutation", key="failed-stage", workspace=workspace, action="ingest"
+        )
+        payload = {
+            **envelope.payload,
+            "source": {
+                "source_type": "local",
+                "documents": [{"path": str(staged)}],
+                "replace": False,
+            },
+            "staged_sources": [{"path": str(staged), "content_sha256": "0" * 64, "size_bytes": 4}],
+        }
+        accepted = await store.accept_run(
+            envelope=replace(envelope, payload=payload), run_id=run_id
+        )
+        executor = CorpusMutationExecutor(
+            pool=cast(Any, _WorkspacePool({workspace: runtime})),
+            maintenance=cast(Any, _Maintenance()),
+            store=cast(Any, _projection_store()),
+            corpus_root=tmp_path,
+            workspace_exists=_listed,
+        )
+        coordinator = RunCoordinator(
+            store=store,
+            executors={"corpus_mutation": executor},
+            query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
+            sweep_seconds=0.02,
+        )
+        await coordinator.start()
+        coordinator.wake()
+        try:
+            final = await _wait_for(store, workspace, accepted.run.run_id, lambda row: row.terminal)
+        finally:
+            await coordinator.aclose()
+
+        assert final.status == "failed"
+        assert not stage.exists()
+
+
+async def test_the_stage_sweep_removes_a_stage_whose_run_ended_without_its_executor(
+    tmp_path: Path,
+) -> None:
+    """A queued Run cancelled in the store never reaches its executor, which removes stages."""
+    workspace = "swept_stages"
+    async with isolated_run_runtime("mutation_stage_sweep") as (store, _pool):
+        stages: dict[str, Path] = {}
+        for key in ("queued", "cancelled"):
+            run_id = str(uuid.uuid7())
+            envelope = run_envelope(
+                "corpus_mutation", key=f"sweep-{key}", workspace=workspace, action="reset"
+            )
+            await store.accept_run(envelope=envelope, run_id=run_id)
+            stages[key] = tmp_path / workspace / ".runs" / run_id
+            (stages[key] / "sources" / "0").mkdir(parents=True)
+        cancellation = await store.request_cancellation(
+            owner_id=workspace, run_id=stages["cancelled"].name
+        )
+        assert cancellation.outcome == "cancelled"
+
+        removed = await CorpusStageReclaimer(tmp_path).sweep_orphans(store)
+
+        assert removed == 1
+        assert stages["queued"].is_dir()
+        assert not stages["cancelled"].exists()

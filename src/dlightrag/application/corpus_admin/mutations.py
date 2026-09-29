@@ -28,7 +28,6 @@ from dlightrag.application.runs import (
 )
 from dlightrag.engine.dependencies import (
     DependencyComponent,
-    DependencyRetriesExhausted,
     classify_transient_dependency,
     next_dependency_retry,
 )
@@ -47,13 +46,14 @@ from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import CorpusMaintenanceStore, WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 from dlightrag.engine.runtime.coordinator import (
-    RunCancellationObserved,
+    LeaseLostError,
     RunExecutor,
     RunSession,
 )
 from dlightrag.engine.runtime.policy import CORPUS_MUTATION_RUN_RETENTION_SECONDS
 from dlightrag.engine.runtime.records import (
     Deferred,
+    DeletedRun,
     Failed,
     PreparedInputTooLargeError,
     PreparedRunEnvelope,
@@ -70,6 +70,7 @@ from dlightrag.engine.runtime.records import (
 from dlightrag.engine.runtime.records import (
     RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
 )
+from dlightrag.engine.runtime.store import RunExistenceReader
 
 from .errors import (
     CorpusMutationInputError,
@@ -288,11 +289,15 @@ class CorpusMutationService:
                 for item in staged_sources
             ],
         }
-        replay = await self.replay(
-            submitted_by=submitted_by,
-            idempotency_key=idempotency_key,
-            normalized_request=normalized_request,
-        )
+        try:
+            replay = await self.replay(
+                submitted_by=submitted_by,
+                idempotency_key=idempotency_key,
+                normalized_request=normalized_request,
+            )
+        except BaseException:
+            await self.discard_staged_run(workspace=canonical, run_id=run_id)
+            raise
         if replay is not None:
             await self.discard_staged_run(workspace=canonical, run_id=run_id)
             return replay
@@ -866,7 +871,11 @@ class CorpusMutationExecutor(RunExecutor):
         # leaves it to the next owner.
         try:
             outcome = await self._execute(session, raw, action, workspace)
-        except RunCancellationObserved, DependencyRetriesExhausted:
+        except LeaseLostError:
+            raise
+        except Exception:
+            # Cancellation, spent deferrals and every unclassified error end the
+            # Run in the coordinator, which never runs it again.
             if _ACTIONS[action].source_based:
                 await self._discard_stage(workspace, session.run_id)
             raise
@@ -1299,6 +1308,95 @@ class CorpusMutationExecutor(RunExecutor):
             if len(page) < _SUCCESSOR_PAGE_LIMIT:
                 return
             after = page[-1].run_id
+
+
+#: How long a stage with no Run is left alone after its request began, the time
+#: its uuid7 run id carries: a request stages its files before its Run is
+#: accepted, and none takes nearly this long.
+_UNACCEPTED_STAGE_GRACE = datetime.timedelta(days=1)
+
+
+class CorpusStageReclaimer:
+    """Removes the Run stages no Corpus Mutation will read again.
+
+    A Run's executor removes its stage when the Run ends there. One that ends
+    elsewhere (cancelled or failed by the Runtime's sweep, abandoned when
+    claimed) leaves it, as does a request that stopped between staging and
+    acceptance. The maintenance sweep removes the stage of a Run that has ended,
+    and one with no Run a day after its request began.
+    """
+
+    def __init__(
+        self,
+        corpus_root: Path,
+        *,
+        now: Callable[[], datetime.datetime] | None = None,
+    ) -> None:
+        self._corpus_root = Path(corpus_root)
+        self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
+
+    async def reclaim(self, runs: Sequence[DeletedRun]) -> None:
+        """Nothing to do: the sweep after every retention pass finds these stages."""
+
+    async def sweep_orphans(self, store: RunExistenceReader) -> int:
+        removed = 0
+        for stage in await asyncio.to_thread(_list_run_stages, self._corpus_root):
+            began = _run_began(stage.name)
+            if began is None:
+                continue
+            try:
+                record = await store.get_run_global(run_id=stage.name)
+            except Exception:
+                logger.warning(
+                    "Failed to read run %s during the Run stage sweep", stage.name, exc_info=True
+                )
+                continue
+            if record is None:
+                if self._now() - began < _UNACCEPTED_STAGE_GRACE:
+                    continue
+            elif getattr(record, "terminal", False) is not True:
+                continue
+            try:
+                await asyncio.to_thread(shutil.rmtree, stage)
+            except FileNotFoundError:
+                continue
+            except Exception:
+                logger.warning("Failed to remove the Run stage %s", stage, exc_info=True)
+                continue
+            removed += 1
+        return removed
+
+
+def _list_run_stages(corpus_root: Path) -> list[Path]:
+    """Every folder in a Workspace's Run stages: ``<workspace>/.runs/<run id>``."""
+    try:
+        with os.scandir(corpus_root) as entries:
+            workspaces = [
+                Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False)
+            ]
+    except FileNotFoundError:
+        return []
+    stages: list[Path] = []
+    for workspace in workspaces:
+        try:
+            with os.scandir(workspace / RUN_STAGES_DIR_NAME) as entries:
+                stages.extend(
+                    Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False)
+                )
+        except FileNotFoundError, NotADirectoryError:
+            continue
+    return sorted(stages)
+
+
+def _run_began(name: str) -> datetime.datetime | None:
+    """When the request that chose this uuid7 run id began; None for any other name."""
+    try:
+        run_id = UUID(name)
+    except ValueError:
+        return None
+    if run_id.version != 7 or str(run_id) != name:
+        return None
+    return datetime.datetime.fromtimestamp(run_id.time / 1000, datetime.UTC)
 
 
 def _remove_empty_workspace_folders(corpus_root: Path, workspace: str) -> None:

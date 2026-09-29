@@ -116,10 +116,11 @@ class RunExecutor(Protocol):
 
 
 class RunWorkspaceReclaimer(Protocol):
-    """Removes per-run working trees after Runtime deletes the rows.
+    """Removes per-run working trees once no Run will use them again.
 
-    Runtime stays filesystem-neutral: it reports deleted identities and asks.
-    A missing root is success. A failed deletion must not raise to the
+    Runtime stays filesystem-neutral: it reports deleted identities and asks,
+    then lets each reclaimer sweep for trees whose Run it can look up. A
+    missing root is success. A failed deletion must not raise to the
     maintenance pass; the next orphan sweep retries it.
     """
 
@@ -474,7 +475,7 @@ class RunCoordinator:
         heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
         maintenance_seconds: float = MAINTENANCE_SECONDS,
-        workspace_reclaimer: RunWorkspaceReclaimer | None = None,
+        workspace_reclaimers: Sequence[RunWorkspaceReclaimer] = (),
         _token_flush_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if query_worker_concurrency < 1:
@@ -499,7 +500,7 @@ class RunCoordinator:
         self._heartbeat_seconds = heartbeat_seconds
         self._sweep_seconds = sweep_seconds
         self._maintenance_seconds = maintenance_seconds
-        self._workspace_reclaimer = workspace_reclaimer
+        self._workspace_reclaimers = tuple(workspace_reclaimers)
         # Private deterministic test seam; production always uses asyncio.sleep
         # with the fixed TOKEN_BATCH_SECONDS bound.
         self._token_flush_sleep = _token_flush_sleep
@@ -720,17 +721,18 @@ class RunCoordinator:
             await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
         while True:
             deletion = await self._store.prune_expired_runs()
-            if self._workspace_reclaimer is not None and deletion.deleted:
-                try:
-                    await self._workspace_reclaimer.reclaim(deletion.deleted)
-                except Exception:
-                    logger.warning("Run workspace reclaim failed", exc_info=True)
+            if deletion.deleted:
+                for reclaimer in self._workspace_reclaimers:
+                    try:
+                        await reclaimer.reclaim(deletion.deleted)
+                    except Exception:
+                        logger.warning("Run workspace reclaim failed", exc_info=True)
             if deletion.runs <= 0:
                 break
             await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
-        if self._workspace_reclaimer is not None:
+        for reclaimer in self._workspace_reclaimers:
             try:
-                await self._workspace_reclaimer.sweep_orphans(self._store)
+                await reclaimer.sweep_orphans(self._store)
             except Exception:
                 logger.warning("Run workspace orphan sweep failed", exc_info=True)
 

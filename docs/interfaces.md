@@ -175,14 +175,16 @@ scans a folder. Right before a file is enqueued it is copied to
 A listed file missing when the Run starts fails it as `corpus_source_unavailable`
 before any upstream effect, and so does one that cannot be copied there.
 
-A stage belongs to its Run alone. The Run removes it once it succeeds, fails, or
-is cancelled before its handoff; it stays while the Run is deferred or waiting
-for repair. Cancelling a queued Run removes its stage at once, a full reset
+A stage belongs to its Run alone. The Run removes it once it ends: it succeeds,
+fails, or is cancelled before its handoff. It stays while the Run is deferred or
+waiting for repair, and when its worker stops or loses the Run to another, which
+resumes from it. Cancelling a queued Run removes its stage at once, a full reset
 removes the stage of the Run it supersedes, and Workspace Delete those of the
 Runs it cancels. Corpus Reset and Workspace Delete clear the rest of the
 Workspace's corpus directory but never another Run's stage, so an upload still
-being staged is never cut short. A stage whose request never finished (a crash
-before acceptance) is left behind; nothing reads it.
+being staged is never cut short. The hourly Run maintenance of a `writer`
+removes any stage left behind: one whose Run has ended, and one with no Run (its
+request stopped before the Run was accepted) a day after the request began.
 
 Per-document metadata uses a manifest:
 

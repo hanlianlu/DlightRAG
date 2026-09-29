@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypedDict, cast
 from unittest.mock import AsyncMock, create_autospec
+from uuid import UUID
 
 import pytest
 
@@ -21,6 +22,7 @@ from dlightrag.application.corpus_admin import (
 from dlightrag.application.corpus_admin.mutations import (
     CorpusMutationExecutor,
     CorpusMutationService,
+    CorpusStageReclaimer,
     UploadLimits,
     _join_public_operation,
     _result,
@@ -34,6 +36,7 @@ from dlightrag.engine.dependencies import (
 )
 from dlightrag.engine.rag.workspace.ports import WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import (
     Deferred,
     Failed,
@@ -41,6 +44,7 @@ from dlightrag.engine.runtime.records import (
     WaitingForRepair,
     run_request_fingerprint,
 )
+from dlightrag.engine.runtime.records import IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict
 
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
 _TRACK_ID = f"dlightrag-corpus-{_RUN_ID}"
@@ -248,6 +252,36 @@ async def test_a_retried_ingest_key_replays_before_the_workspace_check(tmp_path:
 
     assert receipt == "receipt"
     assert lookups == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeIdempotencyKeyConflict("key reused"), ConnectionError("store unavailable")],
+    ids=["conflict", "store-unavailable"],
+)
+async def test_a_local_ingest_whose_key_cannot_be_replayed_removes_its_stage(
+    tmp_path: Path, error: Exception
+) -> None:
+    """A local source is staged before its key can be matched, so a failed match drops it."""
+    from dlightrag.application.runs import IdempotencyKeyConflict
+
+    source = tmp_path / "inputs" / "default" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"%PDF")
+    store = AsyncMock()
+    store.replay_run.side_effect = error
+    service = _accepting_service(tmp_path, store)
+
+    with pytest.raises((IdempotencyKeyConflict, ConnectionError)):
+        await service.create_ingest(
+            workspace="default",
+            spec=_local_spec(source),
+            submitted_by="operator",
+            idempotency_key="key-1",
+        )
+
+    assert list((tmp_path / "corpus" / "default" / ".runs").iterdir()) == []
+    store.accept_run.assert_not_awaited()
 
 
 async def test_workspace_delete_replays_its_receipt_after_the_workspace_is_gone(
@@ -963,6 +997,43 @@ async def test_a_replacement_whose_parser_input_cannot_be_placed_fails_before_an
     assert not stage.exists()
 
 
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("LightRAG refused the enqueue"), IsADirectoryError(21, "Is a directory")],
+    ids=["unclassified", "os-error"],
+)
+async def test_a_local_run_ended_by_an_error_removes_its_stage(
+    tmp_path: Path, error: Exception
+) -> None:
+    """The coordinator fails such a Run for good, so nothing reads its stage again."""
+    stage, payload = _staged_run(tmp_path)
+    runtime = _runtime()
+    runtime.aingest.side_effect = error
+    executor, _pool, _store = _executor(runtime, corpus_root=tmp_path)
+
+    with pytest.raises(type(error)):
+        await executor.execute(cast(Any, _Session(payload)))
+
+    assert not stage.exists()
+
+
+@pytest.mark.parametrize(
+    "error", [LeaseLostError(), asyncio.CancelledError()], ids=["lease-lost", "worker-stopped"]
+)
+async def test_a_local_run_another_worker_may_resume_keeps_its_stage(
+    tmp_path: Path, error: BaseException
+) -> None:
+    stage, payload = _staged_run(tmp_path)
+    runtime = _runtime()
+    runtime.aingest.side_effect = error
+    executor, _pool, _store = _executor(runtime, corpus_root=tmp_path)
+
+    with pytest.raises(type(error)):
+        await executor.execute(cast(Any, _Session(payload)))
+
+    assert (stage / "sources" / "0" / "report.pdf").read_bytes() == b"pdf"
+
+
 async def test_a_run_that_may_run_again_keeps_its_stage(tmp_path: Path) -> None:
     stage, payload = _staged_run(tmp_path)
     error = TransientDependencyError("corpus_storage", "temporarily unavailable")
@@ -1362,6 +1433,38 @@ def _run_record(run_id: str, *, status: str = "queued", run_kind: str = "corpus_
         run_kind=run_kind,
         terminal=status in {"succeeded", "failed", "cancelled"},
     )
+
+
+def _run_id_at(moment: datetime.datetime, serial: int) -> str:
+    """A uuid7 run id chosen at ``moment``."""
+    milliseconds = int(moment.timestamp() * 1000)
+    return str(UUID(int=(milliseconds << 80) | (0x7 << 76) | (0b10 << 62) | serial))
+
+
+async def test_the_stage_sweep_removes_what_no_run_will_read_again(tmp_path: Path) -> None:
+    """A Run ended outside its executor leaves its stage, as does a request that never
+    became a Run; one still being staged has no Run yet either, but only for a while."""
+    now = datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)
+    hour_ago = now - datetime.timedelta(hours=1)
+    ended, queued, staging = (_run_id_at(hour_ago, serial) for serial in (1, 2, 3))
+    abandoned = _run_id_at(now - datetime.timedelta(days=2), 4)
+    runs = tmp_path / "default" / ".runs"
+    for run_id in (ended, queued, staging, abandoned):
+        (runs / run_id / "sources" / "0").mkdir(parents=True)
+        (runs / run_id / "sources" / "0" / "report.pdf").write_bytes(b"pdf")
+    (runs / "not-a-run").mkdir()
+    records = {
+        ended: _run_record(ended, status="failed"),
+        queued: _run_record(queued, status="queued"),
+    }
+    store = SimpleNamespace(
+        get_run_global=AsyncMock(side_effect=lambda *, run_id: records.get(run_id))
+    )
+
+    removed = await CorpusStageReclaimer(tmp_path, now=lambda: now).sweep_orphans(cast(Any, store))
+
+    assert removed == 2
+    assert sorted(path.name for path in runs.iterdir()) == sorted([queued, staging, "not-a-run"])
 
 
 def _successor_store(*pages: tuple[Any, ...]) -> SimpleNamespace:

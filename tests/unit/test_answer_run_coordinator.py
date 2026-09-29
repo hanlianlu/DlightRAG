@@ -778,7 +778,7 @@ class TestRetentionMaintenance:
                 "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
             },
             query_worker_concurrency=1,
-            workspace_reclaimer=reclaimer,
+            workspace_reclaimers=(reclaimer,),
         )
 
         await coordinator._maintain_once()
@@ -788,21 +788,24 @@ class TestRetentionMaintenance:
 
     async def test_a_reclaimer_fault_does_not_fail_the_maintenance_pass(self) -> None:
         store = _MemoryStore()
-        store.prune_batches = [
-            (DeletedRun(owner_id="owner-alpha", run_id="run-one", run_kind="answer"),)
-        ]
+        deleted = DeletedRun(owner_id="owner-alpha", run_id="run-one", run_kind="answer")
+        store.prune_batches = [(deleted,)]
+        reclaimer = _RecordingReclaimer()
         coordinator = RunCoordinator(
             store=store,
             executors={
                 "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
             },
             query_worker_concurrency=1,
-            workspace_reclaimer=_RaisingReclaimer(),
+            workspace_reclaimers=(_RaisingReclaimer(), reclaimer),
         )
 
         await coordinator._maintain_once()
 
         assert store.prunes == 2
+        # Nor does it keep the next reclaimer from its turn.
+        assert reclaimer.reclaimed == [(deleted,)]
+        assert reclaimer.sweeps == 1
 
     async def test_one_pass_drains_full_batches(self) -> None:
         store = _MemoryStore()

@@ -114,6 +114,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         UploadLimits,
     )
     from dlightrag.application.corpus_admin.mutations import (
+        CorpusStageReclaimer,
         validate_corpus_mutation_prepared_input,
     )
     from dlightrag.application.health import ApplicationHealth
@@ -171,7 +172,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime.contracts import RunKind
-    from dlightrag.engine.runtime.coordinator import RunCoordinator, RunExecutor
+    from dlightrag.engine.runtime.coordinator import (
+        RunCoordinator,
+        RunExecutor,
+        RunWorkspaceReclaimer,
+    )
     from dlightrag.engine.runtime.errors import IncompatibleActiveRunError, RunExecutionError
     from dlightrag.engine.runtime.records import parse_run_id
     from dlightrag.engine.runtime.settlements import InventoryPathRecord
@@ -434,6 +439,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         "answer": answer_executor,
         "retrieval": retrieval_executor,
     }
+    workspace_reclaimers: list[RunWorkspaceReclaimer] = []
+    agent_reclaimer = agent_workspace_reclaimer(
+        execution_environment=config.answer.agent.execution_environment,
+        workspace_root=config.answer.agent.workspace_root,
+    )
+    if agent_reclaimer is not None:
+        workspace_reclaimers.append(agent_reclaimer)
     if not config.is_reader:
         executors["corpus_mutation"] = CorpusMutationExecutor(
             pool=pool,
@@ -442,6 +454,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             corpus_root=config.corpus_dir_path,
             workspace_exists=corpora.workspace_exists,
         )
+        workspace_reclaimers.append(CorpusStageReclaimer(config.corpus_dir_path))
 
     async def validate_active_runs() -> None:
         """Compose operation-owned durable-input checks at the process boundary."""
@@ -476,10 +489,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         executors=executors,
         query_worker_concurrency=config.runtime.query.worker_concurrency,
         corpus_mutation_worker_concurrency=(config.runtime.corpus_mutation.worker_concurrency),
-        workspace_reclaimer=agent_workspace_reclaimer(
-            execution_environment=config.answer.agent.execution_environment,
-            workspace_root=config.answer.agent.workspace_root,
-        ),
+        workspace_reclaimers=workspace_reclaimers,
     )
     retrieval.bind_runtime(store=run_store, coordinator=coordinator)
 
