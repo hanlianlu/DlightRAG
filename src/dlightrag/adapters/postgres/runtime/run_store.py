@@ -252,14 +252,16 @@ _RUN_INDEXES = (
 # Final clean-break baseline schema
 # ─────────────────────────────────────────────────────────────────
 
-# Databases created by releases 2.0.0 through 2.0.5 keep their Answer runs in
-# dlightrag_answer_runs. No migration path from them is offered: development data
-# is reset instead (docs/postgresql.md), so that table refuses startup with the remedy.
+# A database that still holds dlightrag_answer_runs (created by releases 2.0.0
+# through 2.0.5 and never started by a later release) is not migrated: development
+# data is reset instead (docs/postgresql.md), so that table refuses startup with the
+# remedy.
 _PRE_RUNTIME_ANSWER_SCHEMA = "SELECT to_regclass('dlightrag_answer_runs') IS NOT NULL"
 _PRE_RUNTIME_ANSWER_SCHEMA_ERROR = (
-    "dlightrag_answer_runs holds Answer runs from a database created by DlightRAG "
-    "2.0.0-2.0.5, which this revision does not migrate; run a full development reset "
-    "(scripts/reset_development.py) and start a writer on the empty database"
+    "this database still holds dlightrag_answer_runs (created by DlightRAG 2.0.0-2.0.5 "
+    "and never started by a later release), which is not migrated; run a full "
+    "development reset (scripts/reset_development.py) and start a writer on the empty "
+    "database"
 )
 
 _CREATE_RUNS = """

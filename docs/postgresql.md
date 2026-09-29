@@ -230,9 +230,9 @@ the complete current schema; each later Run migration only brings a database
 created before it up to date. Integration tests require a freshly migrated Run
 catalog to contain exactly what is declared, no more and no less, and require
 every later Run migration to leave a fresh baseline unchanged down to each
-definition. Databases created by releases 2.0.0 through 2.0.5 keep their Answer
-runs in `dlightrag_answer_runs`, and no migration path from them is offered:
-writers and readers both refuse to start on such a database and name the full
+definition. A database that still holds `dlightrag_answer_runs` (created by
+releases 2.0.0 through 2.0.5 and never started by a later release) is not
+migrated: writers and readers both refuse to start on it and name the full
 development reset above as the remedy.
 
 ## Durable Run State

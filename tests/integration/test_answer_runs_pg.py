@@ -466,7 +466,10 @@ async def _assert_run_event_parent_guard(store: FingerprintingRunStore, pool: An
 
 class TestSchema:
     async def test_refuses_a_pre_runtime_answer_schema_with_the_reset_remedy(self, pool) -> None:
-        """A 2.0.x Answer schema is reset, never migrated: both roles refuse to start on it."""
+        """A database still holding the 2.0.0-2.0.5 Answer table is reset, never migrated.
+
+        Both roles refuse to start on it and name the reset as the remedy.
+        """
         async with pool.acquire() as conn:
             await conn.execute(_BASELINE_ANSWER_RUNS_DDL)
 
