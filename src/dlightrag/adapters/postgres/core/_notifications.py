@@ -54,10 +54,11 @@ async def dedicated_connection(connect_kwargs: Mapping[str, Any]) -> AsyncIterat
         yield connection
     finally:
         # A graceful close waits for the server to hang up, which a half-open socket
-        # never does; past the bound the connection is terminated instead.
+        # never does, and re-raises an out-of-band cancel that failed. Either way the
+        # connection is terminated instead, and the reason it closes still propagates.
         try:
             await asyncio.wait_for(connection.close(), timeout=_STATEMENT_TIMEOUT_SECONDS)
-        except TimeoutError:
+        except Exception:
             connection.terminate()
 
 
@@ -115,19 +116,20 @@ class PGNotificationHub:
 
     async def _run(self) -> None:
         while True:
+            failure: Exception | None = None
             try:
                 async with self._connect() as connection:
                     await self._serve(connection)
-                logger.warning(
-                    "PostgreSQL notification connection was lost; reconnecting in %.1fs",
-                    self._reconnect_delay,
-                )
-            except Exception:
-                logger.warning(
-                    "PostgreSQL notification connection failed; reconnecting in %.1fs",
-                    self._reconnect_delay,
-                    exc_info=True,
-                )
+            except Exception as exc:
+                failure = exc
+            if self._closed:
+                return  # closing can surface as a connection error instead of a cancellation
+            logger.warning(
+                "PostgreSQL notification connection %s; reconnecting in %.1fs",
+                "failed" if failure else "was lost",
+                self._reconnect_delay,
+                exc_info=failure,
+            )
             # Every replacement waits, and the wait doubles until a connection passes a
             # keepalive, so one that dies right after its LISTENs cannot spin the hub
             # through reconnects and resynchronizations.
@@ -146,8 +148,10 @@ class PGNotificationHub:
                 await asyncio.wait_for(connection.fetchval("SELECT 1"), _STATEMENT_TIMEOUT_SECONDS)
                 self._reconnect_delay = _RECONNECT_BASE_SECONDS
                 self._resynchronize()
-        except Exception:
-            # A failed or hung statement leaves the connection's state unknown.
+        except BaseException:
+            # A failed, hung, or abandoned statement leaves the connection's state
+            # unknown. Terminating it also drops the out-of-band cancel an abandoned
+            # statement set off, which a graceful close would wait for and re-raise.
             connection.terminate()
             raise
         finally:
@@ -196,6 +200,7 @@ class ChannelWatcher:
         self._ready = asyncio.Event()
         self._woken = asyncio.Event()
         self._live = False
+        self._closing = False
         self._listening_on: PGNotificationHub | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -206,6 +211,8 @@ class ChannelWatcher:
 
     async def start(self) -> None:
         """Subscribe and run after every wake; the hub's first ``None`` brings the first."""
+        if self._closing:
+            raise RuntimeError("channel watcher is closed")
         if self._task is not None:
             return
         hub = self._hub()
@@ -214,7 +221,8 @@ class ChannelWatcher:
         self._task = asyncio.create_task(self._run(), name=self._name)
 
     async def aclose(self) -> None:
-        """Unsubscribe and stop, abandoning a run in progress."""
+        """Unsubscribe and stop, abandoning a run in progress; the watcher cannot restart."""
+        self._closing = True
         hub, self._listening_on = self._listening_on, None
         if hub is not None:
             hub.unsubscribe(self._channel, self._wake)
@@ -231,13 +239,15 @@ class ChannelWatcher:
 
     async def _run(self) -> None:
         retry_delay = _RECONNECT_BASE_SECONDS
-        while True:
+        while not self._closing:
             await self._woken.wait()
             self._woken.clear()
             live = self._live
             try:
                 await self._on_wake()
             except Exception:
+                if self._closing:
+                    return  # an abandoned run can surface as the error it was cancelled in
                 if self._ready.is_set():
                     logger.warning(
                         "%s failed; the next wake runs it again", self._name, exc_info=True

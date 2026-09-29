@@ -3,8 +3,9 @@
 and the channel watcher that runs one coroutine after every wake."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
+from functools import partial
 from itertools import pairwise
 from typing import Any
 
@@ -33,6 +34,7 @@ class ListenConnection:
         self.listeners: dict[str, Callable[..., None]] = {}
         self.statements: list[str] = []
         self.keepalive_error: Exception | None = None
+        self.close_error: Exception | None = None  # what a graceful close raises
         self.hang: set[str] = set()  # statements that never complete
         self._delay = delay  # how long every statement takes
         self._dies_after_listen = dies_after_listen  # the server drops it once it LISTENs
@@ -67,7 +69,11 @@ class ListenConnection:
         return self._closed
 
     async def close(self) -> None:
+        if self._closed:
+            return
         await self._statement("close")
+        if self.close_error is not None:
+            raise self.close_error
         self._end()
 
     def terminate(self) -> None:
@@ -122,6 +128,17 @@ async def until(predicate: Callable[[], bool], *, timeout: float = 2.0) -> None:
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition not reached")
         await asyncio.sleep(0.005)
+
+
+async def closes_on_its_own(close: Coroutine[Any, Any, None]) -> bool:
+    """Whether ``close`` finishes within a second without being cancelled.
+
+    A timeout that cancelled it would cancel what it awaits as well, and so could
+    finish a close that on its own never would.
+    """
+    closing = asyncio.ensure_future(close)
+    done, _pending = await asyncio.wait({closing}, timeout=1)
+    return closing in done
 
 
 @pytest.fixture(autouse=True)
@@ -406,6 +423,69 @@ async def test_closing_the_hub_releases_its_connection_and_refuses_new_subscribe
         hub.subscribe(RUNS, received.append)
 
 
+async def test_closing_the_hub_during_a_statement_terminates_its_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_KEEPALIVE_SECONDS", 0.01)
+    endpoint = ListenEndpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    received: list[str | None] = []
+    hub.subscribe(RUNS, received.append)
+    await until(lambda: received == [None])
+    connection = endpoint.opened[0]
+    connection.hang.add("SELECT 1")
+    await until(lambda: "SELECT 1" in connection.statements)
+
+    await asyncio.wait_for(hub.aclose(), timeout=1)
+
+    assert connection.is_closed()
+    assert endpoint.released == [connection]
+
+
+async def test_closing_the_hub_is_final_even_when_its_connection_fails_to_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed close must not stand in for the cancellation that closes the hub."""
+    connections: list[ListenConnection] = []
+
+    async def connect(**_kwargs: Any) -> ListenConnection:
+        connection = ListenConnection()
+        connection.close_error = ConnectionResetError("the cancel request was reset")
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    hub = PGNotificationHub(connect=partial(_notifications.dedicated_connection, {}))
+    received: list[str | None] = []
+    hub.subscribe(RUNS, received.append)
+    await until(lambda: received == [None])
+
+    assert await closes_on_its_own(hub.aclose())
+    await asyncio.sleep(0.01)
+
+    assert len(connections) == 1
+    assert connections[0].is_closed()
+
+
+async def test_a_dedicated_connection_that_fails_to_close_is_terminated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """asyncpg's graceful close re-raises an out-of-band cancel that failed."""
+    broken = ListenConnection()
+    broken.close_error = ConnectionResetError("the cancel request was reset")
+
+    async def connect(**_kwargs: Any) -> ListenConnection:
+        return broken
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+
+    with pytest.raises(RuntimeError, match="the reason it closes"):
+        async with _notifications.dedicated_connection({"host": "unused"}):
+            raise RuntimeError("the reason it closes")
+
+    assert broken.is_closed()
+
+
 async def test_a_dedicated_connection_that_never_finishes_closing_is_terminated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -550,6 +630,35 @@ async def test_once_ready_a_failed_run_waits_for_the_next_wake(
     endpoint.opened[0].notify(CANCEL, "next wake")
     await until(lambda: runs == 3)
     await watcher.aclose()
+    await hub.aclose()
+
+
+async def test_closing_a_watcher_stops_it_when_a_cancelled_run_raises_instead() -> None:
+    """asyncpg can surface a cancelled query as the failure of its out-of-band cancel."""
+    endpoint = ListenEndpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    entered = asyncio.Event()
+    runs = 0
+
+    async def on_wake() -> None:
+        nonlocal runs
+        runs += 1
+        if runs == 1:
+            return
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise ConnectionResetError("the cancel request was reset") from None
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await asyncio.wait_for(watcher.ready.wait(), timeout=2)
+    endpoint.opened[0].notify(CANCEL, "wake")
+    await asyncio.wait_for(entered.wait(), timeout=2)
+
+    assert await closes_on_its_own(watcher.aclose())
+    assert runs == 2
     await hub.aclose()
 
 
