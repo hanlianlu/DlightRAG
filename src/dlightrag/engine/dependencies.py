@@ -10,6 +10,7 @@ non-retryable.
 from __future__ import annotations
 
 import ssl
+import sys
 from collections.abc import Mapping
 from types import ModuleType
 from typing import Any, Literal
@@ -26,22 +27,6 @@ except ImportError:  # pragma: no cover - installed with the provider SDKs
     pass
 else:
     _HTTP_CLIENTS.append(httpx2)
-
-# google-genai sends its async requests through aiohttp when it is importable, and
-# raises aiohttp's own connection errors. ClientOSError covers every connector
-# failure (refused, reset, DNS, proxy, and TLS, whose misconfigured cases the
-# endpoint rule still vetoes).
-_AIOHTTP_TRANSIENT_ERRORS: tuple[type[Exception], ...] = ()
-try:
-    import aiohttp
-except ImportError:  # pragma: no cover - installed with google-genai
-    pass
-else:
-    _AIOHTTP_TRANSIENT_ERRORS = (
-        aiohttp.ClientOSError,
-        aiohttp.ServerDisconnectedError,
-        aiohttp.ServerTimeoutError,
-    )
 
 type DependencyComponent = Literal["corpus_storage", "parser", "providers"]
 
@@ -88,18 +73,15 @@ _RETRYABLE_STATUS_CODES = frozenset(
 # proxy that dropped or refused the connection. An unsupported URL scheme or a
 # local protocol violation is configuration or a client bug and stays
 # non-retryable.
-_TRANSIENT_TRANSPORT_ERRORS = (
-    *(
-        error
-        for client in _HTTP_CLIENTS
-        for error in (
-            client.TimeoutException,
-            client.NetworkError,
-            client.RemoteProtocolError,
-            client.ProxyError,
-        )
-    ),
-    *_AIOHTTP_TRANSIENT_ERRORS,
+_TRANSIENT_HTTPX_ERRORS = tuple(
+    error
+    for client in _HTTP_CLIENTS
+    for error in (
+        client.TimeoutException,
+        client.NetworkError,
+        client.RemoteProtocolError,
+        client.ProxyError,
+    )
 )
 _HTTP_STATUS_ERRORS = tuple(client.HTTPStatusError for client in _HTTP_CLIENTS)
 # OpenSSL reasons for a TLS protocol mismatch, such as an https URL for a
@@ -186,12 +168,14 @@ def classify_transient_dependency(
     # misconfigured endpoint is not an outage. Typed boundaries decide for
     # themselves, so a wrapper such as CorpusUnavailableError still defers.
     misconfigured = any(_is_misconfigured_endpoint(item) for item in chain)
+    if not misconfigured and _is_transient_aiohttp_failure(exc):
+        return component_hint or "providers"
     for item in chain:
         if isinstance(item, TransientDependencyError):
             return item.component
         if isinstance(item, TimeoutError | ConnectionError) and component_hint is not None:
             return component_hint
-        if isinstance(item, _TRANSIENT_TRANSPORT_ERRORS):
+        if isinstance(item, _TRANSIENT_HTTPX_ERRORS):
             if misconfigured:
                 continue
             return component_hint or "providers"
@@ -240,9 +224,8 @@ def is_transient_request_failure(exc: BaseException, *, text_vetoes: bool = True
         for item in chain
     ):
         return False
-    return any(
-        isinstance(item, _TRANSIENT_TRANSPORT_ERRORS)
-        or _status_code(item) in _RETRYABLE_STATUS_CODES
+    return _is_transient_aiohttp_failure(exc) or any(
+        isinstance(item, _TRANSIENT_HTTPX_ERRORS) or _status_code(item) in _RETRYABLE_STATUS_CODES
         for item in chain
     )
 
@@ -333,6 +316,39 @@ def _is_misconfigured_endpoint(exc: BaseException) -> bool:
     )
 
 
+def _is_transient_aiohttp_failure(exc: BaseException) -> bool:
+    """Whether aiohttp itself raised a broken connection, response, or proxy 5xx.
+
+    google-genai sends its async requests through aiohttp and raises aiohttp's
+    errors unwrapped. Libraries that wrap them (aiobotocore for S3, azure-core
+    for Azure Blob) own their failures, so an aiohttp error counts only when it
+    is the exception raised. aiohttp is looked up, not imported: if it was never
+    imported, no aiohttp error can be in the chain.
+    """
+
+    aiohttp: Any = sys.modules.get("aiohttp")
+    parser_errors: Any = sys.modules.get("aiohttp.http_exceptions")
+    if aiohttp is None or parser_errors is None:
+        return False
+    if isinstance(
+        exc,
+        aiohttp.ClientOSError  # every connector failure: refused, reset, DNS, proxy, TLS
+        | aiohttp.ClientConnectionResetError
+        | aiohttp.ServerDisconnectedError
+        | aiohttp.ServerTimeoutError,
+    ):
+        return True
+    if isinstance(exc, aiohttp.ClientPayloadError):
+        # A body the peer cut short, not one the client could not decode.
+        return any(
+            isinstance(item, parser_errors.ContentLengthError | parser_errors.TransferEncodingError)
+            for item in _exception_chain(exc)
+        )
+    if isinstance(exc, aiohttp.ClientResponseError):  # includes a proxy refusing CONNECT
+        return _status_code(exc) in _RETRYABLE_STATUS_CODES
+    return False
+
+
 def _anthropic_error_type(exc: BaseException) -> str | None:
     body = getattr(exc, "body", None)
     error = body.get("error") if isinstance(body, Mapping) else None
@@ -341,6 +357,13 @@ def _anthropic_error_type(exc: BaseException) -> str | None:
 
 
 def _status_code(exc: BaseException) -> int | None:
+    aiohttp: Any = sys.modules.get("aiohttp")
+    parser_errors: Any = sys.modules.get("aiohttp.http_exceptions")
+    if parser_errors is not None and isinstance(exc, parser_errors.HttpProcessingError):
+        return None  # an HTTP parser error code (400 for a truncated body), not a status
+    if aiohttp is not None and isinstance(exc, aiohttp.ClientResponseError):
+        status = getattr(exc, "status", None)  # .code is a deprecated alias
+        return status if isinstance(status, int) and not isinstance(status, bool) else None
     for value in (
         getattr(exc, "status_code", None),
         getattr(exc, "code", None),

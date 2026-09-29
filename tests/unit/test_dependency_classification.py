@@ -5,9 +5,10 @@ import asyncio
 import socket
 import ssl
 import warnings
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import aiohttp
 import anthropic
@@ -611,22 +612,54 @@ def gemini_reconnects_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_api_client, "asyncio", _AsyncioWithoutPauses("asyncio"))
 
 
-async def _gemini_failure(base_url: str) -> BaseException:
+async def _gemini_failure(
+    base_url: str,
+    *,
+    stream: bool = False,
+    timeout_ms: int = 5_000,
+) -> BaseException:
     client = genai.Client(
         api_key="test-key",
         http_options=genai.types.HttpOptions(
             base_url=base_url,
-            timeout=5_000,
+            timeout=timeout_ms,
             retry_options=genai.types.HttpRetryOptions(attempts=1),
         ),
     )
     try:
-        await client.aio.models.generate_content(model="gemini-test", contents="hi")
+        if stream:
+            chunks = await client.aio.models.generate_content_stream(
+                model="gemini-test", contents="hi"
+            )
+            async for _chunk in chunks:
+                pass
+        else:
+            await client.aio.models.generate_content(model="gemini-test", contents="hi")
     except Exception as exc:  # noqa: BLE001 - the failure is the subject
         return exc
     finally:
         await client.aio.aclose()
     raise AssertionError("the request did not fail")
+
+
+async def _read_request(reader: asyncio.StreamReader) -> None:
+    received = b""
+    while b"\r\n\r\n" not in received:
+        chunk = await reader.read(65_536)
+        if not chunk:
+            return
+        received += chunk
+    head, _, body = received.partition(b"\r\n\r\n")
+    length = next(
+        (
+            int(line.split(b":")[1])
+            for line in head.split(b"\r\n")
+            if line.lower().startswith(b"content-length:")
+        ),
+        0,
+    )
+    while len(body) < length and (chunk := await reader.read(65_536)):
+        body += chunk
 
 
 async def _close_after_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -708,3 +741,183 @@ async def test_a_real_aiohttp_socket_read_timeout_is_transient() -> None:
             release.set()
 
     assert classify_transient_dependency(raised.value) == "providers"
+
+
+def _cut_short(framing: str, close: str) -> Callable[..., Awaitable[None]]:
+    """Answer 200, send part of the body, then close (FIN) or reset (RST)."""
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_request(reader)
+        if framing == "content-length":
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b'Content-Length: 5000\r\n\r\n{"candidates": ['
+            )
+        else:
+            event = b'data: {"candidates": [{"content": {"parts": [{"text": "h"}]}}]}\n\n'
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n" + b"%x\r\n%s\r\n" % (len(event), event)
+            )
+        await writer.drain()
+        if close == "reset":
+            await reset_on_accept(reader, writer)
+        else:
+            writer.close()
+
+    return respond
+
+
+@pytest.mark.usefixtures("gemini_reconnects_at_once")
+@pytest.mark.parametrize("framing", ["content-length", "chunked"])
+@pytest.mark.parametrize("close", ["fin", "reset"])
+async def test_a_real_gemini_response_cut_short_is_a_provider_interruption(
+    framing: str,
+    close: str,
+) -> None:
+    # aiohttp reports a truncated body as ClientPayloadError over an HTTP parser
+    # error whose parser code (400) must not read as an HTTP 400 rejection.
+    async with loopback_server(_cut_short(framing, close)) as port:
+        failure = await _gemini_failure(f"http://127.0.0.1:{port}", stream=framing == "chunked")
+
+    assert isinstance(failure, aiohttp.ClientPayloadError)
+    assert classify_transient_dependency(failure) == "providers"
+    assert classify_transient_dependency(failure, component_hint="providers") == "providers"
+
+
+@pytest.mark.usefixtures("gemini_reconnects_at_once")
+async def test_a_real_gemini_response_it_cannot_decode_is_not_an_outage() -> None:
+    async def undecodable(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_request(reader)
+        body = b"not gzip at all"
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        await writer.drain()
+        writer.close()
+
+    async with loopback_server(undecodable) as port:
+        failure = await _gemini_failure(f"http://127.0.0.1:{port}")
+
+    assert isinstance(failure, aiohttp.ClientPayloadError)
+    assert classify_transient_dependency(failure, component_hint="providers") is None
+
+
+async def test_a_real_gemini_request_timeout_needs_the_providers_hint() -> None:
+    # google-genai bounds a request with aiohttp's total timeout, which raises a
+    # bare TimeoutError: only the Run's providers hint can name its component.
+    release = asyncio.Event()
+
+    async def stall(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_request(reader)
+        await release.wait()
+        writer.close()
+
+    async with loopback_server(stall) as port:
+        try:
+            failure = await _gemini_failure(f"http://127.0.0.1:{port}", timeout_ms=200)
+        finally:
+            release.set()
+
+    assert isinstance(failure, TimeoutError)
+    assert classify_transient_dependency(failure, component_hint="providers") == "providers"
+    assert classify_transient_dependency(failure) is None
+
+
+async def test_a_real_proxy_refusing_gemini_is_a_provider_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def refuse_connect(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read(65_536)
+        writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+        await writer.drain()
+        writer.close()
+
+    async with loopback_server(refuse_connect) as port:
+        monkeypatch.delenv("NO_PROXY")
+        monkeypatch.delenv("no_proxy")
+        monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{port}")
+        failure = await _gemini_failure("https://gemini.example.test")
+
+    assert isinstance(failure, aiohttp.ClientHttpProxyError)
+    with warnings.catch_warnings():
+        # ClientResponseError.code is a deprecated alias of .status.
+        warnings.simplefilter("error", DeprecationWarning)
+        assert classify_transient_dependency(failure) == "providers"
+        assert is_transient_request_failure(failure) is True
+
+
+def test_an_aiohttp_connection_reset_raised_directly_is_transient() -> None:
+    reset = aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    assert classify_transient_dependency(reset) == "providers"
+    assert is_transient_request_failure(reset) is True
+
+
+async def _s3_failure(endpoint: str) -> BaseException:
+    from aiobotocore.session import get_session
+    from botocore.config import Config
+
+    async with get_session().create_client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name="us-east-1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        config=Config(retries={"max_attempts": 1, "mode": "standard"}),
+    ) as client:
+        s3: Any = client  # aiobotocore generates its operations at runtime
+        try:
+            await s3.get_object(Bucket="bucket", Key="key")
+        except Exception as exc:  # noqa: BLE001 - the failure is the subject
+            return exc
+    raise AssertionError("the request did not fail")
+
+
+async def _azure_failure(endpoint: str) -> BaseException:
+    from azure.storage.blob.aio import BlobServiceClient
+
+    client = BlobServiceClient(account_url=endpoint, credential=None, retry_total=0)
+    try:
+        downloader = await client.get_blob_client("container", "blob").download_blob()
+        await downloader.readall()
+    except Exception as exc:  # noqa: BLE001 - the failure is the subject
+        return exc
+    finally:
+        await client.close()
+    raise AssertionError("the request did not fail")
+
+
+@pytest.mark.parametrize("source", [_s3_failure, _azure_failure], ids=["s3", "azure-blob"])
+@pytest.mark.parametrize("failure_kind", ["refused", "reset"])
+async def test_a_source_sdk_wrapping_an_aiohttp_failure_keeps_its_own_classification(
+    source: Callable[[str], Awaitable[BaseException]],
+    failure_kind: str,
+) -> None:
+    # aiobotocore raises botocore errors over the aiohttp error, and azure-core
+    # wraps it; a Corpus Mutation classifies them without a hint, and they must
+    # not become a model-provider outage.
+    if failure_kind == "refused":
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        failure = await source(f"http://127.0.0.1:{port}")
+    else:
+        async with loopback_server(reset_on_accept) as port:
+            failure = await source(f"http://127.0.0.1:{port}")
+
+    assert not isinstance(failure, aiohttp.ClientError)
+    assert any(isinstance(item, aiohttp.ClientOSError) for item in _chain(failure))
+    assert classify_transient_dependency(failure) is None
+    assert is_transient_request_failure(failure) is False
+
+
+def _chain(error: BaseException) -> list[BaseException]:
+    items: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and current not in items:
+        items.append(current)
+        current = current.__cause__ or current.__context__
+    return items
