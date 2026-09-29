@@ -30,6 +30,7 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
     _prepare_ingest_item,
     _raw_path_source_uri,
 )
+from dlightrag.engine.rag.corpus.ingestion.errors import ParserInputPlacementError
 
 
 def _sha256(content: bytes) -> str:
@@ -3478,7 +3479,7 @@ async def test_a_parser_input_that_cannot_be_placed_deletes_nothing(
         "content_hash": "sha256:old",
     }
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ParserInputPlacementError):
         await engine.aingest_files(
             [
                 PreparedIngestFile(

@@ -6,39 +6,39 @@ from lightrag.constants import PARSED_DIR_NAME
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     REMOTE_INGEST_DIR_NAME,
     REMOTE_SOURCES_DIR_NAME,
+    RUN_STAGES_DIR_NAME,
     UPLOADS_DIR_NAME,
     discard_parser_input,
     document_name,
-    excluded_from_directory_scan,
     parser_input_path,
     place_parser_input,
     remote_ingest_batch_root,
     remote_parser_input_path,
+    reserved_corpus_name,
     retained_remote_source_path,
     workspace_input_root,
 )
 
 
 @pytest.mark.parametrize(
-    ("name", "is_dir"),
+    "name",
     [
-        (".cache", True),
-        (".hidden.pdf", False),
-        (PARSED_DIR_NAME, True),
-        (UPLOADS_DIR_NAME, True),
-        (REMOTE_INGEST_DIR_NAME, True),
-        (REMOTE_SOURCES_DIR_NAME, True),
+        ".cache",
+        ".hidden.pdf",
+        RUN_STAGES_DIR_NAME,
+        PARSED_DIR_NAME,
+        UPLOADS_DIR_NAME,
+        REMOTE_INGEST_DIR_NAME,
+        REMOTE_SOURCES_DIR_NAME,
     ],
 )
-def test_a_local_source_listing_skips_dot_entries_and_parser_folders(
-    name: str, is_dir: bool
-) -> None:
-    assert excluded_from_directory_scan(name, is_dir=is_dir)
+def test_the_corpus_directory_keeps_dot_names_and_its_folder_names(name: str) -> None:
+    assert reserved_corpus_name(name)
 
 
-@pytest.mark.parametrize(("name", "is_dir"), [("report.pdf", False), ("nested", True)])
-def test_a_local_source_listing_keeps_ordinary_entries(name: str, is_dir: bool) -> None:
-    assert not excluded_from_directory_scan(name, is_dir=is_dir)
+@pytest.mark.parametrize("name", ["report.pdf", "nested", "__parsed__.pdf", "a.runs"])
+def test_any_other_name_is_free_for_a_document(name: str) -> None:
+    assert not reserved_corpus_name(name)
 
 
 def test_a_documents_name_is_its_basename_without_a_parser_hint() -> None:
@@ -60,6 +60,21 @@ def test_a_parser_input_is_placed_flat_under_its_basename(tmp_path: Path) -> Non
     assert target.read_bytes() == b"%PDF"
     assert source.read_bytes() == b"%PDF"
     assert sorted(path.name for path in input_root.iterdir()) == ["report.pdf"]
+
+
+def test_a_parser_input_with_the_longest_name_the_folder_allows_is_placed(
+    tmp_path: Path,
+) -> None:
+    """The copy is written under a temporary name of its own, not one derived from it."""
+    input_root = workspace_input_root(tmp_path / "corpus", "default")
+    source = tmp_path / "stage" / ("r" * 251 + ".pdf")
+    source.parent.mkdir()
+    source.write_bytes(b"%PDF")
+
+    placed = place_parser_input(source, input_root)
+
+    assert placed.read_bytes() == b"%PDF"
+    assert sorted(path.name for path in input_root.iterdir()) == [source.name]
 
 
 def test_placing_replaces_the_same_documents_earlier_input_and_keeps_one_in_place(

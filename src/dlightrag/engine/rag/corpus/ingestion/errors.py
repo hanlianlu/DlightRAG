@@ -6,4 +6,11 @@ class RetryOutcomeUncertainError(RuntimeError):
     """A retry may have committed, but its authoritative status is unavailable."""
 
 
-__all__ = ["RetryOutcomeUncertainError"]
+class ParserInputPlacementError(RuntimeError):
+    """A document's parser input could not be copied to where LightRAG reads it.
+
+    Placement precedes every upstream effect of its batch, so nothing changed.
+    """
+
+
+__all__ = ["ParserInputPlacementError", "RetryOutcomeUncertainError"]

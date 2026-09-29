@@ -33,11 +33,14 @@ from dlightrag.engine.dependencies import (
     next_dependency_retry,
 )
 from dlightrag.engine.rag.corpus.contracts import IngestDocument
-from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+from dlightrag.engine.rag.corpus.ingestion.errors import (
+    ParserInputPlacementError,
+    RetryOutcomeUncertainError,
+)
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     RUN_STAGES_DIR_NAME,
     document_name,
-    excluded_from_directory_scan,
+    reserved_corpus_name,
 )
 from dlightrag.engine.rag.corpus.ingestion.uploads import safe_upload_relative_path
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
@@ -643,9 +646,10 @@ class CorpusMutationService:
         """Stage one request's files under the shared per-file and per-request caps.
 
         Every file is bounded by the per-file cap and by what the request has left,
-        so no surface can let one file use the whole request budget. Two files that
-        would become one document are refused before any is staged. A failed file
-        removes the whole Run stage.
+        so no surface can let one file use the whole request budget. A file whose
+        path a folder listing would skip is left out; a name no document may have,
+        and two files that would become one document, are refused before any is
+        staged. A failed file removes the whole Run stage.
         """
         self._require_writable("the upload")
         limits = self._upload_limits
@@ -656,6 +660,18 @@ class CorpusMutationService:
             raise UploadTooLargeError(f"upload contains more than {limits.request_files} files")
         if content_sha256 is not None and len(uploads) != 1:
             raise CorpusMutationInputError("content_sha256 is supported only for a single upload")
+        # A folder upload carries what a folder listing skips (.DS_Store, a parser
+        # folder), and leaves it out the same way.
+        uploads = [
+            (filename, reader)
+            for filename, reader in uploads
+            if not any(reserved_corpus_name(part) for part in _upload_path(filename).parts)
+        ]
+        if not uploads:
+            raise CorpusMutationInputError(
+                "upload contains no files to ingest: files named with a leading dot, "
+                "or inside such a folder or a corpus folder, are skipped"
+            )
         names: set[str] = set()
         for filename, _reader in uploads:
             _claim_document_name(names, _upload_basename(filename))
@@ -929,6 +945,13 @@ class CorpusMutationExecutor(RunExecutor):
             if action in _DESTRUCTIVE_ACTIONS and session.handoff_started:
                 return WaitingForRepair(_repair_checkpoint(checkpoint, ()))
             return _deferred(checkpoint, "corpus_storage", now=self._now, outage=False)
+        except ParserInputPlacementError:
+            # Placing a batch's parser inputs precedes every upstream effect of it.
+            return Failed(
+                "corpus_source_unavailable",
+                "A corpus source could not be copied to where LightRAG parses it.",
+                result=_result(action, (), checkpoint),
+            )
         except FileNotFoundError:
             return Failed(
                 "corpus_source_unavailable",
@@ -1320,15 +1343,29 @@ def _run_stage_root(corpus_root: Path, workspace: str, run_id: str) -> Path:
     return corpus_root / workspace / RUN_STAGES_DIR_NAME / str(UUID(run_id))
 
 
-def _upload_basename(filename: str) -> str:
+def _upload_path(filename: str) -> Path:
     try:
-        return safe_upload_relative_path(filename).name
+        return safe_upload_relative_path(filename)
     except ValueError:
         raise UnsafeUploadNameError(f"Unsafe filename: {filename!r}") from None
 
 
+def _upload_basename(filename: str) -> str:
+    return _upload_path(filename).name
+
+
 def _claim_document_name(names: set[str], filename: str) -> None:
-    """Refuse a second source that LightRAG would store as the same document."""
+    """Refuse a source whose name is not free to be a document's.
+
+    A document's parser input is placed in the corpus directory under this name,
+    so it may not be one that directory keeps for itself; and LightRAG stores two
+    sources of one name as the same document.
+    """
+    if reserved_corpus_name(Path(filename).name):
+        raise CorpusMutationInputError(
+            f"a document cannot be named {filename!r}: names that start with a dot, "
+            "and the corpus directory's own folder names, are reserved"
+        )
     name = document_name(filename)
     if name in names:
         raise CorpusMutationInputError(
@@ -1416,9 +1453,9 @@ def _list_directory(
             raise CorpusMutationInputError(
                 f"local corpus source holds more than {_MAX_LOCAL_ENTRIES} entries"
             )
-        is_dir = entry.is_dir(follow_symlinks=False)
-        if excluded_from_directory_scan(entry.name, is_dir=is_dir):
+        if reserved_corpus_name(entry.name):
             continue
+        is_dir = entry.is_dir(follow_symlinks=False)
         path = (*prefix, entry.name)
         if entry.is_symlink():
             raise CorpusMutationInputError("local corpus sources cannot contain symlinks")

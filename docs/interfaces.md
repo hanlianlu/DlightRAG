@@ -143,9 +143,16 @@ but a regular file or folder refuses the source as the caller's to fix, even
 when the link is swapped in while the copy runs. A folder is listed before
 anything is copied; it may hold at most 100 files that ingestion would read,
 nest folders at most 32 deep, and hold at most 10,000 entries in all. Entries
-ingestion skips (dot entries, parser sidecars, and staging folders) are not
-copied, and a link among them is ignored, but they count toward the 10,000.
-A folder with nothing to ingest is refused too.
+ingestion skips are not copied, and a link among them is ignored, but they
+count toward the 10,000. A folder with nothing to ingest is refused too.
+
+A document's parser input takes its file name in the Workspace's corpus
+directory, so a name that directory keeps for itself cannot be a document's:
+one starting with a dot (Run stages, temporary copies) or one of its folders
+(`__parsed__`, `__remote_sources__`, `__remote_ingest__`, `__uploads__`). A
+folder listing and an upload skip such an entry, with everything below it
+(`.DS_Store`, `.git/`), and an upload left with nothing to ingest is refused
+with 400; so is a local file of such a name, or a manifest entry naming one.
 
 LightRAG names a document by its file name alone, so one request may not hold
 two files with the same name (a parser hint such as `.[mineru]` aside), even
@@ -166,7 +173,7 @@ each file's size and digest. The Run ingests only the files it lists; nothing
 scans a folder. Right before a file is enqueued it is copied to
 `corpus/<workspace>/<file name>`, the one place LightRAG looks a document up.
 A listed file missing when the Run starts fails it as `corpus_source_unavailable`
-before any upstream effect.
+before any upstream effect, and so does one that cannot be copied there.
 
 A stage belongs to its Run alone. The Run removes it once it succeeds, fails, or
 is cancelled before its handoff; it stays while the Run is deferred or waiting

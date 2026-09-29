@@ -28,7 +28,10 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     RobustDocumentEmbedder,
 )
-from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+from dlightrag.engine.rag.corpus.ingestion.errors import (
+    ParserInputPlacementError,
+    RetryOutcomeUncertainError,
+)
 from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
     DEFAULT_IMAGE_MARGIN,
     apadded_parser_path,
@@ -284,13 +287,19 @@ class UnifiedIngestionEngine:
             ]
             # Placed before any replacement deletes the old document, so a parser
             # input that cannot be copied changes nothing.
-            parser_inputs = (
-                await asyncio.to_thread(
-                    self._place_parser_inputs, [entry for entry, _decision in validated_to_enqueue]
+            try:
+                parser_inputs = (
+                    await asyncio.to_thread(
+                        self._place_parser_inputs,
+                        [entry for entry, _decision in validated_to_enqueue],
+                    )
+                    if validated_to_enqueue
+                    else {}
                 )
-                if validated_to_enqueue
-                else {}
-            )
+            except OSError as exc:
+                raise ParserInputPlacementError(
+                    "a parser input could not be copied to where LightRAG reads it"
+                ) from exc
 
             cleanup_snapshots: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
             cleanup_ids_by_entry: dict[int, tuple[str, ...]] = {}

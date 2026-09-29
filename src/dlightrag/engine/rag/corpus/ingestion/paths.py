@@ -37,18 +37,21 @@ def document_name(filename: str | Path) -> str:
     return normalize_document_file_path(Path(filename).name)
 
 
-def excluded_from_directory_scan(name: str, *, is_dir: bool) -> bool:
-    """Whether listing a local source folder skips this entry and all below it.
+#: The folders a Workspace's corpus directory keeps beside its documents: LightRAG's
+#: parser archive, fetched remote sources, and staging folders earlier releases wrote.
+_CORPUS_FOLDER_NAMES = frozenset(
+    {PARSED_DIR_NAME, UPLOADS_DIR_NAME, REMOTE_INGEST_DIR_NAME, REMOTE_SOURCES_DIR_NAME}
+)
 
-    Skipped are dot-prefixed entries and the folders LightRAG and earlier releases
-    wrote beside sources: parser sidecars and the remote ingest, remote source and
-    ``__uploads__`` staging directories.
+
+def reserved_corpus_name(name: str) -> bool:
+    """Whether a file of this name would take an entry the corpus directory keeps.
+
+    Dot entries there are Run stages and temporary copies; the rest are its own
+    folders. A document of such a name is refused, and a folder listing or a folder
+    upload skips such an entry, and everything below it.
     """
-    return name.startswith(".") or (
-        is_dir
-        and name
-        in {PARSED_DIR_NAME, UPLOADS_DIR_NAME, REMOTE_INGEST_DIR_NAME, REMOTE_SOURCES_DIR_NAME}
-    )
+    return name.startswith(".") or name in _CORPUS_FOLDER_NAMES
 
 
 def parser_input_path(input_root: Path, source: Path) -> Path:
@@ -74,7 +77,8 @@ def place_parser_input(source: Path, input_root: Path) -> Path:
     if target.exists() and os.path.samefile(source, target):
         return target
     input_root.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+    # Named apart from the document, so any name that fits the folder fits the copy.
+    temporary = input_root / f".{uuid.uuid4().hex}.part"
     try:
         shutil.copy2(source, temporary)
         os.replace(temporary, target)

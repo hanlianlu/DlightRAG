@@ -70,12 +70,12 @@ def _roots(tmp_path: Path) -> _Roots:
     return {"source_root": tmp_path / "inputs", "corpus_root": tmp_path / "corpus"}
 
 
-def _service(tmp_path: Path) -> CorpusMutationService:
+def _service(tmp_path: Path, *, upload_limits: UploadLimits = _LIMITS) -> CorpusMutationService:
     return CorpusMutationService(
         **_roots(tmp_path),
         store=AsyncMock(),
         coordinator=cast(Any, SimpleNamespace()),
-        upload_limits=_LIMITS,
+        upload_limits=upload_limits,
         workspace_exists=_registered,
     )
 
@@ -426,6 +426,40 @@ async def test_uploads_that_would_become_one_document_are_refused_before_staging
             workspace="default",
             run_id=_RUN_ID,
             uploads=[("q1/report.pdf", _Reader(b"a")), ("q2/report.pdf", _Reader(b"b"))],
+        )
+    assert not (tmp_path / "corpus").exists()
+
+
+async def test_a_folder_upload_leaves_out_what_a_folder_listing_skips(tmp_path: Path) -> None:
+    """A dot file such as .DS_Store, and anything in a dot or corpus folder, is no document."""
+    limits = UploadLimits(file_bytes=10, request_bytes=100, request_files=10)
+    staged = await _service(tmp_path, upload_limits=limits).stage_uploads(
+        workspace="default",
+        run_id=_RUN_ID,
+        uploads=[
+            ("docs/a/report.pdf", _Reader(b"a")),
+            ("docs/a/.DS_Store", _Reader(b"x")),
+            ("docs/b/notes.md", _Reader(b"b")),
+            ("docs/b/.DS_Store", _Reader(b"x")),
+            ("docs/.git/HEAD", _Reader(b"x")),
+            ("docs/__parsed__/old.pdf", _Reader(b"x")),
+        ],
+    )
+
+    assert [item.filename for item in staged] == ["docs/a/report.pdf", "docs/b/notes.md"]
+    assert [item.path.name for item in staged] == ["report.pdf", "notes.md"]
+
+
+@pytest.mark.parametrize("filename", [".DS_Store", ".runs", "__parsed__", "docs/.git/config"])
+async def test_an_upload_with_nothing_left_to_ingest_is_refused(
+    tmp_path: Path, filename: str
+) -> None:
+    """A document's parser input takes its name in the corpus directory, beside its stages."""
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    with pytest.raises(CorpusMutationInputError, match="no files to ingest"):
+        await _service(tmp_path).stage_uploads(
+            workspace="default", run_id=_RUN_ID, uploads=[(filename, _Reader(b"x"))]
         )
     assert not (tmp_path / "corpus").exists()
 
@@ -905,6 +939,27 @@ async def test_a_settled_local_run_removes_its_stage(tmp_path: Path, result: dic
     outcome = await executor.execute(cast(Any, _Session(payload)))
 
     assert isinstance(outcome, Succeeded | Failed)
+    assert not stage.exists()
+
+
+async def test_a_replacement_whose_parser_input_cannot_be_placed_fails_before_any_effect(
+    tmp_path: Path,
+) -> None:
+    """Placement precedes the replacement's cleanup, so there is nothing to repair."""
+    from dlightrag.engine.rag.corpus.ingestion.errors import ParserInputPlacementError
+
+    stage, payload = _staged_run(tmp_path)
+    payload = {**payload, "action": "replace", "source": {**payload["source"], "replace": True}}
+    runtime = _runtime()
+    runtime.aingest.side_effect = ParserInputPlacementError("no space left on the corpus disk")
+    executor, _pool, _store = _executor(runtime, corpus_root=tmp_path)
+    session = _Session(payload)
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Failed)
+    assert outcome.error_kind == "corpus_source_unavailable"
+    assert session.handoff_started is True
     assert not stage.exists()
 
 
@@ -1703,6 +1758,7 @@ def test_a_workspace_root_source_copies_only_what_ingestion_reads(tmp_path: Path
     workspace = tmp_path / "inputs" / "default"
     (workspace / "reports").mkdir(parents=True)
     (workspace / "reports" / "q3.txt").write_text("quarter", encoding="utf-8")
+    (workspace / "reports" / "__uploads__").write_text("x", encoding="utf-8")
     (workspace / "top.txt").write_text("top", encoding="utf-8")
     (workspace / ".staging").mkdir()
     (workspace / ".staging" / "partial.txt").write_text("x", encoding="utf-8")
@@ -1792,6 +1848,20 @@ def test_a_manifest_keeps_each_documents_fields_and_names_only_files(tmp_path: P
     )
     with pytest.raises(CorpusMutationInputError, match="must name a file"):
         service._snapshot_local_spec("0199a0a0-0000-7000-8000-000000000002", "default", folder)
+
+
+@pytest.mark.parametrize("name", [".hidden.pdf", ".runs", "__parsed__", "__remote_sources__"])
+def test_a_local_file_named_like_a_corpus_entry_is_refused(tmp_path: Path, name: str) -> None:
+    """Its parser input would take a Run stage's, a temporary copy's or a corpus folder's place."""
+    from dlightrag.application.corpus_admin import CorpusMutationInputError
+
+    source = tmp_path / "inputs" / "default" / name
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"%PDF")
+
+    with pytest.raises(CorpusMutationInputError, match="cannot be named"):
+        _service(tmp_path)._snapshot_local_spec(_RUN_ID, "default", _local_spec(source))
+    assert not (tmp_path / "corpus" / "default" / ".runs" / _RUN_ID).exists()
 
 
 def test_two_local_files_that_would_become_one_document_are_refused(tmp_path: Path) -> None:
