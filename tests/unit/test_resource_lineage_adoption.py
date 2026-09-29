@@ -23,6 +23,7 @@ from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
     LINEAGE_ADOPTION_KIND,
     SNAPSHOT_KIND,
+    LineageAdoptionConflict,
     LineageResourceBytes,
 )
 from dlightrag.engine.answer.resources.models import (
@@ -700,6 +701,22 @@ async def test_nothing_changes_here_until_the_adoption_is_recorded(failure) -> N
         assert adopted.is_error is False, "the one attachment slot was given back"
         assert _ADOPTED_TEXT in adopted.text_content
         assert len(lineage.recorded) == 1
+
+
+async def test_a_conflicting_adoption_is_refused_in_the_tools_own_words() -> None:
+    """The store's refusal of a second view reaches the model as a typed refusal."""
+    lineage = Loader(adopted_document(with_snapshot=True))
+    lineage.fails = LineageAdoptionConflict("this run records another view for that document")
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+        refused = await call(read, resource_id=EARLIER_HANDLE)
+
+        assert refused.is_error is True
+        assert refused.text_content == (
+            "this run records another view for that document; "
+            "the earlier document was not adopted into this run."
+        )
+        assert registry.manifest() == ()
 
 
 async def test_an_adoption_that_landed_despite_its_error_is_restored_without_refusal() -> None:

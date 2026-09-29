@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.postgres.answer.session_repository import _EvidenceIdentityConflict
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore, write_blob_content
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.engine.agent.environment.access import AccessScheduler
@@ -25,6 +24,7 @@ from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
     LINEAGE_ADOPTION_KIND,
     SNAPSHOT_KIND,
+    LineageAdoptionConflict,
     adopt_lineage_resource,
 )
 from dlightrag.engine.answer.resources.models import TextWindowBudget
@@ -488,7 +488,7 @@ async def test_a_second_view_for_one_resource_rolls_the_whole_adoption_back() ->
             aliases=("res-another-handle",),
         )
         owner = ResourceEffectOwner(execution_scope=session_id, intent_id=IntentId.new())
-        with pytest.raises(_EvidenceIdentityConflict):
+        with pytest.raises(LineageAdoptionConflict):
             await loader.record((adoption, *other.effects()), owner)
 
         assert await _run_rows(db, claim.run_id) == before, "the alias merge rolled back too"

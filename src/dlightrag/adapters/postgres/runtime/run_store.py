@@ -3644,7 +3644,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         resources: tuple[FetchedResourceSettlementUpdate, ...],
     ) -> None:
         """Record one adopted Resource as this Run's own rows, fenced by its lease."""
-        from dlightrag.adapters.postgres.answer.lineage_adoption import record_lineage_adoption
+        from dlightrag.adapters.postgres.answer.session_repository import record_lineage_adoption
 
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)

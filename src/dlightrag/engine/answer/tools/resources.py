@@ -34,6 +34,7 @@ from dlightrag.engine.answer.resources.formatting import (
     resource_read_continuation,
 )
 from dlightrag.engine.answer.resources.lineage import (
+    LineageAdoptionConflict,
     LineageResourceLoader,
     LineageSnapshotError,
     adopt_lineage_resource,
@@ -134,9 +135,10 @@ async def _adopt_earlier_then_retry(
         return ToolResult.text(f"{exc}; the document was not converted again.", is_error=True)
     except ResourceNotConvertedError as exc:
         return ToolResult.text(_unconverted_refusal(exc.filename, exc.media_type), is_error=True)
-    except ResourceAdmissionError as exc:
+    except (ResourceAdmissionError, LineageAdoptionConflict) as exc:
         # Adoption spends this Run's own attachment allowance, so a spent allowance
-        # refuses the earlier document the way it refuses one more attachment.
+        # refuses the earlier document the way it refuses one more attachment; the
+        # store refuses a second view of a Resource the same way.
         return ToolResult.text(
             f"{exc}; the earlier document was not adopted into this run.", is_error=True
         )

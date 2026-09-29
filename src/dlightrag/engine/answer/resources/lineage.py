@@ -81,6 +81,14 @@ class LineageSnapshotError(RuntimeError):
     """
 
 
+class LineageAdoptionConflict(RuntimeError):
+    """An adoption the store refused: this Run records other bytes or another view.
+
+    The store keeps one view per Resource, so the whole adoption is refused and
+    nothing of it is recorded or bound.
+    """
+
+
 async def adopt_lineage_resource(
     registry: ResourceRegistry,
     loaded: LineageResourceBytes,
@@ -158,6 +166,7 @@ __all__ = [
     "ASSET_KIND",
     "LINEAGE_ADOPTION_KIND",
     "SNAPSHOT_KIND",
+    "LineageAdoptionConflict",
     "LineageResourceBytes",
     "LineageResourceLoader",
     "LineageSnapshotError",
