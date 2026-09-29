@@ -2,7 +2,7 @@
 /** The redacted Settings Connections wire; no credential or catalogue reply is accepted. */
 import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
-import {parseWire} from './wire.ts';
+import {type ApiError, apiErrorFromBody, parseWire} from './wire.ts';
 
 const connection = v.pipe(v.strictObject({
   connection_id: v.string(), label: v.string(), endpoint: v.string(), enabled: v.boolean(),
@@ -26,12 +26,14 @@ export type Connection = v.InferOutput<typeof connection>;
 /** A starter fill for the create form; it carries no credential and grants nothing. */
 export type Preset = v.InferOutput<typeof preset>;
 
-/** A refused Connections command: the module answers `{kind, message}`, not the general envelope. */
+/** A refusal of the Connections module itself, which answers `{kind, message}`.
+ *  The route's other refusals (authorization, request validation) answer the
+ *  general envelope and arrive as ApiError. */
 export class ConnectionsApiError extends Error {
   readonly status: number;
-  /** The Connections module's refusal kind, or null when the body named none. */
-  readonly kind: string | null;
-  constructor(status: number, kind: string | null, message: string) {
+  /** The Connections module's refusal kind. */
+  readonly kind: string;
+  constructor(status: number, kind: string, message: string) {
     super(message || `HTTP ${status}`);
     this.name = 'ConnectionsApiError';
     this.status = status;
@@ -39,16 +41,13 @@ export class ConnectionsApiError extends Error {
   }
 }
 
-async function connectionsRefusal(response: Response): Promise<ConnectionsApiError> {
+async function connectionsRefusal(response: Response): Promise<ConnectionsApiError | ApiError> {
   const body: unknown = await response.json().catch(() => null);
   const {kind, message} = body !== null && typeof body === 'object'
     ? body as {kind?: unknown; message?: unknown}
     : {};
-  return new ConnectionsApiError(
-    response.status,
-    typeof kind === 'string' ? kind : null,
-    typeof message === 'string' ? message : '',
-  );
+  if (typeof kind !== 'string') return apiErrorFromBody(response.status, body);
+  return new ConnectionsApiError(response.status, kind, typeof message === 'string' ? message : '');
 }
 
 export async function getConnections(signal?: AbortSignal): Promise<ConnectionsView> {

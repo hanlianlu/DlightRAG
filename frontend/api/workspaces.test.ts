@@ -47,7 +47,7 @@ test('a refusal without a readable detail carries no copy for the UI to show', a
     resetWorkspaceRequest('finance'),
     (error: unknown) => error instanceof ApiError
       && error.status === 502
-      && error.errorType === 'internal'
+      && error.errorType === null
       && error.detail === null,
   );
 });

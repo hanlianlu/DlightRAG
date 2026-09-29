@@ -14,7 +14,18 @@
  */
 
 import {msg} from '@lit/localize';
-import {answerErrorMessage} from './errors.ts';
+
+/** The public message of an answer error payload, or the localized generic failure. */
+export function answerErrorMessage(
+  payload: unknown,
+  fallback: string = msg('Service error. Please try again.', {id: 'errors.service'}),
+): string {
+  const message =
+    payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as {message?: unknown}).message
+      : undefined;
+  return typeof message === 'string' && message.trim() ? message : fallback;
+}
 
 const RUN_ERROR_KIND_COPY: Record<string, string> = {
   MODEL_CAPABILITY_UNAVAILABLE:

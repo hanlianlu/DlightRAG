@@ -3,40 +3,41 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {ApiError} from '../api/wire.ts';
-import {answerErrorMessage, apiErrorMessage} from '../lib/errors.ts';
-
-test('answer errors reject non-object payloads', () => {
-  assert.equal(answerErrorMessage('Document parsing failed.'), 'Service error. Please try again.');
-});
-
-test('answer errors accept structured message payloads', () => {
-  assert.equal(
-    answerErrorMessage({message: 'Could not read report.pdf.', error_kind: 'PARSE_FAILED'}),
-    'Could not read report.pdf.',
-  );
-});
-
-test('answer errors use the fallback for empty messages', () => {
-  assert.equal(answerErrorMessage(''), 'Service error. Please try again.');
-  assert.equal(answerErrorMessage({message: '   '}, 'Unavailable.'), 'Unavailable.');
-});
-
-test('answer errors do not expose malformed payload fields', () => {
-  assert.equal(
-    answerErrorMessage({detail: 'raw provider failure', error: {secret: 'token'}}),
-    'Service error. Please try again.',
-  );
-  assert.equal(answerErrorMessage(null), 'Service error. Please try again.');
-});
+import {ApiError, apiError} from '../api/wire.ts';
+import {apiErrorMessage} from '../lib/errors.ts';
 
 test('API refusals show the server reason, and the caller localizes everything else', () => {
   for (const [status, errorType] of [[422, 'validation'], [409, 'conflict'], [503, 'unavailable']] as const) {
     const refused = new ApiError(status, {detail: 'Corpus writes are paused.', errorType});
     assert.equal(apiErrorMessage(refused, 'Upload failed.'), 'Corpus writes are paused.');
   }
+  for (const errorType of ['not_found', 'configuration', 'internal'] as const) {
+    const refused = new ApiError(404, {detail: 'Workspace not found', errorType});
+    assert.equal(apiErrorMessage(refused, 'Upload failed.'), 'Workspace not found', 'every non-auth type');
+  }
   assert.equal(apiErrorMessage(new ApiError(502), 'Upload failed.'), 'Upload failed.');
   assert.equal(apiErrorMessage(new TypeError('network down'), 'Upload failed.'), 'Upload failed.');
+});
+
+test('a refusal naming a known error kind gets that kind\'s localized copy', () => {
+  const refused = new ApiError(422, {
+    detail: 'Current model does not support image input. [CURRENT_IMAGES_UNSUPPORTED]',
+    errorType: 'validation',
+    errorKind: 'CURRENT_IMAGES_UNSUPPORTED',
+  });
+  assert.equal(
+    apiErrorMessage(refused, 'Upload failed.'),
+    'Current model does not support image input. Use a vision-capable model or remove images.',
+  );
+  const unmapped = new ApiError(422, {detail: 'Server said why.', errorKind: 'not_a_known_kind'});
+  assert.equal(apiErrorMessage(unmapped, 'Upload failed.'), 'Server said why.');
+});
+
+test('a bare 403 is not read as an authorization refusal', async () => {
+  // The cross-origin guard answers plain text, not the general envelope.
+  const guarded = await apiError(new Response('Cross-origin request rejected', {status: 403}));
+  assert.equal(guarded.errorType, null);
+  assert.equal(apiErrorMessage(guarded, 'Failed to create workspace'), 'Failed to create workspace');
 });
 
 test('an authorization refusal is explained, never echoed', () => {

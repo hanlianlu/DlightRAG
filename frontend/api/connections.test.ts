@@ -24,10 +24,26 @@ test('a Connections refusal keeps its own {kind, message} envelope', async () =>
     && error.status === 409
     && error.kind === 'requires_reauthorization'
     && error.message === 'Endpoint candidate needs a new grant');
+});
+
+test('the route\'s other refusals answer the general envelope and keep their reason', async () => {
+  globalThis.fetch = async () => Response.json(
+    {detail: 'Invalid Connection command', error_type: 'validation'},
+    {status: 422},
+  );
+  await assert.rejects(getConnections(), (error: unknown) => error instanceof ApiError
+    && error.status === 422
+    && error.errorType === 'validation'
+    && error.detail === 'Invalid Connection command');
+  globalThis.fetch = async () => Response.json({detail: 'Not authenticated', error_type: 'auth'}, {status: 401});
+  await assert.rejects(getConnections(), (error: unknown) => error instanceof ApiError
+    && error.errorType === 'auth'
+    && error.detail === 'Not authenticated');
   globalThis.fetch = async () => new Response('', {status: 503});
-  await assert.rejects(getConnections(), (error: unknown) => error instanceof ConnectionsApiError
+  await assert.rejects(getConnections(), (error: unknown) => error instanceof ApiError
+    && !(error instanceof ConnectionsApiError)
     && error.status === 503
-    && error.kind === null);
+    && error.detail === null);
 });
 
 test('presets arrive as display copy plus the tab they imply, and an unknown tab is rejected', async () => {

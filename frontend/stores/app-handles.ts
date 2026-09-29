@@ -30,14 +30,14 @@ export function productionHandles(): AppHandles {
   return produced;
 }
 
-/** Construct a complete bag; an override replaces one store (tests). */
-export function createAppHandles(overrides: Partial<AppHandles> = {}): AppHandles {
-  const workspaces = overrides.workspaces ?? new WorkspaceStore();
+/** Construct a complete bag of new stores. */
+export function createAppHandles(): AppHandles {
+  const workspaces = new WorkspaceStore();
   return {
-    conversations: overrides.conversations ?? new ConversationStore(),
+    conversations: new ConversationStore(),
     workspaces,
-    ingest: overrides.ingest ?? new IngestStore(workspaces),
-    attachments: overrides.attachments ?? new AttachmentStore(),
-    answerEventCursors: overrides.answerEventCursors ?? new AnswerEventCursorStore(),
+    ingest: new IngestStore(workspaces),
+    attachments: new AttachmentStore(),
+    answerEventCursors: new AnswerEventCursorStore(),
   };
 }

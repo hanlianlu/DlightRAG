@@ -24,19 +24,9 @@ const API_ERROR_TYPES = [
 
 export type ApiErrorType = (typeof API_ERROR_TYPES)[number];
 
-/** Classify a status the way the server does when a body names no type. */
-function errorTypeForStatus(status: number): ApiErrorType {
-  if (status === 401 || status === 403) return 'auth';
-  if (status === 404 || status === 410) return 'not_found';
-  if (status === 409 || status === 412) return 'conflict';
-  if (status === 429 || status === 503) return 'unavailable';
-  if (status >= 400 && status < 500) return 'validation';
-  return 'internal';
-}
-
 export interface ApiErrorFields {
   readonly detail?: string | null;
-  readonly errorType?: ApiErrorType;
+  readonly errorType?: ApiErrorType | null;
   readonly errorKind?: string | null;
 }
 
@@ -44,13 +34,15 @@ export interface ApiErrorFields {
 
  * `status` is the HTTP status even when a successful response was unreadable,
  * so a caller can tell a refusal from an answer it could not parse. `detail`
- * is the server's public reason, or null when it gave none. This carries no
- * user-visible copy: the UI chooses localized text from these fields.
+ * is the server's public reason and `errorType` the type it names, each null
+ * when the body gave none: a status alone is never read as a type, so a
+ * proxy's or guard's bare 403 is not an authorization refusal. This carries
+ * no user-visible copy: the UI chooses localized text from these fields.
  */
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: string | null;
-  readonly errorType: ApiErrorType;
+  readonly errorType: ApiErrorType | null;
   readonly errorKind: string | null;
 
   constructor(status: number, fields: ApiErrorFields = {}) {
@@ -58,7 +50,7 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.detail = fields.detail ?? null;
-    this.errorType = fields.errorType ?? errorTypeForStatus(status);
+    this.errorType = fields.errorType ?? null;
     this.errorKind = fields.errorKind ?? null;
   }
 }
@@ -69,18 +61,21 @@ function envelopeOf(value: unknown): Record<string, unknown> {
     : {};
 }
 
-/** Parse one refused response; a body that is not the envelope keeps only its status. */
-export async function apiError(response: Response): Promise<ApiError> {
-  const envelope = envelopeOf(await response.json().catch(() => null));
-  const {detail, error_type: errorType, error_kind: errorKind} = envelope;
-  return new ApiError(response.status, {
+/** Read a refusal body already parsed as JSON (null when it was not); a body
+ *  that is not the envelope keeps only its status. */
+export function apiErrorFromBody(status: number, body: unknown): ApiError {
+  const {detail, error_type: errorType, error_kind: errorKind} = envelopeOf(body);
+  return new ApiError(status, {
     // FastAPI's own request validation answers a list here; that is no reason.
     detail: typeof detail === 'string' && detail.trim() ? detail : null,
-    errorType: API_ERROR_TYPES.includes(errorType as ApiErrorType)
-      ? errorType as ApiErrorType
-      : errorTypeForStatus(response.status),
+    errorType: API_ERROR_TYPES.includes(errorType as ApiErrorType) ? errorType as ApiErrorType : null,
     errorKind: typeof errorKind === 'string' && errorKind ? errorKind : null,
   });
+}
+
+/** Parse one refused response through the general envelope. */
+export async function apiError(response: Response): Promise<ApiError> {
+  return apiErrorFromBody(response.status, await response.json().catch(() => null));
 }
 
 /** Parse a response through its schema; refusals go through `refused`. */

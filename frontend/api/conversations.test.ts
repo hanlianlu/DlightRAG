@@ -261,7 +261,7 @@ test('child control 409 surfaces the explicit terminal outcome', async () => {
       assert.ok(error instanceof ApiError);
       assert.equal(error.outcome, 'terminal_child');
       assert.equal(error.status, 409);
-      assert.equal(error.errorType, 'conflict');
+      assert.equal(error.errorType, null, 'the body names no type');
       return true;
     },
   );

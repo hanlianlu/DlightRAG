@@ -4,18 +4,20 @@ import {expect} from '@esm-bundle/chai';
 import {setLanguagePreference} from '../i18n/locale.ts';
 import {LANGUAGE_STORAGE_KEY} from '../lib/language.ts';
 
+/** The shipped sign-in page, so the test reads the markup users get. */
+async function loginPage(): Promise<Document> {
+  const response = await fetch(new URL('../login.html', import.meta.url));
+  if (!response.ok) throw new Error(`login.html: HTTP ${response.status}`);
+  return new DOMParser().parseFromString(await response.text(), 'text/html');
+}
+
 it('localizes the sign-in page and never shows the error parameter text', async () => {
   const originalUrl = window.location.href;
   const originalTitle = document.title;
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, 'zh');
-  document.body.innerHTML = `
-    <form method="post" action="/web/login">
-      <input type="hidden" name="next" value="/web/">
-      <label for="token">Access token</label>
-      <input id="token" name="token" type="password">
-      <div class="file-error" role="alert" hidden></div>
-      <button class="primary-btn" type="submit">Sign in</button>
-    </form>`;
+  const page = await loginPage();
+  document.title = page.title;
+  document.body.replaceChildren(...[...page.body.childNodes].map((node) => document.importNode(node, true)));
   const url = new URL(originalUrl);
   url.searchParams.set('next', '/web/conversations/c-1');
   url.searchParams.set('error', 'Call 555-0100 to unlock your account');
@@ -24,8 +26,8 @@ it('localizes the sign-in page and never shows the error parameter text', async 
     await import('./login.ts');
 
     expect(document.title).to.equal('登录 · DlightRAG');
-    expect(document.querySelector('label')?.textContent).to.equal('访问令牌');
-    expect(document.querySelector('button')?.textContent).to.equal('登录');
+    expect(document.querySelector('label[for="token"]')?.textContent).to.equal('访问令牌');
+    expect(document.querySelector('form button[type="submit"]')?.textContent).to.equal('登录');
     const error = document.querySelector<HTMLElement>('.file-error')!;
     expect(error.hidden).to.equal(false);
     expect(error.textContent).to.equal('身份验证失败。请检查令牌后重试。');
