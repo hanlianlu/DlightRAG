@@ -254,7 +254,9 @@ async def test_adopts_an_earlier_runs_document_and_its_stored_view() -> None:
         assert loaded.conversion_snapshot is not None
         assert loaded.assets == {"page-1-of-res-earlier-document": PAGE}
 
-        owner = ResourceEffectOwner(execution_scope=session_id, intent_id=IntentId.new())
+        # A Child's call adopts: the rows still carry the conversation's Session.
+        child_session = str(uuid.uuid4())
+        owner = ResourceEffectOwner(execution_scope=child_session, intent_id=IntentId.new())
         async with ResourceRegistry() as registry:
             adopted = await adopt_lineage_resource(
                 registry, loaded, record=partial(loader.record, owner=owner)
@@ -529,6 +531,34 @@ async def test_a_later_turn_adopts_through_the_handle_an_adoption_printed() -> N
                 assert EARLIER_TEXT in text.content
         finally:
             await resumed.aclose()
+
+
+async def test_a_later_turn_adopts_what_a_child_adopted_for_the_conversation() -> None:
+    """A Child's adoption is the conversation's: the next turn adopts it by the handle.
+
+    The Child adopts first, the parent reads the same document and prints this Run's
+    handle, and the next turn names that handle. The rows carry the Agent Session
+    whose lineage admitted the read, not the Child Session that asked.
+    """
+    async with isolated_run_runtime("resource_lineage_child") as (_, db):
+        store = await _store(db)
+        session_id, _ = await _seed_origin_run(db, store)
+
+        second = await _claimed_run(store)
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, second))
+            by_child = await _call(read, str(uuid.uuid4()), resource_id="res-earlier-document")
+            by_parent = await _call(read, session_id, resource_id="res-earlier-document")
+        assert (by_child.is_error, by_parent.is_error) == (False, False)
+        printed = re.search(r"\[resource: (res-[0-9a-f]+)", by_parent.text_content)
+        assert printed is not None
+
+        third = await _claimed_run(store)
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, third))
+            result = await _call(read, session_id, resource_id=printed.group(1))
+        assert result.is_error is False, result.text_content
+        assert EARLIER_TEXT in result.text_content
 
 
 async def test_an_adoption_outlives_the_run_it_came_from() -> None:

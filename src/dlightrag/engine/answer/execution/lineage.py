@@ -103,7 +103,10 @@ class RetainedResourceLoader:
 
         The rows are the ones a settlement of the adopting call would write, so
         recovery restores them like any other Resource of this Run and never reads
-        the lineage again. A lost lease raises ``LeaseLostError`` and writes nothing.
+        the lineage again. They carry the Agent Session whose lineage admitted the
+        read, whichever Session's call asked for it, so the conversation's next
+        turn can adopt them in turn. A lost lease raises ``LeaseLostError`` and
+        writes nothing.
         """
         await self._store.record_lineage_adoption(
             owner_id=self._owner_id,
@@ -113,7 +116,7 @@ class RetainedResourceLoader:
             resources=tuple(
                 attached_resource_update(
                     resource,
-                    session_id=owner.execution_scope,
+                    session_id=self._session_id,
                     intent_id=owner.intent_id.value,
                 )
                 for resource in resources

@@ -235,7 +235,9 @@ completeness, or untested platforms.
 - Before the earlier handle resolves, the adoption is written as this Run's own
   Resources: the adoption row (the canonical handle, the bytes, and the earlier
   handle as an alias), the view, and its images, in one transaction under the
-  Run's lease. Cleanup of the origin Run cannot invalidate them, and the
+  Run's lease. The rows belong to the conversation's Agent Session also when a
+  Child's call adopted, so a later turn can adopt them in turn. Cleanup of the
+  origin Run cannot invalidate them, and the
   adoption holds whatever the call that asked for it does next: a cancelled call,
   or a retried `read` or `view` that fails on a stale cursor, a document with no
   viewable target, or a refused view, leaves the adoption in place, and the
