@@ -2476,22 +2476,24 @@ class AnswerExecutor:
 
         async def load(digest: str) -> bytes:
             pieces: list[bytes] = []
+            # Hashed as it streams, so the loop never hashes a whole blob at once.
+            streamed = hashlib.sha256()
             async for piece in self._blob_store.stream(owner_id=owner_id, digest=digest):
+                streamed.update(piece)
                 pieces.append(piece)
             if not pieces:
                 raise RunExecutionError(
                     "run_execution_failed",
                     "Answer run attachment bytes no longer exist.",
                 )
-            content = b"".join(pieces)
             # The accepted reference names its bytes by content address; every
             # other restoration path already refuses bytes that do not match.
-            if hashlib.sha256(content).hexdigest() != digest:
+            if streamed.hexdigest() != digest:
                 raise RunExecutionError(
                     "run_execution_failed",
                     "Answer run attachment bytes do not match their accepted digest.",
                 )
-            return content
+            return b"".join(pieces)
 
         def loader(digest: str) -> Callable[[], Awaitable[bytes]]:
             async def read() -> bytes:

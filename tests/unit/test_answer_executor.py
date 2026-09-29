@@ -2300,7 +2300,9 @@ async def test_answer_run_attachments_must_match_their_accepted_digest(
         del owner_id, digest
 
         async def pieces() -> Any:
-            yield stored["bytes"]
+            # The digest covers every piece the store streams, not only the first.
+            yield stored["bytes"][:5]
+            yield stored["bytes"][5:]
 
         return pieces()
 
