@@ -1,9 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Focused behavior for the PostgreSQL corpus composition adapter."""
 
+import asyncio
 import datetime
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call
@@ -53,6 +55,20 @@ class _Connection:
     async def fetchval(self, query: str) -> str:
         assert query == "SHOW max_connections"
         return self._max_connections
+
+
+class _AsyncioSleeping:
+    """asyncio as the corpus adapter sees it, with its sleeps replaced.
+
+    The process-wide asyncio.sleep stays: other threads' loops in this test process,
+    such as the E2E suite's server, await it too.
+    """
+
+    def __init__(self, sleep: Callable[[float], Awaitable[None]]) -> None:
+        self.sleep = sleep
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(asyncio, name)
 
 
 async def test_connection_budget_warning_is_owned_by_coordination(
@@ -424,7 +440,6 @@ async def test_runtime_binder_rejects_missing_postgres_chunk_backend(
 async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import asyncio
     from contextlib import asynccontextmanager
 
     coordination = PGCorpusCoordination(
@@ -478,7 +493,7 @@ async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
     async def fake_sleep(seconds: float) -> None:
         sleepers.append(seconds)
 
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(corpus_module, "asyncio", _AsyncioSleeping(fake_sleep))
 
     entered = False
     async with coordination.pipeline_recovery():
@@ -497,7 +512,6 @@ async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
 async def test_pipeline_recovery_cancellation_propagates_while_waiting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import asyncio
     from contextlib import asynccontextmanager
 
     coordination = PGCorpusCoordination(
@@ -538,7 +552,7 @@ async def test_pipeline_recovery_cancellation_propagates_while_waiting(
     async def fake_sleep(seconds: float) -> None:
         raise _Cancelled()
 
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(corpus_module, "asyncio", _AsyncioSleeping(fake_sleep))
 
     with pytest.raises(_Cancelled):
         async with coordination.pipeline_recovery():

@@ -15,6 +15,7 @@ import pytest
 from lightrag.utils import TiktokenTokenizer
 from PIL import Image
 
+from dlightrag.engine.ai import embedding
 from dlightrag.engine.ai.contracts import InputModality, ResolvedInputModality
 from dlightrag.engine.ai.embedding import MultimodalEmbedder as _MultimodalEmbedder
 from dlightrag.engine.ai.embedding import resolve_embedding_input_modality
@@ -590,11 +591,30 @@ async def test_probe_checks_image_query_and_fused_document() -> None:
     assert embedder.embed_index_fused.await_args.args[0][0][0] == "DlightRAG fusion probe"  # type: ignore[attr-defined]
 
 
+def _record_retry_delays(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record the delay of every retry the embedder schedules, and wait none of it.
+
+    The process-wide asyncio.sleep is not replaced: other threads' loops in this test
+    process, such as the E2E suite's server, await it too and would count as retries.
+    """
+    delays: list[float] = []
+    compute = embedding._retry_delay  # pyright: ignore[reportPrivateUsage]
+
+    def record(response: httpx.Response | None, *, attempt: int) -> float:
+        delays.append(compute(response, attempt=attempt))
+        return 0.0
+
+    monkeypatch.setattr(embedding, "_retry_delay", record)
+    return delays
+
+
 @pytest.mark.parametrize(
     "failure",
     [httpx.ConnectError("down"), httpx.ReadError("reset"), httpx.ReadTimeout("slow")],
 )
-async def test_connection_failures_retry_at_most_twice(failure: httpx.TransportError) -> None:
+async def test_connection_failures_retry_at_most_twice(
+    failure: httpx.TransportError, monkeypatch: pytest.MonkeyPatch
+) -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
@@ -605,19 +625,19 @@ async def test_connection_failures_retry_at_most_twice(failure: httpx.TransportE
     embedder._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
         side_effect=[failure, failure, _response(200, {"data": [{"embedding": [0.1, 0.2, 0.3]}]})]
     )
-    with pytest.MonkeyPatch.context() as patch:
-        sleep = AsyncMock()
-        patch.setattr(asyncio, "sleep", sleep)
-        try:
-            assert await embedder.embed_texts(["hello"]) == [[0.1, 0.2, 0.3]]
-        finally:
-            await embedder.aclose()
+    delays = _record_retry_delays(monkeypatch)
+    try:
+        assert await embedder.embed_texts(["hello"]) == [[0.1, 0.2, 0.3]]
+    finally:
+        await embedder.aclose()
     assert embedder._client.post.await_count == 3  # pyright: ignore[reportPrivateUsage]
-    assert sleep.await_count == 2
+    assert len(delays) == 2
 
 
 @pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529])
-async def test_retryable_http_statuses_are_retried(status: int) -> None:
+async def test_retryable_http_statuses_are_retried(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
@@ -631,22 +651,18 @@ async def test_retryable_http_statuses_are_retried(status: int) -> None:
             _response(200, {"data": [{"embedding": [0.1, 0.2, 0.3]}]}),
         ]
     )
-    with pytest.MonkeyPatch.context() as patch:
-        sleep = AsyncMock()
-        patch.setattr(asyncio, "sleep", sleep)
-        try:
-            await embedder.embed_texts(["hello"])
-        finally:
-            await embedder.aclose()
-    sleep.assert_awaited_once_with(2.0)
+    delays = _record_retry_delays(monkeypatch)
+    try:
+        await embedder.embed_texts(["hello"])
+    finally:
+        await embedder.aclose()
+    assert delays == [2.0]
 
 
 async def test_a_real_handshake_reset_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     # A TLS endpoint that resets each connection right after accepting it: the
     # real httpcore chain carries an implicit SSLWantReadError context, which is
     # a dropped connection rather than a misconfigured endpoint.
-    from dlightrag.engine.ai import embedding
-
     connections = 0
 
     async def counted_reset(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -686,7 +702,7 @@ async def test_a_real_handshake_reset_is_retried(monkeypatch: pytest.MonkeyPatch
     ids=["401", "403", "409", "501", "505", "unsupported-protocol", "tls-certificate"],
 )
 async def test_failures_the_dependency_classification_rejects_are_not_retried(
-    failure: httpx.Response | httpx.TransportError,
+    failure: httpx.Response | httpx.TransportError, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Embedding retries use the same classification that defers a durable Run,
     # so a failure a Run would not wait out is not retried here either.
@@ -703,16 +719,14 @@ async def test_failures_the_dependency_classification_rejects_are_not_retried(
         else AsyncMock(side_effect=failure)
     )
     embedder._client.post = post  # pyright: ignore[reportPrivateUsage]
-    with pytest.MonkeyPatch.context() as patch:
-        sleep = AsyncMock()
-        patch.setattr(asyncio, "sleep", sleep)
-        try:
-            with pytest.raises((httpx.HTTPStatusError, httpx.TransportError)):
-                await embedder.embed_texts(["hello"])
-        finally:
-            await embedder.aclose()
+    delays = _record_retry_delays(monkeypatch)
+    try:
+        with pytest.raises((httpx.HTTPStatusError, httpx.TransportError)):
+            await embedder.embed_texts(["hello"])
+    finally:
+        await embedder.aclose()
     assert post.await_count == 1
-    sleep.assert_not_awaited()
+    assert delays == []
 
 
 async def test_non_retryable_4xx_and_schema_errors_are_not_retried() -> None:
