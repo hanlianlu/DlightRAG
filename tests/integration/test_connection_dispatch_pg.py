@@ -14,6 +14,7 @@ from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.answer.execution.connection_binding import ResearchToolClaim
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
 from tests.integration.test_connection_binding_pg import enabled_connection
+from tests.support.pg import notification_hub
 
 
 async def dispatch_fixture(
@@ -205,8 +206,10 @@ async def test_gate_first_revoke_is_in_flight_cancelled_unknown_without_network_
 
     from dlightrag.application.connections import ConnectionCommand
 
-    async with isolated_run_runtime("dispatch_race") as (runs, pool):
-        service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
+    async with isolated_run_runtime("dispatch_race") as (runs, pool), notification_hub(pool) as hub:
+        service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(
+            runs, pool, connection=await enabled_connection(pool, notifications=hub)
+        )
         entered = asyncio.Event()
         closed = asyncio.Event()
 

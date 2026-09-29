@@ -18,6 +18,7 @@ from tests.integration.test_connection_authorization_pg import cipher
 from tests.integration.test_connection_binding_pg import enabled_connection
 from tests.integration.test_connections_pg import stored_catalogue
 from tests.support.dns import public_dns
+from tests.support.pg import notification_hub
 from tests.unit.test_connection_oauth import refresh_credentials
 
 
@@ -849,8 +850,11 @@ async def test_in_flight_http_call_tracks_authorization_not_secret_version(
 
 @pytest.mark.asyncio
 async def test_reader_validates_without_writer_gc_and_writer_shutdown_is_restartable():
-    async with isolated_run_runtime("connection_lifecycle") as (_, pool):
-        service, store, mcp, view = await enabled_connection(pool)
+    async with (
+        isolated_run_runtime("connection_lifecycle") as (_, pool),
+        notification_hub(pool) as hub,
+    ):
+        service, store, mcp, view = await enabled_connection(pool, notifications=hub)
         await service.change(
             owner_id="a",
             auth_mode="jwt",
@@ -859,7 +863,7 @@ async def test_reader_validates_without_writer_gc_and_writer_shutdown_is_restart
                 kind="disable", connection_id=view.connections[0].connection_id
             ),
         )
-        reader = Connections(store=PGConnectionsStore(pool=pool), mcp=mcp)
+        reader = Connections(store=PGConnectionsStore(pool=pool, notifications=hub), mcp=mcp)
         await reader.start(validate_only=True)
         await asyncio.sleep(0.1)
         async with pool.acquire() as conn:
@@ -884,8 +888,11 @@ async def test_reader_validates_without_writer_gc_and_writer_shutdown_is_restart
 
 @pytest.mark.asyncio
 async def test_notification_reconnect_wakes_a_scan_after_listener_connection_loss():
-    async with isolated_run_runtime("connection_notify") as (_, pool):
-        store = PGConnectionsStore(pool=pool)
+    async with (
+        isolated_run_runtime("connection_notify") as (_, pool),
+        notification_hub(pool) as hub,
+    ):
+        store = PGConnectionsStore(pool=pool, notifications=hub)
         await store.initialize(validate_only=False)
         await store.start_notifications()
         try:
@@ -905,7 +912,6 @@ async def test_notification_reconnect_wakes_a_scan_after_listener_connection_los
 
                 pid = await listen_backend()
                 assert pid is not None
-                await store.wait_refresh(0.05)  # the first connection's own resynchronization
                 assert await conn.fetchval("SELECT pg_terminate_backend($1)", pid)
                 # Reconnection's resynchronization wake is observable without a new NOTIFY.
                 started = asyncio.get_running_loop().time()

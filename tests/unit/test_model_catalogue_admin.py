@@ -300,6 +300,20 @@ async def test_listener_reload_applies_committed_snapshot_and_invalidates_caches
 
 
 @pytest.mark.asyncio
+async def test_a_reload_that_finds_the_applied_revision_rebuilds_nothing() -> None:
+    """The revision hashes the overlay, so the periodic resynchronization stops at one read."""
+    admin, store, catalogue, invalidations = await _admin()
+    snapshot = catalogue.snapshot
+    store.overlay = "never parsed while its revision is the applied one"
+
+    assert store.listener is not None
+    await store.listener()
+
+    assert catalogue.snapshot is snapshot
+    assert invalidations == []
+
+
+@pytest.mark.asyncio
 async def test_empty_overlay_revision_survives_a_builtin_catalogue_upgrade() -> None:
     old_catalogue = _catalogue(context=100_000)
     upgraded_catalogue = _catalogue(context=200_000)

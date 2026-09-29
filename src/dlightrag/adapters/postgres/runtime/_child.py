@@ -8,6 +8,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -26,11 +27,6 @@ _MAX_PENDING_CHILD_CONTROLS = 100
 # again after applying a batch, so every pending control still arrives, in order.
 PENDING_CONTROL_READ_LIMIT = 100
 _MAX_PENDING_CHILD_GUIDANCE = 8
-# Wake hints arrive through the notification hub, which resynchronizes after any
-# reconnect. While the hub is reconnecting (with backoff) or cannot get a pool
-# connection, no hint arrives, so a waiting child still re-reads its one indexed
-# guidance row this often.
-_GUIDANCE_RESYNC_SECONDS = 5.0
 
 _UPSERT_CHILD_SESSION = """
 INSERT INTO dlightrag_answer_child_sessions (
@@ -1620,12 +1616,12 @@ class ChildRunStoreMixin:
         wake = asyncio.Event()
 
         def _notified(payload: str | None) -> None:
-            # None is the hub reconnecting: a wake may have been missed, so re-read.
+            # None is the hub resynchronizing: a wake may have been missed, so re-read.
             if payload is None or payload == wake_key:
                 wake.set()
 
         # Listen before the first read, so a reply that lands in between still wakes.
-        async with self._notification_hub().listen(RUN_ACTIVITY_CHANNEL, _notified):
+        with self._notification_hub().listen(RUN_ACTIVITY_CHANNEL, _notified):
             row = await self.load_child_guidance(
                 owner_id=owner_id, run_id=run_id, request_id=request_id
             )
@@ -1639,10 +1635,8 @@ class ChildRunStoreMixin:
                     return await self.load_child_guidance(
                         owner_id=owner_id, run_id=run_id, request_id=request_id
                     )
-                try:
-                    await asyncio.wait_for(wake.wait(), timeout=min(left, _GUIDANCE_RESYNC_SECONDS))
-                except TimeoutError:
-                    pass
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(wake.wait(), timeout=left)
                 wake.clear()
                 current = await self.load_child_guidance(
                     owner_id=owner_id, run_id=run_id, request_id=request_id

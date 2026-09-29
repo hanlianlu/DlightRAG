@@ -12,6 +12,7 @@ from dlightrag.application.connections import ConnectionCommand, Connections, Co
 from dlightrag.application.connections.credentials import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp, stored_catalogue
+from tests.support.pg import notification_hub
 
 
 def cipher():
@@ -95,8 +96,8 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
 
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
-    async with isolated_run_runtime("oauth_inbox") as (_, pool):
-        store = PGConnectionsStore(pool=pool)
+    async with isolated_run_runtime("oauth_inbox") as (_, pool), notification_hub(pool) as hub:
+        store = PGConnectionsStore(pool=pool, notifications=hub)
         await store.initialize(validate_only=False)
         await PGConnectionsStore(pool=pool).initialize(validate_only=True)
         await store.start_notifications()

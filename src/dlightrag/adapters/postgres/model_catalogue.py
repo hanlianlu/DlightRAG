@@ -208,11 +208,10 @@ class PGModelCatalogueStore(PostgresOperationRunner):
         changed = asyncio.Event()
 
         def _notified(_payload: str | None) -> None:
-            # A publication, or a hub reconnect that may have missed one: reload.
+            # A publication, or a resynchronization that stands in for a missed one.
             changed.set()
 
-        async with self._listener_hub().listen(MODEL_CATALOGUE_CHANNEL, _notified):
-            changed.set()  # Startup synchronization closes the gap before listening.
+        with self._listener_hub().listen(MODEL_CATALOGUE_CHANNEL, _notified):
             backoff = _RELOAD_RETRY_BASE_SECONDS
             while not self._closing:
                 await changed.wait()

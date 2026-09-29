@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any, Protocol
 
 import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.core._migrations import ForeignKeyRequirement, TableRequirement
+from dlightrag.adapters.postgres.core._notifications import PGNotificationHub, dedicated_connection
 
 # `localhost` is ambiguous on a machine that also runs a host PostgreSQL on [::1]: the resolver
 # prefers that IPv6 instance over the container's IPv4 mapping, so the suite silently tested against
@@ -123,6 +126,24 @@ async def drop_database(database: str) -> None:
         await drop_scratch_database(admin, database)
     finally:
         await admin.close()
+
+
+@asynccontextmanager
+async def notification_hub(pool: Any) -> AsyncIterator[PGNotificationHub]:
+    """A notification hub on a connection of its own to the database `pool` serves.
+
+    A store on an injected pool takes this hub alongside it, as production stores share the
+    process hub. It closes on exit, so leave it before the database is dropped.
+    """
+    async with pool.acquire() as connection:
+        database = await connection.fetchval("SELECT current_database()")
+    hub = PGNotificationHub(
+        connect=partial(dedicated_connection, {**PG_CONN_KWARGS, "database": database})
+    )
+    try:
+        yield hub
+    finally:
+        await hub.aclose()
 
 
 _CATALOG_TABLES = """SELECT c.relname AS name

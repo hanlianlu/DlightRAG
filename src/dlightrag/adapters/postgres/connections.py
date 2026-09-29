@@ -24,6 +24,7 @@ from dlightrag.adapters.postgres.core._migrations import (
     apply_migrations,
     verify_migrations,
 )
+from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.application.connections.models import (
     CatalogueTool,
@@ -297,8 +298,13 @@ async def _owner_lock(conn: Any, owner: str) -> None:
 
 
 class PGConnectionsStore(PostgresOperationRunner):
-    def __init__(self, *, pool: ConnectionPool | None = None) -> None:
-        super().__init__(pool=pool)
+    def __init__(
+        self,
+        *,
+        pool: ConnectionPool | None = None,
+        notifications: PGNotificationHub | None = None,
+    ) -> None:
+        super().__init__(pool=pool, notifications=notifications)
         self._oauth_wakes: dict[str, asyncio.Event] = {}
         self._wake = asyncio.Event()
         self._dispatch_wake = asyncio.Event()
@@ -307,20 +313,19 @@ class PGConnectionsStore(PostgresOperationRunner):
     async def start_notifications(self) -> None:
         if self._listening:
             return
-        self._listening = True
         hub = self._notification_hub()
-        await hub.subscribe(CONNECTION_OAUTH_CHANNEL, self._oauth_changed)
-        await hub.subscribe(CONNECTIONS_CHANGED_CHANNEL, self._changed)
-        self._wake.set()  # The startup scan recovers anything published before now.
+        hub.subscribe(CONNECTION_OAUTH_CHANNEL, self._oauth_changed)
+        hub.subscribe(CONNECTIONS_CHANGED_CHANNEL, self._changed)
+        self._listening = True
 
     def _changed(self, _payload: str | None) -> None:
-        # A hub reconnect (None) wakes the same scan a notification does.
+        # A resynchronization (None) wakes the same scan a notification does.
         self._wake.set()
         self._dispatch_wake.set()
 
     def _oauth_changed(self, worker_id: str | None) -> None:
         if worker_id is None:
-            # After a reconnect any flow owner may have missed its callback.
+            # Any flow owner may have missed its callback while nothing listened.
             for wake in self._oauth_wakes.values():
                 wake.set()
             return
@@ -340,8 +345,8 @@ class PGConnectionsStore(PostgresOperationRunner):
             return
         self._listening = False
         hub = self._notification_hub()
-        await hub.unsubscribe(CONNECTIONS_CHANGED_CHANNEL, self._changed)
-        await hub.unsubscribe(CONNECTION_OAUTH_CHANNEL, self._oauth_changed)
+        hub.unsubscribe(CONNECTIONS_CHANGED_CHANNEL, self._changed)
+        hub.unsubscribe(CONNECTION_OAUTH_CHANNEL, self._oauth_changed)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         async def operation(conn: Any) -> None:

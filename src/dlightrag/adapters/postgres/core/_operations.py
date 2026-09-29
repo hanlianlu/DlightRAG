@@ -20,21 +20,26 @@ class ConnectionPool(Protocol):
 class PostgresOperationRunner:
     """Run adapter operations through an injected raw pool or the process pool."""
 
-    def __init__(self, *, pool: ConnectionPool | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        pool: ConnectionPool | None = None,
+        notifications: PGNotificationHub | None = None,
+    ) -> None:
         self._operation_pool = pool
-        self._pool_notifications: PGNotificationHub | None = None
+        self._notifications = notifications
 
     def _notification_hub(self) -> PGNotificationHub:
-        """The LISTEN hub on the pool this runner operates on.
+        """The hub this runner's subscribers listen through.
 
-        The process pool's hub is shared by every adapter in the process; an
-        injected pool gets one hub of its own, on the same database.
+        Every adapter on the process pool shares the process hub. An injected pool
+        comes with the hub for its database, since no hub can be derived from it.
         """
-        if self._operation_pool is None:
-            return pg_pool.notifications
-        if self._pool_notifications is None:
-            self._pool_notifications = PGNotificationHub(connect=self._operation_pool.acquire)
-        return self._pool_notifications
+        if self._notifications is not None:
+            return self._notifications
+        if self._operation_pool is not None:
+            raise RuntimeError("an injected pool needs an injected notification hub")
+        return pg_pool.notifications
 
     async def _run(self, operation: Callable[[Any], Awaitable[T]]) -> T:
         if self._operation_pool is None:

@@ -36,6 +36,7 @@ from dlightrag.adapters.postgres.core._migrations import (
     apply_migrations,
     verify_migrations,
 )
+from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.adapters.postgres.runtime._child import (
@@ -2619,13 +2620,14 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         self,
         *,
         pool: ConnectionPool | None = None,
+        notifications: PGNotificationHub | None = None,
         retention_seconds: int = DEFAULT_RUN_RETENTION_SECONDS,
         query_max_nonterminal_runs: int = DEFAULT_QUERY_MAX_NONTERMINAL_RUNS,
         corpus_mutation_max_nonterminal_runs: int = DEFAULT_CORPUS_MUTATION_MAX_NONTERMINAL_RUNS,
         promotion_doc_threshold: int | None = None,
         promotion_chunk_threshold: int | None = None,
     ) -> None:
-        super().__init__(pool=pool)
+        super().__init__(pool=pool, notifications=notifications)
         self._retention_seconds = retention_seconds
         self._query_max_nonterminal_runs = max(1, int(query_max_nonterminal_runs))
         self._corpus_mutation_max_nonterminal_runs = max(

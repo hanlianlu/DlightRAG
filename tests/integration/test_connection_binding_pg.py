@@ -36,8 +36,8 @@ class CatalogueMcp:
         ]
 
 
-async def enabled_connection(pool, owner="a"):
-    store = PGConnectionsStore(pool=pool)
+async def enabled_connection(pool, owner="a", *, notifications=None):
+    store = PGConnectionsStore(pool=pool, notifications=notifications)
     await store.initialize(validate_only=False)
     mcp = CatalogueMcp()
     service = Connections(store=store, mcp=mcp)

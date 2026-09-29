@@ -90,7 +90,12 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
-from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
+from tests.support.pg import (
+    PG_CONN_KWARGS,
+    drop_database,
+    notification_hub,
+    skip_without_postgres,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -165,11 +170,12 @@ async def store() -> AsyncIterator[FingerprintingRunStore]:
     )
     try:
         assert pool is not None
-        created = FingerprintingRunStore(pool=pool)
-        await created.initialize()
-        # Establish the complete operational schema exactly as a real process does.
-        await PGWebConversationStore(pool=pool, run_store=created).initialize()
-        yield created
+        async with notification_hub(pool) as hub:
+            created = FingerprintingRunStore(pool=pool, notifications=hub)
+            await created.initialize()
+            # Establish the complete operational schema exactly as a real process does.
+            await PGWebConversationStore(pool=pool, run_store=created).initialize()
+            yield created
     finally:
         if pool is not None:
             await pool.close()
@@ -399,6 +405,7 @@ class _InteractiveGuidanceProvider:
         self.parent_calls = 0
         self.child_calls = 0
         self.wait_text = ""
+        self.child_reply = ""
 
     async def __call__(self, **kwargs: Any) -> AssistantTurn:
         tools = kwargs.get("tools") or ()
@@ -424,6 +431,7 @@ class _InteractiveGuidanceProvider:
                     stop_reason="tool_use",
                     usage_details={"input_tokens": 2, "output_tokens": 1},
                 )
+            self.child_reply = _newest_tool_text(messages)
             return AssistantTurn(
                 text="child used the official report",
                 tool_calls=(),
@@ -1954,6 +1962,7 @@ async def test_wait_subagent_wakes_on_ask_parent_and_parent_replies(
     assert provider.parent_calls >= 3
     assert "request_id=" in provider.wait_text
     assert "Which source should I prioritize?" in provider.wait_text
+    assert "Use the official report." in provider.child_reply
     assert run.result is not None
     assert run.result["answer"] == "parent synthesized after the child question"
     purposes = [item["purpose"] for item in run.result["trace"]["agent_operations"]]

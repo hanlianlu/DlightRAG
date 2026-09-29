@@ -341,27 +341,21 @@ metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
 and session-level PostgreSQL tuning.
 
 Cross-process wake-ups use LISTEN/NOTIFY through one notification hub per
-process: a single LISTEN connection, held from `pg_pool` while anything
-listens, that fans each channel out to its subscribers (the Connections
-scheduler and OAuth inbox, and Answer child-guidance waits, however many are
-waiting). A notification is only a wake hint. After every reconnect the hub
-tells each subscriber to re-read its authoritative rows, and a periodic
-keepalive replaces a connection that died silently. Replacing a lost connection
-waits one second, doubling with each further loss up to 30 seconds until a
-connection passes a keepalive, so a connection that dies right after its LISTEN
-cannot spin the hub through reconnects. Each LISTEN, UNLISTEN, and keepalive,
-and the whole batch of LISTENs a new connection starts with, is bounded to five
-seconds; one that fails, hangs, or is abandoned by a cancelled caller costs only
-the connection, which is replaced, and never leaves a subscriber registered on a
-channel nothing listens on. A subscriber
-that leaves is unregistered before it waits for the hub, so even an exit that
-is cancelled again while waiting leaves nothing registered. A waiting child
-also re-reads its guidance row every five seconds, so a hub that is
-reconnecting delays a reply by at most that much. The model catalogue
-listener uses a dedicated connection when it is given an explicit endpoint, as
-the service composition currently does, and closing that connection gracefully
-is bounded the same way before it is terminated instead. The run-cancellation
-listener keeps its own pooled connection.
+process. The hub holds one connection of its own, outside `pg_pool`, LISTENs
+every channel declared in `adapters/postgres/core/_channels.py` on it once, and
+fans each channel out to its subscribers (the Connections scheduler and OAuth
+inbox, and Answer child-guidance waits, however many are waiting); joining and
+leaving never touch the connection. A notification is only a wake hint: after
+every (re)connect, and after each 30-second keepalive passes, the hub tells
+every subscriber to re-read its authoritative rows, and it tells a subscriber
+that joins a live hub once on its own. A connection that is lost, or whose
+LISTENs or keepalive fail or outlast five seconds, is terminated and replaced
+after one second, doubling with each further loss up to 30 seconds until a
+connection passes a keepalive. The model catalogue listener uses a dedicated
+connection when it is given an explicit endpoint, as the service composition
+currently does, and closing that connection gracefully is bounded the same way
+before it is terminated instead. The run-cancellation listener keeps its own
+pooled connection.
 
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and

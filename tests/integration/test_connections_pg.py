@@ -8,7 +8,7 @@ import pytest
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
 from tests.integration.run_runtime_pg_harness import drop_owned_database, isolated_run_runtime
-from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database
+from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, notification_hub
 
 
 class FakeMcp:
@@ -224,9 +224,12 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
                 )
             return tools
 
-    async with isolated_run_runtime("connection_refresh") as (_, pool):
+    async with (
+        isolated_run_runtime("connection_refresh") as (_, pool),
+        notification_hub(pool) as hub,
+    ):
         mcp = ChangingMcp()
-        store = PGConnectionsStore(pool=pool)
+        store = PGConnectionsStore(pool=pool, notifications=hub)
         service = Connections(store=store, mcp=mcp, policy=ConnectionPolicy(refresh_seconds=1))
         await service.start()
         try:

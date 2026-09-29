@@ -442,3 +442,34 @@ class TestPGPoolGet:
 
         mock_pool.terminate.assert_called_once()
         assert pool._pool is None
+
+    @pytest.mark.asyncio
+    async def test_notifications_listen_on_a_connection_of_their_own(self) -> None:
+        """The process hub connects to the bound endpoint directly and holds no pool slot."""
+        from dlightrag.adapters.postgres.core._channels import RUN_CANCEL_CHANNEL
+        from dlightrag.adapters.postgres.core._pool import PGPool
+
+        connection = MagicMock()
+        connection.add_listener = AsyncMock()
+        connection.close = AsyncMock()
+        pool = PGPool()
+        mock_config = MagicMock()
+        mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+        pool.bind(mock_config)
+        received: list[str | None] = []
+
+        with (
+            patch("asyncpg.connect", new=AsyncMock(return_value=connection)) as connect,
+            patch(
+                "dlightrag.adapters.postgres.core._pool.asyncpg.create_pool", new=AsyncMock()
+            ) as create_pool,
+        ):
+            pool.notifications.subscribe(RUN_CANCEL_CHANNEL, received.append)
+            async with asyncio.timeout(2):
+                while received != [None]:
+                    await asyncio.sleep(0.005)
+            await pool.close()
+
+        connect.assert_awaited_once_with(host="h", port=5432)
+        create_pool.assert_not_called()
+        connection.close.assert_awaited_once()

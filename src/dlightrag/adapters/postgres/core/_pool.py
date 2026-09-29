@@ -18,13 +18,16 @@ Usage::
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 from typing import Any, TypeVar
 
 import asyncpg
 
 from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
-from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
+from dlightrag.adapters.postgres.core._notifications import (
+    PGNotificationHub,
+    dedicated_connection,
+)
 from dlightrag.adapters.postgres.core._session_settings import domain_pool_server_settings
 
 logger = logging.getLogger(__name__)
@@ -123,17 +126,13 @@ class PGPool:
 
     @property
     def notifications(self) -> PGNotificationHub:
-        """The process's one LISTEN connection, held from this pool while anything listens."""
+        """The process's notification hub, on one connection of its own outside the pool."""
         if self._notifications is None:
             self._notifications = PGNotificationHub(connect=self._listener_connection)
         return self._notifications
 
-    @asynccontextmanager
-    async def _listener_connection(self) -> AsyncIterator[Any]:
-        config = self._active_config()
-        pool = await self.get()
-        async with pool.acquire(timeout=config.storage.postgres.acquire_timeout) as connection:
-            yield connection
+    def _listener_connection(self) -> AbstractAsyncContextManager[Any]:
+        return dedicated_connection(self._active_config().pg_connection_kwargs())
 
     async def run(
         self,

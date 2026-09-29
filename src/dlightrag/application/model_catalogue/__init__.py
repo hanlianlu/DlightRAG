@@ -235,6 +235,10 @@ class ModelCatalogueAdmin:
 
     async def _reload(self, *, require_match: bool) -> None:
         stored = await self._store.load()
+        if stored.revision == self._stored_overlay_revision:
+            # The revision hashes the overlay, which this process already applied: a
+            # periodic resynchronization costs one row read and rebuilds nothing.
+            return
         try:
             overlay = parse_catalogue_overlay(stored.overlay)
             candidate = self._catalogue.preview(overlay)

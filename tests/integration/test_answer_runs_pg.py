@@ -66,6 +66,7 @@ from tests.support.pg import (
     declared_shape,
     delete_runs,
     drop_database,
+    notification_hub,
     skip_without_postgres,
 )
 
@@ -166,14 +167,15 @@ async def pool() -> AsyncIterator[Any]:
 
 
 @pytest.fixture
-async def store(pool: Any) -> PGRunStore:
-    created = FingerprintingRunStore(pool=pool)
-    await created.initialize()
-    # Establish the complete operational schema exactly as a real process does.
-    from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
+async def store(pool: Any) -> AsyncIterator[PGRunStore]:
+    async with notification_hub(pool) as hub:
+        created = FingerprintingRunStore(pool=pool, notifications=hub)
+        await created.initialize()
+        # Establish the complete operational schema exactly as a real process does.
+        from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 
-    await PGWebConversationStore(pool=pool, run_store=created).initialize()
-    return created
+        await PGWebConversationStore(pool=pool, run_store=created).initialize()
+        yield created
 
 
 def _request(query: str = "why", **extra: Any) -> dict[str, Any]:
@@ -3629,12 +3631,12 @@ class TestAgentControlsAndChildren:
         )
         assert isinstance(stale, TransactionLeaseLost)
 
-    async def test_concurrent_guidance_waits_share_one_listen_connection(self, store) -> None:
-        """Waiting children listen through one shared connection, whatever their number.
+    async def test_concurrent_guidance_waits_hold_no_pool_connection(self, store) -> None:
+        """Waiting children listen through the notification hub, whatever their number.
 
         A connection per waiter would let enough waiting children exhaust the pool the
-        replies they wait for must use; the notification hub holds exactly one, and
-        gives it back when the last waiter leaves.
+        replies they wait for must use; the hub listens on a connection of its own, so
+        a waiting child holds none.
         """
         creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
         claim = await _claimed(store)
@@ -3733,7 +3735,8 @@ class TestAgentControlsAndChildren:
                 for request_id in request_ids
             ]
             await asyncio.sleep(0.2)
-            assert counting.held == 1
+            assert counting.held == 0
+            assert not any(waiter.done() for waiter in waiters)
             for index, request_id in enumerate(request_ids):
                 assert (
                     await store.reply_child_guidance(
