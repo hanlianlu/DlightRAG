@@ -48,8 +48,13 @@ def test_pg18_harness_never_borrows_the_application_database_settings() -> None:
         }
     )
 
-    assert kwargs["host"] == "localhost"
-    assert kwargs["password"] != "app-secret"
+    assert kwargs == {
+        "host": "localhost",
+        "port": 5432,
+        "user": "dlightrag",
+        "password": "dlightrag",
+        "database": "dlightrag",
+    }
 
 
 def test_pg18_harness_tracks_required_postgres_extensions() -> None:

@@ -246,6 +246,20 @@ def test_unit_runs_ignore_the_checkout_config(
     assert DlightragConfig().model_dump() == isolated
 
 
+def test_only_the_named_suite_gates_stay_visible_to_tests() -> None:
+    """A gate the settings refuse would break every run; a client name must stay hidden."""
+    from tests.conftest import _SUITE_GATE_PREFIXES, _SUITE_GATES, _is_suite_gate
+
+    assert all(config_sections._is_auxiliary_env_name(name) for name in _SUITE_GATES)
+    assert all(
+        config_sections._is_auxiliary_env_name(f"{prefix}HOST") for prefix in _SUITE_GATE_PREFIXES
+    )
+    assert _is_suite_gate("dlightrag_run_e2e_pg18")
+    assert _is_suite_gate("DLIGHTRAG_E2E_POSTGRES_HOST")
+    for hidden in ("DLIGHTRAG_API_TOKEN", "DLIGHTRAG_API_URL", "DLIGHTRAG_DEPLOYMENT__WORKSPACE"):
+        assert not _is_suite_gate(hidden)
+
+
 def test_shipped_config_and_env_example_use_canonical_sections() -> None:
     root = _REPO_ROOT
     config_text = (root / "config.yaml").read_text(encoding="utf-8")

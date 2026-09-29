@@ -203,9 +203,11 @@ def _answer_envelope(
 # not product contracts: a test that reads them asserts whatever this checkout is
 # tuned to. Tests that mean to exercise a YAML config or an environment set their
 # own. Only the suite gates stay visible; they choose what runs and set nothing.
-_CLIENT_ENV_NAMES = frozenset(
-    {"DLIGHTRAG_API_TOKEN", "DLIGHTRAG_API_URL", "DLIGHTRAG_CLIENT_TIMEOUT"}
-)
+# They are named here rather than derived, so a new client or product name never
+# becomes visible to tests by accident.
+_SUITE_GATES = frozenset({"DLIGHTRAG_RUN_E2E_PG18", "DLIGHTRAG_RUN_LOAD"})
+# The PG18 smoke's own server, never the application's database.
+_SUITE_GATE_PREFIXES = ("DLIGHTRAG_E2E_",)
 # The config.yaml files present when the run starts: this checkout's and the
 # invocation directory's.
 _STARTUP_CONFIG_YAMLS = frozenset(
@@ -225,7 +227,8 @@ def _yaml_config_ignoring_startup_files() -> Path | None:
 
 
 def _is_suite_gate(name: str) -> bool:
-    return config_sections._is_auxiliary_env_name(name) and name.upper() not in _CLIENT_ENV_NAMES
+    upper = name.upper()
+    return upper in _SUITE_GATES or upper.startswith(_SUITE_GATE_PREFIXES)
 
 
 def _hide_operator_inputs(patch: pytest.MonkeyPatch) -> None:
@@ -243,7 +246,7 @@ def _playwright_browsers(home: Path) -> Path:
     if sys.platform == "darwin":
         return home / "Library" / "Caches" / "ms-playwright"
     if sys.platform == "win32":
-        return home / "AppData" / "Local" / "ms-playwright"
+        return Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "ms-playwright"
     return Path(os.environ.get("XDG_CACHE_HOME", home / ".cache")) / "ms-playwright"
 
 
