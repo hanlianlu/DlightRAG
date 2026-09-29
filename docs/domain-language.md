@@ -115,7 +115,7 @@ An authorized full Corpus Reset may explicitly supersede one
 Run identity; reset preserves Corpus Workspace identity and history rather than
 recreating the Workspace. A Workspace Delete is a full reset too and may
 supersede the same way before it removes the Workspace.
-_Avoid_: Workspace Delete, hidden repair abandonment
+_Avoid_: partial reset, hidden repair abandonment
 
 **Workspace Delete**:
 The Workspace's final Corpus Mutation (`delete_workspace`): a full Corpus Reset

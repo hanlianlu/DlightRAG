@@ -162,6 +162,79 @@ async def test_workspace_delete_refuses_a_workspace_that_is_gone(tmp_path: Path)
     store.accept_run.assert_not_awaited()
 
 
+async def _gone(_workspace: str) -> bool:
+    return False
+
+
+@pytest.mark.parametrize(
+    "write_to",
+    [
+        lambda service: service.create_ingest(
+            workspace="reserch",
+            spec=IngestSpec(source_type="url", url="https://example.com/a.pdf"),
+            submitted_by="o",
+        ),
+        lambda service: service.create_delete(
+            workspace="reserch", submitted_by="o", document_ids=["doc-a"]
+        ),
+        lambda service: service.create_retry(
+            workspace="reserch", submitted_by="o", document_ids=["doc-a"]
+        ),
+        lambda service: service.create_reset(workspace="reserch", submitted_by="o"),
+    ],
+    ids=["ingest", "delete", "retry", "reset"],
+)
+async def test_every_corpus_write_needs_a_created_workspace(tmp_path: Path, write_to) -> None:
+    """A misspelled Workspace is refused, never a write to an uncatalogued corpus."""
+    store = AsyncMock()
+    service = _accepting_service(tmp_path, store, workspace_exists=_gone)
+
+    with pytest.raises(WorkspaceNotFoundError, match="does not exist; create it first"):
+        await write_to(service)
+    store.accept_run.assert_not_awaited()
+
+
+async def test_a_local_source_or_upload_for_a_missing_workspace_stages_nothing(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "reserch"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "a.txt").write_text("a", encoding="utf-8")
+    service = _accepting_service(tmp_path, AsyncMock(), workspace_exists=_gone)
+
+    with pytest.raises(WorkspaceNotFoundError):
+        await service.create_ingest(
+            workspace="reserch", spec=_local_spec(workspace / "docs"), submitted_by="o"
+        )
+    with pytest.raises(WorkspaceNotFoundError):
+        await service.stage_uploads(
+            workspace="reserch", run_id=_RUN_ID, uploads=[("a.pdf", _Reader(b"a"))]
+        )
+    assert not (workspace / ".runs").exists()
+    assert not (workspace / ".staging").exists()
+
+
+async def test_a_retried_ingest_key_replays_before_the_workspace_check(tmp_path: Path) -> None:
+    lookups: list[str] = []
+
+    async def gone(workspace: str) -> bool:
+        lookups.append(workspace)
+        return False
+
+    service = _accepting_service(tmp_path, AsyncMock(), workspace_exists=gone)
+    service.replay = AsyncMock(return_value="receipt")  # type: ignore[method-assign]
+
+    receipt = await service.create_ingest(
+        workspace="reserch",
+        spec=IngestSpec(source_type="url", url="https://example.com/a.pdf"),
+        submitted_by="o",
+        idempotency_key="key",
+    )
+
+    assert receipt == "receipt"
+    assert lookups == []
+
+
 async def test_workspace_delete_replays_its_receipt_after_the_workspace_is_gone(
     tmp_path: Path,
 ) -> None:

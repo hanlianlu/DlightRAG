@@ -243,6 +243,7 @@ class CorpusMutationService:
             )
             if replay is not None:
                 return replay
+        await self._require_workspace(request["workspace"], action)
 
         run_id = str(uuid7())
         execution_spec = spec
@@ -527,8 +528,7 @@ class CorpusMutationService:
         )
         if replay is not None:
             return replay
-        if action == "delete_workspace" and not await self._require_registered(canonical):
-            raise WorkspaceNotFoundError("Workspace no longer exists")
+        await self._require_workspace(canonical, action)
         run_id = str(uuid7())
         return await self._accept(
             run_id=run_id,
@@ -539,16 +539,28 @@ class CorpusMutationService:
             payload={**request, "track_id": _track_id(run_id)},
         )
 
-    async def _require_registered(self, workspace: str) -> bool:
-        """Whether the catalog lists the Workspace; an unreadable catalog refuses."""
+    async def _require_workspace(self, workspace: str, action: CorpusMutationAction) -> None:
+        """Refuse a corpus write to a Workspace the catalog does not list.
+
+        Every write needs a created Workspace: data written under an unlisted name
+        is invisible to the catalog and its access rules, and a misspelled reset
+        would otherwise "succeed" on an empty corpus. An unreadable catalog refuses
+        rather than letting the write through.
+        """
         try:
-            return await self._workspace_exists(workspace)
+            registered = await self._workspace_exists(workspace)
         except ApplicationError:
             raise
         except Exception as exc:
             raise ApplicationUnavailableError(
                 "Workspace catalog is temporarily unavailable"
             ) from exc
+        if not registered:
+            raise WorkspaceNotFoundError(
+                "Workspace no longer exists"
+                if action == "delete_workspace"
+                else "Workspace does not exist; create it first"
+            )
 
     async def _accept(
         self,
@@ -620,6 +632,7 @@ class CorpusMutationService:
         limits = self._upload_limits
         if not uploads:
             raise CorpusMutationInputError("at least one upload is required")
+        await self._require_workspace(require_canonical_workspace_id(workspace), "ingest")
         if len(uploads) > limits.request_files:
             raise UploadTooLargeError(f"upload contains more than {limits.request_files} files")
         if content_sha256 is not None and len(uploads) != 1:

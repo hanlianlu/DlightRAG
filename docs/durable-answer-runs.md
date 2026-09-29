@@ -127,10 +127,12 @@ resumes this same Run through REST, same-origin browser, Python, or the
 Application Run service. Resume records repair confirmation and requeues only
 that identity.
 
-A full Corpus Reset may instead name one waiting Run to supersede. The old Run
-becomes terminal `repair_superseded`, linked to the reset Run. Reset hides first,
-preserves Corpus Workspace identity and mutation history, and then clears
-corpus content. It is not Workspace Delete.
+A full reset may instead name one waiting Run to supersede: a Corpus Reset, or a
+Workspace Delete, which is a full reset followed by removing the Workspace. The
+old Run becomes terminal `repair_superseded`, linked to the superseding Run.
+Corpus Reset hides first, preserves Corpus Workspace identity and mutation
+history, and then clears corpus content; Workspace Delete then also removes the
+Workspace's catalog identity.
 
 Ingest finalization has a separate Product Document publication barrier. If
 LightRAG has committed `PROCESSED` but DlightRAG finalization is incomplete, the

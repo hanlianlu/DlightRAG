@@ -160,13 +160,13 @@ The cohort includes LightRAG `FAILED` documents and LightRAG `PROCESSED` documen
 
 Corpus Reset is a Workspace-scoped FIFO mutation barrier. Earlier ordinary mutations finish before it; later submissions execute against the empty corpus. It removes the Workspace's LightRAG corpus state, DlightRAG corpus projections and maintenance counters, and source/sidecar files. It preserves durable Run/event history, Conversations, Agent Sessions, historical Artifacts, Workspace access control, and logical Workspace identity.
 
-An administrator may explicitly use Reset to supersede a `waiting_for_repair` Run. The Reset then owns the existing barrier; if Reset itself becomes ambiguous it enters `waiting_for_repair` rather than reporting success.
+An administrator may explicitly use Reset, or Workspace Delete, to supersede a `waiting_for_repair` Run. The Reset then owns the existing barrier; if Reset itself becomes ambiguous it enters `waiting_for_repair` rather than reporting success.
 
 ### Workspace Delete
 
 Workspace Delete (`delete_workspace`) is the Workspace's final mutation. Like Reset it is a FIFO barrier: earlier mutations finish first. It then clears the whole corpus without retaining later-accepted sources, removes the Workspace's catalog identity, and cancels every mutation queued behind it, so no later Run writes into the removed Workspace. Identity removal happens before that sweep, so a browser submission can no longer join the queue once the sweep starts. Both steps are idempotent: recovery after the settled reset repeats them, while an ambiguous reset enters `waiting_for_repair` with the identity still registered.
 
-It preserves durable Run/event history, Conversations, Agent Sessions, and historical Artifacts, which are owner-scoped rather than Workspace-owned. The deployment's configured default Workspace cannot be deleted. A later REST submission naming a deleted Workspace follows the rules for any unregistered Workspace, and creating a Workspace with the same name starts an empty corpus.
+It preserves durable Run/event history, Conversations, Agent Sessions, and historical Artifacts, which are owner-scoped rather than Workspace-owned. The deployment's configured default Workspace cannot be deleted. Every Corpus Mutation needs a Workspace the catalog lists, so a later submission naming a deleted Workspace is refused as not found (as is one naming a Workspace never created), and creating a Workspace with the same name starts an empty corpus.
 
 ## Product Document consistency and visibility
 
