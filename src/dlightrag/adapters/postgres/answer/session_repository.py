@@ -75,12 +75,11 @@ from dlightrag.engine.runtime.progress import (
     StageTerminalCommitResult,
 )
 from dlightrag.engine.runtime.settlements import (
-    CompleteBlobDescriptor,
     EffectHostUpdate,
+    FetchedResourceSettlementUpdate,
     MemoryOperationSettlement,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
-    OpaqueFetchedResourceWrite,
 )
 
 _LOCK_PROGRESS_RUN = """
@@ -418,6 +417,64 @@ async def _write_evidence_identities(
         is not None
     ):
         raise _EvidenceIdentityConflict()
+
+
+async def write_fetched_resources(
+    conn: Any,
+    *,
+    owner_id: str,
+    run_id: Any,
+    updates: Sequence[FetchedResourceSettlementUpdate],
+) -> None:
+    """Write fetched Resources and their complete Blobs as rows of one Run.
+
+    New Blob identities take one canonical lock order across transactions; rows
+    keep the caller's order. A row already stored under the same identity and
+    bytes only merges its aliases, and one naming other bytes is an identity
+    conflict that rolls the caller's transaction back.
+    """
+    for update in sorted(updates, key=lambda item: item.complete_blob.digest):
+        blob = update.complete_blob
+        try:
+            await write_complete_blob(
+                conn,
+                owner_id=owner_id,
+                digest=blob.digest,
+                total_bytes=blob.total_bytes,
+                chunks=blob.chunks,
+            )
+        except BlobSizeConflict as exc:
+            raise _EvidenceIdentityConflict() from exc
+    for update in updates:
+        write = update.resource
+        await guard_payload(
+            conn.execute(
+                _INSERT_RESOURCE,
+                owner_id,
+                run_id,
+                write.resource_id,
+                "fetched_blob",
+                write.safe_name,
+                write.media_type,
+                json.dumps(write.capabilities, ensure_ascii=False),
+                write.ordinal,
+                write.blob_digest,
+                write.source_locator_digest,
+                write.source_locator,
+                write.session_id,
+                write.intent_id,
+                None,
+            ),
+            surface="Fetched Resource",
+        )
+        row = await conn.fetchrow(_SELECT_RESOURCE_DIGESTS, owner_id, run_id, write.resource_id)
+        if (
+            row is None
+            or row["kind"] != "fetched_blob"
+            or row["blob_digest"] != write.blob_digest
+            or row["locator_digest"] != write.source_locator_digest
+        ):
+            raise _EvidenceIdentityConflict()
 
 
 class PGAgentSessionRepository:
@@ -1053,12 +1110,9 @@ class PGAgentSessionRepository:
         )
         for resource in update.resources:
             await self._write_evidence_resource(conn, resource)
-        # New blob identities use one canonical lock order across transactions;
-        # resource/evidence projection retains the Host update's original order.
-        for fetched in sorted(update.fetched, key=lambda item: item.complete_blob.digest):
-            await self._write_complete_blob(conn, fetched.complete_blob)
-        for fetched in update.fetched:
-            await self._write_fetched_resource(conn, fetched.resource)
+        await write_fetched_resources(
+            conn, owner_id=self._owner_id, run_id=self._run_id, updates=update.fetched
+        )
         await _write_evidence_identities(
             conn,
             owner_id=self._owner_id,
@@ -1151,50 +1205,6 @@ class PGAgentSessionRepository:
             row is None
             or row["kind"] != "evidence"
             or row["locator_digest"] != write.locator_digest
-        ):
-            raise _EvidenceIdentityConflict()
-
-    async def _write_complete_blob(self, conn: Any, blob: CompleteBlobDescriptor) -> None:
-        try:
-            await write_complete_blob(
-                conn,
-                owner_id=self._owner_id,
-                digest=blob.digest,
-                total_bytes=blob.total_bytes,
-                chunks=blob.chunks,
-            )
-        except BlobSizeConflict as exc:
-            raise _EvidenceIdentityConflict() from exc
-
-    async def _write_fetched_resource(self, conn: Any, write: OpaqueFetchedResourceWrite) -> None:
-        await guard_payload(
-            conn.execute(
-                _INSERT_RESOURCE,
-                self._owner_id,
-                self._run_id,
-                write.resource_id,
-                "fetched_blob",
-                write.safe_name,
-                write.media_type,
-                json.dumps(write.capabilities, ensure_ascii=False),
-                write.ordinal,
-                write.blob_digest,
-                write.source_locator_digest,
-                write.source_locator,
-                write.session_id,
-                write.intent_id,
-                None,
-            ),
-            surface="Fetched Resource",
-        )
-        row = await conn.fetchrow(
-            _SELECT_RESOURCE_DIGESTS, self._owner_id, self._run_id, write.resource_id
-        )
-        if (
-            row is None
-            or row["kind"] != "fetched_blob"
-            or row["blob_digest"] != write.blob_digest
-            or row["locator_digest"] != write.source_locator_digest
         ):
             raise _EvidenceIdentityConflict()
 

@@ -63,6 +63,7 @@ from dlightrag.engine.answer.research.persistence import (
     RenewChild,
     ResearchRunStore,
 )
+from dlightrag.engine.answer.research.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
     FetchedResourceBytes,
@@ -427,46 +428,16 @@ def _build_effect_host_update(
             )
         )
     inventory = tool_effects.workspace_inventory
-
-    def blob_descriptor(content: bytes) -> CompleteBlobDescriptor:
-        plan = plan_blob(content)
-        return CompleteBlobDescriptor(
-            digest=plan.digest,
-            total_bytes=plan.total_bytes,
-            chunks=tuple(plan.chunk(content, index) for index in range(plan.chunk_count)),
-        )
-
     attached_updates: list[FetchedResourceSettlementUpdate] = []
     for attached in tool_effects.attached_resources:
-        digest = blob_digest(attached.content)
         fetched_digest = fetched_digests.get(attached.resource_id)
         if fetched_digest is not None:
-            if fetched_digest != digest:
+            if fetched_digest != blob_digest(attached.content):
                 raise ValueError("Web snapshot and tool attachment bytes disagree")
             continue
         attached_updates.append(
-            FetchedResourceSettlementUpdate(
-                resource=OpaqueFetchedResourceWrite(
-                    resource_id=attached.resource_id,
-                    ordinal=0,
-                    safe_name=attached.filename,
-                    media_type=attached.mime_type,
-                    capabilities={
-                        "resource_kind": attached.resource_kind,
-                        "visual_source": asdict(attached.source)
-                        if attached.source is not None
-                        else None,
-                        **(
-                            {"resource_aliases": list(attached.aliases)} if attached.aliases else {}
-                        ),
-                    },
-                    blob_digest=digest,
-                    source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
-                    source_locator=attached.source_locator.encode("utf-8"),
-                    session_id=session_id.value,
-                    intent_id=intent.intent_id.value,
-                ),
-                complete_blob=blob_descriptor(attached.content),
+            attached_resource_update(
+                attached, session_id=session_id.value, intent_id=intent.intent_id.value
             )
         )
     return EffectHostUpdate(
