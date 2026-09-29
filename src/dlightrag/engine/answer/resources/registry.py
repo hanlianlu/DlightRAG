@@ -229,6 +229,8 @@ class ResourceRegistry:
         self._text_views: dict[str, _ConvertedResource] = {}
         self._fallback_lock = asyncio.Lock()
         self._fallback_tasks: dict[str, asyncio.Future[_ConvertedResource]] = {}
+        # Adoptions of earlier Runs' Resources run one at a time; see ``adopt``.
+        self._adoption_lock = asyncio.Lock()
 
     async def __aenter__(self) -> ResourceRegistry:
         return self
@@ -324,14 +326,7 @@ class ResourceRegistry:
                 raise ResourceAdmissionError("resource requires content bytes")
             if len(content) > self._max_attachment_bytes:
                 raise ResourceAdmissionError("attachment exceeds per-attachment byte limit")
-            dedup_key = (
-                "bytes",
-                (resource.filename or "").encode()
-                + b"\0"
-                + (resource.declared_mime or "").encode()
-                + b"\0"
-                + hashlib.sha256(content).digest(),
-            )
+            dedup_key = _content_key(resource)
             source = "bytes"
             byte_size = len(content)
 
@@ -405,31 +400,96 @@ class ResourceRegistry:
         return resource_id
 
     def _bind_alias(self, alias: str, canonical: str) -> None:
-        """Point one earlier durable handle at this Run's canonical Resource.
+        """Point one earlier durable handle at this Run's canonical Resource."""
+        if self._alias_binds(alias, canonical):
+            self._aliases[alias] = canonical
+
+    def _alias_binds(self, alias: str, canonical: str) -> bool:
+        """Whether ``alias`` is a handle to bind to ``canonical``, checking it may be.
 
         Aliases only ever name bytes this Run already holds, so following one can
         never reach content the Run did not adopt; a collision is therefore a state
         mismatch rather than a silent rebind.
         """
         if not is_resource_handle(alias) or alias == canonical:
-            return
+            return False
         bound = self._aliases.get(alias)
         if bound is not None and self._canonical_resource_id(bound) != canonical:
             raise ResourceStateMismatchError("Resource alias collides with another Resource")
         if alias in self._resources:
             raise ResourceStateMismatchError("Resource alias collides with another Resource")
-        self._aliases[alias] = canonical
+        return True
 
-    def aliases_of(self, resource_id: str) -> tuple[str, ...]:
-        """Every earlier handle bound to this Resource's canonical handle, sorted."""
-        canonical = self._canonical_resource_id(resource_id)
-        return tuple(
-            sorted(
-                alias
-                for alias in self._aliases
-                if alias != canonical and self._canonical_resource_id(alias) == canonical
-            )
-        )
+    async def adopt(
+        self,
+        resource: ResourceInput,
+        *,
+        alias: str,
+        view: ConversionSnapshot | None,
+        record: Callable[[str, ConversionSnapshot | None], Awaitable[None]],
+        needs_text: bool = False,
+    ) -> str:
+        """Hold another Run's bytes under ``alias`` once ``record`` made them durable.
+
+        Adoptions run one at a time, so the canonical handle, whether ``view``
+        comes along, the durable record, and the binding see no other adoption in
+        between, and one Resource never gains two views. ``view`` becomes the view
+        of this Run's Resource, named by its handle, only for bytes that are new
+        here or were adopted without one: bytes this Run can convert itself keep
+        their own conversion. A caller that ``needs_text`` is refused before
+        anything is admitted when the Resource would read text only through a view
+        it does not have.
+
+        Nothing a later call can reach, the alias or the view, exists before
+        ``record`` returns. The bytes themselves are admitted first, because
+        lazily loaded uploads charge the same request total while the record is
+        written, and are withdrawn again when it does not complete.
+        """
+        async with self._adoption_lock:
+            if alias in self._aliases:
+                return self._canonical_resource_id(alias)
+            held = self._held_bytes(resource)
+            has_view = held is not None and held.resource_id in self._snapshots
+            converts_here = held is not None and not held.stored_view_only
+            takes_view = view is not None and not has_view and not converts_here
+            if (
+                needs_text
+                and not (takes_view or has_view or converts_here)
+                and is_convertible(resource.filename, resource.declared_mime)
+            ):
+                raise ResourceNotConvertedError(resource.filename or alias, resource.declared_mime)
+            canonical = self.register(resource, stored_view_only=True)
+            try:
+                binds = self._alias_binds(alias, canonical)
+                adopted = (
+                    replace(view, resource_id=canonical)
+                    if view is not None and takes_view
+                    else None
+                )
+                await record(canonical, adopted)
+            except BaseException:
+                if held is None:
+                    self._withdraw(canonical, resource)
+                raise
+            if binds:
+                self._aliases[alias] = canonical
+            if adopted is not None:
+                self.adopt_conversion_snapshot(adopted)
+            return canonical
+
+    def _held_bytes(self, resource: ResourceInput) -> _Registered | None:
+        """This Run's Resource that registering these caller bytes would return."""
+        key = _content_key(resource)
+        known = self._ids_by_dedup.get(key) or self._aliases.get(self._mint_resource_id(key))
+        return None if known is None else self._resources[self._canonical_resource_id(known)]
+
+    def _withdraw(self, resource_id: str, resource: ResourceInput) -> None:
+        """Undo the first admission of caller bytes whose adoption was not recorded."""
+        withdrawn = self._resources.pop(resource_id)
+        key = _content_key(resource)
+        self._ids_by_dedup.pop(key, None)
+        self._caller_dedup.discard(key)
+        self._total_bytes -= withdrawn.byte_size or 0
 
     def canonical_resource_id(self, resource_id: str) -> str:
         """Return the durable canonical handle for a known Resource alias."""
@@ -1662,6 +1722,18 @@ class ResourceRegistryClosedError(RuntimeError):
 
 class ResourceStateMismatchError(RuntimeError):
     """Raised when a settled catalog cannot describe the replayed request."""
+
+
+def _content_key(resource: ResourceInput) -> tuple[str, bytes]:
+    """The identity under which one Run admits caller bytes once."""
+    return (
+        "bytes",
+        (resource.filename or "").encode()
+        + b"\0"
+        + (resource.declared_mime or "").encode()
+        + b"\0"
+        + hashlib.sha256(resource.content or b"").digest(),
+    )
 
 
 def _is_textual_web_resource(resource: _Registered) -> bool:

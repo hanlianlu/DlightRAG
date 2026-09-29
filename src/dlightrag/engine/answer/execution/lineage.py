@@ -5,6 +5,9 @@ The authorization is the durable row's own Session stamp: a Resource another Run
 registered for this same Agent Session and whose bytes are still retained. A row
 belonging to another Session or owner is not visible to this loader at all, and
 nothing here reads message text or accepts a handle on trust.
+
+An adoption is recorded through the same loader, fenced by the consuming Run's
+lease, as that Run's own Resources.
 """
 
 from __future__ import annotations
@@ -14,15 +17,19 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol
 
+from dlightrag.engine.agent.tools import ResourceAttachmentBytes
+from dlightrag.engine.answer.research.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.lineage import (
     ASSET_KIND,
     SNAPSHOT_KIND,
     LineageResourceBytes,
 )
 from dlightrag.engine.runtime.records import RunFetchedResource
+from dlightrag.engine.runtime.settlements import FetchedResourceSettlementUpdate
 
 if TYPE_CHECKING:
     from dlightrag.engine.answer.execution.executor import RunBlobReader
+    from dlightrag.engine.answer.resources.registry import ResourceEffectOwner
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +52,25 @@ _ADOPTABLE_KINDS = frozenset(capability for capability, _kind in ADOPTABLE_LINEA
 
 
 class LineageResourceStore(Protocol):
-    """The one durable read lineage adoption needs, already Session-scoped."""
+    """The durable read lineage adoption needs, already Session-scoped, and its write."""
 
     async def lineage_resource_rows(
         self, *, owner_id: str, session_id: str, resource_id: str
     ) -> tuple[RunFetchedResource, ...]: ...
 
+    async def record_lineage_adoption(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        resources: tuple[FetchedResourceSettlementUpdate, ...],
+    ) -> None: ...
+
 
 class RetainedResourceLoader:
-    """Implements the tool seam's loader for one consuming Run."""
+    """Implements the tool seam's loader for one consuming Run and its claim."""
 
     def __init__(
         self,
@@ -62,11 +79,41 @@ class RetainedResourceLoader:
         blobs: RunBlobReader,
         owner_id: str,
         session_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
     ) -> None:
         self._store = store
         self._blobs = blobs
         self._owner_id = owner_id
         self._session_id = session_id
+        self._run_id = run_id
+        self._worker_id = worker_id
+        self._fencing_epoch = fencing_epoch
+
+    async def record(
+        self, resources: tuple[ResourceAttachmentBytes, ...], owner: ResourceEffectOwner
+    ) -> None:
+        """Write one adoption as this Run's own Resources, in one write under its lease.
+
+        The rows are the ones a settlement of the adopting call would write, so
+        recovery restores them like any other Resource of this Run and never reads
+        the lineage again. A lost lease raises ``LeaseLostError`` and writes nothing.
+        """
+        await self._store.record_lineage_adoption(
+            owner_id=self._owner_id,
+            run_id=self._run_id,
+            worker_id=self._worker_id,
+            fencing_epoch=self._fencing_epoch,
+            resources=tuple(
+                attached_resource_update(
+                    resource,
+                    session_id=owner.execution_scope,
+                    intent_id=owner.intent_id.value,
+                )
+                for resource in resources
+            ),
+        )
 
     async def load(self, resource_id: str) -> LineageResourceBytes | None:
         rows = await self._store.lineage_resource_rows(

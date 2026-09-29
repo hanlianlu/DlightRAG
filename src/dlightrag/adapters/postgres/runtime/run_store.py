@@ -100,7 +100,10 @@ from dlightrag.engine.runtime.records import (
     parse_run_id,
     require_prepared_input_bounds,
 )
-from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
+from dlightrag.engine.runtime.settlements import (
+    ArtifactAttachmentUpdate,
+    FetchedResourceSettlementUpdate,
+)
 
 RUN_MIGRATION_SCOPE = "runs"
 
@@ -3630,6 +3633,35 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             )
 
         return await self._run_write(operation)
+
+    async def record_lineage_adoption(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        resources: tuple[FetchedResourceSettlementUpdate, ...],
+    ) -> None:
+        """Record one adopted Resource as this Run's own rows, fenced by its lease."""
+        from dlightrag.adapters.postgres.answer.lineage_adoption import record_lineage_adoption
+
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            raise ValueError("invalid lineage adoption Run")
+
+        async def operation(conn: Any) -> None:
+            await record_lineage_adoption(
+                conn,
+                owner_id=owner,
+                run_id=run_uuid,
+                worker_id=worker_id,
+                fencing_epoch=fencing_epoch,
+                resources=resources,
+            )
+
+        await self._run_write(operation)
 
     async def list_artifact_attachments(
         self, *, owner_id: str, run_id: str

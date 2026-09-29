@@ -28,7 +28,6 @@ from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     UnsafeArchiveError,
     conversion_format,
-    is_convertible,
 )
 from dlightrag.engine.answer.resources.formatting import (
     format_resource_read,
@@ -38,7 +37,6 @@ from dlightrag.engine.answer.resources.lineage import (
     LineageResourceLoader,
     LineageSnapshotError,
     adopt_lineage_resource,
-    lineage_adoption_effects,
 )
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
@@ -104,37 +102,38 @@ async def _adopt_earlier_then_retry(
     lineage: LineageResourceLoader | None,
     registry: ResourceRegistry,
     refusal: str,
-    requires_stored_view: bool = False,
+    owner: ResourceEffectOwner,
+    needs_text: bool = False,
 ) -> ToolResult:
     """Give one earlier Run's handle the chance to become this Run's Resource.
 
     The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
-    refusal. Adoption effects ride the retried call's own settlement, which is what
-    pins the adopted bytes under this Run before the model sees the content.
+    refusal. The adoption is recorded under this Run's fence before the handle
+    resolves, so it holds whatever the retried call does next, and that call's own
+    result carries nothing on its behalf.
 
-    A read of a *convertible* resource requires the earlier Run's own view, because
-    converting it here would record a parse history that Run never had. A resource with
-    no conversion route — a published Markdown report, a fetched text page — is read by
-    decoding the adopted bytes, so demanding a view for it would refuse the very read
-    the handle teaches.
+    A read of a *convertible* resource requires a stored view, the earlier Run's or one
+    this Run already holds for the same bytes, because converting it here would record
+    a parse history that Run never had. A resource with no conversion route — a
+    published Markdown report, a fetched text page — is read by decoding the adopted
+    bytes, so demanding a view for it would refuse the very read the handle teaches.
     """
     if lineage is None or not resource_id:
         return ToolResult.text(refusal, is_error=True)
     loaded = await lineage.load(resource_id)
     if loaded is None:
         return ToolResult.text(refusal, is_error=True)
-    if (
-        requires_stored_view
-        and loaded.conversion_snapshot is None
-        and is_convertible(loaded.filename, loaded.media_type)
-    ):
-        return ToolResult.text(
-            _unconverted_refusal(loaded.filename, loaded.media_type), is_error=True
-        )
     try:
-        adopted = adopt_lineage_resource(registry, loaded)
+        adopted = await adopt_lineage_resource(
+            registry,
+            loaded,
+            record=partial(lineage.record, owner=owner),
+            needs_text=needs_text,
+        )
     except LineageSnapshotError as exc:
         return ToolResult.text(f"{exc}; the document was not converted again.", is_error=True)
+    except ResourceNotConvertedError as exc:
+        return ToolResult.text(_unconverted_refusal(exc.filename, exc.media_type), is_error=True)
     except ResourceAdmissionError as exc:
         # Adoption spends this Run's own attachment allowance, so a spent allowance
         # refuses the earlier document the way it refuses one more attachment.
@@ -144,54 +143,28 @@ async def _adopt_earlier_then_retry(
     logger.info(
         "Adopted an earlier Run Resource",
         extra={
-            "resource_id": adopted.resource_id,
+            "resource_id": adopted,
             "origin_resource_id": loaded.resource_id,
             "origin_run_id": loaded.origin_run_id,
             "filename": loaded.filename,
             "source_url": loaded.source_url,
-            "reused_conversion_view": registry.has_conversion_snapshot(adopted.resource_id),
+            "reused_conversion_view": registry.has_conversion_snapshot(adopted),
         },
     )
-    effects = lineage_adoption_effects(loaded, adopted)
-    # The adoption is bound in this Run's registry whatever the retried call does
-    # next, so its effects settle with a refusal too: a later call through the
-    # alias could otherwise settle a view whose parent no durable row names, and
-    # the Run would fail to resume.
     try:
-        result = await retry()
+        return await retry()
     except ResourceNotFoundError as exc:
         # The handle is held now, so what the retried call did not find is inside
         # it, such as an embedded-image handle.
-        result = ToolResult.text(
+        return ToolResult.text(
             f"{exc}. Read the resource again for the handles it holds.", is_error=True
         )
     except ResourceNotConvertedError as exc:
-        result = ToolResult.text(_unconverted_refusal(exc.filename, exc.media_type), is_error=True)
+        return ToolResult.text(_unconverted_refusal(exc.filename, exc.media_type), is_error=True)
     except ResourceCursorError as exc:
-        result = ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
+        return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
     except ResourceRegistryError as exc:
-        result = ToolResult.text(str(exc), is_error=True)
-    return replace(
-        result,
-        effects=replace(
-            result.effects,
-            attached_resources=_settled_once(result.effects.attached_resources, effects),
-        ),
-    )
-
-
-def _settled_once(
-    first: tuple[ResourceAttachmentBytes, ...], then: tuple[ResourceAttachmentBytes, ...]
-) -> tuple[ResourceAttachmentBytes, ...]:
-    """Keep one settlement entry per Resource, preferring the tool's own.
-
-    A view of an adopted document names the same stored snapshot the adoption
-    pinned, and settling it twice would write the same bytes twice for no gain.
-    """
-    seen = {effect.resource_id: effect for effect in then}
-    for effect in first:
-        seen[effect.resource_id] = effect
-    return tuple(seen.values())
+        return ToolResult.text(str(exc), is_error=True)
 
 
 def make_resource_reader(
@@ -249,7 +222,8 @@ def make_resource_reader(
                 lineage=lineage,
                 registry=registry,
                 refusal=_run_scoped_handle_refusal(exc),
-                requires_stored_view=True,
+                owner=_effect_owner(runtime),
+                needs_text=True,
             )
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)
@@ -411,6 +385,7 @@ def make_resource_viewer(
                 lineage=lineage,
                 registry=registry,
                 refusal=_run_scoped_handle_refusal(exc),
+                owner=_effect_owner(runtime),
             )
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)

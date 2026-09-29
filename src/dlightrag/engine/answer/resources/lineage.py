@@ -4,9 +4,11 @@
 A later Run on the same Agent Session may re-materialize what it can still see.
 The model asks with a handle it read in its own context, the host loads the
 earlier Run's retained bytes, and this module turns them into a Resource of the
-consuming Run: a fresh handle, the earlier handle as an alias, the stored
-conversion snapshot adopted as-is, and settlement effects that pin the adopted
-bytes under the consuming Run's fence.
+consuming Run: a fresh handle, the earlier handle as an alias, and the stored
+conversion view adopted as that Resource's view. The loader records all of it
+as the consuming Run's own Resources, under its fence, before any of it can be
+reached, so an adoption is durable or absent whatever the call that asked for it
+does next.
 
 Nothing here reads message text or grants authority. The loader decides what the
 lineage rule admits, and a loader that returns nothing leaves the tool's ordinary
@@ -16,13 +18,13 @@ refusal in place.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
 from dlightrag.engine.answer.resources.models import ResourceInput
-from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 
 LINEAGE_ADOPTION_KIND = "lineage_adoption"
@@ -58,9 +60,17 @@ class LineageResourceBytes:
 
 
 class LineageResourceLoader(Protocol):
-    """Read one earlier Run's Resource through this Run's lineage authorization."""
+    """This Run's lineage authorization: one earlier Run's Resource, read and adopted.
+
+    ``record`` makes an adoption durable as this Run's own Resources, fenced by
+    this Run's lease, and raises when it could not.
+    """
 
     async def load(self, resource_id: str) -> LineageResourceBytes | None: ...
+
+    async def record(
+        self, resources: tuple[ResourceAttachmentBytes, ...], owner: ResourceEffectOwner
+    ) -> None: ...
 
 
 class LineageSnapshotError(RuntimeError):
@@ -71,22 +81,13 @@ class LineageSnapshotError(RuntimeError):
     """
 
 
-@dataclass(frozen=True, slots=True)
-class AdoptedLineageResource:
-    """This Run's canonical handle for adopted bytes, and the view adopted with them.
-
-    ``aliases`` is every earlier handle bound to that canonical handle so far: two
-    earlier Runs may have registered identical bytes under different handles.
-    """
-
-    resource_id: str
-    snapshot: ConversionSnapshot | None = None
-    aliases: tuple[str, ...] = ()
-
-
-def adopt_lineage_resource(
-    registry: ResourceRegistry, loaded: LineageResourceBytes
-) -> AdoptedLineageResource:
+async def adopt_lineage_resource(
+    registry: ResourceRegistry,
+    loaded: LineageResourceBytes,
+    *,
+    record: Callable[[tuple[ResourceAttachmentBytes, ...]], Awaitable[None]],
+    needs_text: bool = False,
+) -> str:
     """Register the earlier bytes as this Run's Resource under the earlier handle.
 
     The returned id is this Run's canonical handle, and the handle the model used
@@ -97,25 +98,43 @@ def adopt_lineage_resource(
     bytes afresh; checking first means asking again refuses again. The bytes are
     registered as stored-view-only for the same reason: a ``view`` may adopt a
     document the earlier Run never converted, and a later ``read`` of it must
-    refuse rather than build the view that Run never had. Bytes this Run already
-    reads through a view of its own keep that view: adopting a second one would
-    give one Resource two histories, and keeping it converts nothing.
+    refuse rather than build the view that Run never had.
+
+    The adoption row and the view it brings are recorded in one write before the
+    registry binds the earlier handle. The view is the earlier Run's, verbatim,
+    recorded as the view of this Run's Resource under this Run's handle, so a
+    recovery restores it like any view this Run made, and a later turn can adopt
+    this Run's Resource by the handle this Run printed.
     """
     snapshot = _restore_snapshot(loaded)
-    adopted = registry.register(
+
+    async def durable(canonical: str, view: ConversionSnapshot | None) -> None:
+        await record(
+            (
+                ResourceAttachmentBytes(
+                    resource_id=canonical,
+                    filename=loaded.filename,
+                    mime_type=loaded.media_type,
+                    source_locator=canonical,
+                    content=loaded.content,
+                    resource_kind=LINEAGE_ADOPTION_KIND,
+                    aliases=(loaded.resource_id,),
+                ),
+                *(view.effects() if view is not None else ()),
+            )
+        )
+
+    return await registry.adopt(
         ResourceInput(
             filename=loaded.filename,
             declared_mime=loaded.media_type,
             content=loaded.content,
         ),
-        aliases=(loaded.resource_id,),
-        stored_view_only=True,
+        alias=loaded.resource_id,
+        view=snapshot,
+        record=durable,
+        needs_text=needs_text,
     )
-    aliases = registry.aliases_of(adopted)
-    if snapshot is None or registry.has_conversion_snapshot(adopted):
-        return AdoptedLineageResource(adopted, aliases=aliases)
-    registry.adopt_conversion_snapshot(snapshot)
-    return AdoptedLineageResource(adopted, snapshot, aliases)
 
 
 def _restore_snapshot(loaded: LineageResourceBytes) -> ConversionSnapshot | None:
@@ -135,71 +154,12 @@ def _restore_snapshot(loaded: LineageResourceBytes) -> ConversionSnapshot | None
     return snapshot
 
 
-def lineage_adoption_effects(
-    loaded: LineageResourceBytes, adopted: AdoptedLineageResource
-) -> tuple[ResourceAttachmentBytes, ...]:
-    """Pin the adopted bytes, snapshot, and assets under the consuming Run.
-
-    Settlement writes these as this Run's own Resources, so origin-Run cleanup can
-    never invalidate what this Run adopted, and recovery re-materializes them
-    through the same restore path a same-Run fetch already uses. The adopted view
-    names its own assets, so nothing here re-reads the stored JSON.
-
-    The adoption row is located by this Run's canonical handle, not the earlier
-    one: a second earlier handle for identical bytes settles the same row again,
-    and settlement merges the aliases instead of refusing a second locator. Each
-    settlement carries every alias bound so far, so a view settled under one
-    earlier handle stays resolvable after a resume even when that handle's own
-    adoption never settled.
-    """
-    effects = [
-        ResourceAttachmentBytes(
-            resource_id=adopted.resource_id,
-            filename=loaded.filename,
-            mime_type=loaded.media_type,
-            source_locator=adopted.resource_id,
-            content=loaded.content,
-            resource_kind=LINEAGE_ADOPTION_KIND,
-            aliases=adopted.aliases or (loaded.resource_id,),
-        )
-    ]
-    if adopted.snapshot is None or loaded.conversion_snapshot is None:
-        return tuple(effects)
-    # The stored view keeps the identity the earlier Run recorded for it: recovery
-    # matches a snapshot to its parent by that identity, and this Run reaches the
-    # parent through the alias instead of renaming what the earlier Run wrote.
-    effects.append(
-        ResourceAttachmentBytes(
-            resource_id=f"{loaded.resource_id}-conversion",
-            filename="conversion.json",
-            mime_type="application/json",
-            source_locator=loaded.resource_id,
-            content=loaded.conversion_snapshot,
-            resource_kind=SNAPSHOT_KIND,
-        )
-    )
-    effects.extend(
-        ResourceAttachmentBytes(
-            resource_id=visual.handle_id,
-            filename=visual.handle_id,
-            mime_type=visual.media_type,
-            source_locator=loaded.resource_id,
-            content=visual.data,
-            resource_kind=ASSET_KIND,
-        )
-        for visual in adopted.snapshot.visuals
-    )
-    return tuple(effects)
-
-
 __all__ = [
     "ASSET_KIND",
-    "AdoptedLineageResource",
     "LINEAGE_ADOPTION_KIND",
     "SNAPSHOT_KIND",
     "LineageResourceBytes",
     "LineageResourceLoader",
     "LineageSnapshotError",
     "adopt_lineage_resource",
-    "lineage_adoption_effects",
 ]

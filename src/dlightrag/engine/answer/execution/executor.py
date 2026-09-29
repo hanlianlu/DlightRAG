@@ -122,7 +122,7 @@ from dlightrag.engine.answer.execution.input import (
     pinned_model_selectors,
     validate_active_answer_input,
 )
-from dlightrag.engine.answer.execution.lineage import RetainedResourceLoader
+from dlightrag.engine.answer.execution.lineage import LineageResourceStore, RetainedResourceLoader
 from dlightrag.engine.answer.execution.resources import AnswerResourceResolver
 from dlightrag.engine.answer.fast import (
     FastRunBoundaries,
@@ -169,12 +169,8 @@ from dlightrag.engine.answer.research.runtime import (
     _usage_from_snapshot_entries,
 )
 from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
-from dlightrag.engine.answer.resources.lineage import (
-    LineageResourceLoader,
-    adopt_lineage_resource,
-)
+from dlightrag.engine.answer.resources.lineage import LineageResourceLoader
 from dlightrag.engine.answer.resources.models import (
-    ResourceNotFoundError,
     ResourceRegistryError,
     TextWindowBudget,
 )
@@ -310,16 +306,10 @@ class ArtifactReader(Protocol):
     ) -> tuple[RunFetchedResource, ...]: ...
 
 
-class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, ResearchRunStore, Protocol):
+class AnswerExecutionStore(
+    ArtifactReader, AnswerRoutingStore, ResearchRunStore, LineageResourceStore, Protocol
+):
     """Answer execution persistence, including required Research child operations."""
-
-    async def lineage_resource_rows(
-        self,
-        *,
-        owner_id: str,
-        session_id: str,
-        resource_id: str,
-    ) -> tuple[RunFetchedResource, ...]: ...
 
     async def load_child_attachment_occurrences(
         self,
@@ -1270,7 +1260,6 @@ class AnswerExecutor:
                 ),
             )
 
-        lineage = self._lineage_loader(session, agent_session_id)
         run = await self.prepare_orchestrated_run(
             query=request.query,
             agent_effort=request.effort,
@@ -1287,7 +1276,7 @@ class AnswerExecutor:
             model_profiles=model_profiles,
             pinned_models=request.pinned_models,
             connection_tools=connection_tools,
-            lineage_loader=lineage,
+            lineage_loader=self._lineage_loader(session, agent_session_id),
             skills=(
                 self._skills_bundle_factory(session.owner_id, request.requested_skill)
                 if self._skills_bundle_factory is not None
@@ -1300,7 +1289,6 @@ class AnswerExecutor:
                 run.registry,
                 owner_id=session.owner_id,
                 run_id=str(session.run_id),
-                lineage=lineage,
             )
         retained_snapshots = await self._restore_selected_attachments(session, selected_snapshot)
         for resource_id, content in retained_snapshots.items():
@@ -2359,7 +2347,6 @@ class AnswerExecutor:
         *,
         owner_id: str,
         run_id: str,
-        lineage: LineageResourceLoader | None = None,
     ) -> dict[str, bytes]:
         attachment_snapshots: dict[str, bytes] = {}
         conversions: list[tuple[str, bytes]] = []
@@ -2440,10 +2427,7 @@ class AnswerExecutor:
                 raise ValueError("conversion snapshot parent mismatch")
             # Recovery must verify durable source bytes, including lazy inputs.
             # Registry adoption separately guards any already-materialized source.
-            try:
-                original = await registry.materialize(parent_id)
-            except ResourceNotFoundError:
-                original = await _readopt_view_parent(registry, lineage, parent_id, snapshot)
+            original = await registry.materialize(parent_id)
             if hashlib.sha256(original).hexdigest() != snapshot.input_digest:
                 raise ValueError("conversion snapshot input digest mismatch")
             registry.adopt_conversion_snapshot(snapshot)
@@ -2455,7 +2439,8 @@ class AnswerExecutor:
         """Adopt an earlier Run's Resources when this deployment allows it.
 
         The loader carries this Run's owner and Agent Session, so a row from another
-        Session or owner cannot be reached through it even by a forged handle.
+        Session or owner cannot be reached through it even by a forged handle, and
+        this Run's claim, so an adoption is recorded only while this worker holds it.
         """
         if not self._settings.lineage_adoption:
             return None
@@ -2464,6 +2449,9 @@ class AnswerExecutor:
             blobs=self._blob_store,
             owner_id=session.owner_id,
             session_id=agent_session_id.value,
+            run_id=str(session.run_id),
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
         )
 
     async def _answer_run_resources(
@@ -2804,28 +2792,6 @@ async def _close_execution_resources(
             logger.warning("Failed to close Answer resource registry", exc_info=True)
     if cancellation is not None:
         raise cancellation
-
-
-async def _readopt_view_parent(
-    registry: ResourceRegistry,
-    lineage: LineageResourceLoader | None,
-    parent_id: str,
-    snapshot: ConversionSnapshot,
-) -> bytes:
-    """Adopt again the earlier Resource an unsettled adoption left a stored view for.
-
-    An adoption whose call was cancelled, or whose result the Session could not
-    record, settles no adoption row, while a later call through its alias may have
-    settled the view. Recovery adopts the same earlier Resource again through this
-    Run's lineage rule, which mints the same canonical handle and binds the alias,
-    so the view attaches to it as before. A parent the lineage cannot supply with
-    the view's own input bytes is a real inconsistency and fails as it always has.
-    """
-    loaded = await lineage.load(parent_id) if lineage is not None else None
-    if loaded is None or hashlib.sha256(loaded.content).hexdigest() != snapshot.input_digest:
-        raise ResourceNotFoundError(f"unknown resource id: {parent_id}")
-    adopt_lineage_resource(registry, loaded)
-    return loaded.content
 
 
 def _require_resolved_mode(value: str | None) -> ResolvedMode:

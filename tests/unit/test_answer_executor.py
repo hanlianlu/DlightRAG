@@ -1195,9 +1195,10 @@ async def test_public_document_citations_are_projected_into_the_published_artifa
 async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> None:
     """An adopted Resource must survive a resume.
 
-    A Run that adopted an earlier Run's document pins it as its own fetch, so
-    recovery has to rebuild that Resource (and its earlier handle as alias) rather
-    than treat the row as a Web catalog entry it never was.
+    A Run that adopted an earlier Run's document records it as its own Resource,
+    with the view it brought named by its own handle, so recovery has to rebuild
+    that Resource (and its earlier handle as alias) rather than treat the row as a
+    Web catalog entry it never was.
     """
     import hashlib
 
@@ -1207,7 +1208,7 @@ async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> N
 
     document = b"%PDF-1.7 adopted earlier"
     snapshot = ConversionSnapshot(
-        resource_id="res-earlier",
+        resource_id="res-adopted",
         input_digest=hashlib.sha256(document).hexdigest(),
         text="Adopted text.",
         visuals=(),
@@ -1228,16 +1229,16 @@ async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> N
             digest=hashlib.sha256(document).hexdigest(),
             filename="earlier.pdf",
             mime_type="application/pdf",
-            source_locator=b"res-earlier",
+            source_locator=b"res-adopted",
             capabilities={"resource_kind": "lineage_adoption", "resource_aliases": ["res-earlier"]},
         ),
         RunFetchedResource(
-            resource_id="res-earlier-conversion",
+            resource_id="res-adopted-conversion",
             ordinal=0,
             digest=hashlib.sha256(encoded).hexdigest(),
             filename="conversion.json",
             mime_type="application/json",
-            source_locator=b"res-earlier",
+            source_locator=b"res-adopted",
             capabilities={"resource_kind": "conversion_snapshot"},
         ),
     )
@@ -1289,7 +1290,7 @@ async def test_recovery_keeps_an_adoption_without_its_view_unconverted(monkeypat
                 digest=digest,
                 filename="earlier.pdf",
                 mime_type="application/pdf",
-                source_locator=b"res-earlier",
+                source_locator=b"res-adopted",
                 capabilities={
                     "resource_kind": "lineage_adoption",
                     "resource_aliases": ["res-earlier"],

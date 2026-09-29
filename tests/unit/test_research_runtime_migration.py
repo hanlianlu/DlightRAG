@@ -1153,47 +1153,36 @@ def test_provider_failure_detail_names_the_http_status_without_provider_text() -
 
 @pytest.mark.asyncio
 async def test_attached_resources_pin_their_earlier_handles_for_recovery() -> None:
-    """An adopted Resource records the earlier handle at settlement.
+    """An adopted Resource's row records the earlier handle.
 
     The alias is what makes the model's printed handle resolvable after a resume, so
-    it has to reach the durable row, not just the in-memory registry.
+    it has to reach the durable row, not just the in-memory registry. Adoption and
+    settlement describe a Resource through this one translation.
     """
+    import hashlib
+
     from dlightrag.engine.agent.tools import ResourceAttachmentBytes
-    from dlightrag.engine.answer.research.runtime import _build_effect_host_update
+    from dlightrag.engine.answer.research.resource_settlement import attached_resource_update
 
-    intent = EffectIntent(
-        intent_id=IntentId.new(),
-        tool_name="read",
-        replay_policy="never",
-        contract_version=1,
-        input_schema_digest="a" * 64,
-        canonical_input="{}",
-        source_call_id="call-1",
-    )
-    update = _build_effect_host_update(
-        session_id=SessionId.new(),
-        intent=intent,
-        ledger_state=lambda: "{}",
-        fetched_buffer=FetchedResourceBuffer(),
-        execution_scope="scope",
-        tool_effects=ToolEffects(
-            attached_resources=(
-                ResourceAttachmentBytes(
-                    resource_id="res-adopted",
-                    filename="earlier.pdf",
-                    mime_type="application/pdf",
-                    source_locator="res-earlier",
-                    content=b"%PDF-1.7 adopted",
-                    resource_kind="lineage_adoption",
-                    aliases=("res-earlier",),
-                ),
-            )
+    content = b"%PDF-1.7 adopted"
+    fetched = attached_resource_update(
+        ResourceAttachmentBytes(
+            resource_id="res-adopted",
+            filename="earlier.pdf",
+            mime_type="application/pdf",
+            source_locator="res-adopted",
+            content=content,
+            resource_kind="lineage_adoption",
+            aliases=("res-earlier",),
         ),
+        session_id=SessionId.new().value,
+        intent_id=IntentId.new().value,
     )
 
-    (fetched,) = update.fetched
     assert fetched.resource.capabilities["resource_aliases"] == ["res-earlier"]
     assert fetched.resource.capabilities["resource_kind"] == "lineage_adoption"
+    assert fetched.resource.blob_digest == hashlib.sha256(content).hexdigest()
+    assert fetched.complete_blob.digest == fetched.resource.blob_digest
 
 
 @pytest.mark.asyncio
