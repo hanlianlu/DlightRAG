@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 from collections.abc import Iterator, Mapping
+from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -2415,6 +2416,73 @@ async def test_failed_old_to_new_replacement_restores_only_old_failed_identity(
     assert set(metadata) == {old_id}
     assert metadata[old_id]["_dlightrag_finalization_complete"] is False
     assert deps["lightrag"].adelete_by_doc_id.await_count == 2
+
+
+class _DeletionStatus(Enum):
+    """A status reported as an enum member, whose str() is its name, not its value."""
+
+    SUCCESS = "success"
+
+
+@pytest.mark.parametrize("reported", [" success ", _DeletionStatus.SUCCESS], ids=["padded", "enum"])
+async def test_failed_replacement_rollback_reads_a_padded_or_enum_deletion_as_success(
+    tmp_path: Path, reported: object
+) -> None:
+    """The rollback's own deletion check goes through the status normalizer.
+
+    The candidate's row stays visible here, so the reported status alone decides. Read
+    raw, it looked like a failed deletion: the rollback kept the failed candidate as
+    the retry identity and retired the old one, leaving a finished rollback to repair.
+    """
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    statuses = {old_id: {"status": "processed", "chunks_list": ["old"]}}
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"filename": "old.pdf", "download_locator": locator, "source_uri": source_uri}
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        if current == old_id:
+            statuses.pop(current, None)
+            return SimpleNamespace(status="success")
+        return SimpleNamespace(status=reported)
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "failed", "chunks_list": [], "error_msg": "parse"}
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 0
+    assert new_id in statuses
+    # A successful deletion retires the candidate and keeps the old identity for retry.
+    assert set(metadata) == {old_id}
+    assert metadata[old_id]["_dlightrag_finalization_complete"] is False
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("enqueue failed"), asyncio.CancelledError()])
