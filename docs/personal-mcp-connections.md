@@ -423,13 +423,14 @@ unexpired flows; beyond these, the request fails with 429.
 
 An authorization carries the owner revision read when it began, and completing
 it is a CAS on that revision. Every published background refresh of any of the
-owner's Connections changes the revision, and refresh claims do not wait for a
-pending authorization. A refresh that publishes during the authorization window,
-which can last up to `oauth_timeout`, therefore fails the authorization with
-"Connections revision changed", and the user has to start again. The more
-enabled Connections an owner has, the likelier this is: each refreshes
-`refresh_seconds` after a success, and while it keeps failing, after a backoff
-that starts at about two seconds.
+owner's Connections changes the revision, as does any Settings command on
+another of them, and refresh claims do not wait for a pending authorization.
+Any such change published during the authorization window, which can last up
+to `oauth_timeout`, therefore fails the authorization's final CAS; Settings
+shows it as an authorization that failed or expired, and the user has to start
+again. The more enabled Connections an owner has, the likelier this is: each
+refreshes `refresh_seconds` after a success, and while it keeps failing, after
+a backoff that starts at about two seconds.
 
 ### Client registration
 
@@ -475,10 +476,12 @@ refresh finds it expired:
   beyond the consented scopes, or any other failure of the token request,
   including its own connect or idle timeout, an admission refusal, a network
   error, or a server error, becomes an authentication failure (`needs-auth`).
-  Only a refresh preflight that exceeds `discovery_timeout` as a whole, or a
-  gate refusal, is recorded as `degraded` instead. With the default
-  `idle_timeout` below `discovery_timeout`, a hung token endpoint therefore
-  records `needs-auth`. Refresh never enters discovery, registration, or
+  Apart from the call's own `call_timeout`, a Run cancellation or lease loss,
+  and a leased envelope that cannot be read, only a refresh preflight that
+  exceeds `discovery_timeout` as a whole, or a gate refusal, is recorded as
+  `degraded` instead. With the default `idle_timeout` below `discovery_timeout`,
+  a hung token endpoint therefore records `needs-auth` unless the call already
+  spent most of its `call_timeout` waiting for a slot. Refresh never enters discovery, registration, or
   consent.
 - Saving the new token is a CAS on Grant id, active status, lease owner, live
   lease, refresh epoch, and expected secret version; losing the CAS discards the

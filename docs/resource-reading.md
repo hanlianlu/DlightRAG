@@ -235,14 +235,21 @@ completeness, or untested platforms.
   SHA-256) settle one Resource with merged aliases.
 - The adoption settles even when the retried `read` or `view` then fails, for
   example on a stale cursor, a document with no viewable target, or a refused
-  view: the failure returns as a typed refusal that carries the adoption.
+  view: the failure returns as a typed refusal that carries the adoption. Once
+  adopted the handle is held, so an embedded-image handle the call cannot find
+  is named as the missing one.
+- An adoption whose call was cancelled, or whose result the Session could not
+  record, leaves no adoption row. Recovery then skips any view later settled
+  under that earlier handle, with a warning, instead of failing the Run; naming
+  the handle again adopts it again under the same canonical handle.
 - Newly adopted bytes are registered stored-view-only, and this Run never
   converts them. A convertible document (PDF, DOCX, XLSX, PPTX, CSV, or HTML)
   reads text only through the view adopted or restored with it; other formats,
   such as a Markdown Published Artifact or a fetched text page, are decoded from
   the adopted bytes. `read` of a convertible document whose earlier Run never
   extracted text refuses, and names the remedy: re-read it from its URL or a
-  fresh attachment, or, for a PDF only, view its pages as pixels. `view` can
+  fresh attachment, or, for a PDF only (by file name or declared type), view its
+  pages as pixels. `view` can
   still adopt such a document for pixels that need no conversion, such as PDF
   pages, but a later `read` through the earlier handle or this Run's handle
   refuses the same way, and recovery keeps it so.
