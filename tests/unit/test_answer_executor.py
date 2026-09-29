@@ -1925,7 +1925,7 @@ async def _drive_fast_execute(
                 path = parent.workspace / record.relative_path
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"the error was ECONNRESET on shard 4")
-            await parent_store.replace_inventory(parent_inventory)
+            parent_store.inventory = list(parent_inventory)
 
     async def load_parent_inventory(_owner: str, run_id: str) -> tuple[Any, ...]:
         if parent_run_id is None:

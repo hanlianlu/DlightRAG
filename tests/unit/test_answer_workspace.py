@@ -91,7 +91,7 @@ async def _seed_spills(
         content = f"content for {resource_id}".encode()
         contents[resource_id] = content
         (spill_dir / f"{resource_id}.txt").write_bytes(content)
-        await store.register_spill(_spill(resource_id, content))
+        store.spills.append(_spill(resource_id, content))
     return contents
 
 

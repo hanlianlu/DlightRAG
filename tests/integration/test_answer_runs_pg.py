@@ -24,7 +24,11 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
+from dlightrag.adapters.postgres.answer.workspace import (
+    PGWorkspaceStore,
+    write_committed_spill,
+    write_inventory,
+)
 from dlightrag.adapters.postgres.core._migrations import apply_migrations
 from dlightrag.adapters.postgres.runtime.run_blob_store import (
     BlobSizeConflict,
@@ -1194,14 +1198,15 @@ class TestClaiming:
         assert record is not None
         assert record.agent_workspace_epoch == claim.run.fencing_epoch
 
-    async def test_handoff_and_replace_write_the_whole_inventory(self, store, pool) -> None:
-        """A handoff carries the copied inventory; a replace makes a new one exactly."""
+    async def test_handoff_and_rescan_write_the_whole_inventory(self, store, pool) -> None:
+        """A handoff carries the copied inventory; a settlement's rescan replaces it exactly."""
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
+        run_id = uuid.UUID(creation.run.run_id)
         workspace = PGWorkspaceStore(
             pool=pool,
             owner_id=_OWNER,
-            run_id=uuid.UUID(creation.run.run_id),
+            run_id=run_id,
             worker_id=_WORKER,
             lease_owner=_WORKER,
             fencing_epoch=claim.run.fencing_epoch,
@@ -1233,7 +1238,8 @@ class TestClaiming:
         ]
 
         replaced = (record("notes/a.md", 10, "b" * 64), record("d.md", 4))
-        assert await workspace.replace_inventory(replaced) == "committed"
+        async with pool.acquire() as conn, conn.transaction():
+            await write_inventory(conn, _OWNER, run_id, upserts=replaced, replace_all=True)
         assert observed(await workspace.load_inventory()) == [
             ("d.md", 4, None),
             ("notes/a.md", 10, "b" * 64),
@@ -1248,27 +1254,29 @@ class TestClaiming:
         """
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
+        run_id = uuid.UUID(creation.run.run_id)
         workspace = PGWorkspaceStore(
             pool=pool,
             owner_id=_OWNER,
-            run_id=uuid.UUID(creation.run.run_id),
+            run_id=run_id,
             worker_id=_WORKER,
             lease_owner=_WORKER,
             fencing_epoch=claim.run.fencing_epoch,
         )
-        for resource_id, ordinal in (("spill_z", 1), ("spill_m", 3), ("spill_a", 2)):
-            assert (
-                await workspace.register_spill(
+        async with pool.acquire() as conn, conn.transaction():
+            for resource_id, ordinal in (("spill_z", 1), ("spill_m", 3), ("spill_a", 2)):
+                await write_committed_spill(
+                    conn,
+                    _OWNER,
+                    run_id,
                     CommittedSpillRecord(
                         resource_id=resource_id,
                         content_digest="b" * 64,
                         size_bytes=8,
                         session_id="01930000-0000-7000-8000-0000000000ff",
                         intent_id=f"01930000-0000-7000-8000-00000000000{ordinal}",
-                    )
+                    ),
                 )
-                == "committed"
-            )
 
         newest = await workspace.load_recent_spills(limit=2)
 

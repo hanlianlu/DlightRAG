@@ -263,16 +263,14 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     )
     # The settlement's job: the tool reports the observation, the store keeps it.
     assert written.effects.workspace_inventory is not None
-    await store.replace_inventory(
-        (
-            InventoryPathRecord(
-                relative_path="notes/findings.md",
-                entry_type="file",
-                size_bytes=len(content.encode("utf-8")),
-                content_digest=digest,
-            ),
+    store.inventory = [
+        InventoryPathRecord(
+            relative_path="notes/findings.md",
+            entry_type="file",
+            size_bytes=len(content.encode("utf-8")),
+            content_digest=digest,
         )
-    )
+    ]
     registered = await store.load_inventory()
     assert registered  # the tool's own registration is what the settlement keeps
 
@@ -541,7 +539,7 @@ async def test_compaction_handles_put_the_runs_spills_before_its_evidence(tmp_pa
     """
     orchestrator = _orchestrator(mode="research")
     store = _RecordingWorkspaceStore()
-    await store.register_spill(_spill_record("spill_read_ab12"))
+    store.spills = [_spill_record("spill_read_ab12")]
     orchestrator.bind_workspace(
         RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
@@ -569,14 +567,12 @@ async def test_session_note_names_come_from_the_runs_working_copy(tmp_path: Path
     """
     orchestrator = _orchestrator(mode="research")
     store = _RecordingWorkspaceStore()
-    await store.replace_inventory(
-        (
-            _inventory_record("artifacts/report.md"),
-            _inventory_record("notes/plan.md", size_bytes=1_240, digest=None),
-            _inventory_record("notes/decisions.md", size_bytes=310),
-            _inventory_record("readme.md"),
-        )
-    )
+    store.inventory = [
+        _inventory_record("artifacts/report.md"),
+        _inventory_record("notes/plan.md", size_bytes=1_240, digest=None),
+        _inventory_record("notes/decisions.md", size_bytes=310),
+        _inventory_record("readme.md"),
+    ]
     orchestrator.bind_workspace(
         RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,
@@ -613,8 +609,8 @@ async def test_compaction_carries_the_spill_handles_into_the_projection(tmp_path
     """
     orchestrator = _orchestrator(mode="research")
     store = _RecordingWorkspaceStore()
-    await store.register_spill(_spill_record("spill_grep_7f21"))
-    await store.replace_inventory((_inventory_record("notes/plan.md", size_bytes=1_240),))
+    store.spills = [_spill_record("spill_grep_7f21")]
+    store.inventory = [_inventory_record("notes/plan.md", size_bytes=1_240)]
     orchestrator.bind_workspace(
         RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock()),
         store,

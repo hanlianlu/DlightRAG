@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""WorkspaceStore: epoch CAS, inventory replace, no progress increment."""
+"""WorkspaceStore: epoch CAS without progress, spill reads, the PostgreSQL inventory write."""
 
 import pytest
 
@@ -66,22 +66,6 @@ async def test_handoff_does_not_increment_progress() -> None:
     assert loaded[0].relative_path == "notes/a.md"
 
 
-@pytest.mark.asyncio
-async def test_inventory_replace_is_all_or_nothing() -> None:
-    store = InMemoryWorkspaceStore()
-    await store.replace_inventory(
-        (
-            InventoryPathRecord(relative_path="a", entry_type="file", size_bytes=1),
-            InventoryPathRecord(relative_path="b", entry_type="file", size_bytes=1),
-        )
-    )
-    await store.replace_inventory(
-        (InventoryPathRecord(relative_path="c", entry_type="file", size_bytes=2),)
-    )
-    paths = [item.relative_path for item in await store.load_inventory()]
-    assert paths == ["c"]
-
-
 def _spill(resource_id: str, *, intent_id: str = "i") -> CommittedSpillRecord:
     return CommittedSpillRecord(
         resource_id=resource_id,
@@ -95,8 +79,7 @@ def _spill(resource_id: str, *, intent_id: str = "i") -> CommittedSpillRecord:
 @pytest.mark.asyncio
 async def test_spill_pages_are_ordered_and_use_an_exclusive_cursor() -> None:
     store = InMemoryWorkspaceStore()
-    for resource_id in ("res_3", "res_1", "res_4", "res_2"):
-        await store.register_spill(_spill(resource_id))
+    store.spills = [_spill(resource_id) for resource_id in ("res_3", "res_1", "res_4", "res_2")]
 
     first = await store.load_spills_page(after_resource_id=None, limit=2)
     second = await store.load_spills_page(after_resource_id="res_2", limit=2)
@@ -116,15 +99,6 @@ async def test_spill_page_rejects_invalid_limit(limit: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_spill_register_and_clear() -> None:
-    store = InMemoryWorkspaceStore()
-    await store.register_spill(_spill("res_1"))
-    assert len(await store.load_spills_page(after_resource_id=None, limit=1)) == 1
-    await store.clear_spills()
-    assert await store.load_spills_page(after_resource_id=None, limit=1) == ()
-
-
-@pytest.mark.asyncio
 async def test_recent_spills_are_newest_first_and_bounded() -> None:
     """The producing effect intent is the only monotone marker a spill carries.
 
@@ -134,8 +108,10 @@ async def test_recent_spills_are_newest_first_and_bounded() -> None:
     purpose: fixtures where both keys agree cannot tell the two orders apart.
     """
     store = InMemoryWorkspaceStore()
-    for resource_id, ordinal in (("res_z", 1), ("res_m", 2), ("res_a", 3)):
-        await store.register_spill(_spill(resource_id, intent_id=_intent(ordinal)))
+    store.spills = [
+        _spill(resource_id, intent_id=_intent(ordinal))
+        for resource_id, ordinal in (("res_z", 1), ("res_m", 2), ("res_a", 3))
+    ]
 
     newest = await store.load_recent_spills(limit=2)
 

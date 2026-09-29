@@ -21,7 +21,6 @@ from dlightrag.engine.runtime.workspace import (
     HandoffConflict,
     HandoffLeaseLost,
     HandoffResult,
-    InventoryReplaceResult,
     RunArtifactRecord,
     SessionNoteRecord,
     SessionNotesLimits,
@@ -159,18 +158,6 @@ class PGWorkspaceStore:
             owner_id=self._owner_id, run_id=self._run_id, pool=self._pool
         )
 
-    async def replace_inventory(
-        self, records: Sequence[InventoryPathRecord]
-    ) -> InventoryReplaceResult:
-        async with self._connection() as conn:
-            async with conn.transaction():
-                if not await self._hold_lease(conn):
-                    return "lease_lost"
-                await write_inventory(
-                    conn, self._owner_id, self._run_id, upserts=records, replace_all=True
-                )
-                return "committed"
-
     async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
         """Read this Run's attached Artifact roots, ordered by path.
 
@@ -270,14 +257,6 @@ class PGWorkspaceStore:
             degraded_reason=(SESSION_NOTES_BUDGET_REFUSED if refused else None),
         )
 
-    async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult:
-        async with self._connection() as conn:
-            async with conn.transaction():
-                if not await self._hold_lease(conn):
-                    return "lease_lost"
-                await _upsert_spill(conn, self._owner_id, self._run_id, spill)
-                return "committed"
-
     async def load_spills_page(
         self, *, after_resource_id: str | None, limit: int
     ) -> tuple[CommittedSpillRecord, ...]:
@@ -337,25 +316,6 @@ class PGWorkspaceStore:
             )
             for row in rows
         )
-
-    async def clear_spills(self) -> InventoryReplaceResult:
-        async with self._connection() as conn:
-            async with conn.transaction():
-                if not await self._hold_lease(conn):
-                    return "lease_lost"
-                await conn.execute(
-                    "DELETE FROM dlightrag_answer_committed_spills"
-                    " WHERE owner_id = $1 AND run_id = $2",
-                    self._owner_id,
-                    self._run_id,
-                )
-                await conn.execute(
-                    "DELETE FROM dlightrag_answer_resources"
-                    " WHERE owner_id = $1 AND run_id = $2 AND kind = 'committed_spill'",
-                    self._owner_id,
-                    self._run_id,
-                )
-                return "committed"
 
 
 async def write_inventory(
@@ -480,9 +440,14 @@ def _inventory_row(row: Any) -> InventoryPathRecord:
     )
 
 
-async def _upsert_spill(
+async def write_committed_spill(
     conn: Any, owner_id: str, run_id: uuid.UUID, spill: CommittedSpillRecord
 ) -> None:
+    """Record one committed spill inside the caller's fenced transaction.
+
+    A spill committed again keeps its first intent: the intent is what orders the
+    newest-first read.
+    """
     await conn.execute(
         "INSERT INTO dlightrag_answer_committed_spills ("
         " owner_id, run_id, resource_id, content_digest, size_bytes, session_id, intent_id)"
@@ -516,5 +481,6 @@ __all__ = [
     "load_run_artifacts",
     "load_run_inventory",
     "load_session_notes",
+    "write_committed_spill",
     "write_inventory",
 ]

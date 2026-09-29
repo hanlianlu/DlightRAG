@@ -1287,16 +1287,14 @@ async def test_fast_compaction_names_the_notes_its_workspace_holds() -> None:
             return _ToolModel()
 
     workspace_store = InMemoryWorkspaceStore()
-    await workspace_store.replace_inventory(
-        (
-            InventoryPathRecord(
-                relative_path="notes/plan.md",
-                entry_type="file",
-                size_bytes=1_240,
-                content_digest="d" * 64,
-            ),
+    workspace_store.inventory = [
+        InventoryPathRecord(
+            relative_path="notes/plan.md",
+            entry_type="file",
+            size_bytes=1_240,
+            content_digest="d" * 64,
         )
-    )
+    ]
     executor = object.__new__(AnswerExecutor)
     executor._models = cast(Any, _Models())
     query_profile = ModelProfile(context_window_tokens=1_000_000)

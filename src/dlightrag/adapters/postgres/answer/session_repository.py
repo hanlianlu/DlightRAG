@@ -1166,13 +1166,16 @@ class PGAgentSessionRepository:
             writes=tuple(write for fetched in update.fetched for write in fetched.evidence),
         )
 
-        from dlightrag.adapters.postgres.answer.workspace import _upsert_spill, write_inventory
+        from dlightrag.adapters.postgres.answer.workspace import (
+            write_committed_spill,
+            write_inventory,
+        )
 
         if update.committed_outputs:
             from dlightrag.engine.runtime.workspace import CommittedSpillRecord
 
             for output in update.committed_outputs:
-                await _upsert_spill(
+                await write_committed_spill(
                     conn,
                     self._owner_id,
                     self._run_id,

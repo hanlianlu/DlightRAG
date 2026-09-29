@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from heapq import nsmallest
-from typing import Literal, Protocol
+from typing import Protocol
 
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 
@@ -153,7 +153,6 @@ class HandoffLeaseLost:
 
 
 type HandoffResult = HandoffCommit | HandoffConflict | HandoffLeaseLost
-type InventoryReplaceResult = Literal["committed", "lease_lost"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,10 +191,6 @@ class WorkspaceStore(Protocol):
 
     async def load_inventory(self) -> tuple[InventoryPathRecord, ...]: ...
 
-    async def replace_inventory(
-        self, records: Sequence[InventoryPathRecord]
-    ) -> InventoryReplaceResult: ...
-
     async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]: ...
 
     async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]: ...
@@ -209,15 +204,11 @@ class WorkspaceStore(Protocol):
         limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
     ) -> SessionNotesPromotion: ...
 
-    async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult: ...
-
     async def load_spills_page(
         self, *, after_resource_id: str | None, limit: int
     ) -> tuple[CommittedSpillRecord, ...]: ...
 
     async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]: ...
-
-    async def clear_spills(self) -> InventoryReplaceResult: ...
 
 
 class InMemoryWorkspaceStore:
@@ -262,14 +253,6 @@ class InMemoryWorkspaceStore:
         # a filter over this observation, and two orders would be two answers.
         return tuple(sorted(self.inventory, key=lambda record: record.relative_path))
 
-    async def replace_inventory(
-        self, records: Sequence[InventoryPathRecord]
-    ) -> InventoryReplaceResult:
-        if not self.live:
-            return "lease_lost"
-        self.inventory = list(records)
-        return "committed"
-
     async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
         return tuple(sorted(self.artifacts, key=lambda record: record.relative_path))
 
@@ -309,20 +292,6 @@ class InMemoryWorkspaceStore:
             degraded_reason=(SESSION_NOTES_BUDGET_REFUSED if refused else None),
         )
 
-    async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult:
-        if not self.live:
-            return "lease_lost"
-        # The durable adapter keeps the first commit's intent on conflict, and the
-        # intent is what orders the newest-first read, so the double must too.
-        existing = next(
-            (item for item in self.spills if item.resource_id == spill.resource_id), None
-        )
-        if existing is not None:
-            spill = replace(spill, intent_id=existing.intent_id)
-        self.spills = [item for item in self.spills if item.resource_id != spill.resource_id]
-        self.spills.append(spill)
-        return "committed"
-
     async def load_spills_page(
         self, *, after_resource_id: str | None, limit: int
     ) -> tuple[CommittedSpillRecord, ...]:
@@ -351,12 +320,6 @@ class InMemoryWorkspaceStore:
             )[:limit]
         )
 
-    async def clear_spills(self) -> InventoryReplaceResult:
-        if not self.live:
-            return "lease_lost"
-        self.spills = []
-        return "committed"
-
 
 _MAX_SPILL_PAGE_LIMIT = 1_000
 
@@ -373,7 +336,6 @@ __all__ = [
     "HandoffLeaseLost",
     "HandoffResult",
     "InMemoryWorkspaceStore",
-    "InventoryReplaceResult",
     "RunArtifactRecord",
     "SESSION_NOTES_BUDGET_REFUSED",
     "SESSION_NOTES_LEASE_LOST",
