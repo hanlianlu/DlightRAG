@@ -26,6 +26,10 @@ _MAX_PENDING_CHILD_CONTROLS = 100
 # again after applying a batch, so every pending control still arrives, in order.
 PENDING_CONTROL_READ_LIMIT = 100
 _MAX_PENDING_CHILD_GUIDANCE = 8
+# The notification hub resynchronizes its subscribers every 30 seconds only while it
+# is connected, so a waiting child re-reads its guidance row this often on its own: a
+# hub that cannot connect never holds a reply back until the wait's deadline.
+_GUIDANCE_REREAD_SECONDS = 30.0
 
 _UPSERT_CHILD_SESSION = """
 INSERT INTO dlightrag_answer_child_sessions (
@@ -1640,7 +1644,7 @@ class ChildRunStoreMixin:
                         owner_id=owner_id, run_id=run_id, request_id=request_id
                     )
                 with suppress(TimeoutError):
-                    await asyncio.wait_for(wake.wait(), timeout=left)
+                    await asyncio.wait_for(wake.wait(), timeout=min(left, _GUIDANCE_REREAD_SECONDS))
                 wake.clear()
                 current = await self.load_child_guidance(
                     owner_id=owner_id, run_id=run_id, request_id=request_id
