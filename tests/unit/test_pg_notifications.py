@@ -1,5 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The PostgreSQL notification hub: fixed LISTENs, fan-out, resynchronization, reconnect."""
+"""The PostgreSQL notification hub: fixed LISTENs, fan-out, resynchronization, reconnect,
+and the channel watcher that runs one coroutine after every wake."""
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
@@ -15,11 +16,13 @@ from dlightrag.adapters.postgres.core._channels import (
     CHANNELS,
     MODEL_CATALOGUE_CHANNEL,
     RUN_ACTIVITY_CHANNEL,
+    RUN_CANCEL_CHANNEL,
 )
-from dlightrag.adapters.postgres.core._notifications import PGNotificationHub
+from dlightrag.adapters.postgres.core._notifications import ChannelWatcher, PGNotificationHub
 
 RUNS = RUN_ACTIVITY_CHANNEL
 CATALOGUE = MODEL_CATALOGUE_CHANNEL
+CANCEL = RUN_CANCEL_CHANNEL
 LISTEN_ALL = [f"LISTEN {channel}" for channel in CHANNELS]
 
 
@@ -421,3 +424,159 @@ async def test_a_dedicated_connection_that_never_finishes_closing_is_terminated(
 
     assert half_open.statements == ["close"]
     assert half_open.is_closed()
+
+
+async def test_a_watcher_runs_once_the_channel_is_live_and_again_after_each_wake() -> None:
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    runs = 0
+
+    async def on_wake() -> None:
+        nonlocal runs
+        runs += 1
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await asyncio.wait_for(watcher.ready.wait(), timeout=2)
+    assert runs == 1
+
+    endpoint.opened[0].notify(CANCEL, "wake")
+    await _until(lambda: runs == 2)
+    endpoint.opened[0].notify(RUNS, "another channel")
+    await asyncio.sleep(0.01)
+
+    assert runs == 2
+    await watcher.aclose()
+    await hub.aclose()
+
+
+async def test_wakes_during_a_run_coalesce_into_one_more_run() -> None:
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    release = asyncio.Event()
+    runs = 0
+
+    async def on_wake() -> None:
+        nonlocal runs
+        runs += 1
+        if runs == 2:
+            await release.wait()
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await asyncio.wait_for(watcher.ready.wait(), timeout=2)
+    connection = endpoint.opened[0]
+    connection.notify(CANCEL, "first")
+    await _until(lambda: runs == 2)
+    for payload in ("second", "third", "fourth"):
+        connection.notify(CANCEL, payload)
+    release.set()
+    await _until(lambda: runs == 3)
+    await asyncio.sleep(0.01)
+
+    assert runs == 3
+    await watcher.aclose()
+    await hub.aclose()
+
+
+async def test_a_watcher_is_ready_only_after_a_run_that_began_once_the_channel_was_live() -> None:
+    endpoint = _Endpoint(delays=(0.02,))  # the LISTENs take a while
+    hub = PGNotificationHub(connect=endpoint.connect)
+    runs = 0
+
+    async def on_wake() -> None:
+        nonlocal runs
+        runs += 1
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await _until(lambda: bool(endpoint.opened) and CANCEL in endpoint.opened[0].listeners)
+    endpoint.opened[0].notify(CANCEL, "before the hub is live")
+    await _until(lambda: runs == 1)
+
+    assert not watcher.ready.is_set()
+    await asyncio.wait_for(watcher.ready.wait(), timeout=2)
+    assert runs == 2
+    await watcher.aclose()
+    await hub.aclose()
+
+
+async def test_until_ready_a_failed_run_is_retried_with_a_doubling_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 0.05)
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    started: list[float] = []
+
+    async def on_wake() -> None:
+        started.append(asyncio.get_running_loop().time())
+        if len(started) < 3:
+            raise RuntimeError("authoritative read unavailable")
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await asyncio.wait_for(watcher.ready.wait(), timeout=2)
+
+    waits = [later - earlier for earlier, later in pairwise(started)]
+    slack = 0.001  # the event loop may run a timer up to its clock resolution early
+    assert all(w >= e - slack for w, e in zip(waits, (0.05, 0.1), strict=True)), waits
+    await watcher.aclose()
+    await hub.aclose()
+
+
+async def test_once_ready_a_failed_run_waits_for_the_next_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_notifications, "_RECONNECT_BASE_SECONDS", 0.01)
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    runs = 0
+
+    async def on_wake() -> None:
+        nonlocal runs
+        runs += 1
+        if runs == 2:
+            raise RuntimeError("authoritative read unavailable")
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await asyncio.wait_for(watcher.ready.wait(), timeout=2)
+    endpoint.opened[0].notify(CANCEL, "fails")
+    await _until(lambda: runs == 2)
+    await asyncio.sleep(0.1)  # ten retry delays: none is taken
+
+    assert runs == 2
+    endpoint.opened[0].notify(CANCEL, "next wake")
+    await _until(lambda: runs == 3)
+    await watcher.aclose()
+    await hub.aclose()
+
+
+async def test_closing_a_watcher_unsubscribes_it_and_abandons_its_run() -> None:
+    endpoint = _Endpoint()
+    hub = PGNotificationHub(connect=endpoint.connect)
+    entered = asyncio.Event()
+    abandoned = asyncio.Event()
+    runs = 0
+
+    async def on_wake() -> None:
+        nonlocal runs
+        runs += 1
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            abandoned.set()
+
+    watcher = ChannelWatcher(lambda: hub, CANCEL, on_wake, name="Test watcher")
+    await watcher.start()
+    await asyncio.wait_for(entered.wait(), timeout=2)
+
+    await watcher.aclose()
+    endpoint.opened[0].notify(CANCEL, "after closing")
+    await asyncio.sleep(0.01)
+
+    assert abandoned.is_set()
+    assert runs == 1
+    await hub.aclose()

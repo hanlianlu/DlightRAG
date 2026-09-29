@@ -265,10 +265,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     model_catalogue = ModelCatalogueAdmin(
-        store=PGModelCatalogueStore(
-            initial_revision=catalogue_overlay_revision(()),
-            connection_kwargs=config.pg_connection_kwargs(),
-        ),
+        store=PGModelCatalogueStore(initial_revision=catalogue_overlay_revision(())),
         configured_models=lambda: tuple(
             config.models.chat.resolve(role) for role in MODEL_ROLE_NAMES
         ),

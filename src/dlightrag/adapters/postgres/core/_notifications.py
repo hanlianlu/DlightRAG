@@ -17,12 +17,13 @@ does not affect the others.
 
 A lost connection, or one whose LISTENs or keepalive fail or hang, is terminated
 and replaced after a delay that doubles from one second up to thirty, and starts
-over once a replacement passes a keepalive.
+over once a replacement passes a keepalive. A subscriber whose re-read must await
+watches its channel through a ``ChannelWatcher``, which runs it serially.
 """
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager, suppress
 from typing import Any
 
@@ -170,6 +171,90 @@ class PGNotificationHub:
             _deliver(callback, None)
 
 
+class ChannelWatcher:
+    """Run one coroutine after every wake on a channel, one run at a time.
+
+    Wakes that arrive during a run coalesce into one more run. ``ready`` is set once
+    a run that began after the channel went live succeeds; until then a failed run
+    is retried after a delay that doubles from one second up to thirty. Afterwards
+    a failure is only logged: the next wake, at the latest the hub's periodic
+    resynchronization, runs it again.
+    """
+
+    def __init__(
+        self,
+        hub: Callable[[], PGNotificationHub],
+        channel: str,
+        on_wake: Callable[[], Awaitable[None]],
+        *,
+        name: str,
+    ) -> None:
+        self._hub = hub
+        self._channel = channel
+        self._on_wake = on_wake
+        self._name = name
+        self._ready = asyncio.Event()
+        self._woken = asyncio.Event()
+        self._live = False
+        self._listening_on: PGNotificationHub | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def ready(self) -> asyncio.Event:
+        """Set once a run that began after the channel went live has succeeded."""
+        return self._ready
+
+    async def start(self) -> None:
+        """Subscribe and run after every wake; the hub's first ``None`` brings the first."""
+        if self._task is not None:
+            return
+        hub = self._hub()
+        hub.subscribe(self._channel, self._wake)
+        self._listening_on = hub
+        self._task = asyncio.create_task(self._run(), name=self._name)
+
+    async def aclose(self) -> None:
+        """Unsubscribe and stop, abandoning a run in progress."""
+        hub, self._listening_on = self._listening_on, None
+        if hub is not None:
+            hub.unsubscribe(self._channel, self._wake)
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    def _wake(self, payload: str | None) -> None:
+        if payload is None:
+            self._live = True
+        self._woken.set()
+
+    async def _run(self) -> None:
+        retry_delay = _RECONNECT_BASE_SECONDS
+        while True:
+            await self._woken.wait()
+            self._woken.clear()
+            live = self._live
+            try:
+                await self._on_wake()
+            except Exception:
+                if self._ready.is_set():
+                    logger.warning(
+                        "%s failed; the next wake runs it again", self._name, exc_info=True
+                    )
+                else:
+                    logger.warning(
+                        "%s failed; retrying in %.1fs", self._name, retry_delay, exc_info=True
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _RECONNECT_MAX_SECONDS)
+                    self._woken.set()
+            else:
+                retry_delay = _RECONNECT_BASE_SECONDS
+                if live:
+                    self._ready.set()
+
+
 async def _set_within(event: asyncio.Event, timeout: float) -> bool:
     """Wait up to ``timeout`` for ``event``; return whether it is set."""
     with suppress(TimeoutError):
@@ -184,4 +269,4 @@ def _deliver(callback: NotificationCallback, payload: str | None) -> None:
         logger.warning("Notification subscriber failed", exc_info=True)
 
 
-__all__ = ["NotificationCallback", "PGNotificationHub", "dedicated_connection"]
+__all__ = ["ChannelWatcher", "NotificationCallback", "PGNotificationHub", "dedicated_connection"]

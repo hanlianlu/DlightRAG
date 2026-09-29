@@ -3,12 +3,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
-from collections.abc import Awaitable, Callable, Mapping
-from contextlib import suppress
-from functools import partial
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from dlightrag.adapters.postgres.core._channels import MODEL_CATALOGUE_CHANNEL
@@ -18,10 +14,7 @@ from dlightrag.adapters.postgres.core._migrations import (
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.adapters.postgres.core._notifications import (
-    PGNotificationHub,
-    dedicated_connection,
-)
+from dlightrag.adapters.postgres.core._notifications import ChannelWatcher, PGNotificationHub
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.application.model_catalogue import (
     ModelCatalogueSchemaError,
@@ -29,10 +22,6 @@ from dlightrag.application.model_catalogue import (
 )
 
 MODEL_CATALOGUE_MIGRATION_SCOPE = "model_catalogue"
-_RELOAD_RETRY_BASE_SECONDS = 1.0
-_RELOAD_RETRY_MAX_SECONDS = 30.0
-
-logger = logging.getLogger(__name__)
 
 _CREATE_MODEL_CATALOGUE = """
 CREATE TABLE IF NOT EXISTS dlightrag_model_catalogue (
@@ -109,16 +98,11 @@ class PGModelCatalogueStore(PostgresOperationRunner):
         *,
         initial_revision: str,
         pool: ConnectionPool | None = None,
-        connection_kwargs: Mapping[str, Any] | None = None,
+        notifications: PGNotificationHub | None = None,
     ) -> None:
-        """``connection_kwargs`` makes the listener use a dedicated connection to that
-        endpoint instead of the notification hub shared on the store's pool."""
-        super().__init__(pool=pool)
+        super().__init__(pool=pool, notifications=notifications)
         self._initial_revision = initial_revision
-        self._connection_kwargs = dict(connection_kwargs) if connection_kwargs is not None else None
-        self._dedicated_notifications: PGNotificationHub | None = None
-        self._listener_task: asyncio.Task[None] | None = None
-        self._closing = False
+        self._listener: ChannelWatcher | None = None
 
     async def initialize(self, *, validate_only: bool) -> None:
         async def operation(conn: Any) -> None:
@@ -196,58 +180,22 @@ class PGModelCatalogueStore(PostgresOperationRunner):
         return await self._run_once(operation)
 
     async def start_listener(self, on_change: Callable[[], Awaitable[None]]) -> None:
-        if self._listener_task is not None:
+        """Reload after every publication, and whenever the hub resynchronizes."""
+        if self._listener is not None:
             return
-        self._closing = False
-        self._listener_task = asyncio.create_task(
-            self._listen_forever(on_change),
-            name="model-catalogue-listener",
+        listener = ChannelWatcher(
+            self._notification_hub,
+            MODEL_CATALOGUE_CHANNEL,
+            on_change,
+            name="Model catalogue reload",
         )
-
-    async def _listen_forever(self, on_change: Callable[[], Awaitable[None]]) -> None:
-        changed = asyncio.Event()
-
-        def _notified(_payload: str | None) -> None:
-            # A publication, or a resynchronization that stands in for a missed one.
-            changed.set()
-
-        with self._listener_hub().listen(MODEL_CATALOGUE_CHANNEL, _notified):
-            backoff = _RELOAD_RETRY_BASE_SECONDS
-            while not self._closing:
-                await changed.wait()
-                changed.clear()
-                try:
-                    await on_change()
-                    backoff = _RELOAD_RETRY_BASE_SECONDS
-                except Exception:
-                    logger.warning(
-                        "Model catalogue reload failed; retrying in %.1fs",
-                        backoff,
-                        exc_info=True,
-                    )
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, _RELOAD_RETRY_MAX_SECONDS)
-                    changed.set()
-
-    def _listener_hub(self) -> PGNotificationHub:
-        if self._connection_kwargs is None:
-            return self._notification_hub()
-        if self._dedicated_notifications is None:
-            self._dedicated_notifications = PGNotificationHub(
-                connect=partial(dedicated_connection, self._connection_kwargs)
-            )
-        return self._dedicated_notifications
+        await listener.start()
+        self._listener = listener
 
     async def aclose(self) -> None:
-        self._closing = True
-        task, self._listener_task = self._listener_task, None
-        if task is not None:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-        hub, self._dedicated_notifications = self._dedicated_notifications, None
-        if hub is not None:
-            await hub.aclose()
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            await listener.aclose()
 
 
 __all__ = [

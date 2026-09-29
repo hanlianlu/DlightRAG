@@ -152,9 +152,9 @@ Concurrency knobs affect different bottlenecks:
 
 For a single DlightRAG process, reserve roughly
 `storage.postgres.lightrag_pool_max_size + storage.postgres.pool_max_size` PostgreSQL
-connections. Multiply that by API worker count before comparing it with
-PostgreSQL `max_connections`, leaving room for migrations, admin sessions,
-health checks, and managed-service maintenance.
+connections, plus the one the notification hub holds. Multiply that by API worker
+count before comparing it with PostgreSQL `max_connections`, leaving room for
+migrations, admin sessions, health checks, and managed-service maintenance.
 
 ## Filtered BM25 Top-K
 
@@ -344,18 +344,15 @@ Cross-process wake-ups use LISTEN/NOTIFY through one notification hub per
 process. The hub holds one connection of its own, outside `pg_pool`, LISTENs
 every channel declared in `adapters/postgres/core/_channels.py` on it once, and
 fans each channel out to its subscribers (the Connections scheduler and OAuth
-inbox, and Answer child-guidance waits, however many are waiting); joining and
-leaving never touch the connection. A notification is only a wake hint: after
-every (re)connect, and after each 30-second keepalive passes, the hub tells
-every subscriber to re-read its authoritative rows, and it tells a subscriber
-that joins a live hub once on its own. A connection that is lost, or whose
-LISTENs or keepalive fail or outlast five seconds, is terminated and replaced
-after one second, doubling with each further loss up to 30 seconds until a
-connection passes a keepalive. The model catalogue listener uses a dedicated
-connection when it is given an explicit endpoint, as the service composition
-currently does, and closing that connection gracefully is bounded the same way
-before it is terminated instead. The run-cancellation listener keeps its own
-pooled connection.
+inbox, the model catalogue reload, and Answer child-guidance waits, however
+many are waiting); joining and leaving never touch the connection. A
+notification is only a wake hint: after every (re)connect, and after each
+30-second keepalive passes, the hub tells every subscriber to re-read its
+authoritative rows, and it tells a subscriber that joins a live hub once on its
+own. A connection that is lost, or whose LISTENs or keepalive fail or outlast
+five seconds, is terminated and replaced after one second, doubling with each
+further loss up to 30 seconds until a connection passes a keepalive. The
+run-cancellation listener keeps its own pooled connection.
 
 All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
 the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and
