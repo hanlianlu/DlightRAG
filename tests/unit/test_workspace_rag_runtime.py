@@ -116,6 +116,86 @@ def _replay_each(
     return replay
 
 
+@pytest.mark.parametrize(
+    "fetch_error",
+    [
+        httpx.ConnectError("connection refused"),
+        httpx.HTTPStatusError(
+            "Service Unavailable",
+            request=httpx.Request("GET", "https://docs.example.com/b.pdf"),
+            response=httpx.Response(503),
+        ),
+    ],
+    ids=["refused", "503"],
+)
+async def test_a_url_that_cannot_be_fetched_fails_only_its_document(
+    test_config: DlightragConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    fetch_error: Exception,
+) -> None:
+    """A remote document server is the caller's source, not a dependency of the Run.
+
+    Even a transient fetch failure fails that document alone: the Run is neither
+    deferred nor reported to health as a provider outage, and its result names
+    the document and why.
+    """
+    from dlightrag.engine.runtime.records import Failed
+    from tests.unit.test_corpus_mutations import _executor, _Health, _payload, _Session
+
+    async def download(url: str, destination: Path, **_kwargs: Any) -> None:
+        if url.endswith("b.pdf"):
+            raise fetch_error
+        destination.write_bytes(b"%PDF-a")
+
+    monkeypatch.setattr("dlightrag.engine.rag.corpus.sources.url.download_public_http", download)
+    monkeypatch.setattr(
+        "dlightrag.engine.rag.corpus.sources.url.validate_public_http_url",
+        lambda url, **_kwargs: url,
+    )
+    service = _service(test_config)
+    service._initialized = True
+    service._ingestion_engine = MagicMock()
+    service._ingestion_engine.aingest_files = AsyncMock(
+        side_effect=lambda items, **_kwargs: {
+            "processed": len(items),
+            "errors": [],
+            "results": [{"doc_id": f"doc-{item.display_filename}"} for item in items],
+        }
+    )
+    runtime = SimpleNamespace(
+        lightrag=SimpleNamespace(aget_docs_by_track_id=AsyncMock(return_value={})),
+        aingest=service.aingest,
+    )
+    health = _Health()
+    executor, _pool, _store = _executor(runtime, health=health)
+    payload = _payload(
+        "ingest",
+        source={
+            "source_type": "url",
+            "urls": ["https://docs.example.com/a.pdf", "https://docs.example.com/b.pdf"],
+            "retain_source_file": True,
+            "replace": False,
+        },
+        staged_sources=[],
+    )
+
+    outcome = await executor.execute(cast(Any, _Session(payload)))
+
+    assert isinstance(outcome, Failed)
+    assert outcome.error_kind == "corpus_mutation_document_failed"
+    assert outcome.result is not None
+    assert outcome.result["documents"] == [
+        {"document_id": "doc-a.pdf", "status": "ready", "phase": "finalized"},
+        {
+            "identifier": "b.pdf",
+            "status": "failed",
+            "phase": "pipeline",
+            "reason": "the source could not be downloaded",
+        },
+    ]
+    assert health.degraded == []
+
+
 def _runtime_lightrag() -> SimpleNamespace:
     return SimpleNamespace(
         workspace="default",
@@ -1491,13 +1571,13 @@ class TestWorkspaceRagLightRAGMainPath:
         )
 
         assert result["processed"] == 1
-        assert result["errors"] == ["b.pdf: remote materialization failed"]
+        assert result["errors"] == ["b.pdf: the source could not be downloaded"]
         assert len(progress_events) == 1
         progress = progress_events[0]
         assert progress.total_delta == 2
         assert progress.processed_delta == 1
         assert progress.failed_delta == 1
-        assert progress.errors == ("b.pdf: remote materialization failed",)
+        assert progress.errors == ("b.pdf: the source could not be downloaded",)
 
     async def test_failed_remote_download_leaves_no_partial_parser_copy(
         self, test_config: DlightragConfig
@@ -1521,7 +1601,7 @@ class TestWorkspaceRagLightRAGMainPath:
             InterruptedSource(), source_type="s3", retain_source_file=False
         )
 
-        assert result["errors"] == ["a.pdf: remote materialization failed"]
+        assert result["errors"] == ["a.pdf: the source could not be downloaded"]
         service._ingestion_engine.aingest_files.assert_not_awaited()
         root = service._workspace_input_root()
         assert not root.exists() or not [path for path in root.rglob("*") if path.is_file()]
@@ -1867,7 +1947,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 BynderSource(), source_type="bynder", retain_source_file=False
             )
 
-        assert result["errors"] == ["report.pdf: remote materialization failed"]
+        assert result["errors"] == ["report.pdf: the source could not be downloaded"]
         assert "token=secret" not in caplog.text
         assert signed_url not in caplog.text
 
@@ -3425,7 +3505,7 @@ class TestWorkspaceRagLightRAGMainPath:
             AsyncMock(
                 return_value={
                     "processed": 0,
-                    "errors": ["report.pdf: remote materialization failed"],
+                    "errors": ["report.pdf: the source could not be downloaded"],
                     "results": [],
                 }
             ),

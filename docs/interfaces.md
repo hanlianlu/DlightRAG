@@ -151,6 +151,15 @@ query or fragment is not durable; use `retain_source_file: true` or supply a
 separate queryless locator. S3 uses the standard AWS credential chain. Payloads
 never carry access keys.
 
+A remote document that cannot be fetched fails alone, however briefly its
+server refused, dropped, timed out, or answered with an error. The Run's result
+names it and says why (`the source could not be downloaded`), and the Run fails
+with it rather than deferring; nothing is reported as a dependency outage in
+`GET /health`. A remote document server is the caller's source, not a service
+this deployment runs, and a Run that deferred on it would fetch every other
+document again when it resumed. LightRAG never saw the document, so a retry Run
+cannot reach it: submit it again once its source is back.
+
 A `local` source is copied into the Run's own stage before it is accepted, so
 later edits under `input_dir` never change what the Run ingests. `path` may name
 a file or a folder; each `documents` entry must name a file. The copy never
@@ -251,7 +260,9 @@ each writer process executes at most two Corpus Mutations concurrently by
 default.
 
 The terminal result carries the action, stable `track_id`, bounded per-document
-outcomes, `document_count`, and `details_truncated`. An ambiguous destructive
+outcomes, `document_count`, and `details_truncated`. An ingest's result names
+each document that failed by `identifier`, its file name, with the `reason` it
+failed. An ambiguous destructive
 outcome remains `running` with `phase=waiting_for_repair` and exposes bounded
 `repair_reason` and `repair_remedy` guidance. An authorized operator repairs the
 upstream state and explicitly uses `POST /runs/{run_id}/resume`; Corpus Reset is

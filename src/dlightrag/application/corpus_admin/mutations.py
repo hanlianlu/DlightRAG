@@ -1916,7 +1916,13 @@ def _document_outcomes(result: Any) -> list[dict[str, Any]]:
         row.setdefault("phase", "finalized")
     errors = [str(error)[:256] for error in result.get("errors") or ()]
     for error in errors[: max(0, _MAX_RESULT_DOCUMENTS - len(rows))]:
-        rows.append({"status": "failed", "phase": "pipeline", "error": error})
+        # Ingestion names each failed document and why, as "<file name>: <reason>".
+        name, separator, reason = error.partition(": ")
+        rows.append(
+            {"status": "failed", "phase": "pipeline", "identifier": name, "reason": reason}
+            if separator
+            else {"status": "failed", "phase": "pipeline", "error": error}
+        )
     return rows[:_MAX_RESULT_DOCUMENTS]
 
 

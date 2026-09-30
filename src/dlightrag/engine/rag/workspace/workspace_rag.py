@@ -183,6 +183,10 @@ def _safe_remote_source_id(document: SourceDocument) -> str:
     return safe_source_filename(document.display_filename or document.key)
 
 
+def _download_failure(safe_source_id: str) -> str:
+    return f"{safe_source_id}: the source could not be downloaded"
+
+
 def _retry_display_filename(value: object) -> str:
     if not isinstance(value, str) or not value or "\x00" in value:
         raise ValueError("source filename is invalid")
@@ -964,10 +968,12 @@ class WorkspaceRag:
                     )
                 except SourceDownloadContractError as exc:
                     return _RemoteDownloadFailure(str(exc))
-                except Exception:  # noqa: BLE001
-                    return _RemoteDownloadFailure(
-                        f"{safe_source_id}: remote materialization failed"
-                    )
+                except Exception as exc:  # noqa: BLE001
+                    # The remote server is the caller's source, not a dependency of
+                    # this deployment: a fetch that fails, even for a moment, is this
+                    # document's failure, and the caller submits it again.
+                    logger.warning("Downloading %s failed (%s)", safe_source_id, type(exc).__name__)
+                    return _RemoteDownloadFailure(_download_failure(safe_source_id))
 
             try:
                 download_results = await bounded_map(
@@ -985,7 +991,7 @@ class WorkspaceRag:
                         window_errors.append(error)
                         continue
                     if isinstance(downloaded, Exception):
-                        error = f"{_safe_remote_source_id(document)}: remote materialization failed"
+                        error = _download_failure(_safe_remote_source_id(document))
                         errors.append(error)
                         window_errors.append(error)
                         continue
