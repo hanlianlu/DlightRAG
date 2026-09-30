@@ -1,12 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for centralized prompt profile assembly."""
 
+import inspect
 import json
 from datetime import UTC, datetime
 
 from dlightrag.engine.answer.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
+    agent_control_prompt,
     answer_core,
     clock_line,
 )
@@ -26,9 +28,22 @@ def test_no_system_prompt_states_a_clock() -> None:
     # prefix and forfeits the provider's cache, so neither path states one there
     # (Pi states no clock either, and DeepSeek's harness ships its time context
     # opt-in and disabled by default).
-    for prompt in (answer_core(), core_identity(environment_clock=True)):
+    research = agent_control_prompt(
+        profile_memory_write=True, artifact_publication=True, run_notes=True
+    )
+    for prompt in (answer_core(), core_identity(environment_clock=True), research):
         assert f"{datetime.now(UTC):%Y-%m-%d}" not in prompt
         assert "Current time:" not in prompt
+
+
+def test_research_system_prompt_takes_only_capability_flags() -> None:
+    # The same cache argument covers every per-request value: the Research system
+    # text is chosen by what the Run can do, never by what one request carries.
+    parameters = inspect.signature(agent_control_prompt).parameters.values()
+    assert all(
+        parameter.kind is parameter.KEYWORD_ONLY and parameter.annotation is bool
+        for parameter in parameters
+    )
 
 
 def test_each_path_is_told_where_its_clock_comes_from() -> None:
