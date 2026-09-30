@@ -13,7 +13,7 @@ from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.capabilities import RequestModelContext
-from dlightrag.engine.answer.errors import AnswerInputOverflowError, UnsupportedAnswerModeError
+from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.execution import acceptance
 from dlightrag.engine.answer.execution.acceptance import (
     FAST_GENERATION,
@@ -186,26 +186,27 @@ async def test_routing_is_measured_on_the_keyword_model_exactly_as_it_is_sent() 
     assert "tools: search_knowledge_base,search_web" in sent[0][-1]["content"]
 
 
-def test_a_routing_call_that_cannot_fit_makes_auto_unsupported() -> None:
+def test_a_routing_call_that_cannot_fit_resolves_auto_to_research() -> None:
     # The routing request alone is over a hundred tokens; the keyword model that
-    # routes cannot take it, however large the answering model is.
+    # routes cannot take it, however large the answering model is. Nothing can
+    # choose a mode then, so ``auto`` resolves to Research instead of refusing.
     budget = _budget(
         _Planning(),
         profiles=_profiles(keyword=ModelProfile(context_window_tokens=64)),
     )
 
-    with pytest.raises(UnsupportedAnswerModeError):
-        accept_history(
-            budget,
-            history=_HISTORY,
-            requested_mode="auto",
-            allowed_modes=frozenset({"fast", "research"}),
-            research=ResearchSeed(
-                tools=(), query_images=None, resource_manifest=(), image_budget=None
-            ),
-            mode_resources=(),
-            web_search=False,
-        )
+    accepted = accept_history(
+        budget,
+        history=_HISTORY,
+        requested_mode="auto",
+        allowed_modes=frozenset({"fast", "research"}),
+        research=ResearchSeed(tools=(), query_images=None, resource_manifest=(), image_budget=None),
+        mode_resources=(),
+        web_search=False,
+    )
+
+    assert accepted.valid_modes == frozenset({"research"})
+    assert list(accepted.history) == _HISTORY
 
 
 def test_an_explicit_fast_request_that_cannot_hold_its_reserve_names_the_planner() -> None:

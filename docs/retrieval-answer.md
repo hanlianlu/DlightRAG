@@ -335,7 +335,9 @@ dynamic-context reserve with no history at all; Research's planning call
 (`extract`) and first Agent request (`query`); and, when `auto` has both modes
 valid, the routing call on the `keyword` model. An explicit Fast request that
 cannot keep its reserve is refused; `auto` resolves without Fast instead, and a
-routing call that cannot fit makes `auto` unsupported. A Fast Run measures its
+routing call that cannot fit resolves `auto` to Research, which needs no routing
+(a Research request that cannot fit either is refused as too long). A Fast Run
+measures its
 durable Session history against the same Fast calls before it compacts. Both
 sides build these calls in `engine/answer/execution/acceptance.py`, so they
 cannot disagree about which calls exist or how each is measured.

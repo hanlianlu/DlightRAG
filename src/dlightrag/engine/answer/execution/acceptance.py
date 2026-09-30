@@ -285,8 +285,8 @@ def accept_history(
     Fast request that cannot is refused as an overflow; ``auto`` drops Fast and
     keeps whatever else is valid. The newest complete history pairs every
     remaining call accepts are kept, older pairs become a bounded extractive
-    summary, and a fixed request that overflows refuses the Run: a routing call
-    that cannot fit makes ``auto`` unsupported rather than an overflow.
+    summary, and a fixed request that overflows refuses the Run. A routing call
+    that cannot fit resolves ``auto`` to Research, which needs no routing.
     """
     effective_modes = allowed_modes
     fast_targets: tuple[HistoryProjectionTarget, ...] = ()
@@ -335,9 +335,26 @@ def accept_history(
     try:
         projected = project_history([dict(message) for message in history], targets=targets)
     except HistoryProjectionOverflowError as exc:
-        if exc.target == ROUTER:
-            raise UnsupportedAnswerModeError("auto") from exc
-        raise AnswerInputOverflowError(str(exc)) from exc
+        if exc.target != ROUTER or research is None:
+            raise AnswerInputOverflowError(str(exc)) from exc
+        # The keyword model cannot take even the routing request, so nothing can
+        # choose between the modes: resolve ``auto`` to Research, the mode that
+        # handles any request, and fit the history to its calls alone.
+        logger.info(
+            "The auto routing call cannot fit; resolving to Research",
+            extra={
+                "fixed_input_tokens": exc.fixed_input_tokens,
+                "acceptance_limit_tokens": exc.acceptance_limit_tokens,
+            },
+        )
+        effective_modes = frozenset[ResolvedMode]({"research"})
+        try:
+            projected = project_history(
+                [dict(message) for message in history],
+                targets=list(budget.research_targets(research)),
+            )
+        except HistoryProjectionOverflowError as overflow:
+            raise AnswerInputOverflowError(str(overflow)) from overflow
     summaries = (
         part.strip()
         for part in (budget.episodic_summary, projected.episodic_summary)
