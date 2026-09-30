@@ -206,7 +206,8 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     Handles the full LightRAG parser artifact layout:
 
     - Source files in ``input_dir/``
-    - A local document's own copy in ``input_dir/__local_sources__/``
+    - A local document's own copy in ``input_dir/__local_sources__/``, and a
+      retained remote document's in ``input_dir/__remote_sources__/<source type>/``
     - Parsed artifacts under ``input_dir/__parsed__/`` using either the full
       filename or its stem: ``<name>.pdf.parsed/`` or ``<name>.parsed/`` plus
       the corresponding ``.mineru_raw`` / ``.docling_raw`` directories
@@ -227,13 +228,19 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
 
     from lightrag.constants import PARSED_ARTIFACT_DIR_SUFFIXES, PARSED_DIR_NAME
 
-    from dlightrag.engine.rag.corpus.ingestion.paths import LOCAL_SOURCES_DIR_NAME
+    from dlightrag.engine.rag.corpus.ingestion.paths import (
+        LOCAL_SOURCES_DIR_NAME,
+        REMOTE_SOURCES_DIR_NAME,
+    )
 
     removed = 0
     failures: list[OSError] = []
     input_root = Path(input_dir)
     default_parsed_root = input_root / PARSED_DIR_NAME
     local_sources_root = input_root / LOCAL_SOURCES_DIR_NAME
+    # A retained remote source is its document's parser input, so LightRAG stores
+    # the document under the kept file's own name, which carries its source's digest.
+    remote_source_folders = _subfolders(input_root / REMOTE_SOURCES_DIR_NAME)
     _collision_re = re.compile(r"_\d{3}$")
 
     for fp in file_paths:
@@ -252,7 +259,11 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
         #    __parsed__/ by LightRAG after ingest) and a local document's own
         #    copy, also under a parser-hinted name LightRAG stores as this one
         #    (``report.[native].md``).
-        source_candidates = [source_root / filename, local_sources_root / filename]
+        source_candidates = [
+            source_root / filename,
+            local_sources_root / filename,
+            *(folder / filename for folder in remote_source_folders),
+        ]
         if path.is_absolute():
             source_candidates.insert(0, path)
         source_candidates.extend(parsed_root / filename for parsed_root in parsed_roots)
@@ -301,6 +312,15 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     if failures:
         raise OSError("one or more requested corpus source files could not be removed")
     return removed
+
+
+def _subfolders(root: Path) -> list[Path]:
+    try:
+        return [
+            Path(entry.path) for entry in os.scandir(root) if entry.is_dir(follow_symlinks=False)
+        ]
+    except FileNotFoundError, NotADirectoryError:
+        return []
 
 
 def _hinted_sources(root: Path, name: str) -> list[Path]:

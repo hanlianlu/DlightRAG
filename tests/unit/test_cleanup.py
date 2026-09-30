@@ -249,6 +249,21 @@ class TestRemoveDeletedFiles:
         assert not kept.exists()
         assert other.exists()
 
+    def test_a_retained_remote_documents_copy_goes_with_it(self, tmp_path) -> None:
+        """LightRAG stores a retained document under its kept file's own name."""
+        workspace_input = tmp_path / "corpus" / "default"
+        kept = workspace_input / "__remote_sources__" / "url" / "report__abc123def456.pdf"
+        other = workspace_input / "__remote_sources__" / "s3" / "report__0123456789ab.pdf"
+        for path in (kept, other):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"%PDF")
+
+        removed = remove_deleted_files({"report__abc123def456.pdf"}, str(workspace_input))
+
+        assert removed == 1
+        assert not kept.exists()
+        assert other.exists()
+
     def test_nested_remote_parser_path_removes_artifacts_not_remote_source(self, tmp_path) -> None:
         workspace_input = tmp_path / "inputs" / "default"
         batch_root = workspace_input / "__remote_ingest__" / "s3" / "batch-1"
