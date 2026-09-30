@@ -237,6 +237,14 @@ to represent product-finalization failure. Re-ingest the same retained source
 to replay only the idempotent same-ID finalizers; do not manually set the marker. Documents written directly through LightRAG have no completion proof
 and remain excluded.
 
+A retry, or an ingest that resumes after LightRAG processed a document
+DlightRAG had not finished, fails such a document at once when it cannot be
+replayed: its source file is gone (`the source file is no longer available`),
+or its stored source metadata is incomplete or invalid (`source metadata
+incomplete`, `source metadata invalid`). Waiting cannot change either, so the
+Run settles rather than waiting for a repair or deferring, and the document
+stays hidden. Restore its source and retry it, or delete it.
+
 Failed documents are terminal and are not automatically retried. First inspect
 the workspace:
 

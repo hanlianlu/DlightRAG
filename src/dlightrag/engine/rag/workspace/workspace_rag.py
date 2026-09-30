@@ -184,14 +184,19 @@ def _safe_remote_source_id(document: SourceDocument) -> str:
 
 
 _DOWNLOAD_FAILURE_REASON = "the source could not be downloaded"
+_SOURCE_FILE_MISSING_REASON = "the source file is no longer available"
 
 
 def _download_failure(safe_source_id: str) -> str:
     return f"{safe_source_id}: {_DOWNLOAD_FAILURE_REASON}"
 
 
-class _RetryDownloadError(Exception):
-    """A retry could not fetch its document's remote source, so it replayed nothing."""
+class _RetrySourceUnavailableError(Exception):
+    """A retry could not read its document's source, so it replayed nothing."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _retry_display_filename(value: object) -> str:
@@ -1703,9 +1708,10 @@ class WorkspaceRag:
         same owner never share a pass, so every recorded outcome matches a
         one-document-at-a-time retry.
 
-        A document whose remote source cannot be downloaded fails with that
-        reason, even one LightRAG processed but DlightRAG never finalized: the
-        attempt replayed nothing, so the document stays retryable.
+        A document that cannot be replayed fails with the reason, even one
+        LightRAG processed but DlightRAG never finalized: its remote source
+        cannot be downloaded, its source file is gone, or its source metadata is
+        incomplete or invalid. Nothing was replayed, so it keeps its state.
 
         ``RetryOutcomeUncertainError`` ends the retry. Raised by a document's
         preflight, it first replays the documents already admitted, as a
@@ -1860,20 +1866,21 @@ class WorkspaceRag:
         file_path = str(entry.get("file_path") or "")
         recovered_processed = str(entry.get("status") or "") == "processed"
 
-        async def preflight_failure(reason: str) -> None:
-            if recovered_processed:
-                # A processed pending item may already be a complete commit,
-                # or may only need idempotent application finalization. Never
-                # freeze the opposite ledger outcome because its source
-                # preflight is temporarily unavailable.
-                raise RetryOutcomeUncertainError(reason)
-            await record(doc_id, "failed", {"doc_id": doc_id, "reason": reason})
+        async def preflight_failure(reason: str, **detail: str) -> None:
+            # Waiting cannot complete source metadata or bring a source file
+            # back, so even a processed document fails; it keeps its state,
+            # unpublished.
+            await record(doc_id, "failed", {"doc_id": doc_id, **detail, "reason": reason})
 
         # A pending durable item with PROCESSED LightRAG status may have
         # crashed before required DlightRAG finalization. A durable complete
         # marker proves success without requiring the source to still exist;
         # incomplete/legacy markers re-enter the same-ID finalization seam.
+        # While the marker cannot be read, such an item may already be a
+        # complete commit, so its outcome is uncertain.
         if self._metadata_index is None:
+            if recovered_processed:
+                raise RetryOutcomeUncertainError("source metadata unavailable")
             await preflight_failure("source metadata unavailable")
             return None
         if isinstance(metadata, Exception):
@@ -1922,11 +1929,12 @@ class WorkspaceRag:
                 download_locator=download_locator,
                 display_filename=display_filename,
             )
-        except (OSError, TypeError, ValueError) as exc:
-            if recovered_processed:
-                raise RetryOutcomeUncertainError(
-                    "retry finalization source preflight failed"
-                ) from exc
+        except FileNotFoundError:
+            await preflight_failure(
+                _SOURCE_FILE_MISSING_REASON, identifier=safe_source_filename(stored_filename)
+            )
+            return None
+        except OSError, TypeError, ValueError:
             await preflight_failure("source metadata invalid")
             return None
 
@@ -2042,10 +2050,10 @@ class WorkspaceRag:
                 # durable totals aligned with the authoritative status.
                 await record(doc_id, "succeeded", succeeded)
                 return
-            if isinstance(outcome, _RetryDownloadError) and authoritative is not None:
-                # A fetch that failed replayed nothing: the document keeps its
-                # state, unpublished, and stays retryable once its source is back.
-                failed.update(identifier=request.display_filename, reason=_DOWNLOAD_FAILURE_REASON)
+            if isinstance(outcome, _RetrySourceUnavailableError) and authoritative is not None:
+                # A source that could not be read replayed nothing: the document
+                # keeps its state, unpublished, and stays retryable.
+                failed.update(identifier=request.display_filename, reason=outcome.reason)
             elif authoritative != "failed":
                 raise RetryOutcomeUncertainError("retry document status is not yet authoritative")
             await record(doc_id, "failed", failed)
@@ -2254,9 +2262,13 @@ class WorkspaceRag:
         """Materialize one retry locator as same-ID parser input.
 
         A remote source is downloaded to a transient parser file; ``cleanup``
-        removes that file and closes its adapter once the replay settles.
+        removes that file and closes its adapter once the replay settles. A
+        source that cannot be read raises ``_RetrySourceUnavailableError``.
         """
-        source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
+        try:
+            source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
+        except FileNotFoundError as exc:
+            raise _RetrySourceUnavailableError(_SOURCE_FILE_MISSING_REASON) from exc
         stable_source_uri = validate_source_uri(source_uri)
         replacement_doc_ids, replacement_ownership = await self._retry_replacement_owners(
             download_locators=self._retry_ownership_locators(
@@ -2283,8 +2295,12 @@ class WorkspaceRag:
             user_metadata["creation_date"] = retry_metadata["creation_date"]
 
         if source_type == "local":
+            try:
+                parser_path = self._retry_local_source_path(download_locator)
+            except FileNotFoundError as exc:
+                raise _RetrySourceUnavailableError(_SOURCE_FILE_MISSING_REASON) from exc
             return PreparedIngestFile(
-                parser_path=self._retry_local_source_path(download_locator),
+                parser_path=parser_path,
                 source_uri=stable_source_uri,
                 download_locator=download_locator,
                 display_filename=display_filename,
@@ -2353,7 +2369,7 @@ class WorkspaceRag:
             logger.warning(
                 "Downloading %s for a retry failed (%s)", display_filename, type(exc).__name__
             )
-            raise _RetryDownloadError from exc
+            raise _RetrySourceUnavailableError(_DOWNLOAD_FAILURE_REASON) from exc
         cleanup.push_async_callback(asyncio.to_thread, _remove_remote_parser_sources, [prepared])
         return dataclass_replace(
             prepared,

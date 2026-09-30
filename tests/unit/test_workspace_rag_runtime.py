@@ -258,6 +258,36 @@ async def _source_is_gone(_url: str, destination: Path, **_kwargs: Any) -> None:
     raise httpx.ConnectError("connection refused")
 
 
+def _hold_unfinalized_document(
+    service: WorkspaceRag, row: Mapping[str, Any] | None
+) -> SimpleNamespace:
+    """Give ``service`` ``doc-1``, a document LightRAG processed but DlightRAG never
+    finalized, whose metadata row is ``row`` (None: it has none).
+
+    Returns the service with its store, metadata and engine doubles.
+    """
+    stores = AsyncMock()
+    stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: SimpleNamespace(status="processed", file_path="report.pdf") for doc_id in doc_ids
+    }
+    stores.get_doc_status.return_value = {"status": "processed"}
+    metadata = AsyncMock()
+    _serve_metadata(metadata, {} if row is None else {"doc-1": row})
+    locator = None if row is None else row.get("download_locator")
+    metadata.find_by_download_locator.side_effect = lambda value: (
+        ["doc-1"] if value == locator else []
+    )
+    engine = MagicMock()
+    engine.aingest_files = AsyncMock(
+        side_effect=AssertionError("a document that cannot be replayed replays nothing")
+    )
+    service._initialized = True
+    service._lightrag_stores = stores
+    service._metadata_index = metadata
+    service._ingestion_engine = engine
+    return SimpleNamespace(service=service, stores=stores, metadata=metadata, engine=engine)
+
+
 def _unfinalized_url_document(
     config: DlightragConfig,
     monkeypatch: pytest.MonkeyPatch,
@@ -270,44 +300,79 @@ def _unfinalized_url_document(
     input a fetch of the document's source writes.
     """
     _fetch_urls_with(monkeypatch, download)
-    stores = AsyncMock()
-    stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
-        doc_id: SimpleNamespace(status="processed", file_path="report.pdf") for doc_id in doc_ids
-    }
-    stores.get_doc_status.return_value = {"status": "processed"}
-    metadata = AsyncMock()
-    _serve_metadata(
-        metadata,
+    service = _service(config)
+    document = _hold_unfinalized_document(
+        service,
         {
-            "doc-1": {
-                "filename": "report.pdf",
-                "source_uri": "bynder://asset/1",
-                "download_locator": _GONE_LOCATOR,
-                "_dlightrag_finalization_complete": False,
-            }
+            "filename": "report.pdf",
+            "source_uri": "bynder://asset/1",
+            "download_locator": _GONE_LOCATOR,
+            "_dlightrag_finalization_complete": False,
         },
     )
-    metadata.find_by_download_locator.side_effect = lambda value: (
-        ["doc-1"] if value == _GONE_LOCATOR else []
-    )
-    engine = MagicMock()
-    engine.aingest_files = AsyncMock(
-        side_effect=AssertionError("a document whose source is gone replays nothing")
-    )
-    service = _service(config)
-    service._initialized = True
-    service._lightrag_stores = stores
-    service._metadata_index = metadata
-    service._ingestion_engine = engine
-    parser_input = (
+    document.parser_input = (
         service._workspace_input_root()
         / remote_parser_input_path(
             input_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
         ).name
     )
-    return SimpleNamespace(
-        service=service, stores=stores, metadata=metadata, engine=engine, parser_input=parser_input
-    )
+    return document
+
+
+#: The ways a processed document cannot be replayed, each with the reason it fails with.
+_UNREPLAYABLE_REASONS = {
+    "remote_source_gone": "the source could not be downloaded",
+    "source_file_gone": "the source file is no longer available",
+    "metadata_row_missing": "source metadata incomplete",
+    "metadata_incomplete": "source metadata incomplete",
+    "metadata_invalid": "source metadata invalid",
+}
+#: The ways whose reason also names the document's file.
+_NAMED_UNREPLAYABLE = frozenset({"remote_source_gone", "source_file_gone"})
+
+
+def _unfinalized_local_document(
+    config: DlightragConfig, case: str | None = None
+) -> SimpleNamespace:
+    """A writer holding ``doc-1``, a local document LightRAG processed but DlightRAG
+    never finalized, left unreplayable the way ``case`` names (None: replayable).
+
+    Returns the service, its store, metadata and engine doubles, and the source file.
+    """
+    service = _service(config)
+    source = service._workspace_input_root() / "report.pdf"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"%PDF-1.4")
+    row: dict[str, Any] | None = {
+        "filename": "report.pdf",
+        "source_uri": "local://default/report.pdf",
+        "download_locator": str(source),
+        "_dlightrag_finalization_complete": False,
+    }
+    match case:
+        case None:
+            pass
+        case "source_file_gone":
+            source.unlink()
+        case "metadata_row_missing":
+            row = None
+        case "metadata_incomplete":
+            del row["download_locator"]
+        case "metadata_invalid":
+            row["filename"] = ".."
+        case _:
+            raise AssertionError(case)
+    document = _hold_unfinalized_document(service, row)
+    document.source = source
+    return document
+
+
+def _unreplayable_document(
+    config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, case: str
+) -> SimpleNamespace:
+    if case == "remote_source_gone":
+        return _unfinalized_url_document(config, monkeypatch)
+    return _unfinalized_local_document(config, case)
 
 
 async def test_a_processed_document_whose_source_is_gone_fails_its_retry(
@@ -338,6 +403,57 @@ async def test_a_processed_document_whose_source_is_gone_fails_its_retry(
     assert not document.parser_input.exists()
 
 
+@pytest.mark.parametrize("case", sorted(set(_UNREPLAYABLE_REASONS) - {"remote_source_gone"}))
+async def test_a_processed_document_that_cannot_be_replayed_fails_its_retry(
+    test_config: DlightragConfig, case: str
+) -> None:
+    """Waiting cannot bring a source file back or complete source metadata.
+
+    So the document fails at once and says why, rather than leaving the retry
+    uncertain for good. Nothing is replayed or rewritten: it keeps its state,
+    unpublished.
+    """
+    document = _unfinalized_local_document(test_config, case)
+
+    result = await document.service.aretry_failed_docs(cohort_doc_ids=("doc-1",))
+
+    assert result["failed_docs"] == [
+        {
+            "doc_id": "doc-1",
+            **({"identifier": "report.pdf"} if case in _NAMED_UNREPLAYABLE else {}),
+            "reason": _UNREPLAYABLE_REASONS[case],
+        }
+    ]
+    document.engine.aingest_files.assert_not_awaited()
+    document.metadata.upsert.assert_not_awaited()
+    document.metadata.delete.assert_not_awaited()
+
+
+async def test_a_source_file_gone_before_its_replay_fails_the_document(
+    test_config: DlightragConfig,
+) -> None:
+    """The file can go after preflight admitted the replay, which then reads nothing."""
+    document = _unfinalized_local_document(test_config)
+
+    async def owners(_locator: str) -> list[str]:
+        document.source.unlink()
+        return ["doc-1"]
+
+    document.metadata.find_by_download_locator.side_effect = owners
+
+    result = await document.service.aretry_failed_docs(cohort_doc_ids=("doc-1",))
+
+    assert result["failed_docs"] == [
+        {
+            "doc_id": "doc-1",
+            "file_path": "report.pdf",
+            "identifier": "report.pdf",
+            "reason": "the source file is no longer available",
+        }
+    ]
+    document.engine.aingest_files.assert_not_awaited()
+
+
 async def _source_is_back(_url: str, destination: Path, **_kwargs: Any) -> None:
     destination.write_bytes(b"%PDF-1.4")
 
@@ -360,16 +476,17 @@ async def test_a_retry_whose_outcome_is_not_known_stays_uncertain(
         await document.service.aretry_failed_docs(cohort_doc_ids=("doc-1",))
 
 
+@pytest.mark.parametrize("case", list(_UNREPLAYABLE_REASONS))
 @pytest.mark.parametrize("action", ["retry", "ingest"])
-async def test_a_run_settles_when_a_processed_documents_source_is_gone(
-    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, action: str
+async def test_a_run_settles_when_a_processed_document_cannot_be_replayed(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, action: str, case: str
 ) -> None:
     """A retry Run, or an ingest resuming once LightRAG processed the document,
     fails with it instead of waiting for a repair or deferring without bound."""
     from dlightrag.engine.runtime.records import Failed
     from tests.unit.test_corpus_mutations import _executor, _Health, _payload, _Session
 
-    document = _unfinalized_url_document(test_config, monkeypatch)
+    document = _unreplayable_document(test_config, monkeypatch, case)
     runtime = SimpleNamespace(
         lightrag=SimpleNamespace(
             aget_docs_by_track_id=AsyncMock(
@@ -398,10 +515,10 @@ async def test_a_run_settles_when_a_processed_documents_source_is_gone(
     assert outcome.result["documents"] == [
         {
             "document_id": "doc-1",
-            "identifier": "report.pdf",
+            **({"identifier": "report.pdf"} if case in _NAMED_UNREPLAYABLE else {}),
             "status": "failed",
             "phase": "retry",
-            "reason": "the source could not be downloaded",
+            "reason": _UNREPLAYABLE_REASONS[case],
         }
     ]
     assert health.degraded == []
@@ -3247,11 +3364,10 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert outcomes == []
 
-    async def test_recovered_processed_invalid_source_preflight_stays_uncertain(
+    async def test_recovered_processed_invalid_source_locator_fails(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
-
+        """Waiting cannot make an invalid source locator valid."""
         service = _service(test_config)
         service._initialized = True
         service._metadata_index = AsyncMock()
@@ -3275,13 +3391,15 @@ class TestWorkspaceRagLightRAGMainPath:
         async def outcome(doc_id: str, state: str, _summary: dict[str, Any]) -> None:
             outcomes.append((doc_id, state))
 
-        with pytest.raises(RetryOutcomeUncertainError, match="source preflight failed"):
-            await service.aretry_failed_docs(
-                cohort_doc_ids=("doc-committed",),
-                outcome_callback=outcome,
-            )
+        result = await service.aretry_failed_docs(
+            cohort_doc_ids=("doc-committed",),
+            outcome_callback=outcome,
+        )
 
-        assert outcomes == []
+        assert outcomes == [("doc-committed", "failed")]
+        assert result["failed_docs"] == [
+            {"doc_id": "doc-committed", "reason": "source metadata invalid"}
+        ]
 
     async def test_recovered_cohort_status_read_failure_is_typed_uncertainty(
         self, test_config: DlightragConfig
@@ -4135,7 +4253,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_remote_retry_materialization_failure_removes_partial_parser_source(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag.engine.rag.workspace.workspace_rag import _RetryDownloadError
+        from dlightrag.engine.rag.workspace.workspace_rag import _RetrySourceUnavailableError
 
         service = _service(test_config)
         service._initialized = True
@@ -4171,7 +4289,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "dlightrag.engine.rag.corpus.sources.url.URLDataSource",
                 return_value=source,
             ),
-            pytest.raises(_RetryDownloadError) as raised,
+            pytest.raises(_RetrySourceUnavailableError) as raised,
         ):
             await service._aingest_download_locator(  # type: ignore[attr-defined]
                 "bynder://asset/1",
@@ -4179,6 +4297,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "report.pdf",
             )
 
+        assert raised.value.reason == "the source could not be downloaded"
         assert isinstance(raised.value.__cause__, RuntimeError)
         assert not parser_path.exists()
         assert not archived.exists()
@@ -4229,19 +4348,23 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_download_locator_dispatch_rejects_existing_file_outside_workspace(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
+        from dlightrag.engine.rag.workspace.workspace_rag import _RetrySourceUnavailableError
+
         service = _service(test_config)
         outside = tmp_path / "other-workspace" / "report.pdf"
         outside.parent.mkdir(parents=True)
         outside.write_bytes(b"%PDF-private")
         service._ingestion_engine = AsyncMock()
 
-        with pytest.raises(FileNotFoundError, match="download locator is unavailable"):
+        with pytest.raises(_RetrySourceUnavailableError) as raised:
             await service._aingest_download_locator(  # type: ignore[attr-defined]
                 "local://other/report.pdf",
                 str(outside),
                 "report.pdf",
             )
 
+        assert raised.value.reason == "the source file is no longer available"
+        assert isinstance(raised.value.__cause__, FileNotFoundError)
         service._ingestion_engine.aingest_files.assert_not_awaited()
 
     async def test_download_locator_dispatch_recovers_lightrag_moved_local_source(
@@ -4809,7 +4932,14 @@ async def test_uncertain_preflight_still_replays_documents_admitted_before_it(
     service, metadata, doc_by_file = _local_retry_service(
         test_config, ["a", "b"], statuses={"b": "processed"}
     )
-    metadata["doc-b"] = {"filename": "b.pdf"}  # incomplete: b's outcome is uncertain
+
+    def row(doc_id: str) -> Any:
+        if doc_id == "doc-b":
+            # b's finalization marker cannot be read: its outcome is uncertain.
+            raise RuntimeError("metadata temporarily down")
+        return metadata.get(doc_id)
+
+    _serve_metadata(service._metadata_index, row)
     engine, passes = _fake_engine(doc_by_file)
     service._ingestion_engine = engine  # type: ignore[assignment]
     outcomes: list[tuple[str, str]] = []
@@ -4817,7 +4947,7 @@ async def test_uncertain_preflight_still_replays_documents_admitted_before_it(
     async def outcome(doc_id: str, state: str, _summary: dict[str, Any]) -> None:
         outcomes.append((doc_id, state))
 
-    with pytest.raises(RetryOutcomeUncertainError, match="source metadata incomplete"):
+    with pytest.raises(RetryOutcomeUncertainError, match="metadata read failed"):
         await service.aretry_failed_docs(outcome_callback=outcome)
 
     assert passes == [["doc-a"]]
