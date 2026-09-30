@@ -491,7 +491,7 @@ class TestAnthropicProvider:
             cast(Any, p)._client = None
             await p.complete(
                 [{"role": "user", "content": "hi"}],
-                "claude-opus-5",
+                "claude-opus-5-5",
                 response_format={
                     "type": "json_schema",
                     "json_schema": {"name": "demo_plan", "schema": schema, "strict": True},
