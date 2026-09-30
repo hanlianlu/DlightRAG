@@ -11,7 +11,6 @@ import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.adapters.http.browser.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import DEPLOYMENT_OWNER_ID
 from dlightrag.application.answer_runs.service import AgentEffortOffer
@@ -35,6 +34,35 @@ from tests.unit.conftest import answer_capabilities
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
 SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
+#: The document types an Answer Run reads, which the Web composer offers.
+_READABLE_EXTENSIONS = (
+    "conf",
+    "css",
+    "csv",
+    "docx",
+    "htm",
+    "html",
+    "ini",
+    "js",
+    "json",
+    "log",
+    "md",
+    "pdf",
+    "pptx",
+    "properties",
+    "py",
+    "rtf",
+    "scss",
+    "sh",
+    "sql",
+    "tex",
+    "ts",
+    "txt",
+    "xlsx",
+    "xml",
+    "yaml",
+    "yml",
+)
 BUILTIN_SKILL_COUNCIL = {
     "name": "council",
     "description": (
@@ -767,14 +795,13 @@ class TestWebBootstrap:
                 "count_limit": 6,
                 "image_max_bytes": 104_857_600,
                 "document_max_bytes": 104_857_600,
-                "extensions": sorted(SUPPORTED_DOCUMENT_EXTENSIONS),
+                # What an Answer Run reads, as the Engine declares it: no packaged
+                # format such as odt, epub, or textpack that no path could read.
+                "extensions": list(_READABLE_EXTENSIONS),
                 "image_capability": "supported",
                 "image_limit": 8,
                 "accept": ",".join(
-                    [
-                        "image/*",
-                        *(f".{extension}" for extension in sorted(SUPPORTED_DOCUMENT_EXTENSIONS)),
-                    ]
+                    ["image/*", *(f".{extension}" for extension in _READABLE_EXTENSIONS)]
                 ),
             },
             "active_html_preview_enabled": True,

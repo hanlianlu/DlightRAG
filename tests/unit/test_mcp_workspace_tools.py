@@ -1189,6 +1189,33 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
     assert resources[0].content is None
 
 
+async def test_mcp_answer_links_are_not_refused_by_the_type_their_address_names(
+    mock_mcp_application: Any,
+) -> None:
+    from tests.support.application_double import delegate
+    from tests.unit.test_answer_service import _service, _Store
+
+    # MCP carries links only. The upload rule never refuses a link: what it serves is
+    # known only once it is fetched, and reading it follows Web acquisition.
+    answer_store = _Store()
+    delegate(mock_mcp_application.answers, _service(store=answer_store), "create")
+
+    result = await mcp_server.mcp_app.call_tool(
+        "answer",
+        {
+            "query": "Summarize the draft",
+            "mode": "research",
+            "attachments": [{"url": "https://example.com/draft.odt", "filename": "draft.odt"}],
+        },
+    )
+
+    assert _tool_json(result)["run_kind"] == "answer"
+    (created,) = answer_store.created
+    assert [link["url"] for link in created["prepared_input"]["links"]] == [
+        "https://example.com/draft.odt"
+    ]
+
+
 async def test_mcp_answer_reports_changed_connections(
     mock_mcp_application: Any,
 ) -> None:

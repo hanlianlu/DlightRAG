@@ -55,7 +55,11 @@ from dlightrag.engine.answer.resources.models import (
     is_resource_handle,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from dlightrag.engine.answer.resources.text import build_text_windows, decode_text
+from dlightrag.engine.answer.resources.text import (
+    build_text_windows,
+    declared_charset,
+    decode_text,
+)
 from dlightrag.engine.answer.resources.visual import ResourceViewError, pdf_page_count
 from dlightrag.engine.answer.web_sources import WebExtractResult
 from dlightrag.engine.public_http import (
@@ -888,7 +892,7 @@ class ResourceRegistry:
             text = await asyncio.to_thread(
                 decode_text,
                 content,
-                declared_charset=_charset_of(resource.declared_mime),
+                declared_charset=declared_charset(resource.declared_mime),
             )
             view = _ConvertedResource(text=text, handles=())
         if view.text or not (resource.url and _is_textual_web_resource(resource)):
@@ -1946,16 +1950,6 @@ def _focus_order(windows: list[tuple[TextWindowLocator, str]], focus: str | None
         return list(range(count))
     best = ranked[0][0]
     return [*range(best, count), *range(0, best)]
-
-
-def _charset_of(declared_mime: str | None) -> str | None:
-    if not declared_mime:
-        return None
-    for token in declared_mime.split(";")[1:]:
-        key, _, value = token.strip().partition("=")
-        if key.strip().lower() == "charset" and value:
-            return value.strip().strip('"')
-    return None
 
 
 __all__ = [

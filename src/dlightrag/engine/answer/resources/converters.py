@@ -139,6 +139,8 @@ _ROUTES: dict[str, _Route] = {
     ".xlsx": _Route(".xlsx", _XLSX_MIME, True, True),
 }
 _MIME_TO_ROUTE: dict[str, _Route] = {route.mimetype: route for route in _ROUTES.values()}
+#: The formats a converter turns into text, by file extension (without the dot).
+CONVERTED_EXTENSIONS: frozenset[str] = frozenset(route[1:] for route in _ROUTES)
 
 
 def _resolve_route(filename: str | None, declared_mime: str | None) -> _Route | None:
@@ -466,6 +468,7 @@ def _xlsx_anchor(sheet_title: str, image: object) -> str | None:
 
 
 __all__ = [
+    "CONVERTED_EXTENSIONS",
     "ConvertedResource",
     "ConversionLimitError",
     "ExtractedVisual",

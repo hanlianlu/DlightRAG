@@ -77,6 +77,14 @@ Blob.
   database credentials rotate, mints the handles the Run already printed.
   Cursors are HMAC-signed with a key derived from the same identity and bound to
   their Resource and focus; a cursor never crosses a Run.
+- An upload is admitted only when a Run can read it, by one rule in
+  `engine/answer/resources/admission.py`: its type admits an image, a document a
+  converter turns into text, a listed text type, or a `text/*` media type, and
+  any other upload is decided by its bytes, admitted when they verify as an image
+  or decode as text. Every transport applies that rule at acceptance and refuses
+  any other upload as `UNSUPPORTED_ATTACHMENT_TYPE`; the Web composer offers the
+  listed types. A link is admitted whatever its address names, because what it
+  serves is known only once it is fetched.
 - Caller attachments and links count against `answer.generation.max_attachments`
   (6). An upload larger than `max_attachment_bytes` (100 MiB) is refused, and a
   fetched URL body larger than it fails the direct fetch; uploads together may

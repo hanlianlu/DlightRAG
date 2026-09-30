@@ -309,6 +309,46 @@ async def test_create_persists_the_run_and_its_uploaded_bytes(
     )
 
 
+async def test_an_upload_no_run_can_read_is_refused_by_kind_and_stores_nothing(
+    client: AsyncClient, pool: Any
+) -> None:
+    response = await client.post(
+        "/answer",
+        data={"request": json.dumps({"query": "summarize"})},
+        files=[
+            ("attachments", ("notes.md", b"# notes", "text/markdown")),
+            ("attachments", ("draft.odt", b"PK\x03\x04", "application/octet-stream")),
+        ],
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error_type"] == "validation"
+    assert body["error_kind"] == "UNSUPPORTED_ATTACHMENT_TYPE"
+    assert body["detail"].startswith("Attachment type .odt cannot be read by an answer.")
+    assert await pool.fetchval("SELECT count(*) FROM dlightrag_runs") == 0
+
+
+async def test_a_text_upload_of_an_unlisted_type_is_accepted_by_its_bytes(
+    client: AsyncClient, store: PGRunStore
+) -> None:
+    # curl and requests name no type for such a file: application/octet-stream.
+    response = await client.post(
+        "/answer",
+        data={"request": json.dumps({"query": "review the build"})},
+        files=[
+            ("attachments", ("main.go", b"package main\n", "application/octet-stream")),
+            ("attachments", ("Makefile", b"build:\n\tgo build\n", "application/octet-stream")),
+        ],
+    )
+
+    assert response.status_code == 202
+    references = await store.list_run_artifacts(
+        owner_id=owner_id_from_user(_ANON), run_id=response.json()["run_id"]
+    )
+    assert sorted(reference.filename for reference in references) == ["Makefile", "main.go"]
+
+
 async def test_idempotency_replays_and_conflicts_within_one_owner(
     client: AsyncClient, app: FastAPI
 ) -> None:

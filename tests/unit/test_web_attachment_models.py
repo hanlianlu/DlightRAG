@@ -9,7 +9,6 @@ import pytest
 from PIL import Image
 
 from dlightrag.adapters.http.browser.attachment_models import (
-    SUPPORTED_DOCUMENT_EXTENSIONS,
     ValidatedWebAttachment,
     classify_web_attachment,
     validate_web_attachments,
@@ -47,7 +46,8 @@ def test_classify_web_attachment_separates_images_and_documents() -> None:
     assert classify_web_attachment("photo.jpg", None) == "image"
     assert classify_web_attachment("report.pdf", "application/pdf") == "document"
     assert classify_web_attachment("notes.md", "text/markdown") == "document"
-    assert classify_web_attachment("archive.zip", "application/zip") == "unsupported"
+    # Which documents a Run reads is the Answer's rule, applied at acceptance.
+    assert classify_web_attachment("archive.zip", "application/zip") == "document"
 
 
 def test_validate_rejects_total_attachment_bytes_before_processing() -> None:
@@ -63,14 +63,6 @@ def test_validate_rejects_total_attachment_bytes_before_processing() -> None:
             max_attachment_bytes=10,
             max_total_attachment_bytes=7,
         )
-    assert classify_web_attachment("payload.bin", None) == "unsupported"
-
-
-def test_supported_document_extensions_cover_core_formats() -> None:
-    assert SUPPORTED_DOCUMENT_EXTENSIONS
-    assert {"pdf", "docx", "pptx", "xlsx", "md", "csv", "json", "html"} <= (
-        SUPPORTED_DOCUMENT_EXTENSIONS
-    )
 
 
 def test_validate_admits_mixed_ordered_image_and_document() -> None:
@@ -148,9 +140,11 @@ def test_validate_rejects_document_over_byte_limit() -> None:
         )
 
 
-def test_validate_rejects_unsupported_attachment() -> None:
-    with pytest.raises(ValueError, match="Unsupported attachment"):
-        _validate([("archive.zip", "application/zip", b"x")])
+def test_validate_leaves_which_documents_are_readable_to_the_answer() -> None:
+    (document,) = _validate([("archive.zip", "application/zip", b"x")])
+
+    assert document.kind == "document"
+    assert document.mime_type == "application/zip"
 
 
 def test_validate_rejects_empty_attachment() -> None:

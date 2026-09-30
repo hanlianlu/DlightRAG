@@ -867,6 +867,54 @@ async def test_a_rejected_fork_input_says_why_with_its_stable_kind(
     }
 
 
+async def test_an_upload_no_run_can_read_is_refused_by_the_answers_own_rule(
+    application: Any,
+) -> None:
+    from tests.unit.test_answer_service import _service, _Store
+
+    # A real conversation service over a real Answer service: the Web adapter keeps
+    # no list of its own, so the refusal is the one every transport gets.
+    conversation_store = AsyncMock()
+    conversation_store.replay_answer_turn.return_value = None
+    answer_store = _Store()
+    application.web_conversations = WebConversationService(
+        store=conversation_store,
+        answers=_service(store=answer_store),
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+    app = create_app(include_web_app=True)
+    app.state.application = application
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        cookies={"dlightrag_workspace": "default"},
+    ) as client:
+        response = await client.post(
+            "/web/api/answer",
+            data={
+                "query": "Summarize the draft",
+                "workspaces": json.dumps(["default"]),
+                "submission_id": SUBMISSION_ID,
+            },
+            files=[
+                (
+                    "attachments",
+                    ("draft.odt", b"PK\x03\x04", "application/vnd.oasis.opendocument.text"),
+                )
+            ],
+        )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["kind"] == "invalid_request"
+    assert body["error_kind"] == "UNSUPPORTED_ATTACHMENT_TYPE"
+    assert body["message"].startswith("Attachment type .odt cannot be read by an answer.")
+    assert answer_store.created == []
+    # The conversation was only ever asked whether this submission was a replay.
+    assert {call[0] for call in conversation_store.method_calls} == {"replay_answer_turn"}
+
+
 async def test_an_empty_question_is_rejected_before_acceptance(
     client: AsyncClient, service: Any
 ) -> None:

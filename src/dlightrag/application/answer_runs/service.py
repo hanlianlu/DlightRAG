@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable answer runs over already-authorized canonical workspaces."""
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
@@ -64,6 +65,7 @@ from dlightrag.engine.answer.mode import (
     valid_modes,
 )
 from dlightrag.engine.answer.owner import is_personal_auth_mode
+from dlightrag.engine.answer.resources.admission import require_readable_attachment
 from dlightrag.engine.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.results import AnswerResult, restore_answer_result
@@ -648,6 +650,12 @@ def _accepted_resource_payloads(
     return payloads
 
 
+def _require_readable_uploads(uploads: Sequence[tuple[str | None, str | None, bytes]]) -> None:
+    """One admission rule for every transport: the Engine decides what a Run reads."""
+    for filename, declared_mime, content in uploads:
+        require_readable_attachment(filename, declared_mime, content)
+
+
 def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
     """Project one public request into durable acceptance input, without I/O."""
     if not request.workspaces:
@@ -878,6 +886,14 @@ class AnswerService:
             )
             if replay is not None:
                 return replay
+        uploads = tuple(
+            (resource.filename, resource.declared_mime, resource.content)
+            for resource in request.resources
+            if resource.content is not None
+        )
+        if uploads:
+            # Deciding an upload by its bytes decodes it, so it runs off the event loop.
+            await asyncio.to_thread(_require_readable_uploads, uploads)
         if not self._coordinator.is_started:
             raise RunRuntimeUnavailableError("Answer runtime is unavailable")
         run_request, attachment_bytes = await self._resources.pin_current_image_links(

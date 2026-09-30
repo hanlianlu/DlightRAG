@@ -5,7 +5,6 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from dlightrag.adapters.http.browser.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.adapters.http.browser.deps import (
     filter_web_workspace_records,
     get_application,
@@ -27,6 +26,7 @@ from dlightrag.engine.answer.client_contracts import (
 )
 from dlightrag.engine.answer.image_capability import ImageCapabilityStatus
 from dlightrag.engine.answer.owner import is_personal_auth_mode
+from dlightrag.engine.answer.resources.admission import READABLE_DOCUMENT_EXTENSIONS
 
 router = APIRouter()
 
@@ -146,7 +146,8 @@ async def build_web_bootstrap(
         capability_status = capability.status
         effective_current_upload_limit = capability.effective_max_images
 
-    extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
+    # The composer offers what an Answer Run reads; acceptance enforces the same list.
+    extensions = list(READABLE_DOCUMENT_EXTENSIONS)
     attachment_limit = application.config.answer.generation.max_attachment_bytes
     return WebBootstrap(
         personal_mcp_connections=is_personal_auth_mode(request.state.user_context.auth_mode),

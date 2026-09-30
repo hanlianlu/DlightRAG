@@ -793,7 +793,10 @@ answer:
 ```
 
 Attachments are run-scoped Resources. Full bytes do not enter model context;
-text is decoded/converted by `read` and image pixels are attached by `view` on demand. `query_images`
+text is decoded/converted by `read` and image pixels are attached by `view` on demand.
+Which uploads are admitted is not configuration: the Engine decides what a Run
+reads, by type and otherwise by the bytes, and every transport admits uploads by
+that one rule ([Interfaces](interfaces.md)). `query_images`
 is a separate retrieve-only path limited to three current images. The final
 answer image count is clamped to the query model's discovered capability.
 

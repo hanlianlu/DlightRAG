@@ -18,6 +18,7 @@ ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 INVALID_TOOL_CONFIGURATION = "invalid_tool_configuration"
 ANSWER_RESOURCE_INVALID = "ANSWER_RESOURCE_INVALID"
+UNSUPPORTED_ATTACHMENT_TYPE = "UNSUPPORTED_ATTACHMENT_TYPE"
 UNSUPPORTED_ANSWER_MODE = "unsupported_answer_mode"
 UNSUPPORTED_RESOURCE_CAPABILITY = "unsupported_resource_capability"
 ROUTING_FAILED = "routing_failed"
@@ -92,6 +93,28 @@ class AnswerResourceAdmissionError(AnswerInputError):
         )
 
 
+class UnsupportedAttachmentTypeError(AnswerInputError):
+    """An uploaded attachment is of a type no Answer Run can read.
+
+    ``attachment_type`` is a sanitized label (a file extension or a media type), or
+    ``None`` when the upload names neither, and the message lists the types a Run
+    does read so the caller can act on it.
+    """
+
+    def __init__(self, attachment_type: str | None, readable: tuple[str, ...]) -> None:
+        named = (
+            f"Attachment type {attachment_type}"
+            if attachment_type is not None
+            else "An attachment without a file type"
+        )
+        super().__init__(
+            f"{named} cannot be read by an answer. "
+            f"Attach an image, a text file, or a file of type: {', '.join(readable)}.",
+            error_kind=UNSUPPORTED_ATTACHMENT_TYPE,
+        )
+        self.attachment_type = attachment_type
+
+
 class ChildToolNarrowingError(RuntimeError):
     """A Child's explicit ``tools`` narrowing names something its Run cannot offer.
 
@@ -160,6 +183,7 @@ __all__ = [
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "INVALID_TOOL_CONFIGURATION",
     "UNSUPPORTED_ANSWER_MODE",
+    "UNSUPPORTED_ATTACHMENT_TYPE",
     "UNSUPPORTED_RESOURCE_CAPABILITY",
     "REASONING_CONTROL_REJECTED_MESSAGE",
     "ROUTING_FAILED",
@@ -171,6 +195,7 @@ __all__ = [
     "CurrentImagePayloadError",
     "InvalidToolConfigurationError",
     "UnsupportedAnswerModeError",
+    "UnsupportedAttachmentTypeError",
     "UnsupportedResourceCapabilityError",
     "classify_answer_error",
 ]

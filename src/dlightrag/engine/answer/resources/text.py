@@ -26,6 +26,17 @@ _BINARY_RATIO = 0.30
 _MAX_CHARS_PER_TOKEN = 4
 
 
+def declared_charset(media_type: str | None) -> str | None:
+    """The ``charset`` a declared media type names, or ``None`` when it names none."""
+    if not media_type:
+        return None
+    for token in media_type.split(";")[1:]:
+        key, _, value = token.strip().partition("=")
+        if key.strip().lower() == "charset" and value:
+            return value.strip().strip('"')
+    return None
+
+
 def decode_text(content: bytes, *, declared_charset: str | None) -> str:
     """Decode *content* to text or raise :class:`ResourceDecodeError`."""
     if not content:
@@ -181,4 +192,4 @@ def _fit_char_span(line: str, start: int, *, max_window_tokens: int) -> int:
     return low
 
 
-__all__ = ["build_text_windows", "decode_text"]
+__all__ = ["build_text_windows", "decode_text", "declared_charset"]

@@ -36,9 +36,11 @@ from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.errors import (
+    UNSUPPORTED_ATTACHMENT_TYPE,
     AnswerInputOverflowError,
     CurrentImagePayloadError,
     UnsupportedAnswerModeError,
+    UnsupportedAttachmentTypeError,
     UnsupportedResourceCapabilityError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -989,6 +991,75 @@ async def test_explicit_fast_rejects_when_40k_cannot_fit() -> None:
         await service.create(request=_request(mode="fast"), owner_id=_OWNER)
 
     assert store.created == []
+
+
+async def test_an_upload_no_run_can_read_is_refused_before_anything_is_prepared() -> None:
+    store = _Store()
+    resources = _Resources()
+    service = _service(store=store, resources=resources)
+
+    with pytest.raises(UnsupportedAttachmentTypeError) as refused:
+        await service.create(
+            request=_request(
+                resources=(
+                    ResourceInput(filename="notes.md", content=b"# notes"),
+                    ResourceInput(
+                        filename="draft.odt",
+                        content=b"PK\x03\x04",
+                        declared_mime="application/vnd.oasis.opendocument.text",
+                    ),
+                ),
+            ),
+            owner_id=_OWNER,
+        )
+
+    assert refused.value.error_kind == UNSUPPORTED_ATTACHMENT_TYPE
+    assert refused.value.attachment_type == ".odt"
+    assert store.created == []
+    assert resources.calls == []
+
+
+async def test_an_unlisted_upload_is_admitted_when_a_run_decodes_its_bytes() -> None:
+    store = _Store()
+    service = _service(store=store)
+
+    await service.create(
+        request=_request(
+            mode="research",
+            resources=(
+                ResourceInput(
+                    filename="main.go",
+                    content=b"package main\n",
+                    declared_mime="application/octet-stream",
+                ),
+                ResourceInput(filename="Makefile", content=b"report:\n\tgo run .\n"),
+            ),
+        ),
+        owner_id=_OWNER,
+    )
+
+    (created,) = store.created
+    assert [item["filename"] for item in created["prepared_input"]["attachments"]] == [
+        "main.go",
+        "Makefile",
+    ]
+
+
+async def test_a_link_is_admitted_whatever_type_its_address_names() -> None:
+    store = _Store()
+    service = _service(store=store)
+
+    await service.create(
+        request=_request(
+            mode="research",
+            resources=(ResourceInput(url="https://example.com/draft.odt", filename="draft.odt"),),
+        ),
+        owner_id=_OWNER,
+    )
+
+    assert [link["url"] for link in store.created[0]["prepared_input"]["links"]] == [
+        "https://example.com/draft.odt"
+    ]
 
 
 async def test_explicit_fast_with_pdf_creates_no_run() -> None:

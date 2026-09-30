@@ -77,6 +77,22 @@ They never become workspace documents or appear in `/retrieve`. The separate
 `query_images` input belongs only to `/retrieve` and performs knowledge-base
 visual search.
 
+An uploaded file is admitted only when an Answer Run can read it, by one rule
+the Engine owns (`engine/answer/resources/admission.py`). Its type admits it
+first: an image; a document a converter turns into text (`csv`, `docx`, `htm`,
+`html`, `pdf`, `pptx`, `xlsx`, or the media type of one); one of the listed text
+types (`conf`, `css`, `ini`, `js`, `json`, `log`, `md`, `properties`, `py`,
+`rtf`, `scss`, `sh`, `sql`, `tex`, `ts`, `txt`, `xml`, `yaml`, `yml`); or a
+`text/*` media type. Any other upload is decided by its bytes, as a Run reads
+them: bytes that verify as an image or decode as text are admitted, so a source
+or data file a client sends as `application/octet-stream` (`main.go`, `Makefile`,
+`data.tsv`) is, and a packaged format that does neither (`odt`, `epub`, `zip`) is
+not. REST and the Web apply this rule at acceptance and refuse any other upload
+with HTTP 422 and `error_kind: UNSUPPORTED_ATTACHMENT_TYPE`, naming its type;
+nothing is stored. A link is not an upload: what it serves is known only once it
+is fetched, so a link is admitted whatever its address names and is read under
+the public Web acquisition contract. MCP accepts links only.
+
 ## Ingestion
 
 ### REST
@@ -563,6 +579,8 @@ Memory package's separately bound MCP server retains its own four-tool contract.
 Web routes under `/web/api/*` are browser contracts, not compatibility aliases
 for REST. `GET /web/api/bootstrap` (bootstrap contract version 3) returns
 authorized workspace state, Files target, attachment limits, image capability,
+the document types admitted by their extension (`answer_attachments.extensions`,
+the Engine's list above, which is what the composer offers),
 and `agent_effort: {levels, default}` — the efforts this deployment applies and,
 when it is one of them, its own configured level — never bearer or edge tokens.
 `POST /web/api/answer` accepts the same optional `effort` as REST and MCP, on
@@ -883,8 +901,8 @@ below. Stable answer error kinds are:
 
 - `CURRENT_IMAGES_UNSUPPORTED`, `CURRENT_IMAGE_LIMIT_EXCEEDED`,
   `ANSWER_IMAGE_CAPABILITY_UNKNOWN`, `ANSWER_INPUT_OVERFLOW`,
-  `MODEL_CAPABILITY_UNAVAILABLE`, `unsupported_resource_capability`, and
-  `ANSWER_RESOURCE_INVALID`;
+  `MODEL_CAPABILITY_UNAVAILABLE`, `unsupported_resource_capability`,
+  `ANSWER_RESOURCE_INVALID`, and `UNSUPPORTED_ATTACHMENT_TYPE`;
 - `invalid_tool_configuration`, `unsupported_answer_mode`, `routing_failed`,
   `tool_contract_changed`, `run_abandoned`, and `run_execution_failed`; and
 - `ANSWER_STREAM_FAILED`.

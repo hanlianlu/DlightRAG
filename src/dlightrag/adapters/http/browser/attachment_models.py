@@ -13,43 +13,11 @@ from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS, verify_web_image_b
 
 # One ordered attachment collection per message. Images and documents mix; the
 # Answer preparation extracts verified images into current-image blocks and registers the
-# rest as request-local resources. The admitted count is owned at runtime by
+# rest as request-local resources. Which documents a Run can read is the Answer's own
+# rule, applied at acceptance to every transport, so this adapter keeps no list of its
+# own. The admitted count is owned at runtime by
 # ``config.answer.generation.max_attachments`` and threaded in by callers.
-SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
-    {
-        "pdf",
-        "docx",
-        "pptx",
-        "xlsx",
-        "md",
-        "textpack",
-        "txt",
-        "csv",
-        "json",
-        "html",
-        "htm",
-        "xml",
-        "yaml",
-        "yml",
-        "rtf",
-        "odt",
-        "epub",
-        "tex",
-        "log",
-        "py",
-        "js",
-        "ts",
-        "css",
-        "scss",
-        "sql",
-        "sh",
-        "conf",
-        "ini",
-        "properties",
-    }
-)
-
-AttachmentKind = Literal["image", "document", "unsupported"]
+AttachmentKind = Literal["image", "document"]
 
 
 def _suffix(filename: str) -> str:
@@ -60,10 +28,7 @@ def _suffix(filename: str) -> str:
 
 def classify_web_attachment(filename: str, mime_type: str | None) -> AttachmentKind:
     mime = (mime_type or mimetypes.guess_type(filename)[0] or "").lower()
-    if mime.startswith("image/"):
-        return "image"
-    extension = _suffix(filename).lstrip(".")
-    return "document" if extension in SUPPORTED_DOCUMENT_EXTENSIONS else "unsupported"
+    return "image" if mime.startswith("image/") else "document"
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,14 +77,12 @@ def validate_web_attachments(
                 detected_mime = verify_web_image_bytes(payload, max_pixels=image_max_pixels)
             except ValueError as exc:
                 raise ValueError(f"image {safe_name} {exc}") from exc
-        elif kind == "document":
+        else:
             if len(payload) > max_attachment_bytes:
                 raise ValueError(f"document {safe_name} exceeds the size limit")
             detected_mime = (
                 mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
             )
-        else:
-            raise ValueError(f"Unsupported attachment: {safe_name}")
         validated.append(
             ValidatedWebAttachment(
                 attachment_id=str(uuid4()),
@@ -129,14 +92,13 @@ def validate_web_attachments(
                 suffix=suffix,
                 attachment_bytes=payload,
                 content_sha256=hashlib.sha256(payload).hexdigest(),
-                kind="image" if kind == "image" else "document",
+                kind=kind,
             )
         )
     return tuple(validated)
 
 
 __all__ = [
-    "SUPPORTED_DOCUMENT_EXTENSIONS",
     "ValidatedWebAttachment",
     "classify_web_attachment",
     "validate_web_attachments",
