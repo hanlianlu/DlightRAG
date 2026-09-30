@@ -3,6 +3,7 @@
 
 import ast
 import asyncio
+import logging
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -20,6 +21,27 @@ from dlightrag.engine.ai.telemetry import SPAN_TYPES, NoopTelemetry
 from tests.unit.conftest import RecordingLangfuse, RecordingObservation
 
 pytestmark = pytest.mark.usefixtures("reset_langfuse_client")
+
+
+def test_no_log_call_names_a_log_record_attribute_in_extra() -> None:
+    """Such a key raises KeyError at the call whenever its level is enabled.
+
+    ``filename`` in one ``extra`` crashed ``read`` adopting an earlier Run's document.
+    """
+    reserved = set(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
+    source = Path(__file__).resolve().parents[2] / "src" / "dlightrag"
+    offenders = [
+        f"{path.relative_to(source)}:{key.lineno} {key.value!r}"
+        for path in sorted(source.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "extra" and isinstance(keyword.value, ast.Dict)
+        for key in keyword.value.keys
+        if isinstance(key, ast.Constant) and key.value in reserved
+    ]
+
+    assert offenders == []
 
 
 def test_importing_langfuse_adapter_does_not_initialize_tracing() -> None:

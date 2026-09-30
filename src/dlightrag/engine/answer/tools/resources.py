@@ -148,7 +148,7 @@ async def _adopt_earlier_then_retry(
             "resource_id": adopted,
             "origin_resource_id": loaded.resource_id,
             "origin_run_id": loaded.origin_run_id,
-            "filename": loaded.filename,
+            "resource_filename": loaded.filename,
             "source_url": loaded.source_url,
             "reused_conversion_view": registry.has_conversion_snapshot(adopted),
         },
