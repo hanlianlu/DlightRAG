@@ -551,6 +551,10 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_evidence (
 )
 """
 
+# Nothing writes kind 'accepted_blob' any more: an accepted upload is its Run's
+# current_attachment artifact, which also holds its Blob. The checks still admit
+# the kind, because databases created before then keep those rows and those
+# checks, and narrowing them would need a migration.
 _CREATE_RESOURCES = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     owner_id       TEXT        NOT NULL,
@@ -2699,7 +2703,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         *,
         envelope: PreparedRunEnvelope,
         run_id: str,
-        resources: Sequence[Mapping[str, object]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
@@ -2710,7 +2713,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             envelope,
             run_id,
             carries_answer_projections=bool(
-                resources or artifacts or references or routing or connection_bindings
+                artifacts or references or routing or connection_bindings
             ),
             references=references,
         )
@@ -2721,7 +2724,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                     conn,
                     envelope,
                     accepted,
-                    resources=resources,
                     artifacts=artifacts,
                     references=references,
                     routing=routing,
@@ -2766,7 +2768,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             conn,
             envelope,
             accepted,
-            resources=(),
             artifacts=artifacts,
             references=references,
             routing=routing,
@@ -2779,7 +2780,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         envelope: PreparedRunEnvelope,
         accepted: _AcceptedRun,
         *,
-        resources: Sequence[Mapping[str, object]],
         artifacts: Sequence[PendingArtifact],
         references: Sequence[PendingArtifactReference],
         routing: RoutingAcceptance | None,
@@ -2846,24 +2846,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             if replayed is None:
                 raise RuntimeError("run insert reported a vanished conflict")
             return replayed
-        for resource in resources:
-            await conn.execute(
-                _INSERT_RESOURCE,
-                owner,
-                run_uuid,
-                str(resource["resource_id"]),
-                "accepted_blob",
-                str(resource["safe_name"]),
-                str(resource["media_type"]),
-                json.dumps(resource.get("capabilities") or {}, ensure_ascii=False),
-                int(str(resource["ordinal"])),
-                str(resource["blob_digest"]),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
         for reference in references:
             await conn.execute(
                 _INSERT_RUN_ARTIFACT,

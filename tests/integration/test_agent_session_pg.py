@@ -1216,7 +1216,8 @@ async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool
         )
 
 
-async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
+async def test_acceptance_stores_an_attachment_as_its_blob_and_reference_alone(pool) -> None:
+    """An accepted upload is its Run's artifact reference; no resource row repeats it."""
     store = await _store(pool)
     content = b"%PDF-accepted"
     digest = hashlib.sha256(content).hexdigest()
@@ -1232,20 +1233,10 @@ async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
     creation = await store.accept_run(
         envelope=_run_envelope(prepared_input, submission_key="attachment-acceptance"),
         run_id=run_id,
-        resources=(
-            {
-                "resource_id": "accepted-1",
-                "safe_name": "report.pdf",
-                "media_type": "application/pdf",
-                "capabilities": {},
-                "ordinal": 0,
-                "blob_digest": digest,
-            },
-        ),
         artifacts=(PendingArtifact(content=content),),
         references=(
             PendingArtifactReference(
-                resource_id="accepted-1",
+                resource_id="attachment-0",
                 reference_kind="current_attachment",
                 ordinal=0,
                 digest=digest,
@@ -1255,6 +1246,7 @@ async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
         ),
     )
     assert not creation.replayed
+    run_uuid = uuid.UUID(creation.run.run_id)
     async with pool.acquire() as conn:
         assert await conn.fetchval(
             "SELECT byte_size FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2",
@@ -1263,12 +1255,21 @@ async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
         ) == len(content)
         assert (
             await conn.fetchval(
-                "SELECT kind FROM dlightrag_answer_resources"
-                " WHERE owner_id = $1 AND run_id = $2 AND resource_id = 'accepted-1'",
+                "SELECT digest FROM dlightrag_answer_run_artifacts"
+                " WHERE owner_id = $1 AND run_id = $2 AND resource_id = 'attachment-0'",
                 _OWNER,
-                uuid.UUID(creation.run.run_id),
+                run_uuid,
             )
-            == "accepted_blob"
+            == digest
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_answer_resources"
+                " WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                run_uuid,
+            )
+            == 0
         )
 
 

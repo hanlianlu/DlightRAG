@@ -381,7 +381,6 @@ class AnswerRunAcceptor[T](RunReplayer[T], Protocol):
         *,
         envelope: PreparedRunEnvelope,
         run_id: str,
-        resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
@@ -604,27 +603,6 @@ def _prepared_input_payload(
     payload["auth_mode"] = auth_mode
     payload["mode"] = requested_mode
     return payload
-
-
-def _accepted_resource_payloads(
-    run_input: Any, *, attachment_bytes: Sequence[bytes]
-) -> list[dict[str, Any]]:
-    import hashlib
-
-    payloads: list[dict[str, Any]] = []
-    for ordinal, attachment in enumerate(run_input.attachments):
-        content = attachment_bytes[ordinal] if ordinal < len(attachment_bytes) else b""
-        payloads.append(
-            {
-                "resource_id": attachment.resource_id,
-                "safe_name": attachment.filename,
-                "media_type": attachment.mime_type or "application/octet-stream",
-                "capabilities": {},
-                "ordinal": ordinal,
-                "blob_digest": hashlib.sha256(content).hexdigest(),
-            }
-        )
-    return payloads
 
 
 def _require_readable_uploads(uploads: Sequence[tuple[str | None, str | None, bytes]]) -> None:
@@ -906,9 +884,6 @@ class AnswerService:
                     return await self._admission.admit(
                         partial(
                             acceptor.accept_run,
-                            resources=_accepted_resource_payloads(
-                                run_input, attachment_bytes=attachment_bytes
-                            ),
                             artifacts=[
                                 PendingArtifact(content=content) for content in attachment_bytes
                             ],

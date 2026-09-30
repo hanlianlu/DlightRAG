@@ -53,7 +53,6 @@ class FingerprintingRunStore(PGRunStore):
         prepared_input: Mapping[str, Any] | None = None,
         idempotency_fingerprint: str | None = None,
         idempotency_key: str | None = None,
-        resources: Sequence[Mapping[str, object]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
@@ -65,7 +64,6 @@ class FingerprintingRunStore(PGRunStore):
             return await super().accept_run(
                 envelope=envelope,
                 run_id=run_id,
-                resources=resources,
                 artifacts=artifacts,
                 references=references,
                 routing=routing,

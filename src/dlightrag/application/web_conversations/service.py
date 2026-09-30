@@ -142,7 +142,6 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
         *,
         envelope: PreparedRunEnvelope,
         run_id: str,
-        resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,

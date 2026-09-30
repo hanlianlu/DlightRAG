@@ -309,6 +309,46 @@ async def test_create_persists_the_run_and_its_uploaded_bytes(
     )
 
 
+async def test_an_accepted_upload_reads_back_by_its_id_from_its_artifact_reference(
+    app: FastAPI, client: AsyncClient, store: PGRunStore, pool: Any
+) -> None:
+    """The upload's artifact reference is its only record; no resource row repeats it."""
+    response = await client.post(
+        "/answer",
+        data={"request": json.dumps({"query": "summarize"})},
+        files=[("attachments", ("notes.txt", b"durable-bytes", "text/plain"))],
+    )
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+    owner = owner_id_from_user(_ANON)
+    [reference] = await store.list_run_artifacts(owner_id=owner, run_id=run_id)
+    answers = app.state.application.answers
+
+    read = await answers.read_run_resource(
+        owner_id=owner, run_id=run_id, resource_id=reference.resource_id
+    )
+    assert read is not None
+    descriptor, content = read
+    assert (descriptor.registry, descriptor.reference_kind) == ("artifact", "current_attachment")
+    assert (descriptor.filename, descriptor.digest) == ("notes.txt", reference.digest)
+    assert content == b"durable-bytes"
+    stream = await answers.open_run_resource(
+        owner_id=owner, run_id=run_id, resource_id=reference.resource_id
+    )
+    assert stream is not None
+    assert b"".join([piece async for piece in stream]) == b"durable-bytes"
+    assert await answers.run_resource_size(
+        owner_id=owner, run_id=run_id, resource_id=reference.resource_id
+    ) == len(b"durable-bytes")
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM dlightrag_answer_resources WHERE run_id = $1",
+            uuid.UUID(run_id),
+        )
+        == 0
+    )
+
+
 async def test_an_upload_no_run_can_read_is_refused_by_kind_and_stores_nothing(
     client: AsyncClient, pool: Any
 ) -> None:
