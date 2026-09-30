@@ -3899,21 +3899,73 @@ async def test_a_cancelled_ingest_publishes_nothing_more_and_cancels_its_queue_r
     assert not _published(state, "second.md")
 
 
-async def test_an_error_of_the_ingest_lets_lightrag_finish_the_rest_of_the_batch(
+async def test_a_status_read_that_fails_while_lightrag_runs_is_made_again(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only cancelling the ingest cancels its queue run; an error waits for it to end."""
+    """A failed read only holds the cohort's documents until the next one."""
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+    read = deps["stores"].get_full_doc_statuses.side_effect
+    failures = [RuntimeError("status store unavailable")]
+
+    def read_unless_failing(doc_ids: list[str]) -> dict[str, Any]:
+        if failures:
+            raise failures.pop()
+        return read(doc_ids)
+
+    deps["stores"].get_full_doc_statuses.side_effect = read_unless_failing
+    batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch))
+    await _until(lambda: _published(state, "first.md"))
+
+    second_settles.set()
+    result = await asyncio.wait_for(ingest, timeout=5)
+
+    assert not failures
+    assert result["errors"] == []
+    assert _published(state, "second.md")
+
+
+async def test_a_status_read_that_keeps_failing_ends_the_ingest_once_lightrag_is_done(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
     state["gates"]["second.md"] = second_settles = asyncio.Event()
     deps["stores"].get_full_doc_statuses.side_effect = RuntimeError("status store unavailable")
     batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
     ingest = asyncio.create_task(engine.aingest_files(batch))
-    await _until(lambda: deps["stores"].get_full_doc_statuses.await_count > 0)
-    await asyncio.sleep(0.05)
+    await _until(lambda: deps["stores"].get_full_doc_statuses.await_count > 1)
     assert not ingest.done()
 
     second_settles.set()
     with pytest.raises(RuntimeError, match="status store unavailable"):
+        await asyncio.wait_for(ingest, timeout=5)
+
+    assert state["cancelled"] == []
+    assert state["status"][_doc_id("second.md")]["status"] == "processed"
+
+
+async def test_an_unexpected_error_lets_lightrag_finish_the_rest_of_the_batch(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only cancelling the ingest cancels its queue run; an error waits for it to end."""
+    from dlightrag.engine.rag.corpus.ingestion import engine as engine_module
+
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+
+    def discard(parser_input: Path) -> None:
+        raise RuntimeError(f"cannot discard {parser_input.name}")
+
+    monkeypatch.setattr(engine_module, "discard_parser_input", discard)
+    batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch))
+    await _until(lambda: state["status"].get(_doc_id("first.md"), {}).get("status") == "processed")
+    await asyncio.sleep(0.1)
+    assert not ingest.done()
+
+    second_settles.set()
+    with pytest.raises(RuntimeError, match="cannot discard first.md"):
         await asyncio.wait_for(ingest, timeout=5)
 
     assert state["cancelled"] == []

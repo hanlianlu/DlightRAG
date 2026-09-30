@@ -209,7 +209,9 @@ class UnifiedIngestionEngine:
         immediate finalization read would misclassify the PENDING row as a
         processing failure. Poll the accepted cohort while rows report a known
         active state; missing or unknown rows fall through to finalization's
-        existing consistency error instead of waiting forever.
+        existing consistency error instead of waiting forever. A read that fails
+        while the queue run is still active is made again at the next interval;
+        once the queue run has ended, a failed read ends the ingest.
 
         This returns once the queue run it started has ended. A queue run that
         fails ends the ingest with its error. Cancelling the ingest cancels the
@@ -228,7 +230,20 @@ class UnifiedIngestionEngine:
                     await asyncio.wait((queue_run,), timeout=delay)
                     if queue_run.done():
                         queue_run.result()
-                    statuses = await self._stores.get_full_doc_statuses(pending)
+                    try:
+                        statuses = await self._stores.get_full_doc_statuses(pending)
+                    except Exception as exc:
+                        if queue_run.done():
+                            raise
+                        # The queue run keeps the cohort moving: a read that fails
+                        # meanwhile only holds its documents until the next one.
+                        # Storage errors can echo connection details, so only the
+                        # type is logged.
+                        logger.warning(
+                            "Could not read the status of an ingest cohort (%s); reading it again",
+                            type(exc).__name__,
+                        )
+                        continue
                     active: list[str] = []
                     for doc_id in pending:
                         status = statuses.get(doc_id)
