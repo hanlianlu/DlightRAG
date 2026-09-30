@@ -845,10 +845,20 @@ class TestWorkspaceRagClose:
 # ---------------------------------------------------------------------------
 
 
+def _publishing_index(*, published: bool) -> AsyncMock:
+    """A metadata index that answers the publication probe and holds no extra metadata."""
+    index = AsyncMock()
+    index.has_visible_documents.return_value = published
+    index.get_many.return_value = {}
+    return index
+
+
 class TestWorkspaceRagRetrieve:
     """Test aretrieve delegation to RetrievalEngine."""
 
-    def _make_retrieval_service(self, config: DlightragConfig) -> tuple[WorkspaceRag, MagicMock]:
+    def _make_retrieval_service(
+        self, config: DlightragConfig, *, metadata_index: AsyncMock | None = None
+    ) -> tuple[WorkspaceRag, MagicMock]:
         from dlightrag.engine.rag.retrieval import RetrievalResult
 
         service = _service(config)
@@ -857,12 +867,87 @@ class TestWorkspaceRagRetrieve:
         orchestrator.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
         service._retrieval_orchestrator = orchestrator
         service._lightrag_stores = MagicMock()
+        service._metadata_index = metadata_index or _publishing_index(published=True)
         return service, orchestrator
 
     async def test_aretrieve_delegates_to_orchestrator(self, test_config):
         service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query")
         orchestrator.aretrieve.assert_awaited_once()
+
+    async def test_aretrieve_runs_no_leg_in_a_workspace_that_publishes_nothing(
+        self, test_config
+    ) -> None:
+        """No LightRAG query, so no keyword-extraction call and no no-result "failure"."""
+        service, orchestrator = self._make_retrieval_service(
+            test_config, metadata_index=_publishing_index(published=False)
+        )
+
+        result = await service.aretrieve("test query")
+
+        orchestrator.aretrieve.assert_not_awaited()
+        assert result.contexts == {"chunks": [], "entities": [], "relationships": []}
+        assert result.trace == {"workspace": service.workspace_id, "workspace_empty": True}
+
+    async def test_federated_search_passes_over_an_empty_workspace_but_reports_a_broken_one(
+        self, test_config
+    ) -> None:
+        from dlightrag.engine.rag.retrieval import RetrievalResult
+        from dlightrag.engine.rag.retrieval.federation import (
+            FederationMergePolicy,
+            federated_retrieve,
+        )
+
+        broken = _publishing_index(published=True)
+        broken.has_visible_documents.side_effect = ConnectionError("corpus unreachable")
+        indexes = {
+            "published": _publishing_index(published=True),
+            "empty": _publishing_index(published=False),
+            "broken": broken,
+        }
+        services: dict[str, WorkspaceRag] = {}
+        orchestrators: dict[str, MagicMock] = {}
+        for workspace, index in indexes.items():
+            service = WorkspaceRag(
+                workspace_id=workspace,
+                settings=rag_settings(test_config),
+                backend=cast(Any, _backend(workspace, read_only=False)),
+                scheduler=ModelScheduler(max_concurrency=1),
+                telemetry=NoopTelemetry(),
+            )
+            service._initialized = True
+            service._metadata_index = index
+            orchestrator = MagicMock()
+            orchestrator.aretrieve = AsyncMock(
+                return_value=RetrievalResult(
+                    contexts={
+                        "chunks": [{"chunk_id": f"{workspace}-c1", "content": "evidence"}],
+                        "entities": [],
+                        "relationships": [],
+                    },
+                    trace={"lightrag_status": "success"},
+                )
+            )
+            service._retrieval_orchestrator = orchestrator
+            services[workspace] = service
+            orchestrators[workspace] = orchestrator
+
+        async def acquire(workspace: str) -> WorkspaceRag:
+            return services[workspace]
+
+        result = await federated_retrieve(
+            "query", list(services), acquire, policy=FederationMergePolicy(chunk_top_k=5)
+        )
+
+        assert [chunk["_workspace"] for chunk in result.contexts["chunks"]] == ["published"]
+        assert result.trace["per_workspace"]["empty"] == {
+            "workspace": "empty",
+            "workspace_empty": True,
+        }
+        assert result.trace["failed_workspaces"] == ["broken"]
+        orchestrators["published"].aretrieve.assert_awaited_once()
+        orchestrators["empty"].aretrieve.assert_not_awaited()
+        orchestrators["broken"].aretrieve.assert_not_awaited()
 
     async def test_aretrieve_tags_all_context_rows_with_workspace(self, test_config) -> None:
         from dlightrag.engine.rag.retrieval import RetrievalResult
@@ -2845,6 +2930,7 @@ class TestWorkspaceRagLightRAGMainPath:
 
         service = _service(test_config)
         service._initialized = True
+        service._metadata_index = _publishing_index(published=True)
         service._retrieval_orchestrator = MagicMock()
         service._retrieval_orchestrator.aretrieve = AsyncMock(return_value=expected)
 

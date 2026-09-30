@@ -1032,6 +1032,18 @@ class PGMetadataIndex(PostgresOperationRunner):
 
         return bool(await self._run(_operation))
 
+    async def has_visible_documents(self) -> bool:
+        """Return whether any document in this workspace has the publication marker."""
+
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM dlightrag_doc_metadata "  # noqa: S608 - fixed internal column
+                f"WHERE workspace=$1 AND {metadata_visibility_condition()})",
+                self._workspace,
+            )
+
+        return bool(await self._run(_operation))
+
     async def visible_subset(
         self,
         doc_ids: Sequence[str],

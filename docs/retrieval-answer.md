@@ -83,6 +83,13 @@ If both fail, retrieval raises the LightRAG error with BM25 chained. Trace
 `lightrag_mix_chunk_count` records the LightRAG count before fusion;
 `contexts.chunks` is the final fused/reranked set.
 
+A workspace that publishes no document runs none of these lanes: its result is
+empty and its trace records `workspace_empty`. Querying LightRAG there would
+spend a keyword-extraction model call only to report LightRAG's no-result status,
+`failure`. The publication check reads corpus storage, so a workspace whose
+storage fails still fails; multi-workspace retrieval lists it in
+`failed_workspaces` beside the workspaces that answered.
+
 Top-level Retrieval uses `planning` and `searching` durable phases. Corpus
 unavailability returns a deferred Runtime outcome with bounded exponential
 backoff, releasing Query execution capacity until `next_attempt_at`, at most

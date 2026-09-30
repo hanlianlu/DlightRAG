@@ -1379,15 +1379,20 @@ class WorkspaceRag:
 
         The unified retriever applies metadata scope inside every retrieval leg,
         fuses the resulting candidates, and this service hydrates provenance,
-        reranks, enriches metadata, and assigns citation identities.
+        reranks, enriches metadata, and assigns citation identities. A workspace
+        that publishes no document returns an empty result without running a leg.
 
         Args:
             filters: Optional MetadataFilter for structured metadata queries.
             filter_source: Whether filters are explicit or LLM-inferred.
         """
         self._ensure_initialized()
-        if self._retrieval_orchestrator is None:
+        if self._retrieval_orchestrator is None or self._metadata_index is None:
             raise RuntimeError("Retrieval orchestrator not initialized")
+        if not await self._metadata_index.has_visible_documents():
+            # No leg can return evidence here. Asking LightRAG anyway spends a
+            # keyword-extraction model call to report its no-result "failure".
+            return RetrievalResult(trace={"workspace": self.workspace_id, "workspace_empty": True})
 
         kg_result = await self._retrieval_orchestrator.aretrieve(
             query,

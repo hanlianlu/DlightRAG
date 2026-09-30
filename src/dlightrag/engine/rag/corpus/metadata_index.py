@@ -26,6 +26,10 @@ class MetadataIndexProtocol(VisibleDocumentLookup, Protocol):
     async def is_visible(self, doc_id: str) -> bool:
         raise NotImplementedError
 
+    async def has_visible_documents(self) -> bool:
+        """Whether the workspace publishes at least one document."""
+        raise NotImplementedError
+
     async def visible_subset(
         self,
         doc_ids: Sequence[str],

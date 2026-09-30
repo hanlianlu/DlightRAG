@@ -298,6 +298,29 @@ async def test_finalization_marker_round_trips_and_partial_updates_preserve_true
     assert unfinished["_dlightrag_finalization_complete"] is False
 
 
+async def test_publication_probe_sees_only_this_workspace_finished_documents(
+    writer_corpus: WriterCorpus,
+) -> None:
+    """Retrieval skips a workspace on this probe, so it must not count drafts or neighbours."""
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+
+    index = PGMetadataIndex(workspace="ms_publication_probe")
+    neighbour = PGMetadataIndex(workspace="ms_publication_probe_neighbour")
+    await index.clear()
+    await neighbour.clear()
+    assert await index.has_visible_documents() is False
+
+    await neighbour.upsert(
+        "doc-neighbour",
+        {"filename": "neighbour.pdf", "_dlightrag_finalization_complete": True},
+    )
+    await index.upsert("doc-draft", {"filename": "draft.pdf"})
+    assert await index.has_visible_documents() is False
+
+    await index.upsert("doc-draft", {"_dlightrag_finalization_complete": True})
+    assert await index.has_visible_documents() is True
+
+
 async def test_field_schema_stats_follow_writes_deletes_clear_and_workspace_union(
     writer_corpus: WriterCorpus,
 ) -> None:
