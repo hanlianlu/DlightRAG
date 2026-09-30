@@ -3,6 +3,7 @@
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Callable, Iterator, Mapping
 from enum import Enum
 from pathlib import Path
@@ -3887,7 +3888,7 @@ async def test_a_cancelled_ingest_publishes_nothing_more_and_cancels_its_queue_r
 
     ingest.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await ingest
+        await asyncio.wait_for(ingest, timeout=5)
 
     assert state["cancelled"] == ["second.md"]
     assert (parser_input_root / "second.md").read_bytes() == b"# second.md\n"
@@ -3926,15 +3927,49 @@ async def test_a_status_read_that_fails_while_lightrag_runs_is_made_again(
     assert _published(state, "second.md")
 
 
-async def test_a_status_read_that_keeps_failing_ends_the_ingest_once_lightrag_is_done(
+async def test_a_status_read_that_fails_after_lightrag_is_done_is_made_again(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The read that would see the cohort settle is retried too, not only one mid-run."""
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    read = deps["stores"].get_full_doc_statuses.side_effect
+    failed: list[str] = []
+
+    def fail_once_settled(doc_ids: list[str]) -> dict[str, Any]:
+        row = state["status"].get(_doc_id("only.md"), {})
+        if not failed and row.get("status") == "processed":
+            failed.append("once")
+            raise RuntimeError("status store unavailable")
+        return read(doc_ids)
+
+    deps["stores"].get_full_doc_statuses.side_effect = fail_once_settled
+
+    result = await asyncio.wait_for(
+        engine.aingest_files(_staged_batch(tmp_path, parser_input_root, "only.md")),
+        timeout=5,
+    )
+
+    assert failed == ["once"]
+    assert result["errors"] == []
+    assert _published(state, "only.md")
+
+
+async def test_status_reads_that_keep_failing_end_the_ingest_once_lightrag_finishes(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion import engine as engine_module
+
+    monkeypatch.setattr(engine_module, "_STATUS_POLL_MAX_SECONDS", 0.05)
     engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
     state["gates"]["second.md"] = second_settles = asyncio.Event()
-    deps["stores"].get_full_doc_statuses.side_effect = RuntimeError("status store unavailable")
+    reads = deps["stores"].get_full_doc_statuses
+    reads.side_effect = RuntimeError("status store unavailable")
     batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
     ingest = asyncio.create_task(engine.aingest_files(batch))
-    await _until(lambda: deps["stores"].get_full_doc_statuses.await_count > 1)
+    await _until(lambda: reads.await_count == engine_module._MAX_FAILED_STATUS_READS)
+    await asyncio.sleep(0.1)
+    # The last failure ends the ingest, which still lets LightRAG finish the batch.
+    assert reads.await_count == engine_module._MAX_FAILED_STATUS_READS
     assert not ingest.done()
 
     second_settles.set()
@@ -3943,6 +3978,25 @@ async def test_a_status_read_that_keeps_failing_ends_the_ingest_once_lightrag_is
 
     assert state["cancelled"] == []
     assert state["status"][_doc_id("second.md")]["status"] == "processed"
+
+
+async def test_ending_a_queue_run_logs_only_a_failure_the_ingest_does_not_raise(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion import engine as engine_module
+
+    async def fail() -> None:
+        raise RuntimeError("worker lost")
+
+    raised, replaced = asyncio.create_task(fail()), asyncio.create_task(fail())
+    await asyncio.wait((raised, replaced))
+
+    with caplog.at_level(logging.WARNING, logger=engine_module.logger.name):
+        await engine_module._end_queue_run(raised, raised.exception() or RuntimeError())
+        assert "queue run failed" not in caplog.text
+        await engine_module._end_queue_run(replaced, asyncio.CancelledError())
+
+    assert "LightRAG's queue run failed as its ingest ended (RuntimeError)" in caplog.text
 
 
 async def test_an_unexpected_error_lets_lightrag_finish_the_rest_of_the_batch(
@@ -3954,14 +4008,17 @@ async def test_an_unexpected_error_lets_lightrag_finish_the_rest_of_the_batch(
     engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
     state["gates"]["second.md"] = second_settles = asyncio.Event()
 
+    discarded: list[str] = []
+
     def discard(parser_input: Path) -> None:
+        discarded.append(parser_input.name)
         raise RuntimeError(f"cannot discard {parser_input.name}")
 
     monkeypatch.setattr(engine_module, "discard_parser_input", discard)
     batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
     ingest = asyncio.create_task(engine.aingest_files(batch))
-    await _until(lambda: state["status"].get(_doc_id("first.md"), {}).get("status") == "processed")
-    await asyncio.sleep(0.1)
+    await _until(lambda: discarded == ["first.md"])
+    await asyncio.sleep(0.05)
     assert not ingest.done()
 
     second_settles.set()
@@ -4015,7 +4072,7 @@ async def test_recovery_after_a_stop_finalizes_only_what_was_not_published(
     # sweep settles what it left.
     ingest.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await ingest
+        await asyncio.wait_for(ingest, timeout=5)
     second_settles.set()
     await state["process"]()
     finalized_before = deps["metadata_index"].upsert.await_count
@@ -4039,41 +4096,43 @@ async def test_recovery_after_a_stop_finalizes_only_what_was_not_published(
     ]
 
 
-async def test_a_parser_outage_defers_the_batch_once_what_settled_before_it_is_published(
+async def test_a_parser_outage_defers_the_batch_once_what_settles_after_it_is_published(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The first document is published while the second still waits for the parser.
+    """The parser is down for the first document while the second is still parsing.
 
-    The parser is down when the second reaches it: the batch raises the outage
-    only once that document has settled too, and what was published stays so.
+    The batch raises that outage only once the second has settled too, and the
+    second is published meanwhile rather than left behind.
     """
     engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
-    state["outage"].add("second.md")
+    state["outage"].add("first.md")
     state["gates"]["second.md"] = second_settles = asyncio.Event()
     batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
     ingest = asyncio.create_task(engine.aingest_files(batch))
-    await _until(lambda: _published(state, "first.md"))
+    # Its parser input goes once the ingest saw it settle.
+    await _until(lambda: not (parser_input_root / "first.md").exists())
     assert not ingest.done()
 
     second_settles.set()
     with pytest.raises(ParserUnavailableError):
         await asyncio.wait_for(ingest, timeout=5)
 
-    assert state["status"][_doc_id("second.md")]["status"] == "failed"
-    assert _published(state, "first.md")
-    assert not _published(state, "second.md")
+    assert state["status"][_doc_id("first.md")]["status"] == "failed"
+    assert _published(state, "second.md")
+    assert not _published(state, "first.md")
 
 
-async def test_a_failed_replacement_of_another_document_is_undone_once_lightrag_is_idle(
+async def test_a_failed_replacement_of_another_document_is_undone_once_its_queue_run_ends(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Undoing it deletes the new document through LightRAG, refused while its queue runs.
 
-    The replacement fails while another document of its batch is still in the
-    pipeline. It is undone only once the queue run has ended, so the old
-    identity comes back, hidden, as it does when the whole batch settles at once.
+    The queue run the ingest starts also takes a document enqueued before the batch,
+    so it outlasts the batch. The failed replacement is undone only once that run has
+    ended, so the old identity comes back, hidden, as it does when the whole batch
+    settles at once.
     """
-    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
     old_id, locator = "doc-old", "s3://bucket/report.pdf"
     state["status"][old_id] = {"status": "processed", "chunks_list": ["old"]}
     state["metadata"][old_id] = {
@@ -4093,22 +4152,27 @@ async def test_a_failed_replacement_of_another_document_is_undone_once_lightrag_
         replacement_ownership=((old_id, locator, locator),),
     )
     state["fail"].add("renamed.pdf")
-    state["gates"]["other.md"] = other_settles = asyncio.Event()
+    earlier = parser_input_root / "earlier.md"
+    earlier.write_bytes(b"# earlier.md\n")
+    state["gates"]["earlier.md"] = earlier_settles = asyncio.Event()
+    await deps["lightrag"].apipeline_enqueue_documents(file_paths=[str(earlier)])
     (other,) = _staged_batch(tmp_path, parser_input_root, "other.md")
     ingest = asyncio.create_task(engine.aingest_files([replacement, other], replace=True))
+    await _until(lambda: _published(state, "other.md"))
     # Its parser input goes once the ingest saw it settle.
     await _until(lambda: not (parser_input_root / "renamed.pdf").exists())
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.05)
 
+    assert not ingest.done()
     assert state["status"][_doc_id("renamed.pdf")]["status"] == "failed"
     assert state["metadata"][old_id][_FINALIZATION_COMPLETE_KEY] is False
 
-    other_settles.set()
+    earlier_settles.set()
     result = await asyncio.wait_for(ingest, timeout=5)
 
     assert len(result["errors"]) == 1
     assert [item["doc_id"] for item in result["results"]] == [_doc_id("other.md")]
-    assert set(state["status"]) == {_doc_id("other.md")}
+    assert set(state["status"]) == {_doc_id("other.md"), _doc_id("earlier.md")}
     assert set(state["metadata"]) == {old_id, _doc_id("other.md")}
     assert state["metadata"][old_id][_FINALIZATION_COMPLETE_KEY] is False
     assert _published(state, "other.md")

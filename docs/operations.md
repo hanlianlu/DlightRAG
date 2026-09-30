@@ -236,7 +236,10 @@ DlightRAG's processed file panel, retrieval evidence, metadata surfaces,
 downloads, and image routes require the finalization marker to be exactly true.
 An ingest finalizes each document as soon as LightRAG has settled it, while the
 rest of its batch is still in the pipeline, so a batch of large documents shows
-up in the file panel one by one rather than all at the end. If the Run stops
+up in the file panel one by one rather than all at the end. A replacement that
+retires another document's identity is finalized once the pipeline call has
+ended instead, since undoing its failure deletes through LightRAG, which refuses
+while its pipeline is busy. If the Run stops
 part-way (a restart, for example), what it already published stays published,
 and when it resumes it finalizes each document LightRAG processed meanwhile
 without parsing it again.

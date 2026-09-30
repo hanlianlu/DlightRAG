@@ -74,6 +74,8 @@ _ACTIVE_INGEST_STATUSES = frozenset(
 )
 _STATUS_POLL_INITIAL_SECONDS = 0.05
 _STATUS_POLL_MAX_SECONDS = 1.0
+#: An ingest ends when this many reads of its cohort's status fail in a row.
+_MAX_FAILED_STATUS_READS = 5
 
 
 @dataclass(frozen=True)
@@ -210,8 +212,8 @@ class UnifiedIngestionEngine:
         processing failure. Poll the accepted cohort while rows report a known
         active state; missing or unknown rows fall through to finalization's
         existing consistency error instead of waiting forever. A read that fails
-        while the queue run is still active is made again at the next interval;
-        once the queue run has ended, a failed read ends the ingest.
+        is made again after the next interval, and ``_MAX_FAILED_STATUS_READS``
+        failing in a row end the ingest.
 
         This returns once the queue run it started has ended. A queue run that
         fails ends the ingest with its error. Cancelling the ingest cancels the
@@ -224,6 +226,7 @@ class UnifiedIngestionEngine:
         ):
             pending = list(dict.fromkeys(doc_ids))
             delay = _STATUS_POLL_INITIAL_SECONDS
+            failed_reads = 0
             queue_run = asyncio.create_task(self._lightrag.apipeline_process_enqueue_documents())
             try:
                 while True:
@@ -233,30 +236,31 @@ class UnifiedIngestionEngine:
                     try:
                         statuses = await self._stores.get_full_doc_statuses(pending)
                     except Exception as exc:
-                        if queue_run.done():
+                        failed_reads += 1
+                        if failed_reads == _MAX_FAILED_STATUS_READS:
                             raise
-                        # The queue run keeps the cohort moving: a read that fails
-                        # meanwhile only holds its documents until the next one.
-                        # Storage errors can echo connection details, so only the
-                        # type is logged.
+                        # A failed read only holds the cohort's documents until the
+                        # next one. Storage errors can echo connection details, so
+                        # only the type is logged.
                         logger.warning(
                             "Could not read the status of an ingest cohort (%s); reading it again",
                             type(exc).__name__,
                         )
-                        continue
-                    active: list[str] = []
-                    for doc_id in pending:
-                        status = statuses.get(doc_id)
-                        if (
-                            status is not None
-                            and lightrag_status(status) in _ACTIVE_INGEST_STATUSES
-                        ):
-                            active.append(doc_id)
-                        else:
-                            await settled(doc_id)
-                    pending = active
-                    if not pending:
-                        break
+                    else:
+                        failed_reads = 0
+                        active: list[str] = []
+                        for doc_id in pending:
+                            status = statuses.get(doc_id)
+                            if (
+                                status is not None
+                                and lightrag_status(status) in _ACTIVE_INGEST_STATUSES
+                            ):
+                                active.append(doc_id)
+                            else:
+                                await settled(doc_id)
+                        pending = active
+                        if not pending:
+                            break
                     delay = min(delay * 2, _STATUS_POLL_MAX_SECONDS)
                     if queue_run.done():
                         queue_run.result()
@@ -271,7 +275,7 @@ class UnifiedIngestionEngine:
                 # The run can outlast the cohort, draining work enqueued meanwhile.
                 await queue_run
             except BaseException as error:
-                await _end_queue_run(queue_run, cancel=not isinstance(error, Exception))
+                await _end_queue_run(queue_run, error)
                 raise
 
     async def aingest_files(
@@ -1299,14 +1303,19 @@ def _remove_sidecar_dir(artifact_dir: Path) -> None:
         shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
-async def _end_queue_run(queue_run: asyncio.Task[Any], *, cancel: bool) -> None:
+async def _end_queue_run(queue_run: asyncio.Task[Any], ending: BaseException) -> None:
     """Let a queue run end before the ingest that started it: cancelled, or finished.
 
-    Its own outcome gives way to what is ending the ingest.
+    A cancelled ingest cancels its queue run; any other error lets it finish. A
+    failure of its own gives way to what is ending the ingest, and is logged.
     """
-    if cancel:
+    if not isinstance(ending, Exception):
         queue_run.cancel()
-    await asyncio.gather(queue_run, return_exceptions=True)
+    (outcome,) = await asyncio.gather(queue_run, return_exceptions=True)
+    if isinstance(outcome, Exception) and outcome is not ending:
+        logger.warning(
+            "LightRAG's queue run failed as its ingest ended (%s)", type(outcome).__name__
+        )
 
 
 def _ready_for_enqueue(placed: Sequence[_PlacedInput]) -> None:
