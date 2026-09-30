@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Real-PostgreSQL integration coverage for the promotion worker control plane.
 
-Runs against a dedicated fresh database (``dlightrag_promotion_worker_test``)
+Runs against a fresh scratch database (``dlightrag_promotion_worker_<hex>``)
 that this module creates and drops itself. Proves on compact fixtures:
 
 * the ingest counter ledger and the threshold trigger are idempotent per
@@ -27,6 +27,8 @@ that this module creates and drops itself. Proves on compact fixtures:
 
 import asyncio
 import datetime
+import tempfile
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -59,7 +61,8 @@ pytestmark = [
 ]
 
 _MAINT_DB = "postgres"
-_TEST_DB = "dlightrag_promotion_worker_test"
+# One database per run: two processes sharing a fixed name dropped and reseeded each other's.
+_TEST_DB = f"dlightrag_promotion_worker_{uuid.uuid4().hex[:12]}"
 _EXTENSIONS = ("vector", "pg_textsearch", "pg_trgm")
 _WORKSPACE_A = "pw_hot_ws"
 _WORKSPACE_B = "pw_other_ws"
@@ -119,7 +122,10 @@ async def corpus(_fresh_test_database: None) -> AsyncIterator[None]:
     from dlightrag.application.config import DlightragConfig, reset_config, set_config
 
     cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        deployment={"workspace": _WORKSPACE_A, "working_dir": "/tmp/pw_workdir"},
+        deployment={
+            "workspace": _WORKSPACE_A,
+            "working_dir": tempfile.mkdtemp(prefix="pw_workdir_"),
+        },
         storage={
             "postgres": {
                 **_DEFAULT_KWARGS,
