@@ -33,7 +33,7 @@ _OWNER = {"owner_id": "a", "auth_mode": "jwt"}
 
 
 @asynccontextmanager
-async def _authorizing_owner(prefix, server):
+async def _authorizing_owner(prefix, server, *, callback=_CALLBACK_URL):
     """Connections for one owner with an enabled bearer Connection and a draft beside it.
 
     ``a`` initiates authorizations against ``server``; ``b`` is a second worker that
@@ -47,7 +47,7 @@ async def _authorizing_owner(prefix, server):
     async with isolated_run_runtime(prefix) as (_, pool):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
-        policy = ConnectionPolicy(oauth_callback_url=_CALLBACK_URL)
+        policy = ConnectionPolicy(oauth_callback_url=callback)
         a = Connections(
             store=store,
             mcp=FakeMcp(),
@@ -449,6 +449,24 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
         finally:
             await a.aclose()
             await b.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_local_deployment_authorizes_through_its_loopback_callback(monkeypatch):
+    """The callback is where the provider sends the browser back, not a host DlightRAG calls.
+
+    A Compose deployment reached at localhost therefore authorizes over plain HTTP there,
+    although the outbound network policy refuses loopback and HTTP endpoints.
+    """
+    from tests.support.dns import public_dns
+    from tests.unit.test_connection_oauth import FakeAuthorizationServer
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    server = FakeAuthorizationServer()
+    callback = "http://localhost:8100/web/oauth/connections/mcp/callback"
+    async with _authorizing_owner("oauth_loopback", server, callback=callback) as fixture:
+        await _begin(fixture, server)
+        assert server.authorization["redirect_uri"] == [callback]
 
 
 @pytest.mark.asyncio

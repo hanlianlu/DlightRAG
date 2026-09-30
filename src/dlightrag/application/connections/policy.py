@@ -1,9 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Finite product ceilings; no Run, storage, or execution dependencies."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dlightrag.engine.ai.settings import ServiceUrl
+
+#: The Web route a provider sends the browser back to after an authorization.
+OAUTH_CALLBACK_PATH = "/web/oauth/connections/mcp/callback"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 class ConnectionPolicy(BaseModel):
@@ -30,3 +36,25 @@ class ConnectionPolicy(BaseModel):
     max_response_bytes: int = Field(default=1048576, ge=1, le=4194304)
     allow_private_hosts: tuple[str, ...] = ()
     require_https: bool = True
+
+    @field_validator("oauth_callback_url")
+    @classmethod
+    def _callback_route(cls, value: str | None) -> str | None:
+        """This deployment's callback route as the browser reaches it.
+
+        A provider sends the user's browser there; DlightRAG never calls it, so the
+        outbound network policy does not apply, and a local deployment may use
+        plain HTTP on loopback.
+        """
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("oauth_callback_url must be an absolute HTTP(S) URL")
+        if parts.scheme != "https" and parts.hostname not in _LOOPBACK_HOSTS:
+            raise ValueError("oauth_callback_url must use HTTPS except on loopback")
+        if parts.path != OAUTH_CALLBACK_PATH or parts.query or parts.fragment:
+            raise ValueError(
+                f"oauth_callback_url must end in {OAUTH_CALLBACK_PATH}, with no query or fragment"
+            )
+        return value

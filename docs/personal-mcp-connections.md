@@ -394,9 +394,12 @@ refresh. DlightRAG supplies only the product integration:
 
 1. Settings calls `POST .../oauth` for one owned Connection at the current
    revision. The request fails before contacting any provider unless
-   `oauth_callback_url` is set to a URL whose path is exactly
-   `/web/oauth/connections/mcp/callback` with no query, the key ring can
-   encrypt, and any existing envelope can be read.
+   `oauth_callback_url` is set, the key ring can encrypt, and any existing
+   envelope can be read. Configuration refuses a callback whose path is not
+   exactly `/web/oauth/connections/mcp/callback`, that has a query or fragment,
+   or that is plain HTTP anywhere but loopback. It is where the provider sends
+   the browser back, never an endpoint DlightRAG calls, so the outbound network
+   policy does not apply to it.
 2. A flow row records the initiating worker as `flow_owner`, the endpoint, the
    Connection head's revision, and a lifetime of `oauth_timeout`. The initiator
    renews a 10-second lease every 2 seconds. Starting again supersedes the
@@ -555,7 +558,7 @@ discovery candidate; nothing is truncated.
 
 | Field | Default | Range | Bounds |
 |---|---|---|---|
-| `oauth_callback_url` | unset | ≤ 2048 characters | Public callback URL; OAuth is unavailable while unset |
+| `oauth_callback_url` | unset (`config.yaml`: the local Compose URL) | ≤ 2048 characters; HTTPS except on loopback | The callback URL as the browser reaches it; OAuth is unavailable while unset |
 | `oauth_timeout` | 300 s | 30–600 | Lifetime of one authorization flow, including its discovery |
 | `max_connections` | 20 | 1–100 | Connections per owner, not counting deleted ones |
 | `max_enabled_tools` | 256 | 1–1024 | Tools across one owner's enabled Connections |

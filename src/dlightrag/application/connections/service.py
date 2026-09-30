@@ -483,13 +483,9 @@ class Connections:
             raise ConnectionsError("OAuth callback deployment is not configured", 503)
         if len(self._authorizations) >= 4:
             raise ConnectionsError("Authorization quota exceeded", 429)
+        # Where the provider sends the browser back, not an endpoint this deployment
+        # calls: the policy validated its shape when configuration loaded.
         callback_url = self._policy.oauth_callback_url
-        self._validate_endpoint(callback_url)
-        if (
-            urlsplit(callback_url).path != "/web/oauth/connections/mcp/callback"
-            or urlsplit(callback_url).query
-        ):
-            raise ConnectionsError("OAuth callback deployment is invalid", 503)
         revision, items = await self._store.read(owner_id)
         item = next((item for item in items if item.connection_id == connection_id), None)
         if item is None:
