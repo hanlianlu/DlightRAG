@@ -4,12 +4,14 @@
 import asyncio
 import base64
 import hashlib
+import json
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock
 
+import httpx2
 import pytest
 from pydantic import BaseModel
 
@@ -17,7 +19,11 @@ from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.session.effects import EffectIntent
-from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
+from dlightrag.engine.agent.session.entries import (
+    CompactionEntry,
+    ToolResultMessageEntry,
+    decode_entry_payload,
+)
 from dlightrag.engine.agent.session.ids import (
     AttemptId,
     EntryId,
@@ -28,6 +34,7 @@ from dlightrag.engine.agent.session.ids import (
 )
 from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.runtime import (
     AgentOperationCancelled,
     AgentSessionEvent,
@@ -63,7 +70,7 @@ from dlightrag.engine.answer.research.runtime import (
     _build_effect_host_update,
     provider_attempt_detail,
 )
-from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
     ResourceEffectOwner,
@@ -1295,6 +1302,360 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     assert cache["cache_hit_tokens"] == 0
     # The first turn has nothing cached yet and is never counted as a regression.
     assert cache["cold_turns"] == 1
+
+
+async def _one_fact(_query: str) -> RetrievalResult:
+    return RetrievalResult(
+        contexts={
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "reference_id": "source-1",
+                    "file_path": "doc.txt",
+                    "content": "one grounded fact",
+                    "metadata": {"source_type": "file", "title": "doc.txt"},
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        },
+        trace={"retrieved": 1},
+    )
+
+
+async def _drive_research_run(
+    repository: MemoryAgentSessionRepository[EffectHostUpdate],
+    session_id: SessionId,
+    question: str,
+    *,
+    model: Any,
+    resource_manifest: tuple[ResourceManifestEntry, ...] = (),
+    injected_tools: tuple[AgentTool, ...] = (),
+    memory_text: str = "",
+) -> Any:
+    """Drive one Research Run over a shared Session the way the executor does.
+
+    Each Run composes its own orchestrator, memory and Runtime, accepts its question
+    as a User Entry of the one durable Session, and projects the settled Session back
+    into its result.
+    """
+    profile = answer_model_profile()
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(Any, SimpleNamespace()),
+        retrieve_knowledge_base=_one_fact,
+        model_func=model,
+        stream_model_func=cast(Any, None),
+        injected_tools=list(injected_tools),
+        text_window_budget=TextWindowBudget(profile.context_window_tokens),
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        resolved_mode="research",
+        resource_manifest=resource_manifest,
+    )
+    orchestrator.bind_recall(memory_text)
+    prepared = orchestrator.prepare_run(question)
+    plan = AgentRunPlan.from_tools(
+        prepared.tools,
+        model_role="query",
+        context_policy_revision="context-v1",
+        model_identity=asdict(
+            ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+        ),
+        model_profile=asdict(profile),
+    )
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
+            orchestrator=orchestrator,
+            prepared=prepared,
+            session=_Session(),  # type: ignore[arg-type]
+            session_id=session_id,
+            fetched_buffer=FetchedResourceBuffer(),
+            persist_child_intent=None,
+        ),
+        tools=prepared.tools,
+        fencing_epoch=1,
+        provider_attempt_limit=plan.provider_attempt_limit,
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key=f"answer-run:{question}",
+        content=question,
+        plan=plan,
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    assert isinstance(final.state, OperationCompleted)
+    orchestrator.restore_runtime_snapshot(prepared, final.context.snapshot)
+    return prepared
+
+
+class _LookupArgs(BaseModel):
+    figure: str
+    year: int
+    unit: str
+
+
+def _jsonb(value: Any) -> Any:
+    """Order object keys as PostgreSQL's jsonb stores them: shorter first, then bytewise."""
+    if isinstance(value, dict):
+        mapping = cast(dict[str, Any], value)
+        keys = sorted(mapping, key=lambda key: (len(key.encode()), key.encode()))
+        return {key: _jsonb(mapping[key]) for key in keys}
+    if isinstance(value, list):
+        return [_jsonb(item) for item in cast(list[Any], value)]
+    return value
+
+
+class _JsonbSessionRepository(MemoryAgentSessionRepository[EffectHostUpdate]):
+    """A Session read back the way PostgreSQL returns it.
+
+    A Run keeps the Entries it committed in memory. The next Run loads the Session, and
+    every payload comes back decoded from its jsonb column, whose object keys are stored
+    shortest first rather than in the order they were written.
+    """
+
+    async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
+        snapshot = await super().load(session_id)
+        return replace(
+            snapshot,
+            entries=tuple(
+                decode_entry_payload(
+                    entry_type=entry.entry_type,
+                    entry_id=entry.entry_id,
+                    session_id=entry.session_id,
+                    sequence=entry.sequence,
+                    timestamp=entry.timestamp,
+                    payload=_jsonb(json.loads(json.dumps(entry.canonical_payload()))),
+                    parent_entry_id=entry.parent_entry_id,
+                )
+                for entry in snapshot.entries
+            ),
+        )
+
+
+class _ChatEndpoint:
+    """An OpenAI-compatible endpoint that records each request body as it was sent."""
+
+    def __init__(self, replies: list[dict[str, Any]]) -> None:
+        self.bodies: list[dict[str, Any]] = []
+        self._replies = replies
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.bodies.append(json.loads(request.content))
+        message = self._replies.pop(0)
+        return httpx2.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls" if message.get("tool_calls") else "stop",
+                        "message": {"role": "assistant", **message},
+                    }
+                ],
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wire() -> None:
+    """The next Run's first request body starts with the previous Run's last one.
+
+    Measured on this deployment, a follow-up Run's first request reused 0.8k-7.8k
+    cached tokens of a 70k-244k prompt: the question block led every request, in front
+    of a Session fold that already held the question. A Session read back from
+    PostgreSQL would still break the prefix at the first Tool call with several
+    arguments, replayed in jsonb's key order instead of the order the earlier Run sent.
+    The bodies recorded here are what the provider receives, and the second Run loads
+    the Session through jsonb. Everything the earlier Run sent before its own
+    statements (recalled memory, Tool guidance) is the prefix; what is new follows it.
+    """
+    from dlightrag.engine.ai.scheduler import ModelScheduler
+    from dlightrag.engine.ai.settings import ModelSettings
+    from dlightrag.engine.ai.tool_model import ToolModel
+    from tests.unit.test_provider_attachment_contract import bind_mock_http
+
+    wire = _ChatEndpoint(
+        [
+            {
+                "content": None,
+                "reasoning_content": "Look the figure up first.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            # The model's own key order, which jsonb does not keep.
+                            "arguments": '{"figure":"revenue","year":2023,"unit":"EUR"}',
+                        },
+                    }
+                ],
+            },
+            {"content": "Revenue was 12 EUR.", "reasoning_content": "Answer it."},
+            {"content": "Prices rose.", "reasoning_content": "Explain it."},
+        ]
+    )
+    model = ToolModel(
+        ModelSettings(
+            provider="openai",
+            model="deepseek-v4-flash",
+            base_url="https://api.deepseek.com",
+            api_key="test-key",
+            max_retries=0,
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    bind_mock_http(model._provider, wire)  # pyright: ignore[reportPrivateUsage]
+
+    async def lookup_figure(_args: BaseModel, _runtime: Any) -> ToolResult:
+        return ToolResult.text("revenue 2023: 12 EUR")
+
+    lookup = AgentTool(
+        "lookup",
+        "Look up one reported figure.",
+        _LookupArgs,
+        execute=lookup_figure,
+        guidance="Look a figure up before citing it.",
+    )
+    memory = "Remembered about this owner (context only): reports in EUR."
+    repository = _JsonbSessionRepository()
+    session_id = SessionId.new()
+
+    await _drive_research_run(
+        repository,
+        session_id,
+        "What was the 2023 revenue?",
+        model=model,
+        injected_tools=(lookup,),
+        memory_text=memory,
+    )
+    await _drive_research_run(
+        repository,
+        session_id,
+        "Why did it change?",
+        model=model,
+        injected_tools=(lookup,),
+        memory_text=memory,
+        resource_manifest=(
+            ResourceManifestEntry("res-1", "report.pdf", "application/pdf", "bytes", 1),
+        ),
+    )
+    earlier, later = wire.bodies[1], wire.bodies[2]
+
+    assert json.dumps(later["tools"]) == json.dumps(earlier["tools"])
+    # The earlier Run's own statements close its last request: memory, Tool guidance.
+    tail = earlier["messages"][-2:]
+    assert tail[0]["content"] == memory
+    assert "Look a figure up before citing it." in json.dumps(tail[1]["content"])
+    cut = len(earlier["messages"]) - len(tail)
+    assert json.dumps(later["messages"][:cut]) == json.dumps(earlier["messages"][:cut])
+    assert later["messages"][cut]["role"] == "assistant"
+    assert later["messages"][cut]["content"] == "Revenue was 12 EUR."
+    assert later["messages"][cut + 1] == {"role": "user", "content": "Why did it change?"}
+    # Each question is stated once, and what only the follow-up registered follows it.
+    for question in ("What was the 2023 revenue?", "Why did it change?"):
+        assert json.dumps(later["messages"]).count(question) == 1
+    assert "[resource: res-1] report.pdf" in json.dumps(later["messages"][cut + 2 :])
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_that_covers_the_question_restates_it_after_the_summary() -> None:
+    """The question survives a compaction verbatim, where it stood.
+
+    A compaction keeps whole exchanges, so it covers the Run's own User Entry and leaves
+    the question only in the summary's paraphrase. The request after it states the
+    question again right after the summary and before the retained work, so a steer or
+    follow-up retained after it still comes later.
+    """
+    requests: list[list[dict[str, Any]]] = []
+    # Large enough that covering it shrinks the request, as a real compaction must.
+    question = "What changed? " + "x" * 40_000
+
+    async def model(**kwargs: Any) -> AssistantTurn:
+        requests.append([dict(message) for message in kwargs["messages"]])
+        if len(requests) == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(ToolCall("search-1", "search_knowledge_base", {"query": "one fact"}),),
+                stop_reason="tool_use",
+            )
+        if len(requests) == 2:
+            raise RuntimeError("prompt is too long: 300000 tokens > 200000 maximum")
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    def summarize(**_kwargs: Any) -> Any:
+        async def stream() -> Any:
+            yield (
+                "## Goal\nAnswer the question.\n\n"
+                "## Progress\nResearch started.\n\n"
+                "## Next Steps\nFinish the answer."
+            )
+
+        return stream()
+
+    profile = answer_model_profile()
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(Any, SimpleNamespace()),
+        retrieve_knowledge_base=_one_fact,
+        model_func=model,
+        stream_model_func=summarize,
+        text_window_budget=TextWindowBudget(profile.context_window_tokens),
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        resolved_mode="research",
+    )
+    prepared = orchestrator.prepare_run(question)
+    plan = AgentRunPlan.from_tools(
+        prepared.tools,
+        model_role="query",
+        context_policy_revision="context-v1",
+        model_identity=asdict(
+            ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+        ),
+        model_profile=asdict(profile),
+    )
+    session_id = SessionId.new()
+    runtime = AgentSessionRuntime(
+        repository=MemoryAgentSessionRepository[EffectHostUpdate](),
+        effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
+            orchestrator=orchestrator,
+            prepared=prepared,
+            session=_Session(),  # type: ignore[arg-type]
+            session_id=session_id,
+            fetched_buffer=FetchedResourceBuffer(),
+            persist_child_intent=None,
+        ),
+        tools=prepared.tools,
+        fencing_epoch=1,
+        provider_attempt_limit=plan.provider_attempt_limit,
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="covered-question",
+        content=question,
+        plan=plan,
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    after = requests[2]
+    summary_at = next(
+        index
+        for index, message in enumerate(after)
+        if "Answer the question." in str(message["content"])
+    )
+    assert after[summary_at + 1] == {"role": "user", "content": question}
+    assert after[summary_at + 2]["tool_calls"]
+    assert sum(question in str(message["content"]) for message in after) == 1
 
 
 @pytest.mark.parametrize(

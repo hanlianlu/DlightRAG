@@ -15,6 +15,11 @@ and complements [ADR 0024](0024-the-agent-sees-only-its-workspace.md): a child's
 processes are confined by the same policy as its parent's, because the working
 copy they run in is the same one.
 
+The objective prefix is no longer a prefix: [ADR 0015](0015-prompt-prefix-stability-and-cache-anchored-accounting.md)
+moved the child's instructions, the scratch convention among them, into its system
+prompt, so the objective is stated once, by the child's own User Entry, and a steer
+that redirects the child still comes after it. The convention itself is unchanged.
+
 ## Context
 
 A Child Session is one parent Run's worker, not a second Run. It has its own

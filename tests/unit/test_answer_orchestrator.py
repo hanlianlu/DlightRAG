@@ -314,10 +314,18 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     assert [
         (item.relative_path, item.content_digest) for item in await child_store.load_inventory()
     ] == [("notes/findings.md", digest)]
-    assert str(first).count("already in this workspace") == 1
-    assert str(second).count("already in this workspace") == 1
-    assert first[1]["content"] == second[1]["content"]
-    assert "notes/findings.md" in first[1]["content"]
+    assert str(first).count("At the start of this Run") == 1
+    assert str(second).count("At the start of this Run") == 1
+    # The line names what this Run bound, so it follows the transcript and repeats
+    # byte for byte on each of the Run's turns.
+    statement = next(
+        message for message in first if "At the start of this Run" in str(message["content"])
+    )
+    assert statement in second
+    assert "notes/findings.md" in statement["content"]
+    assert second.index(statement) > second.index(
+        {"role": "assistant", "content": "a further turn"}
+    )
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
@@ -357,18 +365,71 @@ def test_child_preparation_excludes_every_parent_subagent_control() -> None:
     )
 
 
-def test_a_child_is_told_its_own_scratch_directory() -> None:
-    """Simultaneous children share one workspace, so the prefix names their own corner.
+@pytest.mark.asyncio
+async def test_a_child_states_its_objective_once_and_a_steer_keeps_the_last_word() -> None:
+    """A child's objective is its own User Entry; its instructions ride its system prompt.
 
-    Nothing enforces it — two children that write one path are last-writer-wins — which
-    is exactly why the convention has to be stated where the child reads it (ADR 0025).
+    Simultaneous children share one workspace, so the instructions name the child's own
+    corner: nothing enforces it — two children that write one path are last-writer-wins
+    — which is exactly why the convention is stated where the child reads it (ADR 0025).
+    The objective used to travel inside those instructions, which the child's Entry never
+    states, so it was restated after the transcript on every request: behind the
+    parent's steer that had redirected it.
     """
-    from dlightrag.engine.answer.orchestration.orchestrator import child_question
+    from dlightrag.engine.agent.session.fold import WorkingContextProjection
+    from dlightrag.engine.answer.tools.subagents import (
+        ChildContextSnapshot,
+        ChildRequest,
+        SubagentHost,
+    )
 
-    question = child_question("investigate widgets", child_session_id="child-7")
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    assert "tmp/children/child-7/" in question
-    assert "investigate widgets" in question
+    orchestrator = _orchestrator(mode="research", model=model)
+    orchestrator._subagent_host = SubagentHost()  # same Host composition owner
+    objective = "Find every 2023 revenue figure."
+    child = orchestrator.prepare_child_session(
+        ChildRequest(objective=objective),
+        context_snapshot=ChildContextSnapshot.from_values(
+            parent_session_id=SessionId.new(),
+            parent_entry_id=EntryId.new(),
+            depth=0,
+            messages=[],
+        ),
+        child_session_id="child-7",
+    )
+    steer = "Parent steer: stop; report only the Q4 figure."
+
+    def searched(call_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "search_knowledge_base", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": call_id, "content": "filings"},
+        ]
+
+    # The child's Session: its objective, a search, the steer, and a search after it.
+    working = WorkingContextProjection()
+    working.record([{"role": "user", "content": objective}])
+    working.record([*searched("c1"), {"role": "user", "content": steer}])
+    working.record(searched("c2"))
+
+    messages = await child.context.control_turn(evidence=child.evidence, working=working)
+
+    assert "tmp/children/child-7/" in str(messages[0]["content"])
+    assert sum(objective in str(message["content"]) for message in messages) == 1
+    steer_at = messages.index({"role": "user", "content": steer})
+    assert messages.index({"role": "user", "content": objective}) < steer_at
+    assert all(objective not in str(message["content"]) for message in messages[steer_at:])
 
 
 def _research_owner_with_subagents(tmp_path: Path):

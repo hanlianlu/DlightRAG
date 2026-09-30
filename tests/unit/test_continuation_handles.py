@@ -264,7 +264,7 @@ def test_the_notes_message_names_paths_once_without_a_clock_or_run_id() -> None:
         )
     )
 
-    assert message.count("already in this workspace") == 1
+    assert message.count("At the start of this Run") == 1
     assert "notes/plan.md (1240 bytes)" in message
     assert "notes/decisions.md (310 bytes)" in message
     assert "do not re-derive" in message

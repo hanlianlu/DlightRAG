@@ -8,10 +8,10 @@ from dlightrag.engine.ai.tokens import estimate_messages_tokens
 
 type ContextAuthority = Literal[
     "system",
-    "workspace",
     "conversation",
-    "user",
     "working",
+    "workspace",
+    "user",
     "evidence",
     "profile",
     "reference",
@@ -20,10 +20,17 @@ type ContextAuthority = Literal[
 
 _AUTHORITY_ORDER: dict[ContextAuthority, int] = {
     "system": 0,
-    "workspace": 10,
-    "conversation": 20,
-    "user": 30,
-    "working": 40,
+    # The transcript leads: the history a caller supplied, then the Session's own
+    # fold, which already holds each question in its place. A later request, of this
+    # Run or of the next one, then extends an earlier request instead of diverging
+    # right after the system prompt (ADR 0015).
+    "conversation": 10,
+    "working": 20,
+    # What one request composes follows the transcript it continues, because it can
+    # differ from one Run to the next: the notes the Run holds, then its question's
+    # Resources and pixels.
+    "workspace": 30,
+    "user": 40,
     "evidence": 50,
     "profile": 60,
     "reference": 70,

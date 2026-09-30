@@ -292,17 +292,36 @@ class WorkingContextProjection:
     In durable Research it is only a projection cache rebuilt from the active
     session graph before each provider call. In-process callers may append to it
     directly because they have no durable Session Repository.
+
+    After a compaction the projection opens with the summary that replaced the
+    covered prefix, kept apart from the exchanges so a reader knows where that
+    prefix ended.
     """
 
     def __init__(self) -> None:
+        self._summary: dict[str, Any] | None = None
         self._exchanges: list[list[dict[str, Any]]] = []
+
+    @property
+    def summary(self) -> dict[str, Any] | None:
+        """The compaction summary this projection opens with, if one is active."""
+        return self._summary
+
+    def summarize(self, message: dict[str, Any]) -> None:
+        """Open the projection with the summary that replaced its covered prefix."""
+        self._summary = message
 
     def record(self, exchange: list[dict[str, Any]]) -> None:
         self._exchanges.append(exchange)
 
     def canonical_json(self) -> dict[str, Any]:
-        """Return every exchange, provider-native state included, in order."""
-        return {"exchanges": [[dict(message) for message in ex] for ex in self._exchanges]}
+        """Return the summary and every exchange, provider-native state included."""
+        state: dict[str, Any] = {
+            "exchanges": [[dict(message) for message in ex] for ex in self._exchanges]
+        }
+        if self._summary is not None:
+            state["summary"] = dict(self._summary)
+        return state
 
     @classmethod
     def from_canonical_json(cls, state: Mapping[str, Any]) -> WorkingContextProjection:
@@ -311,6 +330,9 @@ class WorkingContextProjection:
         if not isinstance(exchanges, Sequence):
             raise ValueError("working projection state has no exchanges")
         projection = cls()
+        summary = state.get("summary")
+        if isinstance(summary, Mapping):
+            projection._summary = dict(cast(Mapping[str, Any], summary))
         projection._exchanges = [
             [dict(cast(Mapping[str, Any], message)) for message in cast(Sequence[Any], exchange)]
             for exchange in exchanges
@@ -318,8 +340,8 @@ class WorkingContextProjection:
         return projection
 
     def messages(self) -> list[dict[str, Any]]:
-        """Return every exchange verbatim, provider-native state included."""
-        messages: list[dict[str, Any]] = []
+        """Return the summary and every exchange verbatim, provider-native state included."""
+        messages: list[dict[str, Any]] = [] if self._summary is None else [self._summary]
         for exchange in self._exchanges:
             messages.extend(exchange)
         return messages

@@ -50,10 +50,13 @@ async def test_research_question_keeps_all_raw_current_images_and_resource_handl
         working=WorkingContextProjection(),
     )
 
-    question = messages[1]["content"]
-    assert [block["type"] for block in question] == ["text", "text", "image_url", "image_url"]
-    assert "resource_one" in question[1]["text"]
-    assert "resource_two" in question[1]["text"]
+    # Before acceptance the transcript does not hold the question, so it is stated in
+    # its place; what only this Run adds follows it.
+    assert messages[1] == {"role": "user", "content": "Compare the images"}
+    material = messages[2]["content"]
+    assert [block["type"] for block in material] == ["text", "image_url", "image_url"]
+    assert "resource_one" in material[0]["text"]
+    assert "resource_two" in material[0]["text"]
 
 
 def _long_history(turns: int, *, chars: int = 4_000) -> list[dict[str, Any]]:
@@ -192,6 +195,84 @@ async def test_history_contribution_preserves_roles_and_precedes_current_questio
         ("assistant", "earlier answer"),
         ("user", "current question"),
     ]
+
+
+async def test_the_transcript_states_the_question_once_and_the_runs_material_follows() -> None:
+    """A Run's question is its own User Entry in the fold; only its material is new.
+
+    The question block used to lead the request, in front of a Session fold that
+    already held the same question: every follow-up Run's first request diverged from
+    the previous Run's right after the system prompt, and sent its question twice.
+    """
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW, supports_images=True),
+        query="Compare the chart",
+        history=PriorTurns(),
+        query_images=[{"type": "text", "text": "[current image 1 | resource: res-1]"}, picture],
+        resource_manifest=(ResourceManifestEntry("res-1", "chart.png", "image/png", "bytes", 1),),
+    )
+    working = WorkingContextProjection()
+    working.record(
+        [
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+            {"role": "user", "content": "Compare the chart"},
+        ]
+    )
+
+    messages = await assembler.control_turn(evidence=EvidenceLedger(), working=working)
+
+    assert [message["content"] for message in messages[1:4]] == [
+        "earlier question",
+        "earlier answer",
+        "Compare the chart",
+    ]
+    assert str(messages).count("Compare the chart") == 1
+    material = messages[4]["content"]
+    assert [block["type"] for block in material] == ["text", "text", "image_url"]
+    assert "[resource: res-1] chart.png" in material[0]["text"]
+    assert len(messages) == 5
+
+
+async def test_a_question_a_compaction_covered_is_restated_where_it_stood() -> None:
+    """A later steer keeps the last word over a question restated after a compaction.
+
+    Once a summary replaces the Run's own User Entry, the transcript no longer holds
+    the question verbatim, so the request states it again — right after that summary,
+    where it stood. Appended after the transcript instead, the Run's original question
+    would follow a steer that had since narrowed it.
+    """
+    assembler = _assembler([])
+    steer = {"role": "user", "content": "Only the Q4 figure, please."}
+    working = WorkingContextProjection()
+    working.summarize({"role": "user", "content": "Summary of the covered prefix."})
+    working.record(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "search_knowledge_base", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "one fact"},
+            steer,
+        ]
+    )
+
+    messages = await assembler.control_turn(evidence=EvidenceLedger(), working=working)
+
+    assert [message["content"] for message in messages[1:3]] == [
+        "Summary of the covered prefix.",
+        "What changed?",
+    ]
+    assert messages[-1] == steer
+    assert str(messages).count("What changed?") == 1
 
 
 async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
@@ -548,7 +629,7 @@ async def test_evidence_images_stay_after_the_transcript() -> None:
     assert "image_url" not in str(messages[0]["content"])
 
 
-async def test_session_notes_are_stated_once_in_the_static_prefix() -> None:
+async def test_session_notes_are_stated_once_after_the_transcript() -> None:
     from dlightrag.engine.runtime.workspace import SessionNoteRecord
 
     notes = (SessionNoteRecord(relative_path="notes/plan.md", content=b"x" * 12),)
@@ -561,10 +642,10 @@ async def test_session_notes_are_stated_once_in_the_static_prefix() -> None:
         run_notes=True,
         session_notes=notes,
     )
-    first = await assembler.control_turn(
-        evidence=EvidenceLedger(), working=WorkingContextProjection()
-    )
+    # Acceptance records the question as the Run's own User Entry.
     working = WorkingContextProjection()
+    working.record([{"role": "user", "content": "continue"}])
+    first = await assembler.control_turn(evidence=EvidenceLedger(), working=working)
     working.record(
         [
             {"role": "assistant", "content": "working"},
@@ -573,16 +654,20 @@ async def test_session_notes_are_stated_once_in_the_static_prefix() -> None:
     )
     second = await assembler.control_turn(evidence=EvidenceLedger(), working=working)
 
-    carry = "already in this workspace"
+    carry = "At the start of this Run"
     assert str(first).count(carry) == 1
     assert str(second).count(carry) == 1
-    assert first[1]["content"] == second[1]["content"]
-    assert "notes/plan.md (12 bytes)" in first[1]["content"]
-    # The statement sits after system and before the question, so later turns do not
-    # push it past the growing fold.
-    assert first[1]["role"] == "user"
-    assert first[2]["content"] == "continue"
-    assert second[-1]["content"] == "and then"
+    # The statement names the notes this Run bound, so the next Run may state other
+    # sizes. It follows the transcript, where a change cannot move the prefix the next
+    # Run reuses, and it repeats byte for byte on every turn of this one.
+    assert first[-1] == second[-1]
+    assert "notes/plan.md (12 bytes)" in first[-1]["content"]
+    assert [message["content"] for message in first[1:-1]] == ["continue"]
+    assert [message["content"] for message in second[1:-1]] == [
+        "continue",
+        "working",
+        "and then",
+    ]
 
 
 async def test_a_run_with_nothing_bound_says_nothing_about_memory() -> None:
@@ -596,5 +681,5 @@ async def test_a_run_with_nothing_bound_says_nothing_about_memory() -> None:
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(), working=WorkingContextProjection()
     )
-    assert "already in this workspace" not in str(messages)
+    assert "At the start of this Run" not in str(messages)
     assert "carried" not in str(messages).lower()

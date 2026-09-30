@@ -75,17 +75,19 @@ def published_artifact_handle(record: RunArtifactRecord) -> str:
 
 
 def session_notes_message(records: Sequence[SessionNoteRecord]) -> str:
-    """Return the one static prefix that names the notes this Run holds.
+    """Return the one static statement that names the notes this Run started with.
 
     The text is a function of the note set alone: no clock, no Run id, and no per-turn
     remainder. Empty input is empty output, so a Run that bound no notes says nothing
     about memory. Naming a call to read implies a tool that can make it, so an inert
-    Fast workspace composes nothing.
+    Fast workspace composes nothing. The statement follows the transcript, after the
+    Run's own writes, so it dates its sizes to the start of the Run instead of
+    presenting them as current.
     """
     if not records:
         return ""
     lines = [
-        "These Session notes are already in this workspace. Read one with "
+        "At the start of this Run, notes/ held these Session notes. Read one with "
         "read(path=...) and continue it; do not re-derive what one states.",
         "",
     ]

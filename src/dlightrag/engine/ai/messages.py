@@ -34,7 +34,15 @@ class ToolCall:
 
 
 def tool_call_message(call: ToolCall) -> dict[str, Any]:
-    """Project one normalized tool call to its model-message shape."""
+    """Project one normalized tool call to its model-message shape.
+
+    The arguments are serialized with sorted keys, so a replayed call is the same bytes
+    whichever order its arguments were read back in. A Session read back from
+    PostgreSQL returns them in jsonb's order (shorter keys first), not the order the
+    model wrote or the Run that made the call still holds in memory, and a follow-up
+    Run's first request would otherwise diverge from the previous Run's at the first
+    call with more than one argument.
+    """
     message: dict[str, Any] = {
         "id": call.id,
         "type": "function",
@@ -44,6 +52,7 @@ def tool_call_message(call: ToolCall) -> dict[str, Any]:
                 call.arguments,
                 ensure_ascii=False,
                 separators=(",", ":"),
+                sort_keys=True,
             ),
         },
     }

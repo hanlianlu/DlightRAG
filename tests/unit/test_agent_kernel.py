@@ -45,10 +45,12 @@ def test_context_projector_orders_authorities_and_keeps_source_order() -> None:
             ),
         ]
     )
+    # The transcript precedes what a request composes, so a later request extends an
+    # earlier one instead of diverging right after the system prompt (ADR 0015).
     assert [message["content"] for message in projected.messages] == [
         "rules",
-        "question",
         "work",
+        "question",
     ]
 
 

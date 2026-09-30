@@ -351,7 +351,13 @@ cannot disagree about which calls exist or how each is measured.
 
 A Research request is the previous request plus new material, so a provider prefix
 cache can reuse it: the Session fold only appends, admitted Evidence text is frozen
-into the Tool result that produced it, and nothing is composed per turn. No system
+into the Tool result that produced it, and nothing is composed per turn. What a Run
+composes — its question's Resource manifest and attached images, the Session-notes
+statement, memory, and guidance — follows the transcript, which already states the
+question as the Run's own User Entry, and a replayed Tool call's arguments are
+serialized with sorted keys, the same bytes whether the Session was held in memory or
+read back from PostgreSQL. The first request of a follow-up Run is therefore the
+previous Run's last one plus new material too. No system
 message states the current time — a prefix that moves with wall time forfeits the
 whole cache — so a Research agent reads the clock from its environment and a Fast
 answer's own request states it
@@ -403,8 +409,10 @@ Either kind also binds the Session's notes, and neither copies a parent Run's. M
 belongs to the Agent Session: its notes are laid down into the continuation's own
 Workspace Epoch and recorded in its Inventory before the first request, so a
 conversation, its forks, and every later turn of the Session read the same set. A
-tool-capable first request also states that they are there, once, as static text
-beside the system prompt; a Fast first request does not, because it has no tool that
+tool-capable request also states the notes the Run started with, once, as static text
+after the transcript, where the next Run's different sizes cannot move the prefix it
+reuses; a
+Fast first request does not, because it has no tool that
 could read a note — the files are there for the turn after it. A Session whose plane
 cannot be read, a note the plane refuses for budget, and a promotion that fails are
 degradations recorded on the Run's trace: a Run always proceeds, because a Run that

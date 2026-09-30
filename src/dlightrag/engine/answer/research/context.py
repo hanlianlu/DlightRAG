@@ -24,16 +24,21 @@ from dlightrag.engine.runtime.workspace import SessionNoteRecord
 class ContextAssembler:
     """Build each turn of one request as an append-only transcript.
 
-    Every request is the previous request plus new material. The Session fold only
-    appends, evidence text is frozen into the Tool result that admitted it, and the
-    control instruction rides after the transcript. That shape is what a provider
-    prefix cache can reuse, and no request states a clock.
+    Every request is the previous request plus new material, and the first request of
+    a follow-up Run is the previous Run's last one plus new material. The Session fold
+    only appends, evidence text is frozen into the Tool result that admitted it, and
+    whatever one Run composes rides after the transcript. That shape is what a
+    provider prefix cache can reuse, and no request states a clock.
 
     The former shape re-packed the whole evidence ledger after the growing fold on
     every turn, which put the pack past every matched cache prefix: on this
     deployment one Run was billed at 0% cache hits on all nine turns, and the turns
     that did hit reused only the fold (7.7k-11k of a 76k-106k prompt) while the
-    65k-90k pack was charged at the full input rate again.
+    65k-90k pack was charged at the full input rate again. The Run's question block
+    then did the same across Runs from the other end: it sat in front of the Session
+    fold, so each follow-up Run's first request reused only the system prompt and the
+    Tool definitions (0.8k-7.8k of 70k-244k tokens), and it repeated a question the
+    fold already held.
 
     The terminal in-loop assistant text is the Research answer; citation and source
     finalization remain deterministic outside model generation.
@@ -55,12 +60,25 @@ class ContextAssembler:
         artifact_publication: bool = False,
         run_notes: bool = False,
         session_notes: Sequence[SessionNoteRecord] = (),
+        instructions: str = "",
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
         self._input_limit = context_policy.hard_input_limit(model_profile)
         self._history = history
-        self._question = _question_message(query, query_images, resource_manifest)
+        #: The question as the Run's own User Entry states it.
+        self._query = query
+        #: Host instructions that hold for every request of this Session, stated with
+        #: the system prompt: a Child's role and scratch directory, for one.
+        self._instructions = instructions
+        manifest = _resource_manifest_context(resource_manifest)
+        #: What this Run adds to its question: the Resources it registered and the
+        #: pixels the caller attached. The Session records the question's text, and
+        #: none of this.
+        self._question_material: tuple[dict[str, Any], ...] = (
+            *(({"type": "text", "text": manifest},) if manifest else ()),
+            *(query_images or ()),
+        )
         self._memory_text = memory_text
         self._contributions = contributions
         self._tool_guidance = tool_guidance
@@ -183,93 +201,25 @@ class ContextAssembler:
         evidence: EvidenceLedger,
         working: WorkingContextProjection,
     ) -> list[dict[str, Any]]:
-        system = {
-            "role": "system",
-            "content": agent_control_prompt(
-                profile_memory_write=self._profile_memory_write,
-                artifact_publication=self._artifact_publication,
-                run_notes=self._run_notes,
-            ),
-        }
-        head = self._head(system, working.messages())
-        memory_message = standing_memory_message(self._memory_text)
-        tail: list[ContextContribution] = []
-        if memory_message is not None:
-            tail.append(
-                ContextContribution(
-                    source="profile.memory",
-                    authority="profile",
-                    messages=(memory_message,),
-                )
-            )
-        visual_blocks = evidence.visual_blocks()
-        if visual_blocks:
-            tail.append(
-                ContextContribution(
-                    source="answer.evidence_images",
-                    authority="visual",
-                    messages=({"role": "user", "content": visual_blocks},),
-                )
-            )
-        if self._tool_guidance:
-            tail.append(
-                ContextContribution(
-                    source="answer.tools",
-                    authority="reference",
-                    messages=(
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Tool usage guidance:\n"
-                                    + "\n".join(self._tool_guidance),
-                                }
-                            ],
-                        },
-                    ),
-                )
-            )
-        tail.extend(self._contributions)
-        # No per-turn prose is composed. A nudge that restated the system prompt's
-        # own guidance had to be rebuilt every turn and sat after the transcript, so
-        # the reusable prefix ended before it; both reference harnesses send nothing
-        # of the kind — Pi appends only durable messages, and DeepSeek's loop derives
-        # each request from its session log. What remains after the transcript is the
-        # per-Run static tail (memory, tool guidance, skill context) and then the
-        # run-local visual lane, which trails it because it re-renders per request
-        # (ADR 0015); the loop-termination guidance lives in the system prompt.
-        return [*head, *ContextProjector().project(tail).messages]
-
-    def _head(
-        self,
-        system: dict[str, Any],
-        carried: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        system = agent_control_prompt(
+            profile_memory_write=self._profile_memory_write,
+            artifact_publication=self._artifact_publication,
+            run_notes=self._run_notes,
+        )
         contributions = [
             ContextContribution(
                 source="answer.system",
                 authority="system",
-                messages=(system,),
+                messages=(
+                    {
+                        "role": "system",
+                        "content": f"{system}\n\n{self._instructions}"
+                        if self._instructions
+                        else system,
+                    },
+                ),
             )
         ]
-        memory = session_notes_message(self._session_notes) if self._run_notes else ""
-        if memory:
-            # Workspace authority sits after system and before conversation, so the
-            # statement is in the static prefix: the same bytes on every turn of this
-            # Run, never restated after the growing fold.
-            contributions.append(
-                ContextContribution(
-                    source="answer.session_notes",
-                    authority="workspace",
-                    messages=(
-                        {
-                            "role": "user",
-                            "content": memory,
-                        },
-                    ),
-                )
-            )
         if self._history.episodic_summary:
             contributions.append(
                 ContextContribution(
@@ -291,20 +241,79 @@ class ContextAssembler:
                     messages=tuple(self._history.messages),
                 )
             )
-        contributions.extend(
-            (
+        contributions.append(
+            ContextContribution(
+                source="agent.session",
+                authority="working",
+                messages=tuple(_stating_the_question(working, self._query)),
+            )
+        )
+        notes = session_notes_message(self._session_notes) if self._run_notes else ""
+        if notes:
+            contributions.append(
+                ContextContribution(
+                    source="answer.session_notes",
+                    authority="workspace",
+                    messages=({"role": "user", "content": notes},),
+                )
+            )
+        material = _material_message(self._question_material)
+        if material is not None:
+            contributions.append(
                 ContextContribution(
                     source="answer.question",
                     authority="user",
-                    messages=(self._question,),
-                ),
-                ContextContribution(
-                    source="agent.session",
-                    authority="working",
-                    messages=tuple(carried),
-                ),
+                    messages=(material,),
+                )
             )
-        )
+        memory_message = standing_memory_message(self._memory_text)
+        if memory_message is not None:
+            contributions.append(
+                ContextContribution(
+                    source="profile.memory",
+                    authority="profile",
+                    messages=(memory_message,),
+                )
+            )
+        visual_blocks = evidence.visual_blocks()
+        if visual_blocks:
+            contributions.append(
+                ContextContribution(
+                    source="answer.evidence_images",
+                    authority="visual",
+                    messages=({"role": "user", "content": visual_blocks},),
+                )
+            )
+        if self._tool_guidance:
+            contributions.append(
+                ContextContribution(
+                    source="answer.tools",
+                    authority="reference",
+                    messages=(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Tool usage guidance:\n"
+                                    + "\n".join(self._tool_guidance),
+                                }
+                            ],
+                        },
+                    ),
+                )
+            )
+        contributions.extend(self._contributions)
+        # Authority order is the request order. The system prompt and the transcript
+        # lead, and the transcript states the question once, in its place, so a later
+        # request, of this Run or of the next one, extends an earlier one and a later
+        # steer still follows the question. Everything this Run composes comes after
+        # the transcript: the notes it holds and its
+        # question's material, which differ from one Run to the next; memory, tool
+        # guidance and skill context, byte-stable for the Run; and last the visual
+        # lane, which re-renders per request (ADR 0015). Nothing is composed per turn:
+        # the loop-termination guidance lives in the system prompt, and both reference
+        # harnesses send no nudge either.
         return list(ContextProjector().project(contributions).messages)
 
     def _check_input_tokens(self, input_tokens: int) -> None:
@@ -327,19 +336,39 @@ def _carries_pixels(messages: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _question_message(
+def _stating_the_question(
+    working: WorkingContextProjection,
     query: str,
-    query_images: list[dict[str, Any]] | None,
-    resource_manifest: tuple[ResourceManifestEntry, ...],
-) -> dict[str, Any]:
-    manifest = _resource_manifest_context(resource_manifest)
-    if not query_images and not manifest:
-        return {"role": "user", "content": query}
-    content: list[dict[str, Any]] = [{"type": "text", "text": query}]
-    if manifest:
-        content.append({"type": "text", "text": manifest})
-    content.extend(query_images or [])
-    return {"role": "user", "content": content}
+) -> list[dict[str, Any]]:
+    """Return the transcript with the Run's question in its place, stated once.
+
+    Acceptance records the question as the Run's own User Entry, so the transcript
+    already states it, before the Tool work it asked for and before any steer or
+    follow-up that came later. Where the transcript does not hold it — before that
+    Entry exists, as in the acceptance measure, or once a compaction has covered it —
+    it is restated where it stood: right after the summary that replaced the covered
+    prefix, so a later message still has the last word.
+    """
+    transcript = working.messages()
+    if any(
+        message.get("role") == "user" and message.get("content") == query for message in transcript
+    ):
+        return transcript
+    lead = 0 if working.summary is None else 1
+    return [*transcript[:lead], {"role": "user", "content": query}, *transcript[lead:]]
+
+
+def _material_message(material: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+    """Return what this Run adds to its question, or nothing when it adds nothing.
+
+    The Resource manifest and the attached pixels belong to this Run alone and differ
+    from one Run to the next, so they follow the transcript rather than sit in it.
+    """
+    if not material:
+        return None
+    if len(material) == 1 and material[0].get("type") == "text":
+        return {"role": "user", "content": material[0]["text"]}
+    return {"role": "user", "content": list(material)}
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:

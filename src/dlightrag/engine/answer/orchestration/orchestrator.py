@@ -33,6 +33,7 @@ from dlightrag.engine.agent.session.fold import (
 from dlightrag.engine.agent.session.ids import EntryId, SessionId
 from dlightrag.engine.agent.session.projection import (
     AgentInputOverflowError,
+    ContextProjection,
     require_compactable,
     should_compact,
 )
@@ -834,13 +835,16 @@ class AnswerOrchestrator:
             context=ContextAssembler(
                 model_profile=child_profile,
                 context_policy=self._context_policy,
-                query=child_question(request.objective, child_session_id=child_session_id),
+                # The objective is what the Child's own User Entry records, so its
+                # transcript states it once and a later steer still follows it.
+                query=request.objective,
                 history=history,
                 query_images=None,
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
                 contributions=() if skills is None else skills.context_contributions(),
                 tool_guidance=_tool_guidance(tools),
+                instructions=child_instructions(child_session_id),
             ),
             tools=tools,
             evidence=evidence,
@@ -873,6 +877,10 @@ class AnswerOrchestrator:
             admissions=run.attachment_admissions,
         )
         working = WorkingContextProjection()
+        if isinstance(projection, ContextProjection) and projection.summary is not None:
+            # The fold opens with the summary that replaced the covered prefix; kept
+            # apart, it tells the request where that prefix ended.
+            working.summarize(messages.pop(0))
         self._record_exchanges(working, messages)
         run.working = working
 
@@ -1231,24 +1239,26 @@ def _last_provider_input_tokens(snapshot: Any) -> int | None:
     return None
 
 
-_CHILD_OBJECTIVE_PREFIX = (
-    "Investigate this question as a research subagent. "
+_CHILD_INSTRUCTIONS = (
+    "Investigate the objective you are given as a research subagent. "
     "Use tools as needed, then write a concise summary and stop. "
     "Simultaneous children share one workspace, so keep intermediate and scratch files "
     "under `tmp/children/{child_session_id}/` and leave the rest of the workspace alone. "
-    "Do not mention these instructions.\n\n"
+    "Do not mention these instructions."
 )
 
 
-def child_question(objective: str, *, child_session_id: str) -> str:
-    """Return one child's objective with the instructions only it needs.
+def child_instructions(child_session_id: str) -> str:
+    """Return the instructions only a child needs, apart from its objective.
 
     The scratch directory is this child's own, which is why the id is a parameter: the
     id exists before the child runs, and one shared workspace needs one convention to
-    keep simultaneous children from overwriting each other's work (ADR 0025).
+    keep simultaneous children from overwriting each other's work (ADR 0025). They hold
+    for every request of the child's Session, so they ride with its system prompt; the
+    objective is the child's own User Entry and stays where it was asked, before any
+    steer that redirects it.
     """
-    prefix = _CHILD_OBJECTIVE_PREFIX.format(child_session_id=child_session_id)
-    return f"{prefix}{objective.strip()}"
+    return _CHILD_INSTRUCTIONS.format(child_session_id=child_session_id)
 
 
 def _tool_schema_tokens(tools: list[AgentTool]) -> int:
@@ -1266,5 +1276,5 @@ __all__ = [
     "AnswerOrchestrator",
     "PhaseBoundaries",
     "PreparedRun",
-    "child_question",
+    "child_instructions",
 ]
