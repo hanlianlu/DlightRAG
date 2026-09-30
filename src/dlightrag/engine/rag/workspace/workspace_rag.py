@@ -2294,8 +2294,14 @@ class WorkspaceRag:
             document = IngestDocument(
                 url=download_locator, download_uri=download_locator, **common_fields
             )
-            source_document = _source_document_from_manifest(document, key=cast(str, document.url))
-            source: AsyncDataSource = factory.url(documents=[source_document])
+            url_source = factory.url(
+                documents=[_source_document_from_manifest(document, key=cast(str, document.url))]
+            )
+            cleanup.push_async_callback(_aclose_retry_source, url_source)
+            # The adapter keys its document by file name rather than by URL, so
+            # the retry fetches the document the adapter keyed.
+            (source_document,) = [item async for item in url_source.aiter_documents()]
+            source: AsyncDataSource = url_source
         else:
             object_key = str(parts["blob_path"] if source_type == "azure_blob" else parts["key"])
             document = IngestDocument(key=object_key, **common_fields)
@@ -2307,7 +2313,7 @@ class WorkspaceRag:
                 )
             else:
                 source = factory.azure(str(parts["container_name"]))
-        cleanup.push_async_callback(_aclose_retry_source, source)
+            cleanup.push_async_callback(_aclose_retry_source, source)
         prepared = await self._download_remote_to_prepared_item(
             source=source,
             document=source_document,

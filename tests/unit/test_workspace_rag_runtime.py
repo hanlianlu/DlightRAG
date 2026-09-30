@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -194,6 +194,60 @@ async def test_a_url_that_cannot_be_fetched_fails_only_its_document(
         },
     ]
     assert health.degraded == []
+
+
+def _fetch_urls_with(
+    monkeypatch: pytest.MonkeyPatch, download: Callable[..., Awaitable[None]]
+) -> None:
+    """Serve the real URL adapter's fetches through ``download``, without DNS."""
+    monkeypatch.setattr("dlightrag.engine.rag.corpus.sources.url.download_public_http", download)
+    monkeypatch.setattr(
+        "dlightrag.engine.rag.corpus.sources.url.validate_public_http_url",
+        lambda url, **_kwargs: url,
+    )
+
+
+async def test_a_url_document_retry_fetches_it_from_its_download_locator(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The URL adapter keys its document by file name, so the retry fetches that one."""
+    locator = "https://cdn.example.com/assets/1.pdf"
+    fetched: list[str] = []
+
+    async def download(url: str, destination: Path, **_kwargs: Any) -> None:
+        fetched.append(url)
+        destination.write_bytes(b"%PDF-1.4")
+
+    _fetch_urls_with(monkeypatch, download)
+    service = _service(test_config)
+    _set_failed_docs(
+        service, [{"doc_id": "doc-1", "file_path": "report.pdf", "error": "parser failed"}]
+    )
+    service._metadata_index = AsyncMock()
+    _serve_metadata(
+        service._metadata_index,
+        {
+            "doc-1": {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": locator,
+            }
+        },
+    )
+    service._metadata_index.find_by_download_locator.side_effect = lambda value: (
+        ["doc-1"] if value == locator else []
+    )
+    service._lightrag_stores = AsyncMock()
+    service._lightrag_stores.get_doc_status.return_value = {"status": "failed"}
+    service._ingestion_engine = MagicMock()
+    service._ingestion_engine.aingest_files = AsyncMock(
+        return_value={"processed": 1, "errors": [], "results": [{"doc_id": "doc-1"}]}
+    )
+
+    result = await service.aretry_failed_docs()
+
+    assert result["succeeded"] == 1, result
+    assert fetched == [locator]
 
 
 def _runtime_lightrag() -> SimpleNamespace:
@@ -3868,6 +3922,15 @@ class TestWorkspaceRagLightRAGMainPath:
         }
         content = b"%PDF-1.4 remote dispatch"
         source = MagicMock()
+        # The URL adapter keys its document by file name, not by URL.
+        url_keyed = SourceDocument(
+            key="report.pdf", source_uri="bynder://asset/1", display_filename="report.pdf"
+        )
+
+        async def keyed_documents(prefix: str | None = None) -> AsyncIterator[SourceDocument]:
+            yield url_keyed
+
+        source.aiter_documents = keyed_documents
         source.amaterialize_document = AsyncMock(
             side_effect=lambda _document, destination: destination.write_bytes(content)
         )
@@ -3882,6 +3945,11 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result == {"status": "success"}
         source.amaterialize_document.assert_awaited_once()
+        materialized = source.amaterialize_document.await_args.args[0]
+        if source_type == "url":
+            assert materialized is url_keyed
+        else:
+            assert materialized.key == "assets/1.pdf"
         source.aclose.assert_awaited_once()
         assert service._ingestion_engine.aingest_files.await_count == 1
         call = service._ingestion_engine.aingest_files.await_args
@@ -3926,6 +3994,11 @@ class TestWorkspaceRagLightRAGMainPath:
         archived.parent.mkdir(parents=True)
         archived.write_bytes(b"%PDF-stale")
         source = MagicMock()
+
+        async def keyed_documents(prefix: str | None = None) -> AsyncIterator[SourceDocument]:
+            yield SourceDocument(key="report.pdf", display_filename="report.pdf")
+
+        source.aiter_documents = keyed_documents
 
         async def fail_after_partial_write(_document: object, destination: Path) -> None:
             destination.write_bytes(b"partial")
