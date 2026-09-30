@@ -8,7 +8,7 @@ from collections.abc import Callable
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import SecretStr
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -183,6 +183,11 @@ def _csrf_header_matches(request: Request) -> bool:
     return secrets.compare_digest(cookie_token, header_token)
 
 
+def _cross_origin_rejected() -> Response:
+    """Refuse a request whose origin could not be verified, in the shared envelope."""
+    return error_response(403, "Cross-origin request rejected", error_kind="cross_origin_rejected")
+
+
 def _reject_web_mutation(request: Request) -> bool:
     """Return True when one unsafe /web request must be rejected.
 
@@ -266,7 +271,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             if path in {"/web/login", "/web/logout"} and request.method.upper() == "POST":
                 origin = request.headers.get("Origin")
                 if origin is not None and not _has_exact_same_origin(request):
-                    return PlainTextResponse("Cross-origin request rejected", status_code=403)
+                    return _cross_origin_rejected()
             return await call_next(request)
 
         cfg = self._config_getter()
@@ -274,7 +279,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
             if path.startswith("/web/api/connections/mcp") or path == "/web/api/video-playback":
                 if _reject_web_mutation(request):
-                    return PlainTextResponse("Cross-origin request rejected", status_code=403)
+                    return _cross_origin_rejected()
                 return await self._finish_web_response(request, call_next)
             return await call_next(request)
 
@@ -297,7 +302,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             return _unauthenticated(request, str(exc.detail))
 
         if _reject_web_mutation(request):
-            return PlainTextResponse("Cross-origin request rejected", status_code=403)
+            return _cross_origin_rejected()
 
         return await self._finish_web_response(request, call_next)
 
@@ -317,7 +322,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             claims=identity.claims,
         )
         if _reject_web_mutation(request):
-            return PlainTextResponse("Cross-origin request rejected", status_code=403)
+            return _cross_origin_rejected()
         return await self._finish_web_response(request, call_next)
 
     async def _finish_web_response(self, request: Request, call_next) -> Response:

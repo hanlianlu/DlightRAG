@@ -98,6 +98,11 @@ class TestWebCsrfHardening:
             },
         )
         assert response.status_code == 403
+        assert response.json() == {
+            "detail": "Cross-origin request rejected",
+            "error_type": "auth",
+            "error_kind": "cross_origin_rejected",
+        }
 
     def test_same_origin_mutation_succeeds(self) -> None:
         client, auth, csrf_token = _client_with_session(_jwt_config())
@@ -119,6 +124,7 @@ class TestWebCsrfHardening:
             headers={"Origin": "https://evil.example.com"},
         )
         assert response.status_code == 403
+        assert response.json()["error_kind"] == "cross_origin_rejected"
 
     def test_logout_post_rejects_cross_origin_browsers(self) -> None:
         client = TestClient(_app(_jwt_config()))

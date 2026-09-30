@@ -34,10 +34,21 @@ test('a refusal naming a known error kind gets that kind\'s localized copy', () 
 });
 
 test('a bare 403 is not read as an authorization refusal', async () => {
-  // The cross-origin guard answers plain text, not the general envelope.
-  const guarded = await apiError(new Response('Cross-origin request rejected', {status: 403}));
-  assert.equal(guarded.errorType, null);
-  assert.equal(apiErrorMessage(guarded, 'Failed to create workspace'), 'Failed to create workspace');
+  // A 403 whose body is not the envelope, such as a proxy's, names no type.
+  const bare = await apiError(new Response('Forbidden', {status: 403}));
+  assert.equal(bare.errorType, null);
+  assert.equal(apiErrorMessage(bare, 'Failed to create workspace'), 'Failed to create workspace');
+});
+
+test('a cross-origin refusal says the origin could not be verified, not that access is denied', async () => {
+  const guarded = await apiError(Response.json(
+    {detail: 'Cross-origin request rejected', error_type: 'auth', error_kind: 'cross_origin_rejected'},
+    {status: 403},
+  ));
+  assert.equal(
+    apiErrorMessage(guarded, 'Failed to create workspace'),
+    'This request was blocked because its origin could not be verified. Reload the page and try again.',
+  );
 });
 
 test('an authorization refusal is explained, never echoed', () => {

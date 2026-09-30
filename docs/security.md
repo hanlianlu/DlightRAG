@@ -126,7 +126,9 @@ Missing/invalid edge credentials return 401; DlightRAG renders no login page.
 The origin must accept traffic only from the configured edge. Cryptographic
 verification does not make arbitrary header injection safe. State-changing Web
 routes also require exact same-origin `Origin` and a double-submit
-`dlightrag_web_csrf` cookie echoed as `X-CSRF-Token`.
+`dlightrag_web_csrf` cookie echoed as `X-CSRF-Token`; a refused request gets
+403 in the shared error envelope with `error_kind: "cross_origin_rejected"`. A
+proxy that does not forward the browser's `Host` refuses every write this way.
 
 ### Entra Example
 
