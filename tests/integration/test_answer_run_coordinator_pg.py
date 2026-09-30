@@ -71,6 +71,7 @@ from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     PinnedModelProfile,
     model_reasoning_settings,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.fast import FastRunBoundaries
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
@@ -138,6 +139,7 @@ def _answer_run_input() -> AnswerRunInput:
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),
         idempotency_fingerprint="public-request-hash",
+        resource_identity=new_resource_identity(),
         agent_session_id="00000000-0000-7000-8000-000000000001",
         agent_lane_id="main",
     )

@@ -8,8 +8,10 @@ its own: the run row remains authoritative for status, turns, and cancellation.
 
 from __future__ import annotations
 
+import re
+import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -32,6 +34,26 @@ from dlightrag.engine.answer.mode import canonical_answer_mode
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.rag.retrieval import RetrievalOptions
 from dlightrag.engine.runtime.errors import IncompatibleActiveRunError, RunExecutionError
+
+#: Random bytes in one Run's resource identity, and its recorded spelling.
+_RESOURCE_IDENTITY_BYTES = 32
+_RESOURCE_IDENTITY = re.compile(rf"[0-9a-f]{{{2 * _RESOURCE_IDENTITY_BYTES}}}")
+
+
+def new_resource_identity() -> str:
+    """Draw the salt one accepted Run mints every Resource handle and cursor from.
+
+    It belongs to the Run and is recorded with its prepared input, so a resume
+    mints exactly the handles the Run already printed, whatever the deployment's
+    own secrets have become since.
+    """
+    return secrets.token_hex(_RESOURCE_IDENTITY_BYTES)
+
+
+def _resource_identity(value: Any) -> str:
+    if not isinstance(value, str) or _RESOURCE_IDENTITY.fullmatch(value) is None:
+        raise ValueError("answer run input is missing its resource identity")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +305,9 @@ class AnswerRunInput:
     context_policy_revision: str
     model_catalog_revision: str
     idempotency_fingerprint: str
+    #: The Run's own salt for every Resource handle and cursor it mints; a secret, so
+    #: it never appears in a repr or a log line that prints one.
+    resource_identity: str = field(repr=False)
     agent_run_plan: AgentRunPlan | None = None
     run_connection_bindings: tuple[RunConnectionBinding, ...] = ()
     workspaces: tuple[str, ...] = ()
@@ -327,6 +352,7 @@ class AnswerRunInput:
             "context_policy_revision": self.context_policy_revision,
             "model_catalog_revision": self.model_catalog_revision,
             "idempotency_fingerprint": self.idempotency_fingerprint,
+            "resource_identity": self.resource_identity,
             "run_connection_bindings": [
                 binding.as_json() for binding in self.run_connection_bindings
             ],
@@ -375,6 +401,7 @@ class AnswerRunInput:
             context_policy_revision=context_policy_revision,
             model_catalog_revision=model_catalog_revision,
             idempotency_fingerprint=idempotency_fingerprint,
+            resource_identity=_resource_identity(request.get("resource_identity")),
             agent_run_plan=agent_run_plan,
             run_connection_bindings=decode_connection_bindings(
                 request.get("run_connection_bindings", [])
@@ -583,6 +610,7 @@ __all__ = [
     "build_current_answer_resources",
     "in_memory_attachment_loader",
     "LinkReference",
+    "new_resource_identity",
     "PinnedModelProfile",
     "ResourceInput",
     "validate_active_answer_input",

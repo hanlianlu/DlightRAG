@@ -307,7 +307,7 @@ async def test_acceptance_and_execution_measure_a_fast_run_with_the_same_calls(
         projected_history=PriorTurns(),
         model_profiles=pinned,
         resolved_mode="fast",
-        resource_scope="owner-1\0run-1",
+        resource_identity=accepted.resource_identity,
         pinned_models=accepted.pinned_models,
     )
 

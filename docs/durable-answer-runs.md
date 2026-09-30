@@ -206,8 +206,12 @@ pin relevant endpoint fingerprints, effective model profiles, and
 catalogue/context-policy revisions. Retrieval also retains current-image bytes
 only while nonterminal; its terminal accepted envelope keeps their count and
 SHA-256 identities, not their bytes. Answer retains its accepted
-history/Resources/scope, image descriptions, and Agent Plan. Recovery uses these
-pinned facts; provider credentials remain deployment state. An incompatible
+history/Resources/scope, image descriptions, Agent Plan, and the random resource
+identity it drew at acceptance, from which every Resource handle and cursor of
+the Run is minted. Recovery uses these pinned facts; provider credentials remain
+deployment state, and none of them takes part in a handle, so a resume after a
+credential rotation still resolves the handles the Run already printed. A
+prepared input without a well-formed resource identity is incompatible. An incompatible
 model fingerprint, model-catalogue revision, or context-policy revision fails
 closed at startup and again before execution rather than silently running with
 changed semantics.

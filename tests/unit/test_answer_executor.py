@@ -60,6 +60,7 @@ from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
     build_current_answer_resources,
     in_memory_attachment_loader,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
@@ -69,6 +70,7 @@ from dlightrag.engine.answer.publication import (
     prepare_artifact_attachment,
 )
 from dlightrag.engine.answer.resources import ResourceInput
+from dlightrag.engine.answer.resources.models import ResourceCursorError
 from dlightrag.engine.dependencies import DependencyRetriesExhausted, ProviderUnavailableError
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved, RunSession
 from dlightrag.engine.runtime.errors import RunExecutionError
@@ -600,31 +602,65 @@ def _resource_resolver() -> AnswerResourceResolver:
         ),
         models=MagicMock(),
         capabilities=capabilities,
-        resource_identity_secret=b"i" * 32,
-        resource_cursor_secret=b"c" * 32,
     )
 
 
-def test_resource_identity_is_stable_within_run_and_isolated_across_runs() -> None:
-    resolver = _resource_resolver()
+async def test_a_run_mints_its_handles_and_cursors_from_its_own_identity() -> None:
+    identity = new_resource_identity()
+    resources = [
+        ResourceInput(url="https://example.com/report"),
+        ResourceInput(
+            filename="notes.txt", content="".join(f"line {n}\n" for n in range(400)).encode()
+        ),
+    ]
+
+    # Two resolvers stand for the process that accepted the Run and the one that
+    # resumes it: nothing either one holds takes part in a handle or a cursor.
+    first = _resource_resolver().build_resource_context(resources, resource_identity=identity)
+    resumed = _resource_resolver().build_resource_context(resources, resource_identity=identity)
+    other = _resource_resolver().build_resource_context(
+        resources, resource_identity=new_resource_identity()
+    )
+
+    handles = [entry.resource_id for entry in first.manifest()]
+    assert handles == [entry.resource_id for entry in resumed.manifest()]
+    assert set(handles).isdisjoint(entry.resource_id for entry in other.manifest())
+    page = await first.read(handles[1], max_window_tokens=200)
+    assert page.next_cursor is not None
+    continued = await resumed.read(handles[1], cursor=page.next_cursor, max_window_tokens=200)
+    assert continued.content
+    with pytest.raises(ResourceCursorError):
+        await other.read(
+            other.manifest()[1].resource_id, cursor=page.next_cursor, max_window_tokens=200
+        )
+
+
+def test_a_resume_under_rotated_database_credentials_mints_the_same_handles(
+    test_config: Any,
+) -> None:
+    from dlightrag._compose import _compose
+
+    postgres = test_config.storage.postgres
+    rotated = test_config.model_copy(
+        update={
+            "storage": test_config.storage.model_copy(
+                update={"postgres": postgres.model_copy(update={"password": "rotated"})}
+            )
+        }
+    )
+    identity = new_resource_identity()
     resources = [ResourceInput(url="https://example.com/report")]
 
-    first = resolver.build_resource_context(
-        resources,
-        resource_scope="owner-a\0run-1",
-    )
-    again = resolver.build_resource_context(
-        resources,
-        resource_scope="owner-a\0run-1",
-    )
-    other = resolver.build_resource_context(
-        resources,
-        resource_scope="owner-a\0run-2",
-    )
+    handles = [
+        _compose(config)
+        .coordinator._executors["answer"]
+        ._resources.build_resource_context(resources, resource_identity=identity)
+        .manifest()[0]
+        .resource_id
+        for config in (test_config, rotated)
+    ]
 
-    assert first is not None and again is not None and other is not None
-    assert first.manifest()[0].resource_id == again.manifest()[0].resource_id
-    assert first.manifest()[0].resource_id != other.manifest()[0].resource_id
+    assert handles[0] == handles[1]
 
 
 def _png_bytes(color: str = "white") -> bytes:
@@ -1869,6 +1905,7 @@ def _fast_prepared_input(
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),
         idempotency_fingerprint="fast-slice-9",
+        resource_identity=new_resource_identity(),
         agent_session_id=session_id,
         agent_lane_id="main",
         parent_run_id=parent_run_id,
@@ -2334,6 +2371,7 @@ async def test_answer_run_attachments_must_match_their_accepted_digest(
         context_policy_revision="policy",
         model_catalog_revision="catalog",
         idempotency_fingerprint="fingerprint",
+        resource_identity=new_resource_identity(),
         attachments=(
             AttachmentReference(
                 digest=hashlib.sha256(accepted).hexdigest(),

@@ -16,6 +16,7 @@ from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     AnswerRunRequest,
     PinnedModelProfile,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
@@ -82,6 +83,7 @@ async def prepare_test_answer_run_input(
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),
         idempotency_fingerprint=idempotency_fingerprint,
+        resource_identity=new_resource_identity(),
     )
 
 

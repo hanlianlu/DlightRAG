@@ -1264,7 +1264,7 @@ class AnswerExecutor:
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
             fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
             resolved_mode=resolved_mode,
-            resource_scope=f"{session.owner_id}\0{session.run_id}",
+            resource_identity=request.resource_identity,
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
@@ -2097,7 +2097,7 @@ class AnswerExecutor:
         projected_history: PriorTurns,
         model_profiles: Mapping[ChatModelSelector, ModelProfile],
         resolved_mode: ResolvedMode,
-        resource_scope: str,
+        resource_identity: str,
         skills: SkillsBundle | None = None,
         pinned_models: tuple[PinnedModelProfile, ...],
         agent_effort: ReasoningLevel | None = None,
@@ -2119,7 +2119,7 @@ class AnswerExecutor:
             confirm_image_context=self._capabilities.pinned_answer_context,
             fetched_bytes_sink=fetched_bytes_sink,
             resolved_mode=resolved_mode,
-            resource_scope=resource_scope,
+            resource_identity=resource_identity,
         )
         try:
             models = resolved.models

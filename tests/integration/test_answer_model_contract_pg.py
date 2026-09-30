@@ -16,6 +16,7 @@ from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     PinnedModelProfile,
     model_reasoning_settings,
+    new_resource_identity,
 )
 from dlightrag.engine.runtime.errors import RunSchemaError
 from dlightrag.engine.runtime.records import Succeeded
@@ -54,6 +55,7 @@ async def test_incompatible_answer_does_not_block_startup_or_new_run(
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),
         idempotency_fingerprint="new-request",
+        resource_identity=new_resource_identity(),
         agent_session_id=str(uuid7()),
         agent_lane_id="main",
     )

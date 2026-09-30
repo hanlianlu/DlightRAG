@@ -78,14 +78,10 @@ class AnswerResourceResolver:
         settings: AnswerResourceSettings,
         models: AnswerModelRuntime,
         capabilities: AnswerCapabilityCoordinator,
-        resource_identity_secret: bytes | None = None,
-        resource_cursor_secret: bytes | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
         self._capabilities = capabilities
-        self._resource_identity_secret = resource_identity_secret
-        self._resource_cursor_secret = resource_cursor_secret
 
     async def pin_current_image_links(
         self,
@@ -176,9 +172,13 @@ class AnswerResourceResolver:
         ],
         fetched_bytes_sink: FetchedBytesSink | None = None,
         resolved_mode: ResolvedMode,
-        resource_scope: str | None = None,
+        resource_identity: str | None = None,
     ) -> ResolvedAnswerResources:
-        """Resolve resource capabilities and image transport."""
+        """Resolve resource capabilities and image transport.
+
+        ``resource_identity`` is the Run's recorded salt; every handle and cursor
+        the registry mints comes from it.
+        """
         declared_image_count = sum(
             1
             for resource in resources or ()
@@ -213,7 +213,7 @@ class AnswerResourceResolver:
             remaining_resources,
             web_sources=web_sources,
             fetched_bytes_sink=fetched_bytes_sink,
-            resource_scope=resource_scope,
+            resource_identity=resource_identity,
         )
         try:
             current_image_resource_ids = (
@@ -353,12 +353,15 @@ class AnswerResourceResolver:
         *,
         web_sources: WebSourceService | None = None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
-        resource_scope: str | None = None,
+        resource_identity: str | None = None,
     ) -> ResourceRegistry:
         """Register the admitted resources for read and view.
 
         The registry always exists in Research-capable composition so ``read(url=...)``
-        does not depend on an Execution Environment or a configured provider.
+        does not depend on an Execution Environment or a configured provider. Its
+        handles and cursors are minted from the Run's ``resource_identity`` and from
+        nothing the deployment holds, so a resume mints the handles the Run already
+        printed; without one they are random to this registry.
         """
         registry = ResourceRegistry(
             max_attachments=self._settings.max_attachments,
@@ -366,8 +369,8 @@ class AnswerResourceResolver:
             max_total_attachment_bytes=self._settings.max_total_attachment_bytes,
             url_text_fallback=(web_sources.extract if web_sources is not None else None),
             fetched_bytes_sink=fetched_bytes_sink,
-            resource_secret=_scoped_secret(self._resource_identity_secret, resource_scope),
-            cursor_secret=_scoped_secret(self._resource_cursor_secret, resource_scope),
+            resource_secret=_run_secret(resource_identity, b"answer-resource-identity"),
+            cursor_secret=_run_secret(resource_identity, b"answer-resource-cursor"),
         )
         try:
             for resource in resources or []:
@@ -406,10 +409,11 @@ class AnswerResourceResolver:
         return await asyncio.to_thread(build)
 
 
-def _scoped_secret(secret: bytes | None, scope: str | None) -> bytes | None:
-    if secret is None or scope is None:
-        return secret
-    return hmac.new(secret, scope.encode("utf-8"), hashlib.sha256).digest()
+def _run_secret(resource_identity: str | None, purpose: bytes) -> bytes | None:
+    """Derive one purpose's key from a Run's identity, keeping handles apart from cursors."""
+    if resource_identity is None:
+        return None
+    return hmac.new(bytes.fromhex(resource_identity), purpose, hashlib.sha256).digest()
 
 
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:

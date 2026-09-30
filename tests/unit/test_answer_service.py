@@ -531,6 +531,7 @@ class _Resources:
     ) -> None:
         self._registry = registry
         self.calls = calls if calls is not None else []
+        self.identities: list[str | None] = []
 
     async def pin_current_image_links(
         self, request: AnswerRunRequest, attachment_bytes: Sequence[bytes], /
@@ -546,9 +547,11 @@ class _Resources:
         models: RequestModelContext,
         confirm_image_context: Any,
         resolved_mode: str = "fast",
+        resource_identity: str | None = None,
     ) -> Any:
         del resources, confirm_image_context, resolved_mode
         self.calls.append("resolve")
+        self.identities.append(resource_identity)
         return MagicMock(
             models=models,
             registry=self._registry,
@@ -1072,6 +1075,30 @@ async def test_idempotent_replay_precedes_live_multimodal_capability_validation(
     assert resources.calls == []
     assert store.created == []
     assert store.replay_calls == 1
+
+
+async def test_every_accepted_run_mints_its_handles_from_an_identity_of_its_own() -> None:
+    store = _Store()
+    resources = _Resources()
+    service = _service(store=store, resources=resources)
+
+    await service.create(request=_request(), owner_id=_OWNER)
+    await service.create(request=_request(), owner_id=_OWNER)
+
+    recorded = [
+        AnswerRunInput.from_request(created["prepared_input"]).resource_identity
+        for created in store.created
+    ]
+    assert recorded[0] != recorded[1]
+    # Acceptance measured with the handles the Run will mint when it executes.
+    assert resources.identities == recorded
+    # The identity keys the Run's handles: it is not part of the public envelope, and
+    # printing the accepted input does not show it.
+    assert all(
+        "resource_identity" not in created["envelope"].accepted_input for created in store.created
+    )
+    accepted = AnswerRunInput.from_request(store.created[0]["prepared_input"])
+    assert accepted.resource_identity not in repr(accepted)
 
 
 async def test_accepted_run_stores_input_artifacts_and_wakes_the_coordinator() -> None:

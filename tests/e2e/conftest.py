@@ -84,6 +84,7 @@ from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     AttachmentReference,
     PinnedModelProfile,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
@@ -145,6 +146,7 @@ def _run_request(
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=MODEL_CATALOG_REVISION,
         idempotency_fingerprint=idempotency_fingerprint,
+        resource_identity=new_resource_identity(),
     ).as_request()
 
 

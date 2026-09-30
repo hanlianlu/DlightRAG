@@ -49,6 +49,7 @@ from dlightrag.engine.answer.execution.input import (
     child_model_guidance,
     in_memory_attachment_loader,
     model_reasoning_settings,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
@@ -597,6 +598,7 @@ class _AnswerResourcePreparer(Protocol):
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
         resolved_mode: ResolvedMode,
+        resource_identity: str | None = None,
     ) -> ResolvedAnswerResources: ...
 
 
@@ -1871,6 +1873,9 @@ class AnswerService:
         ]
     ]:
         """Resolve one normalized request and its capacity-narrowed mode set."""
+        # Drawn once per accepted Run, so a retried binding attempt keeps the handles
+        # acceptance measured with, and every resume mints them again.
+        resource_identity = new_resource_identity()
         async with self._project_acceptance(
             request,
             resources=resources,
@@ -1878,6 +1883,7 @@ class AnswerService:
             allowed_modes=allowed_modes,
             auth_mode=auth_mode,
             memory_enabled=memory_enabled,
+            resource_identity=resource_identity,
         ) as project:
 
             async def prepare(
@@ -1899,6 +1905,7 @@ class AnswerService:
                     context_policy_revision=CONTEXT_POLICY_REVISION,
                     model_catalog_revision=current_model_catalog_revision(),
                     idempotency_fingerprint=idempotency_fingerprint,
+                    resource_identity=resource_identity,
                     agent_run_plan=projection.agent_run_plan,
                     image_descriptions=projection.image_descriptions,
                     parent_run_id=request.parent_run_id,
@@ -1921,6 +1928,7 @@ class AnswerService:
         allowed_modes: frozenset[ResolvedMode],
         auth_mode: str = "none",
         memory_enabled: bool = True,
+        resource_identity: str,
     ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
         """Resolve the exact shared-history envelopes without building the run rig."""
         model_profiles = self._capabilities.current_profiles()
@@ -1929,6 +1937,7 @@ class AnswerService:
             models=self._capabilities.request_model_context(model_profiles),
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
             resolved_mode=("research" if "research" in allowed_modes else "fast"),
+            resource_identity=resource_identity,
         )
         try:
             workspaces = list(request.workspaces)

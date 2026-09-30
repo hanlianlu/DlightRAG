@@ -47,6 +47,7 @@ from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     PinnedModelProfile,
     model_reasoning_settings,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.execution.resources import (
     AnswerResourceResolver,
@@ -683,6 +684,7 @@ async def _create_fast_continuation(pg, *, old_run_id, session_id, kind, profile
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),
         idempotency_fingerprint=f"fast-projection-{uuid.uuid7()}",
+        resource_identity=new_resource_identity(),
         agent_session_id=session_id.value,
         agent_lane_id=lane.value,
         source_lane_id="main" if kind == "fork" else None,

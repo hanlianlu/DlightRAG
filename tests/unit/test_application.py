@@ -37,6 +37,7 @@ from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
     model_reasoning_settings,
+    new_resource_identity,
     validate_active_answer_input,
 )
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
@@ -375,6 +376,7 @@ def _requirement(
         "context_policy_revision": CONTEXT_POLICY_REVISION,
         "model_catalog_revision": current_model_catalog_revision(),
         "idempotency_fingerprint": "test-fingerprint",
+        "resource_identity": new_resource_identity(),
         "pinned_models": [
             PinnedModelProfile(
                 role=role,
@@ -661,6 +663,13 @@ async def test_irrelevant_retrieval_capability_drift_does_not_block_startup(
         pytest.param({"model_catalog_revision": "stale"}, "model catalog", id="model-catalog"),
         pytest.param({"pinned_models": "not-an-array"}, "durable input schema", id="schema"),
         pytest.param({"pinned_models": []}, "durable input schema", id="roles"),
+        # A Run mints its handles from its own identity; without it a resume could
+        # not print the handles its history already names.
+        pytest.param({"resource_identity": None}, "durable input schema", id="no-identity"),
+        pytest.param(
+            {"resource_identity": "A" * 64}, "durable input schema", id="malformed-identity"
+        ),
+        pytest.param({"resource_identity": "a" * 63}, "durable input schema", id="short-identity"),
     ],
 )
 async def test_an_injected_answer_validation_failure_closes_startup(

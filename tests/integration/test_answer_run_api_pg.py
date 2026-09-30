@@ -138,8 +138,9 @@ class _Resources:
         models: RequestModelContext,
         confirm_image_context: Any,
         resolved_mode: str,
+        resource_identity: str | None = None,
     ) -> Any:
-        del confirm_image_context, resolved_mode
+        del confirm_image_context, resolved_mode, resource_identity
         return SimpleNamespace(
             models=models,
             registry=None,

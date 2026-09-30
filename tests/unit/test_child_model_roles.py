@@ -33,6 +33,7 @@ from dlightrag.engine.answer.execution.input import (
     PinnedModelProfile,
     child_model_guidance,
     model_reasoning_settings,
+    new_resource_identity,
 )
 from dlightrag.engine.answer.research.runtime import FetchedResourceBuffer, run_child_session
 from dlightrag.engine.answer.tools.subagents import (
@@ -181,7 +182,7 @@ async def _prepared_executor(monkeypatch, agent_effort: ReasoningLevel | None = 
         projected_history=PriorTurns(),
         model_profiles=profiles,
         resolved_mode="research",
-        resource_scope="owner/run",
+        resource_identity=new_resource_identity(),
         pinned_models=pins,
         agent_effort=agent_effort,
     )

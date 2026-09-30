@@ -293,8 +293,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         settings=answer_resource_settings(config),
         models=models,
         capabilities=capabilities,
-        resource_identity_secret=cursor_secrets.derive("answer-resource-identity"),
-        resource_cursor_secret=cursor_secrets.derive("answer-resource-cursor"),
     )
     schema_index = PGMetadataIndex(workspace=config.deployment.workspace_id)
 

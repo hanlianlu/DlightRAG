@@ -71,9 +71,12 @@ Blob.
 
 ## Registration and acquisition
 
-- Resource handles (`res-…`) are opaque and minted with per-Run secrets. Cursors
-  are HMAC-signed and bound to their Resource and focus; a cursor never crosses
-  a Run.
+- Resource handles (`res-…`, and `vis-…` for an embedded image) are opaque and
+  minted from a random identity the Run draws at acceptance and records with its
+  prepared input. No deployment secret takes part, so a resume, also after the
+  database credentials rotate, mints the handles the Run already printed.
+  Cursors are HMAC-signed with a key derived from the same identity and bound to
+  their Resource and focus; a cursor never crosses a Run.
 - Caller attachments and links count against `answer.generation.max_attachments`
   (6). An upload larger than `max_attachment_bytes` (100 MiB) is refused, and a
   fetched URL body larger than it fails the direct fetch; uploads together may
