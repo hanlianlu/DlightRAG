@@ -282,6 +282,24 @@ def _reset_config_singleton():
     reset_config()
 
 
+@pytest.fixture(autouse=True)
+def _pg_pool_without_leftover_patches():
+    """Drop what undoing a patch of the process pool's methods leaves on the instance.
+
+    ``monkeypatch.setattr(pg_pool, "run", ...)`` undoes by setting the original
+    bound method on the instance, which then shadows every later patch of the
+    ``PGPool`` class in the same process: a test's outcome depended on which
+    tests ran before it.
+    """
+    yield
+    pool_module = sys.modules.get("dlightrag.adapters.postgres.core._pool")
+    if pool_module is None:
+        return
+    pool = pool_module.pg_pool
+    for name in [name for name in vars(pool) if callable(getattr(type(pool), name, None))]:
+        delattr(pool, name)
+
+
 @pytest.fixture
 def tmp_working_dir(tmp_path: Path) -> Path:
     """Create a temporary working directory structure."""
