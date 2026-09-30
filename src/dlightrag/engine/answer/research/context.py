@@ -129,7 +129,7 @@ class ContextAssembler:
         messages = self._compose_control_turn(evidence, working)
         measured = estimate_messages_tokens(messages)
         self._last_measured_tokens = measured
-        self._last_measured_had_pixels = _carries_pixels(messages)
+        self._last_measured_had_pixels = carries_pixels(messages)
         return measured + self._estimated_bias_tokens
 
     def corrected_input_tokens(
@@ -324,7 +324,7 @@ class ContextAssembler:
             )
 
 
-def _carries_pixels(messages: list[dict[str, Any]]) -> bool:
+def carries_pixels(messages: list[dict[str, Any]]) -> bool:
     """Return whether any request message states pixels rather than only text."""
     for message in messages:
         content = message.get("content")
@@ -397,4 +397,4 @@ def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> s
     return "\n".join(lines)
 
 
-__all__ = ["ContextAssembler"]
+__all__ = ["ContextAssembler", "carries_pixels"]

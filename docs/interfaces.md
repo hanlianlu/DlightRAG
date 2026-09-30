@@ -493,7 +493,11 @@ Canonical successful Answer result:
 
 `trace.agent_shell_confinement` states what the answering Agent's processes could be
 confined to on the host that produced the Run, in the same closed shape `/health`
-reports. `trace.bm25_enabled` reports lexical-lane participation. If one retrieval lane
+reports. A Research Run's `trace.agent_turns` counts its own model calls, and
+`trace.prompt_cache` aggregates their billed prompt and cache hits (`turns`,
+`prompt_tokens`, `cache_hit_tokens`, `cold_turns`); both count the attempt that finished
+the Run, so a Run recovered after a crash reports only the calls made after its recovery.
+`trace.bm25_enabled` reports lexical-lane participation. If one retrieval lane
 fails and the other succeeds, the result continues with `bm25_error_type` or
 `lightrag_error_type`; `lightrag_mix_chunk_count` records the pre-fusion
 LightRAG count.

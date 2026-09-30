@@ -6,10 +6,11 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast, overload
 
 from dlightrag.engine.agent.session.effects import EffectIntent, ToolResultEntry, canonical_json
-from dlightrag.engine.agent.session.entries import AssistantMessageEntry
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry, CompactionEntry
 from dlightrag.engine.agent.session.ids import AttemptId, IntentId, LaneId, OperationId, SessionId
 from dlightrag.engine.agent.session.operation import (
     OperationCancelled,
@@ -53,6 +54,7 @@ from dlightrag.engine.answer.evidence import (
     has_unrepresentable_text,
 )
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.research.context import carries_pixels
 from dlightrag.engine.answer.research.persistence import (
     ClaimChild,
     ControlAcknowledger,
@@ -177,19 +179,67 @@ def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
     return max(0, hard_limit - trigger)
 
 
-#: A miss below this prompt size is cache-breakpoint noise, not a regression;
-#: the first turn of a Run has nothing to hit and is never reported.
+#: A reusable prefix below this size is cache-breakpoint noise, not a regression.
 _CACHE_NOTICE_MIN_PROMPT_TOKENS = 8_192
 
+#: How long a provider is trusted to keep a prefix. Anthropic's default cache lives five
+#: minutes and OpenAI's five to ten idle ones, so a miss after a longer pause is the
+#: provider's retention rather than a regression; DeepSeek keeps its cache longer, and
+#: a miss there after the pause goes unjudged.
+_CACHE_RETENTION = timedelta(minutes=5)
 
-def _record_prompt_cache(trace: dict[str, Any], assistant: AssistantTurn) -> None:
+
+def _reusable_prompt_tokens(
+    snapshot: Any,
+    request: RequestSnapshot,
+    *,
+    requested_at: datetime,
+) -> int | None:
+    """Return what this request can reuse: what the previous Agent request billed.
+
+    That request may belong to this Run or to an earlier one: the transcript only
+    appends, so its billed prompt bounds what a prefix cache can reuse now. There is no
+    measure when that request is older than a provider keeps a cache, when a compaction
+    started a new prefix on purpose, or when the Session has none; a Fast turn's request
+    is not a Research prefix and is passed over. Nor is there one when this request
+    re-renders pixels after its transcript: they are never reusable, and nothing counts
+    them before the provider does, which is also why the estimator anchor skips them.
+    """
+    graph = getattr(snapshot, "graph", None)
+    ancestry = graph.ancestry() if graph is not None else snapshot.entries
+    for entry in reversed(list(ancestry)):
+        if isinstance(entry, CompactionEntry):
+            return None
+        # A Fast Host turn carries its acceptance id; an Agent turn never does.
+        if isinstance(entry, AssistantMessageEntry) and entry.acceptance_id is None:
+            if requested_at - entry.timestamp > _CACHE_RETENTION or carries_pixels(
+                request.messages
+            ):
+                return None
+            return provider_input_tokens(usage_counters(entry.usage))
+    return None
+
+
+def _record_prompt_cache(
+    trace: dict[str, Any],
+    assistant: AssistantTurn,
+    *,
+    reusable_prompt_tokens: int | None = None,
+) -> None:
     """Aggregate one turn's prefix-cache hit against what the provider billed.
 
     A prefix cache is invisible until it breaks, and it breaks silently: this
     deployment ran nine consecutive turns at 0% hits while every turn looked
     healthy from the inside. The counters ride in the Run trace so a hit ratio is
-    readable per Run, and a cold turn over a large prompt warns once so a
-    regression reaches logs instead of only the provider's bill.
+    readable per Run, and a cold turn warns once so a regression reaches logs
+    instead of only the provider's bill.
+
+    A turn is cold when the provider reused less than half of what the previous
+    request on its lane already billed. That reference is the Session's, not the
+    Run's, so a follow-up Run's first turn is measured like any other: those turns
+    were exempt, and a zero-hit rule would not have caught them anyway, because a
+    question block in front of the transcript still let the system prompt and the
+    Tool definitions hit (0.8k-7.8k of 70k-244k tokens).
     """
     usage = assistant.usage_details if isinstance(assistant.usage_details, Mapping) else None
     counts = usage_counters(usage) or {}
@@ -201,19 +251,22 @@ def _record_prompt_cache(trace: dict[str, Any], assistant: AssistantTurn) -> Non
         "prompt_cache",
         {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0},
     )
-    previous_turns = int(cache["turns"])
-    cache["turns"] = previous_turns + 1
+    cache["turns"] = int(cache["turns"]) + 1
     cache["prompt_tokens"] = int(cache["prompt_tokens"]) + billed
     cache["cache_hit_tokens"] = int(cache["cache_hit_tokens"]) + (hit or 0)
-    if previous_turns and hit == 0 and billed >= _CACHE_NOTICE_MIN_PROMPT_TOKENS:
+    reusable = min(billed, reusable_prompt_tokens or 0)
+    if hit is not None and reusable >= _CACHE_NOTICE_MIN_PROMPT_TOKENS and hit * 2 < reusable:
         cache["cold_turns"] = int(cache["cold_turns"]) + 1
         logger.warning(
-            "prompt cache returned no hit for a %d-token prompt",
+            "prompt cache reused %d of %d reusable tokens in a %d-token prompt",
+            hit,
+            reusable,
             billed,
             extra={
                 "prompt_tokens": billed,
-                "turn": previous_turns + 1,
-                "cache_hit_tokens": 0,
+                "reusable_prompt_tokens": reusable,
+                "turn": cache["turns"],
+                "cache_hit_tokens": hit,
             },
         )
 
@@ -621,6 +674,7 @@ class ResearchRuntimeEffects:
                 )
             )
 
+        requested_at = datetime.now(UTC)
         try:
             assistant = await self._orchestrator.call_runtime_provider(
                 request,
@@ -648,7 +702,16 @@ class ResearchRuntimeEffects:
             ) from exc
 
         streamed_text = "".join(emitted)
-        _record_prompt_cache(self._prepared.trace, assistant)
+        # The Run's own model calls, not every Assistant Entry of its Session.
+        self._prepared.agent_turn_count += 1
+        self._prepared.trace["agent_turns"] = self._prepared.agent_turn_count
+        _record_prompt_cache(
+            self._prepared.trace,
+            assistant,
+            reusable_prompt_tokens=_reusable_prompt_tokens(
+                context.snapshot, request, requested_at=requested_at
+            ),
+        )
         if assistant.tool_calls or streamed_text != assistant.text:
             if emitted:
                 await self._session.reset_output()

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -274,6 +275,7 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
         streamed_terminal_text=None,
         model_func=None,
         stream_model_func=None,
+        agent_turn_count=0,
         trace={
             "prompt_cache": {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0}
         },
@@ -300,6 +302,7 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
+        snapshot=SimpleNamespace(entries=()),
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -376,6 +379,7 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
         model_profile=answer_model_profile(),
         streamed_terminal_text="older",
         model_func=None,
+        agent_turn_count=0,
         trace={
             "prompt_cache": {"turns": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cold_turns": 0}
         },
@@ -404,6 +408,7 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
         session_id=SessionId.new(),
         lane_id=LaneId.main(),
         operation_id=OperationId.new(),
+        snapshot=SimpleNamespace(entries=()),
     )
 
     async def emit_ephemeral(_event: object) -> None:
@@ -1330,6 +1335,7 @@ async def _drive_research_run(
     *,
     model: Any,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
+    query_images: list[dict[str, Any]] | None = None,
     injected_tools: tuple[AgentTool, ...] = (),
     memory_text: str = "",
 ) -> Any:
@@ -1353,7 +1359,7 @@ async def _drive_research_run(
         resource_manifest=resource_manifest,
     )
     orchestrator.bind_recall(memory_text)
-    prepared = orchestrator.prepare_run(question)
+    prepared = orchestrator.prepare_run(question, query_images=query_images)
     plan = AgentRunPlan.from_tools(
         prepared.tools,
         model_role="query",
@@ -1389,6 +1395,31 @@ async def _drive_research_run(
     assert isinstance(final.state, OperationCompleted)
     orchestrator.restore_runtime_snapshot(prepared, final.context.snapshot)
     return prepared
+
+
+def _search_first(
+    requests: list[list[dict[str, Any]]], usage: list[dict[str, int]] | None = None
+) -> Any:
+    """A model that searches once on the Session's first call and answers after."""
+
+    async def model(**kwargs: Any) -> AssistantTurn:
+        requests.append([dict(message) for message in kwargs["messages"]])
+        details = usage[len(requests) - 1] if usage else None
+        if len(requests) == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(ToolCall("search-1", "search_knowledge_base", {"query": "one fact"}),),
+                stop_reason="tool_use",
+                usage_details=details,
+            )
+        return AssistantTurn(
+            text=f"answer {len(requests)}",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details=details,
+        )
+
+    return model
 
 
 class _LookupArgs(BaseModel):
@@ -1658,6 +1689,123 @@ async def test_a_compaction_that_covers_the_question_restates_it_after_the_summa
     assert sum(question in str(message["content"]) for message in after) == 1
 
 
+@pytest.mark.asyncio
+async def test_a_follow_up_run_reports_its_own_turns_and_its_cold_first_turn() -> None:
+    """A Run's trace describes that Run, measured against the Session's last request.
+
+    ``agent_turns`` counted every Assistant Entry of the Session, so one Run reported
+    28 turns while it made 6; and a follow-up Run's first turn was exempt from the
+    cold count, so ``cold_turns`` stayed 0 while those turns reused only the head.
+    """
+    requests: list[list[dict[str, Any]]] = []
+    model = _search_first(
+        requests,
+        [
+            # The Session's first request has nothing before it.
+            {"prompt_tokens": 20_000, "prompt_cache_hit_tokens": 0},
+            # Its second reuses the first.
+            {"prompt_tokens": 22_000, "prompt_cache_hit_tokens": 19_500},
+            # The follow-up's first turn hit its system prompt and Tools only.
+            {"prompt_tokens": 23_000, "prompt_cache_hit_tokens": 800},
+        ],
+    )
+    repository = MemoryAgentSessionRepository[EffectHostUpdate]()
+    session_id = SessionId.new()
+
+    earlier = await _drive_research_run(repository, session_id, "What changed?", model=model)
+    follow_up = await _drive_research_run(repository, session_id, "Why?", model=model)
+
+    assert earlier.trace["agent_turns"] == 2
+    assert follow_up.trace["agent_turns"] == 1
+    assert earlier.trace["prompt_cache"]["cold_turns"] == 0
+    # 800 of the 22,000 tokens the earlier Run's last request billed.
+    assert follow_up.trace["prompt_cache"]["cold_turns"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_request_re_renders_pixels_is_not_judged_cold(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Attached images follow the transcript, so no later turn can reuse them.
+
+    With a system prompt and Tools of about 8k and twelve images of about 2k each, the
+    second turn reuses about 8k of about 33k while the cache works exactly as designed;
+    judged against what the first turn billed, every turn would count as cold and warn.
+    """
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    requests: list[list[dict[str, Any]]] = []
+    model = _search_first(
+        requests,
+        [
+            {"prompt_tokens": 33_000, "prompt_cache_hit_tokens": 0},
+            {"prompt_tokens": 34_000, "prompt_cache_hit_tokens": 8_000},
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        prepared = await _drive_research_run(
+            MemoryAgentSessionRepository[EffectHostUpdate](),
+            SessionId.new(),
+            "What does the chart show?",
+            model=model,
+            query_images=[picture],
+        )
+
+    assert "image_url" in str(requests[-1][-1]["content"])
+    assert prepared.trace["prompt_cache"]["turns"] == 2
+    assert prepared.trace["prompt_cache"]["cold_turns"] == 0
+    assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+
+
+def test_a_stale_or_pixel_bearing_request_has_no_cache_reference() -> None:
+    """A turn is judged only against a request whose prefix the provider still keeps.
+
+    A provider keeps a prefix for minutes, not for as long as a Session lasts, so a
+    follow-up after a pause is not a regression; and pixels re-rendered after the
+    transcript are billed but never reusable.
+    """
+    from dlightrag.engine.agent.session.entries import AssistantMessageEntry
+    from dlightrag.engine.agent.session.registers import RequestSnapshot
+    from dlightrag.engine.answer.research.runtime import _reusable_prompt_tokens
+
+    now = datetime.now(UTC)
+
+    def previous(age: timedelta) -> Any:
+        return SimpleNamespace(
+            entries=[
+                AssistantMessageEntry(
+                    entry_id=EntryId.new(),
+                    session_id=SessionId.new(),
+                    timestamp=now - age,
+                    content="answer",
+                    stop_reason="stop",
+                    usage={"prompt_tokens": 33_000, "prompt_cache_hit_tokens": 0},
+                )
+            ]
+        )
+
+    def request(*content: Any) -> RequestSnapshot:
+        return RequestSnapshot.from_values(
+            operation_id=OperationId.new(),
+            turn_number=2,
+            plan_digest="a" * 64,
+            model_role="query",
+            messages=[{"role": "user", "content": list(content) or "why?"}],
+            tools=[],
+            tool_choice="auto",
+            max_tokens=None,
+        )
+
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    recent = previous(timedelta(seconds=30))
+    assert _reusable_prompt_tokens(recent, request(), requested_at=now) == 33_000
+    assert _reusable_prompt_tokens(recent, request(picture), requested_at=now) is None
+    assert (
+        _reusable_prompt_tokens(previous(timedelta(minutes=10)), request(), requested_at=now)
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     ("input_key", "cache_key"),
     [
@@ -1681,14 +1829,14 @@ def test_prompt_cache_counters_land_in_the_run_trace_and_warn_once_per_cold_turn
         )
 
     with caplog.at_level("WARNING"):
-        # First turn: nothing was cached yet, so it is not a regression.
+        # The Session's first request has nothing before it to reuse.
         _record_prompt_cache(trace, turn(0, 60_000))
-        # A large prompt with no hit after the first turn is exactly the failure
-        # this counter exists to surface, and it is silent from the inside.
-        _record_prompt_cache(trace, turn(0, 132_202))
+        # A large prompt that reuses nothing the previous request billed is exactly
+        # the failure this counter exists to surface, and it is silent from the inside.
+        _record_prompt_cache(trace, turn(0, 132_202), reusable_prompt_tokens=60_000)
         # A hit, and a miss too small to report, are both ordinary.
-        _record_prompt_cache(trace, turn(120_000, 132_000))
-        _record_prompt_cache(trace, turn(0, 512))
+        _record_prompt_cache(trace, turn(120_000, 132_000), reusable_prompt_tokens=132_202)
+        _record_prompt_cache(trace, turn(0, 512), reusable_prompt_tokens=132_000)
 
     cache = trace["prompt_cache"]
     assert cache == {
@@ -1700,7 +1848,36 @@ def test_prompt_cache_counters_land_in_the_run_trace_and_warn_once_per_cold_turn
     warnings = [record for record in caplog.records if record.levelname == "WARNING"]
     assert len(warnings) == 1
     assert warnings[0].levelname == "WARNING"
-    assert warnings[0].getMessage() == "prompt cache returned no hit for a 132202-token prompt"
+    assert warnings[0].getMessage() == (
+        "prompt cache reused 0 of 60000 reusable tokens in a 132202-token prompt"
+    )
+
+
+def test_a_turn_that_reuses_only_the_system_prompt_and_tools_is_cold() -> None:
+    """The measured miss: a follow-up Run's first turn hit, but only its head.
+
+    Such a turn was exempt as a Run's first, and its hit was never zero, so neither
+    half of the old rule fired while it reused 0.8k-7.8k of a 70k-244k prompt.
+    """
+    from dlightrag.engine.answer.research.runtime import _record_prompt_cache
+
+    trace: dict[str, Any] = {}
+
+    def turn(hit: int, billed: int) -> AssistantTurn:
+        return AssistantTurn(
+            text="x",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"prompt_tokens": billed, "prompt_cache_hit_tokens": hit},
+        )
+
+    # The earlier Run's last request billed 240k; this one reused its system prompt and
+    # Tool definitions only.
+    _record_prompt_cache(trace, turn(7_800, 244_000), reusable_prompt_tokens=240_000)
+    assert trace["prompt_cache"]["cold_turns"] == 1
+    # Reusing the earlier Run's transcript is the healthy case.
+    _record_prompt_cache(trace, turn(236_000, 246_000), reusable_prompt_tokens=244_000)
+    assert trace["prompt_cache"]["cold_turns"] == 1
 
 
 def test_a_provider_that_reports_no_usage_records_no_cache_turn() -> None:

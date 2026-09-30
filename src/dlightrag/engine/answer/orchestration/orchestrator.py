@@ -160,6 +160,7 @@ class PreparedRun:
     inherited_attachment_admissions: dict[str, int] = field(default_factory=dict)
     model_role: str = "query"
     model_identity: Mapping[str, Any] | None = None
+    #: The model calls this Run made; its Session's Assistant Entries span every Run.
     agent_turn_count: int = 0
     stop_reason: str = "model_stop"
     last_turn: ExecutedTurn | None = None
@@ -659,13 +660,16 @@ class AnswerOrchestrator:
         return compose_session_notes(await self._workspace_store.load_inventory())
 
     def restore_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
-        """Project a terminal Runtime snapshot into the product's live result cache."""
+        """Project a terminal Runtime snapshot into the product's live result cache.
+
+        The snapshot is the whole Session, earlier Runs included, so it names the last
+        answer but not this Run's turn count: the provider effect counts the Run's own
+        calls as it makes them.
+        """
         self._record_working_fold(run, snapshot)
         assistants = [
             entry for entry in snapshot.graph.ancestry() if isinstance(entry, AssistantMessageEntry)
         ]
-        run.agent_turn_count = len(assistants)
-        run.trace["agent_turns"] = run.agent_turn_count
         if assistants:
             entry = assistants[-1]
             run.last_turn = ExecutedTurn(
