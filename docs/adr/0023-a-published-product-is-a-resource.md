@@ -8,7 +8,8 @@ on one deliverable without products becoming editable files.
 
 ## Status
 
-Accepted and implemented.
+Accepted and implemented. Amended: publication stores the conversion view of a
+convertible product, so every product is taught `read` (see Consequences).
 
 It extends [ADR 0013](0013-lineage-adoption-of-earlier-run-resources.md)'s adoption to
 published products and records the model that keeps the extension from becoming its own
@@ -93,11 +94,15 @@ later Run adopted before then. That is the same best-effort shape as every other
 handle, and it is the reason the handle is rendered into the summary rather than left
 in a receipt that compaction will cover.
 
-The taught call depends on the product's type, and one function decides it: a product
-whose type has no conversion route is read by decoding the adopted bytes, and one whose
-type routes to a converter is reached by `view`, because the decision above refuses to
-convert retrospectively. The receipt and the summary both render that function, so what
-the model is told is a call that works rather than a call that refuses.
+The taught call is `read` for every product, and one function renders it for the
+receipt and the summary. A product whose type has no conversion route is read by
+decoding the adopted bytes. One whose type routes to a converter was first taught
+`view`, because an adopting Run refuses to convert retrospectively and no view
+existed; publication now converts such a product itself, with the converters and
+limits a read uses, and records that view with the product, so the adopting Run reads
+the publishing Run's own view and still converts nothing. A product publication
+could not convert publishes without a view, and a later `read` of it refuses, as for
+any convertible document without one.
 
 A read of an adopted resource demands the earlier Run's own conversion view only when
 reading it here would convert it (a suffix or MIME with a conversion route). A published

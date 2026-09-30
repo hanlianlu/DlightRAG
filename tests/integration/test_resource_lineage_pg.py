@@ -833,3 +833,206 @@ async def test_unknown_handles_load_nothing(resource_id: str) -> None:
         session_id, _ = await _seed_origin_run(db, store)
 
         assert await _loader(store, db, session_id).load(resource_id) is None
+
+
+def _product(path: str, media_type: str, content: bytes) -> Any:
+    from dlightrag.engine.answer.publication import StagedArtifact, artifact_resource_id
+
+    return StagedArtifact(
+        relative_path=path,
+        media_type=media_type,
+        size_bytes=len(content),
+        resource_id=artifact_resource_id(path),
+        filename=path.rsplit("/", 1)[-1],
+        digest=hashlib.sha256(content).hexdigest(),
+        presentation="download",
+        content=content,
+    )
+
+
+def _workbook(revenue: int) -> bytes:
+    import io
+
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.append(["quarter", "revenue"])
+    sheet.append(["Q1", revenue])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def _publish(store: PGRunStore, session_id: str, products: tuple[Any, ...]) -> str:
+    """Publish products the way the executor does: views built, staged, committed."""
+    from dlightrag.engine.answer.execution.executor import (
+        _publication_views,
+        _stage_publications,
+    )
+    from dlightrag.engine.answer.publication import PublicationPlan
+
+    claim = await _claimed_run(store, worker_id=f"publisher-{uuid.uuid4().hex[:8]}")
+    async with ResourceRegistry() as registry:
+        views = await _publication_views(products, registry=registry)
+    publications, _descriptors, _sources = _stage_publications(
+        plan=PublicationPlan(answer="published", artifacts=products),
+        answer="published",
+        session_id=session_id,
+        views=views,
+    )
+    outcome = await store.finish_success(
+        owner_id=OWNER,
+        run_id=claim.run_id,
+        worker_id=claim.worker_id,
+        fencing_epoch=claim.fencing_epoch,
+        result={"answer": "published"},
+        publications=tuple(publications),
+    )
+    assert outcome is not None
+    return claim.run_id
+
+
+async def test_a_later_turn_reads_a_convertible_product_through_its_published_view() -> None:
+    """The view publication stored is the view a later turn adopts and reads."""
+    async with isolated_run_runtime("resource_lineage_product_view") as (_, db):
+        store = await _store(db)
+        session_id = str(uuid.uuid4())
+        product = _product("reports/model.xlsx", _XLSX, _workbook(11))
+        publishing_run = await _publish(store, session_id, (product,))
+
+        rows = await _run_rows(db, publishing_run)
+        kinds = sorted(json.loads(row["capabilities"])["resource_kind"] for row in rows)
+        assert kinds == ["conversion_snapshot", "published_artifact"]
+        view_row = next(row for row in rows if row["resource_id"].endswith("-conversion"))
+        assert bytes(view_row["source_locator"]) == product.resource_id.encode()
+        assert (view_row["session_id"], view_row["intent_id"]) == (session_id, None)
+
+        claim = await _claimed_run(store)
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, claim))
+            result = await _call(read, session_id, resource_id=product.resource_id)
+
+        assert result.is_error is False, result.text_content
+        assert "Q1" in result.text_content and "11" in result.text_content
+        # The reading turn now holds the product and its view as its own Resources.
+        adopted = {
+            json.loads(row["capabilities"])["resource_kind"]
+            for row in await _run_rows(db, claim.run_id)
+        }
+        assert adopted == {LINEAGE_ADOPTION_KIND, SNAPSHOT_KIND}
+
+
+async def test_a_product_that_cannot_be_converted_publishes_and_keeps_the_refusal() -> None:
+    async with isolated_run_runtime("resource_lineage_product_no_view") as (_, db):
+        store = await _store(db)
+        session_id = str(uuid.uuid4())
+        product = _product("reports/model.xlsx", _XLSX, b"not a workbook")
+        publishing_run = await _publish(store, session_id, (product,))
+
+        rows = await _run_rows(db, publishing_run)
+        assert [json.loads(row["capabilities"])["resource_kind"] for row in rows] == [
+            "published_artifact"
+        ]
+
+        claim = await _claimed_run(store)
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, _loader(store, db, session_id, claim))
+            refused = await _call(read, session_id, resource_id=product.resource_id)
+
+        assert refused.is_error is True
+        assert "never extracted text from model.xlsx" in refused.text_content
+
+
+async def test_a_newer_version_published_without_a_view_never_reads_an_older_ones() -> None:
+    """Every version of one path shares its handle; each keeps only its own view."""
+    async with isolated_run_runtime("resource_lineage_product_versions") as (_, db):
+        store = await _store(db)
+        session_id = str(uuid.uuid4())
+        older = _product("reports/model.xlsx", _XLSX, _workbook(11))
+        newer = _product("reports/model.xlsx", _XLSX, b"not a workbook")
+        await _publish(store, session_id, (older,))
+        newest_run = await _publish(store, session_id, (newer,))
+
+        loader = _loader(store, db, session_id, await _claimed_run(store))
+        loaded = await loader.load(newer.resource_id)
+        assert loaded is not None
+        assert (loaded.content, loaded.origin_run_id) == (newer.content, newest_run)
+        assert loaded.conversion_snapshot is None
+
+        async with ResourceRegistry() as registry:
+            read, _ = _tools(registry, loader)
+            refused = await _call(read, session_id, resource_id=newer.resource_id)
+
+        # The refusal that says what is true of the newest version, not an older view
+        # that does not belong to its bytes.
+        assert refused.is_error is True
+        assert "never extracted text" in refused.text_content
+
+
+async def test_one_publication_writes_every_blob_in_one_order_and_its_views_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two commits that share bytes must never lock them in crossed orders.
+
+    Every Blob the commit names, products and views alike, is written in one sorted
+    pass, and the views of all its products are written in one call.
+    """
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    from dlightrag.adapters.postgres.runtime import run_store as run_store_module
+
+    written: list[str] = []
+    view_writes: list[int] = []
+    write_blob_content = run_store_module.write_blob_content
+    write_fetched_resources = run_store_module.write_fetched_resources
+
+    async def recording_blob(conn: Any, *, owner_id: str, digest: str, content: bytes) -> None:
+        written.append(digest)
+        await write_blob_content(conn, owner_id=owner_id, digest=digest, content=content)
+
+    async def recording_views(conn: Any, **write: Any) -> None:
+        view_writes.append(len(write["updates"]))
+        await write_fetched_resources(conn, **write)
+
+    monkeypatch.setattr(run_store_module, "write_blob_content", recording_blob)
+    monkeypatch.setattr(run_store_module, "write_fetched_resources", recording_views)
+    buffer = _io.BytesIO()
+    Image.new("RGB", (6, 6), (20, 90, 200)).save(buffer, "PNG")
+    chart = base64.b64encode(buffer.getvalue()).decode()
+    report = _product(
+        "reports/report.html",
+        "text/html",
+        (
+            f'<html><body><p>Q1</p><img alt="chart" src="data:image/png;base64,{chart}"></body></html>'
+        ).encode(),
+    )
+    model = _product("reports/model.xlsx", _XLSX, _workbook(11))
+
+    async with isolated_run_runtime("resource_lineage_product_order") as (_, db):
+        store = await _store(db)
+        session_id = str(uuid.uuid4())
+        publishing_run = await _publish(store, session_id, (report, model))
+
+        rows = await _run_rows(db, publishing_run)
+        kinds = sorted(json.loads(row["capabilities"])["resource_kind"] for row in rows)
+        assert kinds == [
+            "conversion_asset",
+            "conversion_snapshot",
+            "conversion_snapshot",
+            "published_artifact",
+            "published_artifact",
+        ]
+        view_digests = {row["blob_digest"] for row in rows} - {report.digest, model.digest}
+        # One sorted pass over every Blob, the views' among them, before any row.
+        assert written == sorted(set(written))
+        assert view_digests <= set(written)
+        # The three view rows of both products, written in one call.
+        assert view_writes == [3]

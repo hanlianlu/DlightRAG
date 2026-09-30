@@ -328,7 +328,9 @@ transaction only when no references survive; the foreign key protects a
 concurrent reuse. Adopted conversion text/status, converter and version,
 input/output digests, embedded occurrences, and returned view derivatives use
 the existing resource/blob Effect Settlement path; same-Run recovery reuses the
-adopted view instead of reparsing. Raw image bytes remain separate from typed
+adopted view instead of reparsing. The view of a converted Published Artifact is
+written by the same resource/blob writer, in the transaction that publishes it,
+so a later Run of its Agent Session adopts bytes and view together. Raw image bytes remain separate from typed
 Session parts. New follow-up/fork Runs atomically retain exact selected-lineage
 attachment references under the consuming Run fence before hydration. Missing,
 mismatched, or unauthorized replay bytes fail explicitly. Retention and

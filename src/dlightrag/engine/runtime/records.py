@@ -14,7 +14,7 @@ from dlightrag.engine.agent.session.repository import AgentSessionRepository
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase, RunStatus
 from dlightrag.engine.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.engine.runtime.progress import RunProgressStore
-from dlightrag.engine.runtime.settlements import EffectHostUpdate
+from dlightrag.engine.runtime.settlements import EffectHostUpdate, FetchedResourceSettlementUpdate
 from dlightrag.engine.runtime.workspace import WorkspaceStore
 
 # Event labels are executor-owned. RunRuntime orders and persists them without
@@ -446,6 +446,9 @@ class PendingPublication:
     relative_path: str = ""
     presentation: str = "download"
     label: str = ""
+    #: The conversion view a later Run adopts with the product, as the rows a read of
+    #: it would settle, or nothing when the product needs none or has none.
+    view: tuple[FetchedResourceSettlementUpdate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

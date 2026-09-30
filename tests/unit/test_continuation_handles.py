@@ -198,21 +198,18 @@ def test_a_published_artifact_renders_the_handle_a_later_turn_reads_it_with() ->
     assert "editing it again" in handle
 
 
-def test_a_product_whose_type_needs_conversion_is_taught_the_view_call() -> None:
+def test_every_product_is_taught_the_read_call() -> None:
     """The taught call has to be one that works for that product's type.
 
-    A Markdown report is decoded, so `read` reaches it. A PDF is not converted
-    retrospectively — the earlier Run never recorded that view — so the call a later
-    turn can actually make is `view`, and teaching `read` there would teach a refusal.
+    A Markdown report is decoded from the adopted bytes. A PDF, a spreadsheet, or a
+    deck is read through the conversion view publication stored with it, since the
+    adopting Run never converts what it adopts, so `read` reaches every product.
     """
-    from dlightrag.engine.answer.publication import artifact_read_call
+    from dlightrag.engine.answer.publication import artifact_read_call, artifact_resource_id
     from dlightrag.engine.runtime.workspace import RunArtifactRecord
 
-    markdown = artifact_read_call("reports/analysis.md", mime_type="text/markdown")
-    assert markdown.startswith("read(resource_id='artifact-")
-    assert artifact_read_call("reports/data.csv", mime_type="text/csv").startswith(
-        "view(resource_id='artifact-"
-    )
+    for path in ("reports/analysis.md", "reports/data.csv", "reports/model.xlsx"):
+        assert artifact_read_call(path) == f"read(resource_id={artifact_resource_id(path)!r})"
 
     record = RunArtifactRecord(
         relative_path="reports/report.pdf",
@@ -223,8 +220,8 @@ def test_a_product_whose_type_needs_conversion_is_taught_the_view_call() -> None
     )
     handle = published_artifact_handle(record)
 
-    assert "view(resource_id='artifact-" in handle
-    assert "read(resource_id=" not in handle
+    assert f"read(resource_id={artifact_resource_id('reports/report.pdf')!r})" in handle
+    assert "view(resource_id=" not in handle
 
 
 def test_the_handle_list_reserves_a_share_for_each_non_evidence_class() -> None:

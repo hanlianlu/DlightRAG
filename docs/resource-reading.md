@@ -283,6 +283,22 @@ completeness, or untested platforms.
   that need no conversion, such as PDF pages, but a later `read` through the
   earlier handle or this Run's handle refuses the same way, and recovery keeps
   it so.
+- Publication stores that view for a convertible Published Artifact. The
+  publishing Run converts the product with the converters and limits a read
+  uses, mints its image handles as a read would, and records the snapshot and
+  its images as rows of that Run, named by the product's handle and stamped with
+  the conversation's Agent Session, in the transaction that publishes the
+  product; that transaction writes every Blob it names in one sorted pass. With
+  lineage adoption off no later Run can adopt the product, so publication
+  converts nothing. The products of one publication share one conversion's
+  120-second budget: once it is spent no further conversion starts or is
+  adopted, though a native step already running finishes first, as it does for a
+  read. A product whose conversion fails, is refused, or finds the budget spent
+  still publishes without a view, and a later `read` of it refuses as above. So
+  every product is reached by `read(resource_id='artifact-…')`, the call the
+  attaching Tool teaches. Every version of one Artifact path shares that handle;
+  a later turn adopts the newest version with only the view its own Run stored,
+  never an older version's.
 - Adopted bytes that match a Resource this Run already holds by file name,
   declared MIME type, and SHA-256, such as the same image attached again, keep
   that Resource's state from its first admission: bytes this Run can convert
@@ -323,10 +339,19 @@ completeness, or untested platforms.
   view held through another handle, the same file under two earlier handles,
   resumes without the lineage, the attachment allowance, and the manifest
   wording.
+- `tests/unit/test_publication_views.py`: a published product's view equals the
+  one a read adopts, which products get one, the shared budget, a cancelled
+  publication's conversion joined at close, and a newer version never borrowing
+  an older version's view.
 - `tests/integration/test_resource_lineage_pg.py`,
   `tests/integration/test_attachment_replay_pg.py`,
   `tests/integration/test_resource_review_regressions_pg.py`: adoption under the
   Run lease (a lost lease writes nothing, a conflicting view rolls back whole),
   one adoption row with both aliases, a later turn adopting an earlier turn's
-  adoption, an adoption outliving its origin Run, selected-lineage replay, and
-  durable settlement against PostgreSQL.
+  adoption, an adoption outliving its origin Run, a later turn reading a
+  converted product through its published view (or refused when publication
+  could build none), a publication writing every Blob in one order,
+  selected-lineage replay, and durable settlement against PostgreSQL.
+- `tests/integration/test_answer_run_coordinator_pg.py`: the terminal commit of
+  a Run storing its product's view through that Run's own registry, and none
+  with lineage adoption off.

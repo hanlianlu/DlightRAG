@@ -60,7 +60,8 @@ class OpaqueFetchedResourceWrite:
     source_locator_digest: str
     source_locator: bytes
     session_id: str
-    intent_id: str
+    #: The Tool effect that attached it, or None for a view publication stored.
+    intent_id: str | None
 
     def __post_init__(self) -> None:
         if not self.resource_id.strip():

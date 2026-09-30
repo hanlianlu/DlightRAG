@@ -208,6 +208,8 @@ class ResourceRegistry:
         self._pdf_counts: dict[str, int | None] = {}
         self._refused: dict[str, BaseException] = {}
         self._conversion_tasks: dict[str, asyncio.Task[_ConvertedResource]] = {}
+        # Views of bytes this Run publishes; see ``conversion_view``.
+        self._view_tasks: set[asyncio.Task[ConversionSnapshot]] = set()
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._total_bytes = 0
         self._closed = False
@@ -1032,8 +1034,11 @@ class ResourceRegistry:
 
     async def _convert_and_adopt(self, resource: _Registered, content: bytes) -> _ConvertedResource:
         try:
-            converted = await convert_resource(
-                content, filename=resource.filename, declared_mime=resource.declared_mime
+            snapshot = await self._snapshot_of(
+                resource.resource_id,
+                content,
+                filename=resource.filename,
+                declared_mime=resource.declared_mime,
             )
         except (
             UnsafeArchiveError,
@@ -1052,23 +1057,76 @@ class ResourceRegistry:
                 _failure_snapshot(resource.resource_id, content, exc, safety_refused=False)
             )
             return self._converted[resource.resource_id]
+        if not snapshot.text and resource.url and _is_textual_web_resource(resource):
+            return _ConvertedResource(
+                text="", handles=(), evidence_available=False, extraction_status="no_extracted_text"
+            )
+        self.adopt_conversion_snapshot(snapshot)
+        return self._converted[resource.resource_id]
+
+    async def conversion_view(
+        self,
+        resource_id: str,
+        content: bytes,
+        *,
+        filename: str | None,
+        declared_mime: str | None,
+        deadline: float | None = None,
+    ) -> ConversionSnapshot:
+        """Convert bytes this Run publishes into the view a read of them would adopt.
+
+        The view is built as a read builds its own, by the same converters under the
+        same limits, with image handles minted by this Run, and it names
+        ``resource_id``. Nothing is registered: the Run's own Resources are unchanged.
+        A conversion that fails, runs out of ``deadline``, or is refused raises, and
+        the caller keeps the bytes without a view. Native work a cancelled caller
+        leaves behind is joined when the registry closes, as a read's is.
+        """
+        self._ensure_open()
+        task = asyncio.create_task(
+            self._snapshot_of(
+                resource_id,
+                content,
+                filename=filename,
+                declared_mime=declared_mime,
+                deadline=deadline,
+            )
+        )
+        self._view_tasks.add(task)
+        task.add_done_callback(self._view_tasks.discard)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.cancelling():
+                task.cancel()
+            raise
+
+    async def _snapshot_of(
+        self,
+        resource_id: str,
+        content: bytes,
+        *,
+        filename: str | None,
+        declared_mime: str | None,
+        deadline: float | None = None,
+    ) -> ConversionSnapshot:
+        """Convert one document into the snapshot this Run adopts as its view."""
+        converted = await convert_resource(
+            content, filename=filename, declared_mime=declared_mime, deadline=deadline
+        )
         text = converted.text
         visuals = []
         for index, visual in enumerate(converted.visuals):
             handle = (
                 "vis-"
                 + hmac.new(
-                    self._secret, f"{resource.resource_id}:{index}".encode(), hashlib.sha256
+                    self._secret, f"{resource_id}:{index}".encode(), hashlib.sha256
                 ).hexdigest()[:24]
             )
             text = text.replace(f"visual://{visual.handle_id}", f"visual://{handle}", 1)
             visuals.append(replace(visual, handle_id=handle))
-        if not text and resource.url and _is_textual_web_resource(resource):
-            return _ConvertedResource(
-                text="", handles=(), evidence_available=False, extraction_status="no_extracted_text"
-            )
-        snapshot = ConversionSnapshot(
-            resource_id=resource.resource_id,
+        return ConversionSnapshot(
+            resource_id=resource_id,
             input_digest=hashlib.sha256(content).hexdigest(),
             text=text,
             visuals=tuple(visuals),
@@ -1080,8 +1138,6 @@ class ResourceRegistry:
             known_page_count=converted.known_page_count,
             note=converted.note,
         )
-        self.adopt_conversion_snapshot(snapshot)
-        return self._converted[resource.resource_id]
 
     def adopt_conversion_snapshot(self, snapshot: ConversionSnapshot) -> None:
         resource = self._require(snapshot.resource_id)
@@ -1270,9 +1326,11 @@ class ResourceRegistry:
             await asyncio.gather(*tasks, return_exceptions=True)
         # Native conversion may still be running after its caller was cancelled.
         # Join it before releasing adopted views and storage; never launch fallback.
-        if self._conversion_tasks:
-            await asyncio.gather(*self._conversion_tasks.values(), return_exceptions=True)
+        conversions = [*self._conversion_tasks.values(), *self._view_tasks]
+        if conversions:
+            await asyncio.gather(*conversions, return_exceptions=True)
         self._conversion_tasks.clear()
+        self._view_tasks.clear()
         self._snapshots.clear()
         self._pdf_counts.clear()
         self._refused.clear()

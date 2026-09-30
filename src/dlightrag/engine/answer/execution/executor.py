@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import hmac
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
@@ -149,6 +150,7 @@ from dlightrag.engine.answer.publication import (
     ArtifactAttachment,
     PublicationLimits,
     PublicationPlan,
+    StagedArtifact,
     is_empty_answer,
     run_artifact_check,
     validate_publication,
@@ -171,7 +173,9 @@ from dlightrag.engine.answer.research.runtime import (
     _restore_durable_evidence,
     _usage_from_snapshot_entries,
 )
+from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources import ResourceInput, ResourceRegistry
+from dlightrag.engine.answer.resources.converters import MAX_CONVERSION_SECONDS, is_convertible
 from dlightrag.engine.answer.resources.lineage import LINEAGE_ADOPTION_KIND, LineageResourceLoader
 from dlightrag.engine.answer.resources.models import (
     ResourceRegistryError,
@@ -2006,6 +2010,12 @@ class AnswerExecutor:
                     plan=publication,
                     answer=finalized.answer,
                     session_id=agent_session_id.value,
+                    # Only an adopting Run reads a stored view, so with adoption off no
+                    # product spends a conversion on one.
+                    views=await _publication_views(
+                        publication.artifacts,
+                        registry=run.registry if self._settings.lineage_adoption else None,
+                    ),
                 )
                 # Fast terminal settlement has no publication channel; Research
                 # leaves publication ownership with the coordinator.
@@ -2802,11 +2812,49 @@ async def _publication_plan(
     )
 
 
+async def _publication_views(
+    artifacts: Sequence[StagedArtifact], *, registry: ResourceRegistry | None
+) -> dict[str, ConversionSnapshot]:
+    """Convert each product a later turn reads through a view, as a read of it would.
+
+    An adopting Run never converts what it adopts, so a convertible product is
+    readable later only through a view stored with it. The products share one
+    conversion's budget: once it is spent no further conversion starts or is
+    adopted. A product whose conversion fails, is refused, or finds the budget
+    spent is published without one, and a later read of it refuses as it does
+    for any convertible document it holds no view for. Without a registry, as when
+    lineage adoption is off, no view is built.
+    """
+    if registry is None:
+        return {}
+    deadline = time.monotonic() + MAX_CONVERSION_SECONDS
+    views: dict[str, ConversionSnapshot] = {}
+    for artifact in artifacts:
+        if not is_convertible(artifact.filename, artifact.media_type):
+            continue
+        try:
+            views[artifact.resource_id] = await registry.conversion_view(
+                artifact.resource_id,
+                artifact.content,
+                filename=artifact.filename,
+                declared_mime=artifact.media_type,
+                deadline=deadline,
+            )
+        except Exception:  # noqa: BLE001 - a product without a view still publishes
+            logger.warning(
+                "A published product keeps no conversion view",
+                extra={"resource_id": artifact.resource_id},
+                exc_info=True,
+            )
+    return views
+
+
 def _stage_publications(
     *,
     plan: PublicationPlan,
     answer: str,
     session_id: str,
+    views: Mapping[str, ConversionSnapshot] | None = None,
 ) -> tuple[list[PendingPublication], list[dict[str, Any]], dict[str, list[Any]]]:
     """Stage one accepted answer's publications, or reject an answer-less run."""
     if is_empty_answer(answer=answer, has_artifacts=bool(plan.artifacts)):
@@ -2821,6 +2869,7 @@ def _stage_publications(
         for descriptor in descriptors
     }
     for item in plan.artifacts:
+        view = (views or {}).get(item.resource_id)
         publications.append(
             PendingPublication(
                 resource_id=item.resource_id,
@@ -2832,6 +2881,14 @@ def _stage_publications(
                 relative_path=item.relative_path,
                 presentation=item.presentation,
                 label=labels.get(item.resource_id) or item.filename,
+                view=(
+                    tuple(
+                        attached_resource_update(effect, session_id=session_id, intent_id=None)
+                        for effect in view.effects()
+                    )
+                    if view is not None
+                    else ()
+                ),
             )
         )
     return publications, descriptors, artifact_sources

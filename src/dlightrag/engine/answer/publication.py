@@ -46,7 +46,6 @@ from dlightrag.engine.answer.reference import (
     inline_references,
     markdown_references,
 )
-from dlightrag.engine.answer.resources.converters import is_convertible
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 from dlightrag.engine.answer.resources.visual import ResourceViewError, pdf_page_count
 from dlightrag.engine.rag.retrieval import RetrievalContexts
@@ -339,25 +338,16 @@ def prepare_artifact_attachment(
     )
 
 
-def artifact_read_call(
-    relative_path: str,
-    *,
-    filename: str | None = None,
-    mime_type: str | None = None,
-) -> str:
+def artifact_read_call(relative_path: str) -> str:
     """Return the agent call that reaches one published Artifact again.
 
-    A product whose type has no conversion route is read by decoding the adopted bytes,
-    so the call is ``read(resource_id=…)``. One whose type routes to a converter is not
-    converted retrospectively — the earlier Run never recorded that view, and recording
-    one here would invent a history it never had — so the call a later turn can actually
-    make is ``view(resource_id=…)``. Naming ``read`` for such a product would teach a
-    call that refuses, which is why this choice lives beside the address it renders.
+    Every product is read by ``read(resource_id=…)``. One whose type has no conversion
+    route is decoded from the adopted bytes; one whose type routes to a converter reads
+    the conversion view publication stored with it, because the adopting Run never
+    converts what it adopts. A product whose view publication could not build refuses
+    that read, as any convertible document without a view does.
     """
-    handle = artifact_resource_id(relative_path)
-    if is_convertible(filename or relative_path, mime_type):
-        return f"view(resource_id={handle!r})"
-    return f"read(resource_id={handle!r})"
+    return f"read(resource_id={artifact_resource_id(relative_path)!r})"
 
 
 def validate_publication(

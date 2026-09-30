@@ -45,9 +45,9 @@ _MAX_OOXML_ENTRIES = 10_000
 _MAX_OOXML_ENTRY_BYTES = 100 * 1024 * 1024
 _MAX_OOXML_TOTAL_BYTES = 512 * 1024 * 1024
 _MAX_OOXML_EXPANSION_RATIO = 100
-# Shared across preflight, candidate and (at most one) fallback.
-# This is an adoption/start-work deadline, not a native thread kill mechanism.
-_MAX_CONVERSION_SECONDS = 120.0
+#: One conversion's budget, shared across preflight, candidate and (at most one)
+#: fallback. It is an adoption/start-work deadline, not a native thread kill.
+MAX_CONVERSION_SECONDS = 120.0
 _ANYDOC_VERSION = "0.2.4"
 
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -170,12 +170,21 @@ async def convert_resource(
     *,
     filename: str | None,
     declared_mime: str | None,
+    deadline: float | None = None,
 ) -> ConvertedResource:
-    """Convert admitted binary *content* to text and extracted visuals off-loop."""
+    """Convert admitted binary *content* to text and extracted visuals off-loop.
+
+    ``deadline``, a ``time.monotonic()`` instant, can only shorten this conversion's
+    budget, so several conversions can share one: a conversion that starts after it
+    is refused like one that runs past it.
+    """
     route = _resolve_route(filename, declared_mime)
     if route is None:
         raise ResourceConversionError("resource type is not an admitted binary format")
-    budget = _ConversionBudget(time.monotonic() + _MAX_CONVERSION_SECONDS, Event())
+    budget_end = time.monotonic() + MAX_CONVERSION_SECONDS
+    budget = _ConversionBudget(
+        budget_end if deadline is None else min(budget_end, deadline), Event()
+    )
     work = asyncio.create_task(asyncio.to_thread(_convert_sync, content, route, budget))
     try:
         return await asyncio.shield(work)
@@ -469,6 +478,7 @@ def _xlsx_anchor(sheet_title: str, image: object) -> str | None:
 
 __all__ = [
     "CONVERTED_EXTENSIONS",
+    "MAX_CONVERSION_SECONDS",
     "ConvertedResource",
     "ConversionLimitError",
     "ExtractedVisual",

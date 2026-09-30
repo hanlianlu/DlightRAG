@@ -145,10 +145,15 @@ class RetainedResourceLoader:
         content = await self._read(source.digest)
         if content is None:
             return None
-        snapshot_row = _first(rows, SNAPSHOT_KIND)
+        # The view is the one the source's own Run stored. A Published Artifact's
+        # handle is its path, so every version of one product shares it, and a newer
+        # version published without a view must not borrow an older version's.
+        origin = _origin_run_id(source)
+        view_rows = tuple(row for row in rows if _origin_run_id(row) == origin)
+        snapshot_row = _first(view_rows, SNAPSHOT_KIND)
         return LineageResourceBytes(
             resource_id=resource_id,
-            origin_run_id=_origin_run_id(source),
+            origin_run_id=origin,
             filename=source.filename or resource_id,
             media_type=source.mime_type or "application/octet-stream",
             content=content,
@@ -157,7 +162,7 @@ class RetainedResourceLoader:
             ),
             assets={
                 row.resource_id: asset
-                for row in rows
+                for row in view_rows
                 if _resource_kind(row) == ASSET_KIND and row.digest
                 for asset in (await self._read(row.digest),)
                 if asset is not None

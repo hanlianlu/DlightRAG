@@ -14,6 +14,7 @@ from the shared integration-test PostgreSQL environment; skipped if unavailable.
 import asyncio
 import base64
 import datetime
+import io
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -77,6 +78,7 @@ from dlightrag.engine.answer.fast import FastRunBoundaries
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.publication import ArtifactIssue, PublicationLimits, PublicationPlan
 from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.answer.tools.subagents import SubagentHost
@@ -2077,6 +2079,116 @@ async def test_workspace_link_correction_attaches_and_publishes_the_report(
     assert len(await store.list_artifact_attachments(owner_id=_OWNER, run_id=run.run_id)) == 1
 
 
+@pytest.mark.parametrize("lineage_adoption", [True, False])
+async def test_the_terminal_commit_stores_a_converted_products_view_from_the_runs_registry(
+    store: FingerprintingRunStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lineage_adoption: bool,
+) -> None:
+    """Publication converts through the Run's own registry, only for an adopting Run."""
+    import hashlib
+    import hmac
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (6, 6), (200, 30, 30)).save(buffer, "PNG")
+    chart = base64.b64encode(buffer.getvalue()).decode()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.html").write_text(
+        "<!doctype html><html><body><p>Revenue grew eleven percent.</p>"
+        f'<img alt="revenue chart" src="data:image/png;base64,{chart}"></body></html>'
+    )
+    model_calls = 0
+
+    async def model(**_kwargs: Any) -> AssistantTurn:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="attach-report",
+                        name="attach_artifact",
+                        arguments={"path": "report.html"},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+        return AssistantTurn(
+            text="[Report](artifact:report.html)", tool_calls=(), stop_reason="stop"
+        )
+
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_func=model,
+        model_profile=ModelProfile(context_window_tokens=1_000_000),
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="research",
+        injected_tools=[
+            attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "artifact_root", lambda: root)
+    plan = AgentRunPlan.from_tools(
+        orchestrator.prepare_run("Publish the report").tools,
+        model_role="query",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    # The Run's own registry: every handle it mints comes from this key.
+    run_key = b"k" * 32
+    application, coordinator = _answer_runtime(
+        store,
+        orchestrator=orchestrator,
+        registry=ResourceRegistry(resource_secret=run_key),
+        lineage_adoption=lineage_adoption,
+    )
+    request = _answer_run_request(mode="research", agent_run_plan=plan)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=run_request_fingerprint(request),
+    )
+    await coordinator.start()
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert run is not None and run.result is not None
+    (artifact,) = run.result["artifacts"]
+    rows = await store.lineage_resource_rows(
+        owner_id=_OWNER,
+        session_id=str(request["agent_session_id"]),
+        resource_id=artifact["resource_id"],
+    )
+    kinds = sorted(str(row.capabilities["resource_kind"]) for row in rows)
+    if not lineage_adoption:
+        # No later Run can adopt the product, so publication converted nothing.
+        assert kinds == ["published_artifact"]
+        return
+    assert kinds == ["conversion_asset", "conversion_snapshot", "published_artifact"]
+    (asset,) = (row for row in rows if row.capabilities["resource_kind"] == "conversion_asset")
+    # The embedded image's handle is the one the Run's own registry mints for it.
+    minted = hmac.new(run_key, f"{artifact['resource_id']}:0".encode(), hashlib.sha256)
+    assert asset.resource_id == f"vis-{minted.hexdigest()[:24]}"
+    snapshot = next(
+        row for row in rows if row.capabilities["resource_kind"] == "conversion_snapshot"
+    )
+    blobs = PGRunBlobStore(pool=store._operation_pool)  # noqa: SLF001
+    view = json.loads(await blobs.read(owner_id=_OWNER, digest=snapshot.digest) or b"")
+    assert view["resource_id"] == artifact["resource_id"]
+    assert "Revenue grew eleven percent." in view["text"]
+
+
 async def test_publication_correction_is_one_linked_agent_operation(
     store: FingerprintingRunStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -2476,6 +2588,8 @@ def _answer_runtime(
     *,
     orchestrator: AnswerOrchestrator | None = None,
     history_sink: list[PriorTurns] | None = None,
+    registry: ResourceRegistry | None = None,
+    lineage_adoption: bool = True,
 ) -> tuple[Application, RunCoordinator]:
     """Compose the final executor and coordinator over the throwaway database."""
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
@@ -2485,7 +2599,10 @@ def _answer_runtime(
                 max_nonterminal_runs=30_000,
             )
         ),
-        answer={"agent": {"execution_environment": "disabled"}},
+        answer={
+            "agent": {"execution_environment": "disabled"},
+            "generation": {"lineage_adoption": lineage_adoption},
+        },
     )
     components = _compose(config)
     application = Application(config, components)
@@ -2533,7 +2650,7 @@ def _answer_runtime(
             fast_history_targets=(),
             current_image_count=0,
             workspaces=["default"],
-            registry=None,
+            registry=registry,
         )
 
     executor.prepare_orchestrated_run = _prepare  # type: ignore[method-assign]

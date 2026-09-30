@@ -24,6 +24,7 @@ from dlightrag.adapters.postgres.answer.memory_settings import (
 from dlightrag.adapters.postgres.answer.session_repository import (
     PGAgentSessionRepository,
     PGProgressStore,
+    write_fetched_resources,
 )
 from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
 from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
@@ -2901,7 +2902,26 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         self, conn: Any, owner: str, run_uuid: uuid.UUID, publications: Sequence[Any]
     ) -> None:
         planned = tuple((item, PendingArtifact(content=item.content)) for item in publications)
-        await self._write_blobs(conn, owner, tuple(blob for _item, blob in planned))
+        # A product's conversion view, written as the rows a read of it settles, so a
+        # later Run of the Session adopts bytes and view. A product with no Session
+        # stamp registers no Resource, so its view is not written either.
+        views = tuple(
+            update for item, _blob in planned if item.session_id is not None for update in item.view
+        )
+        # Every Blob this commit names, products and views alike, is written in one
+        # canonical order, so two commits that share bytes never wait on each other in
+        # a cycle; the view rows below then find their Blobs already written.
+        await self._write_blobs(
+            conn,
+            owner,
+            (
+                *(blob for _item, blob in planned),
+                *(
+                    PendingArtifact(content=b"".join(update.complete_blob.chunks))
+                    for update in views
+                ),
+            ),
+        )
         for index, (item, blob) in enumerate(planned):
             await conn.execute(
                 _INSERT_RUN_ARTIFACT,
@@ -2944,11 +2964,14 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 None,
                 None,
             )
+        if views:
+            await write_fetched_resources(conn, owner_id=owner, run_id=run_uuid, updates=views)
 
     async def _write_blobs(self, conn: Any, owner: str, blobs: Sequence[PendingArtifact]) -> None:
         """Acquire new blob identities in one canonical order per transaction."""
-        for blob in sorted(blobs, key=lambda item: item.digest):
-            await self._write_blob(conn, owner, blob)
+        unique = {blob.digest: blob for blob in blobs}
+        for digest in sorted(unique):
+            await self._write_blob(conn, owner, unique[digest])
 
     async def _write_blob(self, conn: Any, owner: str, blob: PendingArtifact) -> None:
         try:

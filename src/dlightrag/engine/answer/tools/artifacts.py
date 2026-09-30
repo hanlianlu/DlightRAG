@@ -79,11 +79,7 @@ def attach_artifact_tool(
                 )
         link = artifact_link(attachment)
         resource_id = artifact_resource_id(attachment.relative_path)
-        read_call = artifact_read_call(
-            attachment.relative_path,
-            filename=attachment.relative_path,
-            mime_type="",
-        )
+        read_call = artifact_read_call(attachment.relative_path)
         return ToolResult.text(
             f"attached {attachment.relative_path} ({attachment.size_bytes} bytes); "
             f"place it with {link}; a later turn continues from this published version "

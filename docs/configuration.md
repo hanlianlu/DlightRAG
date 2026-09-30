@@ -804,7 +804,8 @@ answer image count is clamped to the query model's discovered capability.
 Agent Session registered, when the model names its handle. Newly adopted bytes
 take an attachment slot, and the adopting Run never converts them: a convertible
 document reads text only through the conversion view stored with it, and other
-formats are decoded from the adopted bytes. See
+formats are decoded from the adopted bytes. Publication stores that view for a
+convertible Published Artifact only while `lineage_adoption` is on. See
 [Resource Reading](resource-reading.md#earlier-runs).
 
 ## Research Agent

@@ -374,7 +374,8 @@ async def test_bytes_this_run_can_convert_keep_this_runs_view(
     """
     conversions: list[str] = []
 
-    async def convert(_content, *, filename, declared_mime):
+    async def convert(_content, *, filename, declared_mime, deadline=None):
+        del declared_mime, deadline
         conversions.append(filename)
         return ConvertedResource(
             text="This Run's own extraction.", visuals=(), converter="own", converter_version="1"
