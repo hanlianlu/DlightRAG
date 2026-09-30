@@ -3,7 +3,7 @@
 
 import asyncio
 import hashlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +21,7 @@ from lightrag.utils_pipeline import (
 )
 from PIL import Image
 
+from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.dependencies import ParserUnavailableError, classify_transient_dependency
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
@@ -37,6 +38,7 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 from dlightrag.engine.rag.corpus.ingestion.errors import ParserInputPlacementError
 from dlightrag.engine.rag.corpus.ingestion.paths import local_source_path
 from dlightrag.engine.rag.retrieval.metadata_fields import PARSER_INPUT_SHA256_FIELD
+from dlightrag.engine.rag.retrieval.visibility import ingest_finalization_complete
 
 
 def _sha256(content: bytes) -> str:
@@ -335,6 +337,52 @@ async def test_ingest_redrives_queue_after_busy_owner_exits_abnormally(
     assert result["processed"] == 1
     assert result["errors"] == []
     assert result["results"][0]["chunks"] == ["chunk-retry-queued"]
+
+
+async def test_a_queue_run_that_fails_while_a_document_finalizes_fails_the_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LightRAG's failure ends the ingest even when it lands between two status reads."""
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    for path in (first, second):
+        path.write_bytes(b"%PDF-" + path.stem.encode())
+    engine, deps = _make_engine()
+    first_id, second_id = (
+        compute_mdhash_id(normalize_document_file_path(path), prefix="doc-")
+        for path in (first, second)
+    )
+    statuses: dict[str, dict[str, object]] = {}
+    first_finalizing = asyncio.Event()
+    runs = 0
+
+    async def process() -> None:
+        nonlocal runs
+        runs += 1
+        if runs == 1:
+            statuses[first_id] = {"status": "processed", "chunks_list": ["chunk-first"]}
+            statuses[second_id] = {"status": "processing", "chunks_list": []}
+            await first_finalizing.wait()
+            raise RuntimeError("worker lost")
+        statuses[second_id] = {"status": "processed", "chunks_list": ["chunk-second"]}
+
+    finalize = engine._finalize_ingested_document
+
+    async def finalize_while_the_run_fails(**kwargs: Any) -> dict[str, Any]:
+        first_finalizing.set()
+        await asyncio.sleep(0.05)
+        return await finalize(**kwargs)
+
+    deps["stores"].get_doc_status.side_effect = statuses.get
+    deps["stores"].get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: statuses[doc_id] for doc_id in doc_ids if doc_id in statuses
+    }
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    monkeypatch.setattr(engine, "_finalize_ingested_document", finalize_while_the_run_fails)
+
+    with pytest.raises(RuntimeError, match="worker lost"):
+        await asyncio.wait_for(engine.aingest_files([first, second]), timeout=5)
+
+    assert runs == 1
 
 
 async def test_ingest_does_not_wait_forever_on_unknown_pipeline_status(
@@ -3357,7 +3405,12 @@ def _archiving_engine(
 
     Each enqueued document is found with LightRAG's own resolver and archived with
     its own ``move_file_to_parsed_dir``, unless its name is in ``fail``: LightRAG
-    then records it FAILED and archives nothing. The returned state holds the
+    then records it FAILED and archives nothing (in ``outage``, FAILED with the
+    parser outage LightRAG records). A queue run processes its documents side by
+    side, as LightRAG's workers do: one whose name has an event in ``gates`` stays
+    ``parsing`` until that event is set, and one a cancelled run leaves mid-flight
+    is named in ``cancelled`` and stays queued for the next run. As in LightRAG, a
+    deletion is refused while a queue run is active. The returned state holds the
     doc_status rows (``status``), the metadata rows (``metadata``), per document
     the bytes each parse read (``parsed``), and ``process``, LightRAG's queue sweep.
     """
@@ -3369,8 +3422,22 @@ def _archiving_engine(
     monkeypatch.chdir(input_root.parent)
     workspace = input_root.name
     engine, deps = _make_engine(input_root=input_root, workspace=workspace, **overrides)
-    state: dict[str, Any] = {"status": {}, "metadata": {}, "parsed": {}, "fail": set()}
+    outage_fields, _ = doc_status_parse_failure_fields(
+        ParserUnavailableError(),
+        status_doc={"content_summary": "", "metadata": {}},
+        engine_hint="mineru",
+    )
+    state: dict[str, Any] = {
+        "status": {},
+        "metadata": {},
+        "parsed": {},
+        "fail": set(),
+        "outage": set(),
+        "gates": {},
+        "cancelled": [],
+    }
     queue: list[str] = []
+    queue_runs = 0
 
     async def enqueue(**kwargs: Any) -> str:
         for path in kwargs["file_paths"]:
@@ -3379,25 +3446,45 @@ def _archiving_engine(
             queue.append(Path(path).name)
         return "track-1"
 
-    async def process() -> None:
-        while queue:
-            name = queue.pop(0)
-            doc_id = compute_mdhash_id(normalize_document_file_path(name), prefix="doc-")
-            source = Path(
-                _PipelineMixin._resolve_source_file_for_parser(
-                    cast(Any, SimpleNamespace(workspace=workspace)),
-                    normalize_document_file_path(name),
-                    source_file=name,
-                )
+    async def process_one(name: str) -> None:
+        doc_id = compute_mdhash_id(normalize_document_file_path(name), prefix="doc-")
+        state["status"][doc_id] = {"status": "parsing", "chunks_list": []}
+        if (gate := state["gates"].get(name)) is not None:
+            try:
+                await gate.wait()
+            except asyncio.CancelledError:
+                state["cancelled"].append(name)
+                queue.append(name)
+                raise
+        source = Path(
+            _PipelineMixin._resolve_source_file_for_parser(
+                cast(Any, SimpleNamespace(workspace=workspace)),
+                normalize_document_file_path(name),
+                source_file=name,
             )
-            state["parsed"].setdefault(doc_id, []).append(source.read_bytes())
-            if name in state["fail"]:
-                state["status"][doc_id] = {"status": "failed", "error_msg": "parse failed"}
-                continue
+        )
+        state["parsed"].setdefault(doc_id, []).append(source.read_bytes())
+        if name in state["outage"]:
+            state["status"][doc_id] = {"status": "failed", "chunks_list": [], **outage_fields}
+        elif name in state["fail"]:
+            state["status"][doc_id] = {"status": "failed", "error_msg": "parse failed"}
+        else:
             await move_file_to_parsed_dir(source, skip_if_already_parsed=True)
             state["status"][doc_id] = {"status": "processed", "chunks_list": [f"chunk-{doc_id}"]}
 
+    async def process() -> None:
+        nonlocal queue_runs
+        queue_runs += 1
+        try:
+            names = list(queue)
+            queue.clear()
+            await asyncio.gather(*(process_one(name) for name in names))
+        finally:
+            queue_runs -= 1
+
     def delete(doc_id: str, **_kwargs: Any) -> SimpleNamespace:
+        if queue_runs:
+            return SimpleNamespace(status="not_allowed")
         state["status"].pop(doc_id, None)
         return SimpleNamespace(status="success")
 
@@ -3687,6 +3774,292 @@ async def test_a_placed_copy_stays_while_lightrag_may_still_parse_it(
         await engine.aingest_files([_remote_item(source)])
 
     assert (parser_input_root / source.name).read_bytes() == b"remote"
+
+
+def _doc_id(name: str) -> str:
+    return compute_mdhash_id(normalize_document_file_path(name), prefix="doc-")
+
+
+def _published(state: Mapping[str, Any], name: str) -> bool:
+    """Whether the document's metadata row publishes it, as every product surface reads it."""
+    return ingest_finalization_complete(state["metadata"].get(_doc_id(name)))
+
+
+async def _until(condition: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    """Wait for ``condition``; the test fails if it does not hold within ``timeout``."""
+    async with asyncio.timeout(timeout):
+        while not condition():
+            await asyncio.sleep(0.01)
+
+
+def _staged_batch(tmp_path: Path, input_root: Path, *names: str) -> list[PreparedIngestFile]:
+    """One document per name, staged by a Run: each keeps its own copy."""
+    return [
+        _staged_local_item(
+            _staged_versions(tmp_path / name, name, f"# {name}\n".encode())[0], input_root
+        )
+        for name in names
+    ]
+
+
+async def test_a_document_is_published_while_the_rest_of_its_batch_is_in_the_pipeline(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each document is finalized once LightRAG has settled it, not once the batch has.
+
+    LightRAG processes the first document long before the second. The first is
+    published, and its parser input gone, while the second is still parsing from
+    the copy it keeps until it settles.
+    """
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+    batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch))
+
+    await _until(lambda: _published(state, "first.md"))
+
+    assert state["status"][_doc_id("second.md")]["status"] == "parsing"
+    assert not _published(state, "second.md")
+    assert not ingest.done()
+    assert _corpus_files(parser_input_root) == [
+        "__local_sources__/first.md",
+        "__local_sources__/second.md",
+        "second.md",
+    ]
+
+    second_settles.set()
+    result = await asyncio.wait_for(ingest, timeout=5)
+
+    assert result["errors"] == []
+    assert [item["doc_id"] for item in result["results"]] == [
+        _doc_id("first.md"),
+        _doc_id("second.md"),
+    ]
+    assert _published(state, "second.md")
+    assert _corpus_files(parser_input_root) == [
+        "__local_sources__/first.md",
+        "__local_sources__/second.md",
+    ]
+
+
+async def test_documents_that_settle_together_are_finalized_one_at_a_time(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    finalize = engine._finalize_ingested_document
+    active = peak = 0
+
+    async def observed(**kwargs: Any) -> dict[str, Any]:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.01)
+            return await finalize(**kwargs)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(engine, "_finalize_ingested_document", observed)
+
+    result = await engine.aingest_files(
+        _staged_batch(tmp_path, parser_input_root, "first.md", "second.md", "third.md")
+    )
+
+    assert result["processed"] == 3
+    assert peak == 1
+    assert all(_published(state, name) for name in ("first.md", "second.md", "third.md"))
+
+
+async def test_a_cancelled_ingest_publishes_nothing_more_and_cancels_its_queue_run(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What was published stays published; the rest is left as LightRAG leaves it.
+
+    The cancellation reaches the queue run the ingest started, and no document is
+    finalized after it, even one LightRAG settles later. The copy of the one it
+    left mid-flight stays, since recovery may parse it.
+    """
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+    batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch))
+    await _until(lambda: _published(state, "first.md"))
+
+    ingest.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await ingest
+
+    assert state["cancelled"] == ["second.md"]
+    assert (parser_input_root / "second.md").read_bytes() == b"# second.md\n"
+    # LightRAG's own sweep settles what the cancelled run left.
+    second_settles.set()
+    await state["process"]()
+    assert state["status"][_doc_id("second.md")]["status"] == "processed"
+    assert _published(state, "first.md")
+    assert not _published(state, "second.md")
+
+
+async def test_an_error_of_the_ingest_lets_lightrag_finish_the_rest_of_the_batch(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only cancelling the ingest cancels its queue run; an error waits for it to end."""
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+    deps["stores"].get_full_doc_statuses.side_effect = RuntimeError("status store unavailable")
+    batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch))
+    await _until(lambda: deps["stores"].get_full_doc_statuses.await_count > 0)
+    await asyncio.sleep(0.05)
+    assert not ingest.done()
+
+    second_settles.set()
+    with pytest.raises(RuntimeError, match="status store unavailable"):
+        await asyncio.wait_for(ingest, timeout=5)
+
+    assert state["cancelled"] == []
+    assert state["status"][_doc_id("second.md")]["status"] == "processed"
+
+
+async def test_recovery_after_a_stop_finalizes_only_what_was_not_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_config: DlightragConfig
+) -> None:
+    """A document published before the ingest stopped is known as such on recovery.
+
+    The Run resumes by reconciling its tracked cohort through the workspace's retry
+    once LightRAG settled it, as ``_reconcile_tracked_ingest`` does: the published
+    document settles from its finalization marker without replaying anything, and
+    the one LightRAG processed after the stop replays only DlightRAG's finalization.
+    """
+    from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.scheduler import ModelScheduler
+    from dlightrag.engine.ai.telemetry import NoopTelemetry
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+
+    service = WorkspaceRag(
+        workspace_id="default",
+        settings=rag_settings(test_config),
+        backend=cast(Any, SimpleNamespace(workspace_id="default", read_only=False)),
+        scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NoopTelemetry(),
+    )
+    input_root = service._workspace_input_root()
+    engine, deps, state = _archiving_engine(input_root, monkeypatch)
+    rows: dict[str, dict[str, Any]] = state["metadata"]
+    deps["metadata_index"].get_many.side_effect = lambda doc_ids: {
+        doc_id: rows[doc_id] for doc_id in doc_ids if doc_id in rows
+    }
+    deps["metadata_index"].find_by_download_locator.side_effect = lambda locator: [
+        doc_id for doc_id, row in rows.items() if row.get("download_locator") == locator
+    ]
+    service._initialized = True
+    service._ingestion_engine = engine
+    service._lightrag_stores = deps["stores"]
+    service._metadata_index = deps["metadata_index"]
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+    batch = _staged_batch(tmp_path, input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch, track_id="track-1"))
+    await _until(lambda: _published(state, "first.md"))
+    # The ingest stops with the process running it; restarted, LightRAG's own
+    # sweep settles what it left.
+    ingest.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await ingest
+    second_settles.set()
+    await state["process"]()
+    finalized_before = deps["metadata_index"].upsert.await_count
+
+    result = await service.aretry_failed_docs(
+        cohort_doc_ids=(_doc_id("first.md"), _doc_id("second.md")), track_id="track-1"
+    )
+
+    assert (result["succeeded"], result["failed"]) == (2, 0)
+    replayed = deps["metadata_index"].upsert.await_args_list[finalized_before:]
+    assert [call.args[0] for call in replayed] == [_doc_id("second.md")]
+    assert _published(state, "second.md")
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
+    assert {doc_id: len(parses) for doc_id, parses in state["parsed"].items()} == {
+        _doc_id("first.md"): 1,
+        _doc_id("second.md"): 1,
+    }
+    assert _corpus_files(input_root) == [
+        "__local_sources__/first.md",
+        "__local_sources__/second.md",
+    ]
+
+
+async def test_a_parser_outage_defers_the_batch_once_what_settled_before_it_is_published(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first document is published while the second still waits for the parser.
+
+    The parser is down when the second reaches it: the batch raises the outage
+    only once that document has settled too, and what was published stays so.
+    """
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    state["outage"].add("second.md")
+    state["gates"]["second.md"] = second_settles = asyncio.Event()
+    batch = _staged_batch(tmp_path, parser_input_root, "first.md", "second.md")
+    ingest = asyncio.create_task(engine.aingest_files(batch))
+    await _until(lambda: _published(state, "first.md"))
+    assert not ingest.done()
+
+    second_settles.set()
+    with pytest.raises(ParserUnavailableError):
+        await asyncio.wait_for(ingest, timeout=5)
+
+    assert state["status"][_doc_id("second.md")]["status"] == "failed"
+    assert _published(state, "first.md")
+    assert not _published(state, "second.md")
+
+
+async def test_a_failed_replacement_of_another_document_is_undone_once_lightrag_is_idle(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Undoing it deletes the new document through LightRAG, refused while its queue runs.
+
+    The replacement fails while another document of its batch is still in the
+    pipeline. It is undone only once the queue run has ended, so the old
+    identity comes back, hidden, as it does when the whole batch settles at once.
+    """
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    old_id, locator = "doc-old", "s3://bucket/report.pdf"
+    state["status"][old_id] = {"status": "processed", "chunks_list": ["old"]}
+    state["metadata"][old_id] = {
+        "filename": "report.pdf",
+        "download_locator": locator,
+        "source_uri": locator,
+        _FINALIZATION_COMPLETE_KEY: True,
+    }
+    renamed = tmp_path / "download" / "renamed.pdf"
+    renamed.parent.mkdir()
+    renamed.write_bytes(b"%PDF-renamed")
+    replacement = PreparedIngestFile(
+        renamed,
+        locator,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, locator),),
+    )
+    state["fail"].add("renamed.pdf")
+    state["gates"]["other.md"] = other_settles = asyncio.Event()
+    (other,) = _staged_batch(tmp_path, parser_input_root, "other.md")
+    ingest = asyncio.create_task(engine.aingest_files([replacement, other], replace=True))
+    # Its parser input goes once the ingest saw it settle.
+    await _until(lambda: not (parser_input_root / "renamed.pdf").exists())
+    await asyncio.sleep(0.1)
+
+    assert state["status"][_doc_id("renamed.pdf")]["status"] == "failed"
+    assert state["metadata"][old_id][_FINALIZATION_COMPLETE_KEY] is False
+
+    other_settles.set()
+    result = await asyncio.wait_for(ingest, timeout=5)
+
+    assert len(result["errors"]) == 1
+    assert [item["doc_id"] for item in result["results"]] == [_doc_id("other.md")]
+    assert set(state["status"]) == {_doc_id("other.md")}
+    assert set(state["metadata"]) == {old_id, _doc_id("other.md")}
+    assert state["metadata"][old_id][_FINALIZATION_COMPLETE_KEY] is False
+    assert _published(state, "other.md")
 
 
 @pytest.mark.parametrize("unplaceable", ["parser input", "own copy"])

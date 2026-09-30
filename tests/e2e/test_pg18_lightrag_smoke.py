@@ -625,6 +625,98 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
         await pg_pool.close()
 
 
+async def test_a_document_is_listed_while_the_rest_of_its_batch_is_still_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LightRAG's real pipeline settles one document of a batch long before the other.
+
+    The Files panel lists the first as soon as DlightRAG finalized it, while the
+    second is still with the parser: the second's parse waits, within a bound, for
+    the first to be listed. The batch then completes both.
+    """
+    import lightrag.pipeline as lightrag_pipeline
+
+    from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.core._pool import pg_pool
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
+    from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
+    from dlightrag.application.corpus_admin import FilePanelPageRequest
+    from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+
+    conn_kwargs = pg_conn_kwargs_from_env()
+    workspace = make_workspace_name("settled")
+    cfg = make_e2e_config(
+        working_dir=tmp_path / "storage", workspace=workspace, conn_kwargs=conn_kwargs
+    )
+    set_config(cfg)
+    install_fake_model_functions(monkeypatch, dim=cfg.models.embedding.dim)
+    sources = []
+    for name, text in (
+        ("alpha.md", "# Alpha\n\nThe alpha ledger balances.\n"),
+        ("beta.md", "# Beta\n\nThe beta survey closes.\n"),
+    ):
+        path = tmp_path / "sources" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        sources.append(path)
+
+    async def listed() -> set[str]:
+        page = await PGFilePanelStore().list_processed_files(workspace, page=FilePanelPageRequest())
+        return {Path(item.file_path).name for item in page.items}
+
+    listed_while_beta_parsed: set[str] = set()
+    real_get_parser = lightrag_pipeline.get_parser
+
+    class _HeldParser:
+        """The engine LightRAG picked; beta's parse first waits for alpha to be listed."""
+
+        def __init__(self, parser: Any) -> None:
+            self._parser = parser
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._parser, name)
+
+        async def parse(self, context: Any) -> Any:
+            if Path(context.file_path).name == "beta.md":
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + 30
+                while "alpha.md" not in (names := await listed()) and loop.time() < deadline:
+                    await asyncio.sleep(0.1)
+                listed_while_beta_parsed.update(names)
+            return await self._parser.parse(context)
+
+    def get_parser(*args: Any, **kwargs: Any) -> Any:
+        parser = real_get_parser(*args, **kwargs)
+        return None if parser is None else _HeldParser(parser)
+
+    monkeypatch.setattr(lightrag_pipeline, "get_parser", get_parser)
+    service = await WorkspaceRag.acreate(
+        workspace_id=workspace,
+        settings=rag_settings(cfg),
+        backend=build_pg_corpus_backend(cfg),
+        scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
+        telemetry=LangfuseTelemetry(),
+    )
+    try:
+        batch = await service.aingest(
+            source_type="local",
+            documents=[{"path": str(path)} for path in sources],
+            replace=False,
+        )
+
+        assert batch["errors"] == []
+        assert len(batch["results"]) == 2
+        assert listed_while_beta_parsed == {"alpha.md"}
+        assert await listed() == {"alpha.md", "beta.md"}
+    finally:
+        if service._initialized:
+            await service.areset()
+        await service.aclose()
+        await pg_pool.close()
+
+
 async def test_a_parser_outage_defers_a_corpus_run_that_resumes_what_it_did_not_finish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

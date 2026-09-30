@@ -216,7 +216,8 @@ Any other parser failure leaves its document failed; retry failed documents as
 below once the cause is fixed. A parser outage instead defers the Corpus Mutation,
 since the same document may well parse a minute later. Ingestion first settles
 every document the Run attempts, a remote source's later windows included, so
-LightRAG tracks all of them; then the Run defers with the usual backoff and
+LightRAG tracks all of them, and publishes each one that becomes ready as it
+settles; then the Run defers with the usual backoff and
 `GET /health` reports the `parser` component degraded. When it resumes, it
 settles each tracked document from its durable state: a document that became
 ready stays as it is, without being parsed again, and every other document is
@@ -233,6 +234,12 @@ eleventh fails the Run as `dependency_unavailable`.
 A LightRAG `processed` status alone does not publish a Product Document.
 DlightRAG's processed file panel, retrieval evidence, metadata surfaces,
 downloads, and image routes require the finalization marker to be exactly true.
+An ingest finalizes each document as soon as LightRAG has settled it, while the
+rest of its batch is still in the pipeline, so a batch of large documents shows
+up in the file panel one by one rather than all at the end. If the Run stops
+part-way (a restart, for example), what it already published stays published,
+and when it resumes it finalizes each document LightRAG processed meanwhile
+without parsing it again.
 A failure in metadata/source finalization, BM25 labeling, required retained
 source/sidecar work, or enabled visual fusion leaves the marker false while the
 native LightRAG status remains `processed`. DlightRAG never rewrites that status

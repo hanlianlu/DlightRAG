@@ -99,6 +99,9 @@ source
   -> publish readiness=true
 ```
 
+The last two steps run for each document as soon as LightRAG has settled it,
+while the rest of its batch is still in the pipeline.
+
 Both parser adapters converge on LightRAG's shared intermediate representation.
 Tables and equations remain structured text. Successful visual chunks keep one
 LightRAG chunk identity: when the embedding provider supports fused text+image

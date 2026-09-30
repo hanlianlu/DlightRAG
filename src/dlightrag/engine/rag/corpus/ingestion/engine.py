@@ -6,7 +6,7 @@ import hashlib
 import logging
 import os
 import shutil
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -190,39 +190,74 @@ class UnifiedIngestionEngine:
         self._telemetry = telemetry
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
-    async def _process_enqueued(self, doc_ids: list[str]) -> None:
-        """Drive the shared queue and wait until this accepted cohort settles.
+    async def _process_enqueued(
+        self,
+        doc_ids: list[str],
+        settled: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """Drive the shared queue, handing on each cohort document once it settles.
 
-        LightRAG returns immediately when another owner already holds its single
-        processing reservation. The enqueue is still durable and wakes that owner,
-        so an immediate finalization read would misclassify the PENDING row as a
+        The queue runs as its own task while the cohort's status rows are polled,
+        so ``settled`` gets a document as soon as LightRAG has processed or failed
+        it, while the rest of the cohort is still in the pipeline. LightRAG tells
+        its caller nothing per document, and another owner may hold its single
+        processing reservation: the durable status row is what says a document
+        settled, whoever processed it.
+
+        LightRAG returns immediately when another owner already holds that
+        reservation. The enqueue is still durable and wakes that owner, so an
+        immediate finalization read would misclassify the PENDING row as a
         processing failure. Poll the accepted cohort while rows report a known
         active state; missing or unknown rows fall through to finalization's
         existing consistency error instead of waiting forever.
+
+        This returns once the queue run it started has ended. A queue run that
+        fails ends the ingest with its error. Cancelling the ingest cancels the
+        queue run with it; any other error lets the queue run finish first, so
+        it never interrupts LightRAG's work on the rest of the cohort.
         """
         async with self._telemetry.observe(
             "ingest-documents",
             metadata={"document_count": len(doc_ids), "doc_ids": doc_ids},
         ):
-            await self._lightrag.apipeline_process_enqueue_documents()
             pending = list(dict.fromkeys(doc_ids))
             delay = _STATUS_POLL_INITIAL_SECONDS
-            while pending:
-                statuses = await self._stores.get_full_doc_statuses(pending)
-                pending = [
-                    doc_id
-                    for doc_id in pending
-                    if (status := statuses.get(doc_id)) is not None
-                    and lightrag_status(status) in _ACTIVE_INGEST_STATUSES
-                ]
-                if not pending:
-                    return
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, _STATUS_POLL_MAX_SECONDS)
-                # A prior owner can abort after restoring its cohort to PENDING.
-                # Re-drive the queue so this waiter does not depend on a future,
-                # unrelated ingest to provide LightRAG's next explicit trigger.
-                await self._lightrag.apipeline_process_enqueue_documents()
+            queue_run = asyncio.create_task(self._lightrag.apipeline_process_enqueue_documents())
+            try:
+                while True:
+                    await asyncio.wait((queue_run,), timeout=delay)
+                    if queue_run.done():
+                        queue_run.result()
+                    statuses = await self._stores.get_full_doc_statuses(pending)
+                    active: list[str] = []
+                    for doc_id in pending:
+                        status = statuses.get(doc_id)
+                        if (
+                            status is not None
+                            and lightrag_status(status) in _ACTIVE_INGEST_STATUSES
+                        ):
+                            active.append(doc_id)
+                        else:
+                            await settled(doc_id)
+                    pending = active
+                    if not pending:
+                        break
+                    delay = min(delay * 2, _STATUS_POLL_MAX_SECONDS)
+                    if queue_run.done():
+                        queue_run.result()
+                        # A prior owner can abort after restoring its cohort to
+                        # PENDING. Re-drive the queue so this waiter does not depend
+                        # on a future, unrelated ingest to provide LightRAG's next
+                        # explicit trigger.
+                        await asyncio.sleep(delay)
+                        queue_run = asyncio.create_task(
+                            self._lightrag.apipeline_process_enqueue_documents()
+                        )
+                # The run can outlast the cohort, draining work enqueued meanwhile.
+                await queue_run
+            except BaseException as error:
+                await _end_queue_run(queue_run, cancel=not isinstance(error, Exception))
+                raise
 
     async def aingest_files(
         self,
@@ -240,6 +275,12 @@ class UnifiedIngestionEngine:
         enqueue can mix native DOCX parsing and MinerU PDF/image parsing.
         DlightRAG keeps only the product-layer metadata and sidecar vector
         overrides around that native batch pipeline.
+
+        Each document is finalized, and so published, as soon as LightRAG has
+        settled it, while the rest of the batch is still in the pipeline; one
+        at a time, never two at once. A replacement that retires other
+        documents waits for the pipeline call to end instead, since undoing its
+        failure deletes through LightRAG.
 
         A document that fails is reported in ``errors``, except one the parser
         service could not take: once every document of the batch has settled,
@@ -286,6 +327,9 @@ class UnifiedIngestionEngine:
         entries = unique_entries
 
         results_by_index: dict[int, dict[str, Any]] = {}
+        # Documents settle in whatever order LightRAG finishes them; outcomes are
+        # reported in the batch's order.
+        failures_by_index: dict[int, str] = {}
         parser_outage = False
         deferred_metadata_updates: list[tuple[_PendingDocumentIngest, dict[str, Any]]] = []
         deferred_finalizations: list[_PendingDocumentIngest] = []
@@ -447,20 +491,15 @@ class UnifiedIngestionEngine:
                         chunk_options=chunk_options,
                         track_id=track_id,
                     )
-                    await self._process_enqueued([entry.doc_id for entry in enqueue_entries])
-                    # The cohort has settled, so LightRAG parses none of these again.
-                    # A copy left by a failure stays, since recovery may parse it.
-                    await asyncio.to_thread(
-                        _discard_parser_inputs,
-                        [placed[entry.index].parser_input for entry in enqueue_entries],
-                    )
 
-                    for entry in enqueue_entries:
+                    async def finalize(entry: _PendingDocumentIngest) -> None:
+                        nonlocal parser_outage
+                        cleanup_ids = cleanup_ids_by_entry.get(entry.index, ())
                         try:
                             parse_engine, process_options = _required_enqueue_fields(entry)
                             external_cleanup_ids = tuple(
                                 cleanup_doc_id
-                                for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ())
+                                for cleanup_doc_id in cleanup_ids
                                 if cleanup_doc_id != entry.doc_id
                             )
                             durable_result = await self._finalize_ingested_document(
@@ -470,7 +509,7 @@ class UnifiedIngestionEngine:
                                 process_options=process_options,
                                 commit_complete=not external_cleanup_ids,
                             )
-                            for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ()):
+                            for cleanup_doc_id in cleanup_ids:
                                 if cleanup_doc_id != entry.doc_id:
                                     await self._metadata_index.delete(cleanup_doc_id)
                                 cleanup_snapshots.pop(cleanup_doc_id, None)
@@ -487,7 +526,7 @@ class UnifiedIngestionEngine:
                         except BaseException as error:  # noqa: BLE001
                             entry_snapshots = {
                                 cleanup_doc_id: cleanup_snapshots[cleanup_doc_id]
-                                for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ())
+                                for cleanup_doc_id in cleanup_ids
                                 if cleanup_doc_id in cleanup_snapshots
                             }
                             await self._settle_failed_replacement(entry, entry_snapshots, error)
@@ -505,7 +544,38 @@ class UnifiedIngestionEngine:
                                 logger.warning(
                                     "Document finalization failed for %s", filename, exc_info=True
                                 )
-                            errors.append(f"{filename}: document processing failed")
+                            failures_by_index[entry.index] = (
+                                f"{filename}: document processing failed"
+                            )
+
+                    enqueued = {entry.doc_id: entry for entry in enqueue_entries}
+                    # Undoing a failed replacement of other documents deletes it
+                    # through LightRAG, which refuses while its queue runs: such a
+                    # replacement is finalized once the queue run has ended.
+                    replaces_others = {
+                        entry.doc_id
+                        for entry in enqueue_entries
+                        if any(
+                            cleanup_doc_id != entry.doc_id
+                            for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ())
+                        )
+                    }
+
+                    async def settle(doc_id: str) -> None:
+                        entry = enqueued[doc_id]
+                        # LightRAG parses none of a settled document again. The copy
+                        # of one that had not settled when the ingest stopped stays,
+                        # since recovery may parse it.
+                        await asyncio.to_thread(
+                            discard_parser_input, placed[entry.index].parser_input
+                        )
+                        if doc_id not in replaces_others:
+                            await finalize(entry)
+
+                    await self._process_enqueued(list(enqueued), settle)
+                    for entry in enqueue_entries:
+                        if entry.doc_id in replaces_others:
+                            await finalize(entry)
             except BaseException as error:
                 # Enqueue/process can partially create candidate rows before it
                 # raises. Settle every affected replacement, rather than merely
@@ -530,7 +600,7 @@ class UnifiedIngestionEngine:
             raise ParserUnavailableError()
         return {
             "processed": len(results_by_index),
-            "errors": errors,
+            "errors": [*errors, *(failures_by_index[index] for index in sorted(failures_by_index))],
             "results": [results_by_index[index] for index in sorted(results_by_index)],
         }
 
@@ -1214,9 +1284,14 @@ def _remove_sidecar_dir(artifact_dir: Path) -> None:
         shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
-def _discard_parser_inputs(parser_inputs: Sequence[Path]) -> None:
-    for parser_input in parser_inputs:
-        discard_parser_input(parser_input)
+async def _end_queue_run(queue_run: asyncio.Task[Any], *, cancel: bool) -> None:
+    """Let a queue run end before the ingest that started it: cancelled, or finished.
+
+    Its own outcome gives way to what is ending the ingest.
+    """
+    if cancel:
+        queue_run.cancel()
+    await asyncio.gather(queue_run, return_exceptions=True)
 
 
 def _ready_for_enqueue(placed: Sequence[_PlacedInput]) -> None:

@@ -857,8 +857,11 @@ mutations queued behind it; Runs and Conversations stay. Either may supersede
 one mutation waiting for repair. Web
 Files uses a workspace-bound signed keyset cursor, defaults
 to 50 files (maximum 100), and orders by `updated_at DESC, id ASC`; processed
-rows appear only after Product Document finalization. The failed-files view
-remains administrative and available for repair regardless of publication.
+rows appear only after Product Document finalization. An ingest finalizes each
+document as soon as LightRAG has settled it, so a multi-document ingest's rows
+appear one by one while its other documents are still processing. The
+failed-files view remains administrative and available for repair regardless of
+publication.
 
 ## Model Catalogue And Profile Memory
 

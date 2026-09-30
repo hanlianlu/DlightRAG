@@ -138,7 +138,7 @@ Source bytes from multipart upload, a local source, URL, S3, or other supported 
 
 ### Ingest
 
-Ingest stages source content to a Run-exclusive path, records `handoff_started`, enqueues with the stable `track_id`, executes the in-process LightRAG pipeline while holding capacity, then completes every required DlightRAG projection. A batch attempts its declared documents and records each result; any failed document makes the Run `failed`, unless a parser outage stopped one of them: the Run then defers and, resumed, retries every document that did not become ready.
+Ingest stages source content to a Run-exclusive path, records `handoff_started`, enqueues with the stable `track_id`, executes the in-process LightRAG pipeline while holding capacity, and completes every required DlightRAG projection of each document as soon as LightRAG has settled it, one document at a time, while the rest of the batch is still in the pipeline: a batch's documents become ready one by one. A replacement that retires another document's identity completes once the pipeline call has ended, because undoing its failure deletes through LightRAG, which refuses while its pipeline is busy. A batch attempts its declared documents and records each result; any failed document makes the Run `failed`, unless a parser outage stopped one of them: the Run then defers and, resumed, retries every document that did not become ready. A document that became ready before the Run stopped or deferred stays ready and is not processed again.
 
 ### Delete
 
