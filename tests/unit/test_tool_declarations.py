@@ -15,7 +15,10 @@ from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.session.plan import AgentRunPlan, AgentToolPlan
 from dlightrag.engine.agent.skills import SkillsBundleFactory
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.files import ls_declaration
+from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 from dlightrag.engine.answer.tools.composition import (
     compose_research_tools,
     research_tool_declarations,
@@ -131,6 +134,52 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert "attach_artifact" not in {tool.name for tool in declared}
         assert "remember" not in {tool.name for tool in declared}
         assert "ask_parent" in {tool.name for tool in declared}
+
+
+def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
+    """All 24 `ls`, `find`, and `grep` calls of 34 live Research Runs met an empty
+    workspace, some hunting knowledge-base documents as files, and follow-ups looked
+    for an earlier Artifact at its old path. The tools that look into the workspace
+    say what it holds; the tools themselves stay product-neutral."""
+    declared = {
+        tool.name: tool
+        for tool in research_tool_declarations(
+            resource_read=True, environment=True, artifact_publication=True
+        )
+    }
+
+    for name in ("bash", "ls", "find", "grep"):
+        description = declared[name].description
+        assert (
+            f"starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs of this "
+            "conversation" in description
+        )
+        assert "`tmp/` is scratch for this Run alone" in description
+        assert "earlier Artifacts and knowledge-base documents are never files in it" in (
+            description
+        )
+    assert SESSION_NOTE_DIRECTORY not in ls_declaration().description
+
+
+def test_read_states_what_a_url_and_an_earlier_artifact_return() -> None:
+    publishing = {
+        tool.name: tool
+        for tool in research_tool_declarations(
+            resource_read=True, environment=True, artifact_publication=True
+        )
+    }
+    read = publishing["read"].description
+
+    assert "A url read returns the page's full content" in read
+    assert (
+        "An Artifact an earlier Run published is reopened by its resource_id, the "
+        f"`{PUBLISHED_ARTIFACT_HANDLE_PREFIX}…` id in its `artifact:` link." in read
+    )
+    # A Run that cannot publish has no earlier Artifact to reopen.
+    without_publication = {
+        tool.name: tool for tool in research_tool_declarations(resource_read=True)
+    }
+    assert "reopened by its resource_id" not in without_publication["read"].description
 
 
 def test_skill_declarations_need_no_owner_or_catalogue(tmp_path: Path, monkeypatch) -> None:

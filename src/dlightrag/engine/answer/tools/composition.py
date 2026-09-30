@@ -38,12 +38,14 @@ from dlightrag.engine.agent.tools.files import (
     write_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
     ChildToolNarrowingError,
     InvalidToolConfigurationError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.publication import PublicationLimits
+from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 from dlightrag.engine.answer.tools.artifacts import (
     attach_artifact_declaration,
     attach_artifact_tool,
@@ -73,6 +75,31 @@ from dlightrag.engine.answer.tools.subagents import (
     subagent_declarations,
     subagent_tools,
 )
+
+#: What a Run's workspace holds, stated on the product-neutral tools that look into it.
+#: The Session's notes are the one plane a Run is handed (ADR 0022); an earlier Run's
+#: Artifact and a knowledge-base document are reached by handle or by search instead.
+_WORKSPACE_FACT = (
+    f"Each Run's workspace starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs "
+    "of this conversation, and `tmp/` is scratch for this Run alone; earlier Artifacts "
+    "and knowledge-base documents are never files in it."
+)
+
+#: A later Run of the Session adopts a published Artifact by the handle its link carries.
+_EARLIER_ARTIFACT_FACT = (
+    "An Artifact an earlier Run published is reopened by its resource_id, the "
+    f"`{PUBLISHED_ARTIFACT_HANDLE_PREFIX}…` id in its `artifact:` link."
+)
+
+
+def _stating[T: ToolDeclaration](tool: T, fact: str) -> T:
+    """Append one product fact to a product-neutral tool's description."""
+    return replace(tool, description=f"{tool.description} {fact}")
+
+
+def _reading[T: ToolDeclaration](read: T, *, earlier_artifacts: bool) -> T:
+    """Only a resource-reading ``read`` in a Run that publishes can reopen an Artifact."""
+    return _stating(read, _EARLIER_ARTIFACT_FACT) if earlier_artifacts else read
 
 
 class ResearchToolDeclarations(Protocol):
@@ -107,7 +134,9 @@ def research_tool_declarations(
     if web_search:
         declarations.append(web_search_declaration())
     if resource_read:
-        declarations.append(read_declaration(public_url=True))
+        declarations.append(
+            _reading(read_declaration(public_url=True), earlier_artifacts=artifact_publication)
+        )
     if resource_view or environment:
         declarations.append(view_declaration())
     declarations.extend(injected)
@@ -116,12 +145,12 @@ def research_tool_declarations(
             declarations.append(read_declaration(public_url=False))
         declarations.extend(
             (
-                bash_declaration(),
+                _stating(bash_declaration(), _WORKSPACE_FACT),
                 edit_declaration(),
                 write_declaration(),
-                grep_declaration(),
-                find_declaration(),
-                ls_declaration(),
+                _stating(grep_declaration(), _WORKSPACE_FACT),
+                _stating(find_declaration(), _WORKSPACE_FACT),
+                _stating(ls_declaration(), _WORKSPACE_FACT),
             )
         )
         if artifact_publication and not child:
@@ -212,11 +241,14 @@ def compose_research_tools(
             register_web_source=register_web_source,
         ),
         "read": lambda: _ledger_backed(
-            read_tool(
-                environment,
-                access,
-                resource_reader=resource_reader,
-                spill=spill,
+            _reading(
+                read_tool(
+                    environment,
+                    access,
+                    resource_reader=resource_reader,
+                    spill=spill,
+                ),
+                earlier_artifacts=resource_reader is not None and artifacts_root is not None,
             ),
             evidence,
         ),
@@ -229,23 +261,37 @@ def compose_research_tools(
             ),
             evidence,
         ),
-        "bash": lambda: bash_tool(
-            cast(ExecutionEnvironment, environment),
-            access,
-            output_stage_factory=output_stage_factory,
+        "bash": lambda: _stating(
+            bash_tool(
+                cast(ExecutionEnvironment, environment),
+                access,
+                output_stage_factory=output_stage_factory,
+            ),
+            _WORKSPACE_FACT,
         ),
         "edit": lambda: edit_tool(cast(ExecutionEnvironment, environment), access, spill=spill),
         "write": lambda: write_tool(cast(ExecutionEnvironment, environment), access),
-        "grep": lambda: grep_tool(
-            cast(ExecutionEnvironment, environment),
-            access,
-            search_toolchain=toolchain,
-            output_stage_factory=output_stage_factory,
+        "grep": lambda: _stating(
+            grep_tool(
+                cast(ExecutionEnvironment, environment),
+                access,
+                search_toolchain=toolchain,
+                output_stage_factory=output_stage_factory,
+            ),
+            _WORKSPACE_FACT,
         ),
-        "find": lambda: find_tool(
-            cast(ExecutionEnvironment, environment), access, search_toolchain=toolchain, spill=spill
+        "find": lambda: _stating(
+            find_tool(
+                cast(ExecutionEnvironment, environment),
+                access,
+                search_toolchain=toolchain,
+                spill=spill,
+            ),
+            _WORKSPACE_FACT,
         ),
-        "ls": lambda: ls_tool(cast(ExecutionEnvironment, environment), access),
+        "ls": lambda: _stating(
+            ls_tool(cast(ExecutionEnvironment, environment), access), _WORKSPACE_FACT
+        ),
         "attach_artifact": lambda: attach_artifact_tool(
             cast(Path, artifacts_root),
             scheduler=access,

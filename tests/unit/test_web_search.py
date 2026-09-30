@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider adapters, ordered failover, and Web Evidence projection."""
 
+import inspect
 import json
 
 import httpx
@@ -12,6 +13,7 @@ from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.search import (
     SearchInput,
     WebSearchInput,
+    knowledge_base_search_declaration,
     knowledge_base_search_tool,
     web_search_tool,
 )
@@ -71,6 +73,11 @@ def test_web_search_schema_exposes_provider_neutral_controls() -> None:
         "effort",
     }
     assert "source page, document, image, or file" in tool.description
+    assert "Results are page excerpts." in tool.description
+    # Every control says what it does, in the schema the model is given.
+    properties = tool.definition.parameters["properties"]
+    assert set(properties) == set(tool.input_model.model_fields)
+    assert all(schema.get("description") for schema in properties.values())
     parsed = tool.input_model.model_validate(
         {
             "query": "policy",
@@ -88,6 +95,17 @@ def test_web_search_schema_exposes_provider_neutral_controls() -> None:
         tool.input_model.model_validate(
             {"query": "q", "include_domains": ["a.example"], "exclude_domains": ["a.example"]}
         )
+
+
+def test_knowledge_base_tool_states_its_mechanics_only() -> None:
+    # Workspaces are created at runtime and each request selects its own, while a
+    # tool definition is provider prefix-cache input the Run pins at acceptance. The
+    # declaration therefore takes no input a workspace name or content could enter by.
+    assert inspect.signature(knowledge_base_search_declaration).parameters == {}
+    description = knowledge_base_search_declaration().description
+
+    assert "Search the knowledge-base workspaces selected for this conversation" in description
+    assert "Each passage it returns names the document it came from." in description
 
 
 async def test_both_search_tools_report_the_query_as_their_subject_live() -> None:

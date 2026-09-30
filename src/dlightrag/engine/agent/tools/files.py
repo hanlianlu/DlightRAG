@@ -327,7 +327,8 @@ def read_declaration(*, public_url: bool) -> ToolDeclaration:
     url_enabled = public_url
     description = (
         "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
-        "anonymous public HTTP(S) url. URL reads accept only optional http.user_agent, "
+        "anonymous public HTTP(S) url. A url read returns the page's full content in "
+        "bounded windows. URL reads accept only optional http.user_agent, "
         "http.accept, and http.accept_language representation preferences; continue "
         "with the returned resource_id and cursor."
         if url_enabled

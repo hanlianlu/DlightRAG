@@ -43,12 +43,37 @@ class SearchInput(BaseModel):
 class WebSearchInput(SearchInput):
     """Provider-neutral controls accepted by every configured search adapter."""
 
-    max_results: int = Field(default=10, ge=1, le=20)
-    include_domains: tuple[str, ...] = Field(default=(), max_length=20)
-    exclude_domains: tuple[str, ...] = Field(default=(), max_length=20)
-    start_date: str | None = None
-    end_date: str | None = None
-    effort: Literal["fast", "balanced", "deep"] = "balanced"
+    max_results: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="Number of results; each adds its page's passages to your context.",
+    )
+    include_domains: tuple[str, ...] = Field(
+        default=(),
+        max_length=20,
+        description="Limits results to these hostnames, such as who.int; no scheme or path.",
+    )
+    exclude_domains: tuple[str, ...] = Field(
+        default=(),
+        max_length=20,
+        description="Leaves out results from these hostnames; no scheme or path.",
+    )
+    start_date: str | None = Field(
+        default=None,
+        description="Limits results to pages published on or after this date (YYYY-MM-DD).",
+    )
+    end_date: str | None = Field(
+        default=None,
+        description="Limits results to pages published on or before this date (YYYY-MM-DD).",
+    )
+    effort: Literal["fast", "balanced", "deep"] = Field(
+        default="balanced",
+        description=(
+            "Search depth: fast is quickest, deep is most thorough at more latency and "
+            "cost, and balanced sits between."
+        ),
+    )
 
     @field_validator("include_domains", "exclude_domains")
     @classmethod
@@ -83,9 +108,13 @@ class WebSearchInput(SearchInput):
 
 
 def knowledge_base_search_declaration() -> ToolDeclaration:
+    # Mechanics only. Workspaces are created at runtime and each request selects its
+    # own, while a tool definition is provider prefix-cache input the Run pins at
+    # acceptance, so no workspace name or content claim belongs in this text.
     return ToolDeclaration(
         "search_knowledge_base",
-        "Search the indexed knowledge base for one concrete unresolved fact.",
+        "Search the knowledge-base workspaces selected for this conversation. Each "
+        "passage it returns names the document it came from.",
         SearchInput,
     )
 
@@ -108,7 +137,8 @@ def web_search_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         "search_web",
         "Search the open web for one concrete unresolved or current fact, source page, "
-        "document, image, or file. Use it before claiming open-web search is unavailable.",
+        "document, image, or file. Results are page excerpts. Use it before claiming "
+        "open-web search is unavailable.",
         WebSearchInput,
         contract_version=2,
     )
