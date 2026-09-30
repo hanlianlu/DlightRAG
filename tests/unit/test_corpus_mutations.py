@@ -677,6 +677,27 @@ def test_a_local_run_must_list_exactly_its_staged_files_in_order() -> None:
             )
 
 
+def test_tracked_documents_carry_the_status_lightrag_status_reads() -> None:
+    """LightRAG reports a status as an enum or text, on an object or a mapping."""
+    from lightrag.base import DocStatus
+
+    from dlightrag.application.corpus_admin.mutations import _public_upstream_state
+
+    rows = _public_upstream_state(
+        {
+            "doc-a": SimpleNamespace(status=DocStatus.PROCESSED),
+            "doc-b": {"status": " Failed "},
+            "doc-c": {},
+        }
+    )
+
+    assert rows == [
+        {"document_id": "doc-a", "status": "processed"},
+        {"document_id": "doc-b", "status": "failed"},
+        {"document_id": "doc-c", "status": "unknown"},
+    ]
+
+
 def test_public_result_is_bounded_and_drops_paths_and_diagnostics() -> None:
     documents = [
         {

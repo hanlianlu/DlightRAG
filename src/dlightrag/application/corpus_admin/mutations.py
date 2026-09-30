@@ -42,6 +42,7 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
     reserved_corpus_name,
 )
 from dlightrag.engine.rag.corpus.ingestion.uploads import safe_upload_relative_path
+from dlightrag.engine.rag.lightrag.status import lightrag_status
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import CorpusMaintenanceStore, WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
@@ -1064,11 +1065,7 @@ class CorpusMutationExecutor(RunExecutor):
         checkpoint: dict[str, Any],
     ) -> Mapping[str, Any]:
         """Settle one already-handed-off cohort without replaying replace deletion."""
-        states = {
-            str(item.get("document_id") or ""): str(item.get("status") or "").lower()
-            for item in checkpoint.get("upstream_documents") or ()
-            if isinstance(item, Mapping) and item.get("document_id")
-        }
+        states = _tracked_states(checkpoint)
         if any(status in _TRACKED_PIPELINE_ACTIVE_STATUSES for status in states.values()):
             # Another LightRAG queue owner is still advancing this cohort. Calling
             # the public sweep here can register a pending follow-up sweep that
@@ -1082,11 +1079,7 @@ class CorpusMutationExecutor(RunExecutor):
             refreshed = await runtime.lightrag.aget_docs_by_track_id(checkpoint["track_id"])
             checkpoint["upstream_documents"] = _public_upstream_state(refreshed)
             await session.checkpoint_state(checkpoint, phase="reconciled")
-            states = {
-                str(item.get("document_id") or ""): str(item.get("status") or "").lower()
-                for item in checkpoint["upstream_documents"]
-                if isinstance(item, Mapping) and item.get("document_id")
-            }
+            states = _tracked_states(checkpoint)
         if not states or any(status not in {"processed", "failed"} for status in states.values()):
             raise _TrackedPipelineNotSettled
         await session.enter_phase("finalizing_tracked_documents")
@@ -1852,20 +1845,22 @@ def _staged_file_present(item: Mapping[str, Any]) -> bool:
 
 
 def _public_upstream_state(value: Any) -> list[dict[str, str]]:
+    """The documents LightRAG tracks for a Run, each with its normalized status."""
     if not isinstance(value, Mapping):
         return []
-    rows: list[dict[str, str]] = []
-    for doc_id, status in list(value.items())[:_MAX_RESULT_DOCUMENTS]:
-        raw = (
-            status.get("status") if isinstance(status, Mapping) else getattr(status, "status", None)
-        )
-        rows.append(
-            {
-                "document_id": str(doc_id),
-                "status": str(getattr(raw, "value", raw) or "unknown"),
-            }
-        )
-    return rows
+    return [
+        {"document_id": str(doc_id), "status": lightrag_status(status) or "unknown"}
+        for doc_id, status in list(value.items())[:_MAX_RESULT_DOCUMENTS]
+    ]
+
+
+def _tracked_states(checkpoint: Mapping[str, Any]) -> dict[str, str]:
+    """Each tracked document's status, from the checkpoint's upstream state."""
+    return {
+        str(item["document_id"]): str(item.get("status") or "")
+        for item in checkpoint.get("upstream_documents") or ()
+        if isinstance(item, Mapping) and item.get("document_id")
+    }
 
 
 def _document_outcomes(result: Any) -> list[dict[str, Any]]:
