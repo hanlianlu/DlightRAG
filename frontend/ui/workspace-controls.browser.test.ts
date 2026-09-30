@@ -566,6 +566,38 @@ it('preserves server-validated active and primary beyond the first display page'
   expect(scope.querySelector('#workspace-label')?.textContent).to.equal('All workspaces (3)');
 });
 
+it('turns All workspaces off again, back to the default workspace alone', async () => {
+  workspaceStore.init(
+    [
+      {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
+      {workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed'},
+    ],
+    ['finance'],
+    'finance',
+    null,
+    null,
+    null,
+    'default',
+  );
+  const scope = mountScope();
+  await scope.updateComplete;
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')!.click();
+  await scope.updateComplete;
+  const all = scope.querySelector<HTMLButtonElement>('[data-workspace-all]')!;
+
+  all.click();
+  await scope.updateComplete;
+  expect(workspaceStore.active).to.deep.equal(['default', 'finance']);
+  expect(all.getAttribute('aria-pressed')).to.equal('true');
+
+  all.click();
+  await scope.updateComplete;
+  expect(workspaceStore.active).to.deep.equal(['default']);
+  expect(workspaceStore.primary).to.equal('default');
+  expect(all.getAttribute('aria-pressed')).to.equal('false');
+  expect(scope.querySelector('#workspace-label')?.textContent).to.equal('Default');
+});
+
 it('resumes accepted corpus reset tracking when Files reopens and refreshes its snapshot', async () => {
   let statusReads = 0;
   let resetAccepted = false;

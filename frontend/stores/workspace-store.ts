@@ -132,14 +132,28 @@ export class WorkspaceStore extends Store {
   }
 
   selectAll(): void {
-    const knownIds = this.#known.length > 0
-      ? [...this.#known]
-      : this.#records.map((record) => record.workspace);
+    const knownIds = this.#allWorkspaces();
     if (knownIds.length === 0) return;
     this.#active = knownIds;
     this.#primary = this.#defaultWorkspace();
     this.#syncCookies();
     this.changed();
+  }
+
+  /** "All workspaces" as a switch: selecting it again leaves only the default one. */
+  toggleAll(): void {
+    const knownIds = this.#allWorkspaces();
+    if (knownIds.length > 0 && knownIds.every((workspace) => this.#active.includes(workspace))) {
+      this.select(this.#defaultWorkspace());
+      return;
+    }
+    this.selectAll();
+  }
+
+  #allWorkspaces(): string[] {
+    return this.#known.length > 0
+      ? [...this.#known]
+      : this.#records.map((record) => record.workspace);
   }
 
   /** Restore an earlier composer scope after an editable submission failure. */

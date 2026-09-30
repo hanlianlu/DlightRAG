@@ -178,14 +178,14 @@ export class DlWorkspaceScope extends LightElement {
 
   #allOption(): TemplateResult {
     const selected = this.#allSelected;
-    const selectAll = (event: Event): void => {
+    const toggleAll = (event: Event): void => {
       event.stopPropagation();
-      this.handles.workspaces.selectAll();
+      this.handles.workspaces.toggleAll();
     };
     return html`
       <button class="dl-popover-item ${workspaceStyles.workspacePopoverAll}" type="button"
               data-workspace-choice data-workspace-all="true"
-              aria-pressed=${selected ? 'true' : 'false'} @click=${selectAll}>
+              aria-pressed=${selected ? 'true' : 'false'} @click=${toggleAll}>
         ${this.#check(selected)}${msg('All workspaces', {id: 'workspaceScope.all'})}
       </button>
     `;
