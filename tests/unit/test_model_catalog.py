@@ -14,6 +14,7 @@ from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import CatalogueEntry
 from dlightrag.engine.ai.fingerprints import (
     ModelEndpointFingerprint,
+    model_endpoint_fingerprint,
     normalized_endpoint_fingerprint,
 )
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
@@ -267,6 +268,35 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
     assert profile.reasoning is not None
     assert profile.reasoning.format == reasoning_format
     assert profile.reasoning.levels.as_dict() == reasoning_levels
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "endpoint"),
+    [
+        ("openai", "gpt-6.1-sol", "https://api.openai.com/v1"),
+        ("anthropic", "claude-opus-5-5", "https://api.anthropic.com/"),
+        ("gemini", "gemini-3.8-flash", "https://generativelanguage.googleapis.com"),
+    ],
+)
+def test_a_provider_default_endpoint_written_out_resolves_its_catalogue_entry(
+    provider: str, model: str, endpoint: str
+) -> None:
+    written = catalog.resolve_model_profile(model_endpoint_fingerprint(provider, model, endpoint))
+
+    assert written == catalog.resolve_model_profile(
+        model_endpoint_fingerprint(provider, model, None)
+    )
+    assert written.reasoning is not None and not written.reasoning.best_effort
+
+
+def test_another_endpoint_of_a_catalogued_model_stays_uncatalogued() -> None:
+    azure = model_endpoint_fingerprint(
+        "openai", "gpt-6.1-sol", "https://example.openai.azure.com/openai/v1"
+    )
+
+    profile = catalog.resolve_model_profile(azure)
+
+    assert profile.reasoning is not None and profile.reasoning.best_effort
 
 
 def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> None:

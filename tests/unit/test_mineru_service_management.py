@@ -158,11 +158,19 @@ def _title_aided_env(tmp_path: Path, home: Path, env_file_text: str) -> dict[str
             "false",
             {"reasoning": {"enabled": False}},
         ),
+        ("https://api.openai.com/v1", "gpt-6.1-sol", "false", {"reasoning_effort": "low"}),
         ("https://api.openai.com/v1", "gpt-uncatalogued", "false", {"reasoning_effort": "none"}),
         ("https://api.moonshot.ai/v1", "kimi-k3", "false", {"reasoning_effort": "low"}),
         ("https://api.deepseek.com", "deepseek-flash", "true", {}),
     ],
-    ids=["deepseek", "openrouter", "openai-uncatalogued", "cannot-stop", "thinking-on"],
+    ids=[
+        "deepseek",
+        "openrouter",
+        "openai-catalogued",
+        "openai-uncatalogued",
+        "cannot-stop",
+        "thinking-on",
+    ],
 )
 def test_title_aided_script_stores_the_catalogue_reasoning_switch(
     tmp_path: Path, endpoint: str, model: str, enable_thinking: str, extra_body: dict[str, object]

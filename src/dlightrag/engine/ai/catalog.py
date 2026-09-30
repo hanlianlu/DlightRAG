@@ -28,6 +28,15 @@ from dlightrag.engine.ai.settings import reject_url_credentials
 _logger = logging.getLogger(__name__)
 
 _ROOT_KEYS = frozenset({"models"})
+#: Where each chat provider's SDK sends a request that names no base URL: an entry
+#: with a null base URL describes that endpoint, however a configuration names it.
+_SDK_DEFAULT_ENDPOINTS: Mapping[str, str | None] = MappingProxyType(
+    {
+        "openai": normalized_endpoint_fingerprint("https://api.openai.com/v1"),
+        "anthropic": normalized_endpoint_fingerprint("https://api.anthropic.com"),
+        "gemini": normalized_endpoint_fingerprint("https://generativelanguage.googleapis.com"),
+    }
+)
 _MODEL_KEYS = frozenset({"provider", "model", "base_url", "profile"})
 _PROFILE_KEYS = frozenset(
     {
@@ -79,7 +88,15 @@ class CatalogueSnapshot:
     overlay_fingerprints: frozenset[ModelEndpointFingerprint]
 
     def resolve(self, fingerprint: ModelEndpointFingerprint) -> ModelProfile | None:
-        return self.profiles.get(fingerprint)
+        profile = self.profiles.get(fingerprint)
+        if (
+            profile is None
+            and fingerprint.endpoint_fingerprint is not None
+            and fingerprint.endpoint_fingerprint == _SDK_DEFAULT_ENDPOINTS.get(fingerprint.provider)
+        ):
+            # The provider's own default endpoint, written out, is the one listed as null.
+            profile = self.profiles.get(replace(fingerprint, endpoint_fingerprint=None))
+        return profile
 
 
 def _entry_order(entry: CatalogueEntry) -> tuple[str, str, str]:

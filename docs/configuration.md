@@ -408,7 +408,10 @@ Further role changes are explicit, not automatic.
 ### Model Catalogue And Reasoning
 
 Model profiles are keyed by normalized `provider`, exact `model`, and normalized
-`base_url`. Resolution order is:
+`base_url`. An entry with a null `base_url` describes the provider's default
+endpoint, so it also matches a model that writes that endpoint out
+(`https://api.openai.com/v1`, `https://api.anthropic.com`, or
+`https://generativelanguage.googleapis.com`). Resolution order is:
 
 ```text
 PostgreSQL runtime overlay > models.catalogue > built-in catalogue > fallback
