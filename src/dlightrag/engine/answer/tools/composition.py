@@ -76,7 +76,7 @@ from dlightrag.engine.answer.tools.subagents import (
     subagent_tools,
 )
 
-#: What a Run's workspace holds, stated on the product-neutral tools that look into it.
+#: What a Run's workspace holds, stated once on the shell and once on the listing tool.
 #: The Session's notes are the one plane a Run is handed (ADR 0022); an earlier Run's
 #: Artifact and a knowledge-base document are reached by handle or by search instead.
 _WORKSPACE_FACT = (
@@ -148,8 +148,8 @@ def research_tool_declarations(
                 _stating(bash_declaration(), _WORKSPACE_FACT),
                 edit_declaration(),
                 write_declaration(),
-                _stating(grep_declaration(), _WORKSPACE_FACT),
-                _stating(find_declaration(), _WORKSPACE_FACT),
+                grep_declaration(),
+                find_declaration(),
                 _stating(ls_declaration(), _WORKSPACE_FACT),
             )
         )
@@ -271,23 +271,14 @@ def compose_research_tools(
         ),
         "edit": lambda: edit_tool(cast(ExecutionEnvironment, environment), access, spill=spill),
         "write": lambda: write_tool(cast(ExecutionEnvironment, environment), access),
-        "grep": lambda: _stating(
-            grep_tool(
-                cast(ExecutionEnvironment, environment),
-                access,
-                search_toolchain=toolchain,
-                output_stage_factory=output_stage_factory,
-            ),
-            _WORKSPACE_FACT,
+        "grep": lambda: grep_tool(
+            cast(ExecutionEnvironment, environment),
+            access,
+            search_toolchain=toolchain,
+            output_stage_factory=output_stage_factory,
         ),
-        "find": lambda: _stating(
-            find_tool(
-                cast(ExecutionEnvironment, environment),
-                access,
-                search_toolchain=toolchain,
-                spill=spill,
-            ),
-            _WORKSPACE_FACT,
+        "find": lambda: find_tool(
+            cast(ExecutionEnvironment, environment), access, search_toolchain=toolchain, spill=spill
         ),
         "ls": lambda: _stating(
             ls_tool(cast(ExecutionEnvironment, environment), access), _WORKSPACE_FACT

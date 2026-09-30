@@ -107,12 +107,14 @@ class ReadWithoutUrlArgs(BaseModel):
         description="Workspace-relative path to read.",
     )
     resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
-    offset: int | None = Field(default=None, ge=1, description="1-based line offset.")
+    offset: int | None = Field(
+        default=None, ge=1, description="1-based line offset in a workspace path."
+    )
     limit: int | None = Field(
         default=None,
         ge=1,
         le=100_000,
-        description="Maximum lines to return.",
+        description="Maximum lines to return from a workspace path.",
     )
     focus: str | None = Field(
         default=None,
@@ -152,12 +154,14 @@ class ReadArgs(BaseModel):
         default=None,
         description="Optional representation headers for the first direct URL acquisition.",
     )
-    offset: int | None = Field(default=None, ge=1, description="1-based line offset.")
+    offset: int | None = Field(
+        default=None, ge=1, description="1-based line offset in a workspace path."
+    )
     limit: int | None = Field(
         default=None,
         ge=1,
         le=100_000,
-        description="Maximum lines to return.",
+        description="Maximum lines to return from a workspace path.",
     )
     focus: str | None = Field(
         default=None,

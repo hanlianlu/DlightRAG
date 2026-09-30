@@ -139,8 +139,9 @@ def test_research_acceptance_and_execution_use_identical_declarations(
 def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
     """All 24 `ls`, `find`, and `grep` calls of 34 live Research Runs met an empty
     workspace, some hunting knowledge-base documents as files, and follow-ups looked
-    for an earlier Artifact at its old path. The tools that look into the workspace
-    say what it holds; the tools themselves stay product-neutral."""
+    for an earlier Artifact at its old path. The shell and the listing tool say what it
+    holds, once each, since the model reads every description; the tools themselves stay
+    product-neutral."""
     declared = {
         tool.name: tool
         for tool in research_tool_declarations(
@@ -148,7 +149,9 @@ def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
         )
     }
 
-    for name in ("bash", "ls", "find", "grep"):
+    for name in ("find", "grep"):
+        assert "starts with only" not in declared[name].description
+    for name in ("bash", "ls"):
         description = declared[name].description
         assert (
             f"starts with only `{SESSION_NOTE_DIRECTORY}/` from earlier Runs of this "
