@@ -96,8 +96,8 @@ def _attachment_inline_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
     requires. No client-side input shape avoids that: a dict, a validated model
     and a ``by_alias`` dump all serialize the same way. Multimodal function
     responses are a known open upstream defect (googleapis/python-genai#2268),
-    so the pixels ride as ordinary parts, which do get the wire names. Revisit
-    this once the nested projection round-trips.
+    so the pixels ride as ordinary parts, which do get the wire name
+    ``inlineData``. Revisit this once the nested projection round-trips.
     """
     parts: list[dict[str, Any]] = []
     for attachment in message.get("attachments") or ():

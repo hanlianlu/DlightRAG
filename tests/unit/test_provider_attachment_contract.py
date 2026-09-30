@@ -1809,20 +1809,12 @@ async def test_gemini_answers_a_whole_tool_batch_in_one_matched_turn() -> None:
     answers = contents[2]["parts"]
     responses = [part["functionResponse"] for part in answers if "functionResponse" in part]
     assert [response["id"] for response in responses] == ["call-1", "call-2"]
-    # The image rides as an ordinary part of the answering turn, and the wire
-    # keeps camelCase because only top-level parts get the alias conversion.
-    assert [part for part in answers if "inlineData" in part] == [
-        {
-            "inlineData": {
-                "data": base64.b64encode(PAGE_ONE).decode(),
-                "mimeType": "image/png",
-            }
-        },
-        {
-            "inlineData": {
-                "data": base64.b64encode(PAGE_TWO).decode(),
-                "mimeType": "image/png",
-            }
-        },
+    # The image rides as an ordinary part of the answering turn, under the wire
+    # name inlineData. google-genai passes the blob inside through as given, and
+    # the API reads either spelling of its fields.
+    blobs = [part["inlineData"] for part in answers if "inlineData" in part]
+    assert [(blob["data"], blob.get("mimeType", blob.get("mime_type"))) for blob in blobs] == [
+        (base64.b64encode(PAGE_ONE).decode(), "image/png"),
+        (base64.b64encode(PAGE_TWO).decode(), "image/png"),
     ]
     assert _wire_images("gemini", capture.body) == _expected_payloads(2)
