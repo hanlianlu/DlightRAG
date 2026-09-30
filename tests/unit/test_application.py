@@ -41,6 +41,7 @@ from dlightrag.engine.answer.execution.input import (
     validate_active_answer_input,
 )
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
+from dlightrag.engine.dependencies import ParserUnavailableError, ProviderUnavailableError
 from dlightrag.engine.rag.workspace.pool import WorkspaceUnavailableError
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
@@ -753,6 +754,45 @@ async def test_a_failed_default_workspace_degrades_instead_of_closing(
     started = parts.recorder.started()
     assert "coordinator:start" in started
     assert "web_conversations:start_retention" in started
+
+
+@pytest.mark.parametrize(
+    ("error", "warning"),
+    [
+        pytest.param(ProviderUnavailableError(), "Model providers unavailable", id="providers"),
+        pytest.param(ParserUnavailableError(), "Document parser unavailable", id="parser"),
+    ],
+)
+async def test_a_default_workspace_down_with_another_dependency_degrades_naming_it(
+    test_config: DlightragConfig, error: Exception, warning: str
+) -> None:
+    """Building a workspace can reach more than corpus storage: its image probe asks
+    the model provider. A transient outage of any dependency degrades startup and
+    names that dependency; corpus storage itself stays healthy."""
+    parts = _Parts()
+    parts.pool.acquire_error = error
+    application = parts.application(test_config)
+
+    await application.astart()
+
+    assert application.health.is_closed is False
+    assert application.health.warnings == (warning,)
+    assert application.health.components["corpus_storage"]["status"] == "healthy"
+    assert application.health.is_ready is True
+    assert "coordinator:start" in parts.recorder.started()
+
+
+async def test_a_default_workspace_that_fails_for_good_closes_startup(
+    test_config: DlightragConfig,
+) -> None:
+    parts = _Parts()
+    parts.pool.acquire_error = RuntimeError("embedding model is misconfigured")
+    application = parts.application(test_config)
+
+    with pytest.raises(RuntimeError, match="misconfigured"):
+        await application.astart()
+
+    assert application.health.is_closed is True
 
 
 async def test_transient_startup_faults_warn_without_starting_the_run_coordinator(

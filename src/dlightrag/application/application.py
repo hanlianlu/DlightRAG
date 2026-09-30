@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from dlightrag.application.retrieval import RetrievalService
     from dlightrag.application.runs import RunService
     from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.engine.dependencies import DependencyComponent
 
 logger = logging.getLogger(__name__)
 
@@ -205,12 +206,16 @@ class Application:
             except BaseException:
                 logger.warning("Application cleanup failed during startup", exc_info=True)
             raise
-        if degraded is not None or not corpora_ready:
+        if degraded == "corpus_storage" or not corpora_ready:
             components.health.mark_component_degraded("corpus_storage")
-            if degraded is not None:
-                logger.error("DlightRAG started with the default corpus unavailable")
         else:
             components.health.mark_component_healthy("corpus_storage")
+        if degraded is not None:
+            components.health.mark_component_degraded(degraded)
+            logger.error(
+                "DlightRAG started with the default workspace unavailable: %s is unavailable",
+                degraded,
+            )
         if not catalogue_ready:
             components.health.mark_component_degraded("providers")
         if self._runs_ready:
@@ -316,8 +321,14 @@ class Application:
             return False
         return True
 
-    async def _warm_default_workspace(self) -> str | None:
-        """Warm the default workspace; return the detail that degrades startup."""
+    async def _warm_default_workspace(self) -> DependencyComponent | None:
+        """Warm the default workspace; return the dependency whose outage degrades startup.
+
+        Building a workspace reaches corpus storage and, when it probes image
+        embedding, the model provider: a transient outage of either is no reason
+        to refuse to start, while any other failure is.
+        """
+        from dlightrag.engine.dependencies import classify_transient_dependency
         from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
         from .errors import StorageSchemaError
@@ -328,15 +339,18 @@ class Application:
         except CorpusSchemaError as exc:
             raise StorageSchemaError(str(exc)) from exc
         except Exception as exc:
-            from dlightrag.engine.dependencies import classify_transient_dependency
-
-            if classify_transient_dependency(exc) != "corpus_storage":
+            component = classify_transient_dependency(exc)
+            if component is None:
                 raise
             logger.warning(
                 "Failed to warm the default workspace",
-                extra={"workspace": workspace, "error_type": type(exc).__name__},
+                extra={
+                    "workspace": workspace,
+                    "error_type": type(exc).__name__,
+                    "component": component,
+                },
             )
-            return "Corpus storage unavailable"
+            return component
         self._components.health.mark_component_healthy("corpus_storage")
         logger.info("Warmed up default workspace service '%s'", workspace)
         return None

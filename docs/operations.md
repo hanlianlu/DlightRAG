@@ -109,6 +109,10 @@ Workspaces in a running deployment. Neither delegates to the other.
   Use `GET /health` for I/O-free liveness and the bounded corpus/parser/provider
   degradation view. A corpus or provider outage does not remove readiness:
   accepted eligible Runs defer durably while their lane's admission limit has room.
+  Neither does it stop startup: a default workspace that cannot be built
+  because corpus storage, the model provider (its image embedding probe), or
+  the parser is briefly unavailable starts the process degraded, with that
+  component degraded in `GET /health`; any other failure still refuses to start.
 - A process whose Run cancellation listener is not ready within 30 seconds of
   startup (PostgreSQL LISTEN or the first cancel-pending rescan keeps failing)
   reports not ready, with `cancellation_listener` degraded, and keeps waiting:
