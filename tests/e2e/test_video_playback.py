@@ -4,7 +4,7 @@
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import Page, Route, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -112,15 +112,29 @@ def _open_card(page: Page) -> None:
     page.wait_for_selector("[data-video-card] [data-video-play]", timeout=10000)
 
 
+def _box_in(card: Locator, element: Locator) -> dict[str, float]:
+    """``element``'s box relative to ``card``, both measured now."""
+    card_box = card.bounding_box()
+    box = element.bounding_box()
+    assert card_box is not None and box is not None
+    return {
+        "x": box["x"] - card_box["x"],
+        "y": box["y"] - card_box["y"],
+        "width": box["width"],
+        "height": box["height"],
+    }
+
+
 def test_native_space_and_enter_activate_play_once(page: Page) -> None:
     calls = _install_card(page)
     _open_card(page)
     play = page.locator("[data-video-card] [data-video-play]")
     expect(play).to_have_count(1)
     assert calls == []
-    media_box = page.locator("[data-video-media]").bounding_box()
+    card = page.locator("[data-video-card]")
+    media_box = _box_in(card, page.locator("[data-video-media]"))
     play_box = play.bounding_box()
-    assert media_box is not None and play_box is not None
+    assert play_box is not None
     assert media_box["height"] >= 200
     assert play_box["width"] == pytest.approx(media_box["width"], abs=1)
     assert play_box["height"] == pytest.approx(media_box["height"], abs=1)
@@ -136,8 +150,9 @@ def test_native_space_and_enter_activate_play_once(page: Page) -> None:
     page.locator("[data-video-card] iframe[data-external-video]").wait_for(timeout=10000)
     assert len(calls) == 1
     expect(play).to_have_count(0)
-    frame_box = page.locator("[data-external-video]").bounding_box()
-    assert frame_box is not None
+    # Measured against the card at the same moment: content that settles above the
+    # card while the frame loads moves the whole card, not the frame within it.
+    frame_box = _box_in(card, page.locator("[data-external-video]"))
     for dimension in ("x", "y", "width", "height"):
         assert frame_box[dimension] == pytest.approx(media_box[dimension], abs=1)
 
