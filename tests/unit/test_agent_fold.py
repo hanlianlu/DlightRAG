@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Semantic Entry fold and complete exchange boundaries."""
 
+import json
 from datetime import UTC, datetime
 
 from dlightrag.engine.agent.session.effects import ToolResultEntry
@@ -15,6 +16,7 @@ from dlightrag.engine.agent.session.fold import (
     WorkingContextProjection,
     conversation_messages,
     exchange_starts,
+    fold_assistant_message,
     fold_entries,
     host_turn_starts,
     project_session_messages,
@@ -44,6 +46,32 @@ def _result(session_id: SessionId, call_id: str, source: int) -> ToolResultMessa
         replay_policy="never",
         attempt_id=None,
         effective_input_digest="b" * 64,
+    )
+
+
+def test_a_replayed_turn_carries_its_provider_state_in_one_key_order() -> None:
+    """A Run holds provider state in the provider's order, a reload in jsonb's order."""
+    session_id, entry_id = SessionId.new(), EntryId.new()
+
+    def turn(provider_state: dict[str, object]) -> AssistantMessageEntry:
+        return AssistantMessageEntry(
+            entry_id=entry_id,
+            session_id=session_id,
+            timestamp=datetime(2026, 9, 30, tzinfo=UTC),
+            content="answer",
+            stop_reason="stop",
+            provider_state=provider_state,
+        )
+
+    in_memory = turn(
+        {"reasoning_details": [{"type": "reasoning.text", "text": "t", "format": "x"}], "a": 1}
+    )
+    reloaded = turn(
+        {"a": 1, "reasoning_details": [{"text": "t", "type": "reasoning.text", "format": "x"}]}
+    )
+
+    assert json.dumps(fold_assistant_message(in_memory)) == json.dumps(
+        fold_assistant_message(reloaded)
     )
 
 

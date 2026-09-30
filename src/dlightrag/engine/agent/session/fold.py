@@ -63,8 +63,23 @@ def fold_assistant_message(entry: AssistantMessageEntry) -> dict[str, Any]:
     if entry.tool_calls:
         message["tool_calls"] = [fold_tool_call(call) for call in entry.tool_calls]
     if entry.provider_state is not None:
-        message["provider_state"] = entry.provider_state
+        message["provider_state"] = _sorted_keys(entry.provider_state)
     return message
+
+
+def _sorted_keys(value: Any) -> Any:
+    """The same value with every mapping's keys sorted and every list kept in order.
+
+    A Session read back from PostgreSQL returns provider state, such as reasoning
+    details or thinking blocks, in jsonb's key order rather than the order the Run
+    that made the turn still holds, so a replayed turn is the same bytes either way,
+    as ``tool_call_message`` makes a call's arguments.
+    """
+    if isinstance(value, Mapping):
+        return {key: _sorted_keys(value[key]) for key in sorted(value)}
+    if isinstance(value, list | tuple):
+        return [_sorted_keys(item) for item in value]
+    return value
 
 
 def fold_tool_message(entry: ToolResultMessageEntry) -> dict[str, Any]:
