@@ -912,7 +912,10 @@ Stable top-level Retrieval terminal error kinds are `retrieval_timeout`,
 `retrieval_context_policy_changed`, `retrieval_input_incompatible`, and
 `retrieval_input_missing`. `run_abandoned` is common to both durable Query kinds.
 `dependency_unavailable` ends any Run, Corpus Mutations included, whose
-dependency outages already deferred it ten times.
+dependency outages already deferred it ten times. A Corpus Mutation defers when
+the document parser is unavailable, once every document it attempted has
+settled; resumed, it retries only the documents that did not become ready (see
+[Parser Services](operations.md#parser-services)).
 
 Internal exception text and schema detail are not public.
 

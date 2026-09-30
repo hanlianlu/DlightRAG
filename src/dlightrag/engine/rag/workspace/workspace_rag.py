@@ -27,6 +27,7 @@ from lightrag.constants import PARSED_DIR_NAME
 from dlightrag.engine.ai.embedding import MultimodalEmbedder, create_embedding_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.dependencies import ParserUnavailableError
 from dlightrag.engine.rag.corpus.contracts import (
     DocStatusLookup,
     IngestDocument,
@@ -837,12 +838,18 @@ class WorkspaceRag:
         track_id: str | None = None,
         source_options: SourceRetrievalOptions | None = None,
     ) -> dict[str, Any]:
-        """Download remote objects into ephemeral parser batches and ingest them."""
+        """Download remote objects into ephemeral parser batches and ingest them.
+
+        A window the parser service could not take still settles, and every later
+        window is still ingested, so all of the source's documents are tracked
+        before the outage is raised as ``ParserUnavailableError``.
+        """
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
         from dlightrag.engine.ai.concurrency import bounded_map
 
         resume_from_window = max(0, int(resume_from_window))
+        parser_outage = False
         processed = 0
         results: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -1028,14 +1035,18 @@ class WorkspaceRag:
                         )
                     prepared_items = replacement_items
 
-                batch_result = await self._ingestion_engine.aingest_files(
-                    prepared_items,
-                    replace=replace,
-                    title=title,
-                    author=author,
-                    metadata=metadata,
-                    track_id=track_id,
-                )
+                try:
+                    batch_result = await self._ingestion_engine.aingest_files(
+                        prepared_items,
+                        replace=replace,
+                        title=title,
+                        author=author,
+                        metadata=metadata,
+                        track_id=track_id,
+                    )
+                except ParserUnavailableError:
+                    parser_outage = True
+                    continue
 
                 processed += int(batch_result.get("processed") or 0)
                 results.extend(batch_result.get("results") or [])
@@ -1062,6 +1073,8 @@ class WorkspaceRag:
                 if not retain_source_files:
                     await asyncio.to_thread(_remove_remote_parser_sources, prepared_items)
 
+        if parser_outage:
+            raise ParserUnavailableError()
         if not saw_documents:
             return {"processed": 0, "errors": [], "results": []}
         return {"processed": processed, "errors": errors, "results": results}
@@ -1681,8 +1694,10 @@ class WorkspaceRag:
         preflight, it first replays the documents already admitted, as a
         one-at-a-time retry would; raised while a pass prepares, runs, or
         settles its documents, it drops that pass's unrecorded outcomes.
-        Retrying the same cohort converges either way: a document an
-        interrupted pass committed settles from its finalization marker.
+        ``ParserUnavailableError`` from a pass, which has settled its documents,
+        ends it the same way. Retrying the same cohort converges either way: a
+        document an interrupted pass committed settles from its finalization
+        marker, and the others replay.
         """
         self._require_writer("failed-document retry")
         self._ensure_initialized()
@@ -1921,7 +1936,8 @@ class WorkspaceRag:
         replays alone, so one bad document cannot fail the others with it.
         ``RetryOutcomeUncertainError`` from any document's preparation, the
         pass, or a lone replay propagates at once, and the pass's other
-        outcomes are dropped with it.
+        outcomes are dropped with it; so does ``ParserUnavailableError`` from
+        the pass or a lone replay, since the others would meet the same outage.
         """
         outcomes: list[Mapping[str, Any] | Exception] = [_NO_RETRY_RESULT] * len(requests)
         admitted: list[tuple[int, PreparedIngestFile]] = []
@@ -1947,7 +1963,7 @@ class WorkspaceRag:
                     batch = await self._require_ingestion_engine().aingest_files(
                         [item for _index, item in admitted], replace=False, track_id=track_id
                     )
-                except RetryOutcomeUncertainError:
+                except RetryOutcomeUncertainError, ParserUnavailableError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - settled per document
                     if len(admitted) == 1:
@@ -1981,7 +1997,7 @@ class WorkspaceRag:
                         request.retry_metadata,
                         track_id=track_id,
                     )
-                except RetryOutcomeUncertainError:
+                except RetryOutcomeUncertainError, ParserUnavailableError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - settled per document
                     outcomes[index] = exc

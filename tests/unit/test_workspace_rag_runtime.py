@@ -1404,6 +1404,55 @@ class TestWorkspaceRagLightRAGMainPath:
         assert source.loaded == ["docs/e.pdf"]
         service._ingestion_engine.aingest_files.assert_awaited_once()
 
+    async def test_a_parser_outage_in_one_window_still_ingests_the_others(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every document is tracked before the outage is raised.
+
+        A Run resumes a remote ingest from the documents LightRAG tracks, so a
+        window never started would be lost to it.
+        """
+        from dlightrag.engine.dependencies import ParserUnavailableError
+
+        monkeypatch.setattr(
+            "dlightrag.engine.rag.workspace.workspace_rag._REMOTE_INGEST_BATCH_SIZE", 2
+        )
+
+        class StreamingS3Source:
+            async def aiter_documents(self, prefix: str | None = None):
+                for name in ("a", "b", "c", "d", "e"):
+                    yield SourceDocument(key=f"docs/{name}.pdf")
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                destination.write_bytes(b"%PDF-fake")
+
+            async def aclose(self) -> None:
+                return None
+
+        windows: list[list[str]] = []
+
+        async def ingest(items: list[PreparedIngestFile], **_kwargs: Any) -> dict[str, Any]:
+            windows.append([str(item.display_filename) for item in items])
+            if len(windows) == 1:
+                raise ParserUnavailableError()
+            return {"processed": len(items), "errors": [], "results": []}
+
+        service = _service(test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=ingest)
+
+        with pytest.raises(ParserUnavailableError):
+            await service.aingest(
+                source_type="s3", bucket="my-bucket", prefix="docs/", source=StreamingS3Source()
+            )
+
+        assert windows == [["a.pdf", "b.pdf"], ["c.pdf", "d.pdf"], ["e.pdf"]]
+        root = service._workspace_input_root()
+        assert not [path for path in root.rglob("*") if path.is_file()]
+
     async def test_aingest_s3_prefix_progress_includes_download_errors(
         self, test_config: DlightragConfig
     ) -> None:
@@ -4327,6 +4376,22 @@ async def test_failed_shared_pass_replays_each_document_alone(
     assert outcomes == [("doc-a", "succeeded"), ("doc-b", "failed"), ("doc-c", "succeeded")]
     assert result["succeeded"] == 2
     assert result["failed"] == 1
+
+
+async def test_a_parser_outage_ends_a_retry_without_replaying_documents_alone(
+    test_config: DlightragConfig,
+) -> None:
+    """The others would meet the same outage; the Run resumes the cohort later."""
+    from dlightrag.engine.dependencies import ParserUnavailableError
+
+    service, _metadata, doc_by_file = _local_retry_service(test_config, ["a", "b", "c"])
+    engine, passes = _fake_engine(doc_by_file, fail=lambda _doc_ids: ParserUnavailableError())
+    service._ingestion_engine = engine  # type: ignore[assignment]
+
+    with pytest.raises(ParserUnavailableError):
+        await service.aretry_failed_docs()
+
+    assert passes == [["doc-a", "doc-b", "doc-c"]]
 
 
 async def test_retry_reads_a_document_after_the_replay_that_may_retire_it(

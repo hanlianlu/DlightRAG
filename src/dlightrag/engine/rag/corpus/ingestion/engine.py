@@ -217,6 +217,11 @@ class UnifiedIngestionEngine:
         enqueue can mix native DOCX parsing and MinerU PDF/image parsing.
         DlightRAG keeps only the product-layer metadata and sidecar vector
         overrides around that native batch pipeline.
+
+        A document that fails is reported in ``errors``, except one the parser
+        service could not take: once every document of the batch has settled,
+        that outage is raised as ``ParserUnavailableError`` for the caller to
+        retry later, since the same document may well parse then.
         """
         if not paths:
             return {"processed": 0, "errors": [], "results": []}
@@ -256,6 +261,7 @@ class UnifiedIngestionEngine:
         entries = unique_entries
 
         results_by_index: dict[int, dict[str, Any]] = {}
+        parser_outage = False
         deferred_metadata_updates: list[tuple[_PendingDocumentIngest, dict[str, Any]]] = []
         deferred_finalizations: list[_PendingDocumentIngest] = []
         to_enqueue: list[tuple[_PendingDocumentIngest, _DocumentIngestDecision]] = []
@@ -458,9 +464,15 @@ class UnifiedIngestionEngine:
                             if isinstance(error, asyncio.CancelledError):
                                 raise
                             filename = _entry_filename(entry)
-                            logger.warning(
-                                "Document finalization failed for %s", filename, exc_info=True
-                            )
+                            if isinstance(error, ParserUnavailableError):
+                                parser_outage = True
+                                logger.warning(
+                                    "The document parser was unavailable for %s", filename
+                                )
+                            else:
+                                logger.warning(
+                                    "Document finalization failed for %s", filename, exc_info=True
+                                )
                             errors.append(f"{filename}: document processing failed")
             except BaseException as error:
                 # Enqueue/process can partially create candidate rows before it
@@ -480,6 +492,10 @@ class UnifiedIngestionEngine:
                 await self._restore_cleanup_after_error(cleanup_snapshots, error)
                 raise
 
+        if parser_outage:
+            # Raised after the batch settled and released its documents: nothing
+            # of it is left in flight when the caller retries.
+            raise ParserUnavailableError()
         return {
             "processed": len(results_by_index),
             "errors": errors,

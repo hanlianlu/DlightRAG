@@ -613,6 +613,173 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
         await pg_pool.close()
 
 
+async def test_a_parser_outage_defers_a_corpus_run_that_resumes_what_it_did_not_finish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A document the parser could not take defers its Run instead of failing.
+
+    LightRAG's real pipeline records the outage for one document of a staged batch;
+    the Run defers and reports the parser unavailable. Resumed, it settles each
+    tracked document from its durable state: the one that parsed is not parsed
+    again, and the one the outage stopped is.
+    """
+    import hashlib
+    import uuid
+    from collections import Counter
+    from collections.abc import AsyncIterator
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import lightrag.pipeline as lightrag_pipeline
+
+    from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.core._pool import pg_pool
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
+    from dlightrag.application.corpus_admin.mutations import CorpusMutationExecutor
+    from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.dependencies import ParserUnavailableError
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+    from dlightrag.engine.runtime.records import Deferred, Succeeded
+
+    conn_kwargs = pg_conn_kwargs_from_env()
+    workspace = make_workspace_name("outage")
+    cfg = make_e2e_config(
+        working_dir=tmp_path / "storage", workspace=workspace, conn_kwargs=conn_kwargs
+    )
+    set_config(cfg)
+    install_fake_model_functions(monkeypatch, dim=cfg.models.embedding.dim)
+
+    parses: Counter[str] = Counter()
+    unavailable_for = {"beta.md"}
+    real_get_parser = lightrag_pipeline.get_parser
+
+    class _CountingParser:
+        """The engine LightRAG picked, with the parser down once for one document."""
+
+        def __init__(self, parser: Any) -> None:
+            self._parser = parser
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._parser, name)
+
+        async def parse(self, context: Any) -> Any:
+            name = Path(context.file_path).name
+            parses[name] += 1
+            if name in unavailable_for:
+                unavailable_for.discard(name)
+                raise ParserUnavailableError()
+            return await self._parser.parse(context)
+
+    def get_parser(*args: Any, **kwargs: Any) -> Any:
+        parser = real_get_parser(*args, **kwargs)
+        return None if parser is None else _CountingParser(parser)
+
+    monkeypatch.setattr(lightrag_pipeline, "get_parser", get_parser)
+
+    run_id = str(uuid.uuid7())
+    stage = cfg.corpus_dir_path / workspace / ".runs" / run_id
+    staged = []
+    for ordinal, (name, text) in enumerate(
+        (
+            ("alpha.md", "# Alpha\n\nThe alpha ledger balances.\n"),
+            ("beta.md", "# Beta\n\nThe beta survey closes.\n"),
+        )
+    ):
+        path = stage / "sources" / str(ordinal) / name
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding="utf-8")
+        staged.append(path)
+    payload = {
+        "action": "ingest",
+        "workspace": workspace,
+        "track_id": f"dlightrag-corpus-{run_id}",
+        "source": {
+            "source_type": "local",
+            "documents": [{"path": str(path)} for path in staged],
+            "replace": False,
+        },
+        "staged_sources": [
+            {
+                "path": str(path),
+                "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size_bytes": path.stat().st_size,
+            }
+            for path in staged
+        ],
+    }
+
+    class _Session:
+        def __init__(self, *, handoff_started: bool, checkpoint: Any = None) -> None:
+            self.prepared_input = payload
+            self.owner_id = workspace
+            self.run_id = run_id
+            self.handoff_started = handoff_started
+            self.checkpoint = checkpoint
+
+        async def checkpoint_state(self, checkpoint: Any, *, phase: Any = None) -> None:
+            self.checkpoint = dict(checkpoint)
+
+        async def begin_handoff(self, checkpoint: Any) -> None:
+            self.handoff_started = True
+            self.checkpoint = dict(checkpoint)
+
+        async def enter_phase(self, _phase: str) -> None:
+            return None
+
+    class _Maintenance:
+        @asynccontextmanager
+        async def workspace_write_gate(self, _workspace: str) -> AsyncIterator[None]:
+            yield
+
+    async def listed(_workspace: str) -> bool:
+        return True
+
+    service = await WorkspaceRag.acreate(
+        workspace_id=workspace,
+        settings=rag_settings(cfg),
+        backend=build_pg_corpus_backend(cfg),
+        scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
+        telemetry=LangfuseTelemetry(),
+    )
+    degraded: list[str] = []
+    recovered: list[str] = []
+    executor = CorpusMutationExecutor(
+        pool=cast(Any, SimpleNamespace(acquire=AsyncMock(return_value=service))),
+        maintenance=cast(Any, _Maintenance()),
+        store=cast(Any, SimpleNamespace(record_corpus_window=AsyncMock(return_value=True))),
+        corpus_root=cfg.corpus_dir_path,
+        workspace_exists=listed,
+        on_dependency_unavailable=degraded.append,
+        on_dependency_recovered=recovered.append,
+    )
+    try:
+        deferred = await executor.execute(cast(Any, _Session(handoff_started=False)))
+
+        assert isinstance(deferred, Deferred)
+        assert deferred.checkpoint["parser_unavailable_attempt"] == 1
+        assert degraded == ["parser"]
+        assert parses == {"alpha.md": 1, "beta.md": 1}
+        assert stage.is_dir()
+
+        resumed = await executor.execute(
+            cast(Any, _Session(handoff_started=True, checkpoint=dict(deferred.checkpoint)))
+        )
+
+        assert isinstance(resumed, Succeeded), resumed
+        assert [item["status"] for item in resumed.result["documents"]] == ["ready", "ready"]
+        # The document that parsed before the outage was not parsed again.
+        assert parses == {"alpha.md": 1, "beta.md": 2}
+        assert recovered == ["parser"]
+        assert not stage.exists()
+    finally:
+        if service._initialized:
+            await service.areset()
+        await service.aclose()
+        await pg_pool.close()
+
+
 async def test_reader_role_attaches_read_only_and_rejects_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

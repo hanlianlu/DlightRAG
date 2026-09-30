@@ -781,6 +781,7 @@ def _executor(
     store: Any = None,
     corpus_root: Path = _NO_CORPUS,
     workspace_exists: Any = _registered,
+    health: _Health | None = None,
 ):
     pool = SimpleNamespace(
         acquire=AsyncMock(side_effect=acquire_error, return_value=runtime),
@@ -794,8 +795,24 @@ def _executor(
         corpus_root=corpus_root,
         workspace_exists=workspace_exists,
         now=now,
+        **(
+            {
+                "on_dependency_unavailable": health.degraded.append,
+                "on_dependency_recovered": health.recovered.append,
+            }
+            if health is not None
+            else {}
+        ),
     )
     return executor, pool, store
+
+
+class _Health:
+    """The dependency components an executor reported down, and back."""
+
+    def __init__(self) -> None:
+        self.degraded: list[str] = []
+        self.recovered: list[str] = []
 
 
 def _runtime(*, tracked: dict[str, Any] | None = None) -> SimpleNamespace:
@@ -1275,6 +1292,89 @@ async def test_a_write_fence_defers_a_run_whose_outages_spent_its_deferrals() ->
 
     assert isinstance(outcome, Deferred)
     assert outcome.checkpoint["dependency_deferrals"] == MAX_DEPENDENCY_DEFERRALS
+
+
+async def test_a_parser_outage_defers_an_ingest_and_reports_the_parser(tmp_path: Path) -> None:
+    """A document the parser could not take may parse a minute later: the Run waits."""
+    from dlightrag.engine.dependencies import ParserUnavailableError
+
+    stage, payload = _staged_run(tmp_path)
+    runtime = _runtime()
+    runtime.aingest.side_effect = ParserUnavailableError()
+    health = _Health()
+    executor, _pool, _store = _executor(runtime, corpus_root=tmp_path, health=health)
+
+    outcome = await executor.execute(cast(Any, _Session(payload)))
+
+    assert isinstance(outcome, Deferred)
+    assert outcome.checkpoint["parser_unavailable_attempt"] == 1
+    assert outcome.checkpoint["dependency_deferrals"] == 1
+    assert health.degraded == ["parser"]
+    # The Run reads its stage again when it resumes.
+    assert (stage / "sources" / "0" / "report.pdf").read_bytes() == b"pdf"
+
+
+_BOTH_DOCUMENTS_READY = {
+    "retried": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "succeeded_docs": [{"doc_id": "doc-1"}, {"doc_id": "doc-2"}],
+    "failed_docs": [],
+}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _payload(
+            "replace",
+            source={"source_type": "s3", "bucket": "documents", "replace": True},
+            staged_sources=[],
+        ),
+        _payload("retry", document_ids=["doc-1", "doc-2"], selector=None),
+    ],
+    ids=["replace", "retry"],
+)
+async def test_a_destructive_run_a_parser_outage_ended_resumes_without_a_repair(
+    payload: dict[str, Any],
+) -> None:
+    """Ingestion reports the outage only after every document it attempted settled.
+
+    So the Run defers instead of waiting for a repair, and when it resumes it
+    settles each document from its durable state: the ready ones as they are,
+    the one the outage stopped by retrying it.
+    """
+    from dlightrag.engine.dependencies import ParserUnavailableError
+
+    first = _runtime()
+    first.aingest.side_effect = ParserUnavailableError()
+    first.aretry_failed_docs.side_effect = ParserUnavailableError()
+    health = _Health()
+    executor, _pool, _store = _executor(first, health=health)
+    session = _Session(payload)
+
+    deferred = await executor.execute(cast(Any, session))
+
+    assert isinstance(deferred, Deferred)
+    assert session.handoff_started is True
+    assert health.degraded == ["parser"]
+
+    resumed = _runtime(tracked={"doc-1": {"status": "processed"}, "doc-2": {"status": "failed"}})
+    resumed.aretry_failed_docs.return_value = _BOTH_DOCUMENTS_READY
+    executor, _pool, _store = _executor(resumed, health=health)
+
+    outcome = await executor.execute(
+        cast(Any, _Session(payload, handoff_started=True, checkpoint=dict(deferred.checkpoint)))
+    )
+
+    assert isinstance(outcome, Succeeded)
+    resumed.aingest.assert_not_awaited()
+    resumed.aretry_failed_docs.assert_awaited_once()
+    assert set(resumed.aretry_failed_docs.await_args.kwargs["cohort_doc_ids"]) == {
+        "doc-1",
+        "doc-2",
+    }
+    assert health.recovered == ["parser"]
 
 
 async def test_transient_dependency_deferral_uses_bounded_exponential_backoff() -> None:

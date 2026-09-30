@@ -205,11 +205,21 @@ budget or download deadline, an oversized or malformed result bundle, and a
 misconfigured endpoint (a TLS certificate that fails verification, or a TLS
 protocol mismatch such as an https URL for a plain-HTTP service).
 
-Either way the document stays failed: a parser outage does not yet defer its
-Corpus Mutation, so retry failed documents as below once the parser is back.
-Automatic deferral must stay bounded when it arrives, because a document that
-crashes or exhausts the parser service (an out-of-memory kill, for example)
-looks like an outage on every attempt.
+Any other parser failure leaves its document failed; retry failed documents as
+below once the cause is fixed. A parser outage instead defers the Corpus Mutation,
+since the same document may well parse a minute later. Ingestion first settles
+every document the Run attempts, a remote source's later windows included, so
+LightRAG tracks all of them; then the Run defers with the usual backoff and
+`GET /health` reports the `parser` component degraded. When it resumes, it
+settles each tracked document from its durable state: a document that became
+ready stays as it is, without being parsed again, and every other document is
+retried, including one that failed for its own reason beside the outage. If that
+one fails again once the parser is back, the Run fails with it; when the Run
+completes, `parser` is reported healthy again. A retry Run stops at the outage
+and resumes its cohort the same way. The Run's ten dependency deferrals bound
+this, because a document that crashes or exhausts the parser service (an
+out-of-memory kill, for example) looks like an outage on every attempt: the
+eleventh fails the Run as `dependency_unavailable`.
 
 ## Product Document Finalization And Failed Ingestion Cleanup
 

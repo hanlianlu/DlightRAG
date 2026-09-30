@@ -28,7 +28,9 @@ from dlightrag.application.runs import (
 )
 from dlightrag.engine.dependencies import (
     DependencyComponent,
+    ParserUnavailableError,
     classify_transient_dependency,
+    dependency_component_from_checkpoint,
     next_dependency_retry,
 )
 from dlightrag.engine.rag.corpus.contracts import IngestDocument
@@ -85,6 +87,7 @@ from .service import IngestSpec, safe_upload_basename
 type CorpusMutationAction = Literal[
     "ingest", "replace", "delete", "retry", "reset", "delete_workspace"
 ]
+type DependencyStateCallback = Callable[[DependencyComponent], None]
 type RetrySelector = Literal["all_retryable"]
 
 
@@ -122,6 +125,10 @@ _REPAIR_REMEDY = "Inspect the public LightRAG state, repair it, then resume this
 logger = logging.getLogger(__name__)
 
 _MAX_RESULT_DOCUMENTS = 100
+#: The failures of a Run that reached its documents and saw some of them fail.
+_DOCUMENT_FAILURE_KINDS = frozenset(
+    {"corpus_mutation_document_failed", "corpus_retry_document_failed"}
+)
 _DESTRUCTIVE_ACTIONS = frozenset(action for action, spec in _ACTIONS.items() if spec.destructive)
 _SUCCESSOR_PAGE_LIMIT = 100
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -848,6 +855,8 @@ class CorpusMutationExecutor(RunExecutor):
         corpus_root: Path,
         workspace_exists: Callable[[str], Awaitable[bool]],
         now: Callable[[], datetime.datetime] | None = None,
+        on_dependency_unavailable: DependencyStateCallback | None = None,
+        on_dependency_recovered: DependencyStateCallback | None = None,
     ) -> None:
         self._pool = pool
         self._maintenance = maintenance
@@ -855,6 +864,8 @@ class CorpusMutationExecutor(RunExecutor):
         self._corpus_root = Path(corpus_root)
         self._workspace_exists = workspace_exists
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
+        self._on_dependency_unavailable = on_dependency_unavailable
+        self._on_dependency_recovered = on_dependency_recovered
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
         raw = session.prepared_input
@@ -882,7 +893,27 @@ class CorpusMutationExecutor(RunExecutor):
             raise
         if _ACTIONS[action].source_based and isinstance(outcome, Succeeded | Failed):
             await self._discard_stage(workspace, session.run_id)
+        if isinstance(outcome, Succeeded) or (
+            isinstance(outcome, Failed) and outcome.error_kind in _DOCUMENT_FAILURE_KINDS
+        ):
+            # The operation reached its documents, so the dependency an earlier
+            # attempt waited for answered.
+            recovered = dependency_component_from_checkpoint(session.checkpoint)
+            if recovered is not None and self._on_dependency_recovered is not None:
+                self._on_dependency_recovered(recovered)
         return outcome
+
+    def _defer(
+        self,
+        checkpoint: Mapping[str, Any],
+        component: DependencyComponent,
+        *,
+        outage: bool = True,
+    ) -> Deferred:
+        deferred = _deferred(checkpoint, component, now=self._now, outage=outage)
+        if outage and self._on_dependency_unavailable is not None:
+            self._on_dependency_unavailable(component)
+        return deferred
 
     async def _discard_stage(self, workspace: str, run_id: str) -> None:
         stage = _run_stage_root(self._corpus_root, workspace, run_id)
@@ -913,7 +944,7 @@ class CorpusMutationExecutor(RunExecutor):
                     component = classify_transient_dependency(exc, component_hint="corpus_storage")
                     if component is None:
                         raise
-                    return _deferred(checkpoint, component, now=self._now)
+                    return self._defer(checkpoint, component)
                 if not listed:
                     return Failed(
                         "workspace_not_found",
@@ -950,11 +981,19 @@ class CorpusMutationExecutor(RunExecutor):
         except WorkspaceWriteFencedError, _TrackedPipelineNotSettled:
             # A write fence or an upstream pipeline still settling is a wait, not
             # an outage: it keeps the backoff but spends none of the Run's retries.
-            return _deferred(checkpoint, "corpus_storage", now=self._now, outage=False)
+            return self._defer(checkpoint, "corpus_storage", outage=False)
         except RetryOutcomeUncertainError:
             if action in _DESTRUCTIVE_ACTIONS and session.handoff_started:
                 return WaitingForRepair(_repair_checkpoint(checkpoint, ()))
-            return _deferred(checkpoint, "corpus_storage", now=self._now, outage=False)
+            return self._defer(checkpoint, "corpus_storage", outage=False)
+        except ParserUnavailableError:
+            # Ingestion reports a parser outage only once every document it
+            # attempted has settled, so running the operation again once the
+            # parser is back repeats nothing unsafe: a Run that would otherwise
+            # wait for repair after its handoff resumes on its own.
+            if session.handoff_started and _requires_repair_resume(action, checkpoint):
+                checkpoint["repair_resume_confirmed"] = True
+            return self._defer(checkpoint, "parser")
         except ParserInputPlacementError:
             # Placing a batch's parser inputs precedes every upstream effect of it.
             return Failed(
@@ -979,7 +1018,7 @@ class CorpusMutationExecutor(RunExecutor):
                 return WaitingForRepair(_repair_checkpoint(checkpoint, ()))
             component = classify_transient_dependency(exc)
             if component is not None:
-                return _deferred(checkpoint, component, now=self._now)
+                return self._defer(checkpoint, component)
             raise
 
     async def _ingest(

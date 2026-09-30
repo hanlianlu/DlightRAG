@@ -451,6 +451,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             store=run_store,
             corpus_root=config.corpus_dir_path,
             workspace_exists=corpora.workspace_exists,
+            on_dependency_unavailable=health.mark_component_degraded,
+            on_dependency_recovered=health.mark_component_healthy,
         )
         workspace_reclaimers.append(CorpusStageReclaimer(config.corpus_dir_path))
 

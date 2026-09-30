@@ -406,36 +406,53 @@ async def test_document_ingest_reports_a_failed_pipeline_per_document(
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
-async def test_document_ingest_names_a_recorded_parser_outage(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+async def test_a_parser_outage_ends_the_batch_once_every_document_has_settled(
+    tmp_path: Path,
 ) -> None:
-    source = tmp_path / "report.pdf"
-    source.write_bytes(b"%PDF-1.4")
+    """The typed outage leaves the batch; a document that parsed is published first.
+
+    Finalization turns LightRAG's recorded verdict back into the typed parser error,
+    so the caller can retry the batch later instead of failing a document that may
+    well parse then. A document that failed for its own reason does not change
+    that: it is retried with the batch.
+    """
+    names = ("parsed.pdf", "rejected.pdf", "stalled.pdf")
+    paths = [tmp_path / name for name in names]
+    for path in paths:
+        path.write_bytes(b"%PDF-" + path.stem.encode())
     engine, deps = _make_engine()
-    failure_fields, _ = doc_status_parse_failure_fields(
+    parsed_id, rejected_id, stalled_id = (
+        compute_mdhash_id(normalize_document_file_path(path), prefix="doc-") for path in paths
+    )
+    outage_fields, _ = doc_status_parse_failure_fields(
         ParserUnavailableError(),
         status_doc={"content_summary": "", "metadata": {}},
         engine_hint="mineru",
     )
-    deps["stores"].get_doc_status.side_effect = [
-        None,
-        {"status": DocStatus.FAILED, "chunks_list": [], **failure_fields},
-    ]
+    statuses: dict[str, dict[str, Any]] = {}
 
-    batch = await engine.aingest_files([_one_file(source)], replace=False)
+    async def process() -> None:
+        statuses[parsed_id] = {"status": DocStatus.PROCESSED, "chunks_list": ["chunk-parsed"]}
+        statuses[rejected_id] = {
+            "status": DocStatus.FAILED,
+            "chunks_list": [],
+            "error_msg": "MinerU rejected the document: HTTP 422",
+        }
+        statuses[stalled_id] = {"status": DocStatus.FAILED, "chunks_list": [], **outage_fields}
 
-    # Finalization turns the recorded verdict back into the typed parser error;
-    # a batch still settles it as this document's failure.
-    assert batch["errors"] == ["report.pdf: document processing failed"]
-    (reported,) = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "Document finalization failed for report.pdf"
-    ]
-    assert reported.exc_info is not None
-    assert isinstance(reported.exc_info[1], ParserUnavailableError)
-    assert classify_transient_dependency(reported.exc_info[1]) == "parser"
-    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
+    deps["stores"].get_doc_status.side_effect = statuses.get
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+
+    with pytest.raises(ParserUnavailableError) as raised:
+        await engine.aingest_files([_one_file(path) for path in paths], replace=False)
+
+    assert classify_transient_dependency(raised.value) == "parser"
+    published = {
+        doc_id: row[_FINALIZATION_COMPLETE_KEY]
+        for doc_id, row in (call.args for call in deps["metadata_index"].upsert.await_args_list)
+        if row.get(_FINALIZATION_COMPLETE_KEY)
+    }
+    assert published == {parsed_id: True}
 
 
 async def test_document_ingest_preserves_lightrag_parser_engine_params(
