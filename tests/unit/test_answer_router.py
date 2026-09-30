@@ -112,7 +112,7 @@ async def test_router_reads_the_conversation_without_the_tool_work_between_turns
     assert messages[1:-1] == [
         {"role": "user", "content": "find me a video"},
         {"role": "assistant", "content": "Here are three videos."},
-        {"role": "user", "content": "and this one"},
+        history[-1],
     ]
 
 

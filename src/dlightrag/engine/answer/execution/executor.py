@@ -33,6 +33,7 @@ from dlightrag.engine.agent.session.entries import (
 )
 from dlightrag.engine.agent.session.fold import (
     PriorTurns,
+    conversation_messages,
     host_turn_starts,
     project_session_messages,
 )
@@ -1221,7 +1222,7 @@ class AnswerExecutor:
         )
         await session.enter_phase("planning")
         projected_history = (
-            PriorTurns(authoritative_messages)
+            PriorTurns(conversation_messages(authoritative_messages))
             if has_agent_history and resolved_mode == "fast"
             else PriorTurns()
             if has_agent_history
@@ -2741,7 +2742,7 @@ def _project_fast_history_before_current_user(
     )
     if not messages or messages[-1].get("role") != "user":
         raise ValueError("Fast compaction projection did not retain the current User query")
-    return PriorTurns(messages[:-1])
+    return PriorTurns(conversation_messages(messages[:-1]))
 
 
 async def _close_execution_resources(

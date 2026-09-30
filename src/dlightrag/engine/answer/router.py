@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from dlightrag.engine.agent.session.fold import conversation_messages
 from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.mode import ModeResource, ResolvedMode
@@ -51,30 +52,6 @@ def _coerce_mode(raw: Any, valid_modes: Sequence[str]) -> ResolvedMode:
 
 class RoutingFailedError(RuntimeError):
     """The router did not return a legal structured mode."""
-
-
-def _conversation_turns(history: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """What the user asked and what each answer said, without the work between them.
-
-    A Research turn's history also carries every tool call and result: hundreds of
-    kilobytes for a one-word decision, and a model handed that much unfinished work
-    sometimes answers with more of it instead of a mode.
-    """
-    turns: list[dict[str, Any]] = []
-    for message in history:
-        role = message.get("role")
-        if role not in {"user", "assistant"} or message.get("tool_calls"):
-            continue
-        content = message.get("content")
-        if isinstance(content, list):
-            content = "\n".join(
-                part["text"]
-                for part in content
-                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
-            )
-        if isinstance(content, str) and content.strip():
-            turns.append({"role": role, "content": content})
-    return turns
 
 
 class AnswerModeRouter:
@@ -165,7 +142,7 @@ class AnswerModeRouter:
             f"allowed: {allowed}"
         )
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-        messages.extend(_conversation_turns(history))
+        messages.extend(conversation_messages(history))
         messages.append({"role": "user", "content": user})
         return messages
 

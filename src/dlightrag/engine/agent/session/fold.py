@@ -146,6 +146,23 @@ def project_session_messages(
     return messages
 
 
+def conversation_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """What was asked and what was answered, without the work in between.
+
+    A Research turn's projection also carries each tool call and result, and the
+    provider state behind its answer. A call that only continues the conversation,
+    as routing and Fast do, is handed none of it: hundreds of kilobytes it does not
+    need, and unfinished work a model may take up instead of its own task.
+    """
+    return [
+        {"role": message["role"], "content": message["content"]}
+        for message in messages
+        if message.get("role") in {"user", "assistant"}
+        and not message.get("tool_calls")
+        and message.get("content")
+    ]
+
+
 def retained_session_entries(
     entries: Sequence[SessionEntry], projection: object | None
 ) -> Sequence[SessionEntry]:

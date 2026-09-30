@@ -13,6 +13,7 @@ from dlightrag.engine.agent.session.entries import (
 )
 from dlightrag.engine.agent.session.fold import (
     WorkingContextProjection,
+    conversation_messages,
     exchange_starts,
     fold_entries,
     host_turn_starts,
@@ -44,6 +45,32 @@ def _result(session_id: SessionId, call_id: str, source: int) -> ToolResultMessa
         attempt_id=None,
         effective_input_digest="b" * 64,
     )
+
+
+def test_conversation_messages_leave_out_the_work_between_turns() -> None:
+    image_question = [
+        {"type": "text", "text": "and this one?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+    ]
+    messages = [
+        {"role": "user", "content": "find me a video"},
+        {
+            "role": "assistant",
+            "content": "Searching.",
+            "tool_calls": [{"id": "call-1", "type": "function"}],
+            "provider_state": {"opaque": 1},
+        },
+        {"role": "tool", "tool_call_id": "call-1", "name": "search_web", "content": "x" * 50_000},
+        {"role": "assistant", "content": "Here are three videos.", "provider_state": {"opaque": 2}},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": image_question},
+    ]
+
+    assert conversation_messages(messages) == [
+        {"role": "user", "content": "find me a video"},
+        {"role": "assistant", "content": "Here are three videos."},
+        {"role": "user", "content": image_question},
+    ]
 
 
 def test_fold_projects_only_conversation_semantics_in_source_order() -> None:
