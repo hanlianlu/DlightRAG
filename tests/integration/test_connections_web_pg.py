@@ -160,9 +160,8 @@ async def test_web_sdk_oauth_authenticated_callback_strips_query_and_returns_fix
             store=store,
             mcp=FakeMcp(),
             cipher=cipher(),
-            policy=ConnectionPolicy(
-                oauth_callback_url="https://app.example/web/oauth/connections/mcp/callback"
-            ),
+            # No override: the callback follows the address the browser reached.
+            policy=ConnectionPolicy(),
             oauth=PersonalOAuthClient(transport_factory=lambda: httpx2.MockTransport(server)),
         )
         app = FastAPI()
@@ -299,9 +298,17 @@ async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path
             }
             assert response.headers["cache-control"] == "public, max-age=300"
 
-        unpublished = Connections(store=store, mcp=FakeMcp(), policy=ConnectionPolicy())
+        # Without an override the document follows the address it was fetched at, and only
+        # an HTTPS deployment can publish one.
+        derived = Connections(store=store, mcp=FakeMcp(), policy=ConnectionPolicy())
         async with AsyncClient(
-            transport=ASGITransport(app_for(unpublished)), base_url="https://app.example"
+            transport=ASGITransport(app_for(derived)), base_url="https://app.example"
+        ) as client:
+            response = await client.get("/web/oauth/connections/mcp/client-metadata")
+            assert response.status_code == 200
+            assert response.json()["redirect_uris"] == [callback]
+        async with AsyncClient(
+            transport=ASGITransport(app_for(derived)), base_url="http://localhost:8100"
         ) as client:
             assert (
                 await client.get("/web/oauth/connections/mcp/client-metadata")

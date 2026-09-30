@@ -3,7 +3,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from .policy import ConnectionPolicy
+from .policy import OAUTH_CALLBACK_PATH, ConnectionPolicy
 
 if TYPE_CHECKING:
     from .models import (
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .service import Connections
 
 __all__ = [
+    "OAUTH_CALLBACK_PATH",
     "AuthorizationStart",
     "BoundResearchConnections",
     "CatalogueTool",

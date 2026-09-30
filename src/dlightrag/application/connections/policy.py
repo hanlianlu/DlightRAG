@@ -12,6 +12,22 @@ OAUTH_CALLBACK_PATH = "/web/oauth/connections/mcp/callback"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
+def oauth_callback_problem(url: str) -> str | None:
+    """Why ``url`` cannot be this deployment's OAuth callback, or None when it can.
+
+    A provider sends the user's browser there; DlightRAG never calls it, so the
+    outbound network policy does not apply, and plain HTTP is fine on loopback.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return "the OAuth callback must be an absolute HTTP(S) URL"
+    if parts.scheme != "https" and parts.hostname not in _LOOPBACK_HOSTS:
+        return "OAuth needs HTTPS unless DlightRAG is reached on loopback"
+    if parts.path != OAUTH_CALLBACK_PATH or parts.query or parts.fragment:
+        return f"the OAuth callback must end in {OAUTH_CALLBACK_PATH}, with no query or fragment"
+    return None
+
+
 class ConnectionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
     oauth_callback_url: ServiceUrl | None = Field(default=None, max_length=2048)
@@ -40,21 +56,7 @@ class ConnectionPolicy(BaseModel):
     @field_validator("oauth_callback_url")
     @classmethod
     def _callback_route(cls, value: str | None) -> str | None:
-        """This deployment's callback route as the browser reaches it.
-
-        A provider sends the user's browser there; DlightRAG never calls it, so the
-        outbound network policy does not apply, and a local deployment may use
-        plain HTTP on loopback.
-        """
-        if value is None:
-            return None
-        parts = urlsplit(value)
-        if parts.scheme not in {"http", "https"} or not parts.hostname:
-            raise ValueError("oauth_callback_url must be an absolute HTTP(S) URL")
-        if parts.scheme != "https" and parts.hostname not in _LOOPBACK_HOSTS:
-            raise ValueError("oauth_callback_url must use HTTPS except on loopback")
-        if parts.path != OAUTH_CALLBACK_PATH or parts.query or parts.fragment:
-            raise ValueError(
-                f"oauth_callback_url must end in {OAUTH_CALLBACK_PATH}, with no query or fragment"
-            )
+        """An override of the callback, which otherwise follows the address a request reached."""
+        if value is not None and (problem := oauth_callback_problem(value)):
+            raise ValueError(problem)
         return value

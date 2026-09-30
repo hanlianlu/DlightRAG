@@ -33,7 +33,7 @@ _OWNER = {"owner_id": "a", "auth_mode": "jwt"}
 
 
 @asynccontextmanager
-async def _authorizing_owner(prefix, server, *, callback=_CALLBACK_URL):
+async def _authorizing_owner(prefix, server, *, override: str | None = _CALLBACK_URL):
     """Connections for one owner with an enabled bearer Connection and a draft beside it.
 
     ``a`` initiates authorizations against ``server``; ``b`` is a second worker that
@@ -47,7 +47,7 @@ async def _authorizing_owner(prefix, server, *, callback=_CALLBACK_URL):
     async with isolated_run_runtime(prefix) as (_, pool):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
-        policy = ConnectionPolicy(oauth_callback_url=callback)
+        policy = ConnectionPolicy(oauth_callback_url=override)
         a = Connections(
             store=store,
             mcp=FakeMcp(),
@@ -89,7 +89,7 @@ async def _authorizing_owner(prefix, server, *, callback=_CALLBACK_URL):
             await b.aclose()
 
 
-async def _begin(fixture, server):
+async def _begin(fixture, server, *, reached=_CALLBACK_URL):
     """Begin authorizing the target at the owner's current revision; return the SDK state."""
     from urllib.parse import parse_qs, urlsplit
 
@@ -98,6 +98,7 @@ async def _begin(fixture, server):
         **_OWNER,
         connection_id=fixture.target,
         expected_revision=current.revision,
+        callback_url=reached,
         endpoint="https://mcp.example/mcp",
     )
     server.authorization = parse_qs(urlsplit(start.authorization_url).query)
@@ -251,6 +252,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
                 **owner,
                 connection_id=identity,
                 expected_revision=draft.revision,
+                callback_url=_CALLBACK_URL,
                 endpoint="https://mcp.example/mcp",
             )
             server.authorization = parse_qs(urlsplit(start.authorization_url).query)
@@ -299,7 +301,10 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
                 old_generation = view.connections[0].generation
                 server.scope = server.granted_scope = scope
                 start = await a.begin_authorization(
-                    **owner, connection_id=identity, expected_revision=view.revision
+                    **owner,
+                    connection_id=identity,
+                    expected_revision=view.revision,
+                    callback_url=_CALLBACK_URL,
                 )
                 server.authorization = parse_qs(urlsplit(start.authorization_url).query)
                 await b.authorization_callback(
@@ -388,6 +393,7 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
                 **owner,
                 connection_id=identity,
                 expected_revision=view.revision,
+                callback_url=_CALLBACK_URL,
                 endpoint="https://mcp.example/mcp",
             )
             server.authorization = parse_qs(urlsplit(start.authorization_url).query)
@@ -405,6 +411,7 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
                     **owner,
                     connection_id=identity,
                     expected_revision=view.revision,
+                    callback_url=_CALLBACK_URL,
                     endpoint="https://mcp.example/mcp",
                 )
                 with pytest.raises(ConnectionsError):
@@ -453,10 +460,11 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
 
 @pytest.mark.asyncio
 async def test_a_local_deployment_authorizes_through_its_loopback_callback(monkeypatch):
-    """The callback is where the provider sends the browser back, not a host DlightRAG calls.
+    """The callback follows the address the browser reached, with no configuration.
 
-    A Compose deployment reached at localhost therefore authorizes over plain HTTP there,
-    although the outbound network policy refuses loopback and HTTP endpoints.
+    It is where the provider sends that browser back, never a host DlightRAG calls, so a
+    Compose deployment reached at localhost authorizes over plain HTTP there, although the
+    outbound network policy refuses loopback and HTTP endpoints.
     """
     from tests.support.dns import public_dns
     from tests.unit.test_connection_oauth import FakeAuthorizationServer
@@ -464,8 +472,8 @@ async def test_a_local_deployment_authorizes_through_its_loopback_callback(monke
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     server = FakeAuthorizationServer()
     callback = "http://localhost:8100/web/oauth/connections/mcp/callback"
-    async with _authorizing_owner("oauth_loopback", server, callback=callback) as fixture:
-        await _begin(fixture, server)
+    async with _authorizing_owner("oauth_loopback", server, override=None) as fixture:
+        await _begin(fixture, server, reached=callback)
         assert server.authorization["redirect_uri"] == [callback]
 
 

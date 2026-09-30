@@ -133,10 +133,6 @@ answer:
     # Personal Settings Connections (Streamable HTTP only). Policy only narrows
     # owner grants; keys belong exclusively in the existing secret source.
     connections:
-      # Where an OAuth provider sends the browser back after authorization: this
-      # deployment's own address as the browser reaches it. The local Compose
-      # default; behind a public domain use https://<host>/web/oauth/connections/mcp/callback.
-      oauth_callback_url: http://localhost:8100/web/oauth/connections/mcp/callback
       oauth_timeout: 300
       require_https: true
       allow_private_hosts: []

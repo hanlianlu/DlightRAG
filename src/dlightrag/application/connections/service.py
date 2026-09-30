@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, RootModel, SecretStr, model_validator
 
-from dlightrag.application.connections.policy import ConnectionPolicy
+from dlightrag.application.connections.policy import ConnectionPolicy, oauth_callback_problem
 from dlightrag.engine.agent.tools import (
     AgentTool,
     ToolDeclaration,
@@ -323,15 +323,16 @@ class Connections:
             # Losing local authority visibility cannot authorize further I/O.
             task.cancel()
 
-    def published_client_metadata(self) -> dict[str, Any] | None:
+    def published_client_metadata(self, *, callback_url: str) -> dict[str, Any] | None:
         """The Client ID Metadata Document this deployment publishes, or None.
 
         Public by protocol: an authorization server fetches it without a credential, so it carries
-        only what an authorization redirect already reveals.
+        only what an authorization redirect already reveals. ``callback_url`` is the callback on
+        the origin the request reached; a configured override wins.
         """
-        callback_url = self._policy.oauth_callback_url
+        callback_url = self._policy.oauth_callback_url or callback_url
         metadata_url = client_metadata_url(callback_url)
-        if metadata_url is None or callback_url is None:
+        if metadata_url is None or oauth_callback_problem(callback_url):
             return None
         return client_metadata_document(metadata_url=metadata_url, oauth_callback_url=callback_url)
 
@@ -476,16 +477,23 @@ class Connections:
         auth_mode: str,
         connection_id: str,
         expected_revision: str,
+        callback_url: str,
         endpoint: str | None = None,
     ) -> AuthorizationStart:
+        """Start authorizing one Connection.
+
+        ``callback_url`` is the callback route on the origin this request reached, the
+        browser's own (the Web's same-origin guard ties the two): the provider sends that
+        browser, with its session, back there. A configured override wins.
+        """
         self._authorize(owner_id, auth_mode)
-        if self._oauth is None or self._policy.oauth_callback_url is None:
+        if self._oauth is None:
             raise ConnectionsError("OAuth callback deployment is not configured", 503)
         if len(self._authorizations) >= 4:
             raise ConnectionsError("Authorization quota exceeded", 429)
-        # Where the provider sends the browser back, not an endpoint this deployment
-        # calls: the policy validated its shape when configuration loaded.
-        callback_url = self._policy.oauth_callback_url
+        callback_url = self._policy.oauth_callback_url or callback_url
+        if problem := oauth_callback_problem(callback_url):
+            raise ConnectionsError(problem, 422)
         revision, items = await self._store.read(owner_id)
         item = next((item for item in items if item.connection_id == connection_id), None)
         if item is None:

@@ -12,7 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from dlightrag.adapters.http.browser.deps import get_application
 from dlightrag.application.access import owner_id_from_user
-from dlightrag.application.connections import ConnectionCommand, ConnectionsError
+from dlightrag.application.connections import (
+    OAUTH_CALLBACK_PATH,
+    ConnectionCommand,
+    ConnectionsError,
+)
 
 
 class _SecretSafeRoute(APIRoute):
@@ -51,6 +55,15 @@ class EditInput(RevisionInput):
 class BearerInput(RevisionInput):
     endpoint: str | None = Field(default=None, min_length=1, max_length=2048)
     bearer: SecretStr = Field(min_length=1, max_length=8192, repr=False)
+
+
+def _reached_callback_url(request: Request) -> str:
+    """The OAuth callback route on the origin this request reached.
+
+    For a browser that is its own origin, which the Web's same-origin guard checks on
+    every write; a provider sends it back there with its session.
+    """
+    return str(request.url.replace(path=OAUTH_CALLBACK_PATH, query="", fragment=""))
 
 
 def _owner(request: Request) -> dict[str, str]:
@@ -159,6 +172,7 @@ async def begin_authorization(
                 **_owner(request),
                 connection_id=connection_id,
                 expected_revision=body.expected_revision,
+                callback_url=_reached_callback_url(request),
                 endpoint=body.endpoint,
             )
         )
@@ -177,7 +191,9 @@ async def published_client_metadata(request: Request) -> Response:
     the few facts an authorization redirect already reveals. A deployment without a public https
     callback publishes none, and its Connections register dynamically instead.
     """
-    document = get_application(request).connections.published_client_metadata()
+    document = get_application(request).connections.published_client_metadata(
+        callback_url=_reached_callback_url(request)
+    )
     if document is None:
         raise HTTPException(404, "No client metadata published")
     return JSONResponse(document, headers={"Cache-Control": "public, max-age=300"})
