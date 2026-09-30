@@ -79,6 +79,43 @@ async def test_router_defaults_to_research_and_reads_full_context() -> None:
     assert "净利润是多少" in messages[-1]["content"]
 
 
+async def test_router_reads_the_conversation_without_the_tool_work_between_turns() -> None:
+    captured: dict[str, object] = {}
+
+    async def llm(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return '{"mode":"research"}'
+
+    history = [
+        {"role": "user", "content": "find me a video"},
+        {
+            "role": "assistant",
+            "content": "Searching.",
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "search_web"}}
+            ],
+            "provider_state": {"opaque": "state"},
+        },
+        {"role": "tool", "tool_call_id": "call-1", "name": "search_web", "content": "x" * 50_000},
+        {"role": "assistant", "content": "Here are three videos.", "provider_state": {"a": 1}},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "and this one"}, {"type": "image_url"}],
+        },
+    ]
+    await AnswerModeRouter(llm).choose(
+        query="really try again", history=history, valid_modes=("fast", "research")
+    )
+
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    assert messages[1:-1] == [
+        {"role": "user", "content": "find me a video"},
+        {"role": "assistant", "content": "Here are three videos."},
+        {"role": "user", "content": "and this one"},
+    ]
+
+
 async def test_router_ignores_extra_json_fields() -> None:
     async def llm(**_kwargs: object) -> str:
         return '{\n  "mode": "research",\n  "response": "long leftover answer"\n}'

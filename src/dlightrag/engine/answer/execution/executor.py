@@ -186,7 +186,7 @@ from dlightrag.engine.answer.resources.registry import (
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.results import store_answer_result
-from dlightrag.engine.answer.router import AnswerModeRouter
+from dlightrag.engine.answer.router import AnswerModeRouter, RoutingFailedError
 from dlightrag.engine.answer.runs.routing import AnswerRoutingStore, decide_resolved_mode
 from dlightrag.engine.answer.session_notes import (
     SESSION_NOTES_DEGRADED_KEY,
@@ -981,10 +981,12 @@ class AnswerExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # An invalid mode is the model's answer, not a fault: its message is enough.
             logger.warning(
-                "auto router failed; defaulting to research",
+                "auto router failed; defaulting to research: %s",
+                exc,
                 extra={"valid_modes": list(valid_modes)},
-                exc_info=True,
+                exc_info=not isinstance(exc, RoutingFailedError),
             )
             if "research" in valid_modes:
                 return "research"
