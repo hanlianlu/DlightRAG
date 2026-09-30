@@ -10,6 +10,7 @@ import pytest
 
 from dlightrag.engine.answer.links.cards import (
     MAX_CARDS,
+    MAX_READS,
     LinkCard,
     collect_link_cards,
     project_link_cards,
@@ -134,17 +135,29 @@ async def test_an_unreadable_or_undeclared_page_stays_a_link() -> None:
     assert cards == ()
 
 
-async def test_only_the_first_declared_videos_are_read() -> None:
+async def test_only_the_first_links_are_read_and_the_first_videos_carded() -> None:
     pages = {
-        f"https://example.com/{index}": _video_page(description=str(index)) for index in range(6)
+        f"https://example.com/{index}": _video_page(**{"og:description": str(index)})
+        for index in range(MAX_READS + 2)
     }
     fetcher = _Fetcher(pages)
     answer = " ".join(pages)
 
     cards = await collect_link_cards(answer, fetch=fetcher)
 
-    assert len(cards) == MAX_CARDS
-    assert len(fetcher.calls) == MAX_CARDS
+    assert [card.description for card in cards] == [str(index) for index in range(MAX_CARDS)]
+    assert len(fetcher.calls) == MAX_READS
+
+
+async def test_a_video_linked_after_three_articles_still_gets_its_card() -> None:
+    articles = {f"https://news.example.com/{index}": _page("og:type") for index in range(3)}
+    video = "https://video.example.com/watch"
+    fetcher = _Fetcher({**articles, video: _video_page()})
+    answer = " ".join([*articles, video])
+
+    cards = await collect_link_cards(answer, fetch=fetcher)
+
+    assert [card.url for card in cards] == [video]
 
 
 async def test_an_unsafe_cover_image_is_dropped_and_the_card_survives() -> None:

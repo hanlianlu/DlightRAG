@@ -27,9 +27,12 @@ from typing import Any
 from dlightrag.engine.answer.markdown import link_targets
 from dlightrag.engine.public_http import fetch_public_http_prefix, validate_public_web_url
 
-#: How many pages one answer may ask about. The reader gets a card or two, and an
-#: answer with a dozen links does not become a dozen outbound reads.
+#: How many cards one answer shows: the reader gets a card or two.
 MAX_CARDS = 3
+#: How many of an answer's links are read to find them. The reads run together
+#: under one deadline, so a video linked after a few articles still gets its card,
+#: while an answer with a dozen links does not become a dozen outbound reads.
+MAX_READS = 6
 # Real video pages put OG metadata after large inline scripts/styles (the
 # observed YouTube head placed it near 700 KiB). Read only a bounded prefix;
 # the remaining body is irrelevant and must not invalidate declarations.
@@ -188,9 +191,10 @@ async def collect_link_cards(
     *,
     fetch: Callable[..., Awaitable[Any]] = fetch_public_http_prefix,
     limit: int = MAX_CARDS,
+    reads: int = MAX_READS,
     deadline: float = _PAGE_TIMEOUT_SECONDS,
 ) -> tuple[LinkCard, ...]:
-    """Read at most ``limit`` declared videos out of one answer's addresses.
+    """Card at most ``limit`` declared videos among one answer's first ``reads`` addresses.
 
     Every failure is silent by design: an address that cannot be read, answers too
     slowly, declares nothing, or answers with something that is not HTML stays an
@@ -200,8 +204,8 @@ async def collect_link_cards(
     Targets are the shared answer parser's link tokens. Quoted code and link
     titles are never candidates; repeated links share one bounded read.
     """
-    addresses = link_targets(answer)[: max(0, limit)]
-    if not addresses:
+    addresses = link_targets(answer)[: max(0, reads)]
+    if not addresses or limit <= 0:
         return ()
     pages = await asyncio.gather(
         *(_read_page(address, fetch=fetch, deadline=deadline) for address in addresses),
@@ -220,6 +224,8 @@ async def collect_link_cards(
         card = _card(address, values)
         if card is not None:
             cards.append(card)
+            if len(cards) == limit:
+                break
     return tuple(cards)
 
 

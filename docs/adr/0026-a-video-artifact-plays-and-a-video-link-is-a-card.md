@@ -12,7 +12,10 @@ auto-detection, and video link cards. See [Consequences](#consequences) for the
 bounds and the accepted residuals. [ADR 0028](0028-the-reader-activates-one-external-video-player.md)
 supersedes only the no-external-embed decision below: readers may explicitly
 activate a separately controlled official player. OG card acquisition, stored
-Answer immutability and arbitrary-HTML restrictions remain unchanged.
+Answer immutability and arbitrary-HTML restrictions remain unchanged. The read
+bound was later separated from the card bound, so a video linked after a few
+other pages still gets its card: an answer's first six addresses are read for at
+most three cards.
 
 ## Context
 
@@ -125,10 +128,10 @@ card carries the page's own cover image, title, description, and site name; the
 browser reads that image from the platform's CDN, exactly as it already reads a
 remote image an answer writes.
 
-Reading the pages happens during the Answer's own settlement, under bounds: at
-most three distinct addresses an answer writes are read, each with a four-second
-deadline and a 2 MiB decoded-prefix ceiling. They are read together so an answer
-with three links costs about one deadline rather than three. Reaching the byte
+Reading the pages happens during the Answer's own settlement, under bounds: the
+first six distinct addresses an answer writes are read for at most three cards,
+each with a four-second deadline and a 2 MiB decoded-prefix ceiling. They are read
+together so an answer with six links costs about one deadline rather than six. Reaching the byte
 ceiling closes the response stream and keeps the prefix; an irrelevant large body
 cannot invalidate metadata already read. Complete-document fetch and download
 retain their separate oversize-rejection contracts. An address that is unreachable,
