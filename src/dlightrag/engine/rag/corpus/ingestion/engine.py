@@ -106,6 +106,10 @@ class PreparedIngestFile:
 @dataclass(frozen=True)
 class _PendingDocumentIngest:
     index: int
+    # The bytes the caller supplied, which the document's digest keeps;
+    # ``parser_path`` is what LightRAG parses: that file, or an image's padded
+    # copy.
+    source_path: Path
     parser_path: Path
     doc_id: str
     metadata_record: dict[str, Any]
@@ -230,10 +234,12 @@ class UnifiedIngestionEngine:
         padded_inputs: list[Path] = []
         try:
             for index, path in enumerate(paths):
+                item = _prepare_ingest_item(path, workspace=self._workspace)
                 entries.append(
                     self._prepare_pending_document(
                         index=index,
-                        item=await self._normalized_parser_item(path, padded_inputs),
+                        item=item,
+                        parser_path=await self._parser_path(item, padded_inputs),
                         title=title,
                         author=author,
                         metadata=metadata,
@@ -502,36 +508,31 @@ class UnifiedIngestionEngine:
             "results": [results_by_index[index] for index in sorted(results_by_index)],
         }
 
-    async def _normalized_parser_item(
-        self,
-        path: str | Path | PreparedIngestFile,
-        padded_inputs: list[Path],
-    ) -> PreparedIngestFile:
-        """Prepare one ingest item, giving an image source page context.
+    async def _parser_path(self, item: PreparedIngestFile, padded_inputs: list[Path]) -> Path:
+        """What LightRAG parses for ``item``: an image source gets page context.
 
-        Only ``parser_path`` moves: ``source_uri``, ``download_locator`` and the
-        display filename keep describing the bytes the caller supplied, so
-        downloads, hashes and metadata stay attached to the original file.
+        The padded copy is a derived parser input, never the document's source:
+        its digest, download and metadata keep describing ``item.parser_path``.
 
         An image whose flat parser input is also its source of record (a local
         source or upload) is parsed as supplied: LightRAG reads and archives
         whatever that one path holds, so padding it would make the padded copy
         the document's source.
         """
-        item = _prepare_ingest_item(path, workspace=self._workspace)
+        source = item.parser_path
         if (
             self._image_margin <= 0
-            or not is_image_source(item.parser_path)
+            or not is_image_source(source)
             or _is_source_of_record(
-                item.download_locator, parser_input_path(self._input_root, item.parser_path)
+                item.download_locator, parser_input_path(self._input_root, source)
             )
         ):
-            return item
-        padded = await apadded_parser_path(item.parser_path, margin=self._image_margin)
+            return source
+        padded = await apadded_parser_path(source, margin=self._image_margin)
         if padded is None:
-            return item
+            return source
         padded_inputs.append(padded)
-        return replace(item, parser_path=padded)
+        return padded
 
     def _place_parser_inputs(self, entries: Sequence[_PendingDocumentIngest]) -> dict[int, Path]:
         """Place each entry's parser input where LightRAG resolves it, by entry index."""
@@ -545,6 +546,7 @@ class UnifiedIngestionEngine:
         *,
         index: int,
         item: PreparedIngestFile,
+        parser_path: Path,
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -562,7 +564,8 @@ class UnifiedIngestionEngine:
             )
         return _PendingDocumentIngest(
             index=index,
-            parser_path=item.parser_path,
+            source_path=item.parser_path,
+            parser_path=parser_path,
             doc_id=_canonical_file_doc_id(item.parser_path),
             metadata_record=self._prepare_metadata_record(
                 item.parser_path,
@@ -593,17 +596,11 @@ class UnifiedIngestionEngine:
         parse_engine, process_options, chunk_options = self._parser_directives_for(
             entry.parser_path
         )
-        return _PendingDocumentIngest(
-            index=entry.index,
-            parser_path=entry.parser_path,
-            doc_id=entry.doc_id,
-            metadata_record=entry.metadata_record,
-            metadata_update_requested=entry.metadata_update_requested,
+        return replace(
+            entry,
             parse_engine=parse_engine,
             process_options=process_options,
             chunk_options=chunk_options,
-            replacement_doc_ids=entry.replacement_doc_ids,
-            replacement_ownership=entry.replacement_ownership,
         )
 
     async def _decide_document_ingest(
@@ -612,9 +609,10 @@ class UnifiedIngestionEngine:
         *,
         replace: bool,
     ) -> _DocumentIngestDecision:
-        # Recorded with the document, so a later ingest of the same bytes is known.
+        # Recorded with the document, so a later ingest of the same bytes is known:
+        # the bytes the caller supplied, whatever page margin LightRAG then parses.
         entry.metadata_record[PARSER_INPUT_SHA256_FIELD] = await asyncio.to_thread(
-            _file_sha256, entry.parser_path
+            _file_sha256, entry.source_path
         )
         existing_status = await self._stores.get_doc_status(entry.doc_id)
         if existing_status is None:
@@ -1214,7 +1212,7 @@ def _clear_archived_sources(parser_inputs: Sequence[Path]) -> None:
 
 def _entry_filename(entry: _PendingDocumentIngest) -> str:
     return safe_source_filename(
-        str(entry.metadata_record.get("filename") or entry.parser_path.name)
+        str(entry.metadata_record.get("filename") or entry.source_path.name)
     )
 
 

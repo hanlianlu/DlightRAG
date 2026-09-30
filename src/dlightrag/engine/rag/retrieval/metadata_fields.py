@@ -43,9 +43,10 @@ def _coerce_creation_date(value: Any) -> datetime:
 # public filter and callers may never supply it through user metadata.
 INGEST_FINALIZATION_COMPLETE_FIELD = "_dlightrag_finalization_complete"
 SOURCE_RETRIEVAL_OPTIONS_FIELD = "_dlightrag_source_options"
-#: The digest of the bytes LightRAG parsed a document from, recorded by ingestion
-#: so that an unchanged document is recognized: LightRAG's own ``content_hash`` is
-#: taken over the parsed text, which ingestion never sees before it enqueues.
+#: The digest of the parser input a document was ingested from, as the caller
+#: supplied it (an image before its page margin), recorded by ingestion so that an
+#: unchanged document is recognized: LightRAG's own ``content_hash`` is taken over
+#: the parsed text, which ingestion never sees before it enqueues.
 PARSER_INPUT_SHA256_FIELD = "_dlightrag_parser_input_sha256"
 
 # The one built-in column a caller may set through `metadata`. Everything else

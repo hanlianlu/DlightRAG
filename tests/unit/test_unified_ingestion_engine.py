@@ -3240,6 +3240,8 @@ async def test_image_ingest_enqueues_a_padded_parser_input(
     assert kwargs["parse_engine"] == ["mineru"]
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["download_locator"] == str(source.resolve())
+    # An unchanged image is known by its own bytes, whatever margin it is parsed with.
+    assert saved[PARSER_INPUT_SHA256_FIELD] == _sha256(source.read_bytes())
     assert source.exists()
     # The padded copy is not the document's source, so it goes once LightRAG settled it.
     assert not (parser_input_root / source.name).exists()
