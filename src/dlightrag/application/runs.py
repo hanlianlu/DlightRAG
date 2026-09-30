@@ -1,14 +1,32 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Owner-scoped Application service and views for the common durable Run lifecycle."""
+"""Admission, the owner-scoped service, and views for the common durable Run lifecycle."""
 
 import datetime
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
+from uuid import uuid7
 
-from dlightrag.application.errors import ApplicationConflictError, ApplicationUnavailableError
+from dlightrag.application.errors import (
+    ApplicationConflictError,
+    ApplicationInputError,
+    ApplicationUnavailableError,
+)
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunPhase, RunStatus
 from dlightrag.engine.runtime.records import CancellationOutcome as RuntimeCancellationOutcome
+from dlightrag.engine.runtime.records import (
+    IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict,
+)
+from dlightrag.engine.runtime.records import (
+    PreparedInputTooLargeError,
+    PreparedRunEnvelope,
+    RunAccessScope,
+    require_prepared_input_bounds,
+)
+from dlightrag.engine.runtime.records import (
+    RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
+)
 from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
 from dlightrag.engine.runtime.records import RunEvent as RuntimeRunEvent
 from dlightrag.engine.runtime.records import RunRecord as RuntimeRunRecord
@@ -174,6 +192,143 @@ class RunCreation:
         return cls(run=RunView.from_runtime(creation.run), replayed=bool(creation.replayed))
 
 
+class RunReplayer[T](Protocol):
+    """Where one kind looks up the Run a submission key already accepted."""
+
+    async def replay_run(
+        self,
+        *,
+        owner_id: str,
+        idempotency_key: str,
+        idempotency_fingerprint: str,
+        run_kind: RunKind,
+    ) -> T | None: ...
+
+
+class RunAccept[T](Protocol):
+    """One kind's durable acceptance of an admitted envelope."""
+
+    def __call__(self, *, envelope: PreparedRunEnvelope, run_id: str) -> Awaitable[T]: ...
+
+
+class RunAdmissionScheduler(Protocol):
+    """The local scheduler a submission is admitted by and wakes."""
+
+    @property
+    def is_started(self) -> bool: ...
+
+    def admission(self) -> AbstractAsyncContextManager[bool]: ...
+
+    def wake(self) -> None: ...
+
+
+@contextmanager
+def _public_refusals() -> Iterator[None]:
+    """Name the store's refusals in the Application's words; the store's own stay the cause."""
+    try:
+        yield
+    except RuntimeIdempotencyKeyConflict as exc:
+        raise IdempotencyKeyConflict() from exc
+    except RuntimeRunAdmissionLimitExceededError as exc:
+        raise RunAdmissionLimitExceededError() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class RunAdmission:
+    """The one sequence every durable Run kind is admitted through.
+
+    A use case keeps what is its own: normalizing its request, preparing its
+    input, and the acceptor that stores it. Admission does the rest, in order:
+    it replays a retried key, bounds the prepared input, takes this process's
+    admission slot, accepts under it, wakes the scheduler, and names every
+    refusal in the Application's words.
+    """
+
+    run_kind: RunKind
+    lane: RunLane
+    #: Names the runtime in its refusal: "{runtime} runtime is unavailable".
+    runtime: str
+    retention_seconds: int
+    #: The kind's own input error, which an oversized prepared input raises.
+    input_error: type[ApplicationInputError]
+    scheduler: RunAdmissionScheduler
+
+    async def replay[T](
+        self,
+        acceptor: RunReplayer[T],
+        *,
+        submitted_by: str,
+        idempotency_key: str | None,
+        fingerprint: str,
+    ) -> T | None:
+        """Return the Run a retried key already accepted; changed input is a conflict."""
+        if idempotency_key is None:
+            return None
+        with _public_refusals():
+            return await acceptor.replay_run(
+                owner_id=submitted_by,
+                idempotency_key=idempotency_key,
+                idempotency_fingerprint=fingerprint,
+                run_kind=self.run_kind,
+            )
+
+    def require_runtime(self) -> None:
+        """Refuse while this process cannot run what it would accept."""
+        if not self.scheduler.is_started:
+            raise self._unavailable()
+
+    async def admit[T](
+        self,
+        accept: RunAccept[T],
+        *,
+        submitted_by: str,
+        access_scope: RunAccessScope,
+        idempotency_key: str | None,
+        fingerprint: str,
+        payload: Mapping[str, Any],
+        accepted_input: Mapping[str, Any],
+        supersedes_run_id: str | None = None,
+        run_id: str | None = None,
+    ) -> T:
+        """Bound, admit, and accept one prepared submission, then wake the scheduler.
+
+        An unkeyed submission is keyed by its own run id, which admission draws
+        unless the kind already staged work under one.
+        """
+        try:
+            require_prepared_input_bounds(payload)
+        except PreparedInputTooLargeError as exc:
+            raise self.input_error(str(exc)) from exc
+        self.require_runtime()
+        with _public_refusals():
+            async with self.scheduler.admission() as available:
+                if not available:
+                    raise self._unavailable()
+                run_id = run_id or str(uuid7())
+                accepted = await accept(
+                    envelope=PreparedRunEnvelope(
+                        run_kind=self.run_kind,
+                        lane=self.lane,
+                        submitted_by=submitted_by,
+                        access_scope=access_scope,
+                        submission_key=idempotency_key or run_id,
+                        request_fingerprint=fingerprint,
+                        payload=payload,
+                        accepted_input=accepted_input,
+                        retention_seconds=self.retention_seconds,
+                        supersedes_run_id=supersedes_run_id,
+                    ),
+                    run_id=run_id,
+                )
+                # A linking acceptor accepts nothing when it finds nothing to link.
+                if accepted is not None:
+                    self.scheduler.wake()
+        return accepted
+
+    def _unavailable(self) -> RunRuntimeUnavailableError:
+        return RunRuntimeUnavailableError(f"{self.runtime} runtime is unavailable")
+
+
 class RunRepository(Protocol):
     async def get_run(self, *, owner_id: str, run_id: str) -> RuntimeRunRecord | None: ...
     async def get_run_global(self, *, run_id: str) -> RuntimeRunRecord | None: ...
@@ -265,6 +420,9 @@ class RunService:
 
 __all__ = [
     "IdempotencyKeyConflict",
+    "RunAccept",
+    "RunAdmission",
+    "RunAdmissionScheduler",
     "RunCancellation",
     "RunCancelledError",
     "RunAdmissionLimitExceededError",
@@ -275,6 +433,7 @@ __all__ = [
     "RunLane",
     "RunRuntimeUnavailableError",
     "RunPhase",
+    "RunReplayer",
     "RunRepository",
     "RunScheduler",
     "RunService",

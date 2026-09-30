@@ -20,10 +20,10 @@ from uuid import UUID, uuid7
 
 from dlightrag.application.errors import ApplicationError, ApplicationUnavailableError
 from dlightrag.application.runs import (
-    IdempotencyKeyConflict,
-    RunAdmissionLimitExceededError,
+    RunAdmission,
+    RunAdmissionScheduler,
     RunCreation,
-    RunRuntimeUnavailableError,
+    RunReplayer,
     RunView,
 )
 from dlightrag.engine.dependencies import (
@@ -58,21 +58,14 @@ from dlightrag.engine.runtime.records import (
     Deferred,
     DeletedRun,
     Failed,
-    PreparedInputTooLargeError,
     PreparedRunEnvelope,
     RunAccessScope,
     RunExecutionOutcome,
     Succeeded,
     WaitingForRepair,
-    require_prepared_input_bounds,
     run_request_fingerprint,
 )
-from dlightrag.engine.runtime.records import (
-    IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict,
-)
-from dlightrag.engine.runtime.records import (
-    RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
-)
+from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
 from dlightrag.engine.runtime.store import RunExistenceReader
 
 from .errors import (
@@ -136,17 +129,10 @@ _DEFER_BASE_SECONDS = 2
 _DEFER_MAX_SECONDS = 60
 
 
-class CorpusMutationStore(Protocol):
-    async def replay_run(
-        self,
-        *,
-        owner_id: str,
-        idempotency_key: str,
-        idempotency_fingerprint: str,
-        run_kind: Literal["corpus_mutation"],
-    ) -> Any: ...
-
-    async def accept_run(self, *, envelope: PreparedRunEnvelope, run_id: str) -> Any: ...
+class CorpusMutationStore(RunReplayer[RuntimeRunCreation], Protocol):
+    async def accept_run(
+        self, *, envelope: PreparedRunEnvelope, run_id: str
+    ) -> RuntimeRunCreation: ...
 
     async def record_corpus_window(
         self,
@@ -163,14 +149,6 @@ class CorpusMutationStore(Protocol):
     ) -> Sequence[Any]: ...
 
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> Any: ...
-
-
-class CorpusMutationScheduler(Protocol):
-    @property
-    def is_started(self) -> bool: ...
-
-    def admission(self) -> Any: ...
-    def wake(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +184,7 @@ class CorpusMutationService:
         source_root: Path,
         corpus_root: Path,
         store: CorpusMutationStore,
-        coordinator: CorpusMutationScheduler,
+        coordinator: RunAdmissionScheduler,
         upload_limits: UploadLimits,
         workspace_exists: Callable[[str], Awaitable[bool]],
         writable: bool = True,
@@ -216,7 +194,14 @@ class CorpusMutationService:
         self._corpus_root = Path(corpus_root)
         self._workspace_exists = workspace_exists
         self._store = store
-        self._coordinator = coordinator
+        self._admission = RunAdmission(
+            run_kind="corpus_mutation",
+            lane="corpus_mutation",
+            runtime="Corpus Mutation",
+            retention_seconds=CORPUS_MUTATION_RUN_RETENTION_SECONDS,
+            input_error=CorpusMutationInputError,
+            scheduler=coordinator,
+        )
         self._upload_limits = upload_limits
         self._writable = writable
         self._default_workspace = require_canonical_workspace_id(default_workspace)
@@ -234,18 +219,12 @@ class CorpusMutationService:
         normalized_request: Mapping[str, Any],
     ) -> RunCreation | None:
         """Resolve a supplied digest/key before receiving an upload body."""
-        if idempotency_key is None:
-            return None
-        fingerprint = run_request_fingerprint(normalized_request)
-        try:
-            replay = await self._store.replay_run(
-                owner_id=submitted_by,
-                idempotency_key=idempotency_key,
-                idempotency_fingerprint=fingerprint,
-                run_kind="corpus_mutation",
-            )
-        except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict() from exc
+        replay = await self._admission.replay(
+            self._store,
+            submitted_by=submitted_by,
+            idempotency_key=idempotency_key,
+            fingerprint=run_request_fingerprint(normalized_request),
+        )
         return RunCreation.from_runtime(replay) if replay is not None else None
 
     async def create_ingest(
@@ -605,43 +584,25 @@ class CorpusMutationService:
         normalized_request: Mapping[str, Any],
         payload: Mapping[str, Any],
     ) -> RunCreation:
-        try:
-            require_prepared_input_bounds(payload)
-        except PreparedInputTooLargeError as exc:
-            raise CorpusMutationInputError(str(exc)) from exc
-        coordinator = self._coordinator
-        if not coordinator.is_started:
-            raise RunRuntimeUnavailableError("Corpus Mutation runtime is unavailable")
-        envelope = PreparedRunEnvelope(
-            run_kind="corpus_mutation",
-            lane="corpus_mutation",
+        creation = await self._admission.admit(
+            self._store.accept_run,
+            run_id=run_id,
             submitted_by=submitted_by,
             access_scope=RunAccessScope(kind="workspace", scope_id=workspace),
-            submission_key=idempotency_key or run_id,
-            request_fingerprint=run_request_fingerprint(normalized_request),
+            idempotency_key=idempotency_key,
+            fingerprint=run_request_fingerprint(normalized_request),
             payload=payload,
             accepted_input={
                 "action": str(payload["action"]),
                 "workspace": workspace,
                 **_accepted_selector(payload),
             },
-            retention_seconds=CORPUS_MUTATION_RUN_RETENTION_SECONDS,
             supersedes_run_id=(
                 str(payload["supersedes_run_id"])
                 if payload.get("supersedes_run_id") is not None
                 else None
             ),
         )
-        try:
-            async with coordinator.admission() as available:
-                if not available:
-                    raise RunRuntimeUnavailableError("Corpus Mutation runtime is unavailable")
-                creation = await self._store.accept_run(envelope=envelope, run_id=run_id)
-                coordinator.wake()
-        except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict() from exc
-        except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError() from exc
         return RunCreation.from_runtime(creation)
 
     @property

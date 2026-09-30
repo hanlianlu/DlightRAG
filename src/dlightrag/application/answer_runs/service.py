@@ -3,20 +3,22 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from typing import Any, Literal, Protocol, cast
-from uuid import UUID, uuid7
+from uuid import UUID
 
 from dlightrag.application.connections import BoundResearchConnections
 from dlightrag.application.errors import ApplicationConflictError, ApplicationInputError
 from dlightrag.application.runs import (
-    IdempotencyKeyConflict,
-    RunAdmissionLimitExceededError,
+    RunAdmission,
+    RunAdmissionScheduler,
     RunCancelledError,
     RunCreation,
     RunEvent,
     RunFailedError,
+    RunReplayer,
     RunRuntimeUnavailableError,
 )
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
@@ -80,26 +82,17 @@ from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_file
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
-from dlightrag.engine.runtime.contracts import RunKind
 from dlightrag.engine.runtime.records import (
     ArtifactReferenceKind,
     PendingArtifact,
     PendingArtifactReference,
-    PreparedInputTooLargeError,
     PreparedRunEnvelope,
     RunAccessScope,
     RunArtifactReference,
     RunFetchedResource,
     RunRecord,
     artifact_digest,
-    require_prepared_input_bounds,
     run_request_fingerprint,
-)
-from dlightrag.engine.runtime.records import (
-    IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict,
-)
-from dlightrag.engine.runtime.records import (
-    RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
 )
 from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
 from dlightrag.engine.runtime.records import RunEvent as RuntimeRunEvent
@@ -380,7 +373,7 @@ class AnswerConnectionsChangedError(ApplicationConflictError):
         super().__init__("Connections changed; submit the Answer again")
 
 
-class AnswerRunAcceptor[T](Protocol):
+class AnswerRunAcceptor[T](RunReplayer[T], Protocol):
     """Persist or replay one prepared run, optionally with an atomic domain link."""
 
     async def create_run(
@@ -393,15 +386,6 @@ class AnswerRunAcceptor[T](Protocol):
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
-    ) -> T | None: ...
-
-    async def replay_run(
-        self,
-        *,
-        owner_id: str,
-        idempotency_key: str,
-        idempotency_fingerprint: str,
-        run_kind: RunKind,
     ) -> T | None: ...
 
 
@@ -523,15 +507,8 @@ class _RunBlobReader(Protocol):
     async def size(self, *, owner_id: str, digest: str) -> int | None: ...
 
 
-class _RunScheduler(Protocol):
+class _RunScheduler(RunAdmissionScheduler, Protocol):
     """The started coordinator accepted runs execute and stream through."""
-
-    @property
-    def is_started(self) -> bool: ...
-
-    def admission(self) -> AbstractAsyncContextManager[bool]: ...
-
-    def wake(self) -> None: ...
 
     def cancel_local(self, owner_id: str, run_id: str) -> None: ...
 
@@ -785,7 +762,14 @@ class AnswerService:
         self._research_tool_declarations = research_tool_declarations
         self._bind_research = bind_research
         self._memory_capability = memory_capability
-        self._run_retention_seconds = int(run_retention_seconds)
+        self._admission = RunAdmission(
+            run_kind="answer",
+            lane="query",
+            runtime="Answer",
+            retention_seconds=int(run_retention_seconds),
+            input_error=AnswerRequestError,
+            scheduler=coordinator,
+        )
         self._child_roster_codec = ChildRosterCursorCodec(child_roster_cursor_secret)
 
     @staticmethod
@@ -819,19 +803,14 @@ class AnswerService:
         accepted run outlives this call and is read back through :meth:`get`,
         :meth:`subscribe`, and :meth:`cancel`.
         """
-        try:
-            creation = await self._accept(
-                request=request,
-                owner_id=owner_id,
-                idempotency_key=idempotency_key,
-                idempotency_fingerprint=idempotency_fingerprint,
-                acceptor=self._store,
-                auth_mode=auth_mode,
-            )
-        except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict() from exc
-        except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError() from exc
+        creation = await self.accept(
+            request=request,
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            idempotency_fingerprint=idempotency_fingerprint,
+            acceptor=self._store,
+            auth_mode=auth_mode,
+        )
         if creation is None:
             raise RuntimeError("Answer run acceptance returned no descriptor")
         return RunCreation.from_runtime(creation)
@@ -841,51 +820,30 @@ class AnswerService:
         *,
         request: AnswerRequest,
         owner_id: str,
-        idempotency_key: str,
-        idempotency_fingerprint: str,
         acceptor: AnswerRunAcceptor[T],
+        idempotency_key: str | None = None,
+        idempotency_fingerprint: str | None = None,
         auth_mode: str = "none",
     ) -> T | None:
-        """Accept through a typed atomic linker while preserving one run pipeline."""
-        try:
-            return await self._accept(
-                request=request,
-                owner_id=owner_id,
-                idempotency_key=idempotency_key,
-                idempotency_fingerprint=idempotency_fingerprint,
-                acceptor=acceptor,
-                auth_mode=auth_mode,
-            )
-        except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict() from exc
-        except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError() from exc
+        """Accept one durable run through ``acceptor``, which may link it atomically.
 
-    async def _accept[T](
-        self,
-        *,
-        request: AnswerRequest,
-        owner_id: str,
-        idempotency_key: str | None,
-        idempotency_fingerprint: str | None,
-        acceptor: AnswerRunAcceptor[T],
-        auth_mode: str = "none",
-    ) -> T | None:
+        The Run store accepts the run alone; a Web conversation's acceptor also
+        writes its turn in the same transaction. Both go through one pipeline.
+        """
         run_request = _normalized_request(request)
         fingerprint = idempotency_fingerprint or run_request_fingerprint(run_request.as_request())
         # Canonical mode syntax is capability-independent and may be checked
         # before replay. Live capability validation must wait until after the
         # answer/VLM refreshes below because an unknown probe can recover.
         requested_mode = canonical_answer_mode(run_request.mode)
-        if idempotency_key is not None:
-            replay = await acceptor.replay_run(
-                owner_id=owner_id,
-                idempotency_key=idempotency_key,
-                idempotency_fingerprint=fingerprint,
-                run_kind="answer",
-            )
-            if replay is not None:
-                return replay
+        replay = await self._admission.replay(
+            acceptor,
+            submitted_by=owner_id,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if replay is not None:
+            return replay
         uploads = tuple(
             (resource.filename, resource.declared_mime, resource.content)
             for resource in request.resources
@@ -894,8 +852,7 @@ class AnswerService:
         if uploads:
             # Deciding an upload by its bytes decodes it, so it runs off the event loop.
             await asyncio.to_thread(_require_readable_uploads, uploads)
-        if not self._coordinator.is_started:
-            raise RunRuntimeUnavailableError("Answer runtime is unavailable")
+        self._admission.require_runtime()
         run_request, attachment_bytes = await self._resources.pin_current_image_links(
             run_request,
             _attachment_bytes(request.resources),
@@ -946,31 +903,12 @@ class AnswerService:
                 prepared_input["profile_memory_enabled"] = memory_enabled
                 prepared_input["profile_memory_epoch"] = memory_epoch
                 try:
-                    require_prepared_input_bounds(prepared_input)
-                except PreparedInputTooLargeError as exc:
-                    raise AnswerRequestError(str(exc)) from exc
-                resources_payload = _accepted_resource_payloads(
-                    run_input, attachment_bytes=attachment_bytes
-                )
-                try:
-                    async with self._coordinator.admission() as runtime_available:
-                        if not runtime_available:
-                            raise RunRuntimeUnavailableError("Answer runtime is unavailable")
-                        run_id = str(uuid7())
-                        accepted = await acceptor.create_run(
-                            envelope=PreparedRunEnvelope(
-                                run_kind="answer",
-                                lane="query",
-                                submitted_by=owner_id,
-                                access_scope=RunAccessScope(kind="owner", scope_id=owner_id),
-                                submission_key=idempotency_key or run_id,
-                                request_fingerprint=fingerprint,
-                                payload=prepared_input,
-                                accepted_input=accepted_input_envelope(prepared_input),
-                                retention_seconds=self._run_retention_seconds,
+                    return await self._admission.admit(
+                        partial(
+                            acceptor.create_run,
+                            resources=_accepted_resource_payloads(
+                                run_input, attachment_bytes=attachment_bytes
                             ),
-                            run_id=run_id,
-                            resources=resources_payload,
                             artifacts=[
                                 PendingArtifact(content=content) for content in attachment_bytes
                             ],
@@ -988,23 +926,25 @@ class AnswerService:
                                 agent_lane_id=run_input.agent_lane_id,
                                 source_lane_id=run_input.source_lane_id,
                             ),
-                        )
-                        if accepted is not None:
-                            self._coordinator.wake()
+                        ),
+                        submitted_by=owner_id,
+                        access_scope=RunAccessScope(kind="owner", scope_id=owner_id),
+                        idempotency_key=idempotency_key,
+                        fingerprint=fingerprint,
+                        payload=prepared_input,
+                        accepted_input=accepted_input_envelope(prepared_input),
+                    )
                 except StaleConnectionBindingError as exc:
-                    if idempotency_key is not None:
-                        replay = await acceptor.replay_run(
-                            owner_id=owner_id,
-                            idempotency_key=idempotency_key,
-                            idempotency_fingerprint=fingerprint,
-                            run_kind="answer",
-                        )
-                        if replay is not None:
-                            return replay
+                    replay = await self._admission.replay(
+                        acceptor,
+                        submitted_by=owner_id,
+                        idempotency_key=idempotency_key,
+                        fingerprint=fingerprint,
+                    )
+                    if replay is not None:
+                        return replay
                     if attempt == 1:
                         raise AnswerConnectionsChangedError() from exc
-                    continue
-                return accepted
         raise RuntimeError("Answer acceptance exhausted its bounded attempts")
 
     def _reject_unsupported_mode(

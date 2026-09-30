@@ -9,10 +9,9 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, aclosing
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
-from uuid import uuid7
 
 from dlightrag.application.errors import (
     ApplicationInputError,
@@ -20,12 +19,13 @@ from dlightrag.application.errors import (
     dependency_unavailable,
 )
 from dlightrag.application.runs import (
-    IdempotencyKeyConflict,
-    RunAdmissionLimitExceededError,
+    RunAdmission,
+    RunAdmissionScheduler,
     RunCancelledError,
     RunCreation,
     RunEvent,
     RunFailedError,
+    RunReplayer,
     RunRuntimeUnavailableError,
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
@@ -51,21 +51,12 @@ from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmb
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
-from dlightrag.engine.runtime.contracts import RunKind
 from dlightrag.engine.runtime.policy import RETRIEVAL_RUN_RETENTION_SECONDS
 from dlightrag.engine.runtime.records import (
-    IdempotencyKeyConflict as RuntimeIdempotencyKeyConflict,
-)
-from dlightrag.engine.runtime.records import (
-    PreparedInputTooLargeError,
     PreparedRunEnvelope,
     RunAccessScope,
     RunRecord,
-    require_prepared_input_bounds,
     run_request_fingerprint,
-)
-from dlightrag.engine.runtime.records import (
-    RunAdmissionLimitExceededError as RuntimeRunAdmissionLimitExceededError,
 )
 from dlightrag.engine.runtime.records import RunCreation as RuntimeRunCreation
 from dlightrag.engine.runtime.records import RunEvent as RuntimeRunEvent
@@ -146,17 +137,8 @@ class PlannerProvider(Protocol):
     async def aclose(self) -> None: ...
 
 
-class RetrievalRunRepository(Protocol):
+class RetrievalRunRepository(RunReplayer[RuntimeRunCreation], Protocol):
     """Owner-scoped generic Run operations used by Retrieval acceptance."""
-
-    async def replay_run(
-        self,
-        *,
-        owner_id: str,
-        idempotency_key: str,
-        idempotency_fingerprint: str,
-        run_kind: RunKind,
-    ) -> RuntimeRunCreation | None: ...
 
     async def accept_run(
         self, *, envelope: PreparedRunEnvelope, run_id: str
@@ -165,14 +147,7 @@ class RetrievalRunRepository(Protocol):
     async def get_run(self, *, owner_id: str, run_id: str) -> RunRecord | None: ...
 
 
-class RetrievalRunScheduler(Protocol):
-    @property
-    def is_started(self) -> bool: ...
-
-    def admission(self) -> AbstractAsyncContextManager[bool]: ...
-
-    def wake(self) -> None: ...
-
+class RetrievalRunScheduler(RunAdmissionScheduler, Protocol):
     def subscribe(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0
     ) -> AsyncGenerator[RuntimeRunEvent]: ...
@@ -258,6 +233,12 @@ class RetrievalService:
             raise RuntimeError("Retrieval runtime is already bound")
         self._store = store
         self._coordinator = coordinator
+
+    def _runtime(self) -> tuple[RetrievalRunRepository, RetrievalRunScheduler]:
+        """Return the bound Run store and scheduler; unbound, no Retrieval can run."""
+        if self._store is None or self._coordinator is None:
+            raise RunRuntimeUnavailableError("Retrieval runtime is unavailable")
+        return self._store, self._coordinator
 
     async def _acquire(self, workspace: str) -> Any:
         """Acquire one workspace and translate Engine availability errors."""
@@ -392,50 +373,30 @@ class RetrievalService:
     ) -> RunCreation:
         """Accept one durable Retrieval and return without waiting for execution."""
         run_input, fingerprint, accepted_input = self._normalized_run_input(request)
-        store = self._store
-        coordinator = self._coordinator
-        if store is None or coordinator is None:
-            raise RunRuntimeUnavailableError("Retrieval runtime is unavailable")
-        try:
-            if idempotency_key is not None:
-                replay = await store.replay_run(
-                    owner_id=owner_id,
-                    idempotency_key=idempotency_key,
-                    idempotency_fingerprint=fingerprint,
-                    run_kind="retrieval",
-                )
-                if replay is not None:
-                    return RunCreation.from_runtime(replay)
-            if not coordinator.is_started:
-                raise RunRuntimeUnavailableError("Retrieval runtime is unavailable")
-            prepared_input = run_input.as_request()
-            try:
-                require_prepared_input_bounds(prepared_input)
-            except PreparedInputTooLargeError as exc:
-                raise RetrievalInputError(str(exc)) from exc
-            async with coordinator.admission() as runtime_available:
-                if not runtime_available:
-                    raise RunRuntimeUnavailableError("Retrieval runtime is unavailable")
-                run_id = str(uuid7())
-                creation = await store.accept_run(
-                    envelope=PreparedRunEnvelope(
-                        run_kind="retrieval",
-                        lane="query",
-                        submitted_by=owner_id,
-                        access_scope=RunAccessScope(kind="owner", scope_id=owner_id),
-                        submission_key=idempotency_key or run_id,
-                        request_fingerprint=fingerprint,
-                        payload=prepared_input,
-                        accepted_input=accepted_input,
-                        retention_seconds=self._run_retention_seconds,
-                    ),
-                    run_id=run_id,
-                )
-                coordinator.wake()
-        except RuntimeIdempotencyKeyConflict as exc:
-            raise IdempotencyKeyConflict() from exc
-        except RuntimeRunAdmissionLimitExceededError as exc:
-            raise RunAdmissionLimitExceededError() from exc
+        store, coordinator = self._runtime()
+        admission = RunAdmission(
+            run_kind="retrieval",
+            lane="query",
+            runtime="Retrieval",
+            retention_seconds=self._run_retention_seconds,
+            input_error=RetrievalInputError,
+            scheduler=coordinator,
+        )
+        creation = await admission.replay(
+            store, submitted_by=owner_id, idempotency_key=idempotency_key, fingerprint=fingerprint
+        )
+        if creation is None:
+            # As Answer does, an unavailable runtime refuses before the input is bounded.
+            admission.require_runtime()
+            creation = await admission.admit(
+                store.accept_run,
+                submitted_by=owner_id,
+                access_scope=RunAccessScope(kind="owner", scope_id=owner_id),
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                payload=run_input.as_request(),
+                accepted_input=accepted_input,
+            )
         return RunCreation.from_runtime(creation)
 
     def _normalized_run_input(
@@ -529,10 +490,7 @@ class RetrievalService:
         projection: RetrieveProjection,
     ) -> RetrieveResponse:
         """Wait for one owned run and apply the caller's current reader scope."""
-        store = self._store
-        coordinator = self._coordinator
-        if store is None or coordinator is None:
-            raise RunRuntimeUnavailableError("Retrieval runtime is unavailable")
+        store, coordinator = self._runtime()
         async with aclosing(coordinator.subscribe(owner_id=owner_id, run_id=run_id)) as events:
             async for _event in events:
                 pass
@@ -599,9 +557,7 @@ class RetrievalService:
             owner_id=owner_id,
             idempotency_key=idempotency_key,
         )
-        coordinator = self._coordinator
-        if coordinator is None:
-            raise RunRuntimeUnavailableError("Retrieval runtime is unavailable")
+        _store, coordinator = self._runtime()
         async with aclosing(
             coordinator.subscribe(owner_id=owner_id, run_id=creation.run.run_id)
         ) as events:
