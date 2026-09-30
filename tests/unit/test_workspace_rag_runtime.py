@@ -250,6 +250,163 @@ async def test_a_url_document_retry_fetches_it_from_its_download_locator(
     assert fetched == [locator]
 
 
+_GONE_LOCATOR = "https://cdn.example.com/assets/gone.pdf"
+
+
+async def _source_is_gone(_url: str, destination: Path, **_kwargs: Any) -> None:
+    destination.write_bytes(b"partial")
+    raise httpx.ConnectError("connection refused")
+
+
+def _unfinalized_url_document(
+    config: DlightragConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    download: Callable[..., Awaitable[None]] = _source_is_gone,
+) -> SimpleNamespace:
+    """A writer holding ``doc-1``, a URL document LightRAG processed but DlightRAG
+    never finalized, whose bytes were not retained.
+
+    Returns the service, its store, metadata and engine doubles, and the parser
+    input a fetch of the document's source writes.
+    """
+    _fetch_urls_with(monkeypatch, download)
+    stores = AsyncMock()
+    stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: SimpleNamespace(status="processed", file_path="report.pdf") for doc_id in doc_ids
+    }
+    stores.get_doc_status.return_value = {"status": "processed"}
+    metadata = AsyncMock()
+    _serve_metadata(
+        metadata,
+        {
+            "doc-1": {
+                "filename": "report.pdf",
+                "source_uri": "bynder://asset/1",
+                "download_locator": _GONE_LOCATOR,
+                "_dlightrag_finalization_complete": False,
+            }
+        },
+    )
+    metadata.find_by_download_locator.side_effect = lambda value: (
+        ["doc-1"] if value == _GONE_LOCATOR else []
+    )
+    engine = MagicMock()
+    engine.aingest_files = AsyncMock(
+        side_effect=AssertionError("a document whose source is gone replays nothing")
+    )
+    service = _service(config)
+    service._initialized = True
+    service._lightrag_stores = stores
+    service._metadata_index = metadata
+    service._ingestion_engine = engine
+    parser_input = (
+        service._workspace_input_root()
+        / remote_parser_input_path(
+            input_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
+        ).name
+    )
+    return SimpleNamespace(
+        service=service, stores=stores, metadata=metadata, engine=engine, parser_input=parser_input
+    )
+
+
+async def test_a_processed_document_whose_source_is_gone_fails_its_retry(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fetching the source again failed before anything replayed: that is certain.
+
+    The document fails and says why, as on first ingestion, rather than leaving
+    the retry uncertain until a source that may never come back does. It keeps
+    its state, unpublished, so it stays retryable.
+    """
+    document = _unfinalized_url_document(test_config, monkeypatch)
+
+    result = await document.service.aretry_failed_docs(cohort_doc_ids=("doc-1",))
+
+    assert result["failed"] == 1, result
+    assert result["failed_docs"] == [
+        {
+            "doc_id": "doc-1",
+            "file_path": "report.pdf",
+            "identifier": "report.pdf",
+            "reason": "the source could not be downloaded",
+        }
+    ]
+    document.engine.aingest_files.assert_not_awaited()
+    document.metadata.upsert.assert_not_awaited()
+    document.metadata.delete.assert_not_awaited()
+    assert not document.parser_input.exists()
+
+
+async def _source_is_back(_url: str, destination: Path, **_kwargs: Any) -> None:
+    destination.write_bytes(b"%PDF-1.4")
+
+
+@pytest.mark.parametrize("case", ["status_not_terminal", "replay_failed"])
+async def test_a_retry_whose_outcome_is_not_known_stays_uncertain(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Only a failed fetch replays nothing; otherwise the document may still change."""
+    from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
+
+    if case == "status_not_terminal":
+        document = _unfinalized_url_document(test_config, monkeypatch)
+        document.stores.get_doc_status.return_value = {"status": "processing"}
+    else:
+        document = _unfinalized_url_document(test_config, monkeypatch, download=_source_is_back)
+        document.engine.aingest_files.side_effect = RuntimeError("finalizer failed")
+
+    with pytest.raises(RetryOutcomeUncertainError, match="not yet authoritative"):
+        await document.service.aretry_failed_docs(cohort_doc_ids=("doc-1",))
+
+
+@pytest.mark.parametrize("action", ["retry", "ingest"])
+async def test_a_run_settles_when_a_processed_documents_source_is_gone(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    """A retry Run, or an ingest resuming once LightRAG processed the document,
+    fails with it instead of waiting for a repair or deferring without bound."""
+    from dlightrag.engine.runtime.records import Failed
+    from tests.unit.test_corpus_mutations import _executor, _Health, _payload, _Session
+
+    document = _unfinalized_url_document(test_config, monkeypatch)
+    runtime = SimpleNamespace(
+        lightrag=SimpleNamespace(
+            aget_docs_by_track_id=AsyncMock(
+                return_value={"doc-1": {"status": "processed"}} if action == "ingest" else {}
+            )
+        ),
+        aretry_failed_docs=document.service.aretry_failed_docs,
+    )
+    health = _Health()
+    executor, _pool, _store = _executor(runtime, health=health)
+    if action == "retry":
+        session = _Session(_payload("retry", document_ids=["doc-1"], selector=None))
+    else:
+        source = {"source_type": "url", "urls": [_GONE_LOCATOR], "retain_source_file": False}
+        session = _Session(
+            _payload("ingest", source=source, staged_sources=[]), handoff_started=True
+        )
+
+    outcome = await executor.execute(cast(Any, session))
+
+    assert isinstance(outcome, Failed), outcome
+    assert outcome.error_kind == (
+        "corpus_retry_document_failed" if action == "retry" else "corpus_mutation_document_failed"
+    )
+    assert outcome.result is not None
+    assert outcome.result["documents"] == [
+        {
+            "document_id": "doc-1",
+            "identifier": "report.pdf",
+            "status": "failed",
+            "phase": "retry",
+            "reason": "the source could not be downloaded",
+        }
+    ]
+    assert health.degraded == []
+
+
 def _runtime_lightrag() -> SimpleNamespace:
     return SimpleNamespace(
         workspace="default",
@@ -3978,6 +4135,8 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_remote_retry_materialization_failure_removes_partial_parser_source(
         self, test_config: DlightragConfig
     ) -> None:
+        from dlightrag.engine.rag.workspace.workspace_rag import _RetryDownloadError
+
         service = _service(test_config)
         service._initialized = True
         service._metadata_index = AsyncMock()
@@ -4012,7 +4171,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "dlightrag.engine.rag.corpus.sources.url.URLDataSource",
                 return_value=source,
             ),
-            pytest.raises(RuntimeError, match="download interrupted"),
+            pytest.raises(_RetryDownloadError) as raised,
         ):
             await service._aingest_download_locator(  # type: ignore[attr-defined]
                 "bynder://asset/1",
@@ -4020,6 +4179,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "report.pdf",
             )
 
+        assert isinstance(raised.value.__cause__, RuntimeError)
         assert not parser_path.exists()
         assert not archived.exists()
         source.aclose.assert_awaited_once()

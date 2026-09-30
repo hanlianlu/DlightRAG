@@ -158,7 +158,11 @@ with it rather than deferring; nothing is reported as a dependency outage in
 `GET /health`. A remote document server is the caller's source, not a service
 this deployment runs, and a Run that deferred on it would fetch every other
 document again when it resumed. LightRAG never saw the document, so a retry Run
-cannot reach it: submit it again once its source is back.
+cannot reach it: submit it again once its source is back. A retry Run downloads
+a remote document again unless its bytes were retained, and so does an ingest
+that resumes after LightRAG processed a document DlightRAG had not yet
+finished. When that download fails, the document fails the same way, and it
+stays retryable: retry it once its source is back.
 
 A `local` source is copied into the Run's own stage before it is accepted, so
 later edits under `input_dir` never change what the Run ingests. `path` may name

@@ -1935,18 +1935,22 @@ def _retry_outcomes(result: Any, cohort: Sequence[str]) -> list[dict[str, Any]]:
         if isinstance(item, Mapping)
     }
     failed = {
-        str(item.get("doc_id"))
+        str(item.get("doc_id")): item
         for item in result.get("failed_docs") or ()
         if isinstance(item, Mapping)
     }
-    return [
-        {
-            "document_id": doc_id,
-            "status": "ready" if doc_id in succeeded and doc_id not in failed else "failed",
-            "phase": "finalized" if doc_id in succeeded and doc_id not in failed else "retry",
-        }
-        for doc_id in cohort[:_MAX_RESULT_DOCUMENTS]
-    ]
+    rows: list[dict[str, Any]] = []
+    for doc_id in cohort[:_MAX_RESULT_DOCUMENTS]:
+        if doc_id in succeeded and doc_id not in failed:
+            rows.append({"document_id": doc_id, "status": "ready", "phase": "finalized"})
+            continue
+        # A failed document keeps the file name and reason its retry gave it.
+        detail = failed.get(doc_id) or {}
+        rows.append(
+            {"document_id": doc_id, "status": "failed", "phase": "retry"}
+            | {key: detail[key] for key in ("identifier", "reason") if detail.get(key)}
+        )
+    return rows
 
 
 def _chunk_count(value: Any) -> int:

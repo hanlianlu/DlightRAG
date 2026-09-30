@@ -20,7 +20,7 @@ from dataclasses import replace as dataclass_replace
 from inspect import isawaitable
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from lightrag.constants import PARSED_DIR_NAME
 
@@ -183,8 +183,15 @@ def _safe_remote_source_id(document: SourceDocument) -> str:
     return safe_source_filename(document.display_filename or document.key)
 
 
+_DOWNLOAD_FAILURE_REASON = "the source could not be downloaded"
+
+
 def _download_failure(safe_source_id: str) -> str:
-    return f"{safe_source_id}: the source could not be downloaded"
+    return f"{safe_source_id}: {_DOWNLOAD_FAILURE_REASON}"
+
+
+class _RetryDownloadError(Exception):
+    """A retry could not fetch its document's remote source, so it replayed nothing."""
 
 
 def _retry_display_filename(value: object) -> str:
@@ -1696,6 +1703,10 @@ class WorkspaceRag:
         same owner never share a pass, so every recorded outcome matches a
         one-document-at-a-time retry.
 
+        A document whose remote source cannot be downloaded fails with that
+        reason, even one LightRAG processed but DlightRAG never finalized: the
+        attempt replayed nothing, so the document stays retryable.
+
         ``RetryOutcomeUncertainError`` ends the retry. Raised by a document's
         preflight, it first replays the documents already admitted, as a
         one-at-a-time retry would; raised while a pass prepares, runs, or
@@ -2031,7 +2042,11 @@ class WorkspaceRag:
                 # durable totals aligned with the authoritative status.
                 await record(doc_id, "succeeded", succeeded)
                 return
-            if authoritative is None:
+            if isinstance(outcome, _RetryDownloadError) and authoritative is not None:
+                # A fetch that failed replayed nothing: the document keeps its
+                # state, unpublished, and stays retryable once its source is back.
+                failed.update(identifier=request.display_filename, reason=_DOWNLOAD_FAILURE_REASON)
+            elif authoritative != "failed":
                 raise RetryOutcomeUncertainError("retry document status is not yet authoritative")
             await record(doc_id, "failed", failed)
             return
@@ -2049,8 +2064,13 @@ class WorkspaceRag:
             return
         await record(doc_id, "succeeded", succeeded)
 
-    async def _retry_doc_authoritative_outcome(self, doc_id: str) -> str | None:
-        """Return a durable outcome only for an authoritative terminal status."""
+    async def _retry_doc_authoritative_outcome(
+        self, doc_id: str
+    ) -> Literal["succeeded", "unfinalized", "failed"] | None:
+        """Return the document's authoritative terminal state, or None if it has none.
+
+        ``unfinalized`` is LightRAG ``processed`` without DlightRAG's finalization.
+        """
         if self._lightrag_stores is None:
             raise RetryOutcomeUncertainError("retry document status store is unavailable")
         try:
@@ -2065,7 +2085,7 @@ class WorkspaceRag:
                 metadata = await self._metadata_index.get(doc_id)
             except Exception as exc:
                 raise RetryOutcomeUncertainError("retry finalization metadata read failed") from exc
-            return "succeeded" if ingest_finalization_complete(metadata) else None
+            return "succeeded" if ingest_finalization_complete(metadata) else "unfinalized"
         if status == "failed":
             return "failed"
         return None
@@ -2290,38 +2310,50 @@ class WorkspaceRag:
             "metadata": user_metadata,
         }
         factory = RemoteSourceFactory(self.settings)
-        if source_type == "url":
-            document = IngestDocument(
-                url=download_locator, download_uri=download_locator, **common_fields
-            )
-            url_source = factory.url(
-                documents=[_source_document_from_manifest(document, key=cast(str, document.url))]
-            )
-            cleanup.push_async_callback(_aclose_retry_source, url_source)
-            # The adapter keys its document by file name rather than by URL, so
-            # the retry fetches the document the adapter keyed.
-            (source_document,) = [item async for item in url_source.aiter_documents()]
-            source: AsyncDataSource = url_source
-        else:
-            object_key = str(parts["blob_path"] if source_type == "azure_blob" else parts["key"])
-            document = IngestDocument(key=object_key, **common_fields)
-            source_document = _source_document_from_manifest(document, key=object_key)
-            if source_type == "s3":
-                source = factory.s3(
-                    str(parts["bucket"]),
-                    source_options or SourceRetrievalOptions(self.settings.s3_region),
+        try:
+            if source_type == "url":
+                document = IngestDocument(
+                    url=download_locator, download_uri=download_locator, **common_fields
                 )
+                url_source = factory.url(
+                    documents=[
+                        _source_document_from_manifest(document, key=cast(str, document.url))
+                    ]
+                )
+                cleanup.push_async_callback(_aclose_retry_source, url_source)
+                # The adapter keys its document by file name rather than by URL, so
+                # the retry fetches the document the adapter keyed.
+                (source_document,) = [item async for item in url_source.aiter_documents()]
+                source: AsyncDataSource = url_source
             else:
-                source = factory.azure(str(parts["container_name"]))
-            cleanup.push_async_callback(_aclose_retry_source, source)
-        prepared = await self._download_remote_to_prepared_item(
-            source=source,
-            document=source_document,
-            source_uri=stable_source_uri,
-            download_locator=download_locator,
-            retain_source_file=False,
-            source_options=source_options,
-        )
+                object_key = str(
+                    parts["blob_path"] if source_type == "azure_blob" else parts["key"]
+                )
+                document = IngestDocument(key=object_key, **common_fields)
+                source_document = _source_document_from_manifest(document, key=object_key)
+                if source_type == "s3":
+                    source = factory.s3(
+                        str(parts["bucket"]),
+                        source_options or SourceRetrievalOptions(self.settings.s3_region),
+                    )
+                else:
+                    source = factory.azure(str(parts["container_name"]))
+                cleanup.push_async_callback(_aclose_retry_source, source)
+            prepared = await self._download_remote_to_prepared_item(
+                source=source,
+                document=source_document,
+                source_uri=stable_source_uri,
+                download_locator=download_locator,
+                retain_source_file=False,
+                source_options=source_options,
+            )
+        except Exception as exc:
+            # As on first ingestion, the remote server is the caller's source, and
+            # a fetch that fails, even for a moment, fails this document.
+            logger.warning(
+                "Downloading %s for a retry failed (%s)", display_filename, type(exc).__name__
+            )
+            raise _RetryDownloadError from exc
         cleanup.push_async_callback(asyncio.to_thread, _remove_remote_parser_sources, [prepared])
         return dataclass_replace(
             prepared,
