@@ -51,12 +51,14 @@ LABEL maintainer="HanlianLyu"
 
 WORKDIR /app
 
-# Create non-root user BEFORE copying files to avoid chown layer duplication
+# Only the node binary is copied, so install the one library it links that the
+# slim base lacks (libatomic1); without it every node process fails to start.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
 COPY --from=search-tools /search-tools/fd /search-tools/rg /usr/local/bin/
+# Create non-root user BEFORE copying files to avoid chown layer duplication
 RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
     && mkdir -p /app/dlightrag_storage /home/app/.dlightrag/agent_workspaces \
     /home/app/.dlightrag/skills /home/app/.dlightrag/owner_skills \

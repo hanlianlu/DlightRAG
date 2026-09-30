@@ -283,6 +283,17 @@ def test_runtime_image_precreates_default_application_paths() -> None:
     assert "/app/dlightrag_agent_workspaces" not in dockerfile
 
 
+def test_runtime_image_installs_the_library_the_copied_node_links() -> None:
+    """Only the node binary crosses stages, so the runtime stage owns its libatomic."""
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    runtime_stage = dockerfile.rsplit("\nFROM ", 1)[1]
+
+    assert "COPY --from=frontend /usr/local/bin/node /usr/local/bin/node" in runtime_stage
+    assert re.search(
+        r"apt-get install -y --no-install-recommends [^\n]*\blibatomic1\b", runtime_stage
+    )
+
+
 def test_compose_runtime_services_do_not_bind_mount_source_tree() -> None:
     """Default compose should run the built image, not a host source overlay."""
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
