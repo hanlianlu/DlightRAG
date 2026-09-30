@@ -98,20 +98,7 @@ def test_title_aided_script_disables_and_scrubs_existing_config(tmp_path: Path) 
         ),
         encoding="utf-8",
     )
-    env_file = tmp_path / ".env.mineru"
-    env_file.write_text("MINERU_TITLE_AIDED_ENABLE=false\n", encoding="utf-8")
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    env["MINERU_ENV_FILE"] = str(env_file)
-    env["MINERU_SERVICE_VENV"] = str(tmp_path / "missing-venv")
-    for key in (
-        "MINERU_TITLE_AIDED_ENABLE",
-        "MINERU_TITLE_AIDED_API_KEY",
-        "MINERU_TITLE_AIDED_BASE_URL",
-        "MINERU_TITLE_AIDED_MODEL",
-        "MINERU_TITLE_AIDED_ENABLE_THINKING",
-    ):
-        env.pop(key, None)
+    env = _title_aided_env(tmp_path, home, "MINERU_TITLE_AIDED_ENABLE=false\n")
 
     subprocess.run(
         [str(MINERU_SCRIPTS / "title_aided.sh")],
@@ -124,6 +111,94 @@ def test_title_aided_script_disables_and_scrubs_existing_config(tmp_path: Path) 
     assert config["model-source"] == "huggingface"
     assert config["llm-aided-config"]["other"] == {"keep": True}
     assert config["llm-aided-config"]["title_aided"] == {"enable": False}
+
+
+def _title_aided_env(tmp_path: Path, home: Path, env_file_text: str) -> dict[str, str]:
+    """title_aided.sh's environment: this .env.mineru, and a uv that runs this interpreter.
+
+    The stand-in uv records its arguments and runs ``python ARGS`` with the test's
+    own interpreter, which has DlightRAG installed.
+    """
+    env_file = tmp_path / ".env.mineru"
+    env_file.write_text(env_file_text, encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "uv",
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$MINERU_CAPTURE"\n'
+        'while [[ $# -gt 0 && "$1" != python ]]; do shift; done\n'
+        "shift\n"
+        f'exec "{sys.executable}" "$@"\n',
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MINERU_CAPTURE"] = str(tmp_path / "uv.txt")
+    env["MINERU_ENV_FILE"] = str(env_file)
+    env["MINERU_SERVICE_VENV"] = str(tmp_path / "missing-venv")
+    for key in (
+        "MINERU_TITLE_AIDED_ENABLE",
+        "MINERU_TITLE_AIDED_API_KEY",
+        "MINERU_TITLE_AIDED_BASE_URL",
+        "MINERU_TITLE_AIDED_MODEL",
+        "MINERU_TITLE_AIDED_ENABLE_THINKING",
+    ):
+        env.pop(key, None)
+    return env
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "model", "enable_thinking", "extra_body"),
+    [
+        ("https://api.deepseek.com", "deepseek-flash", "false", {"thinking": {"type": "disabled"}}),
+        (
+            "https://openrouter.ai/api/v1",
+            "openai/gpt-5.6-luna",
+            "false",
+            {"reasoning": {"effort": "none"}},
+        ),
+        ("https://api.openai.com/v1", "gpt-5.6-luna", "false", {"reasoning_effort": "none"}),
+        ("https://api.moonshot.ai/v1", "kimi-k3", "false", {"reasoning_effort": "low"}),
+        ("https://api.deepseek.com", "deepseek-flash", "true", {}),
+    ],
+    ids=["deepseek", "openrouter", "openai-uncatalogued", "cannot-stop", "thinking-on"],
+)
+def test_title_aided_script_stores_the_catalogue_reasoning_switch(
+    tmp_path: Path, endpoint: str, model: str, enable_thinking: str, extra_body: dict[str, object]
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    env = _title_aided_env(
+        tmp_path,
+        home,
+        "MINERU_TITLE_AIDED_ENABLE=true\n"
+        "MINERU_TITLE_AIDED_API_KEY=title-aided-test-secret\n"
+        f"MINERU_TITLE_AIDED_BASE_URL={endpoint}\n"
+        f"MINERU_TITLE_AIDED_MODEL={model}\n"
+        f"MINERU_TITLE_AIDED_ENABLE_THINKING={enable_thinking}\n",
+    )
+
+    completed = subprocess.run(
+        [str(MINERU_SCRIPTS / "title_aided.sh")],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    config = json.loads((home / "mineru.json").read_text(encoding="utf-8"))
+    assert config["llm-aided-config"]["title_aided"] == {
+        "api_key": "title-aided-test-secret",
+        "base_url": endpoint,
+        "model": model,
+        "extra_body": extra_body,
+        "enable": True,
+    }
+    uv_call = (tmp_path / "uv.txt").read_text(encoding="utf-8")
+    assert uv_call.startswith(f"run --project {ROOT} --no-dev python -u ")
+    assert "title-aided-test-secret" not in completed.stdout + completed.stderr
 
 
 def _fake_mineru_modules(tmp_path: Path) -> Path:
@@ -257,23 +332,29 @@ def test_mineru_sitecustomize_bounds_title_aided_stream_without_leaking_secret(
 
 
 @pytest.mark.parametrize(
-    ("endpoint", "extra_body"),
+    ("reasoning_config", "extra_body"),
     [
-        ("https://api.deepseek.com", {"thinking": {"type": "disabled"}}),
-        ("https://dashscope.example/compatible-mode/v1", {"enable_thinking": False}),
+        (
+            {"extra_body": {"thinking": {"type": "disabled"}}, "enable_thinking": False},
+            {"thinking": {"type": "disabled"}},
+        ),
+        ({"extra_body": {}}, None),
+        ({"enable_thinking": False}, {"enable_thinking": False}),
     ],
+    ids=["resolved-fields", "provider-default", "hand-written"],
 )
-def test_title_aided_turns_reasoning_off_the_way_its_endpoint_reads(
-    tmp_path: Path, endpoint: str, extra_body: dict[str, object]
+def test_title_aided_sends_the_reasoning_fields_its_config_names(
+    tmp_path: Path, reasoning_config: dict[str, object], extra_body: dict[str, object] | None
 ) -> None:
-    """DeepSeek ignores enable_thinking; only its own switch keeps it from reasoning."""
+    """The fields setup resolved go out verbatim; a hand-written config keeps MinerU's own."""
     fake_modules = _fake_mineru_modules(tmp_path)
+    config = {"api_key": "k", "base_url": "https://example.invalid", "model": "m"}
     probe = tmp_path / "probe.py"
     probe.write_text(
         "import json\n"
         "import mineru.utils.llm_aided as aided\n"
         "aided._request_title_levels(\n"
-        f"    {{'api_key': 'k', 'base_url': {endpoint!r}, 'model': 'm', 'enable_thinking': False}},\n"
+        f"    {config | reasoning_config!r},\n"
         "    {0: ['Heading', 12, 1]},\n"
         ")\n"
         "print(json.dumps(aided.extra_bodies))\n",

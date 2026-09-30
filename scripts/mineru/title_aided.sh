@@ -8,7 +8,9 @@
 #
 #   MINERU_TITLE_AIDED_API_KEY=sk-... make mineru-title-aided
 #
-# Re-run after changing credentials to update ~/mineru.json in-place.
+# Re-run after changing any of these values to update ~/mineru.json in-place:
+# the model's reasoning switch is resolved from DlightRAG's model catalogue
+# when the file is written.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -63,5 +65,7 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-"$PYTHON_BIN" -u "$SCRIPTS_DIR/_write_mineru_json.py" \
+# DlightRAG's model catalogue knows how this endpoint turns reasoning off, so the
+# config is written from DlightRAG's own environment rather than MinerU's.
+uv run --project "$mineru_repo_root" --no-dev python -u "$SCRIPTS_DIR/_write_mineru_json.py" \
   "$TARGET" "$API_KEY" "$BASE_URL" "$MODEL" "$ENABLE_THINKING"

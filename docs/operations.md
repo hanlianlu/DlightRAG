@@ -183,6 +183,9 @@ provider attempt by `MINERU_TITLE_AIDED_ATTEMPT_TIMEOUT_SECONDS` (default 60)
 and stops after `MINERU_TITLE_AIDED_MAX_ATTEMPTS` (default 2), then continues
 parsing without corrected title levels. Set overrides in `.env.mineru` and
 restart the service; diagnostics never log the title-aided API key.
+`make mineru-title-aided` asks DlightRAG's model catalogue how the title
+model's endpoint turns reasoning off and stores those request fields in
+`~/mineru.json`; re-run it after changing the endpoint or model.
 
 Optional Compose Docling CPU:
 

@@ -68,7 +68,6 @@ import os
 import sys
 import time
 from functools import wraps
-from urllib.parse import urlsplit
 
 import uvicorn.config
 from PIL import Image
@@ -157,18 +156,20 @@ _TITLE_AIDED_MAX_ATTEMPTS = _positive_int_env("MINERU_TITLE_AIDED_MAX_ATTEMPTS",
 _TITLE_AIDED_READ_TIMEOUT_SECONDS = min(_TITLE_AIDED_ATTEMPT_TIMEOUT_SECONDS, 10.0)
 
 
-def _thinking_switch(title_aided_config):
-    """The request field that sets the title model's reasoning, as its endpoint reads it.
+def _reasoning_fields(title_aided_config):
+    """The request fields that set the title model's reasoning, in its endpoint's dialect.
 
-    DeepSeek ignores the ``enable_thinking`` field other OpenAI-compatible hosts read
-    and keeps reasoning on unless its own ``thinking`` switch turns it off; reasoning
-    over a book's title list then outlasts the attempt deadline every time.
+    Endpoints read different fields: DeepSeek ignores ``enable_thinking`` and keeps
+    reasoning on unless its own ``thinking`` switch turns it off, and OpenAI refuses
+    a field it does not know. ``make mineru-title-aided`` resolves the fields through
+    DlightRAG's model catalogue and stores them as ``extra_body``; a hand-written
+    config keeps MinerU's own ``enable_thinking`` field.
     """
-    enabled = bool(title_aided_config["enable_thinking"])
-    host = (urlsplit(str(title_aided_config.get("base_url") or "")).hostname or "").lower()
-    if host == "deepseek.com" or host.endswith(".deepseek.com"):
-        return {"thinking": {"type": "enabled" if enabled else "disabled"}}
-    return {"enable_thinking": enabled}
+    if "extra_body" in title_aided_config:
+        return title_aided_config["extra_body"]
+    if "enable_thinking" in title_aided_config:
+        return {"enable_thinking": bool(title_aided_config["enable_thinking"])}
+    return {}
 
 
 def _bounded_request_title_levels(title_aided_config, title_dict, prompt_builder=None):
@@ -183,8 +184,9 @@ def _bounded_request_title_levels(title_aided_config, title_dict, prompt_builder
         "temperature": 0.7,
         "stream": True,
     }
-    if "enable_thinking" in title_aided_config:
-        api_params["extra_body"] = _thinking_switch(title_aided_config)
+    extra_body = _reasoning_fields(title_aided_config)
+    if extra_body:
+        api_params["extra_body"] = extra_body
 
     try:
         client = _llm_aided.OpenAI(
