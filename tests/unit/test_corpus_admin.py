@@ -667,3 +667,35 @@ async def test_start_promotion_worker_starts_only_on_writers() -> None:
     reader._promotion_worker = cast(Any, SimpleNamespace(start=MagicMock()))
     reader.start_promotion_worker()
     reader._promotion_worker.start.assert_not_called()  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    ("component", "detail"),
+    [
+        ("corpus_storage", "Corpus storage is temporarily unavailable"),
+        ("providers", "The model provider is temporarily unavailable"),
+    ],
+)
+async def test_a_workspace_that_cannot_be_built_names_the_dependency_that_is_out(
+    component: Any, detail: str
+) -> None:
+    """A request refused for it (HTTP 503) says which dependency to wait for."""
+    from dlightrag.application.corpus_admin.service import _acquire_workspace
+    from dlightrag.application.errors import ApplicationUnavailableError
+    from dlightrag.engine.dependencies import classify_transient_dependency
+    from dlightrag.engine.rag.workspace.pool import WorkspaceUnavailableError
+
+    pool = SimpleNamespace(
+        acquire=AsyncMock(
+            side_effect=WorkspaceUnavailableError(
+                "Workspace 'default' is temporarily unavailable", component=component
+            )
+        )
+    )
+
+    with pytest.raises(ApplicationUnavailableError) as refused:
+        await _acquire_workspace(cast(Any, pool), "default")
+
+    assert str(refused.value) == detail
+    assert classify_transient_dependency(refused.value) == component
+    assert isinstance(refused.value.__cause__, WorkspaceUnavailableError)

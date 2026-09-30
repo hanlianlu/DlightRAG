@@ -3,7 +3,7 @@
 
 import math
 
-from dlightrag.engine.dependencies import TransientDependencyError
+from dlightrag.engine.dependencies import DependencyComponent, TransientDependencyError
 from dlightrag.engine.runtime.errors import RunSchemaError
 
 
@@ -41,11 +41,32 @@ class ApplicationClosedError(ApplicationUnavailableError):
         super().__init__(detail or "Application is shutting down")
 
 
-class CorpusUnavailableError(TransientDependencyError, ApplicationUnavailableError):
+_UNAVAILABLE_DETAILS: dict[DependencyComponent, str] = {
+    "corpus_storage": "Corpus storage is temporarily unavailable",
+    "parser": "The document parser is temporarily unavailable",
+    "providers": "The model provider is temporarily unavailable",
+}
+
+
+class DependencyUnavailableError(TransientDependencyError, ApplicationUnavailableError):
+    """An Application use case cannot currently reach a dependency it needs."""
+
+    def __init__(self, component: DependencyComponent, detail: str | None = None) -> None:
+        super().__init__(component, detail or _UNAVAILABLE_DETAILS[component])
+
+
+class CorpusUnavailableError(DependencyUnavailableError):
     """An Application use case cannot currently reach corpus state."""
 
     def __init__(self, detail: str | None = None) -> None:
-        super().__init__("corpus_storage", detail or "Corpus storage is temporarily unavailable")
+        super().__init__("corpus_storage", detail)
+
+
+def dependency_unavailable(component: DependencyComponent) -> DependencyUnavailableError:
+    """The Application error for a dependency that is briefly out; its text names it."""
+    if component == "corpus_storage":
+        return CorpusUnavailableError()
+    return DependencyUnavailableError(component)
 
 
 class StorageSchemaError(RuntimeError):
@@ -75,7 +96,9 @@ __all__ = [
     "ApplicationNotFoundError",
     "ApplicationUnavailableError",
     "CorpusUnavailableError",
+    "DependencyUnavailableError",
     "RunSchemaError",
     "StorageSchemaError",
     "WorkspaceWriteFencedError",
+    "dependency_unavailable",
 ]

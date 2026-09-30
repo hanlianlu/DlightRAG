@@ -963,16 +963,20 @@ class TestDirectImageEmbeddingCapability:
     async def test_transient_probe_failure_is_raised_not_settled(
         self, failure: Exception, required: bool
     ) -> None:
+        """Raised as the model provider's outage, whatever client error carried it."""
+        from dlightrag.engine.dependencies import ProviderUnavailableError
+
         embedder = MagicMock()
         embedder.supports_images = True
         embedder.probe_image_embedding = AsyncMock(side_effect=failure)
 
-        with pytest.raises(type(failure)):
+        with pytest.raises(ProviderUnavailableError) as raised:
             await resolve_direct_image_embedding_enabled(
                 embedder,
                 startup_probe=True,
                 require_image_support=required,
             )
+        assert raised.value.__cause__ is failure
 
     async def test_definitive_provider_rejection_disables_direct_image_embedding(self) -> None:
         embedder = MagicMock()
@@ -1012,7 +1016,12 @@ class TestDirectImageEmbeddingCapability:
         pool = WorkspacePool(build=build, clock=lambda: now)
         with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable") as failed:
             await pool.acquire("research")
-        assert isinstance(failed.value.__cause__, httpx.ConnectError)
+        # A bare transport error from the embedding client is the provider's
+        # outage, not corpus storage's.
+        assert failed.value.component == "providers"
+        cause = failed.value.__cause__
+        assert cause is not None
+        assert isinstance(cause.__cause__, httpx.ConnectError)
         with pytest.raises(WorkspaceUnavailableError, match="backoff"):
             await pool.acquire("research")
         assert settled == []

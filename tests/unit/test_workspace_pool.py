@@ -79,8 +79,8 @@ async def test_retry_callback_clears_bounded_workspace_degradation() -> None:
     now = 0.0
     runtime = cast(WorkspaceRag, AsyncMock())
     outcomes = [ConnectionError("down"), runtime]
-    unavailable: list[str] = []
-    available: list[str] = []
+    unavailable: list[tuple[str, str]] = []
+    available: list[tuple[str, str | None]] = []
 
     async def build(*_args: Any) -> WorkspaceRag:
         outcome = outcomes.pop(0)
@@ -93,16 +93,69 @@ async def test_retry_callback_clears_bounded_workspace_degradation() -> None:
         clock=lambda: now,
         initial_backoff_seconds=1,
         max_backoff_seconds=1,
-        on_workspace_unavailable=unavailable.append,
-        on_workspace_available=available.append,
+        on_workspace_unavailable=lambda workspace, component: unavailable.append(
+            (workspace, component)
+        ),
+        on_workspace_available=lambda workspace, recovered: available.append(
+            (workspace, recovered)
+        ),
     )
     with pytest.raises(WorkspaceUnavailableError):
         await pool.acquire("default")
     now = 1.0
 
     assert await pool.acquire("default") is runtime
-    assert unavailable == ["default"]
-    assert available == ["default"]
+    assert unavailable == [("default", "corpus_storage")]
+    assert available == [("default", "corpus_storage")]
+
+
+async def test_a_workspace_the_model_provider_keeps_down_backs_off_and_names_it() -> None:
+    """Building a workspace also asks the model provider, when it probes image embedding.
+
+    That outage backs the workspace off like any other, and whoever needs the
+    workspace (a request, a Run, health) is told the provider is out, not storage.
+    """
+    from dlightrag.engine.dependencies import (
+        ProviderUnavailableError,
+        classify_transient_dependency,
+    )
+
+    now = 0.0
+    runtime = cast(WorkspaceRag, AsyncMock())
+    calls = 0
+    unavailable: list[tuple[str, str]] = []
+    available: list[tuple[str, str | None]] = []
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ProviderUnavailableError()
+        return runtime
+
+    pool = WorkspacePool(
+        build=build,
+        clock=lambda: now,
+        on_workspace_unavailable=lambda workspace, component: unavailable.append(
+            (workspace, component)
+        ),
+        on_workspace_available=lambda workspace, recovered: available.append(
+            (workspace, recovered)
+        ),
+    )
+    with pytest.raises(WorkspaceUnavailableError, match="temporarily unavailable") as failed:
+        await pool.acquire("default")
+    assert failed.value.component == "providers"
+    assert isinstance(failed.value.__cause__, ProviderUnavailableError)
+    with pytest.raises(WorkspaceUnavailableError, match="backoff") as waiting:
+        await pool.acquire("default")
+    assert classify_transient_dependency(waiting.value) == "providers"
+    assert calls == 1
+    assert unavailable == [("default", "providers")]
+
+    now = 16.0
+    assert await pool.acquire("default") is runtime
+    assert available == [("default", "providers")]
 
 
 async def test_retryable_failure_backoff_grows_and_caps_at_five_minutes() -> None:

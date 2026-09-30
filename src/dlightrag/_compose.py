@@ -164,6 +164,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
     from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
     from dlightrag.engine.answer.workspace import agent_workspace_reclaimer
+    from dlightrag.engine.dependencies import DependencyComponent
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker
     from dlightrag.engine.rag.retrieval.rerank import build_rerank_func
@@ -231,13 +232,16 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     default_workspace = config.deployment.workspace_id
 
-    def workspace_unavailable(workspace_id: str) -> None:
+    def workspace_unavailable(workspace_id: str, component: DependencyComponent) -> None:
         if workspace_id == default_workspace:
-            health.mark_component_degraded("corpus_storage")
+            health.mark_component_degraded(component)
 
-    def workspace_available(workspace_id: str) -> None:
+    def workspace_available(workspace_id: str, recovered: DependencyComponent | None) -> None:
         if workspace_id == default_workspace:
+            # A built workspace reached corpus storage, and whatever it waited for.
             health.mark_component_healthy("corpus_storage")
+            if recovered is not None:
+                health.mark_component_healthy(recovered)
 
     pool = WorkspacePool(
         build=build_workspace,

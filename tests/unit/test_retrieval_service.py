@@ -913,3 +913,34 @@ async def test_concurrent_planner_runtime_close_callers_join_model_cleanup() -> 
         await asyncio.gather(first, second)
 
     model.aclose.assert_awaited_once()
+
+
+async def test_retrieval_waits_for_the_dependency_that_keeps_a_workspace_down() -> None:
+    """A workspace the model provider keeps down is the provider's outage to a caller."""
+    from dlightrag.application.errors import ApplicationUnavailableError
+    from dlightrag.engine.dependencies import classify_transient_dependency
+    from dlightrag.engine.rag.workspace.pool import WorkspaceUnavailableError
+
+    pool = AsyncMock()
+    pool.acquire.side_effect = WorkspaceUnavailableError(
+        "Workspace 'default' is temporarily unavailable", component="providers"
+    )
+    service = RetrievalService(
+        pool=pool,
+        planners=_Planners(Mock()),
+        schema_lookup=AsyncMock(return_value={}),
+        image_preparer=AsyncMock(return_value=[]),
+        projector=Mock(),
+        settings=RetrievalSettings(
+            default_top_k=8,
+            default_chunk_top_k=5,
+            timeout_seconds=30,
+            query_image_limit=4,
+        ),
+        telemetry=NoopTelemetry(),
+    )
+
+    with pytest.raises(ApplicationUnavailableError, match="model provider") as refused:
+        await service._acquire("default")
+
+    assert classify_transient_dependency(refused.value) == "providers"

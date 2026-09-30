@@ -16,7 +16,7 @@ from dlightrag.engine.ai.concurrency import bounded_map
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.media import flatten_image_to_rgb
 from dlightrag.engine.ai.telemetry import safe_log_text
-from dlightrag.engine.dependencies import classify_transient_dependency
+from dlightrag.engine.dependencies import ProviderUnavailableError, classify_transient_dependency
 from dlightrag.engine.rag.workspace.settings import RagSettings
 
 logger = logging.getLogger(__name__)
@@ -416,8 +416,10 @@ async def resolve_direct_image_embedding_enabled(
 
     The caller keeps the answer for the runtime's lifetime, so only a
     definitive probe outcome is returned. A transient provider failure is
-    re-raised instead: settling it as text-only would embed every document
-    this runtime ingests without its image beside the corpus's fused vectors.
+    raised instead, as ``ProviderUnavailableError``: settling it as text-only
+    would embed every document this runtime ingests without its image beside
+    the corpus's fused vectors, and whoever waits for the runtime waits for the
+    model provider, not for corpus storage.
     """
     if not getattr(embedder, "supports_images", False):
         if require_image_support:
@@ -441,7 +443,7 @@ async def resolve_direct_image_embedding_enabled(
                 "not settling the workspace's embedding mode",
                 type(exc).__name__,
             )
-            raise
+            raise ProviderUnavailableError() from exc
         if require_image_support:
             raise ValueError(
                 "embedding.input_modality='multimodal' requires working image-query and "

@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import uuid7
 
-from dlightrag.application.errors import ApplicationInputError, CorpusUnavailableError
+from dlightrag.application.errors import (
+    ApplicationInputError,
+    CorpusUnavailableError,
+    dependency_unavailable,
+)
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -29,6 +33,7 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.settings import ModelRole
 from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.dependencies import TransientDependencyError
 from dlightrag.engine.rag.retrieval import (
     MetadataFilter,
     RetrievalContexts,
@@ -45,9 +50,6 @@ from dlightrag.engine.rag.retrieval.planner import RetrievalPlan, RetrievalPlann
 from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
-from dlightrag.engine.rag.workspace.ports import (
-    CorpusUnavailableError as _EngineCorpusUnavailableError,
-)
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 from dlightrag.engine.runtime.contracts import RunKind
 from dlightrag.engine.runtime.policy import RETRIEVAL_RUN_RETENTION_SECONDS
@@ -261,9 +263,10 @@ class RetrievalService:
         """Acquire one workspace and translate Engine availability errors."""
         try:
             return await self._pool.acquire(workspace)
-        except _EngineCorpusUnavailableError as exc:
-            # The Engine's text names internals; it stays in the cause.
-            raise CorpusUnavailableError() from exc
+        except TransientDependencyError as exc:
+            # The Engine's text names internals; it stays in the cause. What reaches
+            # the caller names only the dependency that is out.
+            raise dependency_unavailable(exc.component) from exc
 
     def planner_for(self, model_profile: ModelProfile | None = None) -> RetrievalPlanner:
         if self._closed:

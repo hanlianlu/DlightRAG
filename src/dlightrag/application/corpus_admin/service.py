@@ -14,10 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dlightrag.application.access import WorkspaceRecord
 from dlightrag.application.errors import (
-    CorpusUnavailableError,
     StorageSchemaError,
     WorkspaceWriteFencedError,
+    dependency_unavailable,
 )
+from dlightrag.engine.dependencies import TransientDependencyError
 from dlightrag.engine.rag.corpus.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag.engine.rag.corpus.downloads import (
     LocalDownloadTarget as _EngineLocalDownloadTarget,
@@ -44,9 +45,6 @@ from dlightrag.engine.rag.workspace.ports import (
     CorpusMaintenanceStore,
     CorpusSchemaError,
     PromotionWorker,
-)
-from dlightrag.engine.rag.workspace.ports import (
-    CorpusUnavailableError as _EngineCorpusUnavailableError,
 )
 from dlightrag.engine.rag.workspace.ports import (
     WorkspaceWriteFencedError as _EngineWorkspaceWriteFencedError,
@@ -104,9 +102,10 @@ async def _acquire_workspace(pool: WorkspacePool, workspace: str) -> WorkspaceRa
         return await pool.acquire(workspace)
     except CorpusSchemaError as exc:
         raise StorageSchemaError(str(exc)) from exc
-    except _EngineCorpusUnavailableError as exc:
-        # The Engine's text names internals; it stays in the cause.
-        raise CorpusUnavailableError() from exc
+    except TransientDependencyError as exc:
+        # The Engine's text names internals; it stays in the cause. What reaches
+        # the caller names only the dependency that is out.
+        raise dependency_unavailable(exc.component) from exc
 
 
 def validate_workspace_name(name: str, *, max_length: int = 64) -> str:

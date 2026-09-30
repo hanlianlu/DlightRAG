@@ -7,23 +7,38 @@ import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 
+from dlightrag.engine.dependencies import (
+    DependencyComponent,
+    TransientDependencyError,
+    classify_transient_dependency,
+)
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup, defer_cancellation
-from dlightrag.engine.rag.workspace.ports import CorpusSchemaError, CorpusUnavailableError
+from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
 logger = logging.getLogger(__name__)
 
 type WorkspaceBuilder = Callable[[str], Awaitable[WorkspaceRag]]
-type WorkspaceStateCallback = Callable[[str], None]
+#: Told which dependency's outage keeps a workspace from being built.
+type WorkspaceUnavailableCallback = Callable[[str, DependencyComponent], None]
+#: Told a workspace was built, and which dependency's outage it recovered from, if any.
+type WorkspaceAvailableCallback = Callable[[str, DependencyComponent | None], None]
 
 
-class WorkspaceUnavailableError(CorpusUnavailableError):
-    """One canonical workspace runtime is temporarily unavailable."""
+class WorkspaceUnavailableError(TransientDependencyError):
+    """One canonical workspace runtime is temporarily unavailable.
 
-    def __init__(self, detail: str | None = None) -> None:
+    ``component`` is the dependency whose outage keeps it from being built: a
+    workspace's construction reaches corpus storage, and the model provider when
+    it probes image embedding. Whoever needs the workspace waits for that one.
+    """
+
+    def __init__(
+        self, detail: str | None = None, *, component: DependencyComponent = "corpus_storage"
+    ) -> None:
         self.detail = detail or "Workspace is not available"
-        super().__init__(self.detail)
+        super().__init__(component, self.detail)
 
 
 class WorkspacePool:
@@ -37,8 +52,8 @@ class WorkspacePool:
         initial_backoff_seconds: float = 15.0,
         max_backoff_seconds: float = 300.0,
         warm_concurrency: int = 8,
-        on_workspace_unavailable: WorkspaceStateCallback | None = None,
-        on_workspace_available: WorkspaceStateCallback | None = None,
+        on_workspace_unavailable: WorkspaceUnavailableCallback | None = None,
+        on_workspace_available: WorkspaceAvailableCallback | None = None,
     ) -> None:
         self._build = build
         self._clock = clock
@@ -49,7 +64,8 @@ class WorkspacePool:
         self._on_workspace_available = on_workspace_available
         self._runtimes: dict[str, WorkspaceRag] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._backoff: dict[str, tuple[float, float]] = {}
+        # When the last build failed, the backoff it opened, and the dependency that failed it.
+        self._backoff: dict[str, tuple[float, float, DependencyComponent]] = {}
         self._workspace_flights: dict[str, asyncio.Task[WorkspaceRag]] = {}
         self._close_task: asyncio.Task[asyncio.CancelledError | None] | None = None
         self._closed = False
@@ -171,15 +187,10 @@ class WorkspacePool:
                 except CorpusSchemaError:
                     raise
                 except Exception as exc:
-                    from dlightrag.engine.dependencies import classify_transient_dependency
-
-                    if (
-                        classify_transient_dependency(
-                            exc,
-                            component_hint="corpus_storage",
-                        )
-                        != "corpus_storage"
-                    ):
+                    # A bare connection error or timeout is storage's: the model
+                    # provider's calls name their own outages.
+                    component = classify_transient_dependency(exc, component_hint="corpus_storage")
+                    if component is None:
                         raise
                     failed = self._backoff.get(workspace)
                     interval = (
@@ -187,23 +198,28 @@ class WorkspacePool:
                         if failed is None
                         else min(failed[1] * 2, self._max_backoff)
                     )
-                    self._backoff[workspace] = (self._clock(), interval)
+                    self._backoff[workspace] = (self._clock(), interval, component)
                     logger.warning(
-                        "Workspace '%s' construction failed; retry in %.0fs",
+                        "Workspace '%s' construction failed (%s unavailable); retry in %.0fs",
                         workspace,
+                        component,
                         interval,
                         extra={"error_type": type(exc).__name__},
                     )
-                    self._notify_workspace_state(self._on_workspace_unavailable, workspace)
+                    self._notify(self._on_workspace_unavailable, workspace, component)
                     raise WorkspaceUnavailableError(
-                        f"Workspace '{workspace}' is temporarily unavailable"
+                        f"Workspace '{workspace}' is temporarily unavailable", component=component
                     ) from exc
                 if self._closed:
                     await self._close_unpublished_runtime(workspace, runtime)
                     raise WorkspaceUnavailableError("Workspace pool is closed")
                 self._runtimes[workspace] = runtime
-                self._backoff.pop(workspace, None)
-                self._notify_workspace_state(self._on_workspace_available, workspace)
+                recovered = self._backoff.pop(workspace, None)
+                self._notify(
+                    self._on_workspace_available,
+                    workspace,
+                    None if recovered is None else recovered[2],
+                )
                 return runtime
 
     async def _close_unpublished_runtime(
@@ -280,14 +296,15 @@ class WorkspacePool:
         return cancellation
 
     @staticmethod
-    def _notify_workspace_state(
-        callback: WorkspaceStateCallback | None,
+    def _notify[C: DependencyComponent | None](
+        callback: Callable[[str, C], None] | None,
         workspace: str,
+        component: C,
     ) -> None:
         if callback is None:
             return
         try:
-            callback(workspace)
+            callback(workspace, component)
         except Exception:
             logger.warning("Workspace health callback failed", exc_info=True)
 
@@ -295,12 +312,18 @@ class WorkspacePool:
         failed = self._backoff.get(workspace)
         if failed is None:
             return
-        failed_at, interval = failed
+        failed_at, interval, component = failed
         remaining = interval - (self._clock() - failed_at)
         if remaining > 0:
             raise WorkspaceUnavailableError(
-                f"Workspace '{workspace}' in backoff (retry in {remaining:.0f}s)"
+                f"Workspace '{workspace}' in backoff (retry in {remaining:.0f}s)",
+                component=component,
             )
 
 
-__all__ = ["WorkspacePool", "WorkspaceStateCallback", "WorkspaceUnavailableError"]
+__all__ = [
+    "WorkspaceAvailableCallback",
+    "WorkspacePool",
+    "WorkspaceUnavailableCallback",
+    "WorkspaceUnavailableError",
+]
