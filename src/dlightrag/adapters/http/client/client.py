@@ -9,7 +9,7 @@ import logging
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import IO, Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -437,6 +437,32 @@ class AnswerRunClient:
             idempotency_key=idempotency_key,
         )
         return await self.wait_corpus_mutation(descriptor.run_id)
+
+    async def ingest_upload(
+        self,
+        files: Sequence[tuple[str, IO[bytes]]],
+        *,
+        replace: bool = False,
+        fields: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Upload files as one durable ingest/replace mutation and wait for its result.
+
+        One file goes to the ``upload`` route, which also takes ``title``,
+        ``author`` and ``metadata`` fields; several go to ``uploads``. Both take
+        ``workspace``.
+        """
+        action = "replace" if replace else "ingest"
+        route = "upload" if len(files) == 1 else "uploads"
+        headers = {**self._headers, "Idempotency-Key": str(uuid4())}
+        headers.pop("Content-Type", None)
+        response = await self._client.post(
+            self._url(f"/runs/corpus/{action}/{route}"),
+            data=dict(fields or {}),
+            files=[("file", upload) for upload in files],
+            headers=headers,
+        )
+        response.raise_for_status()
+        return await self.wait_corpus_mutation(RunDescriptor.from_payload(response.json()).run_id)
 
     async def status(self, run_id: str) -> dict[str, Any]:
         """Read one run's authoritative status and terminal result."""

@@ -267,7 +267,111 @@ def test_terminal_resolves_rest_relative_links_against_the_api(
     )
 
 
-async def test_ingest_workspace_override_uses_the_durable_rest_facade(
+def _fake_uploads(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Record each upload the CLI sends; every one is accepted as its own Run."""
+    uploads: list[dict[str, Any]] = []
+
+    async def fake_ingest_upload(self, files, *, replace=False, fields=None):
+        uploads.append(
+            {
+                "files": {name: handle.read() for name, handle in files},
+                "replace": replace,
+                "fields": dict(fields or {}),
+            }
+        )
+        return {"action": "replace" if replace else "ingest", "run": len(uploads)}
+
+    monkeypatch.setattr(_cli.AnswerRunClient, "ingest_upload", fake_ingest_upload)
+    monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example")
+    monkeypatch.setattr(_cli.sdk_http, "auth_headers", lambda: {})
+    monkeypatch.setattr(_cli.sdk_http, "client_timeout", lambda: 15)
+    return uploads
+
+
+async def test_ingest_uploads_a_folder_named_from_the_current_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    books = tmp_path / "books"
+    (books / "sub").mkdir(parents=True)
+    (books / ".git").mkdir()
+    (books / "__parsed__").mkdir()
+    (books / "a.pdf").write_bytes(b"A")
+    (books / "sub" / "b.pdf").write_bytes(b"B")
+    (books / ".DS_Store").write_bytes(b"skip")
+    (books / ".git" / "config").write_bytes(b"skip")
+    (books / "__parsed__" / "c.pdf").write_bytes(b"skip")
+    uploads = _fake_uploads(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    results: list[dict[str, Any]] = []
+
+    await _run_ingest(_parse_ingest(["books", "--workspace", "finance"]), results.append)
+
+    assert uploads == [
+        {
+            "files": {"a.pdf": b"A", "sub/b.pdf": b"B"},
+            "replace": False,
+            "fields": {"workspace": "finance"},
+        }
+    ]
+    assert results == [{"action": "ingest", "run": 1}]
+
+
+async def test_ingest_uploads_one_file_with_its_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"%PDF")
+    uploads = _fake_uploads(monkeypatch)
+
+    await _run_ingest(
+        _parse_ingest(
+            [
+                str(report),
+                "--replace",
+                "--title",
+                "Quarterly Report",
+                "--author",
+                "Ada",
+                "--metadata-json",
+                '{"department":"finance"}',
+            ]
+        ),
+        lambda _result: None,
+    )
+
+    assert uploads == [
+        {
+            "files": {"report.pdf": b"%PDF"},
+            "replace": True,
+            "fields": {
+                "title": "Quarterly Report",
+                "author": "Ada",
+                "metadata": '{"department": "finance"}',
+            },
+        }
+    ]
+
+
+async def test_ingest_uploads_a_large_folder_one_run_per_batch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in ("1.pdf", "2.pdf", "3.pdf", "4.pdf", "5.pdf"):
+        (tmp_path / name).write_bytes(b"x")
+    uploads = _fake_uploads(monkeypatch)
+    monkeypatch.setattr(_cli, "_UPLOAD_BATCH_FILES", 2)
+    results: list[dict[str, Any]] = []
+
+    await _run_ingest(_parse_ingest([str(tmp_path)]), results.append)
+
+    assert [list(upload["files"]) for upload in uploads] == [
+        ["1.pdf", "2.pdf"],
+        ["3.pdf", "4.pdf"],
+        ["5.pdf"],
+    ]
+    assert [result["run"] for result in results] == [1, 2, 3]
+
+
+async def test_ingest_remote_source_uses_the_durable_rest_facade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -280,14 +384,20 @@ async def test_ingest_workspace_override_uses_the_durable_rest_facade(
     monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example")
     monkeypatch.setattr(_cli.sdk_http, "auth_headers", lambda: {})
     monkeypatch.setattr(_cli.sdk_http, "client_timeout", lambda: 15)
+    results: list[dict[str, Any]] = []
 
-    result = await _run_ingest(_parse_ingest(["./docs", "--workspace", "finance"]))
+    await _run_ingest(
+        _parse_ingest(
+            ["--source", "url", "--url", "https://example.test/doc.pdf", "--workspace", "finance"]
+        ),
+        results.append,
+    )
 
-    assert result == {"action": "ingest", "document_count": 1}
+    assert results == [{"action": "ingest", "document_count": 1}]
     assert captured == {
         "payload": {
-            "source_type": "local",
-            "path": "./docs",
+            "source_type": "url",
+            "url": "https://example.test/doc.pdf",
             "replace": False,
             "workspace": "finance",
         },
@@ -464,31 +574,44 @@ def test_json_object_arg_rejects_non_object_json() -> None:
 
 
 class TestValidateLocal:
-    """Validation for local source (default)."""
+    """Validation for local source (default): a file or folder to upload."""
 
     @pytest.mark.parametrize(
         "argv",
         [
-            pytest.param(["./docs"], id="valid_local"),
-            pytest.param(["./docs", "--replace"], id="valid_local_with_flags"),
+            pytest.param(["{docs}"], id="valid_local"),
+            pytest.param(["{docs}", "--replace"], id="valid_local_with_flags"),
+            pytest.param(["{docs}/report.pdf", "--title", "T"], id="valid_file_with_title"),
         ],
     )
-    def test_valid(self, argv: list[str]) -> None:
-        args = _parse_ingest(argv)
+    def test_valid(self, argv: list[str], tmp_path: Path) -> None:
+        args = _parse_ingest(_local_argv(argv, tmp_path))
         _validate_ingest_args(args)  # should not raise
 
     @pytest.mark.parametrize(
         "argv",
         [
             pytest.param([], id="local_requires_path"),
-            pytest.param(["./docs", "--container", "c"], id="local_rejects_container"),
-            pytest.param(["./docs", "--bucket", "b"], id="local_rejects_bucket"),
+            pytest.param(["{docs}", "--container", "c"], id="local_rejects_container"),
+            pytest.param(["{docs}", "--bucket", "b"], id="local_rejects_bucket"),
+            pytest.param(["{docs}/missing"], id="local_requires_an_existing_path"),
+            pytest.param(["{docs}", "--title", "T"], id="folder_rejects_title"),
+            pytest.param(["{docs}", "--metadata-json", "{}"], id="folder_rejects_metadata"),
+            pytest.param(["{docs}", "--retain-source-file"], id="local_rejects_retention"),
         ],
     )
-    def test_invalid(self, argv: list[str]) -> None:
-        args = _parse_ingest(argv)
+    def test_invalid(self, argv: list[str], tmp_path: Path) -> None:
+        args = _parse_ingest(_local_argv(argv, tmp_path))
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
+
+
+def _local_argv(argv: list[str], tmp_path: Path) -> list[str]:
+    """Point ``{docs}`` at a real folder holding ``report.pdf``."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "report.pdf").write_bytes(b"%PDF")
+    return [arg.replace("{docs}", str(docs)) for arg in argv]
 
 
 # ---------------------------------------------------------------------------

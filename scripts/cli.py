@@ -3,9 +3,10 @@
 """CLI for dlightrag — durable ingestion, retrieval, and answers over REST.
 
 Usage:
-    # Durable ingestion (requires the API server)
+    # Durable ingestion (requires the API server). A local file or folder, named
+    # relative to the current directory, is uploaded.
     uv run scripts/cli.py ingest ./docs
-    uv run scripts/cli.py ingest ./docs --replace
+    uv run scripts/cli.py ingest ~/Books --replace
     # --workspace names an existing workspace; create it first (POST /workspaces,
     # the MCP create_workspace tool, or the Web UI). Omitted: the default workspace.
     uv run scripts/cli.py ingest ./docs --workspace project-a
@@ -37,9 +38,10 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +58,7 @@ from dlightrag.adapters.http.client import (
 from dlightrag.adapters.http.client import http as sdk_http
 from dlightrag.adapters.http.client.requests import query_image_blocks_from_urls
 from dlightrag.application.corpus_admin import ingest_spec_from_payload
+from dlightrag.engine.rag.corpus.ingestion.paths import reserved_corpus_name
 
 
 def _print_json(data: Any) -> None:
@@ -89,6 +92,16 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
         ingest_spec_from_payload(args)
     except ValidationError as exc:
         _die("; ".join(error["msg"].removeprefix("Value error, ") for error in exc.errors()))
+    if args.source_type == "local":
+        path = Path(args.path).expanduser()
+        if not path.exists():
+            _die(f"no such file or folder: {args.path}")
+        if args.retain_source_file:
+            _die("--retain-source-file is only for remote sources")
+        if path.is_dir() and any(
+            value is not None for value in (args.title, args.author, args.metadata)
+        ):
+            _die("--title, --author and --metadata-json apply to a single file")
 
 
 def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -204,13 +217,90 @@ def _render_answer_for_terminal(data: AnswerResult) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def _run_ingest(args: argparse.Namespace) -> dict[str, Any]:
-    spec = ingest_spec_from_payload(args)
-    payload = spec.model_dump(mode="json", exclude_none=True)
-    if args.workspace:
-        payload["workspace"] = args.workspace
+#: The server's default upload bounds: files per request (UploadLimits.request_files)
+#: and bytes per request (interfaces.max_upload_size_mb). A folder is uploaded in
+#: batches within them, one Run each; a server configured lower refuses with 413.
+_UPLOAD_BATCH_FILES = 100
+_UPLOAD_BATCH_BYTES = 512 * 1024 * 1024
+
+
+def _local_files(root: Path) -> list[Path]:
+    """What uploading ``root`` sends: the file itself, or every file below the folder.
+
+    A folder is read in name order and skips what the server's folder listing
+    skips (dot entries such as ``.git`` and ``.DS_Store``, and corpus folders).
+    """
+    if root.is_file():
+        return [root]
+    files: list[Path] = []
+    for folder, folders, names in os.walk(root):
+        folders[:] = sorted(name for name in folders if not reserved_corpus_name(name))
+        files.extend(
+            Path(folder) / name for name in sorted(names) if not reserved_corpus_name(name)
+        )
+    return files
+
+
+def _upload_batches(files: list[Path]) -> list[list[Path]]:
+    batches: list[list[Path]] = []
+    size = 0
+    for path in files:
+        file_size = path.stat().st_size
+        if (
+            not batches
+            or len(batches[-1]) == _UPLOAD_BATCH_FILES
+            or size + file_size > _UPLOAD_BATCH_BYTES
+        ):
+            batches.append([])
+            size = 0
+        batches[-1].append(path)
+        size += file_size
+    return batches
+
+
+async def _run_ingest(
+    args: argparse.Namespace,
+    report: Callable[[dict[str, Any]], None],
+) -> None:
+    """Ingest what ``args`` names, reporting each Run's result as it completes."""
     async with _answer_client() as client:
-        return await client.ingest(payload, replace=bool(spec.replace))
+        if args.source_type != "local":
+            spec = ingest_spec_from_payload(args)
+            payload = spec.model_dump(mode="json", exclude_none=True)
+            if args.workspace:
+                payload["workspace"] = args.workspace
+            report(await client.ingest(payload, replace=bool(spec.replace)))
+            return
+
+        root = Path(args.path).expanduser()
+        batches = _upload_batches(_local_files(root))
+        if not batches:
+            _die(f"{args.path} holds no files to upload")
+        fields = {
+            name: value
+            for name, value in (
+                ("workspace", args.workspace),
+                ("title", args.title),
+                ("author", args.author),
+            )
+            if value is not None
+        }
+        if args.metadata is not None:
+            fields["metadata"] = json.dumps(args.metadata)
+        for number, batch in enumerate(batches, 1):
+            if len(batches) > 1:
+                print(f"Run {number}/{len(batches)}: {len(batch)} files", flush=True)
+            with ExitStack() as opened:
+                uploads = [
+                    (
+                        path.name if path == root else path.relative_to(root).as_posix(),
+                        opened.enter_context(path.open("rb")),
+                    )
+                    for path in batch
+                ]
+                report(
+                    await client.ingest_upload(uploads, replace=bool(args.replace), fields=fields)
+                )
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -218,7 +308,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     action = "replace" if args.replace else "ingest"
     print(f"API: {sdk_http.api_url()}/runs/corpus/{action}\n")
     try:
-        _print_json(asyncio.run(_run_ingest(args)))
+        asyncio.run(_run_ingest(args, _print_json))
     except RunCancelledError:
         _die("Corpus Mutation Run was cancelled")
     except RunFailedError as exc:
@@ -442,13 +532,13 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Ingest documents into the RAG knowledge base.\n\n"
             "Source types:\n"
-            "  local (default)  Ingest from local filesystem (file or directory)\n"
+            "  local (default)  Upload a file or folder, relative to the current directory\n"
             "  azure_blob       Ingest from Azure Blob Storage container\n"
             "  s3               Ingest from AWS S3 bucket\n"
             "  url              Ingest from public or signed HTTPS URLs\n\n"
             "Examples:\n"
-            "  %(prog)s ./docs                                          # local file/dir\n"
-            "  %(prog)s ./docs --replace                                # local with replace\n"
+            "  %(prog)s ./docs                                          # local file/folder\n"
+            "  %(prog)s ~/Books --replace                               # local with replace\n"
             "  %(prog)s --source azure_blob --container my-container    # entire container\n"
             "  %(prog)s --source azure_blob --container c --prefix rpt/ # by prefix\n"
             "  %(prog)s --source s3 --bucket my-bucket --s3-key doc.pdf    # S3 single object\n"
@@ -460,7 +550,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--download-uri https://cdn.example.com/doc.pdf"
         ),
     )
-    p_ingest.add_argument("path", nargs="?", default=None, help="Path to file or directory (local)")
+    p_ingest.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="File or folder to upload (local), relative to the current directory",
+    )
     p_ingest.add_argument(
         "--source",
         choices=["local", "azure_blob", "s3", "url"],

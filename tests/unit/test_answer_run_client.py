@@ -2,6 +2,7 @@
 """The one async REST helper that owns create-and-wait for durable Answer runs."""
 
 import asyncio
+import io
 import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
@@ -202,6 +203,43 @@ async def test_corpus_ingest_uses_the_run_native_route_and_waits_for_terminal_re
         "/runs/run-1",
     ]
     assert requests[0].headers["Idempotency-Key"] == "ingest-1"
+
+
+async def test_corpus_upload_sends_one_file_or_a_batch_to_its_route_and_waits() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json=_CORPUS_DESCRIPTOR)
+        return httpx.Response(
+            200,
+            json={**_CORPUS_DESCRIPTOR, "status": "succeeded", "result": _CORPUS_RESULT},
+        )
+
+    http, runs = _client(handler)
+    async with http:
+        single = await runs.ingest_upload(
+            [("report.pdf", io.BytesIO(b"%PDF"))],
+            replace=True,
+            fields={"workspace": "finance", "title": "Quarterly"},
+        )
+        batch = await runs.ingest_upload(
+            [("a.pdf", io.BytesIO(b"A")), ("sub/b.pdf", io.BytesIO(b"B"))],
+        )
+
+    assert single == batch == _CORPUS_RESULT
+    assert [request.url.path for request in requests] == [
+        "/runs/corpus/replace/upload",
+        "/runs/run-1",
+        "/runs/corpus/ingest/uploads",
+        "/runs/run-1",
+    ]
+    single_body, batch_body = requests[0].content, requests[2].content
+    assert b'name="workspace"' in single_body and b'name="title"' in single_body
+    assert b'filename="report.pdf"' in single_body
+    assert b'filename="a.pdf"' in batch_body and b'filename="sub/b.pdf"' in batch_body
+    assert requests[0].headers["Idempotency-Key"] != requests[2].headers["Idempotency-Key"]
 
 
 async def test_corpus_wait_returns_waiting_for_repair_status_without_polling_forever() -> None:
