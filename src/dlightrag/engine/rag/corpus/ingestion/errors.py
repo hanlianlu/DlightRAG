@@ -7,7 +7,8 @@ class RetryOutcomeUncertainError(RuntimeError):
 
 
 class ParserInputPlacementError(RuntimeError):
-    """A document's parser input could not be copied to where LightRAG reads it.
+    """A document's parser input could not be copied to where LightRAG reads it,
+    or its own copy could not be staged.
 
     Placement precedes every upstream effect of its batch, so nothing changed.
     """

@@ -4,17 +4,20 @@ import pytest
 from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.engine.rag.corpus.ingestion.paths import (
+    LOCAL_SOURCES_DIR_NAME,
     REMOTE_INGEST_DIR_NAME,
     REMOTE_SOURCES_DIR_NAME,
     RUN_STAGES_DIR_NAME,
     UPLOADS_DIR_NAME,
     discard_parser_input,
     document_name,
+    local_source_path,
     parser_input_path,
     place_parser_input,
     remote_parser_input_path,
     reserved_corpus_name,
     retained_remote_source_path,
+    stage_local_source,
     workspace_input_root,
 )
 
@@ -26,6 +29,7 @@ from dlightrag.engine.rag.corpus.ingestion.paths import (
         ".hidden.pdf",
         RUN_STAGES_DIR_NAME,
         PARSED_DIR_NAME,
+        LOCAL_SOURCES_DIR_NAME,
         UPLOADS_DIR_NAME,
         REMOTE_INGEST_DIR_NAME,
         REMOTE_SOURCES_DIR_NAME,
@@ -105,6 +109,32 @@ def test_placing_replaces_the_same_documents_earlier_input_and_keeps_one_in_plac
     assert placed.read_bytes() == b"fresh"
     assert place_parser_input(placed, input_root) == placed
     assert placed.read_bytes() == b"fresh"
+
+
+def test_a_local_source_is_staged_beside_where_it_is_kept_and_never_over_itself(
+    tmp_path: Path,
+) -> None:
+    """Its own copy lives apart from the parser input LightRAG parses and archives."""
+    input_root = workspace_input_root(tmp_path / "corpus", "default")
+    source = tmp_path / "stage" / "0" / ("r" * 251 + ".png")
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"image")
+    kept = local_source_path(input_root, source)
+
+    staged = stage_local_source(source, input_root)
+
+    assert kept == input_root / LOCAL_SOURCES_DIR_NAME / source.name
+    assert staged is not None
+    assert staged.parent == kept.parent
+    assert staged.name.startswith(".")
+    assert staged.read_bytes() == b"image"
+    assert not kept.exists()
+    # Staged again, the document's copy takes the same name: none is left behind.
+    assert stage_local_source(source, input_root) == staged
+    staged.replace(kept)
+    # A retry replays the kept copy itself.
+    assert stage_local_source(kept, input_root) is None
+    assert sorted(path.name for path in kept.parent.iterdir()) == [source.name]
 
 
 def test_discarding_a_parser_input_keeps_its_sidecar(tmp_path: Path) -> None:

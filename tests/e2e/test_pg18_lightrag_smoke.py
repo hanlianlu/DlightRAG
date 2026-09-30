@@ -279,12 +279,15 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         )
         ready_download = await downloads.prepare(doc_id)
         assert isinstance(ready_download, LocalDownloadTarget)
-        assert ready_download.path.is_file()
-        # The replacement was archived under the document's own name, where its
-        # locator points, and not beside the version it replaced.
+        assert ready_download.path.read_bytes() == doc_path.read_bytes()
+        # The replacement is kept under the document's own name, where its locator
+        # points, and not beside the version it replaced; LightRAG's copy is gone.
         assert [path.name for path in ready_download.path.parent.iterdir() if path.is_file()] == [
             doc_path.name
         ]
+        corpus = cfg.corpus_dir_path / workspace
+        assert not (corpus / doc_path.name).exists()
+        assert not (corpus / "__parsed__" / doc_path.name).exists()
         ready_files = await PGFilePanelStore().list_processed_files(
             workspace,
             page=FilePanelPageRequest(limit=10),
@@ -403,6 +406,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         deleted = await service.adelete_files(file_paths=[doc_id], dry_run=False)
         assert deleted[0]["status"] == "deleted"
         assert deleted[0]["errors"] == []
+        assert not ready_download.path.exists()
 
         async def delete_converged() -> bool:
             conn = await asyncpg.connect(**conn_kwargs)
@@ -603,9 +607,17 @@ async def test_nested_local_sources_are_parsed_from_their_flat_inputs_never_a_de
         assert {path: path.read_bytes() for path in operators.rglob("*") if path.is_file()} == (
             before
         )
-        # LightRAG archived each flat input in the Workspace's corpus directory.
-        archived = cfg.corpus_dir_path / workspace / "__parsed__"
-        assert {"alpha.md", "beta.md"} <= {path.name for path in archived.iterdir()}
+        # Each document keeps its own copy; the flat input LightRAG parsed and
+        # archived is gone.
+        corpus = cfg.corpus_dir_path / workspace
+        kept = corpus / "__local_sources__"
+        assert sorted(path.name for path in kept.iterdir()) == ["alpha.md", "beta.md"]
+        assert (kept / "alpha.md").read_text(encoding="utf-8") == sources[
+            operators / "reports" / "q1" / "alpha.md"
+        ]
+        for name in ("alpha.md", "beta.md"):
+            assert not (corpus / name).exists()
+            assert not (corpus / "__parsed__" / name).exists()
     finally:
         if service._initialized:
             await service.areset()

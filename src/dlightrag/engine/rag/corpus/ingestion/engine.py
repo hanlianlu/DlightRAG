@@ -4,8 +4,9 @@
 import asyncio
 import hashlib
 import logging
+import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -44,9 +45,10 @@ from dlightrag.engine.rag.corpus.ingestion.parser_transport import parser_unavai
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     clear_archived_source,
     discard_parser_input,
-    lightrag_archived_source_path,
+    local_source_path,
     parser_input_path,
     place_parser_input,
+    stage_local_source,
 )
 from dlightrag.engine.rag.corpus.sources.factory import SourceRetrievalOptions
 from dlightrag.engine.rag.corpus.sources.source_contract import (
@@ -79,8 +81,11 @@ class PreparedIngestFile:
     """Prepared parser input with explicit provenance and download identity.
 
     ``parser_path`` must be a local file because LightRAG pending-parse
-    ingestion requires local parser input. ``source_uri`` is stable provenance;
-    ``download_locator`` is the durable location used to reacquire the bytes.
+    ingestion requires local parser input; it holds the bytes the caller
+    supplied, and LightRAG parses a copy of them (an image with its page
+    margin). ``source_uri`` is stable provenance; ``download_locator`` is the
+    durable location used to reacquire the bytes. A locator naming the file's
+    :func:`local_source_path` has the engine keep a copy of ``parser_path`` there.
     """
 
     parser_path: Path
@@ -106,9 +111,9 @@ class PreparedIngestFile:
 @dataclass(frozen=True)
 class _PendingDocumentIngest:
     index: int
-    # The bytes the caller supplied, which the document's digest keeps;
-    # ``parser_path`` is what LightRAG parses: that file, or an image's padded
-    # copy.
+    # The bytes the caller supplied, which the document's digest and own copy
+    # keep; ``parser_path`` is what LightRAG parses: that file, or an image's
+    # padded copy.
     source_path: Path
     parser_path: Path
     doc_id: str
@@ -130,17 +135,31 @@ class _DocumentIngestDecision:
     finalize_only: bool = False
 
 
+@dataclass(frozen=True)
+class _PlacedInput:
+    """Where one enqueued document's bytes were copied ahead of its enqueue."""
+
+    parser_input: Path
+    # A local document's own copy as (staged, kept): staged until the document's
+    # old version is gone, then moved to where it is kept.
+    own_copy: tuple[Path, Path] | None = None
+
+
 class UnifiedIngestionEngine:
     """One ingestion path over LightRAG parser/routing.
 
     ``input_root`` is the Workspace's directory in LightRAG's ``INPUT_DIR``. Right
-    before a document is enqueued, its parser input is copied there under its own
-    basename, the only place LightRAG looks it up. That copy is kept when it is the
-    document's source of record (its ``download_locator`` names it, or LightRAG's
-    archive of it); any other copy (a remote download, a retained remote source, a
-    padded image) is removed, with the copy LightRAG archived, once LightRAG has
-    settled the document. LightRAG archives an input under its own name only while
-    that name is free, so whatever holds it goes right before the enqueue.
+    before a document is enqueued, its parser input (an image with its page
+    margin) is copied there under its own basename, the only place LightRAG looks
+    it up. That copy is never a document's source: it is removed, with the copy
+    LightRAG archived, once LightRAG has settled the document. LightRAG archives
+    an input under its own name only while that name is free, so whatever holds
+    it goes right before the enqueue.
+
+    A document whose ``download_locator`` names its :func:`local_source_path` (an
+    upload or a local source) keeps the bytes the caller supplied there. They are
+    staged with the parser input, before any replacement deletes the old version,
+    and moved into place right before the enqueue, once that version is gone.
     """
 
     def __init__(
@@ -239,7 +258,7 @@ class UnifiedIngestionEngine:
                     self._prepare_pending_document(
                         index=index,
                         item=item,
-                        parser_path=await self._parser_path(item, padded_inputs),
+                        parser_path=await self._parser_path(item.parser_path, padded_inputs),
                         title=title,
                         author=author,
                         metadata=metadata,
@@ -299,9 +318,9 @@ class UnifiedIngestionEngine:
                 (self._ensure_enqueue_entry(entry), decision) for entry, decision in to_enqueue
             ]
             # Placed before any replacement deletes the old document, so a parser
-            # input that cannot be copied changes nothing.
+            # input or own copy that cannot be copied changes nothing.
             try:
-                parser_inputs = (
+                placed = (
                     await asyncio.to_thread(
                         self._place_parser_inputs,
                         [entry for entry, _decision in validated_to_enqueue],
@@ -311,8 +330,10 @@ class UnifiedIngestionEngine:
                 )
             except OSError as exc:
                 raise ParserInputPlacementError(
-                    "a parser input could not be copied to where LightRAG reads it"
+                    "a document could not be copied to where ingestion needs it"
                 ) from exc
+            # An own copy the batch never moved into place goes with it.
+            stack.callback(_discard_staged_copies, list(placed.values()))
 
             cleanup_snapshots: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
             cleanup_ids_by_entry: dict[int, tuple[str, ...]] = {}
@@ -395,22 +416,31 @@ class UnifiedIngestionEngine:
                             error,
                         )
                         raise
+                    # An ingest that stopped before the document settled left its
+                    # parser input, which LightRAG may have parsed and archived
+                    # since; the document has settled, so neither is read again.
+                    await asyncio.to_thread(
+                        discard_parser_input,
+                        parser_input_path(self._input_root, entry.parser_path),
+                    )
 
                 if validated_to_enqueue:
                     enqueue_entries = [entry for entry, _decision in validated_to_enqueue]
                     chunk_options = self._batch_chunk_options(enqueue_entries)
                     for entry in enqueue_entries:
                         await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
-                    # Each document's locator names the archive LightRAG makes under
-                    # the document's own name, which the cleanup above freed of the
-                    # old version's document but not of its bytes.
+                    # The cleanup above deleted each old version's document, so its
+                    # own copy gives way to the new one, and its archive name is
+                    # freed for LightRAG to archive the new parser input under.
                     await asyncio.to_thread(
-                        _clear_archived_sources,
-                        [parser_inputs[entry.index] for entry in enqueue_entries],
+                        _ready_for_enqueue,
+                        [placed[entry.index] for entry in enqueue_entries],
                     )
                     await self._lightrag.apipeline_enqueue_documents(
                         input=[""] * len(enqueue_entries),
-                        file_paths=[str(parser_inputs[entry.index]) for entry in enqueue_entries],
+                        file_paths=[
+                            str(placed[entry.index].parser_input) for entry in enqueue_entries
+                        ],
                         docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
                         parse_engine=[entry.parse_engine for entry in enqueue_entries],
                         process_options=[entry.process_options for entry in enqueue_entries],
@@ -422,11 +452,7 @@ class UnifiedIngestionEngine:
                     # A copy left by a failure stays, since recovery may parse it.
                     await asyncio.to_thread(
                         _discard_parser_inputs,
-                        [
-                            parser_inputs[entry.index]
-                            for entry in enqueue_entries
-                            if not _keeps_parser_input(entry, parser_inputs[entry.index])
-                        ],
+                        [placed[entry.index].parser_input for entry in enqueue_entries],
                     )
 
                     for entry in enqueue_entries:
@@ -508,25 +534,13 @@ class UnifiedIngestionEngine:
             "results": [results_by_index[index] for index in sorted(results_by_index)],
         }
 
-    async def _parser_path(self, item: PreparedIngestFile, padded_inputs: list[Path]) -> Path:
-        """What LightRAG parses for ``item``: an image source gets page context.
+    async def _parser_path(self, source: Path, padded_inputs: list[Path]) -> Path:
+        """What LightRAG parses for ``source``: an image source gets page context.
 
         The padded copy is a derived parser input, never the document's source:
-        its digest, download and metadata keep describing ``item.parser_path``.
-
-        An image whose flat parser input is also its source of record (a local
-        source or upload) is parsed as supplied: LightRAG reads and archives
-        whatever that one path holds, so padding it would make the padded copy
-        the document's source.
+        its digest, own copy, download and metadata keep describing ``source``.
         """
-        source = item.parser_path
-        if (
-            self._image_margin <= 0
-            or not is_image_source(source)
-            or _is_source_of_record(
-                item.download_locator, parser_input_path(self._input_root, source)
-            )
-        ):
+        if self._image_margin <= 0 or not is_image_source(source):
             return source
         padded = await apadded_parser_path(source, margin=self._image_margin)
         if padded is None:
@@ -534,12 +548,28 @@ class UnifiedIngestionEngine:
         padded_inputs.append(padded)
         return padded
 
-    def _place_parser_inputs(self, entries: Sequence[_PendingDocumentIngest]) -> dict[int, Path]:
-        """Place each entry's parser input where LightRAG resolves it, by entry index."""
-        return {
-            entry.index: place_parser_input(entry.parser_path, self._input_root)
-            for entry in entries
-        }
+    def _place_parser_inputs(
+        self, entries: Sequence[_PendingDocumentIngest]
+    ) -> dict[int, _PlacedInput]:
+        """Copy each entry's bytes where its enqueue needs them, by entry index.
+
+        Its parser input goes where LightRAG resolves it; a document that keeps its
+        own copy has it staged too.
+        """
+        placed: dict[int, _PlacedInput] = {}
+        try:
+            for entry in entries:
+                parser_input = place_parser_input(entry.parser_path, self._input_root)
+                own_copy = None
+                kept = local_source_path(self._input_root, entry.source_path)
+                if entry.metadata_record.get("download_locator") == str(kept):
+                    staged = stage_local_source(entry.source_path, self._input_root)
+                    own_copy = None if staged is None else (staged, kept)
+                placed[entry.index] = _PlacedInput(parser_input, own_copy)
+        except BaseException:
+            _discard_staged_copies(placed.values())
+            raise
+        return placed
 
     def _prepare_pending_document(
         self,
@@ -1004,7 +1034,7 @@ class UnifiedIngestionEngine:
 
         full_doc = await self._stores.get_full_doc(doc_id)
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
-        finalized_metadata = _with_finalized_local_download_locator(metadata_record)
+        finalized_metadata = dict(metadata_record)
         finalized_metadata[_FINALIZATION_COMPLETE_KEY] = commit_complete
         await self._overwrite_sidecar_image_vectors(
             doc_id=doc_id,
@@ -1039,7 +1069,7 @@ class UnifiedIngestionEngine:
             ) from error
         if lightrag_status(doc_status) != "processed":
             raise RetryOutcomeUncertainError("replacement finalization status is uncertain")
-        completed = _with_finalized_local_download_locator(metadata_record)
+        completed = dict(metadata_record)
         completed[_FINALIZATION_COMPLETE_KEY] = True
         await self._metadata_index.upsert(doc_id, completed)
 
@@ -1184,30 +1214,29 @@ def _remove_sidecar_dir(artifact_dir: Path) -> None:
         shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
-def _keeps_parser_input(entry: _PendingDocumentIngest, parser_input: Path) -> bool:
-    return _is_source_of_record(entry.metadata_record.get("download_locator"), parser_input)
-
-
-def _is_source_of_record(download_locator: object, parser_input: Path) -> bool:
-    """Whether a document's own copy is this flat parser input or LightRAG's archive of it.
-
-    Such an input is kept, and never padded: LightRAG parses and then archives
-    whatever that one path holds.
-    """
-    return download_locator in {
-        str(parser_input),
-        str(lightrag_archived_source_path(parser_input)),
-    }
-
-
 def _discard_parser_inputs(parser_inputs: Sequence[Path]) -> None:
     for parser_input in parser_inputs:
         discard_parser_input(parser_input)
 
 
-def _clear_archived_sources(parser_inputs: Sequence[Path]) -> None:
-    for parser_input in parser_inputs:
-        clear_archived_source(parser_input)
+def _ready_for_enqueue(placed: Sequence[_PlacedInput]) -> None:
+    """Free each parser input's archive name and keep each staged own copy."""
+    for item in placed:
+        clear_archived_source(item.parser_input)
+        if item.own_copy is not None:
+            staged, kept = item.own_copy
+            os.replace(staged, kept)
+
+
+def _discard_staged_copies(placed: Iterable[_PlacedInput]) -> None:
+    for item in placed:
+        if item.own_copy is None:
+            continue
+        staged, _kept = item.own_copy
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove a staged copy: %s", staged, exc_info=True)
 
 
 def _entry_filename(entry: _PendingDocumentIngest) -> str:
@@ -1239,27 +1268,8 @@ def _prepare_ingest_item(
     )
 
 
-def _with_finalized_local_download_locator(
-    metadata_record: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Persist the exact source location after LightRAG archives parser input."""
-    finalized = dict(metadata_record)
-    locator = finalized.get("download_locator")
-    if not isinstance(locator, str) or "://" in locator:
-        return finalized
-
-    source_path = Path(locator)
-    archived_path = lightrag_archived_source_path(source_path)
-    if source_path.is_file() or not archived_path.is_file():
-        return finalized
-
-    resolved = str(archived_path.resolve())
-    finalized["download_locator"] = resolved
-    return finalized
-
-
 def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str, Any]:
-    comparable = {
+    return {
         "filename": metadata_record.get("filename"),
         "filename_stem": metadata_record.get("filename_stem"),
         "source_uri": metadata_record.get("source_uri"),
@@ -1271,16 +1281,6 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "creation_date": metadata_record.get("creation_date"),
         "custom_metadata": deepcopy(metadata_record.get("custom_metadata")) or {},
     }
-    comparable["download_locator"] = _canonicalize_local_metadata_locator(
-        comparable["download_locator"]
-    )
-    return comparable
-
-
-def _canonicalize_local_metadata_locator(locator: Any) -> Any:
-    if not isinstance(locator, str) or "://" in locator:
-        return locator
-    return str(lightrag_archived_source_path(Path(locator)).resolve())
 
 
 def _raw_path_source_uri(path: Path, *, workspace: str) -> str:

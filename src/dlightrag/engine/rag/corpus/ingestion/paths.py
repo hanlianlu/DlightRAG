@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 UPLOADS_DIR_NAME = "__uploads__"
 REMOTE_INGEST_DIR_NAME = "__remote_ingest__"
 REMOTE_SOURCES_DIR_NAME = "__remote_sources__"
+LOCAL_SOURCES_DIR_NAME = "__local_sources__"
 #: Where a workspace's Run stages live in its corpus directory, one folder per Run.
 RUN_STAGES_DIR_NAME = ".runs"
 
@@ -38,9 +39,16 @@ def document_name(filename: str | Path) -> str:
 
 
 #: The folders a Workspace's corpus directory keeps beside its documents: LightRAG's
-#: parser archive, fetched remote sources, and staging folders earlier releases wrote.
+#: parser archive, the kept copies of local and fetched sources, and staging folders
+#: earlier releases wrote.
 _CORPUS_FOLDER_NAMES = frozenset(
-    {PARSED_DIR_NAME, UPLOADS_DIR_NAME, REMOTE_INGEST_DIR_NAME, REMOTE_SOURCES_DIR_NAME}
+    {
+        PARSED_DIR_NAME,
+        LOCAL_SOURCES_DIR_NAME,
+        UPLOADS_DIR_NAME,
+        REMOTE_INGEST_DIR_NAME,
+        REMOTE_SOURCES_DIR_NAME,
+    }
 )
 
 
@@ -92,14 +100,47 @@ def place_parser_input(source: Path, input_root: Path) -> Path:
     return target
 
 
+def local_source_path(input_root: Path, source: Path) -> Path:
+    """Where an upload or a local source keeps its own copy: ``__local_sources__/<basename>``.
+
+    LightRAG parses the flat parser input (an image with its page margin), then
+    archives it, and ingestion removes that copy once LightRAG has settled the
+    document. The bytes the caller supplied are kept apart, in a folder LightRAG
+    never reads, under the parser input's name: one copy per document.
+    """
+    return input_root / LOCAL_SOURCES_DIR_NAME / source.name
+
+
+def stage_local_source(source: Path, input_root: Path) -> Path | None:
+    """Copy ``source`` beside its :func:`local_source_path` and return the staged copy.
+
+    Ingestion moves the staged copy into place once the document's old version
+    is gone, so a failure before then leaves that version its own bytes. None
+    when ``source`` already is the kept copy, as when a retry replays it.
+    """
+    target = local_source_path(input_root, source)
+    if target.exists() and os.path.samefile(source, target):
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Named by the document, so a copy a cancelled ingest left is overwritten by
+    # the next rather than kept, and of a length any folder allows.
+    staged = target.parent / f".{hashlib.sha256(os.fsencode(target.name)).hexdigest()[:32]}.part"
+    try:
+        shutil.copy2(source, staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
 def clear_archived_source(parser_input: Path) -> None:
     """Remove the file that holds LightRAG's archive name for ``parser_input``.
 
     LightRAG archives a parsed input to ``__parsed__/<name>``, or to
-    ``__parsed__/<stem>_001<ext>`` while that name is taken, and a document's
-    locator names the former. Right before an input is enqueued, what holds that
-    name is an earlier version of the same document, already deleted, or an
-    orphan; when it was the input's own source, it was already copied out.
+    ``__parsed__/<stem>_001<ext>`` while that name is taken, and ingestion removes
+    the former once LightRAG has settled the document. Right before an input is
+    enqueued, whatever holds that name was left by an ingest that stopped before
+    removing it: it is never a document's source.
     """
     lightrag_archived_source_path(parser_input).unlink(missing_ok=True)
 

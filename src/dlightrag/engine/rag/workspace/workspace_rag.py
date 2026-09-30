@@ -22,8 +22,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from lightrag.constants import PARSED_DIR_NAME
-
 from dlightrag.engine.ai.embedding import MultimodalEmbedder, create_embedding_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
@@ -45,7 +43,7 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
 from dlightrag.engine.rag.corpus.ingestion.errors import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     discard_parser_input,
-    parser_input_path,
+    local_source_path,
     remote_parser_input_path,
     retained_remote_source_path,
     workspace_input_root,
@@ -764,20 +762,20 @@ class WorkspaceRag:
     def _local_item(
         self, file_path: Path, *, document: IngestDocument | None = None
     ) -> PreparedIngestFile:
-        """Describe one local source whose flat parser input is its source of record.
+        """Describe one local source, which keeps its own copy of ``file_path``.
 
-        The engine copies ``file_path`` to that flat input, the path LightRAG parses
-        and archives, and keeps it: the download locator names it. A manifest
+        The download locator names that copy in the Workspace's local source
+        folder, where the engine keeps the bytes the caller supplied; LightRAG
+        parses another copy (an image with its page margin). A manifest
         ``document`` may name its own stable source URI, display filename and
-        metadata; otherwise the flat input's name identifies the source.
+        metadata; otherwise the file's name identifies the source.
         """
-        parser_input = parser_input_path(self._workspace_input_root(), file_path)
         source_uri = None if document is None else document.source_uri
         display_filename = None if document is None else document.filename
         return PreparedIngestFile(
             parser_path=file_path,
-            source_uri=source_uri or local_source_uri(self.workspace_id, parser_input.name),
-            download_locator=str(parser_input),
+            source_uri=source_uri or local_source_uri(self.workspace_id, file_path.name),
+            download_locator=str(local_source_path(self._workspace_input_root(), file_path)),
             display_filename=display_filename,
             title=None if document is None else document.title,
             author=None if document is None else document.author,
@@ -2183,26 +2181,19 @@ class WorkspaceRag:
         return source_type, parts
 
     def _retry_local_source_path(self, download_locator: str) -> Path:
-        """Resolve a local source that LightRAG may have moved under __parsed__."""
-        original = Path(download_locator)
-        input_root = self._workspace_input_root().resolve()
+        """Resolve a local locator to the file it names in this Workspace's corpus directory.
+
+        It names a document's own copy (a local source's, or a retained remote
+        source), which LightRAG never moves.
+        """
         try:
-            resolved_original = original.resolve()
-            resolved_original.relative_to(input_root)
+            resolved = Path(download_locator).resolve()
+            resolved.relative_to(self._workspace_input_root().resolve())
         except ValueError:
             raise FileNotFoundError("download locator is unavailable") from None
-        if resolved_original.is_file():
-            return resolved_original
-
-        candidates = (
-            original.parent / PARSED_DIR_NAME / original.name,
-            input_root / PARSED_DIR_NAME / original.name,
-        )
-        for candidate in dict.fromkeys(candidates):
-            resolved = candidate.resolve()
-            if resolved.is_relative_to(input_root) and resolved.is_file():
-                return resolved
-        raise FileNotFoundError("download locator is unavailable")
+        if not resolved.is_file():
+            raise FileNotFoundError("download locator is unavailable")
+        return resolved
 
     def _require_ingestion_engine(self) -> UnifiedIngestionEngine:
         if self._ingestion_engine is None:

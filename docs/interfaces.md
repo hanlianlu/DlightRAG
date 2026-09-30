@@ -178,8 +178,8 @@ count toward the 10,000. A folder with nothing to ingest is refused too.
 A document's parser input takes its file name in the Workspace's corpus
 directory, so a name that directory keeps for itself cannot be a document's:
 one starting with a dot (Run stages, temporary copies) or one of its folders
-(`__parsed__`, `__remote_sources__`, and the `__remote_ingest__` and
-`__uploads__` staging folders of earlier releases). A
+(`__parsed__`, `__local_sources__`, `__remote_sources__`, and the
+`__remote_ingest__` and `__uploads__` staging folders of earlier releases). A
 folder listing and an upload skip such an entry, with everything below it
 (`.DS_Store`, `.git/`), and an upload left with nothing to ingest is refused
 with 400; so is a local file of such a name, or a manifest entry naming one.
@@ -191,20 +191,24 @@ staged.
 
 `input_dir` (`<working_dir>/inputs`) belongs to operators: DlightRAG reads local
 sources from `input_dir/<workspace>` and never writes there. Every file
-DlightRAG writes for a Workspace (Run stages, parser inputs, LightRAG's archived
-sources and parser sidecars, fetched remote sources) lives in its own
-`<working_dir>/corpus/<workspace>`, which is LightRAG's input directory. Corpus
-Reset and Workspace Delete clear that directory; they never delete operators'
-files in `input_dir`.
+DlightRAG writes for a Workspace (Run stages, parser inputs, the copies
+documents keep of their sources, and LightRAG's parser sidecars) lives in its
+own `<working_dir>/corpus/<workspace>`, which is LightRAG's input directory.
+Corpus Reset and Workspace Delete clear that directory; they never delete
+operators' files in `input_dir`.
 
 A Run's stage (`corpus/<workspace>/.runs/<run>/sources`) holds each accepted
 file as `<n>/<file name>`, and the Run records exactly that list, in order, with
 each file's size and digest. The Run ingests only the files it lists; nothing
 scans a folder. Right before a file is enqueued it is copied to
-`corpus/<workspace>/<file name>`, the one place LightRAG looks a document up.
-A listed file missing or no longer of its recorded size when the Run starts
-fails it as `corpus_source_unavailable` before any upstream effect, and so does
-one that cannot be copied there.
+`corpus/<workspace>/<file name>`, the one place LightRAG looks a document up,
+with its page margin when it is an image (`corpus.ingestion.image_margin`);
+LightRAG archives that copy, and it is removed once LightRAG has processed the
+document. The document keeps the file as it was given in
+`corpus/<workspace>/__local_sources__/<file name>`, which its download and a
+retry read. A listed file missing or no longer of its recorded size when the
+Run starts fails it as `corpus_source_unavailable` before any upstream effect,
+and so does one that cannot be copied.
 
 A stage belongs to its Run alone. The Run removes it once it ends: it succeeds,
 fails, or is cancelled before its handoff. It stays while the Run is deferred or

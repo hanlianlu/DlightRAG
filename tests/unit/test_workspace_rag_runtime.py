@@ -2520,10 +2520,11 @@ class TestWorkspaceRagLightRAGMainPath:
         assert seen_items[0].parser_path.suffix == ".pdf"
         assert seen_items[0].display_filename == "report.pdf"
 
-    async def test_aingest_local_manifest_names_each_documents_flat_parser_input(
+    async def test_aingest_local_manifest_names_each_documents_own_copy(
         self, test_config: DlightragConfig
     ) -> None:
         input_root = test_config.corpus_dir_path / test_config.deployment.workspace
+        kept = input_root / "__local_sources__"
         source = input_root / ".runs" / "run-1" / "sources" / "0" / "report.pdf"
         explicit = input_root / ".runs" / "run-1" / "sources" / "1" / "custom.pdf"
         explicit.parent.mkdir(parents=True)
@@ -2556,14 +2557,14 @@ class TestWorkspaceRagLightRAGMainPath:
         assert result["processed"] == 2
         assert seen_items[0].parser_path == source
         assert seen_items[0].source_uri == f"local://{test_config.deployment.workspace}/report.pdf"
-        assert seen_items[0].download_locator == str(input_root / "report.pdf")
+        assert seen_items[0].download_locator == str(kept / "report.pdf")
         assert seen_items[0].metadata == {"asset_id": "local-a"}
         assert seen_items[0].source_uri_explicit is False
         assert seen_items[0].download_locator_explicit is False
         assert seen_items[0].display_filename_explicit is False
         assert seen_items[1].parser_path == explicit
         assert seen_items[1].source_uri == "local://custom/docs/custom.pdf"
-        assert seen_items[1].download_locator == str(input_root / "custom.pdf")
+        assert seen_items[1].download_locator == str(kept / "custom.pdf")
         assert seen_items[1].display_filename == "renamed.pdf"
         assert seen_items[1].source_uri_explicit is True
         assert seen_items[1].download_locator_explicit is False
@@ -2763,7 +2764,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Local ingestion names each source's flat parser input, which the engine places."""
+        """Local ingestion names the copy the engine keeps of each source."""
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
@@ -2780,11 +2781,11 @@ class TestWorkspaceRagLightRAGMainPath:
 
         result = await service.aingest(source_type="local", documents=[{"path": str(fake_pdf)}])
         service._ingestion_engine.aingest_files.assert_awaited_once()
-        parser_input = test_config.corpus_dir_path / test_config.deployment.workspace / "f.pdf"
+        kept = test_config.corpus_dir_path / test_config.deployment.workspace / "__local_sources__"
         (item,) = service._ingestion_engine.aingest_files.call_args.args[0]
         assert item.parser_path == fake_pdf
         assert item.source_uri == f"local://{test_config.deployment.workspace}/f.pdf"
-        assert item.download_locator == str(parser_input)
+        assert item.download_locator == str(kept / "f.pdf")
         assert result["results"][0]["doc_id"] == "d1"
         assert result["results"][0]["page_count"] == 3
         assert item.source_uri_explicit is False
@@ -4367,36 +4368,31 @@ class TestWorkspaceRagLightRAGMainPath:
         assert isinstance(raised.value.__cause__, FileNotFoundError)
         service._ingestion_engine.aingest_files.assert_not_awaited()
 
-    async def test_download_locator_dispatch_recovers_lightrag_moved_local_source(
+    async def test_download_locator_dispatch_never_replays_lightrags_archive(
         self, test_config: DlightragConfig
     ) -> None:
+        """LightRAG archives the copy it parsed, an image's with its page margin."""
+        from dlightrag.engine.rag.workspace.workspace_rag import _RetrySourceUnavailableError
+
         service = _service(test_config)
         input_root = service._workspace_input_root()  # type: ignore[attr-defined]
-        original = input_root / "report.pdf"
-        moved = input_root / "__parsed__" / original.name
-        moved.parent.mkdir(parents=True)
-        moved.write_bytes(b"%PDF-1.4 moved by parser")
+        kept = input_root / "__local_sources__" / "plate.png"
+        archived = input_root / "__parsed__" / kept.name
+        archived.parent.mkdir(parents=True)
+        archived.write_bytes(b"padded by the parser input")
         service._metadata_index = AsyncMock()
         service._metadata_index.find_by_download_locator.return_value = []
         service._ingestion_engine = AsyncMock()
-        service._ingestion_engine.aingest_files.return_value = {
-            "processed": 1,
-            "errors": [],
-            "results": [{"status": "success"}],
-        }
 
-        result = await service._aingest_download_locator(  # type: ignore[attr-defined]
-            "local://default/report.pdf",
-            str(original),
-            "report.pdf",
-        )
+        with pytest.raises(_RetrySourceUnavailableError) as raised:
+            await service._aingest_download_locator(  # type: ignore[attr-defined]
+                "local://default/plate.png",
+                str(kept),
+                "plate.png",
+            )
 
-        assert result == {"status": "success"}
-        items = service._ingestion_engine.aingest_files.await_args.args[0]
-        assert len(items) == 1
-        assert items[0].download_locator == str(original)
-        assert items[0].parser_path == moved
-        assert moved.is_file()
+        assert raised.value.reason == "the source file is no longer available"
+        service._ingestion_engine.aingest_files.assert_not_awaited()
 
     async def test_download_locator_dispatch_rejects_invalid_remote_locator(
         self, test_config: DlightragConfig

@@ -72,31 +72,19 @@ async def test_missing_contained_local_file_is_not_found(test_config) -> None:
         await _service(test_config, metadata_index).prepare("doc-missing-file")
 
 
-async def test_local_download_repairs_known_lightrag_archive_transition(test_config) -> None:
-    original = test_config.corpus_dir_path / "default" / "notes.md"
-    archived = original.parent / "__parsed__" / original.name
+async def test_local_download_never_serves_lightrags_archive(test_config) -> None:
+    """LightRAG archives the copy it parsed, an image's with its page margin."""
+    kept = test_config.corpus_dir_path / "default" / "__local_sources__" / "plate.png"
+    archived = kept.parent.parent / "__parsed__" / kept.name
     archived.parent.mkdir(parents=True, exist_ok=True)
-    archived.write_text("notes", encoding="utf-8")
+    archived.write_bytes(b"padded")
     metadata_index = AsyncMock()
-    metadata_index.get.return_value = {
-        "download_locator": str(original),
-        "file_path": str(original),
-    }
+    metadata_index.get.return_value = {"download_locator": str(kept)}
 
-    target = await _service(test_config, metadata_index).prepare("doc-notes")
+    with pytest.raises(SourceDownloadNotFoundError):
+        await _service(test_config, metadata_index).prepare("doc-plate")
 
-    assert target == LocalDownloadTarget(
-        path=archived.resolve(),
-        media_type="text/markdown",
-        filename="notes.md",
-    )
-    metadata_index.upsert.assert_awaited_once_with(
-        "doc-notes",
-        {
-            "download_locator": str(archived.resolve()),
-            "file_path": str(archived.resolve()),
-        },
-    )
+    metadata_index.upsert.assert_not_awaited()
 
 
 @pytest.mark.parametrize("marker", [False, None])

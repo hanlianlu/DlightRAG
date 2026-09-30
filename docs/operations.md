@@ -243,7 +243,9 @@ replayed: its source file is gone (`the source file is no longer available`),
 or its stored source metadata is incomplete or invalid (`source metadata
 incomplete`, `source metadata invalid`). Waiting cannot change either, so the
 Run settles rather than waiting for a repair or deferring, and the document
-stays hidden. Restore its source and retry it, or delete it.
+stays hidden. Restore its source and retry it, or delete it. An upload or a
+local source keeps its copy in `<working_dir>/corpus/<workspace>/__local_sources__`,
+under its file name.
 
 Failed documents are terminal and are not automatically retried. First inspect
 the workspace:

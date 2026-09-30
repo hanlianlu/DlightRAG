@@ -35,6 +35,7 @@ from dlightrag.engine.rag.corpus.ingestion.engine import (
     _raw_path_source_uri,
 )
 from dlightrag.engine.rag.corpus.ingestion.errors import ParserInputPlacementError
+from dlightrag.engine.rag.corpus.ingestion.paths import local_source_path
 from dlightrag.engine.rag.retrieval.metadata_fields import PARSER_INPUT_SHA256_FIELD
 
 
@@ -352,27 +353,6 @@ async def test_ingest_does_not_wait_forever_on_unknown_pipeline_status(
 
     assert result["processed"] == 0
     assert result["errors"] == ["unknown-status.pdf: document processing failed"]
-
-
-async def test_document_ingest_persists_lightrag_archived_source_locator(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "inputs" / "default" / "report.pdf"
-    source.parent.mkdir(parents=True)
-    source.write_bytes(b"%PDF-1.4")
-    archived = source.parent / "__parsed__" / source.name
-    engine, deps = _make_engine()
-
-    async def archive_source() -> None:
-        archived.parent.mkdir()
-        source.replace(archived)
-
-    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = archive_source
-
-    await _ingest_one(engine, source, replace=False)
-
-    _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["download_locator"] == str(archived.resolve())
 
 
 async def test_document_ingest_reports_a_failed_pipeline_per_document(
@@ -3286,38 +3266,6 @@ async def test_zero_image_margin_enqueues_the_source_bytes(
     assert not (tmp_path / PADDED_INPUT_DIR_NAME).exists()
 
 
-async def test_a_local_image_is_parsed_as_supplied_and_kept_as_its_source(
-    tmp_path: Path, parser_input_root: Path
-) -> None:
-    """LightRAG archives the flat input it parsed, which for a local source is its source."""
-    from PIL import Image
-
-    from dlightrag.engine.rag.corpus.ingestion.image_normalization import (
-        PADDED_INPUT_DIR_NAME,
-    )
-
-    source = tmp_path / "stage" / "plate.png"
-    source.parent.mkdir()
-    Image.new("RGB", (200, 200), (0, 0, 0)).save(source)
-    engine, deps = _make_engine()
-    enqueued = _record_enqueued(deps)
-    parser_input = parser_input_root / source.name
-
-    await engine.aingest_files(
-        [
-            PreparedIngestFile(
-                parser_path=source,
-                source_uri="local://default/plate.png",
-                download_locator=str(parser_input),
-            )
-        ]
-    )
-
-    assert enqueued == [source.read_bytes()]
-    assert parser_input.read_bytes() == source.read_bytes()
-    assert not (source.parent / PADDED_INPUT_DIR_NAME).exists()
-
-
 async def test_image_padding_runs_off_the_event_loop(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3408,9 +3356,10 @@ def _archiving_engine(
     """An engine whose LightRAG looks up and archives parser inputs as LightRAG does.
 
     Each enqueued document is found with LightRAG's own resolver and archived with
-    its own ``move_file_to_parsed_dir``. The returned state holds the doc_status
-    rows (``status``), the metadata rows (``metadata``) and, per document, the
-    bytes LightRAG parsed (``parsed``).
+    its own ``move_file_to_parsed_dir``, unless its name is in ``fail``: LightRAG
+    then records it FAILED and archives nothing. The returned state holds the
+    doc_status rows (``status``), the metadata rows (``metadata``), per document
+    the bytes each parse read (``parsed``), and ``process``, LightRAG's queue sweep.
     """
     from lightrag.pipeline import _PipelineMixin
     from lightrag.utils import move_file_to_parsed_dir
@@ -3420,7 +3369,7 @@ def _archiving_engine(
     monkeypatch.chdir(input_root.parent)
     workspace = input_root.name
     engine, deps = _make_engine(input_root=input_root, workspace=workspace, **overrides)
-    state: dict[str, Any] = {"status": {}, "metadata": {}, "parsed": {}}
+    state: dict[str, Any] = {"status": {}, "metadata": {}, "parsed": {}, "fail": set()}
     queue: list[str] = []
 
     async def enqueue(**kwargs: Any) -> str:
@@ -3441,7 +3390,10 @@ def _archiving_engine(
                     source_file=name,
                 )
             )
-            state["parsed"][doc_id] = source.read_bytes()
+            state["parsed"].setdefault(doc_id, []).append(source.read_bytes())
+            if name in state["fail"]:
+                state["status"][doc_id] = {"status": "failed", "error_msg": "parse failed"}
+                continue
             await move_file_to_parsed_dir(source, skip_if_already_parsed=True)
             state["status"][doc_id] = {"status": "processed", "chunks_list": [f"chunk-{doc_id}"]}
 
@@ -3452,6 +3404,7 @@ def _archiving_engine(
     def upsert(doc_id: str, record: Mapping[str, Any]) -> None:
         state["metadata"][doc_id] = {**state["metadata"].get(doc_id, {}), **record}
 
+    state["process"] = process
     deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
     deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
     deps["lightrag"].adelete_by_doc_id.side_effect = delete
@@ -3467,11 +3420,25 @@ def _archiving_engine(
 
 
 def _staged_local_item(source: Path, input_root: Path) -> PreparedIngestFile:
-    """A staged local source as WorkspaceRag describes it: its flat input is its copy."""
+    """A staged local source as WorkspaceRag describes it: it keeps its own copy."""
     return PreparedIngestFile(
         parser_path=source,
         source_uri=f"local://{input_root.name}/{source.name}",
-        download_locator=str(input_root / source.name),
+        download_locator=str(local_source_path(input_root, source)),
+    )
+
+
+def _replayed_item(row: Mapping[str, Any], input_root: Path) -> PreparedIngestFile:
+    """A document replayed from its metadata row, as a retry prepares it."""
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+
+    return PreparedIngestFile(
+        parser_path=WorkspaceRag._retry_local_source_path(
+            cast(Any, SimpleNamespace(_workspace_input_root=lambda: input_root)),
+            row["download_locator"],
+        ),
+        source_uri=row["source_uri"],
+        download_locator=row["download_locator"],
     )
 
 
@@ -3485,19 +3452,153 @@ def _staged_versions(tmp_path: Path, name: str, *versions: bytes) -> list[Path]:
     return staged
 
 
+def _staged_image(tmp_path: Path, name: str = "plate.png") -> tuple[Path, bytes]:
+    """A full-bleed image staged by a Run, and its bytes."""
+    from PIL import Image
+
+    source = tmp_path / "stage" / "0" / name
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (40, 30), (1, 2, 3)).save(source)
+    return source, source.read_bytes()
+
+
+def _corpus_files(input_root: Path) -> list[str]:
+    """Every file left in the Workspace's corpus directory, outside Run stages."""
+    return sorted(
+        path.relative_to(input_root).as_posix()
+        for path in input_root.rglob("*")
+        if path.is_file() and ".runs" not in path.relative_to(input_root).parts
+    )
+
+
+async def test_a_local_image_is_parsed_with_its_page_margin_and_keeps_the_bytes_it_was_given(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upload or local image gets page context, as a fetched one does.
+
+    LightRAG parses and archives a padded copy, which goes once it settles; the
+    document keeps the bytes it was given, and its digest is theirs.
+    """
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    source, original = _staged_image(tmp_path)
+
+    result = await engine.aingest_files([_staged_local_item(source, parser_input_root)])
+
+    assert not result["errors"]
+    ((doc_id, row),) = state["metadata"].items()
+    ((parsed,),) = state["parsed"].values()
+    assert _image_size(parsed) > _image_size(original)
+    assert Path(row["download_locator"]).read_bytes() == original
+    assert row[PARSER_INPUT_SHA256_FIELD] == _sha256(original)
+    assert row["filename"] == "plate.png"
+    assert result["results"][0]["doc_id"] == doc_id
+    assert _corpus_files(parser_input_root) == ["__local_sources__/plate.png"]
+    assert sorted(path.name for path in source.parent.iterdir()) == ["plate.png"]
+
+
+async def test_an_unchanged_local_image_is_recognized_by_the_bytes_it_was_given(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    first, original = _staged_image(tmp_path / "first")
+    second, _ = _staged_image(tmp_path / "second")
+    await engine.aingest_files([_staged_local_item(first, parser_input_root)])
+
+    result = await engine.aingest_files([_staged_local_item(second, parser_input_root)])
+
+    assert result["results"][0]["source_kind"] == "skipped"
+    (parses,) = state["parsed"].values()
+    assert len(parses) == 1
+    (row,) = state["metadata"].values()
+    assert Path(row["download_locator"]).read_bytes() == original
+
+
+async def test_a_retry_parses_a_local_image_from_its_own_copy_with_its_page_margin(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replay pads the bytes the document was given again, never a padded copy."""
+    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    source, original = _staged_image(tmp_path)
+    state["fail"].add(source.name)
+    failed = await engine.aingest_files([_staged_local_item(source, parser_input_root)])
+    assert failed["errors"] == ["plate.png: document processing failed"]
+    state["fail"].clear()
+    (row,) = state["metadata"].values()
+
+    result = await engine.aingest_files([_replayed_item(row, parser_input_root)])
+
+    assert not result["errors"]
+    ((first, second),) = state["parsed"].values()
+    assert first == second
+    assert _image_size(second) > _image_size(original)
+    (row,) = state["metadata"].values()
+    assert row[_FINALIZATION_COMPLETE_KEY] is True
+    assert Path(row["download_locator"]).read_bytes() == original
+    assert sorted(path.name for path in (parser_input_root / "__local_sources__").iterdir()) == [
+        "plate.png"
+    ]
+    assert _corpus_files(parser_input_root) == ["__local_sources__/plate.png"]
+
+
+async def test_a_local_image_downloads_as_the_bytes_it_was_given(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once its Run stage is gone, the document still downloads what was uploaded."""
+    import shutil
+
+    from dlightrag.engine.rag.corpus.downloads import LocalDownloadTarget, SourceDownloadService
+
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    source, original = _staged_image(tmp_path)
+    await engine.aingest_files([_staged_local_item(source, parser_input_root)])
+    shutil.rmtree(source.parent)
+    (doc_id,) = state["metadata"]
+
+    target = await SourceDownloadService(
+        settings=cast(Any, SimpleNamespace(input_root=parser_input_root.parent)),
+        metadata_index=deps["metadata_index"],
+        workspace_id=parser_input_root.name,
+    ).prepare(doc_id)
+
+    assert isinstance(target, LocalDownloadTarget)
+    assert target.path.read_bytes() == original
+    assert (target.filename, target.media_type) == ("plate.png", "image/png")
+
+
+async def test_deleting_a_local_image_removes_its_own_copy_and_lightrags(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion.cleanup import remove_deleted_files
+
+    engine, _deps, _state = _archiving_engine(parser_input_root, monkeypatch)
+    source, _original = _staged_image(tmp_path)
+    await engine.aingest_files([_staged_local_item(source, parser_input_root)])
+    sidecar = parser_input_root / "__parsed__" / "plate.png.parsed" / "plate.blocks.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text("{}\n")
+    # LightRAG's archive of the padded copy, as a recovery after a stopped ingest leaves it.
+    (parser_input_root / "__parsed__" / "plate.png").write_bytes(b"padded")
+
+    remove_deleted_files({"plate.png"}, str(parser_input_root))
+
+    assert _corpus_files(parser_input_root) == []
+
+
 @pytest.mark.parametrize("replace", [True, False], ids=["replace", "changed-bytes"])
-async def test_a_new_version_is_archived_where_its_locator_points(
+async def test_a_new_version_replaces_the_documents_own_copy(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch, replace: bool
 ) -> None:
-    """LightRAG archives an input as ``<stem>_001<ext>`` while its name is taken.
+    """The new version is kept, and parsed, under the document's own name.
 
-    Deleting the old version's document leaves the old archive under that name, so
-    the new version would be downloaded, and retried, as the old bytes.
+    LightRAG archives an input as ``<stem>_001<ext>`` while its name is taken, so
+    a copy left under that name would outlive the document.
     """
     engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
     first, second = _staged_versions(tmp_path, "report.md", b"# one\n", b"# two\n")
-
     await engine.aingest_files([_staged_local_item(first, parser_input_root)])
+    # LightRAG's archive of the first version, as a recovery after a stopped ingest leaves it.
+    (parser_input_root / "__parsed__" / "report.md").write_bytes(b"# one\n")
+
     result = await engine.aingest_files(
         [_staged_local_item(second, parser_input_root)], replace=replace
     )
@@ -3505,7 +3606,24 @@ async def test_a_new_version_is_archived_where_its_locator_points(
     assert not result["errors"]
     (row,) = state["metadata"].values()
     assert Path(row["download_locator"]).read_bytes() == b"# two\n"
-    assert sorted(path.name for path in (parser_input_root / "__parsed__").iterdir()) == [
+    assert _corpus_files(parser_input_root) == ["__local_sources__/report.md"]
+
+
+async def test_a_replacement_that_stops_before_the_old_version_is_gone_leaves_it_its_bytes(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new version's copy is staged, and kept only once the old document is deleted."""
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    first, second = _staged_versions(tmp_path, "report.md", b"# one\n", b"# two\n")
+    await engine.aingest_files([_staged_local_item(first, parser_input_root)])
+    deps["lightrag"].adelete_by_doc_id.side_effect = RuntimeError("storage unavailable")
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await engine.aingest_files([_staged_local_item(second, parser_input_root)], replace=True)
+
+    (row,) = state["metadata"].values()
+    assert Path(row["download_locator"]).read_bytes() == b"# one\n"
+    assert sorted(path.name for path in (parser_input_root / "__local_sources__").iterdir()) == [
         "report.md"
     ]
 
@@ -3513,9 +3631,7 @@ async def test_a_new_version_is_archived_where_its_locator_points(
 async def test_a_replacement_that_fails_to_finalize_is_retried_from_its_own_bytes(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A retry reads the document's archive, which must hold the version it replays."""
-    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
-
+    """A retry reads the document's own copy, which must hold the version it replays."""
     engine, deps, state = _archiving_engine(
         parser_input_root,
         monkeypatch,
@@ -3531,45 +3647,31 @@ async def test_a_replacement_that_fails_to_finalize_is_retried_from_its_own_byte
 
     assert result["errors"] == ["report.md: document processing failed"]
     (row,) = state["metadata"].values()
-    retried = WorkspaceRag._retry_local_source_path(
-        cast(Any, SimpleNamespace(_workspace_input_root=lambda: parser_input_root)),
-        row["download_locator"],
-    )
-    assert retried.read_bytes() == b"# two\n"
+    assert _replayed_item(row, parser_input_root).parser_path.read_bytes() == b"# two\n"
 
 
-async def test_a_retry_from_lightrags_archive_is_archived_back_in_its_place(
+async def test_a_document_lightrag_settled_after_its_ingest_stopped_leaves_no_parser_input(
     tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A document LightRAG archived is replayed from its archive, which stays its copy.
+    """Its replay only finalizes it, and removes the copy LightRAG parsed and archived."""
+    engine, deps, state = _archiving_engine(parser_input_root, monkeypatch)
+    (source,) = _staged_versions(tmp_path, "report.md", b"# one\n")
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = RuntimeError("worker lost")
+    with pytest.raises(RuntimeError, match="worker lost"):
+        await engine.aingest_files([_staged_local_item(source, parser_input_root)])
+    # LightRAG's own sweep parses what the stopped ingest enqueued.
+    await state["process"]()
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = state["process"]
+    (row,) = state["metadata"].values()
 
-    The replay parses a flat copy of it as supplied (a local image is not padded),
-    which LightRAG archives back under the document's name.
-    """
-    from PIL import Image
-
-    archived = parser_input_root / "__parsed__" / "plate.png"
-    archived.parent.mkdir(parents=True)
-    Image.new("RGB", (40, 40), (1, 2, 3)).save(archived)
-    original = archived.read_bytes()
-    engine, _deps, state = _archiving_engine(parser_input_root, monkeypatch)
-
-    result = await engine.aingest_files(
-        [
-            PreparedIngestFile(
-                parser_path=archived,
-                source_uri="local://default/plate.png",
-                download_locator=str(archived),
-            )
-        ]
-    )
+    result = await engine.aingest_files([_replayed_item(row, parser_input_root)])
 
     assert not result["errors"]
-    assert list(state["parsed"].values()) == [original]
-    assert sorted(path.name for path in archived.parent.iterdir()) == ["plate.png"]
-    assert archived.read_bytes() == original
+    (parses,) = state["parsed"].values()
+    assert parses == [b"# one\n"]
     (row,) = state["metadata"].values()
-    assert row["download_locator"] == str(archived)
+    assert row[_FINALIZATION_COMPLETE_KEY] is True
+    assert _corpus_files(parser_input_root) == ["__local_sources__/report.md"]
 
 
 async def test_a_placed_copy_stays_while_lightrag_may_still_parse_it(
@@ -3587,14 +3689,33 @@ async def test_a_placed_copy_stays_while_lightrag_may_still_parse_it(
     assert (parser_input_root / source.name).read_bytes() == b"remote"
 
 
-async def test_a_parser_input_that_cannot_be_placed_deletes_nothing(
-    tmp_path: Path, parser_input_root: Path
+@pytest.mark.parametrize("unplaceable", ["parser input", "own copy"])
+async def test_a_document_that_cannot_be_placed_deletes_nothing(
+    tmp_path: Path, parser_input_root: Path, monkeypatch: pytest.MonkeyPatch, unplaceable: str
 ) -> None:
+    """Its parser input or its own copy cannot be written: nothing changes."""
+    import errno
+    import shutil
+
     source = tmp_path / "stage" / "report.pdf"
     source.parent.mkdir()
     source.write_bytes(b"%PDF")
-    # A folder where the flat copy belongs: the copy cannot replace it.
-    (parser_input_root / "report.pdf").mkdir(parents=True)
+    kept = local_source_path(parser_input_root, source)
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"%PDF-old")
+    if unplaceable == "parser input":
+        # A folder where the flat copy belongs: the copy cannot replace it.
+        (parser_input_root / "report.pdf").mkdir()
+    else:
+        copy = shutil.copy2
+
+        def copy_until_the_disk_fills(src: Any, dst: Any, **kwargs: Any) -> Any:
+            if Path(dst).parent == kept.parent:
+                Path(dst).write_bytes(b"%P")
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return copy(src, dst, **kwargs)
+
+        monkeypatch.setattr(shutil, "copy2", copy_until_the_disk_fills)
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.return_value = {
         "status": "processed",
@@ -3603,20 +3724,13 @@ async def test_a_parser_input_that_cannot_be_placed_deletes_nothing(
     }
 
     with pytest.raises(ParserInputPlacementError):
-        await engine.aingest_files(
-            [
-                PreparedIngestFile(
-                    parser_path=source,
-                    source_uri="local://default/report.pdf",
-                    download_locator=str(parser_input_root / "report.pdf"),
-                )
-            ],
-            replace=True,
-        )
+        await engine.aingest_files([_staged_local_item(source, parser_input_root)], replace=True)
 
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
     deps["metadata_index"].upsert.assert_not_awaited()
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    assert sorted(path.name for path in kept.parent.iterdir()) == ["report.pdf"]
+    assert kept.read_bytes() == b"%PDF-old"
 
 
 async def test_lightrag_parses_the_placed_input_before_any_same_named_decoy(
@@ -3647,7 +3761,7 @@ async def test_lightrag_parses_the_placed_input_before_any_same_named_decoy(
     monkeypatch.chdir(working_dir)
     engine, deps = _make_engine(input_root=input_root)
     enqueued: list[str] = []
-    parsed: list[Path] = []
+    parsed: list[tuple[Path, bytes]] = []
 
     async def enqueue(**kwargs: Any) -> str:
         enqueued.extend(kwargs["file_paths"])
@@ -3657,31 +3771,21 @@ async def test_lightrag_parses_the_placed_input_before_any_same_named_decoy(
         # What LightRAG keeps from the enqueue: the canonical basename as the
         # document's file_path, and the enqueued basename as its source_file.
         for path in enqueued:
-            parsed.append(
-                Path(
-                    _PipelineMixin._resolve_source_file_for_parser(
-                        cast(Any, SimpleNamespace(workspace="default")),
-                        normalize_document_file_path(path),
-                        source_file=Path(path).name,
-                    )
+            resolved = Path(
+                _PipelineMixin._resolve_source_file_for_parser(
+                    cast(Any, SimpleNamespace(workspace="default")),
+                    normalize_document_file_path(path),
+                    source_file=Path(path).name,
                 )
             )
+            parsed.append((resolved, resolved.read_bytes()))
 
     deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
     deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
 
-    await engine.aingest_files(
-        [
-            PreparedIngestFile(
-                parser_path=source,
-                source_uri="local://default/report.pdf",
-                download_locator=str(input_root / "report.pdf"),
-            )
-        ]
-    )
+    await engine.aingest_files([_staged_local_item(source, input_root)])
 
-    assert parsed == [input_root / "report.pdf"]
-    assert parsed[0].read_bytes() == b"ours"
+    assert parsed == [(input_root / "report.pdf", b"ours")]
     assert all(decoy.read_bytes() == b"decoy" for decoy in decoys)
 
 

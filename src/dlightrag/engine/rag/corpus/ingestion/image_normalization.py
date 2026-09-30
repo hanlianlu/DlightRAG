@@ -34,11 +34,9 @@ is written beside the staging copy under :data:`PADDED_INPUT_DIR_NAME`, keeps
 the original basename (LightRAG derives ``doc_id`` from the canonical basename,
 so a renamed input would change document identity) and is deleted once the
 batch settles. The original bytes stay untouched, so source downloads, content
-hashes and metadata keep referring to what the user supplied.
-
-The ingestion engine pads only a source whose flat parser input is disposable
-(a fetched remote source): LightRAG parses and archives the one file at that
-input's path, which for a local source is also the document's own copy.
+hashes and metadata keep referring to what the user supplied: an upload or a
+local source keeps its own copy apart from the flat parser input LightRAG
+parses and archives.
 """
 
 from __future__ import annotations

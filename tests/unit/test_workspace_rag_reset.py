@@ -231,10 +231,13 @@ class TestAresetPhase4:
         (workspace / "report.pdf").write_bytes(b"parser input")
         (workspace / "__parsed__").mkdir()
         (workspace / "__parsed__" / "report.pdf").write_bytes(b"archived")
+        (workspace / "__local_sources__").mkdir()
+        (workspace / "__local_sources__" / "report.pdf").write_bytes(b"own copy")
+        (workspace / "__local_sources__" / ".0123abcd.part").write_bytes(b"staged copy")
 
         result = await service.areset()
 
-        assert result["local_files_removed"] == 2
+        assert result["local_files_removed"] == 4
         assert sorted(path.name for path in workspace.iterdir()) == [".runs"]
         assert all((stage / "report.pdf").read_bytes() == b"pdf" for stage in stages)
 

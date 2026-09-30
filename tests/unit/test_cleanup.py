@@ -234,6 +234,21 @@ class TestRemoveDeletedFiles:
         assert not kept_input.exists()
         assert other.exists()
 
+    def test_a_local_documents_own_copy_goes_with_it(self, tmp_path) -> None:
+        """It is kept apart from the parser input, under a parser-hinted name too."""
+        workspace_input = tmp_path / "corpus" / "default"
+        kept = workspace_input / "__local_sources__" / "report.[native].md"
+        other = workspace_input / "__local_sources__" / "notes.md"
+        for path in (kept, other):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"bytes")
+
+        removed = remove_deleted_files({"report.md"}, str(workspace_input))
+
+        assert removed == 1
+        assert not kept.exists()
+        assert other.exists()
+
     def test_nested_remote_parser_path_removes_artifacts_not_remote_source(self, tmp_path) -> None:
         workspace_input = tmp_path / "inputs" / "default"
         batch_root = workspace_input / "__remote_ingest__" / "s3" / "batch-1"

@@ -206,6 +206,7 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     Handles the full LightRAG parser artifact layout:
 
     - Source files in ``input_dir/``
+    - A local document's own copy in ``input_dir/__local_sources__/``
     - Parsed artifacts under ``input_dir/__parsed__/`` using either the full
       filename or its stem: ``<name>.pdf.parsed/`` or ``<name>.parsed/`` plus
       the corresponding ``.mineru_raw`` / ``.docling_raw`` directories
@@ -226,10 +227,13 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
 
     from lightrag.constants import PARSED_ARTIFACT_DIR_SUFFIXES, PARSED_DIR_NAME
 
+    from dlightrag.engine.rag.corpus.ingestion.paths import LOCAL_SOURCES_DIR_NAME
+
     removed = 0
     failures: list[OSError] = []
     input_root = Path(input_dir)
     default_parsed_root = input_root / PARSED_DIR_NAME
+    local_sources_root = input_root / LOCAL_SOURCES_DIR_NAME
     _collision_re = re.compile(r"_\d{3}$")
 
     for fp in file_paths:
@@ -244,14 +248,15 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
         if default_parsed_root not in parsed_roots:
             parsed_roots.append(default_parsed_root)
 
-        # 1. Remove the source file (may be in input_dir/ or moved into
-        #    __parsed__/ by LightRAG after ingest), also under a parser-hinted
-        #    name LightRAG stores as this one (``report.[native].md``).
-        source_candidates = [source_root / filename]
+        # 1. Remove the source files: the parser input in input_dir/ (moved into
+        #    __parsed__/ by LightRAG after ingest) and a local document's own
+        #    copy, also under a parser-hinted name LightRAG stores as this one
+        #    (``report.[native].md``).
+        source_candidates = [source_root / filename, local_sources_root / filename]
         if path.is_absolute():
             source_candidates.insert(0, path)
         source_candidates.extend(parsed_root / filename for parsed_root in parsed_roots)
-        for root in dict.fromkeys((source_root, *parsed_roots)):
+        for root in dict.fromkeys((source_root, local_sources_root, *parsed_roots)):
             try:
                 source_candidates.extend(_hinted_sources(root, filename))
             except OSError as exc:
