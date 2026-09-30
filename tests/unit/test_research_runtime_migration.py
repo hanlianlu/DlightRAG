@@ -51,6 +51,7 @@ from dlightrag.engine.agent.tools import (
     ToolResultCapacityError,
     ToolRuntime,
 )
+from dlightrag.engine.agent.tools.contracts import already_in_source_order
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
@@ -171,6 +172,7 @@ async def _settle_bounded_research_tool(
         {},
         AttemptId.new(),
         emit_ephemeral,
+        already_in_source_order,
     )
     return settled, prepared
 
@@ -222,7 +224,9 @@ async def test_only_spawn_agent_captures_the_parent_context() -> None:
             input_schema_digest=tool.input_schema_digest,
             effective_input_digest="0" * 64,
         )
-        await effects.execute_tool(cast(Any, context), item, {}, AttemptId.new(), emit_ephemeral)
+        await effects.execute_tool(
+            cast(Any, context), item, {}, AttemptId.new(), emit_ephemeral, already_in_source_order
+        )
 
     # Capturing the parent context folds the whole transcript, so an ordinary
     # tool call must not pay for it.
@@ -231,6 +235,84 @@ async def test_only_spawn_agent_captures_the_parent_context() -> None:
 
     await run(tools[1])
     bind.assert_called_once_with(prepared, context)
+
+
+@pytest.mark.asyncio
+async def test_research_effect_touches_shared_run_state_only_in_source_order() -> None:
+    """A call does its own work beside its neighbours, never their shared settlement.
+
+    The evidence freeze, the trace, and the host update read state every call of a
+    batch shares, so they wait until the calls before this one have returned.
+    """
+    worked = asyncio.Event()
+
+    async def execute(_input: BaseModel, _runtime: Any) -> ToolResult:
+        worked.set()
+        return ToolResult.text("done")
+
+    tool = AgentTool(
+        "lookup", "Look something up.", _EmptyToolInput, execute=execute, read_only=True
+    )
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=EvidenceLedger(),
+    )
+    effects = ResearchRuntimeEffects(
+        telemetry=NOOP_TELEMETRY,
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=1,
+        call_id="lookup-call",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+        read_only=True,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+    waiting = asyncio.Event()
+    earlier_returned = asyncio.Event()
+
+    async def in_source_order() -> None:
+        waiting.set()
+        await earlier_returned.wait()
+
+    settling = asyncio.create_task(
+        effects.execute_tool(
+            cast(Any, context),
+            item,
+            {},
+            AttemptId.new(),
+            lambda _event: asyncio.sleep(0),
+            in_source_order,
+        )
+    )
+    await waiting.wait()
+    assert worked.is_set()
+    assert prepared.trace["tool_observations"] == []
+    assert not settling.done()
+
+    earlier_returned.set()
+    settled = await settling
+
+    assert settled.result.outcome == "succeeded"
+    assert [row["call_id"] for row in prepared.trace["tool_observations"]] == ["lookup-call"]
 
 
 @pytest.mark.asyncio
@@ -479,6 +561,7 @@ async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path
         {"path": "analysis.md", "label": "Open analysis"},
         AttemptId.new(),
         emit_ephemeral,
+        already_in_source_order,
     )
 
     assert settled.host_delta is not None
@@ -544,6 +627,7 @@ async def test_research_runtime_projects_a_reported_subject_into_tool_updates() 
         {},
         AttemptId.new(),
         emit_ephemeral,
+        already_in_source_order,
     )
 
     updates = [event for event in emitted if getattr(event, "kind", None) == "tool_update"]
@@ -605,6 +689,7 @@ async def test_research_runtime_measures_one_tool_attempt_and_publishes_it_on_se
         {},
         AttemptId.new(),
         lambda _event: asyncio.sleep(0),
+        already_in_source_order,
     )
 
     assert settled.result.outcome == "failed"
@@ -669,6 +754,7 @@ async def test_a_tool_call_is_recorded_under_the_run_that_requested_it() -> None
                 {"query": "which filings mention risk"},
                 AttemptId.new(),
                 lambda _event: asyncio.sleep(0),
+                already_in_source_order,
             )
 
     assert [observation.kwargs["name"] for observation in client.observations] == [
@@ -1014,6 +1100,113 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     assert len(delta.fetched) == 1
     assert delta.fetched[0].resource.resource_id == "attachment-1"
     assert delta.fetched[0].complete_blob.total_bytes == len(b"bounded attachment text")
+
+
+@pytest.mark.asyncio
+async def test_research_reads_run_at_once_yet_cite_and_settle_in_source_order() -> None:
+    """Two reads of one turn overlap, and their evidence still follows the batch.
+
+    The first read can only finish after the second one did, so run one at a time
+    they would never finish. The second read's passage arrives first, yet it takes
+    the second citation number and its result settles after the first read's.
+    """
+    turns = [
+        AssistantTurn(
+            text="",
+            tool_calls=(
+                ToolCall("read-1", "read", {"resource_id": "first"}),
+                ToolCall("read-2", "read", {"resource_id": "second"}),
+            ),
+            stop_reason="tool_use",
+        ),
+        AssistantTurn(text="done", tool_calls=(), stop_reason="stop"),
+    ]
+
+    async def model(**_kwargs) -> AssistantTurn:
+        return turns.pop(0)
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        raise AssertionError("knowledge retrieval was not requested")
+
+    second_read = asyncio.Event()
+
+    async def read_resource(request: Any, _runtime: Any) -> ToolResult:
+        resource_id = request.resource_id
+        if resource_id == "first":
+            await second_read.wait()
+        else:
+            second_read.set()
+        return ToolResult.text(
+            f"{resource_id} passage",
+            effects=ToolEffects(
+                evidence_sources=(
+                    EvidenceSourceFact(
+                        resource_id=resource_id,
+                        source_type="web_attachment",
+                        source_uri=resource_id,
+                        title=f"{resource_id}.txt",
+                    ),
+                )
+            ),
+        )
+
+    profile = answer_model_profile()
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(Any, SimpleNamespace()),
+        retrieve_knowledge_base=retrieve,
+        model_func=model,
+        text_window_budget=TextWindowBudget(profile.context_window_tokens),
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        resource_reader=read_resource,
+        resolved_mode="research",
+    )
+    prepared = orchestrator.prepare_run("read both attachments")
+    plan = AgentRunPlan.from_tools(
+        prepared.tools,
+        model_role="query",
+        context_policy_revision="context-v1",
+        model_identity=asdict(
+            ModelInvocationFingerprint("openai", "query", None, "chat_completion")
+        ),
+        model_profile=asdict(profile),
+    )
+    session_id = SessionId.new()
+    store = MemoryAgentSessionRepository[EffectHostUpdate]()
+    runtime = AgentSessionRuntime(
+        repository=store,
+        effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
+            orchestrator=orchestrator,
+            prepared=prepared,
+            session=_Session(),  # type: ignore[arg-type]
+            session_id=session_id,
+            fetched_buffer=FetchedResourceBuffer(),
+            persist_child_intent=None,
+        ),
+        tools=prepared.tools,
+        fencing_epoch=1,
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="concurrent-reads",
+        content="read both attachments",
+        plan=plan,
+    )
+
+    final = await asyncio.wait_for(
+        runtime.drive(session_id=session_id, operation_id=accepted.operation_id), timeout=5
+    )
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    results = [entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry)]
+    assert [entry.result.call_id for entry in results] == ["read-1", "read-2"]
+    assert [entry.result.text_content for entry in results] == [
+        "[1-1] first.txt\n\nfirst passage",
+        "[2-1] second.txt\n\nsecond passage",
+    ]
 
 
 @pytest.mark.asyncio

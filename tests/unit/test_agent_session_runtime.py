@@ -19,7 +19,20 @@ from dlightrag.engine.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.engine.agent.session.fold import project_session_messages
-from dlightrag.engine.agent.session.ids import AttemptId, EntryId, LaneId, SessionId
+from dlightrag.engine.agent.session.ids import (
+    AttemptId,
+    EntryId,
+    IntentId,
+    LaneId,
+    OperationId,
+    SessionId,
+)
+from dlightrag.engine.agent.session.interpreter import (
+    MAX_CONCURRENT_TOOL_CALLS,
+    BeginToolEffect,
+    CommitSyntheticToolResult,
+    next_action,
+)
 from dlightrag.engine.agent.session.operation import (
     Cancelling,
     CompletionReady,
@@ -27,7 +40,12 @@ from dlightrag.engine.agent.session.operation import (
     OperationCompleted,
     OperationFailed,
     ProviderRequestPending,
+    ToolBatchItem,
+    ToolBatchPlan,
+    ToolBatchReady,
     ToolEffectPending,
+    decode_operation_state,
+    operation_state_payload,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import (
@@ -63,6 +81,7 @@ from dlightrag.engine.agent.session.transactions import (
 )
 from dlightrag.engine.agent.tool_content import tool_content_text
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.agent.tools.contracts import SourceOrder
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.providers.openai_response import response_input
@@ -90,9 +109,9 @@ def _agent_tool(*, replayable: bool = False) -> AgentTool:
     )
 
 
-def _plan(tool: AgentTool) -> AgentRunPlan:
+def _plan(*tools: AgentTool) -> AgentRunPlan:
     return AgentRunPlan.from_tools(
-        [tool],
+        list(tools),
         model_role="query",
         context_policy_revision="context-v1",
     )
@@ -161,8 +180,9 @@ class _Effects:
         arguments: Mapping[str, Any],
         attempt_id: AttemptId,
         emit_ephemeral: Any,
+        in_source_order: SourceOrder,
     ) -> ToolEffectResult[dict[str, Any]]:
-        del context, emit_ephemeral
+        del context, emit_ephemeral, in_source_order
         self.tool_attempts.append(attempt_id)
         self.executed_sources.append(item.source_index)
         if self.crash_tool:
@@ -218,8 +238,7 @@ def _assistant(*calls: ToolCall, text: str = "", stop: str | None = None) -> Ass
 def _runtime(
     store: MemoryAgentSessionRepository[dict[str, Any]],
     effects: _Effects,
-    tool: AgentTool,
-    *,
+    *tools: AgentTool,
     events: list[AgentSessionEvent] | None = None,
     controls: Any = None,
 ) -> AgentSessionRuntime[dict[str, Any]]:
@@ -230,7 +249,7 @@ def _runtime(
     return AgentSessionRuntime(
         repository=store,
         effects=effects,
-        tools=[tool],
+        tools=tools,
         fencing_epoch=1,
         event_sink=collect,
         controls=controls,
@@ -1731,8 +1750,11 @@ class _PoisonToolEffects(_Effects):
         arguments: Mapping[str, Any],
         attempt_id: AttemptId,
         emit_ephemeral: Any,
+        in_source_order: SourceOrder,
     ) -> ToolEffectResult[dict[str, Any]]:
-        execution = await super().execute_tool(context, item, arguments, attempt_id, emit_ephemeral)
+        execution = await super().execute_tool(
+            context, item, arguments, attempt_id, emit_ephemeral, in_source_order
+        )
         return replace(
             execution,
             result=ToolResultEntry.text(
@@ -1914,3 +1936,440 @@ async def test_a_declined_compaction_continues_the_run_instead_of_failing_it() -
     assert effects.declined_assemblies == 1
     snapshot = await store.load(session_id)
     assert not any(isinstance(entry, CompactionEntry) for entry in snapshot.entries)
+
+
+# -- Read-only calls of one Tool Batch ---------------------------------------
+
+
+def _batch_tool(name: str, *, read_only: bool, replayable: bool = False) -> AgentTool:
+    return AgentTool(
+        name=name,
+        description=name,
+        input_model=_Args,
+        execute=_tool,
+        replay_policy="replayable" if replayable else "never",
+        read_only=read_only,
+    )
+
+
+def _call(index: int, name: str) -> ToolCall:
+    return ToolCall(f"c{index}", name, {"value": str(index)})
+
+
+def _batch_item(index: int, name: str, *, read_only: bool) -> ToolBatchItem:
+    return ToolBatchItem(
+        index,
+        f"c{index}",
+        name,
+        "executable",
+        EntryId.new(),
+        IntentId.new(),
+        input_schema_digest="a" * 64,
+        effective_input_digest="b" * 64,
+        read_only=read_only,
+    )
+
+
+class _TimelineEffects(_Effects):
+    """Effects that record when each call starts and when it reaches source order."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.timeline: list[tuple[str, int]] = []
+        self.cancelled_sources: list[int] = []
+
+    async def io(self, source_index: int) -> None:
+        """One call's own work, which may run beside the other calls of its group."""
+        del source_index
+        await asyncio.sleep(0)
+
+    async def execute_tool(
+        self,
+        context: RuntimeContext,
+        item: Any,
+        arguments: Mapping[str, Any],
+        attempt_id: AttemptId,
+        emit_ephemeral: Any,
+        in_source_order: SourceOrder,
+    ) -> ToolEffectResult[dict[str, Any]]:
+        del context, emit_ephemeral
+        self.tool_attempts.append(attempt_id)
+        self.executed_sources.append(item.source_index)
+        self.timeline.append(("start", item.source_index))
+        try:
+            await self.io(item.source_index)
+            await in_source_order()
+        except asyncio.CancelledError:
+            self.cancelled_sources.append(item.source_index)
+            raise
+        self.timeline.append(("ordered", item.source_index))
+        return ToolEffectResult(
+            result=ToolResultEntry.text(
+                tool_name=item.tool_name,
+                call_id=item.call_id,
+                outcome="succeeded",
+                text=f"result:{arguments['value']}",
+            ),
+            host_delta={"source_index": item.source_index},
+        )
+
+
+def _results(snapshot: AgentSessionSnapshot) -> list[ToolResultMessageEntry]:
+    return [entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry)]
+
+
+def test_adjacent_read_only_calls_begin_together_between_barriers() -> None:
+    def begun(names: list[str], position: int) -> tuple[int, ...]:
+        items = tuple(
+            ToolBatchItem(
+                index,
+                f"c{index}",
+                "lookup",
+                "invalid_arguments",
+                EntryId.new(),
+                synthetic_message="invalid",
+            )
+            if name == "invalid"
+            else _batch_item(index, name, read_only=name == "lookup")
+            for index, name in enumerate(names)
+        )
+        action = next_action(
+            ToolBatchReady(OperationId.new(), 1, ToolBatchPlan(EntryId.new(), items), position)
+        )
+        if isinstance(action, CommitSyntheticToolResult):
+            return ()
+        assert isinstance(action, BeginToolEffect)
+        return (action.item.source_index, *(call.source_index for call in action.concurrent))
+
+    mixed = ["lookup", "lookup", "write", "lookup", "lookup", "invalid", "lookup"]
+    assert begun(mixed, 0) == (0, 1)
+    assert begun(mixed, 2) == (2,)
+    assert begun(mixed, 3) == (3, 4)
+    assert begun(mixed, 5) == ()
+    assert begun(mixed, 6) == (6,)
+    # A write between read-only calls keeps the call after it out of their group.
+    assert begun(["lookup", "write", "lookup"], 0) == (0,)
+    # The bound splits a longer run of read-only calls into rounds.
+    bound = MAX_CONCURRENT_TOOL_CALLS
+    assert begun(["lookup"] * (bound + 2), 0) == tuple(range(bound))
+    assert begun(["lookup"] * (bound + 2), bound) == (bound, bound + 1)
+
+
+def test_pending_read_only_calls_round_trip_and_only_they_may_pend_together() -> None:
+    batch = ToolBatchPlan(
+        EntryId.new(),
+        (
+            _batch_item(0, "lookup", read_only=True),
+            _batch_item(1, "lookup", read_only=True),
+            _batch_item(2, "write", read_only=False),
+        ),
+    )
+    pending = ToolEffectPending(
+        OperationId.new(),
+        1,
+        batch,
+        0,
+        AttemptId.new(),
+        concurrent_attempt_ids=(AttemptId.new(),),
+    )
+    cancelling = Cancelling(
+        pending.operation_id,
+        1,
+        batch,
+        next_source_index=0,
+        uncertain_source_index=0,
+        uncertain_attempt_id=pending.attempt_id,
+        concurrent_attempt_ids=pending.concurrent_attempt_ids,
+    )
+    for state in (pending, cancelling):
+        assert decode_operation_state(operation_state_payload(state)) == state
+
+    with pytest.raises(ValueError, match="read-only"):
+        ToolEffectPending(
+            OperationId.new(),
+            1,
+            batch,
+            1,
+            AttemptId.new(),
+            concurrent_attempt_ids=(AttemptId.new(),),
+        )
+    with pytest.raises(ValueError, match="outside"):
+        ToolEffectPending(
+            OperationId.new(),
+            1,
+            batch,
+            0,
+            AttemptId.new(),
+            concurrent_attempt_ids=(AttemptId.new(), AttemptId.new(), AttemptId.new()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_only_calls_run_beside_each_other_and_side_effects_run_alone() -> None:
+    lookup = _batch_tool("lookup", read_only=True)
+    write = _batch_tool("write", read_only=False)
+    names = ["lookup", "lookup", "write", "lookup", "lookup"]
+    effects = _TimelineEffects(
+        [
+            _assistant(*(_call(index, name) for index, name in enumerate(names))),
+            _assistant(text="done"),
+        ]
+    )
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    events: list[AgentSessionEvent] = []
+    runtime = _runtime(store, effects, lookup, write, events=events)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="mixed-batch",
+        content="question",
+        plan=_plan(lookup, write),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    # Each read-only pair starts together; the write starts only after both returned,
+    # and returns before the next pair starts.
+    assert effects.timeline == [
+        ("start", 0),
+        ("start", 1),
+        ("ordered", 0),
+        ("ordered", 1),
+        ("start", 2),
+        ("ordered", 2),
+        ("start", 3),
+        ("start", 4),
+        ("ordered", 3),
+        ("ordered", 4),
+    ]
+    # One durable intent record per group or barrier, one settlement per call.
+    assert [event.kind for event in events].count("tool_intent_committed") == 3
+    settled = [event for event in events if event.kind == "tool_result_committed"]
+    assert [event.data["source_index"] for event in settled] == [0, 1, 2, 3, 4]
+    results = _results(await store.load(session_id))
+    assert [entry.source_index for entry in results] == [0, 1, 2, 3, 4]
+    assert [entry.attempt_id for entry in results] == effects.tool_attempts
+    assert {entry.result.outcome for entry in results} == {"succeeded"}
+    assert len(store.applied_host_deltas(session_id)) == 5
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_overlap_in_time_yet_settle_in_source_order() -> None:
+    """The first call can only finish its work after the second finished its own.
+
+    Run one at a time, the first call would wait forever. Run at once, the second
+    finishes first, yet the first still reaches source order, settles, and stands in
+    the transcript before it.
+    """
+
+    class SecondFinishesFirst(_TimelineEffects):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.second_finished = asyncio.Event()
+
+        async def io(self, source_index: int) -> None:
+            if source_index == 0:
+                await self.second_finished.wait()
+            else:
+                await asyncio.sleep(0.01)
+                self.second_finished.set()
+            self.timeline.append(("finished", source_index))
+
+    lookup = _batch_tool("lookup", read_only=True)
+    effects = SecondFinishesFirst(
+        [_assistant(_call(0, "lookup"), _call(1, "lookup")), _assistant(text="done")]
+    )
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    events: list[AgentSessionEvent] = []
+    runtime = _runtime(store, effects, lookup, events=events)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="overlap",
+        content="question",
+        plan=_plan(lookup),
+    )
+
+    final = await asyncio.wait_for(
+        runtime.drive(session_id=session_id, operation_id=accepted.operation_id), timeout=5
+    )
+
+    assert isinstance(final.state, OperationCompleted)
+    assert effects.timeline == [
+        ("start", 0),
+        ("start", 1),
+        ("finished", 1),
+        ("finished", 0),
+        ("ordered", 0),
+        ("ordered", 1),
+    ]
+    settled = [event for event in events if event.kind == "tool_result_committed"]
+    assert [event.data["call_id"] for event in settled] == ["c0", "c1"]
+    snapshot = await store.load(session_id)
+    assert [entry.result.call_id for entry in _results(snapshot)] == ["c0", "c1"]
+    transcript = project_session_messages(snapshot.tree.ancestry(), None)
+    assert [message["tool_call_id"] for message in transcript if message["role"] == "tool"] == [
+        "c0",
+        "c1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_crash_recovers_each_pending_call_by_its_own_rule_and_keeps_settled_ones() -> None:
+    """Recovery closes the pending calls in source order, each by its own rule.
+
+    The first call settled before the crash and keeps its result. The second never
+    replays, so it settles as an unknown outcome under the attempt that was pending.
+    The third replays under a fresh attempt.
+    """
+
+    class CrashBesideNeighbour(_TimelineEffects):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.third_finished = asyncio.Event()
+
+        async def io(self, source_index: int) -> None:
+            if source_index == 1:
+                await self.third_finished.wait()
+                raise asyncio.CancelledError  # the process dies mid-effect
+            if source_index == 2:
+                self.third_finished.set()
+            await asyncio.sleep(0)
+
+    lookup = _batch_tool("lookup", read_only=True)
+    fetch = _batch_tool("fetch", read_only=True, replayable=True)
+    calls = (_call(0, "lookup"), _call(1, "lookup"), _call(2, "fetch"))
+    first_effects = CrashBesideNeighbour([_assistant(*calls)])
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, first_effects, lookup, fetch)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="group-crash",
+        content="question",
+        plan=_plan(lookup, fetch),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(
+            runtime.drive(session_id=session_id, operation_id=accepted.operation_id), timeout=5
+        )
+
+    crashed = await runtime.restore(session_id=session_id, operation_id=accepted.operation_id)
+    first, second, third = first_effects.tool_attempts
+    assert isinstance(crashed.state, ToolEffectPending)
+    assert crashed.state.source_index == 1
+    assert crashed.state.attempt_id == second
+    assert crashed.state.concurrent_attempt_ids == (third,)
+    # The second call died; the third, done with its own work, was cancelled with it.
+    assert first_effects.cancelled_sources == [1, 2]
+    assert [entry.source_index for entry in _results(await store.load(session_id))] == [0]
+
+    recovered_effects = _TimelineEffects([_assistant(text="done")])
+    final = await _runtime(store, recovered_effects, lookup, fetch).drive(
+        session_id=session_id,
+        operation_id=accepted.operation_id,
+    )
+
+    assert isinstance(final.state, OperationCompleted)
+    assert recovered_effects.executed_sources == [2]
+    results = _results(await store.load(session_id))
+    assert [(entry.source_index, entry.result.outcome) for entry in results] == [
+        (0, "succeeded"),
+        (1, "outcome_unknown"),
+        (2, "succeeded"),
+    ]
+    assert [entry.attempt_id for entry in results] == [
+        first,
+        second,
+        recovered_effects.tool_attempts[0],
+    ]
+    assert recovered_effects.tool_attempts[0] != third
+
+
+@pytest.mark.asyncio
+async def test_cancellation_mid_group_closes_every_pending_call_as_unknown() -> None:
+    class SecondNeverReturns(_TimelineEffects):
+        async def io(self, source_index: int) -> None:
+            if source_index == 1:
+                await asyncio.Event().wait()
+            await asyncio.sleep(0)
+
+    lookup = _batch_tool("lookup", read_only=True)
+    write = _batch_tool("write", read_only=False)
+    calls = (_call(0, "lookup"), _call(1, "lookup"), _call(2, "lookup"), _call(3, "write"))
+    effects = SecondNeverReturns([_assistant(*calls)])
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    first_settled = asyncio.Event()
+
+    async def observe(event: AgentSessionEvent) -> None:
+        if event.kind == "tool_result_committed" and event.data["source_index"] == 0:
+            first_settled.set()
+
+    runtime = AgentSessionRuntime(
+        repository=store,
+        effects=effects,
+        tools=[lookup, write],
+        fencing_epoch=1,
+        event_sink=observe,
+    )
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="group-cancel",
+        content="question",
+        plan=_plan(lookup, write),
+    )
+    drive = asyncio.create_task(
+        runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    )
+    await asyncio.wait_for(first_settled.wait(), timeout=5)
+    drive.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await drive
+
+    # Cancelling the drive cancels the whole group: nothing is left running.
+    assert sorted(effects.cancelled_sources) == [1, 2]
+    await runtime.cancel(session_id=session_id, operation_id=accepted.operation_id)
+    final = await runtime.close(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCancelled)
+    assert effects.executed_sources == [0, 1, 2]
+    results = _results(await store.load(session_id))
+    assert [(entry.source_index, entry.result.outcome) for entry in results] == [
+        (0, "succeeded"),
+        (1, "outcome_unknown"),
+        (2, "outcome_unknown"),
+        (3, "interrupted"),
+    ]
+    assert [entry.attempt_id for entry in results] == [*effects.tool_attempts, None]
+
+
+@pytest.mark.asyncio
+async def test_calls_with_side_effects_still_run_one_at_a_time() -> None:
+    write = _batch_tool("write", read_only=False)
+    effects = _TimelineEffects(
+        [_assistant(_call(0, "write"), _call(1, "write")), _assistant(text="done")]
+    )
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    events: list[AgentSessionEvent] = []
+    runtime = _runtime(store, effects, write, events=events)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="sequential",
+        content="question",
+        plan=_plan(write),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    assert effects.timeline == [("start", 0), ("ordered", 0), ("start", 1), ("ordered", 1)]
+    assert [event.kind for event in events].count("tool_intent_committed") == 2
+    assert [entry.source_index for entry in _results(await store.load(session_id))] == [0, 1]

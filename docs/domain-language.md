@@ -294,6 +294,10 @@ _Avoid_: Tool call when referring to durable recovery identity
 The atomic durable outcome of an Effect Intent, including its ordered result and any host-owned updates.
 _Avoid_: Tool result when referring to the full commit boundary
 
+**Read-only Tool**:
+A Tool whose own declaration says a call changes nothing outside its Run's record of what it read. Adjacent read-only calls of one Tool batch run at once, then admit their evidence and settle in source order. Every other call runs alone and is a barrier between them. Nothing infers the declaration from a name or from a remote server's hint.
+_Avoid_: parallel-safe tool, readOnlyHint, side-effect-free when referring to the declared contract
+
 **Durable Progress**:
 A monotonically increasing run fact advanced only by live fenced execution boundaries that recovery must not repeat.
 _Avoid_: Heartbeat, phase, turn count, recovery interrupt, Workspace Epoch handoff

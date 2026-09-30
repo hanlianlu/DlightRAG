@@ -362,7 +362,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
                 return await self.fake.compact(context, attempt)
 
             async def execute_tool(
-                self, context, item, arguments, attempt_id, emit_ephemeral
+                self, context, item, arguments, attempt_id, emit_ephemeral, in_source_order
             ) -> ToolEffectResult[EffectHostUpdate]:
                 self.executed_sources.append(item.source_index)
                 if crash_point == "pending":
@@ -686,7 +686,7 @@ async def test_research_runtime_continues_other_tools_and_reports_unavailable_pa
                 raise AssertionError("No compaction needed")
 
             async def execute_tool(
-                self, context, item, arguments, attempt_id, emit_ephemeral
+                self, context, item, arguments, attempt_id, emit_ephemeral, in_source_order
             ) -> ToolEffectResult[EffectHostUpdate]:
                 selected = tools[item.tool_name]
                 result = await selected.execute(

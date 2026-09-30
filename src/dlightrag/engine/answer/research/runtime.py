@@ -36,6 +36,7 @@ from dlightrag.engine.agent.session.runtime import (
 )
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
 from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
+from dlightrag.engine.agent.tools.contracts import SourceOrder
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.providers.base import (
@@ -745,6 +746,7 @@ class ResearchRuntimeEffects:
         arguments: Mapping[str, Any],
         attempt_id: AttemptId,
         emit_ephemeral: Any,
+        in_source_order: SourceOrder,
     ) -> ToolEffectResult[EffectHostUpdate]:
         await self._check_cancelled()
         self._check_pins()
@@ -803,6 +805,7 @@ class ResearchRuntimeEffects:
             execution_scope=self._session_id.value,
             fencing_epoch=self._session_fencing_epoch,
             _update_sink=update,
+            _in_source_order=in_source_order,
         )
         async with self._telemetry.observe(
             "execute-agent-tool",
@@ -814,6 +817,9 @@ class ResearchRuntimeEffects:
         ) as tool_trace:
             result = await tool.execute(validated, runtime)
             tool_trace.update(output={"is_error": result.is_error, "cached": result.cached})
+        # Everything below reads or writes what the batch shares: the evidence
+        # freeze, the trace, the fetched-bytes buffer, and the Session notes.
+        await in_source_order()
         observation_capacity = _research_dynamic_context_reserve(self._prepared.model_profile)
         evidence = self._prepared.evidence
         if item.intent_id is None:

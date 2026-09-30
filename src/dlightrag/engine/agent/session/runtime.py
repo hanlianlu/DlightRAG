@@ -113,7 +113,11 @@ from dlightrag.engine.agent.session.transactions import (
     TransactionCommit,
     TransactionLeaseLost,
 )
-from dlightrag.engine.agent.tools.contracts import AgentTool
+from dlightrag.engine.agent.tools.contracts import (
+    AgentTool,
+    SourceOrder,
+    already_in_source_order,
+)
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.dependencies import ProviderUnavailableError
 
@@ -286,7 +290,15 @@ class AgentRuntimeEffects[HostDeltaT](Protocol):
         arguments: Mapping[str, Any],
         attempt_id: AttemptId,
         emit_ephemeral: EventSink,
-    ) -> ToolEffectResult[HostDeltaT]: ...
+        in_source_order: SourceOrder,
+    ) -> ToolEffectResult[HostDeltaT]:
+        """Execute one call, awaiting ``in_source_order`` before touching shared Run state.
+
+        Read-only calls of one batch may execute at once, and ``in_source_order``
+        returns only once the calls before this one have returned, so whatever an
+        effect does after awaiting it happens exactly as if the calls ran alone.
+        """
+        ...
 
     async def compact(
         self,
@@ -653,7 +665,7 @@ class AgentSessionRuntime[HostDeltaT]:
         elif isinstance(action, CommitSyntheticToolResult):
             await self._settle_synthetic(view, action.item, action.outcome)
         elif isinstance(action, BeginToolEffect):
-            await self._begin_tool(view, action.item)
+            await self._begin_tool(view, action.item, action.concurrent)
         elif isinstance(action, RecoverToolEffect):
             if action.replay:
                 await self._replay_tool(view, action.item)
@@ -817,6 +829,7 @@ class AgentSessionRuntime[HostDeltaT]:
         next_index = 0
         uncertain: int | None = None
         uncertain_attempt: AttemptId | None = None
+        concurrent: tuple[AttemptId, ...] = ()
         if isinstance(state, ToolBatchReady):
             batch = state.batch
             next_index = state.next_source_index
@@ -825,6 +838,7 @@ class AgentSessionRuntime[HostDeltaT]:
             next_index = state.source_index
             uncertain = state.source_index
             uncertain_attempt = state.attempt_id
+            concurrent = state.concurrent_attempt_ids
         cancelling = Cancelling(
             operation_id,
             turn_count=_turn_count(state),
@@ -832,6 +846,7 @@ class AgentSessionRuntime[HostDeltaT]:
             next_source_index=next_index,
             uncertain_source_index=uncertain,
             uncertain_attempt_id=uncertain_attempt,
+            concurrent_attempt_ids=concurrent,
         )
         await self._replace_state(view, cancelling, event="cancel_requested")
 
@@ -1071,6 +1086,7 @@ class AgentSessionRuntime[HostDeltaT]:
             synthetic = ""
             intent_id: IntentId | None = None
             replay_policy: ReplayPolicy = "never"
+            read_only = False
             contract_version = 0
             schema = ""
             effective = ""
@@ -1091,6 +1107,7 @@ class AgentSessionRuntime[HostDeltaT]:
                 synthetic = f'Tool "{call.name}" contract is unavailable.'
             elif (
                 resolved.replay_policy != pinned_tool.replay_policy
+                or resolved.read_only != pinned_tool.read_only
                 or resolved.contract_version != pinned_tool.contract_version
                 or resolved.input_schema_digest != pinned_tool.input_schema_digest
             ):
@@ -1109,6 +1126,7 @@ class AgentSessionRuntime[HostDeltaT]:
                     canonical_input = canonical_json(validated.model_dump(mode="json"))
                     intent_id = IntentId.new()
                     replay_policy = pinned_tool.replay_policy
+                    read_only = pinned_tool.read_only
                     contract_version = pinned_tool.contract_version
                     schema = pinned_tool.input_schema_digest
                     effective = sha256(canonical_input.encode("utf-8")).hexdigest()
@@ -1126,6 +1144,7 @@ class AgentSessionRuntime[HostDeltaT]:
                     input_schema_digest=schema,
                     effective_input_digest=effective,
                     synthetic_message=synthetic,
+                    read_only=read_only,
                 )
             )
         return ToolBatchPlan(assistant_entry.entry_id, tuple(items)), tuple(arguments)
@@ -1144,7 +1163,12 @@ class AgentSessionRuntime[HostDeltaT]:
         )
         await self._append_tool_result(view, item, result, attempt_id=None, host_delta=None)
 
-    async def _begin_tool(self, view: OperationView, item: ToolBatchItem) -> None:
+    async def _begin_tool(
+        self,
+        view: OperationView,
+        item: ToolBatchItem,
+        concurrent: tuple[ToolBatchItem, ...] = (),
+    ) -> None:
         state = view.state
         if not isinstance(state, ToolBatchReady) or item.intent_id is None:
             raise TypeError("Tool start requires an executable ToolBatchReady item")
@@ -1155,13 +1179,17 @@ class AgentSessionRuntime[HostDeltaT]:
             source_index=item.source_index,
             attempt_id=AttemptId.new(),
             steers=state.steers,
+            concurrent_attempt_ids=tuple(AttemptId.new() for _ in concurrent),
         )
         await self._replace_state(view, pending, event="tool_intent_committed")
         refreshed = await self.restore(
             session_id=view.context.session_id,
             operation_id=view.context.operation_id,
         )
-        await self._execute_pending_tool(refreshed, item, recovery=False)
+        if concurrent:
+            await self._execute_concurrent_tools(refreshed)
+        else:
+            await self._execute_pending_tool(refreshed, item, recovery=False)
 
     async def _replay_tool(self, view: OperationView, item: ToolBatchItem) -> None:
         state = view.state
@@ -1185,55 +1213,17 @@ class AgentSessionRuntime[HostDeltaT]:
         state = view.state
         if not isinstance(state, ToolEffectPending) or item.intent_id is None:
             raise TypeError("Tool execution requires ToolEffectPending")
-        resolved = self._tools.get(item.tool_name)
-        if (
-            resolved is None
-            or resolved.replay_policy != item.replay_policy
-            or resolved.contract_version != item.contract_version
-            or resolved.input_schema_digest != item.input_schema_digest
-        ):
+        if self._contract_changed(item):
             await self._append_tool_result(
                 view,
                 item,
-                ToolResultEntry.text(
-                    tool_name=item.tool_name,
-                    call_id=item.call_id,
-                    outcome="tool_contract_changed",
-                    text=f'Tool "{item.tool_name}" contract changed; call was not executed.',
-                ),
+                _contract_changed_result(item),
                 attempt_id=state.attempt_id,
                 host_delta=None,
                 advances_durable_progress=not recovery,
             )
             return
-        args_record = _require_register(
-            view.context.snapshot,
-            RegisterRef("tool_arguments", item.intent_id.value),
-        )
-        if not isinstance(args_record.value, ToolArguments):
-            raise TypeError("Tool Arguments register has the wrong value type")
-        effect: ToolEffectResult[HostDeltaT]
-        try:
-            effect = await self._effects.execute_tool(
-                view.context,
-                item,
-                args_record.value.arguments,
-                state.attempt_id,
-                self._ephemeral_sink(view),
-            )
-        except asyncio.CancelledError, AgentOperationCancelled:
-            raise
-        except Exception as exc:
-            logger.warning("Agent Runtime Tool effect failed", exc_info=True)
-            effect = ToolEffectResult(
-                result=ToolResultEntry.text(
-                    tool_name=item.tool_name,
-                    call_id=item.call_id,
-                    outcome="failed",
-                    text=f'Tool "{item.tool_name}" failed: {exc}',
-                ),
-                host_delta=None,
-            )
+        effect = await self._run_effect(view, item, state.attempt_id, already_in_source_order)
         await self._append_tool_result(
             view,
             item,
@@ -1242,6 +1232,112 @@ class AgentSessionRuntime[HostDeltaT]:
             host_delta=effect.host_delta,
             duration_ms=effect.duration_ms,
         )
+
+    async def _execute_concurrent_tools(self, view: OperationView) -> None:
+        """Run the pending read-only calls at once and settle them in source order.
+
+        A call reaches source order once every call before it has returned, and it
+        returns only after reaching it, so whatever an effect does in source order
+        happens exactly as if the calls ran alone. Each result commits in its own
+        transaction once the results before it have. When a call does not return,
+        the calls after it are cancelled and stay pending for recovery or
+        cancellation to close.
+        """
+        state = view.state
+        if not isinstance(state, ToolEffectPending):
+            raise TypeError("concurrent Tool execution requires ToolEffectPending")
+        attempts = (state.attempt_id, *state.concurrent_attempt_ids)
+        items = state.batch.items[state.source_index : state.source_index + len(attempts)]
+        returned = [asyncio.Event() for _ in items]
+
+        async def execute(
+            position: int, item: ToolBatchItem, attempt_id: AttemptId
+        ) -> ToolEffectResult[HostDeltaT] | None:
+            async def in_source_order() -> None:
+                if position:
+                    await returned[position - 1].wait()
+
+            effect = (
+                None
+                if self._contract_changed(item)
+                else await self._run_effect(view, item, attempt_id, in_source_order)
+            )
+            await in_source_order()
+            returned[position].set()
+            return effect
+
+        tasks = [
+            asyncio.create_task(execute(position, item, attempt_id))
+            for position, (item, attempt_id) in enumerate(zip(items, attempts, strict=True))
+        ]
+        try:
+            for item, attempt_id, task in zip(items, attempts, tasks, strict=True):
+                effect = await task
+                current = await self.restore(
+                    session_id=view.context.session_id,
+                    operation_id=view.context.operation_id,
+                )
+                await self._append_tool_result(
+                    current,
+                    item,
+                    _contract_changed_result(item) if effect is None else effect.result,
+                    attempt_id=attempt_id,
+                    host_delta=None if effect is None else effect.host_delta,
+                    duration_ms=None if effect is None else effect.duration_ms,
+                )
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _contract_changed(self, item: ToolBatchItem) -> bool:
+        resolved = self._tools.get(item.tool_name)
+        return (
+            resolved is None
+            or resolved.replay_policy != item.replay_policy
+            or resolved.read_only != item.read_only
+            or resolved.contract_version != item.contract_version
+            or resolved.input_schema_digest != item.input_schema_digest
+        )
+
+    async def _run_effect(
+        self,
+        view: OperationView,
+        item: ToolBatchItem,
+        attempt_id: AttemptId,
+        in_source_order: SourceOrder,
+    ) -> ToolEffectResult[HostDeltaT]:
+        """Execute one pending call; an ordinary effect failure becomes its failed result."""
+        if item.intent_id is None:
+            raise TypeError("Tool execution requires an executable item")
+        args_record = _require_register(
+            view.context.snapshot,
+            RegisterRef("tool_arguments", item.intent_id.value),
+        )
+        if not isinstance(args_record.value, ToolArguments):
+            raise TypeError("Tool Arguments register has the wrong value type")
+        try:
+            return await self._effects.execute_tool(
+                view.context,
+                item,
+                args_record.value.arguments,
+                attempt_id,
+                self._ephemeral_sink(view),
+                in_source_order,
+            )
+        except asyncio.CancelledError, AgentOperationCancelled:
+            raise
+        except Exception as exc:
+            logger.warning("Agent Runtime Tool effect failed", exc_info=True)
+            return ToolEffectResult(
+                result=ToolResultEntry.text(
+                    tool_name=item.tool_name,
+                    call_id=item.call_id,
+                    outcome="failed",
+                    text=f'Tool "{item.tool_name}" failed: {exc}',
+                ),
+                host_delta=None,
+            )
 
     async def _settle_pending_unknown(self, view: OperationView, item: ToolBatchItem) -> None:
         result = ToolResultEntry.text(
@@ -1329,16 +1425,21 @@ class AgentSessionRuntime[HostDeltaT]:
             batch = state.batch
             turn_number = state.turn_number
             steers = state.steers
+            position = state.next_source_index
         elif isinstance(state, ToolEffectPending):
             batch = state.batch
             turn_number = state.turn_number
             steers = state.steers
+            position = state.source_index
         elif isinstance(state, Cancelling) and state.batch is not None:
             batch = state.batch
             turn_number = state.turn_count
             steers = ()
+            position = state.next_source_index
         else:
             raise TypeError("ToolResult settlement requires a Tool Batch state")
+        if item.source_index != position:
+            raise ValueError("a ToolResult settles only its batch's next source position")
         durable_result = replace(result, details=None)
         entry = ToolResultMessageEntry(
             entry_id=item.result_entry_id,
@@ -1355,11 +1456,20 @@ class AgentSessionRuntime[HostDeltaT]:
             effective_input_digest=item.effective_input_digest,
         )
         if isinstance(state, Cancelling):
+            concurrent = state.concurrent_attempt_ids
             next_state: RunOperationState = replace(
                 state,
                 next_source_index=item.source_index + 1,
-                uncertain_source_index=None,
-                uncertain_attempt_id=None,
+                uncertain_source_index=item.source_index + 1 if concurrent else None,
+                uncertain_attempt_id=concurrent[0] if concurrent else None,
+                concurrent_attempt_ids=concurrent[1:],
+            )
+        elif isinstance(state, ToolEffectPending) and state.concurrent_attempt_ids:
+            next_state = replace(
+                state,
+                source_index=item.source_index + 1,
+                attempt_id=state.concurrent_attempt_ids[0],
+                concurrent_attempt_ids=state.concurrent_attempt_ids[1:],
             )
         else:
             next_state = ToolBatchReady(
@@ -1848,6 +1958,15 @@ class AgentSessionRuntime[HostDeltaT]:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _contract_changed_result(item: ToolBatchItem) -> ToolResultEntry:
+    return ToolResultEntry.text(
+        tool_name=item.tool_name,
+        call_id=item.call_id,
+        outcome="tool_contract_changed",
+        text=f'Tool "{item.tool_name}" contract changed; call was not executed.',
+    )
 
 
 def _settlement_facts(

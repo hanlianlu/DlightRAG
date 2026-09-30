@@ -251,6 +251,50 @@ async def test_view_image_path_attaches_the_original_snapshot(tmp_path: Path) ->
     assert attached.mime_type == "image/png"
 
 
+async def test_view_spends_the_image_budget_only_in_source_order(tmp_path: Path) -> None:
+    """Preparing an image spends a budget every call of the batch shares."""
+    import asyncio
+    import io
+    from dataclasses import replace
+
+    from PIL import Image
+
+    from dlightrag.engine.agent.tools.files import PreparedImageAttachment
+
+    env, scheduler = _env(tmp_path)
+    buffer = io.BytesIO()
+    Image.new("RGB", (16, 16), (30, 90, 200)).save(buffer, "PNG")
+    (tmp_path / "chart.png").write_bytes(buffer.getvalue())
+    prepared: list[str] = []
+
+    def prepare(data: bytes, label: str) -> PreparedImageAttachment:
+        prepared.append(label)
+        return PreparedImageAttachment(data=data, media_type="image/png", transformed=False)
+
+    waiting = asyncio.Event()
+    earlier_returned = asyncio.Event()
+
+    async def in_source_order() -> None:
+        waiting.set()
+        await earlier_returned.wait()
+
+    async def view() -> ToolResult:
+        runtime = replace(tool_runtime(), _in_source_order=in_source_order)
+        return await view_tool(env, scheduler, image_preparer=prepare).execute(
+            ViewArgs(path="chart.png"), runtime
+        )
+
+    viewing = asyncio.create_task(view())
+    await waiting.wait()
+    assert prepared == []
+
+    earlier_returned.set()
+    result = await viewing
+
+    assert result.is_error is False
+    assert prepared == ["chart.png"]
+
+
 async def test_read_corrupt_image_falls_back_to_text_decoding(tmp_path: Path) -> None:
     env, scheduler = _env(tmp_path)
     (tmp_path / "fake.png").write_bytes(b"\x89PNG\r\n\x1a\nnot really a png")

@@ -388,9 +388,12 @@ restores nothing. A pin freezes local names, schemas, descriptions, and routing;
 it cannot freeze remote code, data, availability, or side effects.
 
 Connection tools are declared `replay_policy="never"`, and their arguments must
-validate against the pinned schema. The Agent Session runtime commits
-`ToolEffectPending` before calling the tool; recovery of an uncertain pending
-effect settles `outcome_unknown` and never calls MCP again.
+validate against the pinned schema. They are never read-only, whatever a server's
+`readOnlyHint` says, so each call runs alone and no other call runs beside it
+([ADR 0029](adr/0029-read-only-calls-run-at-once-and-settle-in-source-order.md)).
+The Agent Session runtime commits `ToolEffectPending` before calling the tool;
+recovery of an uncertain pending effect settles `outcome_unknown` and never calls
+MCP again.
 
 A call proceeds in this order:
 
@@ -414,8 +417,8 @@ A call proceeds in this order:
      matches;
    - exactly one committed `ToolEffectPending` exists for this
      `(execution_scope, intent_id)`, and its tool name, call id, `never` replay
-     policy, contract version, schema digest, argument digest, and stored
-     arguments match the call.
+     policy, sequential (not read-only) contract, contract version, schema digest,
+     argument digest, and stored arguments match the call.
 4. The endpoint is checked against network policy again. For a Connection with a
    Grant, the credential is decrypted, an expired OAuth access token goes
    through the refresh preflight, and the whole gate then runs a second time,

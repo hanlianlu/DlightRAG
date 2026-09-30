@@ -23,6 +23,7 @@ class AgentToolPlan:
     replay_policy: ReplayPolicy
     contract_version: int
     input_schema_digest: str
+    read_only: bool
 
     def __post_init__(self) -> None:
         definition = self.definition
@@ -44,6 +45,7 @@ class AgentToolPlan:
             replay_policy=tool.replay_policy,
             contract_version=tool.contract_version,
             input_schema_digest=tool.input_schema_digest,
+            read_only=tool.read_only,
         )
 
     @classmethod
@@ -57,6 +59,7 @@ class AgentToolPlan:
             replay_policy=payload["replay_policy"],
             contract_version=int(payload["contract_version"]),
             input_schema_digest=str(payload["input_schema_digest"]),
+            read_only=bool(payload.get("read_only", False)),
         )
 
     @property
@@ -77,6 +80,7 @@ class AgentToolPlan:
             "replay_policy": self.replay_policy,
             "contract_version": self.contract_version,
             "input_schema_digest": self.input_schema_digest,
+            "read_only": self.read_only,
         }
 
 

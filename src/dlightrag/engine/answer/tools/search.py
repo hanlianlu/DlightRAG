@@ -116,6 +116,7 @@ def knowledge_base_search_declaration() -> ToolDeclaration:
         "Search the knowledge-base workspaces selected for this conversation. Each "
         "passage it returns names the document it came from.",
         SearchInput,
+        read_only=True,
     )
 
 
@@ -128,7 +129,7 @@ def knowledge_base_search_tool(
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, SearchInput)
         await runtime.emit_update(ToolResult.text("", subject=args.query))
-        return await _search_corpus(retrieve, args.query, evidence, trace)
+        return await _search_corpus(retrieve, args.query, evidence, trace, runtime)
 
     return knowledge_base_search_declaration().bind(execute)
 
@@ -141,6 +142,7 @@ def web_search_declaration() -> ToolDeclaration:
         "open-web search is unavailable.",
         WebSearchInput,
         contract_version=2,
+        read_only=True,
     )
 
 
@@ -154,7 +156,9 @@ def web_search_tool(
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, WebSearchInput)
         await runtime.emit_update(ToolResult.text("", subject=args.query))
-        return await _search_open_web(search, args.request(), evidence, trace, register_web_source)
+        return await _search_open_web(
+            search, args.request(), evidence, trace, register_web_source, runtime
+        )
 
     return web_search_declaration().bind(execute)
 
@@ -164,11 +168,13 @@ async def _search_corpus(
     query: str,
     evidence: EvidenceLedger,
     trace: dict[str, Any],
+    runtime: ToolRuntime,
 ) -> ToolResult:
     try:
         result = await retrieve(query)
     except Exception as exc:
         raise RuntimeError("knowledge-base search failed") from exc
+    await runtime.in_source_order()
     delta = evidence.add_contexts(result.contexts)
     await evidence.aflush_images()
     retrievals = trace.setdefault("knowledge_base_retrievals", [])
@@ -215,6 +221,7 @@ async def _search_open_web(
     evidence: EvidenceLedger,
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
+    runtime: ToolRuntime,
 ) -> ToolResult:
     try:
         result = await search(request)
@@ -222,6 +229,7 @@ async def _search_open_web(
         raise
     except Exception as exc:
         raise RuntimeError("open-web search failed") from exc
+    await runtime.in_source_order()
     rows = web_context_rows(result.hits)
     if register_web_source is not None:
         resources_by_url: dict[str, str | None] = {}

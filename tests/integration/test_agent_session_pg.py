@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL parity tests for the canonical AgentSessionRuntime."""
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -43,6 +44,7 @@ from dlightrag.engine.agent.session.operation import (
     OperationCompleted,
     OperationMeta,
     ToolBatchItem,
+    ToolEffectPending,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
@@ -278,8 +280,9 @@ class Effects:
         arguments: Mapping[str, Any],
         attempt_id: AttemptId,
         emit_ephemeral,
+        in_source_order,
     ) -> ToolEffectResult[EffectHostUpdate]:
-        del context, arguments, attempt_id, emit_ephemeral
+        del context, arguments, attempt_id, emit_ephemeral, in_source_order
         assert item.intent_id is not None
         content = b"evidence"
         evidence = OpaqueEvidenceWrite(
@@ -479,6 +482,127 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
     assert len(memory.applied_host_deltas(memory_id)) == 1
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 1
+
+
+async def test_a_read_only_group_pends_and_recovers_through_postgres(pool) -> None:
+    """A group's one pending record decodes from PostgreSQL and recovers call by call."""
+    read_only = AgentTool(
+        name="lookup",
+        description="lookup",
+        input_model=Args,
+        execute=_unused,
+        replay_policy="replayable",
+        read_only=True,
+    )
+    plan = AgentRunPlan.from_tools([read_only], model_role="query", context_policy_revision="v1")
+
+    class CrashBesideNeighbour(Effects):
+        def __init__(self, *, session_id: SessionId, turns: list[AssistantTurn]) -> None:
+            super().__init__(session_id=session_id)
+            self.turns = turns
+            self.attempts: list[AttemptId] = []
+            self.third_finished = asyncio.Event()
+            self.crash = True
+
+        async def execute_tool(
+            self,
+            context: RuntimeContext,
+            item: ToolBatchItem,
+            arguments: Mapping[str, Any],
+            attempt_id: AttemptId,
+            emit_ephemeral,
+            in_source_order,
+        ) -> ToolEffectResult[EffectHostUpdate]:
+            self.attempts.append(attempt_id)
+            if self.crash and item.source_index == 1:
+                await self.third_finished.wait()
+                raise asyncio.CancelledError  # the worker dies mid-effect
+            if item.source_index == 2:
+                self.third_finished.set()
+            await in_source_order()
+            assert item.intent_id is not None
+            # Each settlement persists the ledger as its call left it.
+            content = f"evidence through call {item.source_index}".encode()
+            return ToolEffectResult(
+                ToolResultEntry.text(
+                    tool_name=item.tool_name,
+                    call_id=item.call_id,
+                    outcome="succeeded",
+                    text=f"found {arguments['value']}",
+                ),
+                EffectHostUpdate(
+                    evidence=(
+                        OpaqueEvidenceWrite(
+                            session_id=session_id.value,
+                            intent_id=item.intent_id.value,
+                            result_ordinal=0,
+                            content_digest=hashlib.sha256(content).hexdigest(),
+                            locator_digest=hashlib.sha256(b"locator").hexdigest(),
+                            content=content,
+                            locator=b"locator",
+                        ),
+                    )
+                ),
+            )
+
+    claimed = await _claim(pool)
+    repository = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    calls = tuple(ToolCall(f"c{index}", "lookup", {"value": str(index)}) for index in range(3))
+    first = CrashBesideNeighbour(
+        session_id=session_id,
+        turns=[AssistantTurn(text="", tool_calls=calls, stop_reason="tool_use")],
+    )
+    runtime = AgentSessionRuntime(
+        repository=repository, effects=first, tools=[read_only], fencing_epoch=epoch
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="read-only-group",
+        content="question",
+        plan=plan,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(
+            runtime.drive(session_id=session_id, operation_id=accepted.operation_id), timeout=10
+        )
+
+    recovered = CrashBesideNeighbour(
+        session_id=session_id,
+        turns=[AssistantTurn(text="done", tool_calls=(), stop_reason="stop")],
+    )
+    recovered.crash = False
+    fresh = AgentSessionRuntime(
+        repository=repository, effects=recovered, tools=[read_only], fencing_epoch=epoch
+    )
+    pending = (await fresh.restore(session_id=session_id, operation_id=accepted.operation_id)).state
+    assert isinstance(pending, ToolEffectPending)
+    assert (pending.source_index, pending.attempt_id) == (1, first.attempts[1])
+    assert pending.concurrent_attempt_ids == (first.attempts[2],)
+
+    final = await fresh.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    results = [
+        entry
+        for entry in (await repository.load(session_id)).entries
+        if isinstance(entry, ToolResultMessageEntry)
+    ]
+    assert [entry.source_index for entry in results] == [0, 1, 2]
+    assert {entry.result.outcome for entry in results} == {"succeeded"}
+    assert results[0].attempt_id == first.attempts[0]
+    assert [entry.attempt_id for entry in results[1:]] == recovered.attempts
+    async with pool.acquire() as conn:
+        stored = await conn.fetch(
+            "SELECT content FROM dlightrag_answer_evidence WHERE session_id = $1"
+            " ORDER BY created_at",
+            uuid.UUID(session_id.value),
+        )
+    assert [bytes(row["content"]) for row in stored] == [
+        f"evidence through call {index}".encode() for index in range(3)
+    ]
 
 
 async def test_transact_query_work_is_constant_with_large_retained_session(pool) -> None:

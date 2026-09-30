@@ -259,6 +259,40 @@ async def test_reading_a_published_product_decodes_it_without_a_stored_view() ->
         assert len(lineage.recorded) == 1
 
 
+async def test_an_adoption_waits_for_the_calls_before_it_in_the_batch() -> None:
+    """Adopting spends this Run's attachment allowance, so it happens in source order."""
+    lineage = Loader(adopted_product())
+    waiting = asyncio.Event()
+    earlier_returned = asyncio.Event()
+
+    async def in_source_order() -> None:
+        waiting.set()
+        await earlier_returned.wait()
+
+    async with ResourceRegistry() as registry:
+        read, _ = tools(registry, lineage=lineage)
+        runtime = replace(tool_runtime(tool_name=read.name), _in_source_order=in_source_order)
+
+        async def adopt() -> ToolResult:
+            return await read.execute(
+                read.input_model.model_validate({"resource_id": "artifact-431b1900963e6cd2f4a1"}),
+                runtime,
+            )
+
+        reading = asyncio.create_task(adopt())
+        await waiting.wait()
+        assert lineage.reads == 1
+        assert lineage.recorded == []
+        with pytest.raises(ResourceNotFoundError):
+            registry.canonical_resource_id("artifact-431b1900963e6cd2f4a1")
+
+        earlier_returned.set()
+        result = await reading
+
+        assert result.is_error is False
+        assert len(lineage.recorded) == 1
+
+
 async def test_reading_a_document_the_earlier_run_never_converted_refuses(monkeypatch) -> None:
     """Text needs the earlier Run's own view; converting it here would invent one."""
 

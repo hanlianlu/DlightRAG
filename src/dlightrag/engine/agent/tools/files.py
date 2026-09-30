@@ -353,6 +353,7 @@ def read_declaration(*, public_url: bool) -> ToolDeclaration:
         description=description,
         input_model=ReadArgs if url_enabled else ReadWithoutUrlArgs,
         replay_policy="replayable",
+        read_only=True,
         contract_version=4 if url_enabled else 3,
         guidance=guidance,
     )
@@ -497,6 +498,7 @@ def view_declaration() -> ToolDeclaration:
         description="View pixels from exactly one resource registered in this run, anonymous public URL, or workspace image path. PDF without locator returns a bounded overview; select a physical page for detail. No separate model is called.",
         input_model=ViewArgs,
         replay_policy="replayable",
+        read_only=True,
         guidance="view: use PDF overviews to find physical pages, not to transcribe small text. Follow the printed continuation. Paths support standalone images only.",
     )
 
@@ -537,6 +539,8 @@ def view_tool(
                     return ToolResult.text(
                         "view(path) supports verified standalone images only", is_error=True
                     )
+                # Preparing spends the Run's shared image budget.
+                await runtime.in_source_order()
                 prepared = await asyncio.to_thread(prepare, content, canonical)
                 if prepared is None:
                     return ToolResult.text(
@@ -689,6 +693,7 @@ def grep_declaration() -> ToolDeclaration:
         description="Search workspace files with ripgrep.",
         input_model=GrepArgs,
         replay_policy="replayable",
+        read_only=True,
         contract_version=3,
         guidance="grep: regex by default (literal=true for plain text); limit caps matching "
         "lines, not context lines; hidden files are searched while ignore rules apply.",
@@ -1073,6 +1078,7 @@ def find_declaration() -> ToolDeclaration:
         description="Find workspace paths recursively with fd glob semantics.",
         input_model=FindArgs,
         replay_policy="replayable",
+        read_only=True,
         contract_version=2,
         guidance="find: fd --glob semantics relative to the requested search root; hidden paths "
         "are included, .git and active ignore rules are respected, and symlinks are not followed.",
@@ -1164,6 +1170,7 @@ def ls_declaration() -> ToolDeclaration:
         description="List one workspace directory without following symlinks.",
         input_model=LsArgs,
         replay_policy="replayable",
+        read_only=True,
         contract_version=2,
         guidance="ls: one sorted directory level, kind/size/name per entry; continue large "
         "listings with the opaque cursor. Symlinks are listed, never followed.",

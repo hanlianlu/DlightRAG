@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Public read/view seams: text, pixels, inventories, identity, and budgets."""
 
+import asyncio
 import base64
 import io
+from dataclasses import replace
 
 import pytest
 from docx import Document
@@ -16,6 +18,7 @@ from dlightrag.engine.agent.tool_content import (
     encode_tool_content,
     tool_content_attachments,
 )
+from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.agent.tools.files import (
     PreparedImageAttachment,
     ViewArgs,
@@ -114,6 +117,46 @@ async def test_read_image_returns_guidance_only_and_view_attaches_located_pixels
         (restored_attachment,) = tool_content_attachments(restored)
         assert restored_attachment.source == attachment.source
         assert not restored_attachment.data
+
+
+async def test_resource_view_spends_the_image_budget_only_in_source_order():
+    """Preparing pixels spends a budget every call of the batch shares."""
+    budget = preparer()
+    prepared: list[str] = []
+
+    def prepare(data, label):
+        prepared.append(label)
+        return budget(data, label)
+
+    waiting = asyncio.Event()
+    earlier_returned = asyncio.Event()
+
+    async def in_source_order() -> None:
+        waiting.set()
+        await earlier_returned.wait()
+
+    async with ResourceRegistry() as registry:
+        resource = registry.register(ResourceInput(filename="plot.png", content=png()))
+        view = view_tool(
+            None,
+            AccessScheduler(),
+            resource_viewer=make_resource_viewer(registry),
+            image_preparer=prepare,
+        )
+        runtime = replace(tool_runtime(tool_name=view.name), _in_source_order=in_source_order)
+
+        async def look() -> ToolResult:
+            return await view.execute(ViewArgs(resource_id=resource), runtime)
+
+        viewing = asyncio.create_task(look())
+        await waiting.wait()
+        assert prepared == []
+
+        earlier_returned.set()
+        result = await viewing
+
+    assert tool_content_attachments(result.parts)
+    assert prepared == ["source image"]
 
 
 async def test_workspace_read_image_is_text_and_view_rejects_escape_and_documents(tmp_path):

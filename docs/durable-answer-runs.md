@@ -382,6 +382,15 @@ Assistant settlement records the complete response and ordered Tool Batch Plan.
 Tool clearance, effect settlement, ToolResult placement, Host deltas, and
 progress then commit under the lease/epoch predicate.
 
+A call runs alone unless its Tool declares it read-only. Adjacent read-only calls,
+at most eight, run at once under one pending record that holds an attempt for each
+call. A call does its own work beside the others. It admits evidence, adopts an
+earlier Run's Resource, or spends the image budget only after every earlier call of
+its group has returned, and its result then settles in source order. Evidence,
+citations, and Host deltas are therefore what one-at-a-time execution would produce.
+Every other call is a barrier between groups
+([ADR 0029](adr/0029-read-only-calls-run-at-once-and-settle-in-source-order.md)).
+
 Response-native replay belongs to a complete Assistant Entry, bound to the pinned
 provider/model/endpoint/API-Family invocation. Matching items replace synthesized
 assistant output once; another invocation uses canonical text and calls instead.
@@ -409,6 +418,11 @@ Recovery treats effects by contract:
 - `replayable`: reconcile or dispatch again under the unchanged contract;
 - `never`: settle as `outcome_unknown`;
 - changed contract: settle `tool_contract_changed` without dispatch.
+
+When several read-only calls were pending together, recovery closes them one by one
+in source order, each under its own contract. Calls that settled before the crash
+keep their results. A cancellation settles every pending call of the group as
+`outcome_unknown` under its own attempt.
 
 `attach_artifact` is replayable because it only validates current workspace
 bytes and produces authority through settlement. Its model-visible `ToolResult`

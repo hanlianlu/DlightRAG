@@ -366,11 +366,13 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
     )
     args = {"children": [{"objective": "second investigation"}]}
     task = asyncio.create_task(
-        parent_effects.execute_tool(pc, _batch("spawn_agent"), args, AttemptId.new(), AsyncMock())
+        parent_effects.execute_tool(
+            pc, _batch("spawn_agent"), args, AttemptId.new(), AsyncMock(), AsyncMock()
+        )
     )
     await reached.wait()
     await child_effects.execute_tool(
-        cc, _batch("read"), {"resource_id": "generated"}, AttemptId.new(), AsyncMock()
+        cc, _batch("read"), {"resource_id": "generated"}, AttemptId.new(), AsyncMock(), AsyncMock()
     )
     release.set()
     await task

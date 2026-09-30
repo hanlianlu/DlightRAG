@@ -173,6 +173,12 @@ class ToolResult:
 
 
 type ToolUpdateSink = Callable[["ToolResult"], Awaitable[None]]
+type SourceOrder = Callable[[], Awaitable[None]]
+"""Wait until every earlier call running beside this one has returned."""
+
+
+async def already_in_source_order() -> None:
+    """The source order of a call that runs alone: nothing precedes it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,10 +191,22 @@ class ToolRuntime:
     execution_scope: str
     _update_sink: ToolUpdateSink
     fencing_epoch: int = 0
+    _in_source_order: SourceOrder = already_in_source_order
 
     async def emit_update(self, result: ToolResult) -> None:
         """Publish one transient result snapshot without settling the effect."""
         await self._update_sink(result)
+
+    async def in_source_order(self) -> None:
+        """Wait until the calls before this one in its batch have returned.
+
+        A read-only call runs beside its read-only neighbours only until it touches
+        state they share, such as the Run's evidence, image budget, or trace. It
+        awaits this first, so those calls touch that state one at a time in source
+        order and each sees exactly what it would have seen running alone. A call
+        that runs alone returns at once.
+        """
+        await self._in_source_order()
 
 
 type ToolExecute = Callable[[BaseModel, ToolRuntime], Awaitable["ToolResult"]]
@@ -198,11 +216,19 @@ type ToolExecute = Callable[[BaseModel, ToolRuntime], Awaitable["ToolResult"]]
 class ToolDeclaration:
     """Pure tool declaration with a Pydantic argument contract.
 
-    ``replay_policy``, ``contract_version``, and ``input_schema_digest`` are the
-    intent facts replay must match exactly. Replay is fail-closed: tools opt in
-    only when identical persisted arguments are safe to execute again.
-    The digest is the SHA-256 of the canonicalized input schema, so presentation
-    fields and declaration order never change it.
+    ``replay_policy``, ``read_only``, ``contract_version``, and
+    ``input_schema_digest`` are the intent facts execution and replay must match
+    exactly. Replay is fail-closed: tools opt in only when identical persisted
+    arguments are safe to execute again. The digest is the SHA-256 of the
+    canonicalized input schema, so presentation fields and declaration order never
+    change it.
+
+    ``read_only`` is fail-closed the same way. A read-only call changes nothing
+    outside its own Run's record of what it read, so adjacent read-only calls of one
+    batch run at once; every other call runs alone and is a barrier between them. A
+    read-only Tool awaits ``ToolRuntime.in_source_order`` before it touches Run
+    state its neighbours share. Only the Tool's own implementation can declare it:
+    nothing infers it from a name or from a remote server's hints.
     """
 
     name: str
@@ -212,6 +238,7 @@ class ToolDeclaration:
     contract_version: int = 2
     input_schema_digest: str = field(init=False)
     guidance: str = ""
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         if self.replay_policy not in {"replayable", "never"}:
@@ -241,6 +268,7 @@ class ToolDeclaration:
             replay_policy=self.replay_policy,
             contract_version=self.contract_version,
             guidance=self.guidance,
+            read_only=self.read_only,
             execute=execute,
         )
 
@@ -265,6 +293,7 @@ __all__ = [
     "EvidenceSourceFact",
     "ExecutedTurn",
     "ResourceAttachmentBytes",
+    "SourceOrder",
     "ToolDeclaration",
     "ToolExecute",
     "ToolModelFunc",
@@ -275,4 +304,5 @@ __all__ = [
     "ToolEffects",
     "WorkspaceInventoryFacts",
     "WorkspacePathFact",
+    "already_in_source_order",
 ]

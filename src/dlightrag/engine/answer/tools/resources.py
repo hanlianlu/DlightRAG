@@ -103,7 +103,7 @@ async def _adopt_earlier_then_retry(
     lineage: LineageResourceLoader | None,
     registry: ResourceRegistry,
     refusal: str,
-    owner: ResourceEffectOwner,
+    runtime: ToolRuntime,
     needs_text: bool = False,
 ) -> ToolResult:
     """Give one earlier Run's handle the chance to become this Run's Resource.
@@ -111,7 +111,8 @@ async def _adopt_earlier_then_retry(
     The loader owns the lineage rule, so a handle it will not admit keeps the ordinary
     refusal. The adoption is recorded under this Run's fence before the handle
     resolves, so it holds whatever the retried call does next, and that call's own
-    result carries nothing on its behalf.
+    result carries nothing on its behalf. It spends this Run's attachment allowance,
+    so it waits for the calls before it in the batch.
 
     A read of a *convertible* resource requires a stored view, the earlier Run's or one
     this Run already holds for the same bytes, because converting it here would record
@@ -124,11 +125,12 @@ async def _adopt_earlier_then_retry(
     loaded = await lineage.load(resource_id)
     if loaded is None:
         return ToolResult.text(refusal, is_error=True)
+    await runtime.in_source_order()
     try:
         adopted = await adopt_lineage_resource(
             registry,
             loaded,
-            record=partial(lineage.record, owner=owner),
+            record=partial(lineage.record, owner=_effect_owner(runtime)),
             needs_text=needs_text,
         )
     except LineageSnapshotError as exc:
@@ -224,7 +226,7 @@ def make_resource_reader(
                 lineage=lineage,
                 registry=registry,
                 refusal=_run_scoped_handle_refusal(exc),
-                owner=_effect_owner(runtime),
+                runtime=runtime,
                 needs_text=True,
             )
         except ResourceCursorError as exc:
@@ -262,6 +264,8 @@ def make_resource_viewer(
         continuation = ""
 
         async def attach(data: bytes, source: VisualSource, label: str) -> bool:
+            # Preparing spends the Run's shared image budget.
+            await runtime.in_source_order()
             prepared = await asyncio.to_thread(prepare, data, label)
             if prepared is None:
                 return False
@@ -387,7 +391,7 @@ def make_resource_viewer(
                 lineage=lineage,
                 registry=registry,
                 refusal=_run_scoped_handle_refusal(exc),
-                owner=_effect_owner(runtime),
+                runtime=runtime,
             )
         except ResourceCursorError as exc:
             return ToolResult.text(_stale_cursor_refusal(exc), is_error=True)

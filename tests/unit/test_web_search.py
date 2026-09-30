@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider adapters, ordered failover, and Web Evidence projection."""
 
+import asyncio
 import inspect
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -31,7 +33,7 @@ from dlightrag.engine.answer.web_sources import (
     WebSourceUnavailable,
 )
 from dlightrag.engine.rag.retrieval import RetrievalResult
-from tests.tool_helpers import recording_tool_runtime
+from tests.tool_helpers import recording_tool_runtime, tool_runtime
 
 _PAGE = {
     "url": "https://example.org/taylor",
@@ -170,6 +172,53 @@ async def test_both_search_tools_report_the_query_as_their_subject_live() -> Non
     assert [update.subject for update in updates if update.subject] == [
         query,
         query,
+    ]
+
+
+async def test_searches_running_beside_each_other_admit_evidence_in_source_order() -> None:
+    """Citation numbers follow the batch, not which search happened to return first."""
+    ledger = EvidenceLedger()
+    first_may_return = asyncio.Event()
+    second_retrieved = asyncio.Event()
+
+    async def retrieve(query: str) -> RetrievalResult:
+        if query == "first":
+            await first_may_return.wait()
+        else:
+            second_retrieved.set()
+        row = {
+            "chunk_id": f"{query}-chunk",
+            "reference_id": f"{query}-doc",
+            "file_path": f"{query}.pdf",
+            "content": f"{query} passage",
+            "metadata": {"source_uri": f"file:///{query}.pdf"},
+        }
+        return RetrievalResult(contexts={"chunks": [row], "entities": [], "relationships": []})
+
+    tool = knowledge_base_search_tool(retrieve=retrieve, evidence=ledger, trace={})
+    first_returned = asyncio.Event()
+
+    async def first() -> ToolResult:
+        try:
+            return await tool.execute(SearchInput(query="first"), tool_runtime())
+        finally:
+            first_returned.set()
+
+    async def after_first() -> None:
+        await first_returned.wait()
+
+    second_runtime = replace(tool_runtime(), _in_source_order=after_first)
+    searches = asyncio.gather(first(), tool.execute(SearchInput(query="second"), second_runtime))
+    await second_retrieved.wait()
+    # The second search has its passage but admits nothing before the first returns.
+    assert ledger.row_count == 0
+
+    first_may_return.set()
+    await searches
+
+    assert [(row["content"], row["reference_id"]) for row in ledger.contexts["chunks"]] == [
+        ("first passage", "1"),
+        ("second passage", "2"),
     ]
 
 

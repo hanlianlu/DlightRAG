@@ -88,7 +88,11 @@ class AcceptedSteer:
 
 @dataclass(frozen=True, slots=True)
 class ToolBatchItem:
-    """One provider source position with reserved durable identities."""
+    """One provider source position with reserved durable identities.
+
+    ``read_only`` is the pinned contract fact that lets an executable call run
+    beside its read-only neighbours; every other call runs alone.
+    """
 
     source_index: int
     call_id: str
@@ -101,6 +105,7 @@ class ToolBatchItem:
     input_schema_digest: str = ""
     effective_input_digest: str = ""
     synthetic_message: str = ""
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         if self.source_index < 0:
@@ -117,6 +122,8 @@ class ToolBatchItem:
                 raise ValueError("executable Tool Batch item digests must be SHA-256")
         elif not self.synthetic_message:
             raise ValueError("non-executable Tool Batch item requires a synthetic result")
+        elif self.read_only:
+            raise ValueError("only an executable Tool Batch item can be read-only")
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -131,6 +138,7 @@ class ToolBatchItem:
             "input_schema_digest": self.input_schema_digest,
             "effective_input_digest": self.effective_input_digest,
             "synthetic_message": self.synthetic_message,
+            "read_only": self.read_only,
         }
 
 
@@ -203,12 +211,21 @@ class ToolBatchReady:
 
 @dataclass(frozen=True, slots=True)
 class ToolEffectPending:
+    """Calls whose intents are durable and whose results have not settled.
+
+    The call at ``source_index`` is pending under ``attempt_id``. Read-only calls
+    running beside it are pending at the positions that follow it, one attempt each
+    in ``concurrent_attempt_ids``. Results settle in source order, so every earlier
+    position is settled and the first pending call is always this one.
+    """
+
     operation_id: OperationId
     turn_number: int
     batch: ToolBatchPlan
     source_index: int
     attempt_id: AttemptId
     steers: tuple[AcceptedSteer, ...] = ()
+    concurrent_attempt_ids: tuple[AttemptId, ...] = ()
     state_type: Literal["tool_effect_pending"] = "tool_effect_pending"
 
     def __post_init__(self) -> None:
@@ -216,6 +233,8 @@ class ToolEffectPending:
             raise ValueError("pending Tool source position is outside its Plan")
         if self.batch.items[self.source_index].disposition != "executable":
             raise ValueError("only an executable Tool item may be pending")
+        if self.concurrent_attempt_ids:
+            _require_concurrent(self.batch, self.source_index, self.concurrent_attempt_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,13 +264,44 @@ class CompletionReady:
 
 @dataclass(frozen=True, slots=True)
 class Cancelling:
+    """A requested cancellation closing the rest of its Tool Batch in source order.
+
+    A call that was pending when the request arrived may have run, so it closes as
+    an unknown outcome under its attempt: the call at ``uncertain_source_index``,
+    then the read-only calls that were running beside it, one attempt each in
+    ``concurrent_attempt_ids``. Every other open position closes as interrupted.
+    """
+
     operation_id: OperationId
     turn_count: int
     batch: ToolBatchPlan | None = None
     next_source_index: int = 0
     uncertain_source_index: int | None = None
     uncertain_attempt_id: AttemptId | None = None
+    concurrent_attempt_ids: tuple[AttemptId, ...] = ()
     state_type: Literal["cancelling"] = "cancelling"
+
+    def __post_init__(self) -> None:
+        if not self.concurrent_attempt_ids:
+            return
+        if (
+            self.batch is None
+            or self.uncertain_attempt_id is None
+            or self.uncertain_source_index != self.next_source_index
+        ):
+            raise ValueError("concurrent uncertain Tool calls follow the next open position")
+        _require_concurrent(self.batch, self.next_source_index, self.concurrent_attempt_ids)
+
+
+def _require_concurrent(
+    batch: ToolBatchPlan, source_index: int, concurrent: tuple[AttemptId, ...]
+) -> None:
+    """Calls may be pending together only as adjacent executable read-only items."""
+    items = batch.items[source_index : source_index + 1 + len(concurrent)]
+    if len(items) != 1 + len(concurrent):
+        raise ValueError("concurrent Tool source positions are outside their Plan")
+    if not all(item.disposition == "executable" and item.read_only for item in items):
+        raise ValueError("only read-only Tool items may be pending together")
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +374,7 @@ def operation_state_payload(state: RunOperationState) -> dict[str, Any]:
             batch=state.batch.canonical_payload(),
             source_index=state.source_index,
             attempt_id=state.attempt_id.value,
+            concurrent_attempt_ids=[attempt.value for attempt in state.concurrent_attempt_ids],
             steers=[item.canonical_payload() for item in state.steers],
         )
     elif isinstance(state, CompactionPending):
@@ -345,6 +396,7 @@ def operation_state_payload(state: RunOperationState) -> dict[str, Any]:
             uncertain_attempt_id=(
                 state.uncertain_attempt_id.value if state.uncertain_attempt_id is not None else None
             ),
+            concurrent_attempt_ids=[attempt.value for attempt in state.concurrent_attempt_ids],
         )
     elif isinstance(state, OperationCompleted):
         payload["assistant_entry_id"] = state.assistant_entry_id.value
@@ -355,6 +407,10 @@ def operation_state_payload(state: RunOperationState) -> dict[str, Any]:
             provider_attempt_ids=[attempt.value for attempt in state.provider_attempt_ids],
         )
     return payload
+
+
+def _attempts(payload: dict[str, Any], key: str) -> tuple[AttemptId, ...]:
+    return tuple(AttemptId(str(attempt_id)) for attempt_id in payload.get(key) or ())
 
 
 def _steers(payload: dict[str, Any]) -> tuple[AcceptedSteer, ...]:
@@ -380,6 +436,7 @@ def _batch(payload: dict[str, Any]) -> ToolBatchPlan:
                 input_schema_digest=str(item.get("input_schema_digest") or ""),
                 effective_input_digest=str(item.get("effective_input_digest") or ""),
                 synthetic_message=str(item.get("synthetic_message") or ""),
+                read_only=bool(item.get("read_only", False)),
             )
             for item in payload.get("items") or ()
         ),
@@ -423,6 +480,7 @@ def decode_operation_state(payload: dict[str, Any]) -> RunOperationState:
             source_index=int(payload["source_index"]),
             attempt_id=AttemptId(str(payload["attempt_id"])),
             steers=_steers(payload),
+            concurrent_attempt_ids=_attempts(payload, "concurrent_attempt_ids"),
         )
     if kind == "compaction_pending":
         return CompactionPending(
@@ -456,6 +514,7 @@ def decode_operation_state(payload: dict[str, Any]) -> RunOperationState:
                 if payload.get("uncertain_attempt_id")
                 else None
             ),
+            concurrent_attempt_ids=_attempts(payload, "concurrent_attempt_ids"),
         )
     if kind == "completed":
         return OperationCompleted(

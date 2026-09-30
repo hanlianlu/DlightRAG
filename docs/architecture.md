@@ -145,8 +145,12 @@ create a nested Retrieval Run:
   use Profile Memory, load Skills, and run bounded Child Sessions.
 
 Tool acceptance consumes immutable `ToolDeclaration` values: model definitions,
-argument contracts, usage guidance, and replay policy. `AgentTool` specializes a
-declaration with a required execution binding. Each tool owns its declaration;
+argument contracts, usage guidance, replay policy, and whether a call is read-only.
+Adjacent read-only calls of one turn run at once and settle in source order; every
+other call runs alone
+([ADR 0029](adr/0029-read-only-calls-run-at-once-and-settle-in-source-order.md)).
+`AgentTool` specializes a declaration with a required execution binding. Each tool
+owns its declaration;
 Research uses one declaration selection function for admission and execution,
 including child narrowing. Admission pins and measures those declarations without
 creating execution environments, owner Skill catalogues, or callable placeholders.

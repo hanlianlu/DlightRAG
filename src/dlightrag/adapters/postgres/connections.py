@@ -612,6 +612,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                     item.tool_name != tool.local_name
                     or item.call_id != runtime.call_id
                     or item.replay_policy != "never"
+                    or item.read_only
                     or item.contract_version != 2
                     or item.input_schema_digest != schema_digest(tool.input_schema)
                     or item.effective_input_digest

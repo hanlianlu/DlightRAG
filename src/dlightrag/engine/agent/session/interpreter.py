@@ -2,6 +2,7 @@
 """Pure total interpreter from OperationState to one closed NextAction."""
 
 from dataclasses import dataclass
+from itertools import takewhile
 from typing import Literal
 
 from dlightrag.engine.agent.session.operation import (
@@ -15,6 +16,7 @@ from dlightrag.engine.agent.session.operation import (
     ReadyForProvider,
     RunOperationState,
     ToolBatchItem,
+    ToolBatchPlan,
     ToolBatchReady,
     ToolEffectPending,
 )
@@ -42,6 +44,11 @@ TOOL_DISPOSITION_OUTCOME: dict[SyntheticToolDisposition, SyntheticToolResultOutc
     "contract_changed": "tool_contract_changed",
 }
 
+#: Most read-only calls one Tool Batch runs at once. A web-heavy turn issues four
+#: to eight searches, so eight runs such a turn in one round while still bounding
+#: what one batch asks of a search provider or the corpus at a time.
+MAX_CONCURRENT_TOOL_CALLS = 8
+
 
 @dataclass(frozen=True, slots=True)
 class AssembleProviderRequest:
@@ -64,7 +71,10 @@ class CommitSyntheticToolResult:
 
 @dataclass(frozen=True, slots=True)
 class BeginToolEffect:
+    """Start ``item``, and the read-only calls right after it that run beside it."""
+
     item: ToolBatchItem
+    concurrent: tuple[ToolBatchItem, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +150,7 @@ def next_action(state: RunOperationState) -> NextAction:
             return ContinueAfterToolBatch(state.turn_number)
         item = state.batch.items[state.next_source_index]
         if item.disposition == "executable":
-            return BeginToolEffect(item)
+            return BeginToolEffect(item, _concurrent_with(item, state.batch))
         return CommitSyntheticToolResult(item, TOOL_DISPOSITION_OUTCOME[item.disposition])
     if isinstance(state, ToolEffectPending):
         item = state.batch.items[state.source_index]
@@ -164,6 +174,22 @@ def next_action(state: RunOperationState) -> NextAction:
     raise AssertionError(f"unhandled Operation state: {type(state).__name__}")
 
 
+def _concurrent_with(item: ToolBatchItem, batch: ToolBatchPlan) -> tuple[ToolBatchItem, ...]:
+    """The read-only calls right after a read-only ``item``, within the bound.
+
+    Any other call, and any position that never executes, runs alone and ends the
+    run of neighbours, so a call with side effects is a barrier in source order.
+    """
+    if not _read_only(item):
+        return ()
+    following = batch.items[item.source_index + 1 : item.source_index + MAX_CONCURRENT_TOOL_CALLS]
+    return tuple(takewhile(_read_only, following))
+
+
+def _read_only(item: ToolBatchItem) -> bool:
+    return item.disposition == "executable" and item.read_only
+
+
 __all__ = [
     "AssembleProviderRequest",
     "BeginToolEffect",
@@ -174,6 +200,7 @@ __all__ = [
     "ConsumeSteer",
     "ContinueAfterToolBatch",
     "FinishCancellation",
+    "MAX_CONCURRENT_TOOL_CALLS",
     "NextAction",
     "NoAction",
     "RecoverToolEffect",

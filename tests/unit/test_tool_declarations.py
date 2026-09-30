@@ -159,6 +159,39 @@ def test_no_built_in_tool_is_named_like_a_connection_tool(tmp_path: Path, child:
     assert [tool.name for tool in declared if is_connection_tool(tool.name)] == []
 
 
+def test_only_tools_that_change_nothing_outside_their_run_are_read_only(tmp_path: Path) -> None:
+    """Read-only calls run beside each other; every other call is a barrier.
+
+    A Connection tool stays sequential whatever its server claims: its effects are
+    the remote account's, and nothing here can know them.
+    """
+    factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
+    declared = research_tool_declarations(
+        web_search=True,
+        resource_read=True,
+        resource_view=True,
+        environment=True,
+        artifact_publication=True,
+        subagents=subagent_declarations(model_guidance="Configured model roles."),
+        memory=True,
+        skills=factory.declarations(child=False),
+        injected=[ToolDeclaration("mcp__test__lookup", "Remote tool.", Arguments)],
+    )
+
+    assert {tool.name for tool in declared if tool.read_only} == {
+        "search_knowledge_base",
+        "search_web",
+        "read",
+        "view",
+        "ls",
+        "grep",
+        "find",
+    }
+    assert {"bash", "write", "edit", "attach_artifact", "remember", "mcp__test__lookup"} <= {
+        tool.name for tool in declared if not tool.read_only
+    }
+
+
 def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
     """All 24 `ls`, `find`, and `grep` calls of 34 live Research Runs met an empty
     workspace, some hunting knowledge-base documents as files, and follow-ups looked

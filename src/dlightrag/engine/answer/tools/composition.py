@@ -346,6 +346,7 @@ def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
         result = await tool.execute(raw, runtime)
         rows = _resource_rows(tool.name, result)
         if rows:
+            await runtime.in_source_order()
             evidence.add_rows(rows)
             await evidence.aflush_images()
         return result
