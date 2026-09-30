@@ -126,9 +126,8 @@ def test_title_aided_script_disables_and_scrubs_existing_config(tmp_path: Path) 
     assert config["llm-aided-config"]["title_aided"] == {"enable": False}
 
 
-def test_mineru_sitecustomize_bounds_title_aided_stream_without_leaking_secret(
-    tmp_path: Path,
-) -> None:
+def _fake_mineru_modules(tmp_path: Path) -> Path:
+    """Stand-ins for the modules sitecustomize patches, with a stream that never ends."""
     fake_modules = tmp_path / "fake-modules"
     (fake_modules / "uvicorn").mkdir(parents=True)
     (fake_modules / "uvicorn" / "__init__.py").write_text("", encoding="utf-8")
@@ -181,10 +180,12 @@ def test_mineru_sitecustomize_bounds_title_aided_stream_without_leaking_secret(
         "    def close(self):\n"
         "        global closed_streams\n"
         "        closed_streams += 1\n"
+        "extra_bodies = []\n"
         "class _Completions:\n"
         "    def create(self, **kwargs):\n"
         "        global create_calls\n"
         "        create_calls += 1\n"
+        "        extra_bodies.append(kwargs.get('extra_body'))\n"
         "        return _Stream()\n"
         "class _Chat:\n"
         "    completions = _Completions()\n"
@@ -201,6 +202,13 @@ def test_mineru_sitecustomize_bounds_title_aided_stream_without_leaking_secret(
         "    return {'unpatched': 1}\n",
         encoding="utf-8",
     )
+    return fake_modules
+
+
+def test_mineru_sitecustomize_bounds_title_aided_stream_without_leaking_secret(
+    tmp_path: Path,
+) -> None:
+    fake_modules = _fake_mineru_modules(tmp_path)
     probe = tmp_path / "probe.py"
     probe.write_text(
         "import json\n"
@@ -246,6 +254,47 @@ def test_mineru_sitecustomize_bounds_title_aided_stream_without_leaking_secret(
     assert payload["closed_streams"] == 1
     assert payload["warnings"]
     assert "title-aided-test-secret" not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "extra_body"),
+    [
+        ("https://api.deepseek.com", {"thinking": {"type": "disabled"}}),
+        ("https://dashscope.example/compatible-mode/v1", {"enable_thinking": False}),
+    ],
+)
+def test_title_aided_turns_reasoning_off_the_way_its_endpoint_reads(
+    tmp_path: Path, endpoint: str, extra_body: dict[str, object]
+) -> None:
+    """DeepSeek ignores enable_thinking; only its own switch keeps it from reasoning."""
+    fake_modules = _fake_mineru_modules(tmp_path)
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import json\n"
+        "import mineru.utils.llm_aided as aided\n"
+        "aided._request_title_levels(\n"
+        f"    {{'api_key': 'k', 'base_url': {endpoint!r}, 'model': 'm', 'enable_thinking': False}},\n"
+        "    {0: ['Heading', 12, 1]},\n"
+        ")\n"
+        "print(json.dumps(aided.extra_bodies))\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(MINERU_SCRIPTS), str(fake_modules)))
+    env["MINERU_TITLE_AIDED_ATTEMPT_TIMEOUT_SECONDS"] = "0.02"
+    env["MINERU_TITLE_AIDED_MAX_ATTEMPTS"] = "1"
+
+    completed = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+
+    assert json.loads(completed.stdout) == [extra_body]
 
 
 def test_makefile_dispatches_mineru_service_targets() -> None:

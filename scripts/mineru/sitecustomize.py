@@ -68,6 +68,7 @@ import os
 import sys
 import time
 from functools import wraps
+from urllib.parse import urlsplit
 
 import uvicorn.config
 from PIL import Image
@@ -156,6 +157,20 @@ _TITLE_AIDED_MAX_ATTEMPTS = _positive_int_env("MINERU_TITLE_AIDED_MAX_ATTEMPTS",
 _TITLE_AIDED_READ_TIMEOUT_SECONDS = min(_TITLE_AIDED_ATTEMPT_TIMEOUT_SECONDS, 10.0)
 
 
+def _thinking_switch(title_aided_config):
+    """The request field that sets the title model's reasoning, as its endpoint reads it.
+
+    DeepSeek ignores the ``enable_thinking`` field other OpenAI-compatible hosts read
+    and keeps reasoning on unless its own ``thinking`` switch turns it off; reasoning
+    over a book's title list then outlasts the attempt deadline every time.
+    """
+    enabled = bool(title_aided_config["enable_thinking"])
+    host = (urlsplit(str(title_aided_config.get("base_url") or "")).hostname or "").lower()
+    if host == "deepseek.com" or host.endswith(".deepseek.com"):
+        return {"thinking": {"type": "enabled" if enabled else "disabled"}}
+    return {"enable_thinking": enabled}
+
+
 def _bounded_request_title_levels(title_aided_config, title_dict, prompt_builder=None):
     if not title_dict:
         return {}
@@ -169,7 +184,7 @@ def _bounded_request_title_levels(title_aided_config, title_dict, prompt_builder
         "stream": True,
     }
     if "enable_thinking" in title_aided_config:
-        api_params["extra_body"] = {"enable_thinking": title_aided_config["enable_thinking"]}
+        api_params["extra_body"] = _thinking_switch(title_aided_config)
 
     try:
         client = _llm_aided.OpenAI(
