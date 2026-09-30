@@ -212,7 +212,7 @@ class TestCreationValidation:
 
     async def test_rejects_a_blank_owner(self) -> None:
         with pytest.raises(ValueError):
-            await PGRunStore().create_run(
+            await PGRunStore().accept_run(
                 envelope=self._envelope(owner="   "),
                 run_id="00000000-0000-0000-0000-000000000001",
             )
@@ -230,7 +230,7 @@ class TestCreationValidation:
     ) -> None:
         envelope = replace(self._envelope(), **{field: value})
         with pytest.raises(ValueError, match=message):
-            await PGRunStore().create_run(
+            await PGRunStore().accept_run(
                 envelope=envelope,
                 run_id="00000000-0000-0000-0000-000000000001",
             )
@@ -242,14 +242,14 @@ class TestCreationValidation:
         )
 
         with pytest.raises(ValueError, match="only Corpus Mutation"):
-            await PGRunStore().create_run(
+            await PGRunStore().accept_run(
                 envelope=envelope,
                 run_id="00000000-0000-0000-0000-000000000001",
             )
 
     async def test_rejects_a_prepared_input_that_is_not_json(self) -> None:
         with pytest.raises(TypeError):
-            await PGRunStore().create_run(
+            await PGRunStore().accept_run(
                 envelope=self._envelope(payload={"q": object()}),
                 run_id="00000000-0000-0000-0000-000000000001",
             )
@@ -258,7 +258,7 @@ class TestCreationValidation:
         from dlightrag.engine.runtime.records import PendingArtifactReference
 
         with pytest.raises(ValueError):
-            await PGRunStore().create_run(
+            await PGRunStore().accept_run(
                 envelope=self._envelope(),
                 run_id="00000000-0000-0000-0000-000000000001",
                 references=(

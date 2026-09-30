@@ -37,7 +37,11 @@ from dlightrag.engine.runtime.records import (
 
 
 class FingerprintingRunStore(PGRunStore):
-    """Test adapter for low-level suites whose raw request is the public input."""
+    """Test adapter for low-level suites whose raw request is the public input.
+
+    ``create_run`` and ``create_run_in`` build an Answer envelope from a raw
+    request, or pass a ready one through, to ``accept_run`` and ``accept_run_in``.
+    """
 
     async def create_run(
         self,
@@ -58,7 +62,7 @@ class FingerprintingRunStore(PGRunStore):
         if envelope is not None:
             if run_id is None:
                 raise ValueError("run_id is required with an envelope")
-            return await super().create_run(
+            return await super().accept_run(
                 envelope=envelope,
                 run_id=run_id,
                 resources=resources,
@@ -115,7 +119,7 @@ class FingerprintingRunStore(PGRunStore):
         connection_bindings: tuple[RunConnectionBinding, ...],
     ) -> RunCreation:
         run_id = str(uuid7())
-        return await super().create_run(
+        return await super().accept_run(
             envelope=_answer_envelope(
                 owner_id=owner_id,
                 prepared=prepared,
@@ -146,7 +150,7 @@ class FingerprintingRunStore(PGRunStore):
         if envelope is not None:
             if run_id is None:
                 raise ValueError("run_id is required with an envelope")
-            return await super().create_run_in(
+            return await super().accept_run_in(
                 conn,
                 envelope=envelope,
                 run_id=run_id,
@@ -167,7 +171,7 @@ class FingerprintingRunStore(PGRunStore):
             **dict(request),
         }
         run_id = str(uuid7())
-        return await super().create_run_in(
+        return await super().accept_run_in(
             conn,
             envelope=_answer_envelope(
                 owner_id=owner_id,

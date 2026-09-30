@@ -711,7 +711,7 @@ async def _create_fast_continuation(pg, *, old_run_id, session_id, kind, profile
         agent_lane_id=lane.value,
         source_lane_id=prepared.source_lane_id,
     )
-    await pg[0].create_run(envelope=envelope, run_id=run_id, routing=routing)
+    await pg[0].accept_run(envelope=envelope, run_id=run_id, routing=routing)
     return run_id
 
 

@@ -1128,7 +1128,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                             )
                         summary_row = rebased
                 try:
-                    creation = await self._run_store.create_run_in(
+                    creation = await self._run_store.accept_run_in(
                         conn,
                         envelope=replace(
                             envelope,

@@ -74,7 +74,7 @@ class FakeAnswers(AnswerService):
             "source_lane_id": request.source_lane_id,
         }
         run_id = str(uuid7())
-        return await acceptor.create_run(
+        return await acceptor.accept_run(
             envelope=PreparedRunEnvelope(
                 run_kind="answer",
                 lane="query",

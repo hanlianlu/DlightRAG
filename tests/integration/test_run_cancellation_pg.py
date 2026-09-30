@@ -66,7 +66,7 @@ async def _create(store: PGRunStore):
 
     run_id = str(uuid.uuid7())
     prepared = _request()
-    return await store.create_run(
+    return await store.accept_run(
         envelope=PreparedRunEnvelope(
             run_kind="answer",
             lane="query",

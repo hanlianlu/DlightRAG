@@ -98,9 +98,6 @@ class _Store:
             return RuntimeRunCreation(run=_record(envelope, self.accept_replays), replayed=True)
         return RuntimeRunCreation(run=_record(envelope, run_id), replayed=False)
 
-    # Answer's acceptor protocol names the same acceptance ``create_run``.
-    create_run = accept_run
-
 
 class _Scheduler:
     """A started runtime whose admission slot a test can close under a submission."""
@@ -491,7 +488,7 @@ async def test_a_linked_answer_acceptance_that_links_nothing_wakes_nothing(
         async def replay_run(self, **_call: Any) -> None:
             return None
 
-        async def create_run(self, **_call: Any) -> None:
+        async def accept_run(self, **_call: Any) -> None:
             return None
 
     service = answer_service(store=store, coordinator=scheduler)

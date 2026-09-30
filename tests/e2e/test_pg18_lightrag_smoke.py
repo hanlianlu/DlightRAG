@@ -885,7 +885,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
             "agent_lane_id": "main",
         }
         run_id = str(uuid.uuid7())
-        creation = await store.create_run(
+        creation = await store.accept_run(
             envelope=PreparedRunEnvelope(
                 run_kind="answer",
                 lane="query",

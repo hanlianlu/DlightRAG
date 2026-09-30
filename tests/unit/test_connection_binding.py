@@ -95,11 +95,11 @@ async def test_stale_binding_rebuild_is_bounded_and_does_not_repeat_resource_pre
     class ChurningStore(_Store):
         attempts = 0
 
-        async def create_run(self, **kwargs):
+        async def accept_run(self, **kwargs):
             self.attempts += 1
             if self.attempts == 1 or churn:
                 raise StaleConnectionBindingError("snapshot changed")
-            return await super().create_run(**kwargs)
+            return await super().accept_run(**kwargs)
 
     store = ChurningStore()
     resources = _Resources()
@@ -220,7 +220,7 @@ async def test_concurrent_key_winner_replays_before_stale_rebind():
     from dlightrag.engine.runtime.records import RunCreation
 
     class ConcurrentStore(_Store):
-        async def create_run(self, **kwargs):
+        async def accept_run(self, **kwargs):
             self._replay = RunCreation(run=_record(), replayed=True)
             raise StaleConnectionBindingError("A concurrent original acceptance won")
 

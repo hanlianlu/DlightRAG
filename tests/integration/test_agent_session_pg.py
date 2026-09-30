@@ -1242,7 +1242,7 @@ async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
                 "blob_digest": digest,
             },
         ),
-        blobs=(PendingArtifact(content=content),),
+        artifacts=(PendingArtifact(content=content),),
         references=(
             PendingArtifactReference(
                 resource_id="accepted-1",

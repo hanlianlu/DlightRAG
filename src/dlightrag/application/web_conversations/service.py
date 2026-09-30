@@ -137,7 +137,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
         )
         return None if creation is None else _submission(creation)
 
-    async def create_run(
+    async def accept_run(
         self,
         *,
         envelope: PreparedRunEnvelope,

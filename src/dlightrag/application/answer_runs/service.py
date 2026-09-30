@@ -376,7 +376,7 @@ class AnswerConnectionsChangedError(ApplicationConflictError):
 class AnswerRunAcceptor[T](RunReplayer[T], Protocol):
     """Persist or replay one prepared run, optionally with an atomic domain link."""
 
-    async def create_run(
+    async def accept_run(
         self,
         *,
         envelope: PreparedRunEnvelope,
@@ -905,7 +905,7 @@ class AnswerService:
                 try:
                     return await self._admission.admit(
                         partial(
-                            acceptor.create_run,
+                            acceptor.accept_run,
                             resources=_accepted_resource_payloads(
                                 run_input, attachment_bytes=attachment_bytes
                             ),

@@ -2479,22 +2479,27 @@ def _validate_acceptance(
     )
 
 
-async def _replay_in(conn: Any, envelope: PreparedRunEnvelope, owner: str) -> RunCreation | None:
-    """Return the run this submission key already accepted; changed input conflicts."""
-    row = await conn.fetchrow(
-        _SELECT_RUN_BY_KEY,
+async def _replay(
+    conn: Any, run_kind: str, submitted_by: str, key: str, fingerprint: str
+) -> RunCreation | None:
+    """Return the run this submitter's key already accepted; changed input conflicts."""
+    row = await conn.fetchrow(_SELECT_RUN_BY_KEY, run_kind, submitted_by, key)
+    if row is None:
+        return None
+    if str(row["request_fingerprint"]) != fingerprint:
+        raise IdempotencyKeyConflict(
+            f"owner {submitted_by} reused idempotency key {key} with different normalized input"
+        )
+    return RunCreation(run=run_record(row), replayed=True)
+
+
+async def _replay_in(conn: Any, envelope: PreparedRunEnvelope) -> RunCreation | None:
+    return await _replay(
+        conn,
         envelope.run_kind,
         envelope.submitted_by,
         envelope.submission_key,
-    )
-    if row is None:
-        return None
-    return _require_replay_match(
-        owner=owner,
-        key=envelope.submission_key,
-        stored_fingerprint=str(row["request_fingerprint"]),
-        fingerprint=envelope.request_fingerprint,
-        row=row,
+        envelope.request_fingerprint,
     )
 
 
@@ -2680,23 +2685,16 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         run_kind: RunKind,
     ) -> RunCreation | None:
         """Replay a matching operation-scoped key before preparation happens."""
-        owner = _require_owner(owner_id)
+        submitter = _require_owner(owner_id)
 
         async def _operation(conn: Any) -> RunCreation | None:
-            row = await conn.fetchrow(_SELECT_RUN_BY_KEY, run_kind, owner, idempotency_key)
-            if row is None:
-                return None
-            return _require_replay_match(
-                owner=owner,
-                key=idempotency_key,
-                stored_fingerprint=str(row["request_fingerprint"]),
-                fingerprint=idempotency_fingerprint,
-                row=row,
+            return await _replay(
+                conn, run_kind, submitter, idempotency_key, idempotency_fingerprint
             )
 
         return await self._run_read(_operation)
 
-    async def create_run(
+    async def accept_run(
         self,
         *,
         envelope: PreparedRunEnvelope,
@@ -2707,34 +2705,12 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         routing: RoutingAcceptance | None = None,
         connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
-        """Accept one purpose-built Answer envelope on the generic runtime."""
-        return await self.accept_run(
-            envelope=envelope,
-            run_id=run_id,
-            resources=resources,
-            blobs=artifacts,
-            references=references,
-            routing=routing,
-            connection_bindings=connection_bindings,
-        )
-
-    async def accept_run(
-        self,
-        *,
-        envelope: PreparedRunEnvelope,
-        run_id: str,
-        resources: Sequence[Mapping[str, object]] = (),
-        blobs: Sequence[PendingArtifact] = (),
-        references: Sequence[PendingArtifactReference] = (),
-        routing: RoutingAcceptance | None = None,
-        connection_bindings: tuple[RunConnectionBinding, ...] = (),
-    ) -> RunCreation:
         """Atomically accept one operation input and its generic run row."""
         accepted = _validate_acceptance(
             envelope,
             run_id,
             carries_answer_projections=bool(
-                resources or blobs or references or routing or connection_bindings
+                resources or artifacts or references or routing or connection_bindings
             ),
             references=references,
         )
@@ -2746,13 +2722,56 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                     envelope,
                     accepted,
                     resources=resources,
-                    blobs=blobs,
+                    artifacts=artifacts,
                     references=references,
                     routing=routing,
                     connection_bindings=connection_bindings,
                 )
 
         return await self._run_write(_operation)
+
+    async def accept_run_in(
+        self,
+        conn: Any,
+        *,
+        envelope: PreparedRunEnvelope,
+        run_id: str,
+        artifacts: Sequence[PendingArtifact] = (),
+        references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
+    ) -> RunCreation:
+        """Accept or replay one Web Answer run inside a transaction the caller already owns.
+
+        This is the composition seam another durable table uses to link its own
+        row to the accepted run atomically. It performs no transaction control
+        of its own, so the caller's commit is what makes the run and its link
+        durable together. ``envelope`` carries the bounded accepted execution input.
+        """
+        if envelope.run_kind != "answer" or envelope.lane != "query":
+            raise ValueError("Web Answer acceptance requires answer kind on the query lane")
+        if envelope.access_scope.kind != "owner":
+            raise ValueError("Web Answer runs require owner access scope")
+        if envelope.supersedes_run_id is not None:
+            raise ValueError("Web Answer runs cannot supersede another run")
+        accepted = _validate_acceptance(
+            envelope,
+            run_id,
+            carries_answer_projections=bool(
+                artifacts or references or routing or connection_bindings
+            ),
+            references=references,
+        )
+        return await self._accept_in(
+            conn,
+            envelope,
+            accepted,
+            resources=(),
+            artifacts=artifacts,
+            references=references,
+            routing=routing,
+            connection_bindings=connection_bindings,
+        )
 
     async def _accept_in(
         self,
@@ -2761,7 +2780,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         accepted: _AcceptedRun,
         *,
         resources: Sequence[Mapping[str, object]],
-        blobs: Sequence[PendingArtifact],
+        artifacts: Sequence[PendingArtifact],
         references: Sequence[PendingArtifactReference],
         routing: RoutingAcceptance | None,
         connection_bindings: tuple[RunConnectionBinding, ...],
@@ -2774,14 +2793,14 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         answered exactly as a replay is.
         """
         owner, run_uuid = accepted.owner, accepted.run_uuid
-        replayed = await _replay_in(conn, envelope, owner)
+        replayed = await _replay_in(conn, envelope)
         if replayed is not None:
             return replayed
         await conn.execute(
             "SELECT pg_advisory_xact_lock(hashtext($1))",
             f"dlightrag:run-accept:{envelope.lane}",
         )
-        replayed = await _replay_in(conn, envelope, owner)
+        replayed = await _replay_in(conn, envelope)
         if replayed is not None:
             return replayed
         if accepted.superseded_uuid is not None:
@@ -2807,7 +2826,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             await PGConnectionPinWriter.validate_in(
                 conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
             )
-        await self._write_blobs(conn, owner, blobs)
+        await self._write_blobs(conn, owner, artifacts)
         row = await conn.fetchrow(
             _INSERT_RUN,
             owner,
@@ -2823,7 +2842,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             envelope.retention_seconds,
         )
         if row is None:
-            replayed = await _replay_in(conn, envelope, owner)
+            replayed = await _replay_in(conn, envelope)
             if replayed is None:
                 raise RuntimeError("run insert reported a vanished conflict")
             return replayed
@@ -2983,49 +3002,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             )
         except BlobSizeConflict as exc:
             raise ValueError("blob digest collision with a different byte size") from exc
-
-    async def create_run_in(
-        self,
-        conn: Any,
-        *,
-        envelope: PreparedRunEnvelope,
-        run_id: str,
-        artifacts: Sequence[PendingArtifact] = (),
-        references: Sequence[PendingArtifactReference] = (),
-        routing: RoutingAcceptance | None = None,
-        connection_bindings: tuple[RunConnectionBinding, ...] = (),
-    ) -> RunCreation:
-        """Create or replay one Web Answer run inside a transaction the caller already owns.
-
-        This is the composition seam another durable table uses to link its own
-        row to the accepted run atomically. It performs no transaction control
-        of its own, so the caller's commit is what makes the run and its link
-        durable together. ``envelope`` carries the bounded accepted execution input.
-        """
-        if envelope.run_kind != "answer" or envelope.lane != "query":
-            raise ValueError("Web Answer acceptance requires answer kind on the query lane")
-        if envelope.access_scope.kind != "owner":
-            raise ValueError("Web Answer runs require owner access scope")
-        if envelope.supersedes_run_id is not None:
-            raise ValueError("Web Answer runs cannot supersede another run")
-        accepted = _validate_acceptance(
-            envelope,
-            run_id,
-            carries_answer_projections=bool(
-                artifacts or references or routing or connection_bindings
-            ),
-            references=references,
-        )
-        return await self._accept_in(
-            conn,
-            envelope,
-            accepted,
-            resources=(),
-            blobs=artifacts,
-            references=references,
-            routing=routing,
-            connection_bindings=connection_bindings,
-        )
 
     async def _insert_routing(
         self,
@@ -4463,21 +4439,6 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 return RunDeletion(runs=len(deleted), artifacts=artifacts, deleted=deleted)
 
         return await self._run_write(_operation)
-
-
-def _require_replay_match(
-    *,
-    owner: str,
-    key: str | None,
-    stored_fingerprint: str,
-    fingerprint: str,
-    row: Any,
-) -> RunCreation:
-    if stored_fingerprint != fingerprint:
-        raise IdempotencyKeyConflict(
-            f"owner {owner} reused idempotency key {key} with different normalized input"
-        )
-    return RunCreation(run=run_record(row), replayed=True)
 
 
 __all__ = [

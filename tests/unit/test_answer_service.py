@@ -181,7 +181,7 @@ class _Store:
         self.child_control_rows: tuple[Mapping[str, Any], ...] = ()
         self.child_guidance_rows: tuple[Mapping[str, Any], ...] = ()
 
-    async def create_run(
+    async def accept_run(
         self,
         *,
         envelope: PreparedRunEnvelope,

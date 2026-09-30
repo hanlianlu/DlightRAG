@@ -71,7 +71,7 @@ async def new_run(
             "source_lane_id": source_lane,
         },
     )
-    await store.create_run(envelope=envelope, run_id=run_id)
+    await store.accept_run(envelope=envelope, run_id=run_id)
     claim = await store.claim_next(worker_id=WORKER)
     assert claim is not None and claim.run.run_id == run_id
     session: Any = _Session()

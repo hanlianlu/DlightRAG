@@ -76,7 +76,7 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 | `engine/network_admission.py` | DNS and IP admission shared with public Web reads |
 | `engine/answer/execution/connection_binding.py` | Secret-free `RunConnectionBinding`, `ResearchToolClaim`, `ResearchConnectionToolResolver`, `StaleConnectionBindingError` |
 | `engine/agent/tools/contracts.py` | `ToolRuntime.fencing_epoch`, which lets the gate fence parent and Child Session calls without owner, credential, or MCP facts in Agent Core |
-| `application/answer_runs/service.py`, `adapters/postgres/runtime/run_store.py`, `application/web_conversations/`, `adapters/postgres/web/web_conversations.py` | Binding at Answer acceptance; pins written by `accept_run` or by `create_run_in` inside the Web turn transaction |
+| `application/answer_runs/service.py`, `adapters/postgres/runtime/run_store.py`, `application/web_conversations/`, `adapters/postgres/web/web_conversations.py` | Binding at Answer acceptance; pins written by `accept_run` or by `accept_run_in` inside the Web turn transaction |
 | `engine/answer/execution/executor.py`, `engine/answer/tools/composition.py` | Restoring pinned tools for resolved Research, checking the accepted `AgentRunPlan`, and preview-or-spill of tool output |
 | `_compose.py`, `application/application.py`, `application/config/` | Composition, lifecycle order, the `answer.agent.connections` settings, and YAML rejection of the key ring |
 | `adapters/http/browser/routes/connections.py`, `adapters/http/browser/auth.py` | Web routes; callback query capture and the public metadata path in the Web middleware |
@@ -269,9 +269,8 @@ whose generation Grant, if any, is active. The tools join the accepted
 `AgentRunPlan`, and the bindings enter the prepared input as
 `run_connection_bindings`: at most 100, exact fields, no duplicates, no secrets.
 
-`PGRunStore.accept_run`, which `create_run` forwards to, and `create_run_in`,
-which runs inside the Web Conversation transaction, take the same steps inside
-the accepting transaction:
+`PGRunStore.accept_run` and `accept_run_in`, which runs inside the Web
+Conversation transaction, take the same steps inside the accepting transaction:
 
 1. Return an idempotent replay unchanged; an existing Run keeps its original
    pins.

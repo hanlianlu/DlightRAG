@@ -132,7 +132,7 @@ async def test_actual_accept_run_pins_restore_old_generation_and_prevent_gc():
                 "run_connection_bindings": [b.as_json() for b in future.bindings],
             },
         )
-        r2 = await runs.create_run(
+        r2 = await runs.accept_run(
             envelope=r2_envelope, run_id=str(uuid7()), connection_bindings=future.bindings
         )
         assert r2.run.run_id != r1.run.run_id
@@ -302,7 +302,7 @@ async def test_snapshot_publication_gc_accept_race_cannot_leave_dangling_pin():
                 "run_connection_bindings": [b.as_json() for b in fresh.bindings],
             },
         )
-        await runs.create_run(
+        await runs.accept_run(
             envelope=fresh_envelope, run_id=str(uuid7()), connection_bindings=fresh.bindings
         )
         async with pool.acquire() as conn:
@@ -461,7 +461,7 @@ async def test_acceptance_locks_head_before_publication_and_gc_retains_pin():
             publication = None
             try:
                 async with accepting.transaction():
-                    await runs.create_run_in(
+                    await runs.accept_run_in(
                         accepting,
                         envelope=envelope,
                         run_id=str(uuid7()),
@@ -551,7 +551,7 @@ async def test_disable_reenable_or_retirement_cannot_accept_old_activation(mutat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["accept_run", "create_run", "create_run_in"])
+@pytest.mark.parametrize("path", ["accept_run", "accept_run_in"])
 @pytest.mark.parametrize("invalid", ["owner", "digest", "omitted_pins", "fast", "simple"])
 async def test_every_accepting_path_validates_normalized_binding_before_commit(path, invalid):
     from dataclasses import replace
@@ -582,9 +582,9 @@ async def test_every_accepting_path_validates_normalized_binding_before_commit(p
         if invalid == "omitted_pins":
             bindings = ()
         with pytest.raises((ValueError, StaleConnectionBindingError)):
-            if path == "create_run_in":
+            if path == "accept_run_in":
                 async with pool.acquire() as conn, conn.transaction():
-                    await runs.create_run_in(
+                    await runs.accept_run_in(
                         conn, envelope=envelope, run_id=str(uuid7()), connection_bindings=bindings
                     )
             else:
@@ -624,7 +624,7 @@ async def test_pinned_tool_labels_resolve_a_run_and_survive_connection_deletion(
         pinned = await runs.accept_run(
             envelope=envelope, run_id=str(uuid7()), connection_bindings=bound.bindings
         )
-        unpinned = await runs.create_run(
+        unpinned = await runs.accept_run(
             envelope=run_envelope("answer", key="r2", owner="a", mode="research"),
             run_id=str(uuid7()),
             connection_bindings=(),
