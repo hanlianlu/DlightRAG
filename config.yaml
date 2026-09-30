@@ -2,9 +2,6 @@
 # Priority: env > .env > config.yaml > defaults
 
 models:
-  # Optional deployment-specific model capability profiles. Empty falls
-  # through to the built-in catalogue (and any PostgreSQL runtime overlay).
-  catalogue: []
   chat:
     default:
       provider: openai
@@ -87,12 +84,6 @@ corpus:
     # For the bundled CPU profile, use endpoint http://docling:5001 and set
     # code_formula_preset to null instead.
   ingestion:
-    # Page margin composited around an image source before the parser lays it
-    # out; one value for whichever external parser is active. Without it a
-    # full-bleed image gives the layout model no page context: 40% of real
-    # artwork photographs failed outright (docling zero-block IR) at 0%.
-    # 3% is the smallest measured value that works; 0 disables it.
-    image_margin: 0.03
     pipeline:
       max_concurrency: 16
   retrieval:
@@ -119,41 +110,20 @@ answer:
   agent:
     # disabled | trust. Trust confines every Agent process to its Agent Workspace.
     execution_environment: trust
-    # null uses ~/.dlightrag/agent_workspaces; Compose mounts its named volume at
-    # that canonical container path instead of overriding this application value.
-    workspace_root: null
     # Durable Agent memory: the notes one Agent Session keeps, independent of any
     # Run's workspace quota. A note that does not fit is refused for that note alone
     # (never truncated, never evicted) and stays in the writing Run's own copy.
     session_notes:
       max_count: 64
       max_bytes: 262144
-    # Hide named packaged skills only; operator-global and owner overrides remain visible.
-    disabled_builtin_skills: []
     # Personal Settings Connections (Streamable HTTP only). Policy only narrows
-    # owner grants; keys belong exclusively in the existing secret source.
+    # owner grants; keys belong exclusively in the existing secret source. Timeouts
+    # and size ceilings keep their documented defaults (personal-mcp-connections.md).
     connections:
-      oauth_timeout: 300
       require_https: true
       allow_private_hosts: []
       max_connections: 20
       max_enabled_tools: 256
-      max_tools: 128
-      max_pages: 16
-      max_schema_bytes: 32768
-      max_description_bytes: 8192
-      max_catalogue_bytes: 524288
-      discovery_concurrency: 4
-      refresh_seconds: 300
-      discovery_timeout: 30
-      call_timeout: 60
-      call_concurrency: 8
-      max_call_argument_bytes: 65536
-      max_result_bytes: 262144
-      max_result_parts: 32
-      connect_timeout: 10
-      idle_timeout: 15
-      max_response_bytes: 1048576
 
 access:
   # Product security policy belongs here. Compose only carries the explicit
