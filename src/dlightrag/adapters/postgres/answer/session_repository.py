@@ -29,7 +29,7 @@ from typing import Any
 from dlightrag.adapters.postgres.core._errors import guard_payload
 from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
-from dlightrag.adapters.postgres.runtime._lease import hold_run_lease
+from dlightrag.adapters.postgres.runtime._lease import hold_run_lease, lock_leased_run
 from dlightrag.adapters.postgres.runtime._terminal import finish_fenced_run
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_complete_blob
 from dlightrag.engine.agent.session.effects import JsonValue
@@ -83,16 +83,6 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
 )
-
-_LOCK_PROGRESS_RUN = """
-SELECT durable_progress_version,
-       cancel_requested_at IS NOT NULL AS cancel_requested
-FROM dlightrag_runs
-WHERE owner_id = $1 AND run_id = $2
-  AND lease_owner = $3 AND fencing_epoch = $4
-  AND status = 'running' AND lease_expires_at > NOW()
-FOR UPDATE
-"""
 
 _CHILD_LEASE_PREDICATE = """
 SELECT 1
@@ -1318,12 +1308,8 @@ class PGProgressStore:
         """Atomically settle the final Fast stage or an earlier cancellation."""
         async with self._connection() as conn:
             async with conn.transaction():
-                locked = await conn.fetchrow(
-                    _LOCK_PROGRESS_RUN,
-                    self._owner_id,
-                    self._run_id,
-                    self._lease_owner,
-                    self._fencing_epoch,
+                locked = await lock_leased_run(
+                    conn, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
                 )
                 if locked is None:
                     return StageLeaseLost()
@@ -1439,12 +1425,8 @@ class PGProgressStore:
         async with self._connection() as conn:
             try:
                 async with conn.transaction():
-                    locked = await conn.fetchrow(
-                        _LOCK_PROGRESS_RUN,
-                        self._owner_id,
-                        self._run_id,
-                        self._lease_owner,
-                        self._fencing_epoch,
+                    locked = await lock_leased_run(
+                        conn, self._owner_id, self._run_id, self._lease_owner, self._fencing_epoch
                     )
                     if locked is None:
                         return StageLeaseLost()

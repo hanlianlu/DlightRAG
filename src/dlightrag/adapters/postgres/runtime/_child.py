@@ -549,6 +549,28 @@ async def _notify_run_activity(conn: Any, owner_id: str, run_id: Any) -> None:
     )
 
 
+async def _request_child_cancellation(
+    conn: Any,
+    owner_id: str,
+    run_id: Any,
+    child_session_id: Any,
+    operation_id: Any,
+    origin: str,
+) -> bool:
+    """Ask one running Child to stop, from ``origin``, inside the caller's transaction.
+
+    The Child is flagged, its current Operation records who cancelled it, and
+    its pending guidance asks retire. Returns whether the Child was running.
+    """
+    requested = await conn.fetchval(_REQUEST_CHILD_CANCELLATION, owner_id, run_id, child_session_id)
+    if operation_id is not None:
+        await conn.execute(
+            _CANCEL_CHILD_OPERATION, owner_id, run_id, child_session_id, operation_id, origin
+        )
+    await conn.execute(_RETIRE_CHILD_GUIDANCE, owner_id, run_id, child_session_id)
+    return requested is not None
+
+
 def _parent_origin_holds_run(
     row: Mapping[str, Any] | Any,
     *,
@@ -781,25 +803,11 @@ class ChildRunStoreMixin:
                 child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
                 if child is None or str(child["status"]) != "running":
                     return False
-                requested = await conn.fetchval(
-                    _REQUEST_CHILD_CANCELLATION,
-                    owner,
-                    run_uuid,
-                    child_uuid,
+                requested = await _request_child_cancellation(
+                    conn, owner, run_uuid, child_uuid, child["operation_id"], cancellation_origin
                 )
-                operation_id = child["operation_id"]
-                if operation_id is not None:
-                    await conn.execute(
-                        _CANCEL_CHILD_OPERATION,
-                        owner,
-                        run_uuid,
-                        child_uuid,
-                        operation_id,
-                        cancellation_origin,
-                    )
-                await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
                 await _notify_run_activity(conn, owner, run_uuid)
-                return requested is not None
+                return requested
 
         return await self._run_write(_operation)
 
@@ -1365,16 +1373,9 @@ class ChildRunStoreMixin:
                 )
                 if outcome != "cancellation_requested":
                     return receipt
-                await conn.execute(_REQUEST_CHILD_CANCELLATION, owner, run_uuid, child_uuid)
-                await conn.execute(
-                    _CANCEL_CHILD_OPERATION,
-                    owner,
-                    run_uuid,
-                    child_uuid,
-                    operation_id,
-                    "user",
+                await _request_child_cancellation(
+                    conn, owner, run_uuid, child_uuid, operation_id, "user"
                 )
-                await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
                 await _mirror_child_intervention(
                     conn,
                     owner_id=owner,
