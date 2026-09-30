@@ -14,14 +14,14 @@ dependencies = [
     "dlightrag-memory==2.0.26",
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
-    "anthropic>=1.7.0",
-    "google-genai>=2.24.0",
+    "anthropic>=1.9.0",
+    "google-genai>=2.25.0",
     "json-repair>=0.63.4",
     # Built-in RAG and source capabilities
     "lightrag-hku>=1.5.7",
     "aiofiles>=24.1.0",
     "aiobotocore>=3.9.1",
-    "azure-storage-blob>=12.30.2",
+    "azure-storage-blob>=12.30.3",
     "botocore>=1.43.75",
     "lingua-language-detector>=2.2.0",
     # PostgreSQL
@@ -44,7 +44,7 @@ dependencies = [
     "mcp>=2.2.0",
     # REST API server
     "PyJWT>=2.14.0",
-    "fastapi>=0.141.1",
+    "fastapi>=0.142.2",
     "uvicorn[standard]>=0.52.1",
     "python-multipart>=0.0.22",
     # Web frontend
@@ -62,7 +62,7 @@ dependencies = [
     # Direct-text charset detection for answer resource reads.
     "charset-normalizer>=3.4.0",
     # Deterministic binary answer-resource readers (selected extras only).
-    "markitdown[docx,pdf,pptx,xlsx]>=0.1.7",
+    "markitdown[docx,pdf,pptx,xlsx]>=0.1.8",
     # Qualified PDF/DOCX/XLSX text; independent assets and offline fallback retained.
     "firecrawl-anydoc==0.2.4",
     # Content identification for published video Artifacts (ADR 0026); already
@@ -72,7 +72,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "cryptography>=46.0.0",
     "jsonschema>=4.26.0",
-    "httpx2>=2.12.0",
+    "httpx2>=2.13.1",
 ]
 
 [project.optional-dependencies]
