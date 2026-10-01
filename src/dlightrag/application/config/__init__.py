@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """DlightRAG configuration sections and loading."""
 
-from .loading import get_config, load_config, reset_config, set_config
+from .loading import get_config, load_config, set_config
 from .sections import (
     AccessControlConfig,
     AccessControlRuleConfig,
@@ -62,6 +62,5 @@ __all__ = [
     "_find_yaml_config",
     "get_config",
     "load_config",
-    "reset_config",
     "set_config",
 ]

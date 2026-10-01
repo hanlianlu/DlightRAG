@@ -15,7 +15,8 @@ import pytest
 from dlightrag.adapters.postgres.runtime.run_store import (
     PGRunStore,
 )
-from dlightrag.application.config import DlightragConfig, reset_config, set_config
+from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.config import loading as config_loading
 from dlightrag.application.config import sections as config_sections
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
@@ -267,10 +268,14 @@ def _isolated_from_operator_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_config_singleton():
-    """Reset the config singleton before each test."""
-    reset_config()
+    """Start and end every test without the process configuration singleton.
+
+    The product only ever installs one, so tests clear it here rather than
+    through a product function that exists for them.
+    """
+    config_loading._config = None
     yield
-    reset_config()
+    config_loading._config = None
 
 
 @pytest.fixture(autouse=True)

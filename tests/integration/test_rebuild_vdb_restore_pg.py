@@ -111,7 +111,7 @@ async def writer() -> AsyncIterator[_Writer]:
     await skip_without_postgres()
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.config import DlightragConfig, reset_config, set_config
+    from dlightrag.application.config import DlightragConfig, set_config
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
     from dlightrag.engine.rag.workspace.ports import CorpusRuntimeModels
@@ -182,7 +182,6 @@ async def writer() -> AsyncIterator[_Writer]:
             except Exception:  # noqa: BLE001 - teardown must still drop the database
                 pass
         await pg_pool.close()
-        reset_config()
         await drop_database(database)
 
 

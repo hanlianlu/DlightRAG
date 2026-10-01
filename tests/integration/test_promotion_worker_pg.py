@@ -118,7 +118,7 @@ async def corpus(_fresh_test_database: None) -> AsyncIterator[None]:
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus._corpus_schema import CHUNK_DOCUMENT_SCOPE_INDEX
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
-    from dlightrag.application.config import DlightragConfig, reset_config, set_config
+    from dlightrag.application.config import DlightragConfig, set_config
 
     cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         deployment={
@@ -220,7 +220,6 @@ async def corpus(_fresh_test_database: None) -> AsyncIterator[None]:
         await conn.close()
     yield None
     await pg_pool.close()
-    reset_config()
 
 
 async def _clean_state() -> None:

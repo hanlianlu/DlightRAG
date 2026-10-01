@@ -437,12 +437,11 @@ def _load_effective_config(config_path: Path, env_path: Path):
     """Load one explicit repository config with normal env-over-dotenv precedence."""
     if config_path.name != "config.yaml":
         raise ValueError("canonical configuration file must be named config.yaml")
-    from dlightrag.application.config import load_config, reset_config
+    from dlightrag.application.config import load_config
 
     previous = Path.cwd()
     try:
         os.chdir(config_path.parent)
-        reset_config()
         return load_config(env_path)
     finally:
         os.chdir(previous)

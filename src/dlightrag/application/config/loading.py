@@ -42,12 +42,6 @@ def get_config() -> DlightragConfig:
 
 
 def set_config(config: DlightragConfig) -> None:
-    """Set the global config singleton. Useful for testing."""
+    """Install the configuration ``get_config()`` returns for the rest of this process."""
     global _config
     _config = config
-
-
-def reset_config() -> None:
-    """Reset the global config singleton. Useful for testing."""
-    global _config
-    _config = None

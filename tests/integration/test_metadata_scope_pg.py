@@ -124,7 +124,7 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
     """One fresh writer attach over the dedicated test database."""
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
-    from dlightrag.application.config import DlightragConfig, reset_config, set_config
+    from dlightrag.application.config import DlightragConfig, set_config
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.ai.settings import (
         EmbeddingSettings,
@@ -211,7 +211,6 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
                 ClientManager._instances["ref_count"] = 0
         except Exception:
             pass
-        reset_config()
         raise
     try:
         yield WriterCorpus(
@@ -226,7 +225,6 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
         except Exception:
             pass
         await pg_pool.close()
-        reset_config()
 
 
 async def test_finalization_marker_round_trips_and_partial_updates_preserve_true(

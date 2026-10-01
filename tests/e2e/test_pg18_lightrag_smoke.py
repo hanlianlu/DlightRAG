@@ -901,7 +901,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     from dlightrag.adapters.postgres.core._pool import pg_pool
     from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
-    from dlightrag.application.config import reset_config, set_config
+    from dlightrag.application.config import set_config
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime.records import (
@@ -951,7 +951,6 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     finally:
         await writer.aclose()
         await pg_pool.close()
-        reset_config()
 
     # ── Reader: read-only corpus, writable operational state ───────────
     reader_cfg = clone_config(writer_cfg)
@@ -1025,7 +1024,6 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         finally:
             await reader.aclose()
             await pg_pool.close()
-            reset_config()
 
     # ── Cleanup: remove the workspace via a writer ─────────────────────
     set_config(writer_cfg)
@@ -1042,4 +1040,3 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     finally:
         await cleanup.aclose()
         await pg_pool.close()
-        reset_config()
