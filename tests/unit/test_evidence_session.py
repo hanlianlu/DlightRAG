@@ -131,7 +131,10 @@ def test_rendering_keeps_a_web_source_resource_handle() -> None:
     blocks, _ = ledger.render_blocks()
     text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
 
-    assert "resource id: res-web-page" in text
+    assert (
+        "### Document [1]: Page A [resource: res-web-page] (source uri: https://example.com/a)"
+        in (text)
+    )
 
 
 def test_images_are_never_rendered_without_an_explicit_transport_budget() -> None:

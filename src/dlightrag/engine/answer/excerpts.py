@@ -1,12 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared citation-labelled evidence rendering."""
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from dlightrag.engine.ai.media import image_data_uri
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
-from dlightrag.engine.answer.citations.utils import context_chunk_key
+from dlightrag.engine.answer.citations.utils import REQUEST_OWNED_WORKSPACES, context_chunk_key
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 _INTERNAL_KEYS: frozenset[str] = frozenset(
@@ -94,24 +95,8 @@ def build_excerpt_lane_blocks(
     blocks: list[dict[str, Any]] = []
     for ref_id in doc_order:
         doc_chunks = doc_groups[ref_id]
-        first = doc_chunks[0]
-        file_path = first.get("file_path", "")
-        filename = Path(file_path).name if file_path else f"Source {ref_id}"
-        metadata = first.get("metadata") or {}
-        meta_parts = [
-            f"{key.removeprefix('doc_').replace('_', ' ')}: {value}"
-            for key, value in metadata.items()
-            if value is not None and str(value).strip()
-        ]
-        meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
-        workspace = indexer.get_doc_workspace(ref_id) if indexer is not None else None
-        workspace_label = f" [workspace: {workspace}]" if workspace else ""
-        blocks.append(
-            {
-                "type": "text",
-                "text": f"### Document [{ref_id}]{workspace_label}: {filename}{meta_suffix}",
-            }
-        )
+        heading, filename = _document_heading(ref_id, doc_chunks[0], indexer)
+        blocks.append({"type": "text", "text": heading})
 
         for chunk in doc_chunks:
             content = str(chunk.get("content") or "").strip()
@@ -154,6 +139,60 @@ def build_excerpt_lane_blocks(
             if metadata_line:
                 blocks.append({"type": "text", "text": metadata_line})
     return blocks
+
+
+#: Document metadata a heading leaves out: what citations and storage keep for
+#: themselves — where a source is stored, the name it is stored under, how it was
+#: acquired — and the resource handle, which the heading prints in its own form.
+_UNLISTED_METADATA: frozenset[str] = frozenset(
+    {
+        "resource_id",
+        "source_download_locator",
+        "source_file_name",
+        "source_type",
+        "resource_kind",
+        "admission_origin",
+        "acquisition",
+        "remote_image_url",
+    }
+)
+
+
+def _document_heading(
+    ref_id: str, chunk: Mapping[str, Any], indexer: CitationIndexer | None
+) -> tuple[str, str]:
+    """Return a document's heading and the name its passages are labelled with.
+
+    A corpus document is named by its file and labelled with its workspace. A page or
+    resource the request holds itself is named by its title, which is no path to cut
+    at a slash. The metadata describes the document: a web address stays, since an
+    answer links it, while any other source uri, such as a ``local://`` locator, is
+    storage. A value the name already gives is not repeated.
+    """
+    metadata = chunk.get("metadata") or {}
+    file_path = str(chunk.get("file_path") or "")
+    request_owned = chunk.get("_workspace") in REQUEST_OWNED_WORKSPACES
+    name = (file_path if request_owned else Path(file_path).name) or f"Source {ref_id}"
+    workspace = None if request_owned or indexer is None else indexer.get_doc_workspace(ref_id)
+    resource_id = metadata.get("resource_id")
+    described = [
+        f"{key.removeprefix('doc_').replace('_', ' ')}: {value}"
+        for key, value in metadata.items()
+        if key not in _UNLISTED_METADATA
+        and (key != "source_uri" or str(value).startswith(("http://", "https://")))
+        and value is not None
+        and str(value).strip()
+        and str(value) != name
+    ]
+    heading = f"### Document [{ref_id}]"
+    if workspace:
+        heading += f" [workspace: {workspace}]"
+    heading += f": {name}"
+    if resource_id:
+        heading += f" [resource: {resource_id}]"
+    if described:
+        heading += f" ({', '.join(described)})"
+    return heading, name
 
 
 def chunk_label(*, cite_tag: str, chunk: dict[str, Any], filename: str) -> str:

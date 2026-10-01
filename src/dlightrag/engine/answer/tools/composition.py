@@ -38,6 +38,7 @@ from dlightrag.engine.agent.tools.files import (
     write_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.answer.citations.utils import ATTACHMENT_WORKSPACE, WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
     ChildToolNarrowingError,
@@ -379,7 +380,7 @@ def _resource_rows(tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
         "file_path": str(metadata.get("title") or resource_id),
         "content": evidence_key if tool_name == "read" else result.text_content,
         "page_number": None,
-        "_workspace": "__web_search__" if source_type == "web_search" else "__attachment__",
+        "_workspace": WEB_SEARCH_WORKSPACE if source_type == "web_search" else ATTACHMENT_WORKSPACE,
         "_evidence_key": f"{tool_name}:{identity}",
         # This Tool's own result already carries the row's body — the excerpt's text
         # for `read`, its pixels for `view` — so the ledger labels it where it stands

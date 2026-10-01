@@ -1534,12 +1534,13 @@ class WorkspaceRag:
         raise ValueError("size must be 'full' or 'thumb'")
 
     async def _enrich_chunks_with_metadata(self, result: RetrievalResult) -> None:
-        """Inject document metadata into chunk contexts for LLM consumption.
+        """Inject document metadata into chunk contexts.
 
         Looks up each chunk's LightRAG full_doc_id in the metadata index and merges
-        any non-empty fields into the chunk's metadata dict. Fields are
-        dynamic: whatever the metadata index returns is included, minus
-        internal/system fields that add no value to the LLM context.
+        its non-empty descriptive fields, minus ``_SKIP``'s bookkeeping, and the
+        owner's custom metadata into the chunk's metadata dict. The source uri,
+        download locator and stored file name ride along for citations; the
+        evidence renderer keeps them from the model.
         """
         _SKIP = _INTERNAL_FIELDS | frozenset(
             {

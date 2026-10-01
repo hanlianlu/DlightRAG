@@ -15,6 +15,12 @@ _MM_LABEL_LINE_RE = re.compile(r"^\[(?:Image Name|Image Type|Table Name)\].*$", 
 _MATH_DELIMITER_RE = re.compile(r"\$|\\\(|\\\[")
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 
+# Workspaces an Answer request owns rather than a corpus holds: the open-web
+# passages it searched, and the resources it read or was given.
+WEB_SEARCH_WORKSPACE = "__web_search__"
+ATTACHMENT_WORKSPACE = "__attachment__"
+REQUEST_OWNED_WORKSPACES = frozenset({WEB_SEARCH_WORKSPACE, ATTACHMENT_WORKSPACE})
+
 
 def split_source_ids(source_id: Any) -> list[str]:
     """Split comma-separated source_id string into list of chunk IDs."""

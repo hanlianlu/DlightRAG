@@ -9,6 +9,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.answer.citations.contracts import SourceReference, SourceReferencePayload
+from dlightrag.engine.answer.citations.utils import REQUEST_OWNED_WORKSPACES
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,6 @@ _PUBLIC_CHUNK_KEYS = (
     "metadata",
     "_workspace",
 )
-_REQUEST_OWNED_WORKSPACES = frozenset({"__attachment__", "__web_search__"})
 
 
 class SourceDownloadInvariantError(RuntimeError):
@@ -49,7 +49,7 @@ class SourceDownloadLinkBuilder:
 def can_project_workspace_visual(workspace: str | None, allowed: set[str] | None) -> bool:
     """Allow trusted calls and request-owned evidence; otherwise require workspace ACL."""
     return allowed is None or bool(
-        workspace and (workspace in _REQUEST_OWNED_WORKSPACES or workspace in allowed)
+        workspace and (workspace in REQUEST_OWNED_WORKSPACES or workspace in allowed)
     )
 
 

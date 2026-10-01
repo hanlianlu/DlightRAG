@@ -448,13 +448,16 @@ async def test_search_tool_reports_partial_drop_and_provider_degradation() -> No
             degradation="Provider fallback: exa (timeout); used tavily.",
         )
 
+    evidence = EvidenceLedger()
     result = await web_search_tool(
         search=search,
-        evidence=EvidenceLedger(),
+        evidence=evidence,
         trace={"web_search_cost_dollars": 0.0},
         register_web_source=lambda _url: "res-1",
     ).execute(WebSearchInput(query="q"), recording_tool_runtime([]))
 
     assert "Dropped 2 malformed result(s)." in result.text_content
     assert "Provider fallback" in result.text_content
-    assert "[resource: res-1]" in result.text_content
+    # The page's handle is printed once, on its document heading, not listed here too.
+    assert "res-1" not in result.text_content
+    assert evidence.contexts["chunks"][0]["metadata"]["resource_id"] == "res-1"

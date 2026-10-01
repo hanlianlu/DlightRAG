@@ -223,7 +223,6 @@ async def _search_open_web(
     except Exception as exc:
         raise RuntimeError("open-web search failed") from exc
     rows = web_context_rows(result.hits)
-    readable_sources: dict[str, str] = {}
     if register_web_source is not None:
         resources_by_url: dict[str, str | None] = {}
         for row in rows:
@@ -234,7 +233,6 @@ async def _search_open_web(
             resource_id = resources_by_url[url]
             if resource_id is not None:
                 metadata["resource_id"] = resource_id
-                readable_sources.setdefault(resource_id, str(metadata.get("title") or "Source"))
     delta = evidence.add_rows(rows)
     await evidence.aflush_images()
     trace["web_search_cost_dollars"] += result.cost_dollars
@@ -245,11 +243,6 @@ async def _search_open_web(
         content += f" Dropped {result.dropped_results} malformed result(s)."
     if result.degradation:
         content += f"\n{result.degradation}"
-    if delta.new_chunks and readable_sources:
-        content += "\nResource handles:\n" + "\n".join(
-            f"- {title} [resource: {resource_id}]"
-            for resource_id, title in readable_sources.items()
-        )
     return ToolResult.text(content)
 
 

@@ -5,10 +5,9 @@ import hashlib
 from collections.abc import Iterable
 from typing import Any
 
+from dlightrag.engine.answer.citations.utils import WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.web_sources import WebSearchHit
 from dlightrag.engine.public_http import normalize_public_http_url_identity
-
-_WEB_SEARCH_WORKSPACE = "__web_search__"
 
 
 def web_context_rows(hits: Iterable[WebSearchHit]) -> list[dict[str, Any]]:
@@ -42,7 +41,7 @@ def web_context_rows(hits: Iterable[WebSearchHit]) -> list[dict[str, Any]]:
                 "file_path": hit.title,
                 "content": hit.text,
                 "page_number": None,
-                "_workspace": _WEB_SEARCH_WORKSPACE,
+                "_workspace": WEB_SEARCH_WORKSPACE,
                 "metadata": metadata,
             }
         )
