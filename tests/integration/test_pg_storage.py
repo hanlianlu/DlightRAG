@@ -1,25 +1,31 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Integration tests for PostgreSQL storage.
+"""Integration tests for PostgreSQL storage traversal and workspace discovery.
 
-Requires a running PostgreSQL instance with pgvector + AGE extensions.
-Skipped automatically if PostgreSQL is not available.
-
-Tests:
-- CorpusAdmin.list_workspaces() PG workspace discovery
+The suite owns a scratch database, as every other PostgreSQL suite does. It once
+wrote its rows into the configured database itself, which on a developer machine
+is the running deployment's.
 """
 
 import datetime
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
 
+import asyncpg
 import pytest
 
-from tests.support.pg import PG_CONN_KWARGS, skip_without_postgres
+from tests.support.pg import (
+    PG_CONN_KWARGS,
+    drop_database,
+    drop_scratch_database,
+    skip_without_postgres,
+)
 
 # Mark all tests in this module as integration
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.asyncio,
+    # One loop for the module: the scratch database fixture spans every test.
+    pytest.mark.asyncio(loop_scope="module"),
 ]
 
 
@@ -29,7 +35,29 @@ async def pg_check():
     await skip_without_postgres()
 
 
-_PG_CONN_KWARGS = PG_CONN_KWARGS
+_TEST_DB = "dlightrag_pg_storage_test"
+_EXTENSIONS = ("vector", "pg_textsearch", "pg_trgm")
+_PG_CONN_KWARGS: dict[str, Any] = {**PG_CONN_KWARGS, "database": _TEST_DB}
+
+
+@pytest.fixture(scope="module", autouse=True)
+async def _fresh_test_database() -> AsyncIterator[None]:
+    await skip_without_postgres()
+    admin = await asyncpg.connect(**PG_CONN_KWARGS)
+    try:
+        await drop_scratch_database(admin, _TEST_DB)
+        await admin.execute(f"CREATE DATABASE {_TEST_DB}")
+    finally:
+        await admin.close()
+    database = await asyncpg.connect(**_PG_CONN_KWARGS)
+    try:
+        for extension in _EXTENSIONS:
+            await database.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+    finally:
+        await database.close()
+    yield None
+    await drop_database(_TEST_DB)
+
 
 _TEST_WORKSPACE_ALPHA = "test_pg_storage_alpha"
 _TEST_WORKSPACE_BETA = "test_pg_storage_beta"
@@ -56,7 +84,7 @@ async def _open_workspace_registry() -> tuple[Any, Any]:
 
 
 async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None:
-    """Remove integration-test registry rows from the shared local database."""
+    """Remove this suite's registry rows, so each test starts from the same registry."""
     for workspace in (*_TEST_WORKSPACES, *extra_workspaces):
         await registry.delete(workspace)
 
@@ -421,11 +449,8 @@ class TestPGWorkspaceDiscovery:
             try:
                 workspaces = await corpora.list_workspaces()
 
-                # Should at least contain the default workspace
-                # (may contain more if table has data from other tests)
-                assert isinstance(workspaces, list)
-                assert len(workspaces) >= 1
-                assert "test_fallback_ws" in workspaces
+                # The suite's own database has no other workspace to list.
+                assert workspaces == ["test_fallback_ws"]
             finally:
                 await pg_pool.close()
         finally:
