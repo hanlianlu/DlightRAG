@@ -927,8 +927,8 @@ below. Stable answer error kinds are:
 
 - `CURRENT_IMAGES_UNSUPPORTED`, `CURRENT_IMAGE_LIMIT_EXCEEDED`,
   `ANSWER_IMAGE_CAPABILITY_UNKNOWN`, `ANSWER_INPUT_OVERFLOW`,
-  `MODEL_CAPABILITY_UNAVAILABLE`, `unsupported_resource_capability`,
-  `ANSWER_RESOURCE_INVALID`, and `UNSUPPORTED_ATTACHMENT_TYPE`;
+  `unsupported_resource_capability`, `ANSWER_RESOURCE_INVALID`, and
+  `UNSUPPORTED_ATTACHMENT_TYPE`;
 - `invalid_tool_configuration`, `unsupported_answer_mode`, `routing_failed`,
   `tool_contract_changed`, `run_abandoned`, and `run_execution_failed`; and
 - `ANSWER_STREAM_FAILED`.

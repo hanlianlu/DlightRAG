@@ -581,7 +581,6 @@ export const templates: Record<
   'errors.accessDenied': '你没有执行此操作的权限。',
   'errors.crossOriginRejected': '无法确认请求来源，请求已被拦截。请刷新页面后重试。',
   'errors.signInRequired': '会话已结束，请重新登录后继续。',
-  'errors.kind.MODEL_CAPABILITY_UNAVAILABLE': '所配置的查询模型无法使用该回答请求所需的工具。',
   'errors.kind.unsupported_resource_capability':
     '该请求所需的资源能力没有任何回答模式可以提供。',
   'errors.kind.ANSWER_RESOURCE_INVALID': '某个回答附件或链接未能被安全接收。',

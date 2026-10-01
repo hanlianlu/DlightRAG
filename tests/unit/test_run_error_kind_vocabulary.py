@@ -21,9 +21,6 @@ from dlightrag.engine.answer.errors import (
 
 _RUN_ERRORS = Path(__file__).resolve().parents[2] / "frontend/lib/run-errors.ts"
 
-#: Kinds no current path raises that Runs stored by earlier releases still carry.
-_HISTORICAL_KINDS = {"MODEL_CAPABILITY_UNAVAILABLE"}
-
 
 def _frontend_copy() -> dict[str, str]:
     source = _RUN_ERRORS.read_text(encoding="utf-8")
@@ -48,7 +45,7 @@ def _server_kinds() -> set[str]:
 
 
 def test_every_localized_kind_is_one_the_server_sends() -> None:
-    unknown = set(_frontend_copy()) - _server_kinds() - _HISTORICAL_KINDS
+    unknown = set(_frontend_copy()) - _server_kinds()
 
     assert unknown == set()
 
@@ -68,5 +65,5 @@ def test_localized_sources_are_the_server_messages_verbatim() -> None:
         answer_errors.CURRENT_IMAGES_UNSUPPORTED: image_capability._ERROR_IMAGES_NOT_SUPPORTED,
     }
 
-    assert set(copy) - _HISTORICAL_KINDS == set(expected)
+    assert set(copy) == set(expected)
     assert {kind: copy.get(kind) for kind in expected} == expected

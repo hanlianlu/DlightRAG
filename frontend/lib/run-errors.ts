@@ -3,13 +3,11 @@
 /** Localized projection of answer error kinds, stored on Runs or named by rejections.
 
  * The server taxonomy lives in `src/dlightrag/engine/answer/errors.py`.
- * MODEL_CAPABILITY_UNAVAILABLE is historical: no current path raises it, but
- * Runs stored by earlier releases still carry it. Kinds whose public message
- * is static map to catalog copy whose English source is the server message
- * without its bracketed marker; kinds with dynamic payloads
- * (filenames, limits, mode names) keep the server message so no detail is
- * lost. Unknown kinds and unmapped payloads fall back to the server message,
- * then to the localized generic failure copy.
+ * Kinds whose public message is static map to catalog copy whose English
+ * source is the server message without its bracketed marker; kinds with
+ * dynamic payloads (filenames, limits, mode names) keep the server message so
+ * no detail is lost. Unknown kinds and unmapped payloads fall back to the
+ * server message, then to the localized generic failure copy.
  * tests/unit/test_run_error_kind_vocabulary.py locks the keys to the server.
  */
 
@@ -28,8 +26,6 @@ export function answerErrorMessage(
 }
 
 const RUN_ERROR_KIND_COPY: Record<string, string> = {
-  MODEL_CAPABILITY_UNAVAILABLE:
-    'The configured query model cannot use the tools required for this answer request.',
   unsupported_resource_capability:
     'This request needs a resource capability that no answer mode can provide.',
   ANSWER_RESOURCE_INVALID: 'An answer attachment or link could not be admitted safely.',
