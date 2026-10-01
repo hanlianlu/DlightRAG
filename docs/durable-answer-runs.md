@@ -371,9 +371,9 @@ them in its Inventory before the handoff, so a crash cannot leave those files on
 with no observation of them; a recovered attempt copies the whole epoch instead and
 never re-materializes, because the Run may have written notes of its own. A numbered
 epoch that no Run row records is residue from an interrupted bind, and the next
-attempt discards it rather than copying it forward. A Session that predates the notes
-plane takes them from the parent Run it continues, once, best effort: the one last
-carry, after which the Session owns them. A Run with no recorded point —
+attempt discards it rather than copying it forward. Notes a Run registered before the
+notes plane existed are not migrated into it: an older development database is reset,
+so a Session's plane is the only place its memory lives. A Run with no recorded point —
 one that predates the recording, or whose worker died before it could write one —
 refuses a Fork with a remedy rather than branching from wherever the Lane has since
 moved.

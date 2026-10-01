@@ -23,7 +23,6 @@ from dlightrag.engine.answer.continuation_handles import (
     SESSION_NOTE_DIRECTORY,
     is_session_note,
 )
-from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
     DEFAULT_SESSION_NOTES_LIMITS,
     SESSION_NOTES_BUDGET_REFUSED,
@@ -110,49 +109,6 @@ def read_working_copy_notes(
         oversized=tuple(oversized),
         unreadable=tuple(unreadable),
     )
-
-
-def read_legacy_notes(
-    *,
-    source_workspace: Path | None,
-    records: Sequence[InventoryPathRecord],
-    limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
-) -> tuple[SessionNoteRecord, ...]:
-    """Read one legacy parent Run's registered notes for the one-time migration.
-
-    Best effort by decision: a note this cannot read is left behind rather than
-    refusing the Run that happens to bind first. A registered digest that disagrees
-    with the bytes on disk is a refusal for that note alone, because memory that never
-    verified is worse than memory that was not migrated.
-    """
-    if source_workspace is None:
-        return ()
-    selected: list[SessionNoteRecord] = []
-    total_bytes = 0
-    for record in records:
-        if record.entry_type != "file" or not is_session_note(record.relative_path):
-            continue
-        if len(record.relative_path) > MAX_SESSION_NOTE_PATH_CHARS:
-            continue
-        if len(selected) >= limits.max_count:
-            break
-        if total_bytes + record.size_bytes > limits.max_bytes:
-            break
-        path = source_workspace / record.relative_path
-        try:
-            if path.is_symlink() or not path.is_file():
-                continue
-            content = path.read_bytes()
-        except OSError:
-            logger.warning("Could not read the legacy Run note %s", record.relative_path)
-            continue
-        if len(content) != record.size_bytes:
-            continue
-        if record.content_digest is not None and note_digest(content) != record.content_digest:
-            continue
-        selected.append(SessionNoteRecord(relative_path=record.relative_path, content=content))
-        total_bytes += len(content)
-    return tuple(selected)
 
 
 def read_working_copy_safely(
@@ -316,7 +272,6 @@ __all__ = [
     "SessionNotesBinding",
     "SessionNotesPlane",
     "WorkingCopyNotes",
-    "read_legacy_notes",
     "read_working_copy_notes",
     "read_working_copy_or_reason",
     "read_working_copy_safely",

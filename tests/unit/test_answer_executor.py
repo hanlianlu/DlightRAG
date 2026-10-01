@@ -1654,30 +1654,12 @@ async def test_a_fork_whose_recorded_projection_is_not_the_one_there_refuses() -
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_plane_never_runs_the_one_last_carry(tmp_path: Path) -> None:
-    """An unreadable plane is not an empty one.
-
-    Promoting a legacy parent Run's notes into a plane whose state is unknown would
-    replace memory that may already be there, so the migration stands down, the Run
-    proceeds, and the reason is stated.
-    """
+async def test_an_unreadable_plane_costs_the_run_its_notes_and_states_why(tmp_path: Path) -> None:
+    """An unreadable plane is a degradation: the Run still binds its workspace."""
     from dlightrag.engine.answer.session_notes import SESSION_NOTES_PLANE_UNREADABLE
-    from dlightrag.engine.answer.workspace import epoch_paths, run_root
-    from dlightrag.engine.runtime.settlements import InventoryPathRecord
     from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
-    parent_id = "01930000-0000-7000-8000-0000000000d1"
     session_id = "01930000-0000-7000-8000-0000000000d2"
-    workspace_root = tmp_path / "ws"
-    parent_root = run_root(workspace_root, "owner", parent_id)
-    parent_workspace, _ = epoch_paths(parent_root, 1)
-    (parent_workspace / "notes").mkdir(parents=True)
-    (parent_workspace / "notes" / "plan.md").write_bytes(b"legacy")
-
-    async def load(_owner: str, run_id: str) -> tuple[InventoryPathRecord, ...]:
-        assert run_id == parent_id
-        return (InventoryPathRecord("notes/plan.md", "file", 6),)
-
     store = InMemoryWorkspaceStore()
 
     async def unreadable(*, session_id: str):
@@ -1685,9 +1667,8 @@ async def test_an_unreadable_plane_never_runs_the_one_last_carry(tmp_path: Path)
 
     store.load_session_notes = unreadable  # type: ignore[method-assign]
     executor = _executor()
-    executor._workspace_inventory_loader = load
     executor._execution_environment = "trust"
-    executor._workspace_root_setting = str(workspace_root)
+    executor._workspace_root_setting = str(tmp_path / "ws")
     executor._working_dir = str(tmp_path / "corpus")
     session = MagicMock(
         owner_id="owner",
@@ -1699,7 +1680,6 @@ async def test_an_unreadable_plane_never_runs_the_one_last_carry(tmp_path: Path)
 
     bound, binding, _plane = await executor._claim_run_workspace(
         session=cast(RunSession, session),
-        request=MagicMock(parent_run_id=parent_id),
         workspace_store=store,
         session_id=session_id,
     )
@@ -1707,7 +1687,6 @@ async def test_an_unreadable_plane_never_runs_the_one_last_carry(tmp_path: Path)
     assert bound is not None
     assert binding.records == ()
     assert binding.degraded_reason == SESSION_NOTES_PLANE_UNREADABLE
-    assert store.session_notes == {}
 
 
 @pytest.mark.asyncio
@@ -1750,7 +1729,6 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
 
     bound, binding, plane = await executor._claim_run_workspace(
         session=cast(RunSession, session),
-        request=MagicMock(parent_run_id=None),
         workspace_store=session.execution.workspace_store,
         session_id=session_id,
     )
@@ -1761,113 +1739,6 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
     assert binding.degraded_reason is None
     assert plane is not None
     assert (run_root(workspace_root, "owner", run_id) / "epochs" / "1").is_dir()
-
-
-@pytest.mark.asyncio
-async def test_the_one_last_carry_migrates_a_legacy_parent_runs_notes(
-    tmp_path: Path,
-) -> None:
-    """A Session that predates the plane takes its memory from the parent Run, once."""
-    import hashlib
-    import uuid
-
-    from dlightrag.engine.answer.workspace import epoch_paths, run_root
-    from dlightrag.engine.runtime.settlements import InventoryPathRecord
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore, SessionNoteRecord
-
-    parent_id = str(uuid.uuid4())
-    session_id = "01930000-0000-7000-8000-000000000001"
-    content = b"carried"
-    record = InventoryPathRecord(
-        relative_path="notes/plan.md",
-        entry_type="file",
-        size_bytes=len(content),
-        content_digest=hashlib.sha256(content).hexdigest(),
-    )
-    workspace, _ = epoch_paths(run_root(tmp_path, "owner", parent_id), 1)
-    (workspace / "notes").mkdir(parents=True)
-    (workspace / "notes" / "plan.md").write_bytes(content)
-
-    async def load(_owner: str, run_id: str) -> tuple[InventoryPathRecord, ...]:
-        assert run_id == parent_id
-        return (record,)
-
-    executor = _executor()
-    executor._workspace_inventory_loader = load
-    store = InMemoryWorkspaceStore()
-
-    notes = await executor._migrate_legacy_parent_notes(
-        session=cast(RunSession, MagicMock(owner_id="owner")),
-        request=MagicMock(parent_run_id=parent_id),
-        workspace_store=store,
-        session_id=session_id,
-        workspace_root=tmp_path,
-    )
-
-    expected = (SessionNoteRecord(relative_path="notes/plan.md", content=content),)
-    assert notes == expected
-    assert await store.load_session_notes(session_id=session_id) == expected
-
-
-@pytest.mark.asyncio
-async def test_a_gone_legacy_tree_migrates_nothing_and_does_not_fail(tmp_path: Path) -> None:
-    """The one last carry is best effort: a reclaimed parent tree leaves the note behind.
-
-    Nothing here refuses the Run that happened to bind first, which is the failure
-    the retired carry produced when a parent's Workspace had been reclaimed.
-    """
-    import uuid
-
-    from dlightrag.engine.runtime.settlements import InventoryPathRecord
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
-
-    record = InventoryPathRecord(relative_path="notes/plan.md", entry_type="file", size_bytes=1)
-
-    async def load(_owner: str, _run_id: str) -> tuple[InventoryPathRecord, ...]:
-        return (record,)
-
-    executor = _executor()
-    executor._workspace_inventory_loader = load
-    store = InMemoryWorkspaceStore()
-
-    notes = await executor._migrate_legacy_parent_notes(
-        session=cast(RunSession, MagicMock(owner_id="owner")),
-        request=MagicMock(parent_run_id=str(uuid.uuid4())),
-        workspace_store=store,
-        session_id="01930000-0000-7000-8000-000000000001",
-        workspace_root=tmp_path,
-    )
-
-    assert notes == ()
-    assert store.session_notes == {}
-
-
-@pytest.mark.asyncio
-async def test_a_parent_with_no_registered_notes_migrates_nothing() -> None:
-    from dlightrag.engine.runtime.settlements import InventoryPathRecord
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
-
-    async def load(_owner: str, _run_id: str) -> tuple[InventoryPathRecord, ...]:
-        return (
-            InventoryPathRecord(
-                relative_path="artifacts/report.md", entry_type="file", size_bytes=8
-            ),
-        )
-
-    executor = _executor()
-    executor._workspace_inventory_loader = load
-    store = InMemoryWorkspaceStore()
-
-    notes = await executor._migrate_legacy_parent_notes(
-        session=cast(RunSession, MagicMock(owner_id="owner")),
-        request=MagicMock(parent_run_id="parent"),
-        workspace_store=store,
-        session_id="01930000-0000-7000-8000-000000000001",
-        workspace_root=Path("/tmp"),
-    )
-
-    assert notes == ()
-    assert store.session_notes == {}
 
 
 def _pinned_models() -> tuple[Any, ...]:
@@ -1888,12 +1759,7 @@ def _pinned_models() -> tuple[Any, ...]:
     )
 
 
-def _fast_prepared_input(
-    *,
-    session_id: str,
-    parent_run_id: str | None = None,
-    profile_memory_enabled: bool = True,
-) -> dict[str, Any]:
+def _fast_prepared_input(*, session_id: str) -> dict[str, Any]:
     from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
     from dlightrag.engine.ai.catalog import current_model_catalog_revision
     from dlightrag.engine.answer.execution.input import AnswerRunInput
@@ -1908,12 +1774,10 @@ def _fast_prepared_input(
         resource_identity=new_resource_identity(),
         agent_session_id=session_id,
         agent_lane_id="main",
-        parent_run_id=parent_run_id,
-        continuation_kind="follow_up" if parent_run_id else None,
     )
     return {
         **run_input.as_request(),
-        "profile_memory_enabled": profile_memory_enabled,
+        "profile_memory_enabled": True,
         "profile_memory_epoch": 1,
         "auth_mode": "jwt",
     }
@@ -1922,8 +1786,6 @@ def _fast_prepared_input(
 async def _drive_fast_execute(
     *,
     tmp_path: Path,
-    parent_run_id: str | None = None,
-    parent_inventory: tuple[Any, ...] = (),
     memory: Any = None,
     memory_capability_current: Any = None,
     synthesizer: Any,
@@ -1935,41 +1797,15 @@ async def _drive_fast_execute(
     from dlightrag.engine.answer.execution.executor import OrchestratorRun
     from dlightrag.engine.answer.orchestration import AnswerOrchestrator
     from dlightrag.engine.answer.resources.models import TextWindowBudget
-    from dlightrag.engine.answer.workspace import bind_run_workspace
     from dlightrag.engine.runtime.progress import StageCommit
     from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
     session_id = SessionId.new()
     repository = MemoryAgentSessionRepository[Any](fencing_epoch=1)
     workspace_store = InMemoryWorkspaceStore()
-    child_id = str(uuid.uuid4())
     owner = "owner"
     workspace_root = tmp_path / "ws"
     (tmp_path / "corpus").mkdir()
-    if parent_run_id is not None:
-        parent_store = InMemoryWorkspaceStore()
-        parent = await bind_run_workspace(
-            workspace_root=workspace_root,
-            owner_id=owner,
-            run_id=parent_run_id,
-            fencing_epoch=1,
-            recorded_epoch=None,
-            store=parent_store,
-        )
-        if parent_inventory:
-            (parent.workspace / "notes").mkdir(exist_ok=True)
-            for record in parent_inventory:
-                path = parent.workspace / record.relative_path
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(b"the error was ECONNRESET on shard 4")
-            parent_store.inventory = list(parent_inventory)
-
-    async def load_parent_inventory(_owner: str, run_id: str) -> tuple[Any, ...]:
-        if parent_run_id is None:
-            return ()
-        assert run_id == parent_run_id
-        return parent_inventory
-
     orchestrator = AnswerOrchestrator(
         synthesizer=synthesizer,
         retrieve_knowledge_base=AsyncMock(
@@ -2000,11 +1836,10 @@ async def _drive_fast_execute(
     executor._execution_environment = "trust"
     executor._workspace_root_setting = str(workspace_root)
     executor._working_dir = str(tmp_path / "corpus")
-    executor._workspace_inventory_loader = load_parent_inventory
     executor._memory = memory
     executor._memory_capability_current = memory_capability_current
     executor.prepare_orchestrated_run = prepare  # type: ignore[method-assign]
-    payload = _fast_prepared_input(session_id=session_id.value, parent_run_id=parent_run_id)
+    payload = _fast_prepared_input(session_id=session_id.value)
     executor.validate_pinned_model_profiles = MagicMock(
         return_value={item.role: item.profile for item in _pinned_models()}
     )
@@ -2022,7 +1857,7 @@ async def _drive_fast_execute(
     )
     session = MagicMock(
         owner_id=owner,
-        run_id=child_id,
+        run_id=str(uuid.uuid4()),
         worker_id="worker-1",
         fencing_epoch=1,
         durable_progress_version=0,
@@ -2044,74 +1879,6 @@ async def _drive_fast_execute(
 
         composition.compose_research_tools = compose_tools  # type: ignore[method-assign]
     return executor, session, workspace_store
-
-
-@pytest.mark.asyncio
-async def test_a_fast_continuation_binds_the_parent_note_into_its_own_epoch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Research writes a note; Fast execute carries it; Fast's Inventory names it."""
-    import hashlib
-    import uuid
-
-    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-    from dlightrag.engine.answer.tools import composition as composition_module
-    from dlightrag.engine.answer.workspace import run_root
-    from dlightrag.engine.runtime.settlements import InventoryPathRecord
-
-    parent_id = str(uuid.uuid4())
-    payload = b"the error was ECONNRESET on shard 4"
-    digest = hashlib.sha256(payload).hexdigest()
-    record = InventoryPathRecord(
-        relative_path="notes/plan.md",
-        entry_type="file",
-        size_bytes=len(payload),
-        content_digest=digest,
-    )
-    captured: dict[str, Any] = {}
-
-    class _Synthesizer:
-        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
-            captured.update(kwargs)
-            raise RuntimeError("stop after Fast generation")
-
-    composed = MagicMock(side_effect=AssertionError("Fast must not compose tools"))
-    monkeypatch.setattr(composition_module, "compose_research_tools", composed)
-    executor, session, workspace_store = await _drive_fast_execute(
-        tmp_path=tmp_path,
-        parent_run_id=parent_id,
-        parent_inventory=(record,),
-        synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
-    )
-    with pytest.raises(RunExecutionError):
-        await executor.execute(cast(RunSession, session))
-
-    inventory = await workspace_store.load_inventory()
-    assert [item.relative_path for item in inventory] == ["notes/plan.md"]
-    assert inventory[0].content_digest == digest
-    child_root = run_root(tmp_path / "ws", "owner", session.run_id)
-    note = child_root / "epochs" / "1" / "workspace" / "notes" / "plan.md"
-    assert note.read_bytes() == payload
-    composed.assert_not_called()
-    from dlightrag.engine.answer.workspace import bind_run_workspace
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
-
-    # The next turn of the same Session binds the plane, not the parent's tree: the
-    # Fast Run migrated the legacy note into it, and the writer is gone by now.
-    session_id = str(session.prepared_input["agent_session_id"])
-    grandchild_store = InMemoryWorkspaceStore()
-    grandchild_store.session_notes = workspace_store.session_notes
-    grandchild = await bind_run_workspace(
-        workspace_root=tmp_path / "ws",
-        owner_id="owner",
-        run_id=str(uuid.uuid4()),
-        fencing_epoch=1,
-        recorded_epoch=None,
-        store=grandchild_store,
-        notes=await grandchild_store.load_session_notes(session_id=session_id),
-    )
-    assert (grandchild.workspace / "notes" / "plan.md").read_bytes() == payload
-    assert (await grandchild_store.load_inventory())[0].content_digest == digest
 
 
 @pytest.mark.asyncio

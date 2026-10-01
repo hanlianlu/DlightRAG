@@ -55,9 +55,16 @@ class TestCompactionSummary:
         encoded = summary.canonical_json()
         assert CompactionSummary.from_canonical_json(encoded) == summary
 
-    def test_rejects_unknown_fields(self) -> None:
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param('{"goal":"g","made_up":1}', id="unknown"),
+            pytest.param('{"goal":"g"}', id="missing"),
+        ],
+    )
+    def test_decodes_only_the_fields_it_encodes(self, payload: str) -> None:
         with pytest.raises(ValueError):
-            CompactionSummary.from_canonical_json('{"goal":"g","made_up":1}')
+            CompactionSummary.from_canonical_json(payload)
 
     def test_rejects_empty_goal(self) -> None:
         with pytest.raises(ValueError):
@@ -137,24 +144,6 @@ class TestCompactionSummary:
         assert rendered.index("Session notes") < rendered.index("next steps:")
         assert rendered.index("durable handles") < rendered.index("next steps:")
         assert rendered.index("Session notes") < rendered.index("durable handles")
-
-    def test_a_summary_without_run_notes_still_decodes(self) -> None:
-        """Adding a field is backward compatible; removing one is not.
-
-        A projection committed before this field existed carries no key for it, and
-        `from_canonical_json` rejects a key it does not know — so the decoder must
-        keep accepting the older payload while the field's default stands in.
-        """
-        legacy = (
-            '{"constraints_preferences":"","critical_context":"","decisions":"",'
-            '"durable_handles":null,"goal":"g","next_steps":"","paths":null,"progress":""}'
-        )
-
-        summary = CompactionSummary.from_canonical_json(legacy)
-
-        assert summary.goal == "g"
-        assert summary.run_notes is None
-        assert render_compaction_summary(legacy).endswith("goal: g")
 
     def test_render_states_durable_handles_as_a_re_readable_list(self) -> None:
         summary = CompactionSummary(

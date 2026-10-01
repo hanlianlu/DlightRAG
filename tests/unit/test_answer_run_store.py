@@ -65,21 +65,6 @@ class TestMigrationDeclaration:
             "dlightrag_corpus_mutation_windows",
         }
 
-    def test_generic_checkpoint_exists_without_legacy_progress_columns(self) -> None:
-        statements = _all_statements()
-        assert "checkpoint_json" in statements
-        assert "completed_turns" not in statements
-        assert "recovery_count" not in statements
-        assert "dlightrag_answer_artifacts" not in statements
-
-    def test_schema_enforces_one_durable_publication_kind(self) -> None:
-        statements = _all_statements()
-        assert "'published_artifact'" in statements
-        assert "write_model_published_artifact_kind" in {
-            migration.version for migration in RUN_MIGRATIONS
-        }
-        assert "DROP CONSTRAINT dlightrag_answer_run_artifacts_kind_check" in statements
-
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:
         statements = _all_statements()
         assert "REFERENCES dlightrag_blobs (owner_id, digest)" in statements
@@ -91,12 +76,6 @@ class TestMigrationDeclaration:
                     assert "IF NOT EXISTS" in statement, statement
                 elif statement.lstrip().startswith("CREATE INDEX"):
                     assert "IF NOT EXISTS" in statement, statement
-
-    def test_drops_legacy_ingest_tables_without_recreating_them(self) -> None:
-        statements = _all_statements()
-        assert "DROP TABLE IF EXISTS dlightrag_ingest_jobs" in statements
-        assert "CREATE TABLE IF NOT EXISTS dlightrag_ingest_jobs" not in statements
-        assert "web_conversation" not in statements
 
 
 class TestFixedRuntimeBounds:

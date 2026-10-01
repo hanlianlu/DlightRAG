@@ -872,12 +872,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_corpus_mutation_windows (
 )
 """
 
-_CLEAN_BREAK_CORPUS_MUTATIONS = """
-DROP TABLE IF EXISTS dlightrag_failed_retry_items CASCADE;
-DROP TABLE IF EXISTS dlightrag_ingest_counters CASCADE;
-DROP TABLE IF EXISTS dlightrag_ingest_jobs CASCADE;
-"""
-
 _CREATE_COMMITTED_SPILLS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
     owner_id        TEXT        NOT NULL,
@@ -1015,7 +1009,6 @@ RUN_MIGRATIONS = (
             "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS handoff_started_at TIMESTAMPTZ",
             "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS superseded_by_run_id UUID",
             _CREATE_CORPUS_MUTATION_WINDOWS,
-            _CLEAN_BREAK_CORPUS_MUTATIONS,
             _RUNS_MUTATION_FIFO_INDEX.ddl,
         ),
     ),

@@ -411,12 +411,7 @@ async def load_run_inventory(
     run_id: uuid.UUID,
     pool: ConnectionPool | None = None,
 ) -> tuple[InventoryPathRecord, ...]:
-    """Read one Run's Workspace Inventory without a live claim.
-
-    The one last carry reads a terminal parent Run's registered notes. That Run
-    holds no lease, and the fenced store's write methods would refuse it. The read
-    is the same query; it does not need the claim.
-    """
+    """Read one Run's Workspace Inventory without a live claim."""
     connection_pool = pool if pool is not None else await pg_pool.get()
     async with connection_pool.acquire() as conn:
         rows = await conn.fetch(

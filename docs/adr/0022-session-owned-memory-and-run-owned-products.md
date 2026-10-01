@@ -7,7 +7,9 @@ continuation carry is deleted, so memory stops depending on how a Run arrived.
 
 ## Status
 
-Accepted; implemented in 2.0.10.
+Accepted; implemented in 2.0.10. Amended: the one last carry is removed. Notes a Run
+registered before the notes plane existed are not migrated, because in this
+development stage an older database is reset rather than migrated.
 
 It supersedes four clauses, and each of those ADRs points here:
 
@@ -127,11 +129,10 @@ compatibility alias. The REST and MCP endpoints keep their own contracts; their
 callers name a Run explicitly and their copy already states what the call appends
 to.
 
-**Migration is one last carry.** When a Run with registered notes binds into a
-Session whose plane is empty, its registered notes are promoted into the plane
-once under the rules above, and the Session owns them from then on. A note whose
-Run row is already pruned is not recoverable, and the migration says so rather
-than pretending otherwise.
+**No migration.** A Run's registered notes from before the plane are not promoted
+into it. The decision first shipped a one last carry that did, once, for a Session
+whose plane was empty; it was removed, because a development database from before
+the plane is reset rather than migrated.
 
 ## Considered options
 
@@ -201,12 +202,13 @@ memory is last-settled-wins and a note is prose written to be read again rather 
 a record that must never be lost. Both ways of closing that window cost more than it
 is worth: promoting *inside* the settlement transaction would let a refused note
 poison that transaction and fail the Run, breaking the one guarantee this decision
-makes; requiring the Session fence on promotion would land the one-time migration a
-settlement later, since a continuation takes that fence in its first transaction,
-after bind. The reference harnesses set the proportion — neither fences a session at
-all (Pi is one process appending to one session file; DeepSeek's harness records one
-narrow in-log lock for compaction), because neither has multi-worker durable
-execution — and this decision adopts that proportion for memory while the fence keeps
+makes; requiring the Session fence on promotion would have landed the one-time
+migration, since removed, a settlement later, since a continuation takes that fence in
+its first transaction, after bind. The reference harnesses set the proportion —
+neither fences a session at all (Pi is one process appending to one session file;
+DeepSeek's harness records one narrow in-log lock for compaction), because neither
+has multi-worker durable execution — and this decision adopts that proportion for
+memory while the fence keeps
 doing what it is for on history. A fork reads memory that may have moved after
 its Fork Point. The plane's rows now outlive individual
 Runs, so its bounds and the degradation event are the only guards against memory

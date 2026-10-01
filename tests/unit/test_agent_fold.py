@@ -23,7 +23,11 @@ from dlightrag.engine.agent.session.fold import (
     select_compaction_boundary,
 )
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
+from dlightrag.engine.agent.session.projection import (
+    CompactionSummary,
+    ContextProjection,
+    projection_source_digest,
+)
 from dlightrag.engine.ai.messages import ToolCall
 
 
@@ -322,7 +326,7 @@ def test_projection_is_bound_to_physical_branch_entry_identity() -> None:
         covered_through_entry_id=user.entry_id,
         first_retained_entry_id=assistant.entry_id,
         source_digest=projection_source_digest([user.entry_id]),
-        summary='{"goal":"summary"}',
+        summary=CompactionSummary(goal="summary").canonical_json(),
     )
     messages = project_session_messages((user, assistant), projection)
     assert messages[-1]["content"] == "new"

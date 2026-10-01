@@ -51,9 +51,7 @@ class CompactionSummary:
     critical_context: str = ""
     paths: JsonValue | None = None
     durable_handles: JsonValue | None = None
-    #: The Run Notes the next turn may read again, by path. Added after
-    #: ``durable_handles`` and never removed: a summary field may only ever be
-    #: added, because decoding an older projection rejects fields it does not know.
+    #: The Run Notes the next turn may read again, by path.
     run_notes: JsonValue | None = None
 
     def __post_init__(self) -> None:
@@ -73,9 +71,14 @@ class CompactionSummary:
             raise ValueError("compaction summary is not canonical JSON") from exc
         if not isinstance(payload, dict):
             raise ValueError("compaction summary must be a JSON object")
-        unknown = set(payload) - set(COMPACTION_SUMMARY_FIELDS)
-        if unknown:
-            raise ValueError(f"compaction summary has unknown fields: {sorted(unknown)}")
+        # Decoded exactly as ``canonical_json`` encodes it: a summary that lacks a field
+        # was written by an older release, whose database is reset rather than read
+        # with defaults standing in.
+        if set(payload) != set(COMPACTION_SUMMARY_FIELDS):
+            raise ValueError(
+                f"compaction summary fields {sorted(payload)} are not "
+                f"{sorted(COMPACTION_SUMMARY_FIELDS)}"
+            )
         return cls(**payload)
 
 

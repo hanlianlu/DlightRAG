@@ -47,7 +47,11 @@ from dlightrag.engine.agent.session.operation import (
     ToolEffectPending,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
+from dlightrag.engine.agent.session.projection import (
+    CompactionSummary,
+    ContextProjection,
+    projection_source_digest,
+)
 from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
@@ -2285,7 +2289,7 @@ async def test_fast_compaction_recovers_between_projection_and_assistant(pool) -
         projection_id=ProjectionId.new(),
         covered_through_sequence=ancestry[1].sequence,
         first_retained_sequence=ancestry[2].sequence,
-        summary='{"goal":"old turn"}',
+        summary=CompactionSummary(goal="old turn").canonical_json(),
         covered_through_entry_id=ancestry[1].entry_id,
         first_retained_entry_id=ancestry[2].entry_id,
         source_digest=projection_source_digest([entry.entry_id for entry in ancestry[:2]]),

@@ -6,7 +6,6 @@ promotes its differences back; a plane that cannot take a note refuses that note
 never evicts an older one, and no failure here reaches the Run as a failure.
 """
 
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -16,10 +15,8 @@ from dlightrag.engine.answer.session_notes import (
     SESSION_NOTES_PROMOTION_REFUSED,
     SESSION_NOTES_WORKING_COPY_UNREADABLE,
     SessionNotesPlane,
-    read_legacy_notes,
     read_working_copy_notes,
 )
-from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import (
     SESSION_NOTES_BUDGET_REFUSED,
     SESSION_NOTES_LEASE_LOST,
@@ -35,15 +32,6 @@ SESSION = "01930000-0000-7000-8000-0000000000aa"
 
 def _note(path: str, content: bytes = b"value") -> SessionNoteRecord:
     return SessionNoteRecord(relative_path=path, content=content)
-
-
-def _inventory(relative_path: str, *, size_bytes: int = 1_240, digest: str | None = None):
-    return InventoryPathRecord(
-        relative_path=relative_path,
-        entry_type="file",
-        size_bytes=size_bytes,
-        content_digest=digest,
-    )
 
 
 def _plane_with(workspace: Path, store: InMemoryWorkspaceStore) -> SessionNotesPlane:
@@ -421,52 +409,3 @@ def test_an_unreadable_working_copy_degrades(tmp_path: Path, monkeypatch) -> Non
     import asyncio
 
     assert asyncio.run(plane.reconcile()) == SESSION_NOTES_WORKING_COPY_UNREADABLE
-
-
-# -- the one last carry --------------------------------------------------------
-
-
-def test_legacy_notes_are_read_only_when_their_bytes_still_match(tmp_path: Path) -> None:
-    """A registration that disagrees with the bytes is left behind, not migrated."""
-    source = tmp_path / "parent"
-    (source / "notes").mkdir(parents=True)
-    (source / "notes" / "plan.md").write_bytes(b"stale")
-    (source / "notes" / "findings.md").write_bytes(b"fresh")
-    (source / "notes" / "gone.md").write_bytes(b"x")
-
-    notes = read_legacy_notes(
-        source_workspace=source,
-        records=(
-            _inventory(
-                "notes/plan.md",
-                size_bytes=len(b"expected"),
-                digest=hashlib.sha256(b"expected").hexdigest(),
-            ),
-            _inventory(
-                "notes/findings.md",
-                size_bytes=len(b"fresh"),
-                digest=hashlib.sha256(b"fresh").hexdigest(),
-            ),
-            _inventory("notes/gone.md", size_bytes=0),
-            _inventory("artifacts/report.md", size_bytes=0),
-        ),
-    )
-
-    assert [note.relative_path for note in notes] == ["notes/findings.md"]
-
-
-def test_legacy_notes_stop_at_the_planes_own_bounds(tmp_path: Path) -> None:
-    source = tmp_path / "parent"
-    (source / "notes").mkdir(parents=True)
-    (source / "notes" / "big.md").write_bytes(b"x" * (SESSION_NOTES_MAX_BYTES + 1))
-
-    notes = read_legacy_notes(
-        source_workspace=source,
-        records=(_inventory("notes/big.md", size_bytes=SESSION_NOTES_MAX_BYTES + 1),),
-    )
-
-    assert notes == ()
-
-
-def test_legacy_notes_are_empty_without_a_source_tree(tmp_path: Path) -> None:
-    assert read_legacy_notes(source_workspace=None, records=(_inventory("notes/a.md"),)) == ()
