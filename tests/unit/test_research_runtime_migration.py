@@ -1783,9 +1783,11 @@ async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wir
     assert later["messages"][cut]["role"] == "assistant"
     assert later["messages"][cut]["content"] == "Revenue was 12 EUR."
     assert later["messages"][cut + 1] == {"role": "user", "content": "Why did it change?"}
-    # Each question is stated once, and what only the follow-up registered follows it.
-    for question in ("What was the 2023 revenue?", "Why did it change?"):
-        assert json.dumps(later["messages"]).count(question) == 1
+    # The follow-up's first request states each question and the earlier answer once:
+    # the Session fold is the only copy of the earlier turn, and what only the
+    # follow-up registered follows it.
+    for statement in ("What was the 2023 revenue?", "Revenue was 12 EUR.", "Why did it change?"):
+        assert json.dumps(later["messages"]).count(statement) == 1
     assert "[resource: res-1] report.pdf" in json.dumps(later["messages"][cut + 2 :])
 
 

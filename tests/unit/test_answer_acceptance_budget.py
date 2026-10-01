@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """One budget rule for the model calls an Answer Run is accepted and executed under."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -14,7 +14,6 @@ from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.capabilities import RequestModelContext
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
-from dlightrag.engine.answer.execution import acceptance
 from dlightrag.engine.answer.execution.acceptance import (
     FAST_GENERATION,
     FAST_PLANNER,
@@ -32,6 +31,7 @@ from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.mode import ModeResource
 from dlightrag.engine.answer.router import AnswerModeRouter
+from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.rag.retrieval import RetrievalOptions
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
 from tests.unit.conftest import answer_image_policy
@@ -100,17 +100,6 @@ def _budget(
         answer_image_policy=lambda _profile: answer_image_policy(),
         image_descriptions=("Image 1: a revenue chart",),
         memory_text=memory_text,
-    )
-
-
-def _signature(target: HistoryProjectionTarget) -> tuple[Any, ...]:
-    return (
-        target.name,
-        target.profile,
-        target.proactive_compaction,
-        target.require_full_dynamic_reserve,
-        target.measure_input([], ""),
-        target.measure_input(_HISTORY, "Earlier conversation: the filing is for 2025."),
     )
 
 
@@ -250,9 +239,15 @@ class _DistinctProfileCapabilities(_Capabilities):
         return models, None
 
 
-async def test_acceptance_and_execution_measure_a_fast_run_with_the_same_calls(
+async def test_acceptance_and_execution_measure_the_fast_requests_actually_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Each side's Fast targets measure the requests the planner and answer model get.
+
+    Both sides build their targets with one method, so comparing them with each other
+    proves nothing; each is compared with what the real planner and the real answer
+    synthesizer send for the same history, as the routing test does.
+    """
     built: list[tuple[HistoryProjectionTarget, ...]] = []
     fast_targets = AnswerHistoryBudget.fast_targets
 
@@ -312,13 +307,48 @@ async def test_acceptance_and_execution_measure_a_fast_run_with_the_same_calls(
         pinned_models=accepted.pinned_models,
     )
 
+    summary = "Earlier conversation: the filing is for 2025."
+    # The owner's standing memory block is what both sides reserve for generation.
+    memory = _worst_case_recall_block(prepared)
+    assert memory
+    planner_sent: list[list[dict[str, Any]]] = []
+
+    async def planner_model(**kwargs: Any) -> str:
+        planner_sent.append(kwargs["messages"])
+        return '{"standalone_query": "Summarize the filing", "filters": {}}'
+
+    await RetrievalPlanner(llm_func=planner_model, model_profile=pinned["extract"]).plan(
+        accepted.query,
+        conversation_history=_HISTORY,
+        schema=dict(_SCHEMA),
+        current_image_descriptions=list(accepted.image_descriptions) or None,
+    )
+    answer_sent: list[list[dict[str, Any]]] = []
+
+    async def answer_model(**kwargs: Any) -> AsyncIterator[str]:
+        answer_sent.append(kwargs["messages"])
+
+        async def tokens() -> AsyncIterator[str]:
+            yield "ok"
+
+        return tokens()
+
+    await AnswerSynthesizer(
+        image_policy=answer_image_policy(),
+        model_profile=pinned["query"],
+        model_func=answer_model,
+    ).generate_stream(
+        accepted.query,
+        {"chunks": [], "entities": [], "relationships": []},
+        conversation_history=PriorTurns(_HISTORY, episodic_summary=summary),
+        memory_text=memory,
+    )
+
     accepted_targets, executed_targets = built
     assert executed_targets is run.fast_history_targets
-    assert [_signature(target) for target in executed_targets] == [
-        _signature(target) for target in accepted_targets
-    ]
-    assert [target.name for target in executed_targets] == [FAST_PLANNER, FAST_GENERATION]
-    # Both sides reserved the owner's standing memory block.
-    assert executed_targets[1].measure_input([], "") > acceptance.AnswerSynthesizer(
-        image_policy=answer_image_policy(), model_profile=_QUERY
-    ).history_input_measure(accepted.query)([], "")
+    for planner, generation in (accepted_targets, executed_targets):
+        assert (planner.name, generation.name) == (FAST_PLANNER, FAST_GENERATION)
+        assert planner.measure_input(_HISTORY, summary) == estimate_messages_tokens(planner_sent[0])
+        assert generation.measure_input(_HISTORY, summary) == estimate_messages_tokens(
+            answer_sent[0]
+        )

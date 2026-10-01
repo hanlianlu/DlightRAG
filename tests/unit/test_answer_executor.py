@@ -1788,15 +1788,19 @@ async def _drive_fast_execute(
     tmp_path: Path,
     memory: Any = None,
     memory_capability_current: Any = None,
-    synthesizer: Any,
-    compose_tools: Any = None,
-) -> tuple[Any, Any, Any]:
+) -> tuple[Any, Any, list[dict[str, Any]]]:
+    """Execute one Fast Run up to its answer call, and return what that call received.
+
+    The answer model records its request and stops the Run, so every assertion is on
+    the request a provider would have been sent.
+    """
     import uuid
 
     from dlightrag.engine.agent.session.fold import PriorTurns
     from dlightrag.engine.answer.execution.executor import OrchestratorRun
     from dlightrag.engine.answer.orchestration import AnswerOrchestrator
     from dlightrag.engine.answer.resources.models import TextWindowBudget
+    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
     from dlightrag.engine.runtime.progress import StageCommit
     from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
@@ -1806,8 +1810,18 @@ async def _drive_fast_execute(
     owner = "owner"
     workspace_root = tmp_path / "ws"
     (tmp_path / "corpus").mkdir()
+    sent: list[dict[str, Any]] = []
+
+    async def answer_model(**kwargs: Any) -> Any:
+        sent.append(kwargs)
+        raise RuntimeError("stop after the Fast request")
+
     orchestrator = AnswerOrchestrator(
-        synthesizer=synthesizer,
+        synthesizer=AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=ModelProfile(context_window_tokens=1_000_000),
+            model_func=answer_model,
+        ),
         retrieve_knowledge_base=AsyncMock(
             return_value=MagicMock(
                 contexts={"chunks": [], "entities": [], "relationships": []},
@@ -1874,20 +1888,15 @@ async def _drive_fast_execute(
     session.execution.progress_store = progress
     session.execution.workspace_store = workspace_store
     session.execution.fencing_epoch = 1
-    if compose_tools is not None:
-        import dlightrag.engine.answer.tools.composition as composition
-
-        composition.compose_research_tools = compose_tools  # type: ignore[method-assign]
-    return executor, session, workspace_store
+    return executor, session, sent
 
 
 @pytest.mark.asyncio
-async def test_fast_receives_recalled_profile_memory(tmp_path: Path) -> None:
+async def test_fast_sends_recalled_profile_memory_and_no_tools(tmp_path: Path) -> None:
     from dlightrag_memory.memory import RecallResult
     from dlightrag_memory.models import MemoryProvenance, MemoryRecord
 
     from dlightrag.engine.answer.memory import render_auto_recall
-    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 
     record = MemoryRecord(
         owner_id="owner",
@@ -1896,56 +1905,43 @@ async def test_fast_receives_recalled_profile_memory(tmp_path: Path) -> None:
         body="prefers short answers",
         provenance=MemoryProvenance(origin_kind="answer_run", origin_id="origin", run_id="origin"),
     )
-    captured: dict[str, Any] = {}
 
     class _Memory:
         async def recall(self, **_kwargs: Any) -> RecallResult:
             return RecallResult(records=(record,), strategy="test", content_chars=len(record.body))
 
-    class _Synthesizer:
-        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
-            captured.update(kwargs)
-            raise RuntimeError("stop after Fast generation")
-
-    executor, session, _store = await _drive_fast_execute(
-        tmp_path=tmp_path,
-        memory=_Memory(),
-        synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
-    )
+    executor, session, sent = await _drive_fast_execute(tmp_path=tmp_path, memory=_Memory())
     with pytest.raises(RunExecutionError):
         await executor.execute(cast(RunSession, session))
-    assert captured["memory_text"] == render_auto_recall((record,))
+
+    (request,) = sent
+    # Fast composes no tools, so its one answer call offers the model none.
+    assert "tools" not in request
+    # The recalled block rides last, after the request it must not outrank.
+    assert request["messages"][-1] == {"role": "user", "content": render_auto_recall((record,))}
 
 
 @pytest.mark.asyncio
 async def test_fast_recall_is_suppressed_when_memory_capability_is_disabled(
     tmp_path: Path,
 ) -> None:
-    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-
-    captured: dict[str, Any] = {}
-
     class _Memory:
         async def recall(self, **_kwargs: Any) -> Any:
             raise AssertionError("disabled capability must not recall")
 
-    class _Synthesizer:
-        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
-            captured.update(kwargs)
-            raise RuntimeError("stop after Fast generation")
-
     async def disabled(**_kwargs: Any) -> bool:
         return False
 
-    executor, session, _store = await _drive_fast_execute(
+    executor, session, sent = await _drive_fast_execute(
         tmp_path=tmp_path,
         memory=_Memory(),
         memory_capability_current=disabled,
-        synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
     )
     with pytest.raises(RunExecutionError):
         await executor.execute(cast(RunSession, session))
-    assert captured.get("memory_text") == ""
+
+    (request,) = sent
+    assert not any("Remembered about this owner" in str(m["content"]) for m in request["messages"])
 
 
 def test_the_reserved_recall_block_mirrors_the_gates_that_allow_recall() -> None:
