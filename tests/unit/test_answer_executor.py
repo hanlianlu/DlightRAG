@@ -153,6 +153,150 @@ async def test_a_fork_whose_point_cannot_be_resolved_refuses_instead_of_using_th
     assert remedy in raised.value.public_message
 
 
+async def _compact_lane(
+    repository: MemoryAgentSessionRepository[None],
+    session_id: SessionId,
+    lane_id: LaneId,
+    goal: str,
+) -> Any:
+    """Commit one compaction covering a Lane's head, as Fast and Research commit one."""
+    from datetime import UTC
+    from datetime import datetime as moment
+
+    from dlightrag.engine.agent.session.entries import CompactionEntry
+    from dlightrag.engine.agent.session.projection import (
+        CompactionSummary,
+        ContextProjection,
+        projection_source_digest,
+    )
+    from dlightrag.engine.agent.session.registers import LaneHead
+
+    snapshot = await repository.load(session_id)
+    ancestry = snapshot.tree.ancestry(lane_id)
+    last = ancestry[-1]
+    head = snapshot.tree.lane(lane_id).head
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=last.sequence + 1,
+        covered_through_sequence=last.sequence,
+        summary=CompactionSummary(goal=goal).canonical_json(),
+        covered_through_entry_id=last.entry_id,
+        first_retained_entry_id=None,
+        source_digest=projection_source_digest(
+            [entry.entry_id for entry in ancestry if not isinstance(entry, CompactionEntry)]
+        ),
+    )
+    entry = CompactionEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=moment.now(UTC),
+        parent_entry_id=last.entry_id,
+        projection_id=projection.projection_id,
+        summary=projection.summary,
+        covered_through_sequence=projection.covered_through_sequence,
+        first_retained_sequence=projection.first_retained_sequence,
+        covered_through_entry_id=projection.covered_through_entry_id,
+        first_retained_entry_id=None,
+        source_digest=projection.source_digest,
+    )
+    register = ContextProjectionRegister(lane_id, projection)
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[entry],
+            register_writes=[SetRegister(LaneHead(lane_id, entry.entry_id)), SetRegister(register)],
+            expectations=[
+                RegisterExpectation(head.ref, head.sequence),
+                RegisterExpectation(register.ref, None),
+            ],
+        ),
+    )
+    return projection
+
+
+@pytest.mark.asyncio
+async def test_a_fork_refuses_a_projection_its_point_never_had() -> None:
+    """The recorded projection must be the one in force at the recorded head.
+
+    A point naming another branch's projection would seed the Fork with a summary of
+    turns its ancestry never held, so it is refused; the point's own one resolves.
+    """
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+
+    async def no_result() -> None:
+        return None
+
+    host = FastSessionHost(
+        repository=repository,
+        initial_snapshot=await repository.load(session_id),
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+
+    async def turn(name: str) -> None:
+        await host.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id=name,
+            idempotency_key=f"{name}-key",
+            content=f"{name} question",
+        )
+        await host.complete(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id=name,
+            content=f"{name} answer",
+        )
+
+    await turn("one")
+    other = LaneId.new()
+    await ensure_session_lane(
+        repository=repository,
+        snapshot=await repository.load(session_id),
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=other,
+        source_lane_id=LaneId.main(),
+    )
+    foreign = await _compact_lane(repository, session_id, other, "Another branch.")
+    own = await _compact_lane(repository, session_id, LaneId.main(), "This branch.")
+    await turn("two")
+    snapshot = await repository.load(session_id)
+    head = snapshot.tree.lane(LaneId.main()).head_entry_id
+    assert head is not None
+
+    async def resolve(recorded: Any) -> Any:
+        executor = _executor()
+        executor._store = MagicMock(
+            load_routing=AsyncMock(
+                return_value=_routing_record(
+                    session_id.value,
+                    fork_point_entry_id=head.value,
+                    fork_point_projection_id=recorded.projection_id.value,
+                )
+            )
+        )
+        request = SimpleNamespace(
+            parent_run_id="parent",
+            agent_session_id=session_id.value,
+            source_lane_id="main",
+        )
+        return await executor._resolve_fork_seed(
+            cast(RunSession, MagicMock(owner_id="owner", run_id="child")),
+            cast(Any, request),
+            snapshot,
+        )
+
+    seeded_head, seeded = await resolve(own)
+    assert seeded_head == head
+    assert seeded is not None and seeded.projection_id == own.projection_id
+    with pytest.raises(RunExecutionError) as raised:
+        await resolve(foreign)
+    assert raised.value.kind == "fork_point_stale"
+
+
 def _routing_record(
     session_id: str,
     *,
@@ -1694,20 +1838,24 @@ async def _drive_fast_execute(
     tmp_path: Path,
     memory: Any = None,
     memory_capability_current: Any = None,
+    contexts: Mapping[str, Any] | None = None,
+    answer: str | None = None,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
-    """Execute one Fast Run up to its answer call, and return what that call received.
+    """Execute one Fast Run and return the requests its answer model received.
 
-    The answer model records its request and stops the Run, so every assertion is on
-    the request a provider would have been sent.
+    Retrieval returns ``contexts``. The answer model records each request; given an
+    ``answer`` it streams it and the Run settles its result, and without one it stops
+    the Run, so the assertion is on the request a provider would have been sent.
     """
     import uuid
+    from collections.abc import AsyncIterator
 
     from dlightrag.engine.agent.session.fold import PriorTurns
     from dlightrag.engine.answer.execution.executor import OrchestratorRun
     from dlightrag.engine.answer.orchestration import AnswerOrchestrator
     from dlightrag.engine.answer.resources.models import TextWindowBudget
     from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-    from dlightrag.engine.runtime.progress import StageCommit
+    from dlightrag.engine.runtime.progress import StageCommit, StageTerminalCommit
     from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
     session_id = SessionId.new()
@@ -1720,7 +1868,14 @@ async def _drive_fast_execute(
 
     async def answer_model(**kwargs: Any) -> Any:
         sent.append(kwargs)
-        raise RuntimeError("stop after the Fast request")
+        if answer is None:
+            raise RuntimeError("stop after the Fast request")
+        text = answer
+
+        async def tokens() -> AsyncIterator[str]:
+            yield text
+
+        return tokens()
 
     orchestrator = AnswerOrchestrator(
         synthesizer=AnswerSynthesizer(
@@ -1730,7 +1885,7 @@ async def _drive_fast_execute(
         ),
         retrieve_knowledge_base=AsyncMock(
             return_value=MagicMock(
-                contexts={"chunks": [], "entities": [], "relationships": []},
+                contexts=contexts or {"chunks": [], "entities": [], "relationships": []},
                 trace={},
             )
         ),
@@ -1766,6 +1921,8 @@ async def _drive_fast_execute(
     executor._store.load_routing = AsyncMock(
         return_value=_routing_record(session_id.value, fork_point_entry_id=None)
     )
+    executor._store.list_artifact_attachments = AsyncMock(return_value=[])
+    executor._store.record_fork_point = AsyncMock(return_value=True)
     progress = MagicMock()
     progress.load_stage = AsyncMock(return_value=None)
     progress.settle_stage = AsyncMock(
@@ -1773,6 +1930,14 @@ async def _drive_fast_execute(
             progress_version=1,
             stage_intent_id=MagicMock(),
             evidence_count=0,
+        )
+    )
+    progress.settle_terminal = AsyncMock(
+        return_value=StageTerminalCommit(
+            progress_version=2,
+            stage_intent_id=MagicMock(),
+            status="succeeded",
+            terminal_event_sequence=1,
         )
     )
     session = MagicMock(
@@ -1848,6 +2013,60 @@ async def test_fast_recall_is_suppressed_when_memory_capability_is_disabled(
 
     (request,) = sent
     assert not any("Remembered about this owner" in str(m["content"]) for m in request["messages"])
+
+
+@pytest.mark.asyncio
+async def test_a_fast_answer_resolves_its_citations_to_the_documents_it_was_shown(
+    tmp_path: Path,
+) -> None:
+    """The stored answer resolves each marker against the numbers its request printed.
+
+    Retrieval numbers documents by how many chunks cite them, so here the first excerpt
+    is retrieval's document 2. Fast once labelled no excerpt when that order differed
+    from the request's, and resolved the answer's markers against retrieval's numbers.
+    """
+
+    def chunk(chunk_id: str, reference_id: str, name: str, content: str, page: int) -> dict:
+        return {
+            "chunk_id": chunk_id,
+            "reference_id": reference_id,
+            "file_path": f"/docs/{name}",
+            "content": content,
+            "page_number": page,
+            "_workspace": "default",
+            "metadata": {
+                "source_uri": f"local://default/{name}",
+                "source_download_locator": f"/docs/{name}",
+            },
+        }
+
+    executor, session, sent = await _drive_fast_execute(
+        tmp_path=tmp_path,
+        contexts={
+            "chunks": [
+                chunk("a1", "2", "report.pdf", "Revenue grew.", 3),
+                chunk("b1", "1", "other.pdf", "Other one.", 1),
+                chunk("b2", "1", "other.pdf", "Other two.", 2),
+            ],
+            "entities": [],
+            "relationships": [],
+        },
+        answer="Revenue grew [1-1], and the other report says two [2-2].",
+    )
+
+    await executor.execute(cast(RunSession, session))
+
+    (request,) = sent
+    shown = [
+        block["text"] for block in request["messages"][-1]["content"] if block["type"] == "text"
+    ]
+    assert "[1-1] report.pdf, Page 3\nRevenue grew." in shown
+    assert "[2-2] other.pdf, Page 2\nOther two." in shown
+    stored = session.execution.progress_store.settle_terminal.await_args.kwargs["result"]
+    assert stored["answer"] == "Revenue grew [1-1], and the other report says two [2-2]."
+    assert [
+        (source["id"], source["title"], source["cited_chunk_ids"]) for source in stored["sources"]
+    ] == [("1", "report.pdf", ["a1"]), ("2", "other.pdf", ["b2"])]
 
 
 @pytest.mark.parametrize(
