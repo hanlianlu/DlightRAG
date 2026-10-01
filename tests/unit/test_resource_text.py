@@ -1,10 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for direct-text detection, decoding, and structural windows."""
+"""Tests for direct-text detection, decoding, and the windows a read pages through."""
 
 import pytest
 
-from dlightrag.engine.answer.resources.models import ResourceDecodeError, TextWindowLocator
-from dlightrag.engine.answer.resources.text import build_text_windows, decode_text
+from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.answer.resources.formatting import format_resource_read
+from dlightrag.engine.answer.resources.models import (
+    ResourceDecodeError,
+    ResourceInput,
+    ResourceReadResult,
+    TextWindowLocator,
+)
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.resources.text import decode_text
 
 _WINDOW_TOKENS = 100
 
@@ -80,56 +88,59 @@ def test_empty_content_decodes_to_empty_string() -> None:
     assert decode_text(b"", declared_charset=None) == ""
 
 
-def test_single_window_has_structural_line_locator() -> None:
-    windows = build_text_windows("alpha\nbeta\ngamma", max_window_tokens=_WINDOW_TOKENS)
+async def _pages(text: str) -> list[ResourceReadResult]:
+    """Every page a model reads of ``text``, following each cursor to the end."""
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(ResourceInput(filename="notes.txt", content=text.encode()))
+        page = await registry.read(resource_id, max_window_tokens=_WINDOW_TOKENS)
+        pages = [page]
+        while page.next_cursor is not None:
+            page = await registry.read(
+                resource_id, cursor=page.next_cursor, max_window_tokens=_WINDOW_TOKENS
+            )
+            pages.append(page)
+    return pages
 
-    assert len(windows) == 1
-    locator, content = windows[0]
-    assert locator == TextWindowLocator(unit="line", start=1, end=3)
-    assert content == "alpha\nbeta\ngamma"
+
+def _locators(pages: list[ResourceReadResult]) -> list[TextWindowLocator]:
+    locators = [page.locator for page in pages]
+    assert all(locator is not None for locator in locators)
+    return [locator for locator in locators if locator is not None]
 
 
-def test_windows_split_above_observation_budget() -> None:
-    lines = [f"line {index} " + "x" * 30 for index in range(2000)]
+async def test_pages_above_one_window_name_contiguous_whole_lines() -> None:
+    lines = [f"line {index} " + "x" * 30 for index in range(200)]
     text = "\n".join(lines)
 
-    windows = build_text_windows(text, max_window_tokens=_WINDOW_TOKENS)
+    pages = await _pages(text)
 
-    assert len(windows) >= 2
-    # Every window stays within the per-observation token budget.
-    from dlightrag.engine.ai.tokens import estimate_tokens
+    assert len(pages) >= 2
+    # What the model is shown of each page fits the window, and the pages
+    # together are the text with nothing dropped or repeated.
+    assert all(estimate_tokens(format_resource_read(page)) <= _WINDOW_TOKENS for page in pages)
+    assert "".join(page.content for page in pages) == text
+    locators = _locators(pages)
+    assert locators[0].start == 1
+    assert locators[-1].end == len(lines)
+    for previous, current in zip(locators, locators[1:], strict=False):
+        assert current.start == previous.end + 1
+    assert all(locator.char_start is None for locator in locators)
 
-    for _, content in windows:
-        assert estimate_tokens(content) <= _WINDOW_TOKENS
-    # Windows are contiguous and cover every line exactly once.
-    assert windows[0][0].start == 1
-    assert windows[-1][0].end == len(lines)
-    rebuilt = "".join(content for _, content in windows)
-    assert rebuilt == text
 
-
-def test_single_line_over_budget_splits_into_subline_windows() -> None:
-    from dlightrag.engine.ai.tokens import estimate_tokens
-
+async def test_a_line_longer_than_a_page_reads_as_character_spans_of_that_line() -> None:
     # One physical line (no newline) far larger than a single observation budget.
     line = "x" * (_WINDOW_TOKENS * 8)
 
-    windows = build_text_windows(line, max_window_tokens=_WINDOW_TOKENS)
+    pages = await _pages(line)
 
-    assert len(windows) >= 2
-    for _, content in windows:
-        assert estimate_tokens(content) <= _WINDOW_TOKENS
-    # Character sub-windows reconstruct the original line with no drop/duplication.
-    assert "".join(content for _, content in windows) == line
-    # Locators stay truthful: every sub-window lives on the same single line and
-    # carries an explicit intra-line character span covering the whole line.
-    first_locator = windows[0][0]
-    assert first_locator.unit == "line"
-    assert first_locator.start == 1
-    assert first_locator.end == 1
-    assert first_locator.char_start == 1
-    assert windows[-1][0].char_end == len(line)
-    spans = [(loc.char_start, loc.char_end) for loc, _ in windows]
-    for (_, prev_end), (next_start, _) in zip(spans, spans[1:], strict=False):
-        assert prev_end is not None and next_start is not None
-        assert next_start == prev_end + 1
+    assert len(pages) >= 2
+    assert all(estimate_tokens(format_resource_read(page)) <= _WINDOW_TOKENS for page in pages)
+    assert "".join(page.content for page in pages) == line
+    # Every page names the one line and the characters of it that it holds.
+    locators = _locators(pages)
+    assert {(locator.start, locator.end) for locator in locators} == {(1, 1)}
+    assert locators[0].char_start == 1
+    assert locators[-1].char_end == len(line)
+    for previous, current in zip(locators, locators[1:], strict=False):
+        assert previous.char_end is not None
+        assert current.char_start == previous.char_end + 1

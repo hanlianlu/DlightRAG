@@ -1839,7 +1839,7 @@ def _build_cursor_plan(
     windows = build_text_windows(text, max_window_tokens=max_window_tokens)
     spans: list[tuple[int, int]] = []
     offset = 0
-    for _, chunk in windows:
+    for chunk in windows:
         end = offset + len(chunk)
         spans.append((offset, end))
         offset = end
@@ -1848,7 +1848,7 @@ def _build_cursor_plan(
         return tuple(spans)
     best = order[0]
     start, _end = spans[best]
-    match = windows[best][1].casefold().find(focus.casefold())
+    match = windows[best].casefold().find(focus.casefold())
     anchor = start if match < 0 else text.rfind("\n", 0, start + match) + 1
     return _rotate_plan(tuple(spans), anchor)
 
@@ -1935,7 +1935,7 @@ def _bounded_span_end(
     )
     if not windows:
         raise ValueError("cursor span contains no resource text")
-    return start + len(windows[0][1])
+    return start + len(windows[0])
 
 
 def _locator_for_span(text: str, start: int, end: int) -> TextWindowLocator:
@@ -1956,7 +1956,7 @@ def _locator_for_span(text: str, start: int, end: int) -> TextWindowLocator:
     return TextWindowLocator(unit="line", start=start_line, end=end_line)
 
 
-def _focus_order(windows: list[tuple[TextWindowLocator, str]], focus: str | None) -> list[int]:
+def _focus_order(windows: list[str], focus: str | None) -> list[int]:
     """Start at the best focus window, then cover the resource in physical order."""
     count = len(windows)
     if not focus or count <= 1:
@@ -1964,7 +1964,7 @@ def _focus_order(windows: list[tuple[TextWindowLocator, str]], focus: str | None
     query_terms = mixed_script_terms(focus)
     if not query_terms:
         return list(range(count))
-    documents = [mixed_script_terms(text) for _, text in windows]
+    documents = [mixed_script_terms(text) for text in windows]
     ranked = bm25_rank(query_terms, documents, limit=1)
     if not ranked:
         return list(range(count))

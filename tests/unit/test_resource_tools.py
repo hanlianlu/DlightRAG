@@ -254,25 +254,3 @@ async def test_conversion_cancellation_does_not_overlap_native_work_or_cleanup(m
         await second
     assert len(calls) == 1
     await registry.aclose()
-
-
-async def test_a_handle_from_an_earlier_turn_is_a_typed_refusal_with_a_remedy():
-    """Resource ids and cursors belong to the run that registered them.
-
-    A follow-up run replays an earlier turn's images as attachments but never
-    registers its handles, so a tool call that reuses one must fail as an ordinary
-    typed refusal that names the rule and the way forward -- not as an unknown
-    internal failure that invites a retry.
-    """
-    async with ResourceRegistry() as registry:
-        registry.register(ResourceInput(filename="plot.png", content=png()))
-        read, view = tools(registry)
-
-        for result in (
-            await call(view, resource_id="res-earlier-turn"),
-            await call(read, resource_id="res-earlier-turn"),
-        ):
-            assert result.is_error is True
-            assert "res-earlier-turn" in result.text_content
-            assert "earlier turn" in result.text_content
-            assert "Re-attach" in result.text_content

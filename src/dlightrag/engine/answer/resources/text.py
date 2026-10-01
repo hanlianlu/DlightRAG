@@ -12,7 +12,7 @@ from __future__ import annotations
 from charset_normalizer import from_bytes
 
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.engine.answer.resources.models import ResourceDecodeError, TextWindowLocator
+from dlightrag.engine.answer.resources.models import ResourceDecodeError
 
 # Bytes that legitimately appear in decoded single-/multi-byte text. High bytes
 # stay in the set so UTF-8 and Latin text are not misread as binary; the decoder
@@ -87,87 +87,49 @@ def _looks_binary(content: bytes) -> bool:
     return len(nontext) / len(sample) > _BINARY_RATIO
 
 
-def build_text_windows(
-    text: str,
-    *,
-    max_window_tokens: int,
-) -> list[tuple[TextWindowLocator, str]]:
+def build_text_windows(text: str, *, max_window_tokens: int) -> list[str]:
     """Split *text* into windows within the observation budget.
 
-    Each window's content is an exact contiguous slice of *text*; concatenating
-    every window's content in order reconstructs *text* with no drop or
-    duplication. Windows normally span whole lines. A single line larger than one
-    observation budget is split into character sub-windows whose locators carry
-    an explicit intra-line character span so the structural locator stays
-    truthful.
+    Each window is an exact contiguous slice of *text*; concatenating every window
+    in order reconstructs *text* with no drop or duplication. Windows normally span
+    whole lines. A single line larger than one observation budget is split into
+    character windows. They bound what a read returns; the read names the lines and
+    characters of the span it returns itself.
     """
     if max_window_tokens < 1:
         raise ValueError("max_window_tokens must be positive")
-    segments = text.splitlines(keepends=True)
-    if not segments:
-        return []
-
-    windows: list[tuple[TextWindowLocator, str]] = []
+    windows: list[str] = []
     pending: list[str] = []
     pending_tokens = 0
-    pending_start = 1
 
-    def flush(end_line: int) -> None:
+    def flush() -> None:
         nonlocal pending, pending_tokens
         if pending:
-            windows.append(
-                (
-                    TextWindowLocator(unit="line", start=pending_start, end=end_line),
-                    "".join(pending),
-                )
-            )
+            windows.append("".join(pending))
             pending = []
             pending_tokens = 0
 
-    for offset, segment in enumerate(segments):
-        line_no = offset + 1
+    for segment in text.splitlines(keepends=True):
         segment_tokens = max(1, estimate_tokens(segment))
         if segment_tokens > max_window_tokens:
-            flush(line_no - 1)
-            windows.extend(
-                _split_oversized_line(
-                    segment,
-                    line_no,
-                    max_window_tokens=max_window_tokens,
-                )
-            )
+            flush()
+            windows.extend(_split_oversized_line(segment, max_window_tokens=max_window_tokens))
             continue
         if pending and pending_tokens + segment_tokens > max_window_tokens:
-            flush(line_no - 1)
-        if not pending:
-            pending_start = line_no
+            flush()
         pending.append(segment)
         pending_tokens += segment_tokens
-    flush(len(segments))
+    flush()
     return windows
 
 
-def _split_oversized_line(
-    line: str,
-    line_no: int,
-    *,
-    max_window_tokens: int,
-) -> list[tuple[TextWindowLocator, str]]:
-    """Split one over-budget physical line into intra-line character windows."""
-    windows: list[tuple[TextWindowLocator, str]] = []
+def _split_oversized_line(line: str, *, max_window_tokens: int) -> list[str]:
+    """Split one over-budget physical line into character windows."""
+    windows: list[str] = []
     start = 0
-    length = len(line)
-    while start < length:
-        span = _fit_char_span(line, start, max_window_tokens=max_window_tokens)
-        end = start + span
-        locator = TextWindowLocator(
-            unit="line",
-            start=line_no,
-            end=line_no,
-            char_start=start + 1,
-            char_end=end,
-        )
-        windows.append((locator, line[start:end]))
+    while start < len(line):
+        end = start + _fit_char_span(line, start, max_window_tokens=max_window_tokens)
+        windows.append(line[start:end])
         start = end
     return windows
 

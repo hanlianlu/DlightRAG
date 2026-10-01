@@ -370,8 +370,14 @@ async def test_reading_a_document_the_earlier_run_never_converted_refuses(monkey
         # which can only view a target the registry can actually render.
 
 
-async def test_an_unauthorized_handle_keeps_the_typed_refusal() -> None:
-    lineage = Loader(None)
+@pytest.mark.parametrize("with_lineage", [True, False], ids=["lineage-refuses", "no-lineage"])
+async def test_an_unauthorized_handle_keeps_the_typed_refusal(with_lineage: bool) -> None:
+    """A handle this Run neither holds nor may adopt is refused, with the way forward.
+
+    Whether or not lineage is configured, the refusal names the handle and the rule,
+    so the model re-attaches the document instead of retrying an unknown failure.
+    """
+    lineage = Loader(None) if with_lineage else None
     async with ResourceRegistry() as registry:
         read, view = tools(registry, lineage=lineage)
         for result in (
@@ -379,7 +385,10 @@ async def test_an_unauthorized_handle_keeps_the_typed_refusal() -> None:
             await call(view, resource_id="res-foreign"),
         ):
             assert result.is_error is True
+            assert "res-foreign" in result.text_content
             assert "neither holds that handle nor can adopt it" in result.text_content
+            assert "Re-attach the document" in result.text_content
+    if lineage is not None:
         assert lineage.reads == 2
         assert lineage.recorded == []
 
