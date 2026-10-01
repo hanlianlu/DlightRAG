@@ -1268,12 +1268,10 @@ async def test_recovery_restores_an_adopted_resource_under_its_own_handle() -> N
     async with ResourceRegistry() as registry:
         await executor._restore_registry_fetches(registry, owner_id="owner", run_id="run")
 
-        adopted = registry.canonical_resource_id("res-earlier")
-        assert adopted.startswith("res-")
-        assert registry.canonical_resource_id("res-adopted") == adopted
-        assert registry.canonical_resource_id(adopted) == adopted
-        read = await registry.read(adopted, max_window_tokens=1000)
-        assert "Adopted text." in read.content
+        for handle in ("res-earlier", "res-adopted"):
+            read = await registry.read(handle, max_window_tokens=1000)
+            assert read.resource_id == "res-adopted"
+            assert "Adopted text." in read.content
 
 
 @pytest.mark.asyncio

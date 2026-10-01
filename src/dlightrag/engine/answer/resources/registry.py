@@ -521,12 +521,6 @@ class ResourceRegistry:
         for alias in (resource_id, *aliases):
             self._bind_alias(alias, canonical)
 
-    def canonical_resource_id(self, resource_id: str) -> str:
-        """Return the durable canonical handle for a known Resource alias."""
-        canonical = self._canonical_resource_id(resource_id)
-        self._require(canonical)
-        return canonical
-
     def allocate_fetched_ordinal(self, resource_id: str) -> int:
         """Return this fetched resource's durable replay slot, minting it once.
 

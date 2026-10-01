@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-import re
 import uuid
 from dataclasses import dataclass
 from functools import partial
@@ -34,6 +33,7 @@ from dlightrag.engine.answer.tools.resources import make_resource_reader, make_r
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
 from tests.support.pg import delete_runs
+from tests.support.resources import printed_handle
 from tests.tool_helpers import tool_runtime
 
 OWNER = "lineage-owner"
@@ -262,8 +262,8 @@ async def test_adopts_an_earlier_runs_document_and_its_stored_view() -> None:
                 registry, loaded, record=partial(loader.record, owner=owner)
             )
             assert adopted != "res-earlier-document"
-            assert registry.canonical_resource_id("res-earlier-document") == adopted
-            text = await registry.read(adopted, max_window_tokens=1000)
+            text = await registry.read("res-earlier-document", max_window_tokens=1000)
+            assert text.resource_id == adopted
             assert EARLIER_TEXT in text.content
 
         rows = await _run_rows(db, claim.run_id)
@@ -294,7 +294,8 @@ async def test_an_adoption_is_durable_before_its_call_settles() -> None:
             refused = await _call(view, session_id, resource_id="res-earlier-document")
             assert refused.is_error is True
             assert refused.effects.attached_resources == ()
-            canonical = registry.canonical_resource_id("res-earlier-document")
+            earlier = await registry.read("res-earlier-document", max_window_tokens=1000)
+            canonical = earlier.resource_id
 
         rows = await _run_rows(db, claim.run_id)
         adoption = next(row for row in rows if _kind(row) == LINEAGE_ADOPTION_KIND)
@@ -306,6 +307,7 @@ async def test_an_adoption_is_durable_before_its_call_settles() -> None:
         try:
             for handle in ("res-earlier-document", canonical):
                 text = await resumed.read(handle, max_window_tokens=1000)
+                assert text.resource_id == canonical
                 assert EARLIER_TEXT in text.content
         finally:
             await resumed.aclose()
@@ -416,8 +418,8 @@ async def test_two_handles_for_one_document_record_one_row_with_both_aliases() -
             two = await _call(read, session_id, resource_id="res-earlier-two")
             assert (one.is_error, two.is_error) == (False, False)
             assert EARLIER_TEXT in two.text_content, "the first view serves both handles"
-            canonical = registry.canonical_resource_id("res-earlier-one")
-            assert registry.canonical_resource_id("res-earlier-two") == canonical
+            canonical = printed_handle(one)
+            assert printed_handle(two) == canonical
 
         before = await _run_rows(db, claim.run_id)
         adoptions = [row for row in before if _kind(row) == LINEAGE_ADOPTION_KIND]
@@ -445,9 +447,9 @@ async def test_two_handles_for_one_document_record_one_row_with_both_aliases() -
         resumed = await _resumed(store, db, claim.run_id, resource_secret=run_secret)
         try:
             for handle in ("res-earlier-one", "res-earlier-two"):
-                assert resumed.canonical_resource_id(handle) == canonical
-            text = await resumed.read("res-earlier-two", max_window_tokens=1000)
-            assert EARLIER_TEXT in text.content
+                text = await resumed.read(handle, max_window_tokens=1000)
+                assert text.resource_id == canonical
+                assert EARLIER_TEXT in text.content
         finally:
             await resumed.aclose()
 
@@ -461,10 +463,9 @@ async def test_a_second_view_for_one_resource_rolls_the_whole_adoption_back() ->
         loader = _loader(store, db, session_id, claim)
         async with ResourceRegistry() as registry:
             read, _ = _tools(registry, loader)
-            assert (
-                await _call(read, session_id, resource_id="res-earlier-document")
-            ).is_error is False
-            canonical = registry.canonical_resource_id("res-earlier-document")
+            shown = await _call(read, session_id, resource_id="res-earlier-document")
+            assert shown.is_error is False
+            canonical = printed_handle(shown)
         before = await _run_rows(db, claim.run_id)
 
         loaded = await loader.load("res-earlier-document")
@@ -510,9 +511,7 @@ async def test_a_later_turn_adopts_through_the_handle_an_adoption_printed() -> N
             read, _ = _tools(registry, _loader(store, db, session_id, second))
             shown = await _call(read, session_id, resource_id="res-earlier-document")
         assert shown.is_error is False
-        printed = re.search(r"\[resource: (res-[0-9a-f]+)", shown.text_content)
-        assert printed is not None
-        handle = printed.group(1)
+        handle = printed_handle(shown)
         assert handle != "res-earlier-document"
 
         third = await _claimed_run(store)
@@ -521,7 +520,7 @@ async def test_a_later_turn_adopts_through_the_handle_an_adoption_printed() -> N
             result = await _call(read, session_id, resource_id=handle)
             assert result.is_error is False, result.text_content
             assert EARLIER_TEXT in result.text_content
-            canonical = registry.canonical_resource_id(handle)
+            canonical = printed_handle(result)
             assert canonical not in {handle, "res-earlier-document"}
 
         resumed = await _resumed(store, db, third.run_id)
@@ -550,13 +549,12 @@ async def test_a_later_turn_adopts_what_a_child_adopted_for_the_conversation() -
             by_child = await _call(read, str(uuid.uuid4()), resource_id="res-earlier-document")
             by_parent = await _call(read, session_id, resource_id="res-earlier-document")
         assert (by_child.is_error, by_parent.is_error) == (False, False)
-        printed = re.search(r"\[resource: (res-[0-9a-f]+)", by_parent.text_content)
-        assert printed is not None
+        handle = printed_handle(by_parent)
 
         third = await _claimed_run(store)
         async with ResourceRegistry() as registry:
             read, _ = _tools(registry, _loader(store, db, session_id, third))
-            result = await _call(read, session_id, resource_id=printed.group(1))
+            result = await _call(read, session_id, resource_id=handle)
         assert result.is_error is False, result.text_content
         assert EARLIER_TEXT in result.text_content
 

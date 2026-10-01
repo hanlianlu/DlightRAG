@@ -38,6 +38,7 @@ from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import RunFetchedResource
+from tests.support.resources import printed_handle
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
 
@@ -178,7 +179,7 @@ async def test_read_adopts_an_earlier_handle_and_reuses_its_stored_text(monkeypa
         assert _ADOPTED_TEXT in result.text_content
         assert lineage.reads == 1
 
-        canonical = registry.canonical_resource_id(EARLIER_HANDLE)
+        canonical = printed_handle(result)
         assert canonical != EARLIER_HANDLE
         (recorded,) = lineage.recorded
         adoption, *view = recorded
@@ -255,7 +256,7 @@ async def test_reading_a_published_product_decodes_it_without_a_stored_view() ->
         assert result.is_error is False
         assert "version one" in result.text_content
         assert lineage.reads == 1
-        assert registry.canonical_resource_id("artifact-431b1900963e6cd2f4a1") is not None
+        assert [entry.filename for entry in registry.manifest()] == ["analysis.md"]
         assert len(lineage.recorded) == 1
 
 
@@ -283,8 +284,7 @@ async def test_an_adoption_waits_for_the_calls_before_it_in_the_batch() -> None:
         await waiting.wait()
         assert lineage.reads == 1
         assert lineage.recorded == []
-        with pytest.raises(ResourceNotFoundError):
-            registry.canonical_resource_id("artifact-431b1900963e6cd2f4a1")
+        assert registry.manifest() == ()
 
         earlier_returned.set()
         result = await reading
@@ -428,8 +428,6 @@ async def test_an_unusable_stored_snapshot_keeps_refusing_instead_of_repairing(
         assert lineage.reads == 2, "each attempt asks the lineage rule again"
         assert lineage.recorded == []
         assert registry.manifest() == ()
-        with pytest.raises(ResourceNotFoundError):
-            registry.canonical_resource_id(EARLIER_HANDLE)
 
 
 async def test_adoption_past_the_attachment_allowance_refuses_as_a_tool_error() -> None:
@@ -447,8 +445,7 @@ async def test_adoption_past_the_attachment_allowance_refuses_as_a_tool_error() 
             assert result.is_error is True
             assert "too many attachments" in result.text_content
             assert "was not adopted" in result.text_content
-        with pytest.raises(ResourceNotFoundError):
-            registry.canonical_resource_id(EARLIER_HANDLE)
+        assert [entry.filename for entry in registry.manifest()] == ["own.txt"]
         assert lineage.recorded == []
 
 
@@ -488,7 +485,7 @@ async def test_bytes_this_run_can_convert_keep_this_runs_view(
         assert result.is_error is False
         assert "This Run's own extraction." in result.text_content
         assert _ADOPTED_TEXT not in result.text_content
-        assert registry.canonical_resource_id(EARLIER_HANDLE) == own
+        assert printed_handle(result) == own
         assert conversions == [loaded.filename], "nothing is converted a second time"
         (recorded,) = lineage.recorded
         assert [(row.resource_kind, row.resource_id, row.aliases) for row in recorded] == [
@@ -523,7 +520,9 @@ async def test_viewing_an_unconverted_adoption_never_opens_it_to_conversion(monk
         read, view = tools(registry, lineage=lineage)
         viewed = await call(view, resource_id=EARLIER_HANDLE)
         assert viewed.is_error is False
-        adopted = registry.canonical_resource_id(EARLIER_HANDLE)
+        (recorded,) = lineage.recorded
+        assert [row.resource_kind for row in recorded] == [LINEAGE_ADOPTION_KIND]
+        adopted = recorded[0].resource_id
 
         for handle in (EARLIER_HANDLE, adopted):
             refused = await call(read, resource_id=handle)
@@ -531,8 +530,7 @@ async def test_viewing_an_unconverted_adoption_never_opens_it_to_conversion(monk
             assert refused.is_error is True
             assert "never extracted text from scan.pdf" in refused.text_content
         assert lineage.reads == 1, "the alias answers the later calls"
-        (recorded,) = lineage.recorded
-        assert [row.resource_kind for row in recorded] == [LINEAGE_ADOPTION_KIND]
+        assert lineage.recorded == [recorded]
 
 
 class Loaders(Recorder):
@@ -660,8 +658,8 @@ async def test_two_earlier_handles_for_the_same_bytes_record_one_resource(
         two = await call(read, resource_id="res-earlier-two")
 
         assert (one.is_error, two.is_error) == (False, False)
-        canonical = registry.canonical_resource_id("res-earlier-one")
-        assert registry.canonical_resource_id("res-earlier-two") == canonical
+        canonical = printed_handle(one)
+        assert printed_handle(two) == canonical
         assert "View one." in two.text_content, "one Resource keeps the view it adopted first"
     first, second = lineage.recorded
     assert [row.resource_kind for row in second] == [LINEAGE_ADOPTION_KIND]
@@ -691,14 +689,14 @@ async def test_an_adoption_is_durable_before_its_retried_call_fails(monkeypatch)
         (recorded,) = lineage.recorded
         later = await call(read, resource_id=EARLIER_HANDLE)
         assert later.is_error is False
-        canonical = registry.canonical_resource_id(EARLIER_HANDLE)
+        canonical = printed_handle(later)
 
     resumed = await resumed_from(recorded, later.effects.attached_resources)
     try:
         # The resumed registry mints with another secret; the recorded handle holds.
-        assert resumed.canonical_resource_id(EARLIER_HANDLE) == canonical
         for handle in (EARLIER_HANDLE, canonical):
             result = await resumed.read(handle, max_window_tokens=1000)
+            assert result.resource_id == canonical
             assert "Stored text." in result.content
     finally:
         await resumed.aclose()
@@ -786,8 +784,6 @@ async def test_nothing_changes_here_until_the_adoption_is_recorded(failure) -> N
             await call(read, resource_id=EARLIER_HANDLE)
 
         assert registry.manifest() == ()
-        with pytest.raises(ResourceNotFoundError):
-            registry.canonical_resource_id(EARLIER_HANDLE)
 
         lineage.fails = None
         adopted = await call(read, resource_id=EARLIER_HANDLE)
@@ -818,7 +814,7 @@ async def test_a_failed_write_keeps_the_bytes_an_earlier_adoption_holds(monkeypa
         again = await call(read, resource_id="res-earlier-one")
         assert "View one." in again.text_content
         with pytest.raises(ResourceNotFoundError):
-            registry.canonical_resource_id("res-earlier-two")
+            await registry.read("res-earlier-two", max_window_tokens=1000)
 
 
 async def test_a_conflicting_adoption_is_refused_in_the_tools_own_words() -> None:
@@ -862,8 +858,8 @@ async def test_an_adoption_that_landed_despite_its_error_is_restored_without_ref
     resumed = await resumed_from(*lineage.recorded, max_attachments=1)
     try:
         for loaded, handle in zip((first, second), handles, strict=True):
-            assert resumed.canonical_resource_id(loaded.resource_id) == handle
             text = await resumed.read(loaded.resource_id, max_window_tokens=1000)
+            assert text.resource_id == handle
             assert loaded.content.decode().strip() in text.content
     finally:
         await resumed.aclose()
@@ -894,9 +890,10 @@ async def test_concurrent_adoptions_of_one_document_record_one_view(monkeypatch)
         *lineage.recorded, *(result.effects.attached_resources for result in results)
     )
     try:
-        canonical = resumed.canonical_resource_id("res-earlier-one")
-        assert resumed.canonical_resource_id("res-earlier-three") == canonical
-        assert text in (await resumed.read("res-earlier-three", max_window_tokens=1000)).content
+        one = await resumed.read("res-earlier-one", max_window_tokens=1000)
+        three = await resumed.read("res-earlier-three", max_window_tokens=1000)
+        assert three.resource_id == one.resource_id
+        assert text in three.content
     finally:
         await resumed.aclose()
 

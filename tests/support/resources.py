@@ -7,6 +7,7 @@ exercise them over a registry they built assemble them here.
 
 import base64
 import io
+import re
 from typing import Any
 
 from docx import Document
@@ -83,3 +84,10 @@ async def call(tool: AgentTool, **args: Any) -> ToolResult:
     return await tool.execute(
         tool.input_model.model_validate(args), tool_runtime(tool_name=tool.name)
     )
+
+
+def printed_handle(result: ToolResult) -> str:
+    """The Resource handle a read printed, which the model names from then on."""
+    printed = re.search(r"\[resource: (res-[0-9a-f]+)", result.text_content)
+    assert printed is not None, result.text_content
+    return printed.group(1)
