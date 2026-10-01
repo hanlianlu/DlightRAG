@@ -12,7 +12,7 @@ from tests.support.pg import PG_CONN_KWARGS
 
 
 def _enabled() -> bool:
-    return os.environ.get("DLIGHTRAG_RUN_LOAD", "").strip().lower() in {
+    return os.environ.get("RUN_LOAD_RUNTIME", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -23,7 +23,7 @@ def _enabled() -> bool:
 @pytest.fixture(autouse=True)
 async def require_opt_in_and_postgres() -> None:
     if not _enabled():
-        pytest.skip("set DLIGHTRAG_RUN_LOAD=1 to run the RunRuntime load campaign")
+        pytest.skip("set RUN_LOAD_RUNTIME=1 to run the RunRuntime load campaign")
     try:
         connection = await asyncpg.connect(**PG_CONN_KWARGS)
         await connection.fetchval("SELECT 1")

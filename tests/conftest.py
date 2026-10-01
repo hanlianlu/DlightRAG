@@ -204,14 +204,8 @@ def _answer_envelope(
 # The operator's .env, config.yaml, shell settings, and home are deployment inputs,
 # not product contracts: a test that reads them asserts whatever this checkout is
 # tuned to. Tests that mean to exercise a YAML config or an environment set their
-# own. Only the suite gates stay visible: they choose which suites run and where a
-# suite keeps its own server and artifacts, and none configures the product. They
-# are named here rather than derived, so a new client or product name never
-# becomes visible to tests by accident.
-_SUITE_GATES = frozenset({"DLIGHTRAG_RUN_E2E_PG18", "DLIGHTRAG_RUN_LOAD"})
-# The end-to-end suites' own inputs: the PG18 smoke's server, never the
-# application's database, and the browser suite's artifact folder.
-_SUITE_GATE_PREFIXES = ("DLIGHTRAG_E2E_",)
+# own. The suite gates (RUN_E2E_PG18, RUN_LOAD_RUNTIME, E2E_*) live outside the
+# DLIGHTRAG_ namespace, so hiding every DLIGHTRAG_* name leaves them visible.
 # The config.yaml files present when the run starts: this checkout's and the
 # invocation directory's.
 _STARTUP_CONFIG_YAMLS = frozenset(
@@ -230,18 +224,13 @@ def _yaml_config_ignoring_startup_files() -> Path | None:
     return found
 
 
-def _is_suite_gate(name: str) -> bool:
-    upper = name.upper()
-    return upper in _SUITE_GATES or upper.startswith(_SUITE_GATE_PREFIXES)
-
-
 def _hide_operator_inputs(patch: pytest.MonkeyPatch) -> None:
     """Hide the checkout's .env and config.yaml and the shell's DLIGHTRAG_* names."""
     patch.setenv("PYTHON_DOTENV_DISABLED", "1")  # LightRAG load_dotenv()s .env on import
     patch.setitem(DlightragConfig.model_config, "env_file", None)
     patch.setattr(config_sections, "_find_yaml_config", _yaml_config_ignoring_startup_files)
     for key in list(os.environ):
-        if key.upper().startswith("DLIGHTRAG_") and not _is_suite_gate(key):
+        if key.upper().startswith("DLIGHTRAG_"):
             patch.delenv(key, raising=False)
 
 

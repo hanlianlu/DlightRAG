@@ -61,21 +61,16 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://[::1]:*",
 ]
 _LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
-#: Non-config names that share the reserved namespace, accepted from the process
-#: environment and from a .env shared with clients and tests. Compose-only inputs
-#: never join them: they use COMPOSE_* instead.
+#: The HTTP client's names share the reserved namespace without being settings;
+#: the process environment and a .env shared with clients may carry them. Test
+#: suites and Compose-only inputs never join them: they use their own names.
 _AUXILIARY_ENV_NAMES = frozenset(
     {
-        # HTTP client adapter
         "DLIGHTRAG_API_TOKEN",
         "DLIGHTRAG_API_URL",
         "DLIGHTRAG_CLIENT_TIMEOUT",
-        # Test gates
-        "DLIGHTRAG_RUN_E2E_PG18",
-        "DLIGHTRAG_RUN_LOAD",
     }
 )
-_AUXILIARY_ENV_PREFIXES = ("DLIGHTRAG_E2E_",)
 #: Compose-only inputs that left the reserved namespace, named in the startup error.
 _RENAMED_ENV_NAMES = MappingProxyType(
     {
@@ -102,8 +97,7 @@ _RENAMED_ENV_NAMES = MappingProxyType(
 
 
 def _is_auxiliary_env_name(name: str) -> bool:
-    upper = name.upper()
-    return upper in _AUXILIARY_ENV_NAMES or upper.startswith(_AUXILIARY_ENV_PREFIXES)
+    return name.upper() in _AUXILIARY_ENV_NAMES
 
 
 def _unknown_environment(names: Sequence[str]) -> ValueError:
@@ -117,7 +111,7 @@ def _unknown_environment(names: Sequence[str]) -> ValueError:
 
 
 def _drop_auxiliary_dotenv_names(source: DotEnvSettingsSource) -> None:
-    """Let a .env shared with clients and tests carry their names; they are not settings.
+    """Let a .env shared with clients carry their names; they are not settings.
 
     Only this source is filtered: constructor values and config.yaml keep rejecting
     unknown keys. A renamed Compose input fails here with its replacement named.

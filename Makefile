@@ -165,12 +165,12 @@ runtime-faults: frontend-browser-install
 
 # Public default-storage convergence with fake models and the supported PG18 image.
 runtime-pg18:
-	DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e/test_pg18_lightrag_smoke.py -m e2e_pg18 -q --tb=short
+	RUN_E2E_PG18=1 uv run pytest tests/e2e/test_pg18_lightrag_smoke.py -m e2e_pg18 -q --tb=short
 
 # Expensive deterministic control-plane campaign; intentionally excluded from CI.
 load-runtime:
 	@set +e; \
-	PYTHONHASHSEED=0 DLIGHTRAG_RUN_LOAD=1 uv run pytest tests/load -m load_runtime -q -s --tb=short; \
+	PYTHONHASHSEED=0 RUN_LOAD_RUNTIME=1 uv run pytest tests/load -m load_runtime -q -s --tb=short; \
 	status=$$?; \
 	if [ $$status -ne 0 ]; then echo "RUN_RUNTIME_LOAD FAIL pytest_exit=$$status"; fi; \
 	exit $$status
@@ -198,5 +198,5 @@ test-e2e: frontend-build
 
 # Full + E2E: needs PostgreSQL 18; model calls are faked in tests
 ci-e2e: ci-full test-e2e
-	DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -v --tb=short -m e2e_pg18
+	RUN_E2E_PG18=1 uv run pytest tests/e2e -v --tb=short -m e2e_pg18
 	@echo "CI (e2e) passed."

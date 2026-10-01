@@ -2,7 +2,7 @@
 """Opt-in PostgreSQL 18 + LightRAG main-path smoke tests.
 
 Run with:
-    DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -m e2e_pg18 -q
+    RUN_E2E_PG18=1 uv run pytest tests/e2e -m e2e_pg18 -q
 """
 
 import asyncio

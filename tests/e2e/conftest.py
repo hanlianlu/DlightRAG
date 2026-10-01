@@ -899,7 +899,7 @@ def e2e_browser_context(
     """Create a context that retains diagnostics only for failed CI tests."""
     e2e_conversation_service.reset()
     context = browser.new_context(base_url=e2e_base_url)
-    artifact_dir_value = os.getenv("DLIGHTRAG_E2E_ARTIFACT_DIR")
+    artifact_dir_value = os.getenv("E2E_ARTIFACT_DIR")
     artifact_dir = Path(artifact_dir_value) if artifact_dir_value else None
     tracing_started = False
 

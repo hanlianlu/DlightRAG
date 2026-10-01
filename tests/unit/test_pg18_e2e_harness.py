@@ -16,11 +16,11 @@ def test_pg18_harness_connection_env_prefers_e2e_namespace() -> None:
     env = {
         "DLIGHTRAG_STORAGE__POSTGRES__HOST": "primary",
         "DLIGHTRAG_STORAGE__POSTGRES__PORT": "5432",
-        "DLIGHTRAG_E2E_POSTGRES_HOST": "localhost",
-        "DLIGHTRAG_E2E_POSTGRES_PORT": "55432",
-        "DLIGHTRAG_E2E_POSTGRES_USER": "e2e_user",
-        "DLIGHTRAG_E2E_POSTGRES_PASSWORD": "e2e_pass",
-        "DLIGHTRAG_E2E_POSTGRES_DATABASE": "e2e_db",
+        "E2E_PG18_POSTGRES_HOST": "localhost",
+        "E2E_PG18_POSTGRES_PORT": "55432",
+        "E2E_PG18_POSTGRES_USER": "e2e_user",
+        "E2E_PG18_POSTGRES_PASSWORD": "e2e_pass",
+        "E2E_PG18_POSTGRES_DATABASE": "e2e_db",
     }
 
     assert pg_conn_kwargs_from_env(env) == {

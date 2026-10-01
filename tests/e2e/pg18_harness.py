@@ -18,7 +18,7 @@ from dlightrag.engine.ai.fingerprints import ModelEndpointFingerprint
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from tests.support.pg import drop_scratch_database
 
-RUN_E2E_ENV = "DLIGHTRAG_RUN_E2E_PG18"
+RUN_E2E_ENV = "RUN_E2E_PG18"
 REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
 REQUIRED_PRELOAD_LIBRARIES = ("pg_textsearch", "pg_jieba")
 
@@ -34,7 +34,7 @@ def pg_conn_kwargs_from_env(env: Mapping[str, str] | None = None) -> dict[str, A
     source = os.environ if env is None else env
 
     def get(name: str, default: str) -> str:
-        return source.get(f"DLIGHTRAG_E2E_POSTGRES_{name}") or default
+        return source.get(f"E2E_PG18_POSTGRES_{name}") or default
 
     return {
         "host": get("HOST", "localhost"),
@@ -99,7 +99,7 @@ async def isolated_pg18_database(
     import asyncpg
 
     target_env = os.environ if env is None else env
-    database_env = "DLIGHTRAG_E2E_POSTGRES_DATABASE"
+    database_env = "E2E_PG18_POSTGRES_DATABASE"
     configured_kwargs = pg_conn_kwargs_from_env(target_env)
     admin_kwargs = {**configured_kwargs, "database": "postgres"}
     database = make_workspace_name("dlightrag_e2e_pg18")

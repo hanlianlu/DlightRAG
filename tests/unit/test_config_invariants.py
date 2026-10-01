@@ -561,8 +561,8 @@ def test_dotenv_may_carry_client_and_test_names(
     env_file.write_text(
         "DLIGHTRAG_API_TOKEN=client-token\n"
         "dlightrag_client_timeout=30\n"
-        "DLIGHTRAG_RUN_LOAD=1\n"
-        "DLIGHTRAG_E2E_ARTIFACT_DIR=/tmp/e2e\n",
+        "RUN_LOAD_RUNTIME=1\n"
+        "E2E_ARTIFACT_DIR=/tmp/e2e\n",
         encoding="utf-8",
     )
 

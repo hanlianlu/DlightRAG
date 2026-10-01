@@ -33,7 +33,7 @@ jobs:
           --health-timeout 10s
           --health-retries 10
     env:
-      DLIGHTRAG_RUN_E2E_PG18: '1'
+      RUN_E2E_PG18: '1'
       PGHOST: localhost
       PGPORT: 5432
       PGUSER: dlightrag
