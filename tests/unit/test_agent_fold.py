@@ -340,6 +340,17 @@ def test_working_projection_replays_signed_state_without_filtering() -> None:
     Gemini signs its thoughts. A projection that drops either produces a
     history no provider ever sent, so bounding is the compaction boundary's job.
     """
+
+    def signed_state(index: int) -> dict[str, object]:
+        if index % 2:
+            return {"reasoning_content": f"thinking {index}"}
+        return {
+            "interaction_steps": [
+                {"signature": f"sig-{index}", "type": "thought"},
+                {"arguments": {}, "id": f"c{index}", "name": "lookup", "type": "function_call"},
+            ]
+        }
+
     projection = WorkingContextProjection()
     for index in range(4):
         projection.record(
@@ -352,10 +363,9 @@ def test_working_projection_replays_signed_state_without_filtering() -> None:
                             "id": f"c{index}",
                             "type": "function",
                             "function": {"name": "lookup", "arguments": "{}"},
-                            "thought_signature": f"sig-{index}",
                         }
                     ],
-                    "provider_state": {"reasoning_content": f"thinking {index}"},
+                    "provider_state": signed_state(index),
                 },
                 {"role": "tool", "tool_call_id": f"c{index}", "content": "result"},
             ]
@@ -365,11 +375,8 @@ def test_working_projection_replays_signed_state_without_filtering() -> None:
         message for message in projection.messages() if message.get("role") == "assistant"
     ]
     assert [message["provider_state"] for message in assistants] == [
-        {"reasoning_content": f"thinking {index}"} for index in range(4)
+        signed_state(index) for index in range(4)
     ]
-    assert [
-        call["thought_signature"] for message in assistants for call in message["tool_calls"]
-    ] == [f"sig-{index}" for index in range(4)]
 
 
 def test_working_projection_round_trips_signed_state_through_canonical_json() -> None:
@@ -379,8 +386,10 @@ def test_working_projection_round_trips_signed_state_through_canonical_json() ->
                 {
                     "role": "assistant",
                     "content": "",
-                    "tool_calls": [{"id": "c1", "thought_signature": "sig"}],
-                    "provider_state": {"reasoning_content": "thinking"},
+                    "tool_calls": [{"id": "c1", "type": "function"}],
+                    "provider_state": {
+                        "interaction_steps": [{"signature": "sig", "type": "thought"}]
+                    },
                 }
             ]
         ]

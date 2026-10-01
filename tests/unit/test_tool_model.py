@@ -16,6 +16,9 @@ from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tool_model import ToolModel
+from tests.unit.test_gemini_interactions import _bind as _bind_gemini
+from tests.unit.test_gemini_interactions import _Gemini, _streamed_text
+from tests.unit.test_provider_attachment_contract import _HttpCapture, bind_mock_http
 
 
 async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> None:
@@ -258,58 +261,103 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
     }
 
 
-async def test_stream_text_reasoning_off_uses_profile_format_under_cap(
-    monkeypatch,
-) -> None:
-    provider = AsyncMock()
-    seen: dict[str, object] = {}
+def _wire_for(model: ToolModel, provider: str, api_family: str) -> Any:
+    """Replace only the HTTP transport under the model's own provider client."""
+    if provider == "gemini":
+        gemini = _Gemini(_streamed_text("summary"))
+        _bind_gemini(model._provider, gemini)
+        return gemini
+    capture = _HttpCapture("openai_response" if api_family == "response" else provider)
+    bind_mock_http(model._provider, capture.handler)
+    return capture
 
-    async def tokens():
-        yield "summary"
 
-    def stream_tool_text(*_args, **kwargs):
-        seen["kwargs"] = kwargs
-        return tokens()
+def _sent(wire: Any) -> dict[str, Any]:
+    return wire.bodies[-1] if isinstance(wire, _Gemini) else wire.body
 
-    provider.stream_tool_text = stream_tool_text
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.providers.get_provider",
-        lambda *_args, **_kwargs: provider,
-    )
+
+async def test_stream_text_turns_reasoning_off_under_an_explicit_cap() -> None:
     model = ToolModel(
         _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
     )
-
-    output = [
-        token
-        async for token in model.stream_text(
-            messages=[{"role": "user", "content": "summarize"}],
-            model_kwargs={"max_tokens": 4000},
-            reasoning="off",
-            model_profile=ModelProfile(
-                context_window_tokens=100_000,
-                max_output_tokens=64_000,
-                reasoning=ReasoningProfile(
-                    format="openrouter",
-                    levels=ReasoningLevels(
-                        off="none",
-                        minimal="minimal",
-                        low="low",
-                        medium="medium",
-                        high="high",
-                        xhigh=None,
-                        max=None,
+    wire = _wire_for(model, "openai", "chat_completion")
+    try:
+        output = [
+            token
+            async for token in model.stream_text(
+                messages=[{"role": "user", "content": "summarize"}],
+                model_kwargs={"max_tokens": 4000},
+                reasoning="off",
+                model_profile=ModelProfile(
+                    context_window_tokens=100_000,
+                    max_output_tokens=64_000,
+                    reasoning=ReasoningProfile(
+                        format="openrouter",
+                        levels=ReasoningLevels(
+                            off="none",
+                            minimal="minimal",
+                            low="low",
+                            medium="medium",
+                            high="high",
+                            xhigh=None,
+                            max=None,
+                        ),
                     ),
                 ),
-            ),
-        )
-    ]
+            )
+        ]
+    finally:
+        await model.aclose()
 
-    assert output == ["summary"]
-    # The explicit cap is the provider's output cap; the reasoning switch rides beside it.
-    seen_kwargs = cast(dict[str, Any], seen["kwargs"])
-    assert seen_kwargs["max_tokens"] == 4000
-    assert seen_kwargs["model_kwargs"] == {"reasoning": {"effort": "none"}}
+    assert "".join(output)
+    body = _sent(wire)
+    assert body["max_tokens"] == 4000
+    assert body["reasoning"] == {"effort": "none"}
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_family", "limit"),
+    [
+        pytest.param("openai", "chat_completion", ("max_tokens",), id="chat"),
+        pytest.param("openai", "response", ("max_output_tokens",), id="response"),
+        pytest.param("anthropic", "chat_completion", ("max_tokens",), id="anthropic"),
+        pytest.param(
+            "gemini", "interactions", ("generation_config", "max_output_tokens"), id="gemini"
+        ),
+    ],
+)
+async def test_compactions_output_cap_reaches_each_wire_as_its_output_limit(
+    provider: str, api_family: str, limit: tuple[str, ...]
+) -> None:
+    settings = ModelSettings.model_validate(
+        {
+            "provider": provider,
+            "model": "summary-model",
+            "api_key": "test-key",
+            "api_family": api_family,
+            "max_retries": 0,
+        }
+    )
+    model = ToolModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
+    wire = _wire_for(model, provider, api_family)
+    try:
+        output = [
+            token
+            async for token in model.stream_text(
+                messages=[{"role": "user", "content": "summarize"}],
+                model_kwargs={"max_tokens": 4000},
+            )
+        ]
+    finally:
+        await model.aclose()
+
+    assert "".join(output)
+    sent: Any = _sent(wire)
+    for key in limit:
+        sent = sent[key]
+    assert sent == 4000
 
 
 async def test_query_tool_model_retries_empty_final_stream_with_ordinary_kwargs(
