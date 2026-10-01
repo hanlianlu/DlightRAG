@@ -615,17 +615,10 @@ Each route has known limits:
 - HTML uses MarkItDown; AnyDoc 0.2.4 does not accept HTML.
 
 These are current routes, not permanent format bans, and neither PDFium
-rendering nor corpus ingestion depends on them. `scripts/anydoc_pilot.py`,
-`scripts/docx_integration_bench.py`, and `scripts/format_route_bench.py` rerun
-the PDF, DOCX, XLSX, and PPTX comparisons offline on generated fixtures.
-`docx_integration_bench.py` includes the second DOCX structured parse and the
-asset audit, and `format_route_bench.py` measures the production PDF and XLSX
-conversion with the Registry, effect, and recovery paths. No fixture there
-covers the CSV findings beyond a UTF-8 control. These offline small-sample costs
-are not service or Host/PG latency figures or platform-wide promises. A
-non-Latin PDF font sample is optional local-only input, and no proprietary font
-or PDF is bundled. See
-[the resource-reading contract](resource-reading.md#conversion-routes).
+rendering nor corpus ingestion depends on them.
+[The resource-reading contract](resource-reading.md#conversion-routes) names the
+scripts that rerun the route comparisons and what their small samples do not
+establish.
 
 When Exa or Tavily is configured, Research can search Web passages as peer
 evidence through one provider-neutral tool. Search and Extract use independently

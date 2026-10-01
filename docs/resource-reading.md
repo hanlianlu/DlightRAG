@@ -189,10 +189,14 @@ claim:
 
 These are current routes, not permanent bans. `scripts/anydoc_pilot.py`,
 `scripts/docx_integration_bench.py`, and `scripts/format_route_bench.py` rerun
-the PDF, DOCX, XLSX, and PPTX comparisons offline on generated fixtures. They
-carry only a UTF-8 CSV control, so the CSV findings above have no fixture there.
-Their small samples do not establish service latency, arbitrary-document
-completeness, or untested platforms.
+the PDF, DOCX, XLSX, and PPTX comparisons offline on generated fixtures.
+`docx_integration_bench.py` includes the second DOCX structured parse and the
+asset audit, and `format_route_bench.py` measures the production PDF and XLSX
+conversion through the Registry, effect, and recovery paths. A non-Latin PDF
+font sample is optional local-only input; no proprietary font or PDF is
+bundled. The scripts carry only a UTF-8 CSV control, so the CSV findings above
+have no fixture there. Their small samples do not establish service or
+Host/PostgreSQL latency, arbitrary-document completeness, or untested platforms.
 
 ## Conversion snapshots and recovery
 
