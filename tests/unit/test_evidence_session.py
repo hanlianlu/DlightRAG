@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.tools.web_search import web_context_rows
@@ -113,8 +114,7 @@ def test_rendering_labels_knowledge_base_and_open_web_separately() -> None:
     ledger.add_rows([_corpus_row()])
     ledger.add_rows(_web("current passage"))
 
-    blocks, _ = ledger.render_blocks()
-    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
+    _labels, text = ledger.take_admitted_text(budget_tokens=1_000_000)
 
     assert "## Knowledge-base evidence" in text
     assert "## Open-web evidence" in text
@@ -128,24 +128,12 @@ def test_rendering_keeps_a_web_source_resource_handle() -> None:
     ledger = EvidenceLedger()
     ledger.add_rows(_web("current passage", resource_id="res-web-page"))
 
-    blocks, _ = ledger.render_blocks()
-    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
+    _labels, text = ledger.take_admitted_text(budget_tokens=1_000_000)
 
     assert (
         "### Document [1]: Page A [resource: res-web-page] (source uri: https://example.com/a)"
-        in (text)
+        in text.splitlines()
     )
-
-
-def test_images_are_never_rendered_without_an_explicit_transport_budget() -> None:
-    row = _corpus_row()
-    row["image_data"] = "raw-unbounded-payload"
-    ledger = EvidenceLedger()
-    ledger.add_rows([row])
-
-    blocks, _ = ledger.render_blocks()
-
-    assert all(block["type"] != "image_url" for block in blocks)
 
 
 async def test_evidence_images_consume_the_single_supplied_budget_once(
@@ -180,8 +168,8 @@ async def test_evidence_images_consume_the_single_supplied_budget_once(
 
     ledger.add_rows([row])
     await ledger.aflush_images()
-    first, _ = ledger.render_blocks()
-    second, _ = ledger.render_blocks()
+    first = ledger.visual_blocks()
+    second = ledger.visual_blocks()
 
     assert len([block for block in first if block["type"] == "image_url"]) == 1
     assert len([block for block in second if block["type"] == "image_url"]) == 1
@@ -224,7 +212,7 @@ async def test_failed_evidence_image_worker_restores_pending_rows() -> None:
     with pytest.raises(RuntimeError, match="worker failed"):
         await ledger.aflush_images()
     await ledger.aflush_images()
-    blocks, _ = ledger.render_blocks()
+    blocks = ledger.visual_blocks()
 
     assert len([block for block in blocks if block["type"] == "image_url"]) == 1
 
@@ -267,7 +255,7 @@ async def test_cancelled_evidence_flush_restores_rows_before_join() -> None:
         with pytest.raises(asyncio.CancelledError):
             await flush
         await ledger.aflush_images()
-        blocks, _ = ledger.render_blocks()
+        blocks = ledger.visual_blocks()
 
         assert len([block for block in blocks if block["type"] == "image_url"]) == 1
         assert budget.count == 1
@@ -377,7 +365,8 @@ def test_child_evidence_adoption_is_citable_idempotent_and_records_lineage() -> 
         "child_session_id": "child-session",
         "parent_call_id": "spawn-call",
     }
-    assert parent.render_blocks()[1].get_chunk_id("1", 1) == "child-c1"
+    cited = finalize_answer("Finding [1-1].", parent.contexts).sources
+    assert [source.cited_chunk_ids for source in cited] == [["child-c1"]]
     # Lineage is the row's bookkeeping. It once printed in the heading, and every
     # later request replayed it from the frozen Tool result.
     _labels, text = parent.take_admitted_text(budget_tokens=1_000_000)

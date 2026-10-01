@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for dynamic contract chunk rendering in _build_excerpt_blocks."""
+"""Tests for citation-labelled evidence rendering: headings, labels and metadata."""
 
 from dataclasses import asdict
 
@@ -25,7 +25,9 @@ from dlightrag.engine.answer.web_sources import WebSearchHit
 def _heading_and_label(row: dict) -> tuple[str, str]:
     indexer = CitationIndexer()
     indexer.build_index([row])
-    heading, passage = build_excerpt_lane_blocks([row], indexer=indexer)
+    heading, passage = build_excerpt_lane_blocks(
+        [row], indexer=indexer, image_blocks_by_context_key={}
+    )
     return heading["text"], passage["text"].split("\n", 1)[0]
 
 

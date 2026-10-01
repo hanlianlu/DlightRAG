@@ -322,18 +322,21 @@ async def test_reprobe_updates_synthesizer_image_budget(
         model_profile=old_profile,
     )
 
-    before = synthesizer._prepare_prompt_context("question", contexts)
+    before = synthesizer._prepare_model_call("question", contexts)
     await coordinator.refresh_answer()
     refreshed_profile = coordinator.model_profile("query")
     refreshed = AnswerSynthesizer(
         image_policy=coordinator.answer_image_policy(refreshed_profile),
         model_profile=refreshed_profile,
     )
-    after = refreshed._prepare_prompt_context("question", contexts)
+    after = refreshed._prepare_model_call("question", contexts)
 
-    assert before.trace["answer_context_images_sent"] == 0
+    def images_sent(prepared: Any) -> int:
+        return sum(block["type"] == "image_url" for block in prepared.messages[-1]["content"])
+
+    assert images_sent(before) == 0
     assert refreshed is not synthesizer
-    assert after.trace["answer_context_images_sent"] == 1
+    assert images_sent(after) == 1
 
 
 @pytest.mark.parametrize(

@@ -447,16 +447,17 @@ system policy
 bounded prior text history (when supplied)
 current user message:
   User-attached images
-  User-attached document evidence, labeled [att-N-M]
-  Knowledge-base evidence, labeled [N-M]
-  Knowledge Graph Context
+  Knowledge graph evidence, naming its documents as [N] (when retrieved)
+  Knowledge-base evidence, each excerpt labeled [N-M]
+  Current time
   Question (last)
 ```
 
-Each citation marker is defined once on the evidence it labels. Attachment
-`att-N` identities exist only for that answer; they are not durable chunks or
-vectors. Retrieved document images are preceded by their text label and sent
-only when they fit.
+Each citation marker is defined once on the evidence it labels. Fast renders its
+evidence through the same Evidence ledger as Research: documents are numbered by
+first appearance, and the answer's citations resolve against the ledger's rows,
+so a marker always names the excerpt the model read under it. Retrieved document
+images are preceded by their text label and sent only when they fit.
 
 `top_k` controls KG breadth. `chunk_top_k` controls retrieved text/visual
 candidates. Answer retrieval over-fetches candidates, then packs them to the

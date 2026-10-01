@@ -422,19 +422,16 @@ class EvidenceLedger:
         return blocks
 
     def render_blocks(
-        self,
-        *,
-        image_blocks_by_context_key: dict[str, dict[str, Any]] | None = None,
+        self, image_blocks: Mapping[str, dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        """Render every accumulated source as full evidence blocks."""
+        """Render every admitted source as the whole evidence of one request: Fast's.
+
+        ``image_blocks`` are the pixels the caller's image budget admitted, keyed by
+        chunk; a row whose image is not among them renders its text alone.
+        """
         chunks = self.contexts["chunks"]
         indexer = CitationIndexer()
         indexer.build_index(chunks)
-        image_blocks = (
-            image_blocks_by_context_key
-            if image_blocks_by_context_key is not None
-            else self._image_blocks
-        )
         blocks: list[dict[str, Any]] = []
         kg = format_kg_context(self.contexts, indexer)
         if kg != _NO_KG:
@@ -446,7 +443,7 @@ class EvidenceLedger:
         self,
         chunks: list[ContextRow],
         indexer: CitationIndexer,
-        image_blocks: dict[str, dict[str, Any]],
+        image_blocks: Mapping[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Render chunk lanes only. Knowledge-graph evidence is a caller's choice.
 

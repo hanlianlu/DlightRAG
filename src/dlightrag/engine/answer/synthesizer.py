@@ -34,7 +34,7 @@ from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     CurrentImagePayloadError,
 )
-from dlightrag.engine.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
+from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.memory import standing_memory_message
 from dlightrag.engine.answer.prompts import answer_core, clock_line
@@ -49,12 +49,10 @@ NO_CONTEXT_DISCLAIMER = (
 
 
 @dataclass
-class _PreparedAnswerPrompt:
+class _PreparedEvidence:
     contexts: RetrievalContexts
-    user_prompt: str
-    kg_context: str
+    blocks: list[dict[str, Any]]
     indexer: CitationIndexer
-    chunk_image_blocks: dict[str, dict[str, Any]]
     trace: dict[str, Any]
 
 
@@ -111,25 +109,11 @@ class AnswerSynthesizer:
                 current_images,
                 image_budget=budget,
             )
-            empty_contexts: RetrievalContexts = {
-                "chunks": [],
-                "entities": [],
-                "relationships": [],
-            }
-            prepared = self._prepare_prompt_context(
-                query,
-                empty_contexts,
-                image_budget=budget,
-            )
-            excerpt_blocks = self._build_excerpt_blocks(
-                prepared.contexts,
-                prepared.indexer,
-                image_blocks_by_context_key=prepared.chunk_image_blocks,
-            )
+            # Zero evidence renders nothing: the request is its images, clock and question.
             messages = self._compose_user_messages(
                 answer_core(),
-                prepared.user_prompt,
-                excerpt_blocks,
+                query,
+                [],
                 current_image_blocks=current_image_blocks,
                 history_messages=history,
                 episodic_summary="\n\n".join(
@@ -238,44 +222,33 @@ class AnswerSynthesizer:
                 if image_budget is not None
                 else self._prepare_current_image_blocks(current_images, image_budget=budget)
             )
-            prepared = self._prepare_prompt_context(
-                query,
-                candidate_contexts,
-                image_budget=budget,
-            )
+            evidence = self._prepare_evidence(candidate_contexts, image_budget=budget)
             no_context = not any(
-                prepared.contexts.get(key) for key in ("chunks", "entities", "relationships")
+                evidence.contexts.get(key) for key in ("chunks", "entities", "relationships")
             )
             if no_context:
-                prepared.trace["answer_no_context"] = True
+                evidence.trace["answer_no_context"] = True
             self._apply_image_trace(
-                prepared.trace,
+                evidence.trace,
                 budget=budget,
                 current_image_count=len(current_images or ()),
             )
-            excerpt_blocks = self._build_excerpt_blocks(
-                prepared.contexts,
-                prepared.indexer,
-                image_blocks_by_context_key=prepared.chunk_image_blocks,
-            )
             messages = self._compose_user_messages(
                 answer_core(),
-                prepared.user_prompt,
-                excerpt_blocks,
+                query,
+                evidence.blocks,
                 current_image_blocks=current_image_blocks,
                 history_messages=history,
                 episodic_summary=prior_turns.episodic_summary,
                 memory_text=memory_text,
             )
-            evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
-                prepared.kg_context
-            )
+            evidence_tokens = estimate_content_tokens(evidence.blocks)
             total_tokens = estimate_messages_tokens(messages)
             call = _PreparedModelCall(
-                contexts=prepared.contexts,
+                contexts=evidence.contexts,
                 messages=messages,
-                indexer=prepared.indexer,
-                trace=prepared.trace,
+                indexer=evidence.indexer,
+                trace=evidence.trace,
                 no_context=no_context,
                 max_output_tokens=None,
             )
@@ -333,8 +306,8 @@ class AnswerSynthesizer:
     def _compose_user_messages(
         self,
         system_prompt: str,
-        user_prompt: str,
-        excerpt_blocks: list[dict[str, Any]],
+        query: str,
+        evidence_blocks: list[dict[str, Any]],
         *,
         current_image_blocks: list[dict[str, Any]] | None = None,
         history_messages: list[dict[str, Any]],
@@ -353,9 +326,9 @@ class AnswerSynthesizer:
         """
         content: list[dict[str, Any]] = []
         content.extend(current_image_blocks or ())
-        content.extend(excerpt_blocks)
+        content.extend(evidence_blocks)
         content.append({"type": "text", "text": clock_line(datetime.now(UTC))})
-        content.append({"type": "text", "text": user_prompt})
+        content.append({"type": "text", "text": f"## Question\n{query}"})
         contributions = [
             ContextContribution(
                 source="answer.system",
@@ -381,8 +354,8 @@ class AnswerSynthesizer:
             )
         contributions.append(
             ContextContribution(
-                source="answer.evidence" if excerpt_blocks else "answer.question",
-                authority="evidence" if excerpt_blocks else "user",
+                source="answer.evidence" if evidence_blocks else "answer.question",
+                authority="evidence" if evidence_blocks else "user",
                 messages=({"role": "user", "content": content},),
             )
         )
@@ -431,43 +404,29 @@ class AnswerSynthesizer:
         trace["answer_images_total"] = current_image_count + rag_context
         trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
-    def _prepare_prompt_context(
-        self,
-        query: str,
+    @staticmethod
+    def _prepare_evidence(
         contexts: RetrievalContexts,
         *,
-        image_budget: AnswerImageBudget | None = None,
-    ) -> _PreparedAnswerPrompt:
-        if image_budget is None:
-            image_budget = self._image_policy.new_budget()
-        packed = AnswerContextPacker().pack(
-            contexts,
-            image_budget=image_budget,
-        )
-        # Fast and Research use the same Evidence ledger for citation identity;
-        # Fast remains a lightweight invocation and never creates an Agent Session.
-        from dlightrag.engine.answer.evidence import EvidenceLedger
+        image_budget: AnswerImageBudget,
+    ) -> _PreparedEvidence:
+        """Pack retrieval and render it the way the Evidence ledger renders all evidence.
 
+        Fast and Research share one renderer and one citation identity: the ledger
+        numbers documents by first appearance, labels each excerpt from that numbering,
+        and its rows are the contexts the answer is finalized against. A retrieved
+        row's own reference id ranks documents by frequency, so it is never what the
+        model is shown.
+        """
+        packed = AnswerContextPacker().pack(contexts, image_budget=image_budget)
         evidence = EvidenceLedger()
         evidence.add_contexts(packed.contexts)
-        _blocks, indexer = evidence.render_blocks(
-            image_blocks_by_context_key=packed.image_blocks_by_context_key
-        )
-        kg_context = self._format_kg_context(packed.contexts, indexer=indexer)
-        user_prompt = "\n\n".join(
-            [
-                f"## Knowledge Graph Context\n{kg_context}",
-                f"## Question\n{query}",
-            ]
-        )
-        trace = dict(packed.trace)
-        return _PreparedAnswerPrompt(
-            contexts=packed.contexts,
-            user_prompt=user_prompt,
-            kg_context=kg_context,
+        blocks, indexer = evidence.render_blocks(packed.image_blocks_by_context_key)
+        return _PreparedEvidence(
+            contexts=evidence.contexts,
+            blocks=blocks,
             indexer=indexer,
-            chunk_image_blocks=packed.image_blocks_by_context_key,
-            trace=trace,
+            trace=dict(packed.trace),
         )
 
     @staticmethod
@@ -480,60 +439,6 @@ class AnswerSynthesizer:
         indexer = CitationIndexer()
         indexer.build_index(flat)
         return indexer
-
-    @staticmethod
-    def _format_kg_context(
-        contexts: RetrievalContexts,
-        indexer: CitationIndexer | None = None,
-    ) -> str:
-        """Format entities/relationships as markdown text (max 20 each).
-
-        When *indexer* is provided, each entity/relationship is annotated with
-        citation tags derived from its ``source_id``, so the LLM knows which
-        document each KG fact originated from.
-        """
-        return format_kg_context(contexts, indexer)
-
-    @staticmethod
-    def _build_excerpt_blocks(
-        contexts: RetrievalContexts,
-        indexer: CitationIndexer | None = None,
-        image_blocks_by_context_key: dict[str, dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Build lane-labelled per-document blocks with interleaved images."""
-        chunks = contexts.get("chunks", [])
-        if not chunks:
-            return []
-
-        attachment_chunks: list[dict[str, Any]] = []
-        rag_chunks: list[dict[str, Any]] = []
-        for chunk in chunks:
-            source_type = str((chunk.get("metadata") or {}).get("source_type") or "")
-            if source_type == "web_attachment":
-                attachment_chunks.append(chunk)
-            else:
-                rag_chunks.append(chunk)
-
-        blocks: list[dict[str, Any]] = []
-        if attachment_chunks:
-            blocks.append({"type": "text", "text": "## User-attached documents"})
-            blocks.extend(
-                build_excerpt_lane_blocks(
-                    attachment_chunks,
-                    indexer=indexer,
-                    image_blocks_by_context_key=image_blocks_by_context_key,
-                )
-            )
-        if rag_chunks:
-            blocks.append({"type": "text", "text": "## Knowledge-base evidence"})
-            blocks.extend(
-                build_excerpt_lane_blocks(
-                    rag_chunks,
-                    indexer=indexer,
-                    image_blocks_by_context_key=image_blocks_by_context_key,
-                )
-            )
-        return blocks
 
 
 async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:

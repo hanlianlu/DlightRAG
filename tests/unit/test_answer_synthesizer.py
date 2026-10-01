@@ -659,6 +659,9 @@ class TestAnswerSynthesizerCapacity:
         assert prepared.contexts == contexts
         assert prepared.no_context is True
         assert prepared.trace["answer_no_context"] is True
+        clock, question = prepared.messages[-1]["content"]
+        assert str(clock["text"]).startswith("Current time: ")
+        assert question["text"] == "## Question\nquestion"
 
     def test_oversized_single_chunk_is_removed_whole_without_mutating_input(
         self, monkeypatch: pytest.MonkeyPatch
@@ -856,114 +859,118 @@ class TestAnswerSynthesizerCapacity:
 
 
 class TestAnswerSynthesizerHelpers:
-    def test_format_kg_context_with_entities_and_rels(self) -> None:
-        contexts: RetrievalContexts = {
-            "chunks": [],
-            "entities": [
-                {
-                    "entity_name": "Acme",
-                    "entity_type": "Company",
-                    "description": "A company",
-                    "source_id": "s1",
-                },
-            ],
-            "relationships": [
-                {
-                    "src_id": "Acme",
-                    "tgt_id": "Revenue",
-                    "description": "generates",
-                    "source_id": "s1",
-                },
-            ],
-        }
-        result = AnswerSynthesizer._format_kg_context(contexts)
-        assert "## Entities" in result
-        assert "**Acme**" in result
-        assert "## Relationships" in result
-        assert "Acme -> Revenue" in result
-
-    def test_format_kg_context_empty(self) -> None:
-        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
-        assert (
-            AnswerSynthesizer._format_kg_context(contexts)
-            == "No knowledge graph context available."
-        )
-
-    def test_format_kg_context_includes_doc_level_tags(self) -> None:
-        from dlightrag.engine.answer.citations.indexer import CitationIndexer
-
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "file_path": "/docs/report.pdf",
-                    "content": "Revenue data.",
-                    "page_number": 1,
-                },
-            ],
-            "entities": [
-                {
-                    "entity_name": "Revenue",
-                    "entity_type": "Metric",
-                    "description": "Total revenue grew 15%",
-                    "source_id": "c1",
-                },
-            ],
-            "relationships": [
-                {
-                    "src_id": "Acme",
-                    "tgt_id": "Revenue",
-                    "description": "reports",
-                    "source_id": "c1",
-                },
-            ],
-        }
-        flat: list = []
-        for items in contexts.values():
-            if isinstance(items, list):
-                flat.extend(items)
-        indexer = CitationIndexer()
-        indexer.build_index(flat)
-
-        result = AnswerSynthesizer._format_kg_context(contexts, indexer=indexer)
-        assert "(from [1])" in result
-
     def test_build_citation_indexer(self) -> None:
         indexer = AnswerSynthesizer._build_citation_indexer(_text_contexts())
         assert indexer.get_max_chunk_idx("1") > 0
 
 
 # ---------------------------------------------------------------------------
-# TestBuildExcerptBlocks
+# TestFastEvidence: the request Fast sends, rendered by the Evidence ledger
 # ---------------------------------------------------------------------------
 
 
-class TestBuildExcerptBlocks:
-    def test_groups_chunks_by_document(self) -> None:
-        from dlightrag.engine.answer.citations.indexer import CitationIndexer
+def _request_blocks(model_func: AsyncMock) -> list[str]:
+    """Fast's request message, one entry per block: a text block's text or ``<image>``."""
+    content = model_func.call_args.kwargs["messages"][-1]["content"]
+    return [block["text"] if block["type"] == "text" else "<image>" for block in content]
 
-        contexts = _multi_doc_contexts()
-        indexer = CitationIndexer()
-        indexer.build_index(list(contexts["chunks"]))
 
-        blocks = AnswerSynthesizer._build_excerpt_blocks(contexts, indexer=indexer)
+class TestFastEvidence:
+    @pytest.mark.asyncio
+    async def test_excerpts_group_by_document_with_each_image_beside_its_label(self) -> None:
+        model_func = _stream_func("ok")
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=6),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
 
-        all_text = "\n".join(b["text"] for b in blocks if b.get("type") == "text")
-        assert "Document [1]" in all_text
-        assert "Document [2]" in all_text
-        assert "report.pdf" in all_text
-        assert "other.pdf" in all_text
+        await synth.generate_stream("compare", _multi_doc_contexts())
 
-    def test_images_interleaved_with_document(self) -> None:
-        contexts = _multi_doc_contexts()
-        blocks = AnswerSynthesizer._build_excerpt_blocks(contexts)
+        blocks = _request_blocks(model_func)
+        assert blocks[:10] == [
+            "## Knowledge-base evidence",
+            "### Document [1] [workspace: default]: report.pdf (title: 2025 Annual Report)",
+            '[1-1] "2025 Annual Report" Page 3',
+            "<image>",
+            "[1-1] report.pdf, Page 3\nRevenue data.",
+            "[1-2] Page 7",
+            "<image>",
+            "[1-2] report.pdf, Page 7\nExpenses data.",
+            "### Document [2] [workspace: default]: other.pdf",
+            "[2-1] other.pdf, Page 1\nOther info.",
+        ]
+        assert blocks[10].startswith("Current time: ")
+        assert blocks[11:] == ["## Question\ncompare"]
 
-        image_blocks = [b for b in blocks if b.get("type") == "image_url"]
-        assert len(image_blocks) == 2
+    @pytest.mark.asyncio
+    async def test_graph_evidence_leads_the_excerpts_and_names_its_documents(self) -> None:
+        contexts = _text_contexts()
+        contexts["entities"][0]["_workspace"] = "default"
+        model_func = _stream_func("ok")
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
 
-    def test_empty_chunks_returns_empty_blocks(self) -> None:
-        assert AnswerSynthesizer._build_excerpt_blocks({"chunks": []}) == []
+        await synth.generate_stream("query", contexts)
+
+        blocks = _request_blocks(model_func)
+        assert blocks[:2] == [
+            "## Knowledge graph evidence\n## Entities\n"
+            "- **Revenue** (Metric): Total revenue (from [1])",
+            "## Knowledge-base evidence",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_model_cites_the_numbers_it_is_shown_and_the_answer_resolves_them(
+        self,
+    ) -> None:
+        """Retrieval numbers documents by how many chunks cite them; the ledger numbers them
+        by first appearance. Fast once labelled retrieval rows from the ledger's index, so
+        whenever the orders differed no excerpt carried a marker, and the answer resolved
+        markers against a numbering the model never saw."""
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": chunk_id,
+                    "reference_id": reference_id,
+                    "file_path": f"/docs/{name}",
+                    "content": content,
+                    "page_number": page,
+                    "_workspace": "default",
+                    "metadata": _source_metadata(f"/docs/{name}"),
+                }
+                for chunk_id, reference_id, name, content, page in (
+                    ("a1", "2", "report.pdf", "Revenue grew.", 3),
+                    ("b1", "1", "other.pdf", "Other one.", 1),
+                    ("b2", "1", "other.pdf", "Other two.", 2),
+                )
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+        model_func = _stream_func("Revenue grew [1-1]; other two [2-2].")
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
+
+        answer_contexts, stream = await synth.generate_stream("q", contexts)
+        await _drain(stream)
+
+        blocks = _request_blocks(model_func)
+        assert blocks[1:6] == [
+            "### Document [1] [workspace: default]: report.pdf",
+            "[1-1] report.pdf, Page 3\nRevenue grew.",
+            "### Document [2] [workspace: default]: other.pdf",
+            "[2-1] other.pdf, Page 1\nOther one.",
+            "[2-2] other.pdf, Page 2\nOther two.",
+        ]
+        finalized = finalize_answer(cast(Any, stream).answer, answer_contexts)
+        assert [source.cited_chunk_ids for source in finalized.sources] == [["a1"], ["b2"]]
 
 
 def test_fast_packing_keeps_current_and_historical_admissions_in_chunk_budget():

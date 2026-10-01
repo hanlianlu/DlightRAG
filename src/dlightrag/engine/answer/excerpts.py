@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from dlightrag.engine.ai.media import image_data_uri
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.citations.utils import REQUEST_OWNED_WORKSPACES, context_chunk_key
 from dlightrag.engine.network_admission import validate_public_web_url
@@ -39,10 +38,7 @@ _INTERNAL_KEYS: frozenset[str] = frozenset(
 )
 
 
-def format_kg_context(
-    contexts: RetrievalContexts,
-    indexer: CitationIndexer | None = None,
-) -> str:
+def format_kg_context(contexts: RetrievalContexts, indexer: CitationIndexer) -> str:
     """Format entities and relationships with document-level citations."""
     parts: list[str] = []
     entities = contexts.get("entities", [])
@@ -66,9 +62,7 @@ def format_kg_context(
     return "\n".join(parts) if parts else "No knowledge graph context available."
 
 
-def _source_tags(row: dict[str, Any], indexer: CitationIndexer | None) -> str:
-    if indexer is None:
-        return ""
+def _source_tags(row: dict[str, Any], indexer: CitationIndexer) -> str:
     tags = indexer.get_doc_tags(
         row.get("source_id"),
         workspace=row.get("_workspace"),
@@ -79,10 +73,14 @@ def _source_tags(row: dict[str, Any], indexer: CitationIndexer | None) -> str:
 def build_excerpt_lane_blocks(
     chunks: list[dict[str, Any]],
     *,
-    indexer: CitationIndexer | None,
-    image_blocks_by_context_key: dict[str, dict[str, Any]] | None = None,
+    indexer: CitationIndexer,
+    image_blocks_by_context_key: Mapping[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Render one evidence lane without changing chunk order."""
+    """Render one evidence lane without changing chunk order.
+
+    A chunk's image is sent only as the block an image budget admitted for it, so a
+    row's raw pixels never reach a request unbounded.
+    """
     doc_groups: dict[str, list[dict[str, Any]]] = {}
     doc_order: list[str] = []
     for chunk in chunks:
@@ -102,23 +100,16 @@ def build_excerpt_lane_blocks(
         for chunk in doc_chunks:
             content = str(chunk.get("content") or "").strip()
             chunk_id = str(chunk.get("chunk_id") or "")
-            image_data = chunk.get("image_data")
             cite_tag = ""
-            if indexer is not None and ref_id and chunk_id:
+            if ref_id and chunk_id:
                 chunk_index = indexer.get_chunk_idx(ref_id, chunk_id)
                 if chunk_index is not None:
                     cite_tag = f"[{ref_id}-{chunk_index}]"
 
-            if image_data:
-                if image_blocks_by_context_key is None:
-                    image_block = {
-                        "type": "image_url",
-                        "image_url": {"url": image_data_uri(image_data)},
-                    }
-                else:
-                    image_block = image_blocks_by_context_key.get(
-                        context_chunk_key(chunk_id, workspace=chunk.get("_workspace"))
-                    )
+            if chunk.get("image_data"):
+                image_block = image_blocks_by_context_key.get(
+                    context_chunk_key(chunk_id, workspace=chunk.get("_workspace"))
+                )
                 if image_block is not None:
                     blocks.append(
                         {
@@ -189,7 +180,7 @@ def _linkable(uri: object) -> bool:
 
 
 def _document_heading(
-    ref_id: str, chunk: Mapping[str, Any], indexer: CitationIndexer | None
+    ref_id: str, chunk: Mapping[str, Any], indexer: CitationIndexer
 ) -> tuple[str, str]:
     """Return a document's heading and the name its passages are labelled with.
 
@@ -201,7 +192,7 @@ def _document_heading(
     metadata = chunk.get("metadata") or {}
     name = document_name(chunk)
     request_owned = chunk.get("_workspace") in REQUEST_OWNED_WORKSPACES
-    workspace = None if request_owned or indexer is None else indexer.get_doc_workspace(ref_id)
+    workspace = None if request_owned else indexer.get_doc_workspace(ref_id)
     resource_id = metadata.get("resource_id")
     described = [
         f"{key.removeprefix('doc_').replace('_', ' ')}: {value}"
