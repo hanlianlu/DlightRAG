@@ -1242,7 +1242,6 @@ class _FakeSession:
 def _child_orchestrator(
     model_func: Any,
     *,
-    environment: Any = None,
     retrieve_func: Any = None,
 ) -> AnswerOrchestrator:
     profile = answer_model_profile()
@@ -1263,7 +1262,6 @@ def _child_orchestrator(
         text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
         subagent_host=SubagentHost(),
         resolved_mode="research",
-        environment=environment,
     )
 
 

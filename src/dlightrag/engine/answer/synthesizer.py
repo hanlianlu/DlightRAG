@@ -429,17 +429,6 @@ class AnswerSynthesizer:
             trace=dict(packed.trace),
         )
 
-    @staticmethod
-    def _build_citation_indexer(contexts: RetrievalContexts) -> CitationIndexer:
-        """Flatten contexts and build a CitationIndexer."""
-        flat: list[dict[str, Any]] = []
-        for items in contexts.values():
-            if isinstance(items, list):
-                flat.extend(items)
-        indexer = CitationIndexer()
-        indexer.build_index(flat)
-        return indexer
-
 
 async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:
     yield f"{NO_CONTEXT_DISCLAIMER}\n\n"

@@ -22,7 +22,6 @@ from dlightrag_memory import Memory
 
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
-from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry, CompactionEntry
 from dlightrag.engine.agent.session.fold import (
@@ -202,7 +201,6 @@ class AnswerOrchestrator:
         context_policy: ContextPolicy = CONTEXT_POLICY,
         publication_limits: PublicationLimits | None = None,
         telemetry: Telemetry,
-        environment: ExecutionEnvironment | None = None,
         search_toolchain: SearchToolchain | None = None,
         resource_reader: ResourceReader | None = None,
         resource_viewer: ResourceViewer | None = None,
@@ -230,7 +228,6 @@ class AnswerOrchestrator:
         self._context_policy = context_policy
         self._publication_limits = publication_limits or PublicationLimits()
         self._telemetry = telemetry
-        self._environment = environment
         self._search_toolchain = search_toolchain
         self._resource_reader = resource_reader
         self._resource_viewer = resource_viewer
@@ -418,7 +415,6 @@ class AnswerOrchestrator:
     ) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
         self._workspace = workspace
-        self._environment = workspace.environment
         self._workspace_store = store
         self._session_notes = tuple(session_notes)
         self._memory_degradation = memory_degradation
@@ -948,7 +944,7 @@ class AnswerOrchestrator:
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader_for_run(),
             resource_viewer=self._resource_viewer,
-            environment=self._environment,
+            environment=None if self._workspace is None else self._workspace.environment,
             scheduler=self._access,
             search_toolchain=self._search_toolchain,
             image_preparer=(

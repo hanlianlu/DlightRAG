@@ -651,7 +651,6 @@ def test_workspace_links_require_publication_correction(tmp_path: Path, answer: 
 
     plan = validate_publication(root, answer=answer)
 
-    assert plan.repairable
     assert plan.outcome["status"] == "failed"
     assert plan.artifacts == ()
     assert plan.issues[0].kind == "invalid_reference"
@@ -680,7 +679,7 @@ def test_workspace_link_correction_still_requires_explicit_attachment(tmp_path: 
     assert unattached.artifacts == ()
 
     corrected = _validate(root, answer="[Report](artifact:report.html)", attached=("report.html",))
-    assert not corrected.repairable
+    assert not corrected.issues
     assert len(corrected.artifacts) == 1
 
 
@@ -698,7 +697,7 @@ def test_workspace_link_correction_still_requires_explicit_attachment(tmp_path: 
 def test_workspace_path_examples_do_not_request_publication(tmp_path: Path, answer: str) -> None:
     plan = validate_publication(tmp_path / "artifacts", answer=answer)
 
-    assert not plan.repairable
+    assert not plan.issues
     assert plan.answer == answer
     assert plan.descriptors == ()
 

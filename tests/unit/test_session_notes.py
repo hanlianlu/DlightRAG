@@ -17,7 +17,6 @@ from dlightrag.engine.answer.session_notes import (
     SESSION_NOTES_WORKING_COPY_UNREADABLE,
     SessionNotesPlane,
     read_legacy_notes,
-    read_working_copy,
     read_working_copy_notes,
 )
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
@@ -123,7 +122,7 @@ def test_the_working_copy_reads_notes_only_and_skips_what_it_cannot_promote(
     absurd.mkdir(parents=True)
     (absurd / "plan.md").write_bytes(b"absurd name")
 
-    notes = read_working_copy(workspace)
+    notes = read_working_copy_notes(workspace).records
 
     assert [note.relative_path for note in notes] == ["notes/nested/deep.md", "notes/plan.md"]
 
@@ -132,7 +131,7 @@ def test_the_working_copy_is_empty_without_a_notes_directory(tmp_path: Path) -> 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    assert read_working_copy(workspace) == ()
+    assert read_working_copy_notes(workspace).records == ()
 
 
 # -- promotion through the plane -----------------------------------------------

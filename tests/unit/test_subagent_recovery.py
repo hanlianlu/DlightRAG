@@ -2,6 +2,7 @@
 """Regressions for Child Operation recovery and concurrent host composition."""
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -36,6 +37,7 @@ from dlightrag.engine.answer.tools.subagents import (
     SubagentHost,
     subagent_tools,
 )
+from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
 from tests.tool_helpers import tool_runtime
@@ -149,12 +151,15 @@ async def test_child_continuation_terminal_usage_is_operation_local(
 
 
 @pytest.mark.asyncio
-async def test_recovery_preserves_current_pinned_tools():
+async def test_recovery_preserves_current_pinned_tools(tmp_path: Path):
 
     async def model(**kw):
         return AssistantTurn(text="recovered v2", tool_calls=(), stop_reason="stop")
 
-    orchestrator = _child_orchestrator(model, environment=MagicMock())
+    orchestrator = _child_orchestrator(model)
+    orchestrator.bind_workspace(
+        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=tmp_path, environment=MagicMock())
+    )
     assert orchestrator.subagent_host is not None
     request = ChildRequest(objective="continue pinned work")
     parent = SessionId.new()

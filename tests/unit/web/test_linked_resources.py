@@ -48,7 +48,7 @@ def test_invalid_linked_image_surfaces_one_failure_without_nested_anchor(
     tmp_path: Path, answer: str
 ) -> None:
     plan = validate_publication(tmp_path / "artifacts", answer=answer)
-    assert plan.repairable
+    assert plan.issues
     assert plan.outcome["status"] == "failed"
     assert plan.answer == answer
     assert "artifacts/report.png" in plan.artifact_bindings
@@ -72,7 +72,7 @@ def test_valid_linked_artifact_is_a_passive_image_inside_its_original_external_a
     attachment = prepare_artifact_attachment(root, path="report.png", label="Report")
     answer = 'Before [![Report](artifact:report.png "chart")](https://example.com "site") after.'
     plan = validate_publication(root, answer=answer, attachments=(attachment,))
-    assert not plan.repairable
+    assert not plan.issues
     assert plan.answer == answer
     assert len(plan.artifacts) == 1
 
@@ -98,7 +98,7 @@ def test_linked_non_image_artifact_becomes_a_normal_actionable_resource(tmp_path
     )
 
     presentation = _present(plan)
-    assert not plan.repairable
+    assert not plan.issues
     assert len(presentation.parts) == 2
     assert presentation.parts[1].artifact is not None
     assert presentation.parts[1].artifact.status == "available"
@@ -140,7 +140,7 @@ def test_linked_image_code_examples_do_not_validate_or_place_resources(
     tmp_path: Path, answer: str
 ) -> None:
     plan = validate_publication(tmp_path / "artifacts", answer=answer)
-    assert not plan.repairable
+    assert not plan.issues
     assert plan.artifact_bindings == {}
     presentation = _present(plan)
     rendered = presentation.parts[0].html or ""

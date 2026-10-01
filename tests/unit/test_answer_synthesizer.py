@@ -716,11 +716,7 @@ class TestAnswerSynthesizerCapacity:
         assert prepared.indexer.get_max_chunk_idx("1") == len(expected_ids)
         assert prepared.indexer.get_chunk_id("1", len(expected_ids)) == expected_ids[-1]
         assert prepared.indexer.get_chunk_id("1", len(expected_ids) + 1) is None
-        finalized = finalize_answer(
-            "Grounded in the first survivor [1-1].",
-            prepared.contexts,
-            indexer=prepared.indexer,
-        )
+        finalized = finalize_answer("Grounded in the first survivor [1-1].", prepared.contexts)
         assert len(finalized.sources) == 1
         assert finalized.sources[0].cited_chunk_ids == ["capacity-1"]
         assert prepared.contexts["entities"][0]["source_id"] == "capacity-3"
@@ -851,17 +847,6 @@ class TestAnswerSynthesizerCapacity:
 
         assert len(history) == 4
         assert contexts["chunks"] == original_chunks
-
-
-# ---------------------------------------------------------------------------
-# TestAnswerSynthesizerHelpers
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerSynthesizerHelpers:
-    def test_build_citation_indexer(self) -> None:
-        indexer = AnswerSynthesizer._build_citation_indexer(_text_contexts())
-        assert indexer.get_max_chunk_idx("1") > 0
 
 
 # ---------------------------------------------------------------------------

@@ -112,11 +112,6 @@ def read_working_copy_notes(
     )
 
 
-def read_working_copy(workspace: Path) -> tuple[SessionNoteRecord, ...]:
-    """Return just the notes a working copy holds, for callers that need nothing else."""
-    return read_working_copy_notes(workspace).records
-
-
 def read_legacy_notes(
     *,
     source_workspace: Path | None,
@@ -322,7 +317,6 @@ __all__ = [
     "SessionNotesPlane",
     "WorkingCopyNotes",
     "read_legacy_notes",
-    "read_working_copy",
     "read_working_copy_notes",
     "read_working_copy_or_reason",
     "read_working_copy_safely",

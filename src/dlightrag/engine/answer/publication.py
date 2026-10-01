@@ -252,10 +252,6 @@ class PublicationPlan:
     artifact_sources: Mapping[str, Sequence[SourceReference]] = field(default_factory=dict)
 
     @property
-    def repairable(self) -> bool:
-        return bool(self.issues)
-
-    @property
     def outcome(self) -> dict[str, object]:
         if not self.issues:
             status = "complete"

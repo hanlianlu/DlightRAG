@@ -67,17 +67,6 @@ def test_image_without_query_vision_is_unsupported_resource_capability() -> None
     assert caught.value.error_kind == "unsupported_resource_capability"
 
 
-def test_web_search_does_not_remove_fast_from_a_text_only_request() -> None:
-    valid = valid_modes(
-        resources=(),
-        capability=ModeCapability(
-            query_supports_images=False,
-            web_search_available=True,
-        ),
-    )
-    assert valid == frozenset({"fast", "research"})
-
-
 def test_canonical_answer_mode_accepts_every_declared_public_mode() -> None:
     assert tuple(canonical_answer_mode(mode) for mode in ANSWER_MODES) == ANSWER_MODES
 

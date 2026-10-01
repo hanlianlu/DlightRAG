@@ -31,10 +31,9 @@ class ModeResource:
 
 @dataclass(frozen=True, slots=True)
 class ModeCapability:
-    """Pinned model/tool facts that decide which modes can run."""
+    """Pinned model facts that decide which modes can run."""
 
     query_supports_images: bool
-    web_search_available: bool = False
 
 
 def canonical_answer_mode(mode: str | None) -> AnswerMode:

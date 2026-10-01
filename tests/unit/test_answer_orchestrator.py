@@ -35,7 +35,7 @@ from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
-def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None, environment=None):
+def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
 
     profile = answer_model_profile()
 
@@ -50,7 +50,6 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None, env
         text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
-        environment=environment,
         resolved_mode=mode,  # type: ignore[arg-type]
     )
 
@@ -183,18 +182,13 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    environment = LocalExecutionEnvironment(tmp_path)
-    orchestrator = _orchestrator(
-        mode="research",
-        model=model,
-        environment=environment,
-    )
+    orchestrator = _orchestrator(mode="research", model=model)
     orchestrator.bind_workspace(
         RunWorkspace(
             epoch=1,
             workspace=tmp_path,
             spill_dir=tmp_path / "spill",
-            environment=environment,
+            environment=LocalExecutionEnvironment(tmp_path),
         )
     )
     with_workspace = orchestrator.prepare_run("question")
@@ -292,8 +286,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
         store=child_store,
         notes=await child_store.load_session_notes(session_id=session_id),
     )
-    environment = LocalExecutionEnvironment(child.workspace)
-    orchestrator = _orchestrator(mode="research", model=model, environment=environment)
+    orchestrator = _orchestrator(mode="research", model=model)
     orchestrator.bind_workspace(
         child,
         child_store,
@@ -439,14 +432,13 @@ def _research_owner_with_subagents(tmp_path: Path):
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    environment = LocalExecutionEnvironment(tmp_path)
-    orchestrator = _orchestrator(mode="research", model=model, environment=environment)
+    orchestrator = _orchestrator(mode="research", model=model)
     orchestrator.bind_workspace(
         RunWorkspace(
             epoch=1,
             workspace=tmp_path,
             spill_dir=tmp_path / "spill",
-            environment=environment,
+            environment=LocalExecutionEnvironment(tmp_path),
         )
     )
     orchestrator._subagent_host = SubagentHost()
