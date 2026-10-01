@@ -460,7 +460,6 @@ def test_child_outcome_durable_payload_round_trips_evidence_state() -> None:
 
 
 async def test_notification_identity_tracks_child_operation_not_only_session() -> None:
-    ledger = EvidenceLedger()
     parent_id = SessionId.new()
     child_id = SessionId.new().value
     parent_intent_id = IntentId.new().value
@@ -492,18 +491,13 @@ async def test_notification_identity_tracks_child_operation_not_only_session() -
             },
         )
 
-    def merge(state: Any, child: str, call: str) -> tuple[str, ...]:
-        before = len(ledger.contexts["chunks"])
-        ledger.merge_child_state(state, child_session_id=child, parent_call_id=call)
-        return tuple(ledger.citation_handles(after_chunk_count=before))
-
     host = SubagentHost(
         parent_session_id=parent_id,
         run_id=SessionId.new().value,
         owner_id="owner",
         list_children=list_children,
-        merge_evidence=merge,
     )
+    ledger = _parent_ledger(host)
     seen: set[str] = set()
     first = await host.completed_dispatch_notifications(seen=seen)
     seen.add(first[0][0])
@@ -904,7 +898,6 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
     persist = AsyncMock()
     finish = AsyncMock()
     run_child = AsyncMock()
-    ledger = EvidenceLedger()
     evidence_state = {
         "contexts": {
             "chunks": [{"chunk_id": "c1", "content": "persisted finding"}],
@@ -912,18 +905,6 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
             "relationships": [],
         }
     }
-
-    def remerge_evidence(state: Any, child_id: str, call_id: str) -> tuple[str, ...]:
-        # As the parent orchestrator does: every read describes all of the
-        # outcome's sources, not only the ones this merge newly admitted.
-        ledger.merge_child_state(
-            state,
-            child_session_id=child_id,
-            parent_call_id=call_id,
-        )
-        return tuple(ledger.citation_handles(matching_chunks=state["contexts"]["chunks"]))
-
-    merge_evidence = MagicMock(side_effect=remerge_evidence)
 
     async def load_child(**kwargs: Any) -> dict[str, Any]:
         child_id = kwargs["child_session_id"]
@@ -954,8 +935,8 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
         prepare_dispatch=_durable_dispatch,
         run_child=run_child,
         context_snapshot=_context_snapshot(parent_id),
-        merge_evidence=merge_evidence,
     )
+    ledger = _parent_ledger(host)
     spawn, _status, wait = subagent_tools(host=host)[:3]
     runtime = tool_runtime(call_id="call-1", tool_name="spawn_agent")
     waits: list[Any] = []
@@ -977,12 +958,11 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
         assert waited.details is not None
         assert waited.details["inclusive_usage"] == {"input_tokens": 8}
         handles.append(waited.details["children"][0]["evidence_handles"])
-    # Adoption is idempotent: the replayed finding enters the parent ledger once
-    # and both reads cite it identically.
-    assert len(ledger.contexts["chunks"]) == 1
-    assert handles[0] == handles[1] == list(ledger.citation_handles())
-    assert merge_evidence.call_count == 2
-    assert {call.args[2] for call in merge_evidence.call_args_list} == {"call-1"}
+    # Adoption is idempotent: the replayed finding enters the parent ledger once,
+    # labelled with the call that dispatched it, and both reads cite it identically.
+    (row,) = ledger.contexts["chunks"]
+    assert row["_child_lineage"]["parent_call_id"] == "call-1"
+    assert handles[0] == handles[1] == ledger.citation_handles()
     run_child.assert_not_awaited()
     finish.assert_not_awaited()
 
@@ -1243,6 +1223,7 @@ def _child_orchestrator(
     model_func: Any,
     *,
     retrieve_func: Any = None,
+    subagent_host: SubagentHost | None = None,
 ) -> AnswerOrchestrator:
     profile = answer_model_profile()
 
@@ -1260,9 +1241,18 @@ def _child_orchestrator(
         telemetry=NOOP_TELEMETRY,
         model_profile=profile,
         text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
-        subagent_host=SubagentHost(),
+        subagent_host=SubagentHost() if subagent_host is None else subagent_host,
         resolved_mode="research",
     )
+
+
+def _parent_ledger(host: SubagentHost) -> EvidenceLedger:
+    """The ledger of a parent Run whose orchestrator merges ``host``'s Child outcomes."""
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        raise AssertionError("the parent's model is not called")
+
+    return _child_orchestrator(model, subagent_host=host).prepare_run("parent question").evidence
 
 
 async def test_child_session_persists_and_replays_without_rerun() -> None:

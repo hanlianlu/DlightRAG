@@ -134,10 +134,12 @@ class EvidenceLedger:
             "seen_rows": {key: sorted(values) for key, values in self._seen_rows.items()},
         }
 
-    def citation_handles(
-        self, *, after_chunk_count: int = 0, matching_chunks: list[ContextRow] | None = None
-    ) -> list[str]:
-        """Parent-visible citation identities, newest-admitted first after a cursor."""
+    def citation_handles(self, *, matching_chunks: list[ContextRow] | None = None) -> list[str]:
+        """Parent-visible citation handles, one per source, in admission order.
+
+        ``matching_chunks`` keeps only the sources of those rows, wherever the
+        ledger admitted them, so a merged Child outcome names all of its sources.
+        """
         identities = (
             {self._chunk_identity(row) for row in matching_chunks}
             if matching_chunks is not None
@@ -145,7 +147,7 @@ class EvidenceLedger:
         )
         seen: set[str] = set()
         handles: list[str] = []
-        for row in self.contexts.get("chunks", [])[after_chunk_count:]:
+        for row in self.contexts.get("chunks", []):
             if identities is not None and self._chunk_identity(row) not in identities:
                 continue
             reference_id = str(row.get("reference_id") or "")
