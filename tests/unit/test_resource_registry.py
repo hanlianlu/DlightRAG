@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -845,6 +846,59 @@ async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(serve) 
         registry.read(resource_id, effect_owner=second),
     )
 
+    assert fallback.calls == 1
+    assert set(owners) == {first, second}
+
+
+async def test_a_read_that_decodes_late_keeps_the_snapshot_another_read_admitted(
+    serve, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two reads share one empty fetch, and one decodes it after the other's Extract.
+
+    A read whose direct bytes decode to nothing forgets them and hands the URL to
+    the shared Extract. Forgetting them late dropped the snapshot the Extract had
+    admitted in their place, so neither read made it durable.
+    """
+    from dlightrag.engine.answer.resources import registry as registry_module
+
+    decode = registry_module.decode_text
+    extracted = threading.Event()
+    lock = threading.Lock()
+    decodes = 0
+
+    def decode_the_second_after_the_extract(content: bytes, **kwargs: Any) -> str:
+        nonlocal decodes
+        with lock:
+            decodes += 1
+            late = decodes == 2
+        if late:
+            assert extracted.wait(5)
+        return decode(content, **kwargs)
+
+    class _Extract(_CountingFallback):
+        async def __call__(self, url: str) -> WebExtractResult:
+            extracted.set()
+            return await super().__call__(url)
+
+    monkeypatch.setattr(registry_module, "decode_text", decode_the_second_after_the_extract)
+    owners = []
+
+    async def persist(_fetched, owner) -> None:
+        owners.append(owner)
+
+    fallback = _Extract("shared provider text")
+    serve(_Fetch(b""))
+    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    resource_id = registry.register_agent_url("https://data.example.com/report.txt")
+    first = ResourceEffectOwner("session-a", IntentId.new())
+    second = ResourceEffectOwner("session-b", IntentId.new())
+
+    results = await asyncio.gather(
+        registry.read(resource_id, effect_owner=first),
+        registry.read(resource_id, effect_owner=second),
+    )
+
+    assert [result.content for result in results] == ["shared provider text"] * 2
     assert fallback.calls == 1
     assert set(owners) == {first, second}
 

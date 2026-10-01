@@ -924,8 +924,7 @@ class ResourceRegistry:
             raise
         except Exception:
             if _is_textual_web_resource(resource):
-                self._fetched.pop(resource.resource_id, None)
-                self._converted.pop(resource.resource_id, None)
+                self._forget_direct_bytes(resource.resource_id, content)
                 return await self._fallback_text_view(
                     resource,
                     resource.url or url,
@@ -939,8 +938,7 @@ class ResourceRegistry:
             raise
         if not view.text and view.extraction_status != "image":
             if _is_textual_web_resource(resource):
-                self._fetched.pop(resource.resource_id, None)
-                self._converted.pop(resource.resource_id, None)
+                self._forget_direct_bytes(resource.resource_id, content)
                 return await self._fallback_text_view(
                     resource,
                     resource.url or url,
@@ -964,6 +962,17 @@ class ResourceRegistry:
             self._fetched.pop(resource.resource_id, None)
             raise
         return view
+
+    def _forget_direct_bytes(self, resource_id: str, content: bytes) -> None:
+        """Forget a direct fetch that read as no text, before the Extract fallback.
+
+        Concurrent reads share one fetch but decode it apart, so another read's
+        Extract may already have admitted its snapshot in these bytes' place.
+        That snapshot stays: dropping it left neither read to make it durable.
+        """
+        if self._fetched.get(resource_id) is content:
+            del self._fetched[resource_id]
+        self._converted.pop(resource_id, None)
 
     async def _ensure_converted(
         self,
