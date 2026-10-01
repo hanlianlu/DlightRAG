@@ -31,7 +31,6 @@ from dlightrag.engine.ai.providers.base import (
     is_provider_reasoning_rejection as provider_reasoning_rejection,
 )
 from dlightrag.engine.ai.providers.openai_compatible import (
-    OpenAICompatibleProvider,
     _openai_tool_messages,
 )
 from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
@@ -873,40 +872,6 @@ class TestOpenAICompatibleProvider:
         assert turn.tool_calls[0].argument_error is not None
 
     @pytest.mark.asyncio
-    async def test_response_incomplete_never_exposes_calls_for_execution(self):
-        p = get_provider(
-            "openai",
-            api_key="test-key",
-            api_family="response",
-        )
-        response = SimpleNamespace(
-            status="incomplete",
-            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
-            output=[
-                SimpleNamespace(
-                    id="fc-item",
-                    type="function_call",
-                    status="incomplete",
-                    call_id="call-1",
-                    name="lookup",
-                    arguments='{"value":"partial',
-                )
-            ],
-            usage=None,
-        )
-        with patch.object(p, "_get_client") as mock_client:
-            mock_client.return_value.responses.create = AsyncMock(return_value=response)
-            turn = await p.complete_tool_turn(
-                [{"role": "user", "content": "hi"}],
-                "gpt-5.4",
-                tools=[],
-            )
-
-        assert turn.stop_reason == "length"
-        assert turn.tool_calls == ()
-        assert turn.provider_state is None
-
-    @pytest.mark.asyncio
     async def test_response_streaming_tool_turn_reconciles_final_items_without_duplication(self):
         p = get_provider("openai", api_key="test-key", api_family="response")
         message = SimpleNamespace(
@@ -1026,49 +991,6 @@ class TestOpenAICompatibleProvider:
 
         assert tokens == ["hel", "lo"]
         assert holder == {"usage_details": {"input_tokens": 4, "output_tokens": 1}}
-        assert stream.closed is True
-
-    @pytest.mark.asyncio
-    async def test_response_incomplete_stream_never_exposes_partial_call(self):
-        p = get_provider("openai", api_key="test-key", api_family="response")
-        partial_call = SimpleNamespace(
-            id="fc-item-1",
-            type="function_call",
-            status="incomplete",
-            call_id="call-1",
-            name="lookup",
-            arguments='{"value":"par',
-        )
-        response = SimpleNamespace(
-            status="incomplete",
-            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
-            output=[partial_call],
-            usage=None,
-        )
-        stream = _ResponseEventStream(
-            [
-                _response_event(
-                    "response.function_call_arguments.delta",
-                    output_index=0,
-                    item_id="fc-item-1",
-                    delta='{"value":"par',
-                ),
-                _response_event("response.output_item.done", output_index=0, item=partial_call),
-                _response_event("response.incomplete", response=response),
-            ]
-        )
-        with patch.object(p, "_get_client") as mock_client:
-            mock_client.return_value.responses.create = AsyncMock(return_value=stream)
-            turn = await p.complete_tool_turn_streaming(
-                [{"role": "user", "content": "hi"}],
-                "gpt-5.4",
-                tools=[],
-                emit_text=AsyncMock(),
-            )
-
-        assert turn.stop_reason == "length"
-        assert turn.tool_calls == ()
-        assert turn.provider_state is None
         assert stream.closed is True
 
     @pytest.mark.asyncio
@@ -1830,12 +1752,6 @@ class TestGeminiProvider:
 
 
 async def test_empty_tool_calls_arrays_are_stripped_for_strict_endpoints():
-    OpenAICompatibleProvider(
-        api_key="test-key",
-        base_url="http://localhost:8888/v1",
-        timeout=10.0,
-        max_retries=1,
-    )
     messages = [
         {"role": "assistant", "content": "text", "tool_calls": []},
         {

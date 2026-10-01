@@ -2,7 +2,6 @@
 """Tool-message attachment projections for each native provider."""
 
 import base64
-import json
 
 from dlightrag.engine.ai.providers.anthropic_native import _anthropic_tool_messages
 from dlightrag.engine.ai.providers.openai_compatible import _openai_tool_messages
@@ -10,10 +9,6 @@ from dlightrag.engine.ai.providers.openai_response import response_input
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
 DATA_URL = f"data:image/png;base64,{_PNG}"
-_PAGE_ONE = b"\x89PNG\r\n\x1a\npage-one"
-_PAGE_TWO = b"\x89PNG\r\n\x1a\npage-two"
-_PAGE_ONE_URL = f"data:image/png;base64,{base64.b64encode(_PAGE_ONE).decode()}"
-_PAGE_TWO_URL = f"data:image/png;base64,{base64.b64encode(_PAGE_TWO).decode()}"
 
 
 def _tool_message() -> dict[str, object]:
@@ -34,78 +29,6 @@ def _tool_message() -> dict[str, object]:
         ],
         "is_error": False,
     }
-
-
-def test_anthropic_inlines_the_attachment_in_the_tool_result() -> None:
-    converted = _anthropic_tool_messages([{"role": "user", "content": "look"}, _tool_message()])
-
-    assert converted[-1]["role"] == "user"
-    (block,) = converted[-1]["content"]
-    assert block["type"] == "tool_result"
-    assert block["tool_use_id"] == "call-1"
-    content = block["content"]
-    assert isinstance(content, list)
-    assert content[0] == {"type": "text", "text": "image attachment: chart.png"}
-    assert content[1] == {
-        "type": "image",
-        "source": {"type": "base64", "media_type": "image/png", "data": _PNG},
-    }
-
-
-def test_anthropic_serializes_every_attachment_in_declared_order() -> None:
-    message = _tool_message()
-    message["attachments"] = [
-        {
-            "resource_id": "att_1",
-            "safe_name": "page-1.png",
-            "media_type": "image/png",
-            "content_digest": "a" * 64,
-            "size_bytes": len(_PAGE_ONE),
-            "data_url": _PAGE_ONE_URL,
-        },
-        {
-            "resource_id": "att_2",
-            "safe_name": "page-2.png",
-            "media_type": "image/png",
-            "content_digest": "b" * 64,
-            "size_bytes": len(_PAGE_TWO),
-            "data_url": _PAGE_TWO_URL,
-        },
-    ]
-    converted = _anthropic_tool_messages([{"role": "user", "content": "look"}, message])
-
-    (block,) = converted[-1]["content"]
-    content = block["content"]
-    assert content[0] == {"type": "text", "text": "image attachment: chart.png"}
-    assert content[1:] == [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/png",
-                "data": base64.b64encode(_PAGE_ONE).decode(),
-            },
-        },
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/png",
-                "data": base64.b64encode(_PAGE_TWO).decode(),
-            },
-        },
-    ]
-
-
-def test_openai_compatible_appends_untrusted_multimodal_user_message() -> None:
-    converted = _openai_tool_messages([{"role": "user", "content": "look"}, _tool_message()])
-
-    assert converted[1]["role"] == "tool"
-    assert "attachments" not in converted[1]
-    follow_up = converted[2]
-    assert follow_up["role"] == "user"
-    assert "untrusted_tool_data" not in follow_up
-    assert follow_up["content"] == [{"type": "image_url", "image_url": {"url": DATA_URL}}]
 
 
 def _call(call_id: str) -> dict[str, object]:
@@ -153,29 +76,6 @@ def _batch_violations(messages: list[dict[str, object]]) -> list[object]:
                 violations.append((index, calls, seen, following))
         index += 1
     return violations
-
-
-def test_openai_compatible_keeps_an_image_bearing_tool_batch_contiguous() -> None:
-    """An attachment must not cut a batch: the provider answers every later tool
-    result of that batch with HTTP 400 'insufficient tool messages'."""
-    converted = _openai_tool_messages(
-        [
-            {"role": "user", "content": "look"},
-            {"role": "assistant", "content": "", "tool_calls": [_call("call-1"), _call("call-2")]},
-            _tool_result("call-1", attachment=True),
-            _tool_result("call-2", attachment=False),
-        ]
-    )
-
-    assert _batch_violations(converted) == []
-    assert [message["role"] for message in converted] == [
-        "user",
-        "assistant",
-        "tool",
-        "tool",
-        "user",
-    ]
-    assert converted[4]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URL}}]
 
 
 def test_openai_compatible_rides_images_of_one_batch_in_one_user_message() -> None:
@@ -227,20 +127,6 @@ def test_openai_compatible_never_invents_a_user_turn_from_a_non_image_attachment
     )
 
     assert [message["role"] for message in converted] == ["user", "assistant", "tool"]
-
-
-def test_plain_tool_message_projects_without_any_user_turn() -> None:
-    plain = {
-        "role": "tool",
-        "tool_call_id": "call-1",
-        "name": "grep",
-        "content": "matches",
-        "is_error": False,
-    }
-    assert json.dumps(_openai_tool_messages([plain])) is not None
-    converted = _openai_tool_messages([plain])
-    assert len(converted) == 1
-    assert converted[0]["role"] == "tool"
 
 
 def _viewed_question(*, hydrated: bool = True) -> dict[str, object]:

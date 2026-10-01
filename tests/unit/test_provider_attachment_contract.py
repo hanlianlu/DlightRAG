@@ -630,7 +630,12 @@ async def test_sdk_http_projects_tool_attachments(
             # user turn for an attachment that carries no bytes, and any user turn
             # between tool messages ends the batch the provider is still matching.
             assert [part["type"] for part in follow] == ["image_url"] * count
+            # Each image keeps the media type its attachment declared.
+            assert [part["image_url"]["url"].partition(";")[0] for part in follow] == [
+                "data:image/png"
+            ] * count
     elif provider_name == "anthropic":
+        assert body["messages"][-1]["role"] == "user"
         block = body["messages"][-1]["content"][0]
         assert block["type"] == "tool_result"
         assert block["tool_use_id"] == "call-1"
@@ -638,6 +643,9 @@ async def test_sdk_http_projects_tool_attachments(
             assert block["content"] == _TOOL_TEXT
         else:
             assert block["content"][0] == {"type": "text", "text": _TOOL_TEXT}
+            assert [part["source"]["media_type"] for part in block["content"][1:]] == [
+                "image/png"
+            ] * count
 
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)

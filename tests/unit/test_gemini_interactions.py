@@ -228,14 +228,15 @@ def _stored(turn: AssistantTurn) -> dict[str, Any]:
         usage=turn.usage_details,
         provider_state=turn.provider_state,
     )
-    stored = json.loads(canonical_json(entry.to_canonical_json()))
+    # The round trip the PostgreSQL repository makes: canonical JSON, then decode.
+    payload = json.loads(canonical_json(entry.canonical_payload()))
     restored = decode_entry_payload(
         entry_type=entry.entry_type,
         entry_id=entry.entry_id,
         session_id=entry.session_id,
-        sequence=stored["sequence"],
+        sequence=entry.sequence,
         timestamp=entry.timestamp,
-        payload=stored["payload"],
+        payload=payload,
     )
     assert isinstance(restored, AssistantMessageEntry)
     return fold_assistant_message(restored)
