@@ -41,24 +41,6 @@ class MemorySettingsStore(Protocol):
     async def bump_epoch(self, *, owner_id: str) -> MemoryCapability: ...
 
 
-class NoopMemorySettingsStore:
-    """In-process composition without a mutable product control plane."""
-
-    async def state(self, *, owner_id: str) -> MemoryCapability:
-        return MemoryCapability(enabled=True, epoch=0)
-
-    async def state_in_settlement(
-        self, *, owner_id: str, settlement: object | None
-    ) -> MemoryCapability:
-        return await self.state(owner_id=owner_id)
-
-    async def set_enabled(self, *, owner_id: str, enabled: bool) -> MemoryCapability:
-        raise RuntimeError("memory settings are not durable in this composition")
-
-    async def bump_epoch(self, *, owner_id: str) -> MemoryCapability:
-        return MemoryCapability(enabled=True, epoch=0)
-
-
 @dataclass(frozen=True, slots=True)
 class MemorySettings:
     """Settings projection; count is absent while the capability is disabled."""
@@ -76,11 +58,11 @@ class MemoryService:
         store: Any,
         *,
         memory_list_cursor_secret: bytes,
-        settings_store: MemorySettingsStore | None = None,
+        settings_store: MemorySettingsStore,
         superseded_retention_days: int = MEMORY_SUPERSEDE_RETENTION_DAYS,
     ) -> None:
         self._memory = Memory(store)
-        self._settings = settings_store or NoopMemorySettingsStore()
+        self._settings = settings_store
         self._retention_days = superseded_retention_days
         self._memory_list_codec = MemoryListCursorCodec(memory_list_cursor_secret)
 
@@ -285,5 +267,4 @@ __all__ = [
     "MemoryService",
     "MemorySettings",
     "MemorySettingsStore",
-    "NoopMemorySettingsStore",
 ]

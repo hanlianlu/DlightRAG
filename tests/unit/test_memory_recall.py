@@ -1,23 +1,17 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Frozen recall cases: RRF fusion, exact-first, packing prior, budgets."""
+"""Frozen recall cases: RRF fusion, the packing prior, and the character budget.
 
-from unittest.mock import AsyncMock
+Recall over stored records runs against PostgreSQL in tests/integration/test_memory_pg.py.
+"""
+
+from datetime import UTC, datetime
 
 from dlightrag_memory.fusion import rrf_fuse
-from dlightrag_memory.memory import Memory, _packing_prior, _truncate_to_budget
+from dlightrag_memory.memory import _packing_prior, _truncate_to_budget
 from dlightrag_memory.models import MemoryProvenance, MemoryRecord
-from dlightrag_memory.store import InMemoryMemoryStore
 
 
-def _record(
-    *,
-    memory_id: str,
-    kind: str,
-    body: str,
-    updated_minute: int = 0,
-) -> MemoryRecord:
-    from datetime import UTC, datetime, timedelta
-
+def _record(*, memory_id: str, kind: str, body: str) -> MemoryRecord:
     return MemoryRecord(
         owner_id="alpha",
         memory_id=memory_id,
@@ -29,7 +23,7 @@ def _record(
             run_id="r",
             session_id="s",
         ),
-        updated_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=updated_minute),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -65,67 +59,3 @@ def test_char_budget_truncates_after_the_header() -> None:
     kept = _truncate_to_budget(records, budget=300)
 
     assert len(kept) == 1  # header (160) + 100 fits; the second would exceed 300
-
-
-async def test_recall_pins_exact_matches_first_and_orders_chronologically() -> None:
-    store = InMemoryMemoryStore()
-    memory = Memory(store)
-    for record in (
-        _record(memory_id="old", kind="fact", body="deploy to staging", updated_minute=1),
-        _record(memory_id="new", kind="fact", body="deploy to staging", updated_minute=2),
-    ):
-        await store.insert(record)
-
-    result = await memory.recall(owner_id="alpha", query="deploy to staging")
-
-    # Two exact matches: chronological ascending (old before new).
-    assert [record.memory_id for record in result.records] == ["old", "new"]
-
-
-async def test_recall_returns_empty_on_no_match() -> None:
-    store = InMemoryMemoryStore()
-    memory = Memory(store)
-    await store.insert(_record(memory_id="1", kind="fact", body="trains are fast"))
-
-    result = await memory.recall(owner_id="alpha", query="zzz-nothing")
-
-    assert result.records == ()
-    assert result.candidates == ()
-    assert result.strategy == "query_search"
-
-
-async def test_recall_timeout_falls_back_to_recent_active_records(monkeypatch) -> None:
-    import asyncio
-
-    store = InMemoryMemoryStore()
-    memory = Memory(store)
-    await store.insert(_record(memory_id="recent", kind="fact", body="recent profile"))
-
-    async def timeout(**_kwargs):
-        await asyncio.sleep(0.02)
-        return ()
-
-    page_probe = AsyncMock(wraps=store.list_active_page)
-    monkeypatch.setattr(store, "search_candidates", timeout)
-    monkeypatch.setattr(store, "list_active_page", page_probe)
-    monkeypatch.setattr("dlightrag_memory.memory._SEARCH_DEADLINE_SECONDS", 0.001)
-
-    result = await memory.recall(owner_id="alpha", query="anything", top_k=1)
-
-    page_probe.assert_awaited_once_with(owner_id="alpha", limit=1)
-    assert [record.memory_id for record in result.records] == ["recent"]
-    assert result.strategy == "recent_fallback"
-    assert result.degraded == ("search_timeout",)
-
-
-async def test_recall_budget_caps_top_k() -> None:
-    store = InMemoryMemoryStore()
-    memory = Memory(store)
-    for index in range(15):
-        await store.insert(
-            _record(memory_id=str(index), kind="fact", body=f"project alpha item {index}")
-        )
-
-    result = await memory.recall(owner_id="alpha", query="project alpha item", top_k=5)
-
-    assert len(result.records) <= 5

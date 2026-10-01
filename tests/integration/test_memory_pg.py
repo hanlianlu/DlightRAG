@@ -14,6 +14,10 @@ import pytest
 from dlightrag_memory import Memory, MemoryOperation, MemoryProvenance, MemoryRecord
 from dlightrag_memory._storage.pg_bm25 import index_name
 from dlightrag_memory.errors import MemoryWriteRejectedError
+from dlightrag_memory.mcp_server import _forget as mcp_forget
+from dlightrag_memory.mcp_server import _recall as mcp_recall
+from dlightrag_memory.mcp_server import _remember as mcp_remember
+from dlightrag_memory.mcp_server import _undo as mcp_undo
 from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.ports import NullEmbedder, TextEmbedder
 from dlightrag_memory.postgres import PostgresMemoryStore
@@ -23,8 +27,23 @@ from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
     PGMemorySettingsStore,
 )
-from dlightrag.application.memory import MemoryDisabledError, MemoryService
+from dlightrag.application.memory import (
+    MemoryDisabledError,
+    MemoryListPageRequest,
+    MemoryService,
+)
+from dlightrag.engine.agent.tools import ToolResult
+from dlightrag.engine.answer.tools.memory import (
+    ForgetInput,
+    MemoryHost,
+    RecallInput,
+    RememberInput,
+    forget_tool,
+    recall_memory_tool,
+    remember_tool,
+)
 from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgres
+from tests.tool_helpers import recording_tool_runtime, tool_runtime
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -140,7 +159,7 @@ async def test_pg_owners_are_isolated(store: PostgresMemoryStore) -> None:
 async def test_pg_initialization_rejects_legacy_confidence_schema(
     store: PostgresMemoryStore,
 ) -> None:
-    pool = store._operation_pool
+    pool = store._pool
     assert pool is not None
     async with pool.acquire() as conn:
         await conn.execute(
@@ -182,6 +201,7 @@ async def test_pg_operation_replay_duplicate_cap_and_schema(store: PostgresMemor
     )
     assert replay == first
     assert duplicate.outcome == "unchanged"
+    assert duplicate.memory_id == first.memory_id
     with pytest.raises(MemoryWriteRejectedError, match="mutation limit"):
         await memory.remember(
             owner_id="alpha",
@@ -192,7 +212,7 @@ async def test_pg_operation_replay_duplicate_cap_and_schema(store: PostgresMemor
             mutation_scope="run-1",
             mutation_limit=1,
         )
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_operations WHERE owner_id = 'alpha'"
@@ -205,19 +225,104 @@ async def test_pg_operation_replay_duplicate_cap_and_schema(store: PostgresMemor
         )
 
 
-async def test_pg_owner_lock_rechecks_deactivation_before_mutation_commit(
+async def test_pg_reusing_an_idempotency_key_with_different_input_rejects(
     store: PostgresMemoryStore,
 ) -> None:
-    pool = store._operation_pool
+    memory = Memory(store)
+    await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="No email.",
+        provenance=_provenance(),
+        idempotency_key="call-1",
+    )
+
+    with pytest.raises(MemoryWriteRejectedError, match="different input"):
+        await memory.remember(
+            owner_id="alpha",
+            kind="preference",
+            body="Use chat.",
+            provenance=_provenance(),
+            idempotency_key="call-1",
+        )
+    assert [row.body for row in await _active(memory)] == ["No email."]
+
+
+async def test_pg_guard_rejection_settles_neither_journal_nor_record(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+
+    async def reject(_settlement: object | None) -> None:
+        raise MemoryWriteRejectedError("capability changed")
+
+    with pytest.raises(MemoryWriteRejectedError, match="capability changed"):
+        await memory.remember(
+            owner_id="alpha",
+            kind="fact",
+            body="Lives in Gothenburg.",
+            provenance=_provenance(),
+            idempotency_key="call-1",
+            guard=reject,
+        )
+
+    assert await _active(memory) == ()
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+        assert await conn.fetchval("SELECT COUNT(*) FROM dlightrag_memory_operations") == 0
+    settled = await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Lives in Gothenburg.",
+        provenance=_provenance(),
+        idempotency_key="call-1",
+    )
+    assert settled.outcome == "changed"
+
+
+async def test_pg_mutation_cap_counts_only_changed_operations(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+
+    async def remember(key: str, body: str):
+        return await memory.remember(
+            owner_id="alpha",
+            kind="preference",
+            body=body,
+            provenance=_provenance(),
+            idempotency_key=key,
+            mutation_scope="run-1",
+            mutation_limit=2,
+        )
+
+    assert (await remember("call-1", "One.")).outcome == "changed"
+    assert (await remember("call-2", "one.")).outcome == "unchanged"
+    assert (await remember("call-3", "Two.")).outcome == "changed"
+    with pytest.raises(MemoryWriteRejectedError, match="mutation limit"):
+        await remember("call-4", "Three.")
+    assert await memory.count_active(owner_id="alpha") == 2
+
+
+async def _service(store: PostgresMemoryStore) -> MemoryService:
+    """The product gate over this store, with its settings table beside it."""
+    pool = store._pool
     assert pool is not None
     async with pool.acquire() as conn:
         for statement in MEMORY_SETTINGS_DDL:
             await conn.execute(statement)
-    service = MemoryService(
+    return MemoryService(
         store,
         settings_store=PGMemorySettingsStore(pool=pool),
         memory_list_cursor_secret=b"memory-pg-list-test",
     )
+
+
+async def test_pg_owner_lock_rechecks_deactivation_before_mutation_commit(
+    store: PostgresMemoryStore,
+) -> None:
+    service = await _service(store)
+    pool = store._pool
+    assert pool is not None
 
     async with pool.acquire() as conn, conn.transaction():
         await conn.fetchval("SELECT pg_advisory_xact_lock(hashtext($1))", "alpha")
@@ -244,6 +349,92 @@ async def test_pg_owner_lock_rechecks_deactivation_before_mutation_commit(
     assert await store.count_active(owner_id="alpha") == 0
 
 
+def _management() -> MemoryProvenance:
+    return MemoryProvenance(origin_kind="management", origin_id="request-1")
+
+
+async def test_pg_disabled_owner_keeps_only_the_settings_control_plane(
+    store: PostgresMemoryStore,
+) -> None:
+    service = await _service(store)
+    owner = {"owner_id": "alpha", "auth_mode": "jwt"}
+    disabled = await service.set_enabled(**owner, enabled=False)
+
+    assert disabled.enabled is False
+    assert disabled.active_count is None
+    assert disabled.epoch == 1
+    assert (await service.settings(**owner)).active_count is None
+    with pytest.raises(MemoryDisabledError):
+        await service.list_active_page(owner_id="alpha", auth_mode="jwt")
+    with pytest.raises(MemoryDisabledError):
+        await service.remember(
+            **owner,
+            kind="fact",
+            body="Stable.",
+            provenance=_management(),
+            idempotency_key="request-1",
+        )
+    with pytest.raises(MemoryDisabledError):
+        await service.clear(**owner)
+    assert await store.count_active(owner_id="alpha") == 0
+
+
+async def test_pg_deactivation_and_clear_invalidate_run_epochs(
+    store: PostgresMemoryStore,
+) -> None:
+    service = await _service(store)
+    owner = {"owner_id": "alpha", "auth_mode": "jwt"}
+    initial = await service.settings(**owner)
+    assert initial.enabled and initial.epoch == 0
+    assert await service.capability_current(owner_id="alpha", epoch=0)
+
+    assert (await service.set_enabled(**owner, enabled=False)).epoch == 1
+    assert (await service.set_enabled(**owner, enabled=True)).epoch == 1
+    assert not await service.capability_current(owner_id="alpha", epoch=0)
+    assert await service.capability_current(owner_id="alpha", epoch=1)
+
+    await service.remember(
+        **owner,
+        kind="preference",
+        body="Use Chinese.",
+        provenance=_management(),
+        idempotency_key="request-1",
+    )
+    assert (await service.settings(**owner)).active_count == 1
+    # The public count reports Profile Memory records, not journal rows.
+    assert await service.clear(**owner) == 1
+    cleared = await service.settings(**owner)
+    assert (cleared.enabled, cleared.epoch, cleared.active_count) == (True, 2, 0)
+    assert not await service.capability_current(owner_id="alpha", epoch=1)
+
+
+async def test_pg_service_pages_active_memories_with_continuation(
+    store: PostgresMemoryStore,
+) -> None:
+    service = await _service(store)
+    for index in range(7):
+        await service.remember(
+            owner_id="alpha",
+            auth_mode="jwt",
+            kind="preference",
+            body=f"Memory {index}.",
+            provenance=_management(),
+            idempotency_key=f"key-{index}",
+        )
+    seen: list[str] = []
+    page_request: MemoryListPageRequest | None = MemoryListPageRequest(limit=3)
+    while page_request is not None:
+        page = await service.list_active_page(owner_id="alpha", auth_mode="jwt", page=page_request)
+        assert len(page.records) <= 3
+        seen.extend(record.body for record in page.records)
+        page_request = (
+            MemoryListPageRequest(limit=3, cursor=page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        )
+    assert sorted(seen) == [f"Memory {index}." for index in range(7)]
+
+
 async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemoryStore) -> None:
     memory = Memory(store)
     old = await memory.remember(
@@ -261,6 +452,7 @@ async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemorySt
         idempotency_key="call-2",
         supersedes_id=old.memory_id,
     )
+    assert [row.body for row in await _active(memory)] == ["Lives in Gothenburg."]
     undone = await memory.undo(
         owner_id="alpha",
         change_id=replacement.change_id,
@@ -269,6 +461,8 @@ async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemorySt
     )
     assert undone.outcome == "changed"
     assert [row.body for row in await _active(memory)] == ["Lives in Beijing."]
+    current = await store.get(owner_id="alpha", memory_id=replacement.memory_id or "")
+    assert current is not None and current.status == "superseded"
 
     forgotten = await memory.forget(
         owner_id="alpha",
@@ -283,14 +477,43 @@ async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemorySt
         idempotency_key="undo-2",
     )
     assert restored.outcome == "changed"
+    # A restoration is a new active record; the forgotten one keeps its history.
+    assert restored.memory_id != undone.memory_id
     assert [row.body for row in await _active(memory)] == ["Lives in Beijing."]
+
+
+async def test_pg_repeated_undo_of_a_remember_conflicts(store: PostgresMemoryStore) -> None:
+    memory = Memory(store)
+    remembered = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="No email.",
+        provenance=_provenance(),
+        idempotency_key="call-1",
+    )
+    first = await memory.undo(
+        owner_id="alpha",
+        change_id=remembered.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-1",
+    )
+    second = await memory.undo(
+        owner_id="alpha",
+        change_id=remembered.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-2"),
+        idempotency_key="undo-2",
+    )
+
+    assert first.outcome == "changed"
+    assert second.outcome == "conflict"
+    assert await _active(memory) == ()
 
 
 async def test_pg_clear_physically_erases_records_and_operations(
     store: PostgresMemoryStore,
 ) -> None:
     memory = Memory(store)
-    await memory.remember(
+    first = await memory.remember(
         owner_id="alpha",
         kind="fact",
         body="Stable.",
@@ -300,12 +523,24 @@ async def test_pg_clear_physically_erases_records_and_operations(
     assert await memory.clear(owner_id="alpha") == 1
     assert await _active(memory) == ()
 
+    # The journal went with the records, so the same key settles anew.
+    again = await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Stable.",
+        provenance=_provenance(),
+        idempotency_key="call-1",
+    )
+    assert again.changed
+    assert again.change_id == first.change_id
+    assert await memory.count_active(owner_id="alpha") == 1
+
 
 async def test_pg_purge_expired_non_active_rows(store: PostgresMemoryStore) -> None:
     old = _record(body="Stale.")
     await store.insert(old)
     await store.supersede(owner_id="alpha", old_id=old.memory_id, new=_record(body="Fresh."))
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "UPDATE dlightrag_memory_records "
             "SET updated_at = NOW() - INTERVAL '400 days' WHERE memory_id = $1",
@@ -326,8 +561,80 @@ async def test_pg_recall_legs_find_only_the_owner(store: PostgresMemoryStore) ->
     assert all(candidate.record.owner_id == "alpha" for candidate in candidates)
 
 
+def _dated_record(memory_id: str, body: str, *, minute: int) -> MemoryRecord:
+    at = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=minute)
+    return MemoryRecord(
+        owner_id="alpha",
+        memory_id=str(uuid.uuid5(uuid.NAMESPACE_URL, memory_id)),
+        kind="fact",
+        body=body,
+        provenance=_provenance(),
+        created_at=at,
+        updated_at=at,
+    )
+
+
+async def test_pg_recall_searches_with_query(store: PostgresMemoryStore) -> None:
+    await store.insert(_record(body="No email."))
+    await store.insert(_record(body="Unrelated fact about trains."))
+
+    result = await Memory(store).recall(owner_id="alpha", query="email", top_k=5)
+
+    assert result.strategy == "query_search"
+    assert result.candidates[0].record.body == "No email."
+    assert "No email." in [record.body for record in result.records]
+    assert result.content_chars == sum(len(record.body) for record in result.records)
+
+
+async def test_pg_recall_pins_exact_matches_first_in_chronological_order(
+    store: PostgresMemoryStore,
+) -> None:
+    newer = _dated_record("new", "deploy to staging", minute=2)
+    older = _dated_record("old", "deploy to staging", minute=1)
+    related = _dated_record("related", "deploy staging servers nightly", minute=0)
+    for record in (newer, older, related):
+        await store.insert(record)
+
+    result = await Memory(store).recall(owner_id="alpha", query="deploy to staging")
+
+    assert [record.memory_id for record in result.records[:2]] == [
+        older.memory_id,
+        newer.memory_id,
+    ]
+
+
+async def test_pg_recall_timeout_falls_back_to_recent_records(
+    store: PostgresMemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await store.insert(_dated_record("earlier", "earlier profile", minute=1))
+    recent = _dated_record("recent", "recent profile", minute=2)
+    await store.insert(recent)
+
+    async def slow_search(**_kwargs: Any) -> tuple[()]:
+        await asyncio.sleep(0.05)
+        return ()
+
+    monkeypatch.setattr(store, "search_candidates", slow_search)
+    monkeypatch.setattr("dlightrag_memory.memory._SEARCH_DEADLINE_SECONDS", 0.001)
+
+    result = await Memory(store).recall(owner_id="alpha", query="anything", top_k=1)
+
+    assert [record.memory_id for record in result.records] == [recent.memory_id]
+    assert result.strategy == "recent_fallback"
+    assert result.degraded == ("search_timeout",)
+
+
+async def test_pg_recall_caps_records_at_top_k(store: PostgresMemoryStore) -> None:
+    for index in range(15):
+        await store.insert(_record(body=f"project alpha item {index}"))
+
+    result = await Memory(store).recall(owner_id="alpha", query="project alpha item", top_k=5)
+
+    assert 0 < len(result.records) <= 5
+
+
 async def test_pg_bm25_indexes_are_provisioned(store: PostgresMemoryStore) -> None:
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         rows = await conn.fetch(
             "SELECT indexname FROM pg_indexes WHERE tablename = 'dlightrag_memory_records' "
             "AND indexname LIKE $1",
@@ -462,7 +769,7 @@ async def test_pg_multi_row_forget_undo_late_wrong_state_row_conflicts_cleanly(
     memory = Memory(store)
     forgotten, (first, second, _third) = await _forget_duplicate_rows(memory, store)
 
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "UPDATE dlightrag_memory_records SET status = 'active' "
             "WHERE owner_id = 'alpha' AND memory_id = $1",
@@ -475,7 +782,7 @@ async def test_pg_multi_row_forget_undo_late_wrong_state_row_conflicts_cleanly(
     assert await store.count_active(owner_id="alpha") == 2  # r3 plus the drifted row
     first_row = await store.get(owner_id="alpha", memory_id=first.memory_id)
     assert first_row is not None and first_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -499,7 +806,7 @@ async def test_pg_multi_row_forget_undo_late_missing_row_conflicts_cleanly(
     memory = Memory(store)
     forgotten, (first, second, _third) = await _forget_duplicate_rows(memory, store)
 
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "DELETE FROM dlightrag_memory_records WHERE owner_id = 'alpha' AND memory_id = $1",
             uuid.UUID(second.memory_id),
@@ -511,7 +818,7 @@ async def test_pg_multi_row_forget_undo_late_missing_row_conflicts_cleanly(
     assert await store.count_active(owner_id="alpha") == 1  # only r3 remains active
     first_row = await store.get(owner_id="alpha", memory_id=first.memory_id)
     assert first_row is not None and first_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -552,7 +859,7 @@ async def test_pg_multi_row_forget_undo_external_duplicate_conflicts_cleanly(
     second_row = await store.get(owner_id="alpha", memory_id=second.memory_id)
     assert first_row is not None and first_row.status == "forgotten"
     assert second_row is not None and second_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -610,7 +917,7 @@ async def test_pg_multi_row_forget_undo_deterministic_id_collision_rolls_back(
     assert squatter is not None and squatter.body == "Squatter."
     assert first_row is not None and first_row.status == "forgotten"
     assert second_row is not None and second_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -634,7 +941,7 @@ async def test_pg_multi_row_forget_undo_deterministic_id_collision_rolls_back(
         )
 
     # Clearing the collision leaves the same undo idempotency key settleable.
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "DELETE FROM dlightrag_memory_records WHERE owner_id = 'alpha' AND memory_id = $1",
             uuid.UUID(squatter_id),
@@ -686,7 +993,7 @@ async def test_pg_supersede_undo_deterministic_id_collision_rolls_back(
     squatter = await store.get(owner_id="alpha", memory_id=squatter_id)
     assert current is not None and current.status == "active"
     assert squatter is not None and squatter.body == "Squatter."
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -710,7 +1017,7 @@ async def test_pg_supersede_undo_deterministic_id_collision_rolls_back(
         )
 
     # Clearing the collision leaves the same undo idempotency key settleable.
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "DELETE FROM dlightrag_memory_records WHERE owner_id = 'alpha' AND memory_id = $1",
             uuid.UUID(squatter_id),
@@ -725,7 +1032,7 @@ async def test_pg_supersede_undo_deterministic_id_collision_rolls_back(
 async def _rewrite_before_records(
     store: PostgresMemoryStore, forgotten: Any, before_records: list[dict[str, Any]]
 ) -> None:
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "UPDATE dlightrag_memory_operations SET before_records = $2::jsonb "
             "WHERE owner_id = 'alpha' AND change_id = $1",
@@ -735,7 +1042,7 @@ async def _rewrite_before_records(
 
 
 async def _journal_before(store: PostgresMemoryStore, forgotten: Any) -> list[dict[str, Any]]:
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         value = await conn.fetchval(
             "SELECT before_records FROM dlightrag_memory_operations "
             "WHERE owner_id = 'alpha' AND change_id = $1",
@@ -762,7 +1069,7 @@ async def test_pg_multi_row_forget_undo_malformed_journal_owner_conflicts_cleanl
     second_row = await store.get(owner_id="alpha", memory_id=second.memory_id)
     assert first_row is not None and first_row.status == "forgotten"
     assert second_row is not None and second_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -797,7 +1104,7 @@ async def test_pg_multi_row_forget_undo_malformed_journal_duplicate_ids_conflict
     second_row = await store.get(owner_id="alpha", memory_id=second.memory_id)
     assert first_row is not None and first_row.status == "forgotten"
     assert second_row is not None and second_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -842,7 +1149,7 @@ async def test_pg_multi_row_forget_undo_malformed_journal_batch_conflicts_cleanl
     second_row = await store.get(owner_id="alpha", memory_id=second.memory_id)
     assert first_row is not None and first_row.status == "forgotten"
     assert second_row is not None and second_row.status == "forgotten"
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -902,13 +1209,13 @@ async def test_pg_multi_row_forget_undo_db_calls_are_constant(
     store: PostgresMemoryStore,
 ) -> None:
     memory = Memory(store)
-    counting_pool = _CountingPool(store._operation_pool)
+    counting_pool = _CountingPool(store._pool)
     counting_memory = Memory(PostgresMemoryStore(pool=counting_pool))
 
     large_calls: list[tuple[Any, ...]] = []
     for size, body in ((2, "Small batch."), (1000, "Bulk preference.")):
         rows = [_record(body=body) for _ in range(size)]
-        async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        async with store._pool.acquire() as conn:  # type: ignore[union-attr]
             await conn.executemany(
                 "INSERT INTO dlightrag_memory_records "
                 "(owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, "
@@ -993,7 +1300,7 @@ async def test_pg_multi_row_forget_undo_db_calls_are_constant(
             assert restored.supersedes_id == forgotten.memory_ids[index]
             assert restored.provenance.origin_kind == "undo"
 
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -1025,7 +1332,7 @@ async def test_pg_concurrent_multi_row_undo_has_one_winner(store: PostgresMemory
 
     assert sorted((first.outcome, second.outcome)) == ["changed", "conflict"]
     assert await store.count_active(owner_id="alpha") == 3  # r3 plus exactly one restored pair
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         assert (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM dlightrag_memory_records "
@@ -1054,7 +1361,7 @@ async def _dense_ids(store: PostgresMemoryStore, query: str) -> list[str]:
 
 async def _dense_state(store: PostgresMemoryStore, memory_id: str | None) -> tuple[Any, Any]:
     assert memory_id is not None
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         row = await conn.fetchrow(
             "SELECT embedding_fingerprint, embedding::text AS embedding "
             "FROM dlightrag_memory_records WHERE owner_id = 'alpha' AND memory_id = $1",
@@ -1144,7 +1451,7 @@ async def test_pg_dense_undo_keeps_each_restored_vector_in_its_own_space(
     unlabelled = _record(body="Prefers  tea.")
     for record in (current, retired, unembedded, unlabelled):
         await store.insert(record)
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "UPDATE dlightrag_memory_records SET embedding_fingerprint = 'test:retired@local' "
             "WHERE memory_id = $1",
@@ -1208,7 +1515,7 @@ async def test_pg_restating_a_record_heals_a_vector_the_dense_leg_cannot_read(
         provenance=_provenance(),
         idempotency_key="remember-1",
     )
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             f"UPDATE dlightrag_memory_records SET {unreadable} WHERE memory_id = $1",  # noqa: S608
             uuid.UUID(remembered.memory_id),
@@ -1243,7 +1550,7 @@ async def test_pg_restating_a_record_keeps_a_vector_the_dense_leg_reads(
         provenance=_provenance(),
         idempotency_key="remember-1",
     )
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "UPDATE dlightrag_memory_records SET embedding = '[1,0.5,0.5]' WHERE memory_id = $1",
             uuid.UUID(remembered.memory_id),
@@ -1316,10 +1623,144 @@ async def test_pg_list_active_page_traverses_ties_and_over_hundred_rows(
     assert len(set(observed)) == 110
 
     # The exact paged-read index exists and matches the mixed-direction order.
-    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         indexdef = await conn.fetchval(
             "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_dlightrag_memory_records_list'"
         )
         assert indexdef is not None
         normalized = " ".join(str(indexdef).split()).lower()
         assert "(owner_id, status, updated_at desc, memory_id desc)" in normalized
+
+
+# ---------------------------------------------------------------------------
+# The MCP host and the Research tools over the real store
+# ---------------------------------------------------------------------------
+
+
+async def test_pg_mcp_recall_returns_the_bound_subject_records(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    for owner_id, body in (("pi-user", "No email."), ("other-user", "No email at all.")):
+        await memory.remember(
+            owner_id=owner_id,
+            kind="preference",
+            body=body,
+            provenance=MemoryProvenance(origin_kind="mcp", origin_id="seed"),
+            idempotency_key="seed",
+        )
+
+    result = await mcp_recall(memory, subject="pi-user", query="email")
+
+    assert [record["body"] for record in result["records"]] == ["No email."]
+    assert result["records"][0]["memory_id"]
+
+
+async def test_pg_mcp_remember_writes_mcp_provenance_and_replays(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    write: dict[str, Any] = {
+        "subject": "pi-user",
+        "kind": "fact",
+        "body": "Project uses ruff.",
+        "supersedes_id": None,
+        "idempotency_key": "write-1",
+    }
+    stored = await mcp_remember(memory, **write)
+    replay = await mcp_remember(memory, **write)
+
+    assert stored["outcome"] == "changed"
+    assert replay == stored
+    (record,) = await _active(memory, owner_id="pi-user")
+    assert record.provenance.origin_kind == "mcp"
+
+
+async def test_pg_mcp_forget_and_undo_return_operation_receipts(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    stored = await mcp_remember(
+        memory,
+        subject="pi-user",
+        kind="fact",
+        body="Keep me.",
+        supersedes_id=None,
+        idempotency_key="write-1",
+    )
+    forgotten = await mcp_forget(
+        memory,
+        subject="pi-user",
+        memory_id=stored["memory_ids"][0],
+        body=None,
+        idempotency_key="forget-1",
+    )
+    assert forgotten["outcome"] == "changed"
+
+    undone = await mcp_undo(
+        memory, subject="pi-user", change_id=forgotten["change_id"], idempotency_key="undo-1"
+    )
+    assert undone["outcome"] == "changed"
+    assert [row.body for row in await _active(memory, owner_id="pi-user")] == ["Keep me."]
+
+
+def _host(store: PostgresMemoryStore) -> MemoryHost:
+    return MemoryHost(
+        owner_id="o",
+        auth_mode="jwt",
+        run_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        memory=Memory(store),
+    )
+
+
+async def test_pg_remember_then_forget_tools_return_typed_receipts(
+    store: PostgresMemoryStore,
+) -> None:
+    host = _host(store)
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="preference", body="No email."),
+        tool_runtime(call_id="call-1"),
+    )
+    operation = (remembered.details or {})["memory_operation"]
+    assert operation["outcome"] == "changed"
+    memory_id = str(operation["memory_ids"][0])
+
+    forgotten = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+
+    assert (forgotten.details or {})["memory_operation"]["outcome"] == "changed"
+    assert await store.count_active(owner_id="o") == 0
+
+
+async def test_pg_forget_tool_miss_is_unchanged(store: PostgresMemoryStore) -> None:
+    result = await forget_tool(host=_host(store)).execute(
+        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"),
+        tool_runtime(),
+    )
+
+    assert (result.details or {})["memory_operation"]["outcome"] == "unchanged"
+
+
+async def test_pg_recall_tool_lists_ids_with_relevant_records(
+    store: PostgresMemoryStore,
+) -> None:
+    receipt = await Memory(store).remember(
+        owner_id="o",
+        kind="preference",
+        body="No email.",
+        provenance=MemoryProvenance(origin_kind="answer_run", origin_id="seed"),
+        idempotency_key="seed",
+    )
+    updates: list[ToolResult] = []
+
+    result = await recall_memory_tool(host=_host(store)).execute(
+        RecallInput(query="email"),
+        recording_tool_runtime(updates, tool_name="recall_memory"),
+    )
+
+    assert receipt.memory_id is not None
+    assert receipt.memory_id in result.text_content
+    assert "No email." in result.text_content
+    assert [update.subject for update in updates] == ["email"]

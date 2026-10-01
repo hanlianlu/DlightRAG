@@ -16,7 +16,6 @@ from .service import (
     MemoryService,
     MemorySettings,
     MemorySettingsStore,
-    NoopMemorySettingsStore,
 )
 
 __all__ = [
@@ -32,5 +31,4 @@ __all__ = [
     "MemoryService",
     "MemorySettings",
     "MemorySettingsStore",
-    "NoopMemorySettingsStore",
 ]

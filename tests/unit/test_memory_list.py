@@ -1,16 +1,17 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Bounded Profile Memory listing: cursor, service gate, REST, SQL contract."""
+"""Bounded Profile Memory listing: the cursor codec and the REST and Web routes.
+
+Service paging over a real store runs in tests/integration/test_memory_pg.py.
+"""
 
 import datetime
 import uuid
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from dlightrag_memory import MemoryProvenance, MemoryRecord
 from dlightrag_memory.errors import MemoryUnavailableError
-from dlightrag_memory.store import InMemoryMemoryStore
 from fastapi import HTTPException
 
 from dlightrag.adapters.http.browser.routes.memory import list_memories as web_list_memories
@@ -26,10 +27,8 @@ from dlightrag.application.memory import (
     MemoryListCursorError,
     MemoryListPage,
     MemoryListPageRequest,
-    MemoryService,
 )
 from tests.support.application_double import application_double
-from tests.support.memory import InMemoryMemorySettingsStore
 
 _UTC = datetime.UTC
 
@@ -197,112 +196,6 @@ def test_cursor_rejects_bad_field_types() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Service gate ordering and paged delegation
-# ---------------------------------------------------------------------------
-
-
-def _service() -> MemoryService:
-    return MemoryService(
-        InMemoryMemoryStore(),
-        settings_store=InMemoryMemorySettingsStore(),
-        memory_list_cursor_secret=b"memory-list-tests",
-    )
-
-
-async def test_service_disabled_gate_precedes_any_page_work() -> None:
-    service = _service()
-    await service.set_enabled(owner_id="alpha", auth_mode="jwt", enabled=False)
-    with pytest.raises(MemoryDisabledError):
-        await service.list_active_page(owner_id="alpha", auth_mode="jwt")
-
-
-async def test_service_returns_bounded_pages_with_continuation() -> None:
-    service = _service()
-    memory = service._memory
-    for index in range(7):
-        await memory.remember(
-            owner_id="alpha",
-            kind="preference",
-            body=f"Memory {index}.",
-            provenance=_provenance(),
-            idempotency_key=f"key-{index}",
-        )
-    seen: list[str] = []
-    page_request: MemoryListPageRequest | None = MemoryListPageRequest(limit=3)
-    for _ in range(4):
-        page = await service.list_active_page(
-            owner_id="alpha",
-            auth_mode="jwt",
-            page=page_request,
-        )
-        seen.extend(record.body for record in page.records)
-        page_request = (
-            MemoryListPageRequest(limit=3, cursor=page.next_cursor)
-            if page.next_cursor is not None
-            else None
-        )
-        if page_request is None:
-            break
-    assert len(seen) == 7
-    assert len(set(seen)) == 7
-
-
-async def test_service_maps_after_tuple_from_cursor_and_derives_next_from_last_row() -> None:
-    service = _service()
-    store = service._memory
-    browse_calls: list[dict[str, Any]] = []
-    original_browse = service._memory.browse
-
-    async def tracked_browse(**kwargs: Any) -> Any:
-        browse_calls.append(kwargs)
-        return await original_browse(**kwargs)
-
-    store.browse = tracked_browse  # type: ignore[method-assign]
-    await store.remember(
-        owner_id="alpha",
-        kind="preference",
-        body="Only.",
-        provenance=_provenance(),
-        idempotency_key="key-only",
-    )
-    page = await service.list_active_page(
-        owner_id="alpha",
-        auth_mode="jwt",
-        page=MemoryListPageRequest(limit=1),
-    )
-    assert page.next_cursor is None
-    assert browse_calls == [{"owner_id": "alpha", "cursor": None, "limit": 1}]
-
-    browse_calls.clear()
-    cursor = MemoryListCursor(
-        updated_at=datetime.datetime(2026, 1, 1, tzinfo=_UTC),
-        memory_id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
-    )
-    page = await service.list_active_page(
-        owner_id="alpha",
-        auth_mode="jwt",
-        page=MemoryListPageRequest(limit=5, cursor=cursor),
-    )
-    assert page.next_cursor is None
-    assert browse_calls == [
-        {
-            "owner_id": "alpha",
-            "cursor": (cursor.updated_at, str(cursor.memory_id)),
-            "limit": 5,
-        }
-    ]
-
-
-async def test_service_rejects_continuation_after_empty_page() -> None:
-    service = _service()
-    service._memory.browse = AsyncMock(  # type: ignore[method-assign]
-        return_value=((), (datetime.datetime(2026, 1, 1, tzinfo=_UTC), str(uuid.uuid4())))
-    )
-    with pytest.raises(RuntimeError, match="after an empty page"):
-        await service.list_active_page(owner_id="alpha", auth_mode="jwt")
-
-
-# ---------------------------------------------------------------------------
 # REST route
 # ---------------------------------------------------------------------------
 
@@ -406,38 +299,3 @@ async def test_http_leaves_memory_refusals_to_the_shared_error_handlers(
     memory.list_active_page.side_effect = MemoryUnavailableError()
     with pytest.raises(MemoryUnavailableError):
         await list_memories(_request(application))
-
-
-# ---------------------------------------------------------------------------
-# PostgreSQL package SQL/index contract
-# ---------------------------------------------------------------------------
-
-
-def test_package_page_sql_contract_and_index_alignment() -> None:
-    from dlightrag_memory._storage.pg import (
-        _RECORD_INDEXES,
-        _SELECT_ACTIVE_PAGE,
-        _SELECT_ACTIVE_PAGE_AFTER,
-    )
-
-    normalized_first = " ".join(_SELECT_ACTIVE_PAGE.split()).lower()
-    assert "order by updated_at desc, memory_id desc" in normalized_first
-    assert "limit $2" in normalized_first
-    assert "offset" not in normalized_first
-
-    normalized_after = " ".join(_SELECT_ACTIVE_PAGE_AFTER.split()).lower()
-    assert "order by updated_at desc, memory_id desc" in normalized_after
-    assert "(updated_at, memory_id) < ($2, $3)" in normalized_after
-    assert "limit $4" in normalized_after
-    assert "offset" not in normalized_after
-
-    list_index = next(
-        statement
-        for statement in _RECORD_INDEXES
-        if "idx_dlightrag_memory_records_list" in statement
-    )
-    normalized_index = " ".join(list_index.split()).lower()
-    assert (
-        "on dlightrag_memory_records (owner_id, status, updated_at desc, memory_id desc)"
-        in normalized_index
-    )

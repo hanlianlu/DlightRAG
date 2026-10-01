@@ -183,7 +183,6 @@ class PostgresMemoryStore:
         self._embedder = embedder
         self._dense = not isinstance(embedder, NullEmbedder)
         self._bm25_indexes: tuple[str, ...] = ()
-        self._operation_pool = pool  # test hook: backdate rows directly
         self._initialized = False
 
     async def aclose(self) -> None:
