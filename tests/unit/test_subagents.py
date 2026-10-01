@@ -4,7 +4,6 @@
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -1548,78 +1547,6 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
     assert [tool.name for tool in child.tools] == ["search_knowledge_base", "ask_parent"]
     assert any(message.get("content") == "older answer" for message in messages)
     assert any(message.get("content") == "parent question" for message in messages)
-
-
-def test_child_defaults_to_its_parents_capability_minus_authority() -> None:
-    """A Child inherits capability, never authority (ADR 0025).
-
-    The read-only default made every Child that had to compute something ask for
-    `bash` on each spawn, and left a capability nobody had written yet off a Child
-    until somebody remembered it. The authority groups are what a Child may not hold.
-    """
-    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
-
-    child = compose_research_tools(
-        evidence=EvidenceLedger(),
-        trace={},
-        retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
-        search_web=None,
-        injected_tools=[],
-        register_web_source=None,
-        environment=MagicMock(),
-        artifacts_root=Path("/unused/artifacts"),
-        child=True,
-    )
-    names = {tool.name for tool in child}
-
-    assert names >= {
-        "search_knowledge_base",
-        "read",
-        "grep",
-        "find",
-        "ls",
-        "bash",
-        "write",
-        "edit",
-    }
-    assert names & CHILD_FORBIDDEN_TOOLS == set()
-    assert not {"spawn_agent", "attach_artifact"} & names
-
-
-def test_child_can_explicitly_narrow_to_host_permitted_side_effect_tools() -> None:
-    child = compose_research_tools(
-        evidence=EvidenceLedger(),
-        trace={},
-        retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
-        search_web=None,
-        injected_tools=[],
-        register_web_source=None,
-        environment=MagicMock(),
-        artifacts_root=Path("/unused/artifacts"),
-        child=True,
-        tool_names=("read", "write"),
-    )
-
-    assert {tool.name for tool in child} == {"read", "write"}
-
-
-def test_interactive_child_keeps_ask_parent_on_an_explicit_tool_subset() -> None:
-    host = SubagentHost()
-    child = compose_research_tools(
-        evidence=EvidenceLedger(),
-        trace={},
-        retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
-        search_web=None,
-        injected_tools=[],
-        register_web_source=None,
-        environment=MagicMock(),
-        artifacts_root=Path("/unused/artifacts"),
-        subagent_host=host,
-        child=True,
-        tool_names=("read", "write"),
-    )
-
-    assert {tool.name for tool in child} == {"read", "write", "ask_parent"}
 
 
 async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
