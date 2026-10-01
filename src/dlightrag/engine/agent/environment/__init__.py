@@ -8,7 +8,7 @@ from dlightrag.engine.agent.environment.access import (
     ToolAccess,
     WorkspaceAccess,
 )
-from dlightrag.engine.agent.environment.child import build_child_environment, looks_like_secret_name
+from dlightrag.engine.agent.environment.child import build_child_environment
 from dlightrag.engine.agent.environment.errors import (
     TOOL_RESULT_MAX_BYTES,
     TOOL_RESULT_MAX_LINES,
@@ -60,6 +60,5 @@ __all__ = [
     "TrustExecutionAdapter",
     "WorkspaceQuotaExceeded",
     "build_child_environment",
-    "looks_like_secret_name",
     "resolve_execution_adapter",
 ]

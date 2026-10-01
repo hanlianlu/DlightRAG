@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
 from pathlib import Path
 
 _INHERIT = frozenset({"PATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"})
@@ -48,21 +47,15 @@ _BLOCK_EXACT = frozenset(
 )
 
 
-def build_child_environment(
-    *,
-    home: Path,
-    tmp: Path,
-    parent: Mapping[str, str] | None = None,
-) -> dict[str, str]:
+def build_child_environment(*, home: Path, tmp: Path) -> dict[str, str]:
     """Return an explicit env: usable PATH, no service secrets, no full inheritance."""
-    source = os.environ if parent is None else parent
     env: dict[str, str] = {}
     for name in _INHERIT | _SAFE_CA:
-        value = source.get(name)
+        value = os.environ.get(name)
         if value:
             env[name] = value
     for name in _PROXY:
-        value = source.get(name)
+        value = os.environ.get(name)
         cleaned = _uncredentialed_proxy(value) if value else None
         if cleaned:
             env[name] = cleaned
@@ -94,11 +87,6 @@ def _uncredentialed_proxy(value: str) -> str | None:
     return value
 
 
-def looks_like_secret_name(name: str) -> bool:
-    """Return True when a variable name matches the seeded secret-pattern test."""
-    return _blocked(name)
-
-
 def _blocked(name: str) -> bool:
     if name in _BLOCK_EXACT:
         return True
@@ -108,4 +96,4 @@ def _blocked(name: str) -> bool:
     return any(pattern in upper for pattern in _SECRET_PATTERNS)
 
 
-__all__ = ["build_child_environment", "looks_like_secret_name"]
+__all__ = ["build_child_environment"]

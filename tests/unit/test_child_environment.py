@@ -3,11 +3,15 @@
 
 from pathlib import Path
 
-from dlightrag.engine.agent.environment import build_child_environment, looks_like_secret_name
+import pytest
+
+from dlightrag.engine.agent.environment import build_child_environment
 
 
-def test_child_env_keeps_path_and_drops_seeded_secrets(tmp_path: Path) -> None:
-    parent = {
+def test_child_env_keeps_path_and_drops_seeded_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, value in {
         "PATH": "/usr/bin",
         "HOME": "/root",
         "SSH_AUTH_SOCK": "/tmp/ssh",
@@ -18,8 +22,11 @@ def test_child_env_keeps_path_and_drops_seeded_secrets(tmp_path: Path) -> None:
         "PYTHONPATH": "/evil",
         "HTTP_PROXY": "http://user:pass@proxy.example:8080",
         "HTTPS_PROXY": "http://proxy.example:8080",
-    }
-    env = build_child_environment(home=tmp_path / "home", tmp=tmp_path / "tmp", parent=parent)
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    env = build_child_environment(home=tmp_path / "home", tmp=tmp_path / "tmp")
+
     assert env["PATH"] == "/usr/bin"
     assert env["HOME"] == str(tmp_path / "home")
     assert env["TERM"] == "dumb"
@@ -31,5 +38,3 @@ def test_child_env_keeps_path_and_drops_seeded_secrets(tmp_path: Path) -> None:
     assert "PYTHONPATH" not in env
     assert "HTTP_PROXY" not in env
     assert env["HTTPS_PROXY"] == "http://proxy.example:8080"
-    assert looks_like_secret_name("OPENAI_API_KEY")
-    assert not looks_like_secret_name("PATH")
