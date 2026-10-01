@@ -388,7 +388,7 @@ async def test_real_native_depth_limit_is_terminal(fixtures, monkeypatch):
 async def test_resource_refusal_tool_effects_restore_without_reparse(
     fixtures, monkeypatch, failure
 ):
-    from tests.unit.test_resource_tools import call, tools
+    from tests.support.resources import call, tools
 
     root, _ = fixtures
 

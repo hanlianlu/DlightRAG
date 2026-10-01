@@ -89,6 +89,7 @@ from tests.integration.test_attachment_replay_pg import (  # noqa: F401
     orchestrator,
     origin,
 )
+from tests.support.resources import png as png_bytes
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 from tests.unit.test_answer_executor import _resource_resolver
 from tests.unit.test_docx_conversion import _zip_replace
@@ -97,7 +98,6 @@ from tests.unit.test_provider_attachment_contract import (
     _openai_stream_sse,
     bind_mock_http,
 )
-from tests.unit.test_resource_tools import png as png_bytes
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -202,7 +202,7 @@ async def test_url_terminal_source_and_conversion_settle_together(
         )
         assert restored.conversion_effects(resource) == effects
         assert (await restored.materialize(resource)) == data
-        from tests.unit.test_resource_tools import call, tools
+        from tests.support.resources import call, tools
 
         read, view = tools(restored)
         for _ in range(2):
@@ -1039,7 +1039,7 @@ async def test_cancelled_child_url_terminal_settles_source_for_parent_and_recove
         )
         assert snapshots[resource] == data
         assert await restored.materialize(resource) == data
-        from tests.unit.test_resource_tools import call, tools
+        from tests.support.resources import call, tools
 
         read, _ = tools(restored)
         result = await call(read, resource_id=resource)

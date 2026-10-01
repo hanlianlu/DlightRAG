@@ -23,7 +23,7 @@ from scripts.format_route_fixtures import (
     pdf_fixture,
     xlsx_fixture,
 )
-from tests.unit.test_resource_tools import call, tools
+from tests.support.resources import call, tools
 
 NONLATIN_FACTS = ("Привет мир 42.5", "Москва столица", "中文測試 7.5", "東京駅")
 

@@ -37,9 +37,9 @@ from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.runtime.coordinator import LeaseLostError
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
+from tests.support.resources import pdf_bytes
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 from tests.unit.test_research_runtime_migration import _Session
-from tests.unit.test_resource_visual import pdf_bytes
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 OWNER = "generated-replay-owner"
@@ -727,7 +727,7 @@ async def test_unified_docx_host_settlement_restores_exact_text_assets_and_curso
 
     from dlightrag.engine.agent.session.entries import ToolResultMessageEntry
     from dlightrag.engine.agent.tool_content import tool_content_attachments
-    from tests.unit.test_resource_tools import docx_images
+    from tests.support.resources import docx_images
 
     store, pool = pg
     session, session_id = await new_run(store)

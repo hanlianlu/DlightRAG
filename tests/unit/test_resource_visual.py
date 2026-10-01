@@ -11,15 +11,7 @@ from dlightrag.engine.answer.resources.visual import (
     pdf_page_count,
     render_pdf_page,
 )
-
-
-def pdf_bytes(count: int = 3, size: tuple[int, int] = (300, 400)) -> bytes:
-    images = [Image.new("RGB", size, (index * 20, 10, 10)) for index in range(count)]
-    buffer = io.BytesIO()
-    images[0].save(buffer, "PDF", save_all=True, append_images=images[1:])
-    for image in images:
-        image.close()
-    return buffer.getvalue()
+from tests.support.resources import pdf_bytes
 
 
 def test_physical_page_count_and_detail_geometry():

@@ -506,7 +506,7 @@ def test_child_admission_record_is_shared_and_idempotent_across_retry() -> None:
     )
     from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
     from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
-    from tests.unit.test_resource_tools import png as png_bytes
+    from tests.support.resources import png as png_bytes
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")

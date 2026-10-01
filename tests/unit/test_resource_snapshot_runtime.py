@@ -33,10 +33,9 @@ from dlightrag.engine.answer.tools.resources import make_resource_reader, make_r
 from dlightrag.engine.runtime.records import RunFetchedResource
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.resources import call, docx_images, pdf_bytes, tools
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 from tests.unit.test_research_runtime_migration import _Session
-from tests.unit.test_resource_tools import call, docx_images, tools
-from tests.unit.test_resource_visual import pdf_bytes
 
 
 class _SettledBlobs:

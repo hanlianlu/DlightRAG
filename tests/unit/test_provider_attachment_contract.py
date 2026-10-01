@@ -45,9 +45,8 @@ from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.resources import make_resource_viewer
+from tests.support.resources import call, pdf_bytes
 from tests.unit.conftest import answer_image_policy
-from tests.unit.test_resource_tools import call
-from tests.unit.test_resource_visual import pdf_bytes
 
 PAGE_ONE = b"\x89PNG\r\n\x1a\npage-one"
 PAGE_TWO = b"\x89PNG\r\n\x1a\npage-two"

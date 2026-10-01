@@ -2,13 +2,9 @@
 """Public read/view seams: text, pixels, inventories, identity, and budgets."""
 
 import asyncio
-import base64
-import io
 from dataclasses import replace
 
 import pytest
-from docx import Document
-from PIL import Image
 from pydantic import ValidationError
 
 from dlightrag.engine.agent.environment import AccessScheduler
@@ -19,67 +15,14 @@ from dlightrag.engine.agent.tool_content import (
     tool_content_attachments,
 )
 from dlightrag.engine.agent.tools import ToolResult
-from dlightrag.engine.agent.tools.files import (
-    PreparedImageAttachment,
-    ViewArgs,
-    read_tool,
-    view_tool,
-)
-from dlightrag.engine.ai.media import decode_image_base64
+from dlightrag.engine.agent.tools.files import ViewArgs, view_tool
 from dlightrag.engine.answer.resources.converters import ResourceConversionError
-from dlightrag.engine.answer.resources.models import (
-    ResourceInput,
-    ResourceRegistryError,
-    TextWindowBudget,
-)
+from dlightrag.engine.answer.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
+from dlightrag.engine.answer.tools.resources import make_resource_viewer
+from tests.support.resources import call, docx_images, pdf_bytes, png, preparer, tools
 from tests.tool_helpers import tool_runtime
-from tests.unit.conftest import answer_image_policy
-from tests.unit.test_resource_visual import pdf_bytes
-
-
-def png():
-    buffer = io.BytesIO()
-    Image.new("RGB", (24, 24), (20, 10, 0)).save(buffer, "PNG")
-    return buffer.getvalue()
-
-
-def preparer(max_images=8):
-    budget = answer_image_policy(max_images=max_images).new_budget()
-
-    def prepare(data, label):
-        block = budget.add_base64(base64.b64encode(data).decode(), label=label)
-        if block is None:
-            return None
-        content, media = decode_image_base64(block["image_url"]["url"])
-        return PreparedImageAttachment(content, media or "image/png", content != data)
-
-    return prepare
-
-
-def tools(registry, *, max_images=8, environment=None):
-    access = AccessScheduler()
-    return (
-        read_tool(
-            environment,
-            access,
-            resource_reader=make_resource_reader(registry, TextWindowBudget(1000)),
-        ),
-        view_tool(
-            environment,
-            access,
-            resource_viewer=make_resource_viewer(registry),
-            image_preparer=preparer(max_images),
-        ),
-    )
-
-
-async def call(tool, **args):
-    return await tool.execute(
-        tool.input_model.model_validate(args), tool_runtime(tool_name=tool.name)
-    )
 
 
 @pytest.mark.parametrize(
@@ -214,16 +157,6 @@ async def test_pdf_overview_actual_coverage_aggregate_budget_and_signed_recovery
             "call read or view on the resource again for a current continuation"
             in tampered.text_content
         )
-
-
-def docx_images(count):
-    doc = Document()
-    doc.add_paragraph("Revenue was 123.")
-    for _ in range(count):
-        doc.add_picture(io.BytesIO(png()))
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    return buffer.getvalue()
 
 
 async def test_duplicate_occurrences_membership_inventory_and_snapshot_reuse(monkeypatch):
