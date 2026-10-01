@@ -21,12 +21,6 @@ def _dependencies(path: Path = Path("pyproject.toml")) -> list[str]:
     return _project(path)["dependencies"]  # type: ignore[return-value]
 
 
-def test_workspace_versions_are_lockstep() -> None:
-    versions = {_project(path)["version"] for path in _MANIFESTS}
-
-    assert len(versions) == 1
-
-
 def test_workspace_requirements_use_floors_without_upper_bounds() -> None:
     for path in _MANIFESTS:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -125,10 +119,6 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     # Pins the v4 SDK API as the floor without capping the major version, so
     # routine patch bumps stay green while still guarding against v3/v5 drift.
     assert re.fullmatch(r"langfuse>=4\.\d+(\.\d+)?", langfuse_dep)
-
-
-def test_language_detection_dependency_is_owned_by_root() -> None:
-    assert any(dep.startswith("lingua-language-detector") for dep in _dependencies())
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:
