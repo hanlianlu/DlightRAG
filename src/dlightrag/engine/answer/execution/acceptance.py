@@ -25,6 +25,7 @@ from dlightrag.engine.ai.settings import ChatModelSelector
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.errors import AnswerInputOverflowError, UnsupportedAnswerModeError
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
 from dlightrag.engine.answer.execution.input import AttachmentReference
 from dlightrag.engine.answer.history import (
     HistoryInputMeasure,
@@ -128,6 +129,7 @@ def research_history_input_measure(
             artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
             # The measurement must carry the same habit the run's own request does.
             run_notes=any(tool.name == "write" for tool in tools),
+            connection_tools=any(is_connection_tool(tool.name) for tool in tools),
         )
         return (
             context.measure_control_input(

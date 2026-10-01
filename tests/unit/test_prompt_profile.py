@@ -29,7 +29,7 @@ def test_no_system_prompt_states_a_clock() -> None:
     # (Pi states no clock either, and DeepSeek's harness ships its time context
     # opt-in and disabled by default).
     research = agent_control_prompt(
-        profile_memory_write=True, artifact_publication=True, run_notes=True
+        profile_memory_write=True, artifact_publication=True, run_notes=True, connection_tools=True
     )
     for prompt in (answer_core(), core_identity(environment_clock=True), research):
         assert f"{datetime.now(UTC):%Y-%m-%d}" not in prompt

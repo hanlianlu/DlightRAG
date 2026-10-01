@@ -79,6 +79,7 @@ from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.mode import ResolvedMode
 from dlightrag.engine.answer.publication import PublicationLimits
@@ -739,6 +740,7 @@ class AnswerOrchestrator:
                 # composed-tool fact the publication guidance uses: a read-only
                 # Child Session is told nothing about a path it cannot write.
                 run_notes=any(tool.name == "write" for tool in tools),
+                connection_tools=any(is_connection_tool(tool.name) for tool in tools),
                 session_notes=self._session_notes,
             ),
             tools=tools,
@@ -848,6 +850,8 @@ class AnswerOrchestrator:
                 memory_text=self._memory_text,
                 contributions=() if skills is None else skills.context_contributions(),
                 tool_guidance=_tool_guidance(tools),
+                # A Child inherits the Run's Connection tools, and their descriptions with them.
+                connection_tools=any(is_connection_tool(tool.name) for tool in tools),
                 instructions=child_instructions(child_session_id),
             ),
             tools=tools,

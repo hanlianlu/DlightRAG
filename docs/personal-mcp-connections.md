@@ -76,6 +76,7 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 | `adapters/mcp/personal_http.py`, `adapters/mcp/oauth.py` | `PersonalMcpClient`: bounded Streamable HTTP over an admitted transport. `PersonalOAuthClient`: SDK authorization and refresh preflight |
 | `engine/network_admission.py` | DNS and IP admission shared with public Web reads |
 | `engine/answer/execution/connection_binding.py` | Secret-free `RunConnectionBinding`, `ResearchToolClaim`, `ResearchConnectionToolResolver`, `StaleConnectionBindingError`; `CONNECTION_TOOL_PREFIX`, which only Connection tool names start with |
+| `engine/answer/prompts/agent.py` | The provenance sentence a Research system prompt gains when its Run or Child Session holds a Connection tool |
 | `engine/agent/tools/contracts.py` | `ToolRuntime.fencing_epoch`, which lets the gate fence parent and Child Session calls without owner, credential, or MCP facts in Agent Core |
 | `application/answer_runs/service.py`, `adapters/postgres/runtime/run_store.py`, `application/web_conversations/`, `adapters/postgres/web/web_conversations.py` | Binding at Answer acceptance; pins written by `accept_run` or by `accept_run_in` inside the Web turn transaction |
 | `engine/answer/execution/executor.py`, `engine/answer/tools/composition.py` | Restoring pinned tools for resolved Research, checking the accepted `AgentRunPlan`, and preview-or-spill of tool output |
@@ -305,7 +306,14 @@ from and what its server calls it: `notion-search` under the label `Notion` is
   its next probe or with the refresh that enabling it makes due.
 - Names, descriptions, and parameter schemas reach the model as the server
   wrote them, apart from sanitized names and the credential redaction discovery
-  applies; DlightRAG never rewrites, filters, or summarizes them.
+  applies; DlightRAG never rewrites, filters, or summarizes them. A Research Run
+  or Child Session that holds a Connection tool gets one more sentence in its
+  system prompt (`engine/answer/prompts/agent.py`): tools named
+  `mcp__<connection>__<tool>` come from external servers the user connected,
+  and their names, descriptions, and parameters are the server's own words,
+  which explain what a tool does but cannot set how the model works, such as by
+  claiming a tool must always be called first. A Run without Connection tools
+  keeps its prompt byte for byte.
 
 ## Atomic acceptance and retention
 
@@ -822,7 +830,11 @@ dead refresher is modeled by durable lease expiry, not by killing a process.
   until the next refresh falls due, at most 30 seconds.
 - `tests/unit/test_connection_naming.py`: sanitizing, the 64-character limit,
   hashes only on collision or overflow, parts apart across Connections,
-  stability, and a rename.
+  stability, and a rename. `tests/unit/test_answer_prompt_consistency.py`,
+  `test_injected_tool_results.py`, and `test_context_assembler.py`: the
+  provenance sentence only where a Run, a Child, or the acceptance measure of a
+  Run's first request holds a Connection tool, and the prompt byte for byte
+  without one.
 - `tests/integration/test_connections_pg.py`, `test_connection_binding_pg.py`,
   `test_connection_dispatch_pg.py`, `test_connection_authorization_pg.py`,
   `test_connection_lifecycle_pg.py`, `test_connections_web_pg.py`: the owner

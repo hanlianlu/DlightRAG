@@ -59,6 +59,7 @@ class ContextAssembler:
         profile_memory_write: bool = False,
         artifact_publication: bool = False,
         run_notes: bool = False,
+        connection_tools: bool = False,
         session_notes: Sequence[SessionNoteRecord] = (),
         instructions: str = "",
     ) -> None:
@@ -85,6 +86,7 @@ class ContextAssembler:
         self._profile_memory_write = profile_memory_write
         self._artifact_publication = artifact_publication
         self._run_notes = run_notes
+        self._connection_tools = connection_tools
         self._session_notes = tuple(session_notes)
         #: Provider-anchored estimator correction; see ``observe_provider_input``.
         self._estimated_bias_tokens = 0
@@ -205,6 +207,7 @@ class ContextAssembler:
             profile_memory_write=self._profile_memory_write,
             artifact_publication=self._artifact_publication,
             run_notes=self._run_notes,
+            connection_tools=self._connection_tools,
         )
         contributions = [
             ContextContribution(

@@ -474,6 +474,40 @@ def test_research_seed_measure_grows_when_memory_is_reserved() -> None:
     assert reserved([]) > empty([])
 
 
+def test_research_seed_measure_carries_the_connection_sentence_its_run_sends() -> None:
+    """Acceptance measures the first request a Run sends, Connection sentence included."""
+    from pydantic import BaseModel
+
+    from dlightrag.engine.agent.tools import ToolDeclaration
+
+    class Arguments(BaseModel):
+        query: str
+
+    def seed(tool_name: str) -> int:
+        return research_history_input_measure(
+            model_profile=ModelProfile(context_window_tokens=_WINDOW),
+            context_policy=CONTEXT_POLICY,
+            query="What changed?",
+            query_images=None,
+            resource_manifest=(),
+            image_budget=None,
+            tools=[ToolDeclaration(tool_name, "Search the workspace.", Arguments)],
+        )([])
+
+    def run(connection_tools: bool) -> int:
+        return ContextAssembler(
+            model_profile=ModelProfile(context_window_tokens=_WINDOW),
+            query="What changed?",
+            history=PriorTurns(),
+            query_images=None,
+            resource_manifest=(),
+            connection_tools=connection_tools,
+        ).measure_control_input(evidence=EvidenceLedger(), working=WorkingContextProjection())
+
+    # Two names of one length, so only the system prompt tells the seeds apart.
+    assert seed("mcp__Notion__search") - seed("notion_search_tool_x") == run(True) - run(False) > 0
+
+
 async def test_control_turn_projects_artifact_publication_as_one_capability() -> None:
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW),
