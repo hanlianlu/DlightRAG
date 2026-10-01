@@ -766,11 +766,10 @@ One RunRuntime schedules top-level Retrieval and Answer Runs on the Query Lane
 and all ingest, replace, exact delete, retry, reset, and Workspace Delete Runs
 on the Corpus Mutation Lane. Each lane has a per-process worker bound and a deployment-wide
 nonterminal admission limit. Deployment configuration owns process count and
-therefore total active Run capacity. The [captured local load
-evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence)
-records 10,000 local Query control-plane submissions plus the mutation
-submissions, one-process/one-database fake-executor occupancy, the mutation
-admission-limit rejection, measurements, and limitations. It does not exercise the 30,000 Query limit or a multi-host topology.
+therefore total active Run capacity. Other documents link here for these
+defaults instead of restating them. What a local campaign exercised of them,
+and what it did not, is recorded once as [captured local load
+evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence).
 
 `run_retention_days` is the per-Run retention selection for terminal Answer
 Runs, their event logs, linked Web turns, and unreferenced Run blobs; the default

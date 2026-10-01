@@ -96,15 +96,13 @@ Workspaces in a running deployment. Neither delegates to the other.
 - Graceful shutdown fenced-requeues unfinished work; crash recovery waits for
   lease expiry. Four no-progress reclaims fail as `run_abandoned`.
 - Monitor `dlightrag_runs`, `dlightrag_run_events`, `dlightrag_blobs`, and
-  `dlightrag_blob_chunks`. Each process defaults to 16 Query workers, and each
-  writer process defaults to two Corpus Mutation workers. Deployment
-  configuration owns process count and total active capacity. New acceptance is
-  rejected when the lane's deployment-wide nonterminal admission limit is
-  reached: 30,000 Query Runs or 1,000 Corpus Mutation Runs by default. These
-  values are defaults/targets. The local fake-executor campaign exercised 16
-  Query worker slots and 10,000 Query submissions, but not the 30,000 Query
-  limit or a multi-process/multi-host topology; the exact numbers and their
-  limits are under [Captured local load evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence).
+  `dlightrag_blob_chunks`. Every process runs Query workers, and every writer
+  process runs Corpus Mutation workers. Deployment configuration owns process
+  count and total active capacity. New acceptance is rejected when the lane's
+  deployment-wide nonterminal admission limit is reached. The worker and
+  admission defaults are in
+  [Configuration](configuration.md#runruntime-lanes-and-retention); what the
+  local campaign exercised of them is under [Captured local load evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence).
 - Route traffic with `GET /ready`; it probes only writable Operational State.
   Use `GET /health` for I/O-free liveness and the bounded corpus/parser/provider
   degradation view. A corpus or provider outage does not remove readiness:

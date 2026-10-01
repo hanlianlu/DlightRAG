@@ -63,8 +63,9 @@ state, and attachment references through its purpose-built transaction seam.
 
 An execution slot is one of `runtime.query.worker_concurrency` local runs. The
 coordinator reserves a slot **before** claiming a row, so a worker never holds a
-lease while waiting for local capacity. The Query default is 16 workers per
-process; Corpus Mutation defaults to two workers per writer process. Multiple
+lease while waiting for local capacity. Every process runs Query workers and
+every writer process runs Corpus Mutation workers, as many as
+[configured](configuration.md#runruntime-lanes-and-retention). Multiple
 processes contribute additive local slots, while PostgreSQL row locks prevent a
 Run from being double-claimed. Deployment configuration owns process count and
 total active Run capacity. Model-provider and LightRAG pipeline concurrency are
@@ -78,9 +79,9 @@ completion, and once per second so work from another host does not depend on a
 process-local wakeup.
 
 Accepted Retrieval and Answer Runs queue while Query slots are busy, up to the
-deployment-wide `runtime.query.max_nonterminal_runs` nonterminal admission limit
-(default 30,000). Corpus Mutation Runs queue independently up to
-`runtime.corpus_mutation.max_nonterminal_runs` (default 1,000). Reaching a lane's
+deployment-wide `runtime.query.max_nonterminal_runs` nonterminal admission limit.
+Corpus Mutation Runs queue independently up to
+`runtime.corpus_mutation.max_nonterminal_runs`. Reaching a lane's
 admission limit rejects new acceptance before storing a Run; already
 accepted work remains durable. Answer has no wall-clock timeout. A top-level
 Retrieval's `corpus.retrieval.timeout` begins only after it is claimed and bounds

@@ -262,10 +262,10 @@ states and the common `GET|DELETE /runs/{run_id}` plus
 `GET /runs/{run_id}/events` observation routes. Cancellation closes at the
 durable upstream handoff. A multi-document mutation with any failed document is
 `failed`, not partially successful. Acceptance is atomically bounded by the
-1,000-Run Corpus Mutation deployment-wide nonterminal admission limit; reaching
-it returns HTTP 503 before inserting a Run. Accepted work remains durable, and
-each writer process executes at most two Corpus Mutations concurrently by
-default.
+Corpus Mutation deployment-wide nonterminal admission limit; reaching it returns
+HTTP 503 before inserting a Run. Accepted work remains durable, and each writer
+process executes a bounded number of Corpus Mutations concurrently. Both bounds
+are [configuration](configuration.md#runruntime-lanes-and-retention).
 
 The terminal result carries the action, stable `track_id`, bounded per-document
 outcomes, `document_count`, and `details_truncated`. An ingest's result names
@@ -945,10 +945,11 @@ settled; resumed, it retries only the documents that did not become ready (see
 
 Internal exception text and schema detail are not public.
 
-Accepted Retrieval and Answer Runs queue under worker saturation while the Query
-Lane has fewer than 30,000 nonterminal Runs; its deployment-wide nonterminal
-admission limit rejects later admission with HTTP 503. Corpus Mutation admission
-uses its independent 1,000-Run limit and the same pre-insert 503 behavior. REST,
+Accepted Retrieval and Answer Runs queue under worker saturation until the Query
+Lane reaches its deployment-wide nonterminal admission limit, which rejects later
+admission with HTTP 503. Corpus Mutation admission uses its independent limit and
+the same pre-insert 503 behavior. Both limits are
+[configuration](configuration.md#runruntime-lanes-and-retention). REST,
 MCP, and same-origin browser commands report the retriable message
 `Deployment-wide nonterminal admission limit reached`. The controlled failure
 and admission-limit evidence is recorded with the

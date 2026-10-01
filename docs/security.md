@@ -173,9 +173,10 @@ in-process WAF or rate limiter. SIEM systems such as Sentinel observe/correlate;
 they are not an inline blocker.
 
 Accepted Retrieval and Answer Runs queue rather than fail under local worker
-saturation, up to the deployment-wide Query-lane nonterminal admission limit
-(30,000 by default). Corpus Mutation Runs use a separate 1,000-Run limit. Each
-writer process executes at most two Corpus Mutations concurrently by default;
+saturation, up to the deployment-wide Query-lane nonterminal admission limit.
+Corpus Mutation Runs use a separate limit, and each writer process executes a
+bounded number of Corpus Mutations concurrently; both are
+[configuration](configuration.md#runruntime-lanes-and-retention), and
 deployment configuration owns process count and total active capacity. The
 controlled admission-limit, authorization, sanitation, and 10k-client evidence
 is recorded with the [RunRuntime targets](run-runtime-and-scaling-target.md#captured-local-load-evidence).

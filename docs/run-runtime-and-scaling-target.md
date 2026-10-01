@@ -16,7 +16,7 @@ The target is a breaking upgrade. It does not retain parallel legacy lifecycle e
 
 - One trusted organization, 10–100 Corpus Workspaces, and normally 1–10 Workspaces per Query.
 - Expected Query mix is 10% Retrieval, 40% Fast Answer, and 50% Research Answer.
-- The deployment-wide Query nonterminal admission limit defaults to 30,000 Runs; the recorded campaign submitted 10,000 Query Runs and did not fill that limit.
+- The deployment-wide Query nonterminal admission limit keeps its [configured default](configuration.md#runruntime-lanes-and-retention); the recorded campaign did not fill it.
 - Retrieval `top_k` and `chunk_top_k` remain bounded; current target maxima are ten times configured values, presently 400 and 200.
 - The Research working-set guard and Answer attachment maximum are 128 MiB. In trust-mode execution, only filesystem/container infrastructure can enforce a hard storage quota.
 - Existing Child Session concurrency remains four per parent. Additional Bash, browser, Web-search, or tenant capacity classes require load-test evidence.
@@ -114,7 +114,7 @@ Corpus Mutation Lane
 
 Each lane has bounded per-process execution and an independent deployment-wide nonterminal admission limit. Claim ordering favors eligible older Runs, but only Corpus Mutation guarantees durable FIFO within each Workspace; temporarily ineligible work is skipped rather than causing lane-wide head-of-line blocking. Local worker limits bound each process while nonterminal limits prevent a dependency outage from growing a durable queue without bound. Deployment configuration owns process count and therefore total active capacity.
 
-The defaults/targets are 16 Query workers per process and 30,000 Query nonterminal Runs, plus two Corpus Mutation workers per writer process and a 1,000-Run mutation limit. The deterministic one-process, one-database campaign submitted 10,000 Query Runs plus 1,000 recorded mutation Runs to fake executors, exercised occupancy of 16 and two, reached only the mutation admission limit, preserved lane independence and per-Workspace mutation FIFO, and drained; [Captured local load evidence](#captured-local-load-evidence) records the exact measurements and limitations. A separate test with multiple coordinator objects sharing PostgreSQL in one test process shows additive object-local slots without double claims; it is not multi-process or multi-host evidence. `ModelScheduler` remains process-local Engine AI protection, LightRAG owns its stage queues and parser/embedding/LLM concurrency, and providers/operators own external quotas and service capacity.
+Both lanes' worker and admission defaults are in [Configuration](configuration.md#runruntime-lanes-and-retention). The deterministic one-process, one-database campaign filled both lanes' local worker slots, reached only the mutation admission limit, preserved lane independence and per-Workspace mutation FIFO, and drained; [Captured local load evidence](#captured-local-load-evidence) records the exact measurements and limitations. A separate test with multiple coordinator objects sharing PostgreSQL in one test process shows additive object-local slots without double claims; it is not multi-process or multi-host evidence. `ModelScheduler` remains process-local Engine AI protection, LightRAG owns its stage queues and parser/embedding/LLM concurrency, and providers/operators own external quotas and service capacity.
 
 Across the deployment, at most one `corpus_mutation` run owns a Workspace at a time. While calling LightRAG's in-process pipeline, that Run retains its fenced lease and a local Corpus Mutation execution slot. LightRAG owns concurrency within the pipeline. Different Workspaces can be processed by different writer replicas concurrently.
 
@@ -262,7 +262,7 @@ Document visibility barrier. The old Ingest Job lifecycle, unchecked deletion,
 document-status snapshot restoration, and best-effort required projections are
 not compatibility paths.
 
-The evidence decisions are closed: Corpus Mutation retains two workers per writer process and a 1,000-Run deployment-wide nonterminal admission limit; broad survival tripwires and measured latency/memory/drain results are environment-described rather than product SLOs. The deterministic fake-executor campaign covers Retrieval across 1, 10, 50, and 100 Workspaces and the repository-owned failure/recovery matrix. The default PostgreSQL 18 integration gate verifies observable delete convergence across `PGKVStorage`, `PGVectorStorage`, `PGTableGraphStorage`, and `PGDocStatusStorage` without claiming a storage-neutral proof of LightRAG internals. Queue latency remains measured rather than a pass/fail criterion; service survival, bounded pressure, durable control-plane responsiveness, and eventual drain are hard gates.
+The evidence decisions are closed: Corpus Mutation keeps its [default](configuration.md#runruntime-lanes-and-retention) worker bound per writer process and deployment-wide nonterminal admission limit; broad survival tripwires and measured latency/memory/drain results are environment-described rather than product SLOs. The deterministic fake-executor campaign covers Retrieval across 1, 10, 50, and 100 Workspaces and the repository-owned failure/recovery matrix. The default PostgreSQL 18 integration gate verifies observable delete convergence across `PGKVStorage`, `PGVectorStorage`, `PGTableGraphStorage`, and `PGDocStatusStorage` without claiming a storage-neutral proof of LightRAG internals. Queue latency remains measured rather than a pass/fail criterion; service survival, bounded pressure, durable control-plane responsiveness, and eventual drain are hard gates.
 
 ### Captured local load evidence
 
@@ -277,7 +277,7 @@ admission limit. Control operations stayed bounded — accept p50/p95 2.6/3.4 ms
 status 0.6/0.8 ms, event cursor 0.6/0.8 ms, queue residence p50 18.6 s / p95
 37.8 s, maximum event-loop lag 17.9 ms — while the loose survival tripwires
 (900 s total, 300 s drain, 2 GiB RSS growth) reject collapse rather than set a
-latency SLO. The 30,000 Query admission limit, multi-process and multi-host
+latency SLO. The Query admission limit, multi-process and multi-host
 topology, provider throughput, real parser capacity, and fleet behaviour were
 **not** exercised. `make validate-runtime` regenerates the bounded, sanitized
 details; they stay gitignored, and these numbers must not be quoted without
