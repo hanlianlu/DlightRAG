@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from dlightrag.application.config import DlightragConfig
+from dlightrag.engine.ai.fingerprints import ModelEndpointFingerprint
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from tests.support.pg import drop_scratch_database
 
@@ -219,11 +220,15 @@ class FakeMultimodalEmbedder:
 
     supports_asymmetric = True
     supports_images = True
+    input_modality = "multimodal"
     batch_size = 4
 
     def __init__(self, *, dim: int = 8) -> None:
         self.dim = dim
         self.model = "e2e-fake-multimodal"
+        self.fingerprint = ModelEndpointFingerprint(
+            provider="e2e-fake", model=self.model, endpoint_fingerprint=None
+        )
 
     async def aclose(self) -> None:
         return None

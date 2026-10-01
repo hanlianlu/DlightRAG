@@ -11,7 +11,7 @@ from typing import Any
 from PIL import Image
 
 from dlightrag.engine.ai.concurrency import bounded_map
-from dlightrag.engine.ai.fingerprints import normalized_endpoint_fingerprint
+from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.media import (
     decode_image_base64,
     image_url_block,
@@ -64,7 +64,7 @@ class DirectVisualRetriever:
     provider, decode, or store failure still degrades to an empty ranking.
     """
 
-    def __init__(self, *, embedder: Any, stores: Any, top_k: int) -> None:
+    def __init__(self, *, embedder: MultimodalEmbedder, stores: Any, top_k: int) -> None:
         self._embedder = embedder
         self._stores = stores
         self._top_k = max(0, int(top_k))
@@ -164,57 +164,16 @@ class DirectVisualRetriever:
         return await self.search_prepared(prepared) if prepared is not None else []
 
 
-def _embedding_domain(embedder: Any) -> VisualEmbeddingDomain:
-    fingerprint = getattr(embedder, "fingerprint", None)
-    provider = getattr(fingerprint, "provider", None)
-    if not isinstance(provider, str) or not provider:
-        provider_value = getattr(embedder, "provider", None)
-        if isinstance(provider_value, str) and provider_value:
-            provider = provider_value
-        elif provider_value is not None and not _is_mock_like(provider_value):
-            provider = f"{type(provider_value).__module__}.{type(provider_value).__qualname__}"
-        else:
-            provider = f"{type(embedder).__module__}.{type(embedder).__qualname__}"
-
-    model = getattr(embedder, "model", None)
-    if not isinstance(model, str) or not model:
-        raise ValueError("Direct visual embedder must expose a non-empty model")
-    dimension = getattr(embedder, "dim", None)
-    if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
-        raise ValueError("Direct visual embedder must expose a positive integer dimension")
-
-    input_modality = getattr(embedder, "input_modality", None)
-    if not isinstance(input_modality, str) or not input_modality:
-        # Direct visual retrieval is constructed only after image capability is
-        # resolved; lightweight test embedders may omit the resolved attribute.
-        input_modality = "multimodal"
-
-    request_url = getattr(embedder, "request_url", None)
-    endpoint_fingerprint = normalized_endpoint_fingerprint(
-        request_url if isinstance(request_url, str) else None
-    )
-    if endpoint_fingerprint is None:
-        fingerprint_endpoint = getattr(fingerprint, "endpoint_fingerprint", None)
-        endpoint_fingerprint = (
-            fingerprint_endpoint if isinstance(fingerprint_endpoint, str) else None
-        )
-    if endpoint_fingerprint is None:
-        base_url = getattr(embedder, "base_url", None)
-        endpoint_fingerprint = normalized_endpoint_fingerprint(
-            base_url if isinstance(base_url, str) else None
-        )
-
+def _embedding_domain(embedder: MultimodalEmbedder) -> VisualEmbeddingDomain:
+    """Read the vector space's identity from the embedder that defines it."""
+    fingerprint = embedder.fingerprint
     return VisualEmbeddingDomain(
-        provider=provider,
-        model=model,
-        endpoint_fingerprint=endpoint_fingerprint,
-        dimension=dimension,
-        input_modality=input_modality,
+        provider=fingerprint.provider,
+        model=fingerprint.model,
+        endpoint_fingerprint=fingerprint.endpoint_fingerprint,
+        dimension=embedder.dim,
+        input_modality=embedder.input_modality,
     )
-
-
-def _is_mock_like(value: object) -> bool:
-    return type(value).__module__.startswith("unittest.mock")
 
 
 def _immutable_vectors(

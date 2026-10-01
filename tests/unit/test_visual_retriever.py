@@ -4,10 +4,12 @@
 import base64
 import io
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 from PIL import Image
 
+from dlightrag.engine.ai.embedding import MultimodalEmbedder
+from dlightrag.engine.ai.fingerprints import ModelEndpointFingerprint
 from dlightrag.engine.rag.retrieval.visual import (
     DirectVisualRetriever,
     PreparedVisualQuery,
@@ -22,17 +24,17 @@ def _image_block(*, size: tuple[int, int] = (2, 2), mode: str = "RGB") -> dict[s
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
 
 
-def _embedder(vectors: Any = None, *, error: Exception | None = None) -> MagicMock:
-    embedder = MagicMock()
-    embedder.model = "visual-model"
+def _embedder(vectors: Any = None, *, error: Exception | None = None) -> Any:
+    embedder = create_autospec(MultimodalEmbedder, instance=True)
+    embedder.fingerprint = ModelEndpointFingerprint(
+        provider="test-provider", model="visual-model", endpoint_fingerprint=None
+    )
     embedder.dim = 3
     embedder.input_modality = "multimodal"
-    embedder.provider = "test-provider"
-    embedder.request_url = "https://embed.example.test/v1/images"
     if error is not None:
-        embedder.embed_query_images = AsyncMock(side_effect=error)
+        embedder.embed_query_images.side_effect = error
     else:
-        embedder.embed_query_images = AsyncMock(return_value=vectors)
+        embedder.embed_query_images.return_value = vectors
     return embedder
 
 

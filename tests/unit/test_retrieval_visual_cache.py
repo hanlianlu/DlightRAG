@@ -7,12 +7,14 @@ import io
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, create_autospec
 
 import pytest
 from PIL import Image
 
 from dlightrag.application.retrieval import RetrievalService, RetrievalSettings
+from dlightrag.engine.ai.embedding import MultimodalEmbedder
+from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.telemetry import NoopTelemetry
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.rag.retrieval.visual import (
@@ -31,45 +33,43 @@ def _image_block(color: tuple[int, int, int]) -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
 
 
-class _Embedder:
-    supports_images = True
-    input_modality = "multimodal"
+def _embedder(
+    *,
+    provider: str = "visual-provider",
+    model: str = "visual-model",
+    endpoint: str = "https://embed.example.test/v1/images",
+    dim: int = 3,
+    outcomes: Sequence[object] = (),
+    started: asyncio.Event | None = None,
+    release: asyncio.Event | None = None,
+) -> Any:
+    """A MultimodalEmbedder spec whose query-image vectors are scripted."""
+    embedder = create_autospec(MultimodalEmbedder, instance=True)
+    embedder.fingerprint = model_endpoint_fingerprint(provider, model, endpoint)
+    embedder.dim = dim
+    embedder.input_modality = "multimodal"
+    embedder.api_key = "must-never-enter-domain-or-cache"
+    pending = list(outcomes)
 
-    def __init__(
-        self,
-        *,
-        provider: str = "visual-provider",
-        model: str = "visual-model",
-        endpoint: str = "https://embed.example.test/v1/images",
-        dim: int = 3,
-        outcomes: Sequence[object] = (),
-        started: asyncio.Event | None = None,
-        release: asyncio.Event | None = None,
-    ) -> None:
-        self.provider = provider
-        self.model = model
-        self.request_url = endpoint
-        self.base_url = endpoint
-        self.dim = dim
-        self.api_key = "must-never-enter-domain-or-cache"
-        self.calls = 0
-        self.outcomes = list(outcomes)
-        self.started = started
-        self.release = release
-
-    async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
-        self.calls += 1
-        if self.started is not None:
-            self.started.set()
-        if self.release is not None:
-            await self.release.wait()
-        if self.outcomes:
-            outcome = self.outcomes.pop(0)
+    async def embed_query_images(images: list[Image.Image]) -> list[list[float]]:
+        if started is not None:
+            started.set()
+        if release is not None:
+            await release.wait()
+        if pending:
+            outcome = pending.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
             if isinstance(outcome, list):
                 return outcome
-        return [[float(index + 1), 0.25, 0.5][: self.dim] for index in range(len(images))]
+        return [[float(index + 1), 0.25, 0.5][:dim] for index in range(len(images))]
+
+    embedder.embed_query_images.side_effect = embed_query_images
+    return embedder
+
+
+def _calls(embedder: Any) -> int:
+    return embedder.embed_query_images.await_count
 
 
 class _Stores:
@@ -97,7 +97,7 @@ class _Runtime:
         self,
         workspace: str,
         *,
-        embedder: _Embedder | None,
+        embedder: Any,
         semantic_chunks: Sequence[dict[str, Any]] = (),
     ) -> None:
         self.workspace = workspace
@@ -195,7 +195,7 @@ def _service(runtimes: dict[str, _Runtime]) -> RetrievalService:
 
 
 async def test_four_same_domain_workspaces_prepare_once_and_search_every_vdb() -> None:
-    embedder = _Embedder()
+    embedder = _embedder()
     runtimes = {
         workspace: _Runtime(workspace, embedder=embedder)
         for workspace in ("ws-a", "ws-b", "ws-c", "ws-d")
@@ -205,7 +205,7 @@ async def test_four_same_domain_workspaces_prepare_once_and_search_every_vdb() -
 
     result = await service.retrieve_result("query", workspaces=tuple(runtimes), query_images=images)
 
-    assert embedder.calls == 1
+    assert _calls(embedder) == 1
     assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == [
         "ws-a-visual-1",
         "ws-b-visual-1",
@@ -225,8 +225,8 @@ async def test_four_same_domain_workspaces_prepare_once_and_search_every_vdb() -
 
 
 async def test_two_domains_prepare_once_each_and_never_cross_domains() -> None:
-    first = _Embedder(model="domain-a")
-    second = _Embedder(model="domain-b")
+    first = _embedder(model="domain-a")
+    second = _embedder(model="domain-b")
     runtimes = {
         "ws-a1": _Runtime("ws-a1", embedder=first),
         "ws-a2": _Runtime("ws-a2", embedder=first),
@@ -239,7 +239,7 @@ async def test_two_domains_prepare_once_each_and_never_cross_domains() -> None:
         "query", workspaces=tuple(runtimes), query_images=(_image_block((1, 2, 3)),)
     )
 
-    assert first.calls == second.calls == 1
+    assert _calls(first) == _calls(second) == 1
     assert all(len(runtime.stores.queries) == 1 for runtime in runtimes.values())
     for runtime in runtimes.values():
         prepared = runtime.prepared_arguments[0]
@@ -248,7 +248,7 @@ async def test_two_domains_prepare_once_each_and_never_cross_domains() -> None:
 
 
 async def test_repeat_request_hits_cache_and_lru_evicts_oldest_without_raw_storage() -> None:
-    embedder = _Embedder()
+    embedder = _embedder()
     runtime = _Runtime("ws", embedder=embedder)
     service = _service({"ws": runtime})
     first_image = _image_block((0, 0, 0))
@@ -258,7 +258,7 @@ async def test_repeat_request_hits_cache_and_lru_evicts_oldest_without_raw_stora
         "query", workspaces=("ws",), query_images=(first_image,)
     )
 
-    assert embedder.calls == 1
+    assert _calls(embedder) == 1
     assert first.trace["visual_preparation_started_count"] == 1
     assert repeated.trace["visual_preparation_cache_hit_count"] == 1
 
@@ -268,9 +268,9 @@ async def test_repeat_request_hits_cache_and_lru_evicts_oldest_without_raw_stora
             workspaces=("ws",),
             query_images=(_image_block((value, value, value)),),
         )
-    assert embedder.calls == 33
+    assert _calls(embedder) == 33
     await service.retrieve_result("query", workspaces=("ws",), query_images=(first_image,))
-    assert embedder.calls == 34
+    assert _calls(embedder) == 34
     assert len(service._visual_query_cache) == 32
     assert all(
         isinstance(prepared, PreparedVisualQuery)
@@ -284,7 +284,7 @@ async def test_repeat_request_hits_cache_and_lru_evicts_oldest_without_raw_stora
 async def test_cancelled_waiter_does_not_cancel_visual_singleflight() -> None:
     started = asyncio.Event()
     release = asyncio.Event()
-    embedder = _Embedder(started=started, release=release)
+    embedder = _embedder(started=started, release=release)
     runtime = _Runtime("ws", embedder=embedder)
     service = _service({"ws": runtime})
     image = _image_block((5, 6, 7))
@@ -306,7 +306,7 @@ async def test_cancelled_waiter_does_not_cancel_visual_singleflight() -> None:
     await asyncio.sleep(0)
 
     assert result.contexts["chunks"]
-    assert embedder.calls == 1
+    assert _calls(embedder) == 1
     assert result.trace["visual_preparation_singleflight_hit_count"] == 1
     assert service._visual_query_flights == {}
     assert not [
@@ -320,7 +320,7 @@ async def test_cancelled_waiter_does_not_cancel_visual_singleflight() -> None:
 async def test_failed_or_empty_federated_preparation_is_shared_but_later_retries(
     first_outcome: object,
 ) -> None:
-    embedder = _Embedder(outcomes=[first_outcome])
+    embedder = _embedder(outcomes=[first_outcome])
     runtimes = {
         workspace: _Runtime(
             workspace,
@@ -336,7 +336,7 @@ async def test_failed_or_empty_federated_preparation_is_shared_but_later_retries
         "query", workspaces=tuple(runtimes), query_images=(image,)
     )
 
-    assert embedder.calls == 1
+    assert _calls(embedder) == 1
     assert all("semantic" in chunk["chunk_id"] for chunk in degraded.contexts["chunks"])
     assert all(runtime.stores.queries == [] for runtime in runtimes.values())
     assert all(runtime.prepared_arguments == [None] for runtime in runtimes.values())
@@ -346,12 +346,12 @@ async def test_failed_or_empty_federated_preparation_is_shared_but_later_retries
         "query", workspaces=tuple(runtimes), query_images=(image,)
     )
 
-    assert embedder.calls == 2
+    assert _calls(embedder) == 2
     assert any("visual" in chunk["chunk_id"] for chunk in recovered.contexts["chunks"])
 
 
 async def test_no_images_and_visual_disabled_workspace_do_zero_preparation() -> None:
-    embedder = _Embedder()
+    embedder = _embedder()
     enabled = _Runtime("enabled", embedder=embedder)
     disabled = _Runtime("disabled", embedder=None)
     service = _service({"enabled": enabled, "disabled": disabled})
@@ -361,7 +361,7 @@ async def test_no_images_and_visual_disabled_workspace_do_zero_preparation() -> 
         "query", workspaces=("disabled",), query_images=(_image_block((11, 12, 13)),)
     )
 
-    assert embedder.calls == 0
+    assert _calls(embedder) == 0
     assert enabled.prepared_arguments == [_MISSING]
     assert disabled.prepared_arguments == [_MISSING]
 
@@ -369,8 +369,8 @@ async def test_no_images_and_visual_disabled_workspace_do_zero_preparation() -> 
 async def test_close_cancels_and_joins_inflight_visual_preparation() -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
-    embedder = _Embedder(started=started, release=asyncio.Event())
-    original_embed = embedder.embed_query_images
+    embedder = _embedder(started=started, release=asyncio.Event())
+    original_embed = embedder.embed_query_images.side_effect
 
     async def observe_cancel(images: list[Image.Image]) -> list[list[float]]:
         try:
@@ -378,7 +378,7 @@ async def test_close_cancels_and_joins_inflight_visual_preparation() -> None:
         finally:
             cancelled.set()
 
-    embedder.embed_query_images = observe_cancel  # type: ignore[method-assign]
+    embedder.embed_query_images.side_effect = observe_cancel
     runtime = _Runtime("ws", embedder=embedder)
     service = _service({"ws": runtime})
     retrieval = asyncio.create_task(
