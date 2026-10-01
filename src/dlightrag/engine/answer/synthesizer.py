@@ -34,7 +34,7 @@ from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     CurrentImagePayloadError,
 )
-from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.evidence import EvidenceLedger, has_unrepresentable_text
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.answer.memory import standing_memory_message
 from dlightrag.engine.answer.prompts import answer_core, clock_line
@@ -417,8 +417,15 @@ class AnswerSynthesizer:
         and its rows are the contexts the answer is finalized against. A retrieved
         row's own reference id ranks documents by frequency, so it is never what the
         model is shown.
+
+        A row the ledger would refuse, because no durable store can hold its text, is
+        dropped before packing, so its picture spends none of the image budget.
         """
-        packed = AnswerContextPacker().pack(contexts, image_budget=image_budget)
+        admissible: RetrievalContexts = {
+            key: [row for row in rows if not has_unrepresentable_text(row)]
+            for key, rows in contexts.items()
+        }
+        packed = AnswerContextPacker().pack(admissible, image_budget=image_budget)
         evidence = EvidenceLedger()
         evidence.add_contexts(packed.contexts)
         blocks, indexer = evidence.render_blocks(packed.image_blocks_by_context_key)

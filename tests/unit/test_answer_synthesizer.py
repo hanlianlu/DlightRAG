@@ -958,6 +958,32 @@ class TestFastEvidence:
         assert [source.cited_chunk_ids for source in finalized.sources] == [["a1"], ["b2"]]
 
 
+@pytest.mark.asyncio
+async def test_a_row_no_store_can_hold_spends_none_of_the_image_budget() -> None:
+    """A dropped row's picture must not take the slot a kept row's picture needs.
+
+    Evidence drops a row whose text PostgreSQL cannot store. Packing once ran first,
+    so the dropped row spent the only image slot: the trace counted one image sent
+    while the request carried none, and the kept row's picture was skipped.
+    """
+    unstorable = dict(_image_contexts()["chunks"][0], chunk_id="nul", content="Chart\x00 data")
+    kept = dict(_image_contexts()["chunks"][0], chunk_id="kept")
+    model_func = _stream_func("ok")
+    synth = AnswerSynthesizer(
+        image_policy=answer_image_policy(max_images=1),
+        model_profile=answer_model_profile(),
+        model_func=model_func,
+    )
+
+    answer_contexts, stream = await synth.generate_stream(
+        "describe", {"chunks": [unstorable, kept], "entities": [], "relationships": []}
+    )
+
+    assert [row["chunk_id"] for row in answer_contexts["chunks"]] == ["kept"]
+    assert _request_blocks(model_func).count("<image>") == 1
+    assert cast(Any, stream).trace["answer_images_rag"] == 1
+
+
 def test_fast_packing_keeps_current_and_historical_admissions_in_chunk_budget():
     policy = answer_image_policy(max_images=2)
     budget = policy.new_budget()
