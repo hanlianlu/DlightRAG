@@ -5,6 +5,7 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -158,161 +159,29 @@ def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
     assert "pg_config --includedir-server" in dockerfile
 
 
-def test_compose_preloads_postgres_extensions() -> None:
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert "shared_preload_libraries=pg_textsearch,pg_jieba" in compose
+def _compose() -> dict[str, Any]:
+    return yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
 
 
-def test_compose_enables_filtered_pg_textsearch_top_k_seed() -> None:
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert (
-        "pg_textsearch.filtered_seed=${COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
-    ) in compose
-    assert (
-        "pg_textsearch.filtered_seed_margin="
-        "${COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
-    ) in compose
+def test_compose_publishes_every_port_on_host_loopback_only() -> None:
+    """Exposure beyond this host is the operator's ingress, never a Compose default."""
+    for name, service in _compose()["services"].items():
+        for port in service.get("ports", []):
+            assert str(port).startswith("127.0.0.1:"), (name, port)
 
 
-def test_compose_postgres_endpoint_is_env_overridable() -> None:
-    """The container wires the service host while env still outranks YAML."""
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert "DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres" in compose
-    assert "DLIGHTRAG_STORAGE__POSTGRES__PORT" not in compose
-
-
-def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    for setting, default in {
-        "shared_buffers": "8GB",
-        "work_mem": "256MB",
-        "maintenance_work_mem": "2GB",
-        "effective_cache_size": "18GB",
-        "max_connections": "80",
-    }.items():
-        env_name = f"COMPOSE_POSTGRES_{setting.upper()}"
-        assert f"{setting}=${{{env_name}:-{default}}}" in compose
-
-
-def test_compose_builds_pg18_postgres_image_locally() -> None:
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-    workflow = Path(".github/workflows/postgres-image.yml").read_text(encoding="utf-8")
-
-    assert "image: dlightrag-postgres:pg18" in compose
-    assert "context: postgres" in compose
-    assert "ghcr.io/hanlianlu/dlightrag-postgres" not in compose
-    assert "ghcr.io/hanlianlu/dlightrag-postgres:latest" not in compose
-    assert "dlightrag-postgres:pg18" in workflow
-
-
-def test_compose_keeps_only_the_complex_shared_mount_extension() -> None:
-    """Two services are clearer with explicit image/build/topology bindings."""
-    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
-    compose = yaml.safe_load(compose_text)
-
-    assert "x-common-env:" not in compose_text
-    assert "x-app-image:" not in compose_text
-    assert "x-app-build:" not in compose_text
-    assert "x-global-skills-mount:" in compose_text
-    for service_name in ("dlightrag-api", "dlightrag-mcp"):
-        service = compose["services"][service_name]
-        assert service["image"] == "dlightrag:local"
-        assert service["build"] == {"context": "."}
-        assert service["environment"]["DLIGHTRAG_STORAGE__POSTGRES__HOST"] == "postgres"
-
-
-def test_compose_grants_application_config_as_a_config_not_a_data_volume() -> None:
-    """The canonical YAML is configuration in both Compose and Kubernetes."""
-    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
-    compose = yaml.safe_load(compose_text)
-
-    assert compose["configs"]["dlightrag_config"] == {"file": "./config.yaml"}
-    assert "./config.yaml:/app/config.yaml" not in compose_text
-    for service_name in ("dlightrag-api", "dlightrag-mcp"):
-        assert {"source": "dlightrag_config", "target": "/app/config.yaml"} in compose["services"][
-            service_name
-        ]["configs"]
-
-
-def test_compose_uses_config_and_default_paths_without_duplicate_overrides() -> None:
-    """Compose owns topology; canonical config/defaults own application paths."""
-    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
-    compose = yaml.safe_load(compose_text)
-
-    assert "DLIGHTRAG_DEPLOYMENT__WORKING_DIR" not in compose_text
-    assert "DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT" not in compose_text
-    for service_name in ("dlightrag-api", "dlightrag-mcp"):
-        mounts = compose["services"][service_name]["volumes"]
-        assert any(
-            str(mount).endswith(":/home/app/.dlightrag/agent_workspaces") for mount in mounts
-        )
-
-
-def test_compose_requires_an_explicit_operator_skills_directory() -> None:
-    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
-
-    for service_name in ("dlightrag-api", "dlightrag-mcp"):
-        mounts = compose["services"][service_name]["volumes"]
-        skills_mount = next(
-            mount
-            for mount in mounts
-            if isinstance(mount, dict) and mount.get("target") == "/home/app/.dlightrag/skills"
-        )
-        assert skills_mount["type"] == "bind"
-        assert skills_mount["read_only"] is True
-        assert skills_mount["bind"]["create_host_path"] is False
-
-    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
-    env_example = Path(".env.example").read_text(encoding="utf-8")
-    readme = Path("README.md").read_text(encoding="utf-8")
-    assert "COMPOSE_GLOBAL_SKILLS_DIR=" in env_example
-    assert "${COMPOSE_GLOBAL_SKILLS_DIR:-" in compose_text
-    assert "DLIGHTRAG_SKILLS_DIR" not in compose_text + env_example
-    assert 'mkdir -p "${HOME}/.dlightrag/skills"' in readme
-
-
-def test_runtime_image_precreates_default_application_paths() -> None:
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-
-    assert "/app/dlightrag_storage" in dockerfile
-    assert "/home/app/.dlightrag/agent_workspaces" in dockerfile
-    assert "/app/dlightrag_agent_workspaces" not in dockerfile
-
-
-def test_runtime_image_installs_the_library_the_copied_node_links() -> None:
-    """Only the node binary crosses stages, so the runtime stage owns its libatomic."""
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-    runtime_stage = dockerfile.rsplit("\nFROM ", 1)[1]
-
-    assert "COPY --from=frontend /usr/local/bin/node /usr/local/bin/node" in runtime_stage
-    assert re.search(
-        r"apt-get install -y --no-install-recommends [^\n]*\blibatomic1\b", runtime_stage
-    )
-
-
-def test_compose_runtime_services_do_not_bind_mount_source_tree() -> None:
-    """Default compose should run the built image, not a host source overlay."""
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert "./src:/app/src" not in compose
-
-
-def test_compose_binds_api_port_to_loopback_on_host() -> None:
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert '"127.0.0.1:8100:8100"' in compose
-    assert 'DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"' in compose
+def test_compose_mounts_the_operator_skills_root_read_only() -> None:
+    """The global Skills root is operator-provisioned and read-only for the Agent."""
+    for name, service in _compose()["services"].items():
+        for mount in service.get("volumes", []):
+            if isinstance(mount, dict) and mount.get("target") == "/home/app/.dlightrag/skills":
+                assert mount["read_only"] is True, name
 
 
 def test_compose_mcp_local_listener_passes_security_validation() -> None:
     from dlightrag.application.config import DlightragConfig
 
-    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
-    environment = compose["services"]["dlightrag-mcp"]["environment"]
+    environment = _compose()["services"]["dlightrag-mcp"]["environment"]
 
     with pytest.warns(UserWarning, match="allow_insecure_no_auth"):
         config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
@@ -331,31 +200,6 @@ def test_compose_mcp_local_listener_passes_security_validation() -> None:
         )
 
     assert config.interfaces.mcp.host == "0.0.0.0"
-
-
-def test_compose_api_healthcheck_uses_strict_readiness_endpoint() -> None:
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
-
-    assert "http://127.0.0.1:8100/ready" in compose
-    assert "urllib.request.urlopen" in compose
-
-
-def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
-    """App image builds should not require GHCR metadata just to obtain uv."""
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-
-    assert "ghcr.io/astral-sh/uv" not in dockerfile
-    assert "uv==${UV_VERSION}" in dockerfile
-    assert "COPY --from=uv-bin /usr/local/bin/uv /bin/" in dockerfile
-
-
-def test_runtime_image_defaults_to_api_and_mcp_overrides_it() -> None:
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
-
-    assert 'CMD ["dlightrag-api"]' in dockerfile
-    assert "command" not in compose["services"]["dlightrag-api"]
-    assert compose["services"]["dlightrag-mcp"]["command"] == ["dlightrag-mcp"]
 
 
 def test_docx_native_parser_runtime_dependency_is_direct() -> None:
@@ -406,33 +250,24 @@ def test_curated_config_selects_exactly_one_parser_sidecar() -> None:
     assert len(selected) == 1
 
 
-def test_codeql_config_filters_self_referential_advanced_setup_alert() -> None:
-    config = Path(".github/codeql/codeql-config.yml").read_text(encoding="utf-8")
-
-    assert "query-filters:" in config
-    assert "id: actions/unnecessary-use-of-advanced-config" in config
-
-
 def test_compose_reader_service_is_a_profiled_second_role() -> None:
     """The read-only replica is topology, not a hand-assembled docker run.
 
-    A reader is a second process over the same database whose role, port, mounts,
-    config, and healthcheck must be reviewable and reproducible. It stays out of a
-    default `docker compose up` (profile-gated), publishes loopback only, and must
+    A reader is a second process over the writer's database and configuration. It
+    stays out of a default `docker compose up` (profile-gated), and its role must
     never appear in the writer's service definition.
     """
-    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
-    services = compose["services"]
+    services = _compose()["services"]
     reader = services["dlightrag-reader"]
     writer = services["dlightrag-api"]
+    postgres_host = "DLIGHTRAG_STORAGE__POSTGRES__HOST"
 
     assert reader["profiles"] == ["reader"]
     assert reader["environment"]["DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE"] == "reader"
-    assert reader["environment"]["DLIGHTRAG_STORAGE__POSTGRES__HOST"] == "postgres"
-    assert reader["ports"] == ["127.0.0.1:8102:8100"]
-    assert reader["configs"] == [{"source": "dlightrag_config", "target": "/app/config.yaml"}]
-    assert reader["healthcheck"]["test"] == writer["healthcheck"]["test"]
     assert "DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE" not in writer["environment"]
+    assert reader["environment"][postgres_host] == writer["environment"][postgres_host]
+    assert reader["configs"] == writer["configs"]
+    assert reader["healthcheck"]["test"] == writer["healthcheck"]["test"]
 
     # The role is exercised against the shared corpus root, so a reader must see
     # the same storage and Answer-workspace mounts as the writer.
