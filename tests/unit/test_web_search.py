@@ -13,6 +13,7 @@ from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.search import (
     SearchInput,
     WebSearchInput,
+    _searched_workspaces,
     knowledge_base_search_declaration,
     knowledge_base_search_tool,
     web_search_tool,
@@ -106,6 +107,42 @@ def test_knowledge_base_tool_states_its_mechanics_only() -> None:
 
     assert "Search the knowledge-base workspaces selected for this conversation" in description
     assert "Each passage it returns names the document it came from." in description
+
+
+async def test_a_knowledge_base_result_names_what_the_search_covered() -> None:
+    """The description names no workspace, so the result says which were searched."""
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return RetrievalResult(
+            trace={
+                "workspaces": ["hlyu", "default"],
+                "per_workspace": {
+                    "hlyu": {},
+                    "default": {"workspace": "default", "workspace_empty": True},
+                },
+                "per_workspace_chunk_count": {"hlyu": 2},
+                "failed_workspaces": ["finance"],
+            }
+        )
+
+    result = await knowledge_base_search_tool(
+        retrieve=retrieve, evidence=EvidenceLedger(), trace={}
+    ).execute(SearchInput(query="q"), recording_tool_runtime([]))
+
+    assert result.text_content == (
+        "Knowledge base added 0 new passages. Searched hlyu (2 passages), "
+        "default (no published documents), finance (search failed)."
+    )
+
+
+def test_one_searched_workspace_is_named_with_what_it_returned() -> None:
+    assert _searched_workspaces({"workspaces": ["hlyu"]}, [{}, {}, {}]) == (
+        "Searched hlyu (3 passages)."
+    )
+    assert _searched_workspaces(
+        {"workspaces": ["default"], "workspace": "default", "workspace_empty": True}, []
+    ) == ("Searched default (no published documents).")
+    assert _searched_workspaces({}, [{}]) == ""
 
 
 async def test_both_search_tools_report_the_query_as_their_subject_live() -> None:

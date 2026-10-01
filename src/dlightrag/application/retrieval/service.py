@@ -690,6 +690,8 @@ class RetrievalService:
                         runtime, domain, visual_blocks
                     )
                 result = await runtime.aretrieve(plan.standalone_query, **kwargs)
+                # Federation names the workspaces it searched; one workspace says the same.
+                result.trace.setdefault("workspaces", list(workspaces))
             else:
                 reranker = await self._resolve_federated_reranker(federated_rerank)
                 policy = FederationMergePolicy(

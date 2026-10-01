@@ -159,7 +159,11 @@ async def test_retrieve_projects_lightrag_mix_trace_vocabulary() -> None:
         service, RetrieveRequest(query="report", workspaces=("finance",))
     )
 
-    assert response.trace == {"lightrag_mix_chunk_count": 2, "query_image_description_count": 0}
+    assert response.trace == {
+        "lightrag_mix_chunk_count": 2,
+        "query_image_description_count": 0,
+        "workspaces": ["finance"],
+    }
     assert "semantic_chunk_count" not in response.trace
 
 

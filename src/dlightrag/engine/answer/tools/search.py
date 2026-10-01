@@ -7,7 +7,7 @@ Runtime then freezes that run's newly admitted evidence into the Tool result the
 model reads back, so a passage reaches the model once, where it arrived.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date
 from typing import Any, Literal
 
@@ -177,7 +177,36 @@ async def _search_corpus(
     content = f"Knowledge base added {delta.new_chunks} new passages."
     if delta.dropped_rows:
         content += f" Dropped {delta.dropped_rows} unusable evidence item(s)."
-    return ToolResult.text(content)
+    searched = _searched_workspaces(result.trace, result.contexts.get("chunks") or ())
+    return ToolResult.text(f"{content} {searched}" if searched else content)
+
+
+def _searched_workspaces(trace: Mapping[str, Any], chunks: Sequence[Mapping[str, Any]]) -> str:
+    """Each workspace the search covered and what it gave, as the retrieval trace has it.
+
+    The tool's description names no workspace (its text is cached and pinned while
+    workspaces come and go), so the scope reaches the model in the results instead,
+    with the workspaces that hold nothing and the ones whose search failed.
+    """
+    workspaces = [str(workspace) for workspace in trace.get("workspaces") or ()]
+    if not workspaces:
+        return ""
+    per_workspace = trace.get("per_workspace")
+    if isinstance(per_workspace, Mapping):
+        traces: Mapping[str, Any] = per_workspace
+        counts = trace.get("per_workspace_chunk_count") or {}
+    else:
+        traces, counts = {workspaces[0]: trace}, {workspaces[0]: len(chunks)}
+    parts = [
+        f"{workspace} (no published documents)"
+        if isinstance(traces.get(workspace), Mapping) and traces[workspace].get("workspace_empty")
+        else f"{workspace} ({counts.get(workspace, 0)} passages)"
+        for workspace in workspaces
+    ]
+    parts.extend(
+        f"{workspace} (search failed)" for workspace in trace.get("failed_workspaces") or ()
+    )
+    return f"Searched {', '.join(parts)}."
 
 
 async def _search_open_web(
