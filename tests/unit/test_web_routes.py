@@ -184,7 +184,7 @@ def mock_application(test_config: DlightragConfig):
 @pytest.fixture
 def web_app(mock_application):
     """Create the FastAPI app with its Application-shaped double installed."""
-    application = create_app(include_web_app=True)
+    application = create_app()
     application.state.application = mock_application
     return application
 
@@ -209,7 +209,7 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
 
     application = application_double(test_config)
     conversation_service = application.web_conversations
-    app = create_app(include_web_app=True)
+    app = create_app()
     monkeypatch.setattr(
         api_server,
         "create_application",
@@ -359,7 +359,7 @@ async def test_vendored_assets_allow_revalidation_caching(client):
 
 
 def _web_client_for(application: Any) -> AsyncClient:
-    app = create_app(include_web_app=True)
+    app = create_app()
     app.state.application = application
     transport = ASGITransport(app=app)
     return AsyncClient(

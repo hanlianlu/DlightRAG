@@ -259,7 +259,7 @@ def app(store: PGRunStore, tmp_path) -> Iterator[FastAPI]:
         },
     )
     set_config(config)
-    application = create_app(include_web_app=False)
+    application = create_app()
     application.state.application = _store_backed_application(store, config)
     application.dependency_overrides[get_current_user] = lambda: _ANON
     yield application

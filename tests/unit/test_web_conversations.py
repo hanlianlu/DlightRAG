@@ -102,7 +102,7 @@ def conversation_service(application: Any) -> Any:
 @pytest.fixture
 async def conversation_client(application: Any, conversation_service: Any):
     application.corpora.alist_workspace_records.return_value = [{"workspace": "default"}]
-    app = create_app(include_web_app=True)
+    app = create_app()
     app.state.application = application
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -117,7 +117,7 @@ async def cookie_conversation_client(
 ):
     mutate_config(test_config, "access.auth_mode", "simple")
     mutate_config(test_config, "access.api_token", "secret-token")
-    app = create_app(include_web_app=True)
+    app = create_app()
     app.state.application = application
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -571,7 +571,7 @@ async def test_store_unavailability_returns_retryable_503(
 
     store = AsyncMock()
     getattr(store, store_method).side_effect = WebConversationUnavailableError()
-    application = create_app(include_web_app=True)
+    application = create_app()
     service = WebConversationService(
         store=store,
         answers=FakeAnswers(),
@@ -645,7 +645,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
 
     store = AsyncMock()
     store.list_conversations.side_effect = store_error
-    application = create_app(include_web_app=True)
+    application = create_app()
     service = WebConversationService(
         store=store,
         answers=FakeAnswers(),

@@ -136,7 +136,7 @@ def application(test_config: DlightragConfig) -> Any:
 
 @pytest.fixture
 async def client(service: Any, application: Any):
-    app = create_app(include_web_app=True)
+    app = create_app()
     app.state.application = application
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -883,7 +883,7 @@ async def test_an_upload_no_run_can_read_is_refused_by_the_answers_own_rule(
         max_attachments=6,
         cursor_secret=b"web-answer-runs-cursor-test",
     )
-    app = create_app(include_web_app=True)
+    app = create_app()
     app.state.application = application
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -1359,7 +1359,7 @@ async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: Any) -> 
 async def scoped_client(application: Any):
     """A client whose conversation service is real, over a store that must not run."""
     store = AsyncMock()
-    app = create_app(include_web_app=True)
+    app = create_app()
     application.web_conversations = WebConversationService(
         store=store,
         answers=FakeAnswers(),

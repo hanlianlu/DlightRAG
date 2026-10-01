@@ -67,7 +67,7 @@ async def test_http_route_fails_fast_without_a_lifespan_bound_application(
 ) -> None:
     create_application = AsyncMock()
     monkeypatch.setattr(http_server, "create_application", create_application)
-    application = http_server.create_app(include_web_app=False)
+    application = http_server.create_app()
 
     async with AsyncClient(
         transport=ASGITransport(app=application),

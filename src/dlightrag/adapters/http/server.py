@@ -80,11 +80,7 @@ def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
-        web_enabled = bool(getattr(_app.state, "web_enabled", False))
-        application = await create_application(
-            config=_app.state.config,
-            web_enabled=web_enabled,
-        )
+        application = await create_application(config=_app.state.config, web_enabled=True)
     except Exception:
         logger.exception("Failed to initialize DlightRAG application")
         raise
@@ -100,8 +96,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def create_app(*, include_web_app: bool = True) -> FastAPI:
-    """Create the REST API and optionally mount the bundled browser app."""
+def create_app() -> FastAPI:
+    """Create the REST API with the bundled browser app mounted beside it."""
+    from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
+    from dlightrag.adapters.http.browser.routes import router as web_router
+    from dlightrag.adapters.http.browser.static_files import STATIC_DIR, WebStaticFiles
     from dlightrag.application.config import get_config
 
     cfg = get_config()
@@ -145,21 +144,14 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     application.include_router(router)
 
     # -- Web frontend --
-    if include_web_app:
-        from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
-        from dlightrag.adapters.http.browser.routes import router as web_router
-        from dlightrag.adapters.http.browser.static_files import STATIC_DIR, WebStaticFiles
-
-        application.state.web_enabled = True
-
-        application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
-        application.include_router(web_router)
-        if STATIC_DIR.exists():
-            application.mount(
-                "/static",
-                WebStaticFiles(directory=str(STATIC_DIR)),
-                name="static",
-            )
+    application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
+    application.include_router(web_router)
+    if STATIC_DIR.exists():
+        application.mount(
+            "/static",
+            WebStaticFiles(directory=str(STATIC_DIR)),
+            name="static",
+        )
 
     return application
 

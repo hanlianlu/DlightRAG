@@ -177,7 +177,7 @@ def _queued_run_record(
 def _api_app(test_config: DlightragConfig) -> Iterator[FastAPI]:
     """Create the API app after test_config has installed the singleton."""
     global app
-    app = create_app(include_web_app=False)
+    app = create_app()
     yield app
     app.dependency_overrides.clear()
     if hasattr(app.state, "application"):
@@ -2316,7 +2316,7 @@ class TestAPIContracts:
         """FastAPI's list-shaped HTTPValidationError is never what a 422 carries here."""
         app.state.application = mock_application
         # Web routes share the document and the handler, so the whole app is checked.
-        spec = create_app(include_web_app=True).openapi()
+        spec = create_app().openapi()
 
         schemas = spec["components"]["schemas"]
         assert "HTTPValidationError" not in schemas
@@ -2751,7 +2751,7 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
             yield b"x" * 65_536
         yield b"\r\n--test--\r\n"
 
-    application = create_app(include_web_app=False)
+    application = create_app()
     application.state.application = application_double(mock_config)
     response = await _post(
         application,
@@ -2788,7 +2788,7 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
             yield b"x" * 65_536
         yield b"\r\n--test--\r\n"
 
-    application = create_app(include_web_app=False)
+    application = create_app()
     application.state.application = application_double(mock_config)
     response = await _post(
         application,
@@ -2812,7 +2812,7 @@ async def test_corpus_upload_authenticates_before_parsing_multipart(
     mutate_config(mock_config, "access.auth_mode", "simple")
     mutate_config(mock_config, "access.api_token", "secret-token")
     set_config(mock_config)
-    application = create_app(include_web_app=False)
+    application = create_app()
     application.state.application = application_double(mock_config)
 
     response = await _post(
@@ -2839,7 +2839,7 @@ async def test_multipart_header_does_not_raise_json_route_body_cap(
             yield b"x" * 65_536
         yield b"\r\n--test--\r\n"
 
-    application = create_app(include_web_app=False)
+    application = create_app()
     application.state.application = application_double(mock_config)
     response = await _post(
         application,
@@ -2859,7 +2859,7 @@ async def test_the_app_admits_answer_history_with_the_shared_body_cap(
     set_config(mock_config)
 
     response = await _post(
-        create_app(include_web_app=False),
+        create_app(),
         content=b'{"query":"' + b"x" * (1024 * 1024) + b'"}',
         headers={"content-type": "application/json"},
     )
@@ -2885,7 +2885,7 @@ async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
     over_budget = max(history_bytes, image_bytes) + 2 * 1024 * 1024
 
     response = await _post(
-        create_app(include_web_app=False),
+        create_app(),
         content=b'{"query":"' + b"x" * over_budget + b'"}',
         headers={"content-type": "application/json"},
     )
@@ -2905,7 +2905,7 @@ async def test_the_app_admits_the_fixed_retrieve_image_contract(
     )
 
     response = await _post(
-        create_app(include_web_app=False),
+        create_app(),
         content=b'{"query":"' + b"x" * image_sized_body + b'"}',
         headers={"content-type": "application/json"},
     )
@@ -2918,7 +2918,7 @@ async def test_a_route_that_rejects_an_oversized_upload_is_not_reported_as_an_au
     mock_config: DlightragConfig,
 ) -> None:
     set_config(mock_config)
-    application = create_app(include_web_app=False)
+    application = create_app()
 
     @application.post("/probe")
     async def probe() -> None:

@@ -51,7 +51,7 @@ async def route_client(
     )
     set_config(config)
     application = application_double(config)
-    app = create_app(include_web_app=False)
+    app = create_app()
     app.state.application = application
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -170,7 +170,7 @@ async def test_download_authorization_precedes_metadata_lookup(
     set_config(config)
     application = application_double(config)
     with caplog.at_level(logging.INFO, logger="dlightrag.adapters.http.rest.routes.files"):
-        app = create_app(include_web_app=False)
+        app = create_app()
         app.state.application = application
         app.state.access_control = DenyFinanceWorkspace()
         async with AsyncClient(

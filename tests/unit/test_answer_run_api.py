@@ -328,7 +328,7 @@ class _RunApplication:
 
 @pytest.fixture
 def _app(test_config: DlightragConfig) -> Iterator[FastAPI]:
-    application = create_app(include_web_app=False)
+    application = create_app()
     application.dependency_overrides[get_current_user] = lambda: _ANON
     yield application
     application.dependency_overrides.clear()

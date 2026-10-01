@@ -380,7 +380,7 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
             )
             run_id = created.run.run_id
         elif surface == "rest":
-            app = create_app(include_web_app=False)
+            app = create_app()
             app.state.application = application
             app.dependency_overrides[get_current_user] = lambda: user
             async with AsyncClient(

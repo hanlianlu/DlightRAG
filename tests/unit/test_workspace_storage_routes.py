@@ -38,7 +38,7 @@ async def route_client(
     )
     set_config(config)
     application = application_double(config)
-    app = create_app(include_web_app=False)
+    app = create_app()
     app.state.application = application
     async with AsyncClient(
         transport=ASGITransport(app=app),
