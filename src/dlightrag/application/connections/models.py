@@ -49,11 +49,23 @@ class ConnectionCommand(BaseModel):
 
 
 @dataclass(frozen=True)
-class CatalogueTool:
+class RemoteTool:
+    """One validated tool definition as its server publishes it, before it has a local name."""
+
     remote_name: str
-    local_name: str
     description: str
     input_schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CatalogueTool(RemoteTool):
+    """A published tool: its server's definition and the name a model calls it by.
+
+    Publication gives the name (see ``naming``), because only the owner-locked publication sees
+    the names the owner's other Connections already publish.
+    """
+
+    local_name: str = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -233,7 +245,7 @@ class ConnectionsStore(Protocol):
         key_id: str,
         envelope: str,
         scopes: tuple[str, ...],
-        catalogue: tuple[CatalogueTool, ...],
+        catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
     ) -> None: ...
     async def complete_authorization(
@@ -243,7 +255,7 @@ class ConnectionsStore(Protocol):
         key_id: str,
         envelope: str,
         scopes: tuple[str, ...],
-        catalogue: tuple[CatalogueTool, ...],
+        catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
     ) -> None: ...
 
@@ -286,7 +298,7 @@ class ConnectionsStore(Protocol):
         expected_revision: str,
         command: ConnectionCommand,
         policy: ConnectionPolicy,
-        candidate: tuple[CatalogueTool, ...] | None = None,
+        candidate: tuple[RemoteTool, ...] | None = None,
     ) -> None: ...
     async def replace_bearer(
         self,
@@ -310,7 +322,7 @@ class ConnectionsStore(Protocol):
         self,
         *,
         claim: RefreshClaim,
-        catalogue: tuple[CatalogueTool, ...] | None,
+        catalogue: tuple[RemoteTool, ...] | None,
         error: str | None,
         retry_seconds: float,
         policy: ConnectionPolicy,

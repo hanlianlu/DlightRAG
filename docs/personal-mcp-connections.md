@@ -70,11 +70,12 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 | `engine/answer/owner.py` | `is_personal_auth_mode`: the eligibility rule (JWT or `none`), shared with Profile Memory, the Run pin writer, and the bootstrap capability |
 | `application/connections/service.py` | `Connections`: Settings commands, catalogue validation, refresh scheduling, Research binding and restore, dispatch, OAuth flows, maintenance |
 | `application/connections/models.py`, `policy.py`, `presets.py`, `client_metadata.py` | Commands, redacted views, and the store, MCP, and OAuth ports; `ConnectionPolicy`; presets; the Client ID Metadata Document |
+| `application/connections/naming.py` | `name_catalogue`: the local tool names publication gives |
 | `application/connections/credentials.py` | `CredentialCipher`: key-ring validation and AES-256-GCM envelopes; access-token checks |
 | `adapters/postgres/connections.py` | `PGConnectionsStore`: schema, owner-scoped state, claims and leases, revision CAS, NOTIFY, dispatch gate, GC. `PGConnectionPinWriter`: validation and pin insertion inside an accepting transaction |
 | `adapters/mcp/personal_http.py`, `adapters/mcp/oauth.py` | `PersonalMcpClient`: bounded Streamable HTTP over an admitted transport. `PersonalOAuthClient`: SDK authorization and refresh preflight |
 | `engine/network_admission.py` | DNS and IP admission shared with public Web reads |
-| `engine/answer/execution/connection_binding.py` | Secret-free `RunConnectionBinding`, `ResearchToolClaim`, `ResearchConnectionToolResolver`, `StaleConnectionBindingError` |
+| `engine/answer/execution/connection_binding.py` | Secret-free `RunConnectionBinding`, `ResearchToolClaim`, `ResearchConnectionToolResolver`, `StaleConnectionBindingError`; `CONNECTION_TOOL_PREFIX`, which only Connection tool names start with |
 | `engine/agent/tools/contracts.py` | `ToolRuntime.fencing_epoch`, which lets the gate fence parent and Child Session calls without owner, credential, or MCP facts in Agent Core |
 | `application/answer_runs/service.py`, `adapters/postgres/runtime/run_store.py`, `application/web_conversations/`, `adapters/postgres/web/web_conversations.py` | Binding at Answer acceptance; pins written by `accept_run` or by `accept_run_in` inside the Web turn transaction |
 | `engine/answer/execution/executor.py`, `engine/answer/tools/composition.py` | Restoring pinned tools for resolved Research, checking the accepted `AgentRunPlan`, and preview-or-spill of tool output |
@@ -224,9 +225,9 @@ Grants, and removes the old key only after its counts reach zero; see
   is valid JSON Schema (Draft 2020-12) within `max_schema_bytes`; the list must
   fit `max_tools` and `max_catalogue_bytes`. Echoes of the Connection's own
   credential are redacted first. Any violation rejects the whole candidate.
-- A tool's local name is
-  `mcp_<connection_id>_<24 hex digits of SHA-256(remote name)>`; a collision
-  rejects the candidate. The server's `initialize` instructions are discarded.
+- Publication gives each tool its local name (see
+  [Tool names and descriptions](#tool-names-and-descriptions)). The server's
+  `initialize` instructions are discarded.
 - **Refresh.** Each worker runs `discovery_concurrency` refresh loops. A loop
   claims one enabled, due head that is not deleted, not revoked, and not under a
   live claim, using `FOR UPDATE SKIP LOCKED`; a pending OAuth authorization
@@ -258,6 +259,53 @@ Grants, and removes the old key only after its counts reach zero; see
 - New tools and schema or description changes reach future Runs through
   publication, with no restart and no per-tool consent. Existing pins never
   change.
+
+## Tool names and descriptions
+
+`name_catalogue` in `application/connections/naming.py` names a published tool
+`mcp__<connection>__<tool>`, so the model reads which Connection a tool comes
+from and what its server calls it: `notion-search` under the label `Notion` is
+`mcp__Notion__notion_search`, and `hf_doc_search` under `Hugging Face` is
+`mcp__Hugging_Face__hf_doc_search`.
+
+- `<connection>` is the owner's label, with accents folded and each run of
+  characters other than ASCII letters and digits turned into one `_`, cut to 24
+  characters. `<tool>` is the server's name with `.` and `-` turned into `_`.
+  A name therefore holds only letters, digits, and `_`, starts with a letter,
+  and fits 64 characters: the subset the OpenAI-compatible, Response,
+  Anthropic, and Gemini adapters all accept.
+- A six-hex-digit hash appears only where readable text would collide or not
+  fit. `<tool>` keeps what fits and gains a hash of the server name when the
+  name would pass 64 characters, or when sanitizing merges it into another
+  tool's name; a server name that sanitizing leaves alone keeps its text.
+  `<connection>` gains a hash of the Connection id when the label keeps no
+  letter or digit, or when another live Connection of the owner already holds
+  it, and is the Connection id itself if that is taken too. A
+  catalogue whose names still collide, which only crafted names can cause, is
+  rejected whole.
+- Names are unique across a Run's whole tool set. No built-in tool name starts
+  with `mcp__`, and publication names a catalogue inside its owner-locked
+  transaction, apart from the Connection parts the owner's other live
+  Connections hold, so no two Connections one acceptance can bind share a part.
+  A Connection holds the part of its latest catalogue with tools, so a head left
+  without one, as a bearer save leaves it until its probe publishes, keeps its
+  part while that catalogue is retained.
+- A name depends only on the label, the catalogue, and the parts other
+  Connections hold, so refreshing an unchanged catalogue republishes the same
+  names. Two changes still move a name from one generation to the next: a
+  hashed `<connection>` loses its hash at the first publication after no other
+  Connection holds the label, and a tool the server adds under a clean name
+  takes the readable name from an existing tool that sanitizing merges with it
+  (`get_page` added beside `get.page` takes `mcp__<connection>__get_page`, and
+  `get.page` gains a hash). A pin keeps its generation's names, so no Run sees
+  a name move.
+- A rename renames nothing already published. An enabled Connection's next
+  publication, which the rename makes due at once, carries the new label; a
+  disabled one is not refreshed in the background, so the label arrives with
+  its next probe or with the refresh that enabling it makes due.
+- Names, descriptions, and parameter schemas reach the model as the server
+  wrote them, apart from sanitized names and the credential redaction discovery
+  applies; DlightRAG never rewrites, filters, or summarizes them.
 
 ## Atomic acceptance and retention
 
@@ -772,13 +820,18 @@ dead refresher is modeled by durable lease expiry, not by killing a process.
   servers, and Tool Activity labels.
 - `tests/unit/test_connection_refresh_loop.py`: an idle refresh loop sleeps
   until the next refresh falls due, at most 30 seconds.
+- `tests/unit/test_connection_naming.py`: sanitizing, the 64-character limit,
+  hashes only on collision or overflow, parts apart across Connections,
+  stability, and a rename.
 - `tests/integration/test_connections_pg.py`, `test_connection_binding_pg.py`,
   `test_connection_dispatch_pg.py`, `test_connection_authorization_pg.py`,
   `test_connection_lifecycle_pg.py`, `test_connections_web_pg.py`: the owner
-  lifecycle, atomic pins across Application, REST, MCP, and Web, the gate and
-  revoke races, cross-worker OAuth and its completion against a changed or
-  unchanged head, refresh leases, re-encryption, GC, reader startup, and Web
-  authentication and CSRF against PostgreSQL.
+  lifecycle, atomic pins across Application, REST, MCP, and Web, names apart
+  across like-labelled Connections, kept by a pin through a rename and by a
+  Connection through a bearer save, the gate and revoke races, cross-worker
+  OAuth and its completion against a changed or unchanged head, refresh leases,
+  re-encryption, GC, reader startup, and Web authentication and CSRF against
+  PostgreSQL.
 - `frontend/api/connections.test.ts`,
   `frontend/ui/settings-connections.browser.test.ts`: the browser wire and
   Settings behavior.

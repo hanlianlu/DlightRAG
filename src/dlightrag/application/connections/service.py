@@ -54,6 +54,7 @@ from .models import (
     PinnedToolFact,
     PresetView,
     RefreshClaim,
+    RemoteTool,
     StoredGrant,
 )
 from .presets import PRESETS
@@ -381,7 +382,7 @@ class Connections:
                     raise ConnectionsError(
                         "Endpoint candidate needs a new grant", 409, kind="requires_reauthorization"
                     )
-                candidate = await self._discover(item.connection_id, command.endpoint)
+                candidate = await self._discover(command.endpoint)
         await self._store.change(
             owner_id=owner_id,
             expected_revision=expected_revision,
@@ -437,7 +438,7 @@ class Connections:
             self._validate_endpoint(endpoint)
             if expected_revision is None or revision != expected_revision:
                 raise ConnectionsError("Connections revision changed")
-            catalogue = await self._discover(connection_id, endpoint, bearer)
+            catalogue = await self._discover(endpoint, bearer)
             await self._store.publish_authorization(
                 owner_id=owner_id,
                 connection_id=connection_id,
@@ -631,7 +632,7 @@ class Connections:
                     callback=callback,
                     save=save,
                 )
-                catalogue = self._validate_catalogue(flow.connection_id, result.tools)
+                catalogue = self._validate_catalogue(result.tools)
                 key_id, envelope = self._cipher.encrypt(
                     result.credentials,
                     owner_id=flow.owner_id,
@@ -676,19 +677,18 @@ class Connections:
             raise ConnectionsError("Endpoint rejected by network policy", 422) from None
 
     async def _discover(
-        self, identity: str, endpoint: str, bearer: SecretStr | None = None
-    ) -> tuple[CatalogueTool, ...]:
+        self, endpoint: str, bearer: SecretStr | None = None
+    ) -> tuple[RemoteTool, ...]:
         self._validate_endpoint(endpoint)
         async with asyncio.timeout(self._policy.discovery_timeout), self._discovery_slots:
             raw = await self._mcp.discover(endpoint=endpoint, bearer=bearer, policy=self._policy)
-        return self._validate_catalogue(identity, raw)
+        return self._validate_catalogue(raw)
 
-    def _validate_catalogue(
-        self, identity: str, raw: list[dict[str, Any]]
-    ) -> tuple[CatalogueTool, ...]:
+    def _validate_catalogue(self, raw: list[dict[str, Any]]) -> tuple[RemoteTool, ...]:
+        """Validate a server's catalogue whole; publication names the tools."""
         if len(raw) > self._policy.max_tools:
             raise ConnectionsError("catalogue")
-        tools: list[CatalogueTool] = []
+        tools: list[RemoteTool] = []
         names: set[str] = set()
         for item in raw:
             name = item.get("name")
@@ -707,10 +707,7 @@ class Connections:
                 raise ConnectionsError("catalogue")
             Draft202012Validator.check_schema(schema)
             names.add(name)
-            local = "mcp_" + identity + "_" + hashlib.sha256(name.encode()).hexdigest()[:24]
-            if any(tool.local_name == local for tool in tools):
-                raise ConnectionsError("catalogue")
-            tools.append(CatalogueTool(name, local, description, schema))
+            tools.append(RemoteTool(name, description, schema))
         if len(json.dumps(raw).encode()) > self._policy.max_catalogue_bytes:
             raise ConnectionsError("catalogue")
         return tuple(sorted(tools, key=lambda tool: tool.remote_name))
@@ -830,7 +827,7 @@ class Connections:
                     secret=bearer,
                     on_grant=on_grant,
                 )
-            catalogue = await self._discover(item.connection_id, item.endpoint, bearer)
+            catalogue = await self._discover(item.endpoint, bearer)
         except asyncio.CancelledError:
             raise
         except ConnectionsError as exc:

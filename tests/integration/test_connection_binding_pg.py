@@ -664,3 +664,157 @@ async def test_pinned_tool_labels_resolve_a_run_and_survive_connection_deletion(
         assert await service.pinned_tool_labels(
             owner_id="a", auth_mode="jwt", run_id=pinned.run.run_id
         ) == {local_name: "Fixture · read"}
+
+
+@pytest.mark.asyncio
+async def test_like_labelled_connections_bind_apart_and_a_rename_leaves_pins_alone():
+    """Tool names are readable and unique across a Run, and pinned with its generations.
+
+    Both servers publish `read`, which is also a built-in tool's name, under one label; the
+    later publication takes a hashed Connection part, so the Run's whole tool set holds each
+    name once. A rename reaches the next publication and never a Run that already accepted.
+    """
+    import hashlib
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+    from uuid import uuid7
+
+    from dlightrag.engine.answer.execution.connection_binding import ResearchToolClaim
+    from dlightrag.engine.answer.tools.composition import research_tool_declarations
+    from tests.integration.run_runtime_pg_harness import run_envelope
+
+    owner: dict[str, Any] = {"owner_id": "a", "auth_mode": "jwt"}
+
+    async with isolated_run_runtime("binding_names") as (runs, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        service = Connections(store=store, mcp=CatalogueMcp())
+
+        async def command(**fields: Any) -> set[str]:
+            view = await service.change(
+                **owner,
+                expected_revision=(await service.read(**owner)).revision,
+                command=ConnectionCommand(**fields),
+            )
+            return {item.connection_id for item in view.connections}
+
+        async def connect(label: str) -> str:
+            before = {item.connection_id for item in (await service.read(**owner)).connections}
+            created = await command(kind="create", label=label, endpoint="https://example.com/mcp")
+            (identity,) = created - before
+            await command(kind="probe", connection_id=identity)
+            await command(kind="enable", connection_id=identity, consent_version=1)
+            return identity
+
+        async def names() -> tuple[Any, dict[str, str]]:
+            bound = await service.bind_research(**owner)
+            # One tool per catalogue, in binding order.
+            return bound, {
+                binding.connection_id: tool.name
+                for binding, tool in zip(bound.bindings, bound.tools, strict=True)
+            }
+
+        first, second = await connect("Notion"), await connect("Notion")
+        hashed = f"mcp__Notion_{hashlib.sha256(second.encode()).hexdigest()[:6]}__read"
+        bound, accepted = await names()
+        assert accepted == {first: "mcp__Notion__read", second: hashed}
+        run_tools = [
+            tool.name
+            for tool in research_tool_declarations(
+                resource_read=True, environment=True, injected=bound.tools
+            )
+        ]
+        assert {"read", "mcp__Notion__read", hashed} <= set(run_tools)
+        assert len(run_tools) == len(set(run_tools))
+
+        envelope = run_envelope("answer", key="r1", owner="a", mode="research")
+        envelope = replace(
+            envelope,
+            payload={
+                **envelope.payload,
+                "run_connection_bindings": [b.as_json() for b in bound.bindings],
+            },
+        )
+        accepted_run = await runs.accept_run(
+            envelope=envelope, run_id=str(uuid7()), connection_bindings=bound.bindings
+        )
+
+        await command(kind="edit", connection_id=first, label="Work Notion")
+        assert (await names())[1] == accepted
+        await command(kind="probe", connection_id=first)
+        assert (await names())[1] == {first: "mcp__Work_Notion__read", second: hashed}
+        # Once no other Connection publishes under the label, the next publication drops the hash.
+        await command(kind="probe", connection_id=second)
+        assert (await names())[1] == {first: "mcp__Work_Notion__read", second: "mcp__Notion__read"}
+
+        restored = await service.restore_research(
+            bindings=bound.bindings,
+            claim=ResearchToolClaim("a", accepted_run.run.run_id, "worker", 7, AsyncMock()),
+        )
+        assert sorted(tool.name for tool in restored) == sorted(accepted.values())
+
+
+@pytest.mark.asyncio
+async def test_a_connection_keeps_its_part_while_its_head_has_no_catalogue():
+    """A bearer save leaves the head without a catalogue until a probe publishes one.
+
+    The Connection's latest catalogue still holds its part meanwhile, so a like-labelled
+    Connection refreshed in that gap keeps its hash instead of taking the readable part,
+    and the hash never moves from one Connection to the other.
+    """
+    import hashlib
+
+    from pydantic import SecretStr
+
+    from dlightrag.application.connections.credentials import CredentialCipher
+    from tests.unit.test_connections_config import KEYRING
+
+    class SwitchableMcp(CatalogueMcp):
+        down: frozenset[str] = frozenset()
+
+        async def discover(self, **kwargs):
+            if kwargs["endpoint"] in self.down:
+                raise RuntimeError("discovery unavailable")
+            return await super().discover(**kwargs)
+
+    owner: dict[str, Any] = {"owner_id": "a", "auth_mode": "jwt"}
+
+    async with isolated_run_runtime("binding_parts") as (_, pool):
+        store = PGConnectionsStore(pool=pool)
+        await store.initialize(validate_only=False)
+        mcp = SwitchableMcp()
+        service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(SecretStr(KEYRING)))
+
+        async def command(**fields: Any) -> None:
+            await service.change(
+                **owner,
+                expected_revision=(await service.read(**owner)).revision,
+                command=ConnectionCommand(**fields),
+            )
+
+        async def published() -> dict[str, list[str]]:
+            _, items = await store.read("a")
+            return {
+                item.connection_id: [tool.local_name for tool in item.catalogue] for item in items
+            }
+
+        identities = []
+        for endpoint in ("https://a.example/mcp", "https://b.example/mcp"):
+            before = set(await published())
+            await command(kind="create", label="Notion", endpoint=endpoint)
+            (identity,) = set(await published()) - before
+            await command(kind="probe", connection_id=identity)
+            identities.append(identity)
+        first, second = identities
+        hashed = f"mcp__Notion_{hashlib.sha256(second.encode()).hexdigest()[:6]}__read"
+        assert await published() == {first: ["mcp__Notion__read"], second: [hashed]}
+
+        mcp.down = frozenset({"https://a.example/mcp"})
+        await service.replace_bearer(**owner, connection_id=first, bearer=SecretStr("token"))
+        assert (await published())[first] == []
+        await command(kind="probe", connection_id=second)
+        assert (await published())[second] == [hashed]
+
+        mcp.down = frozenset()
+        await command(kind="probe", connection_id=first)
+        assert await published() == {first: ["mcp__Notion__read"], second: [hashed]}

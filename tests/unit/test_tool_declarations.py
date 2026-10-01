@@ -18,6 +18,7 @@ from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult,
 from dlightrag.engine.agent.tools.files import ls_declaration
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.execution.connection_binding import is_connection_tool
 from dlightrag.engine.answer.resources.models import PUBLISHED_ARTIFACT_HANDLE_PREFIX
 from dlightrag.engine.answer.tools.composition import (
     compose_research_tools,
@@ -136,6 +137,28 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert "ask_parent" in {tool.name for tool in declared}
 
 
+@pytest.mark.parametrize("child", [False, True])
+def test_no_built_in_tool_is_named_like_a_connection_tool(tmp_path: Path, child: bool) -> None:
+    """The Connection prefix is Connections' alone, so their tools never meet a built-in name."""
+    factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
+    declared = research_tool_declarations(
+        web_search=True,
+        resource_read=True,
+        resource_view=True,
+        environment=True,
+        artifact_publication=True,
+        memory=True,
+        skills=factory.declarations(child=child),
+        subagents=(
+            child_guidance_declarations()
+            if child
+            else subagent_declarations(model_guidance="Configured model roles.")
+        ),
+        child=child,
+    )
+    assert [tool.name for tool in declared if is_connection_tool(tool.name)] == []
+
+
 def test_workspace_tools_state_what_a_run_workspace_holds() -> None:
     """All 24 `ls`, `find`, and `grep` calls of 34 live Research Runs met an empty
     workspace, some hunting knowledge-base documents as files, and follow-ups looked
@@ -206,7 +229,7 @@ async def test_connection_acceptance_returns_only_the_stored_declaration() -> No
     from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 
     schema = {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
-    catalogue = CatalogueTool("lookup", "mcp_lookup", "Remote lookup.", schema)
+    catalogue = CatalogueTool("lookup", "Remote lookup.", schema, local_name="mcp__Remote__lookup")
     binding = RunConnectionBinding("owner", "a" * 32, 1, 1, "b" * 64)
     store = AsyncMock()
     store.research_catalogues.return_value = [(binding, (catalogue,))]

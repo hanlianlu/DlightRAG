@@ -35,9 +35,11 @@ from dlightrag.application.connections.models import (
     OAuthFlow,
     PinnedToolFact,
     RefreshClaim,
+    RemoteTool,
     StoredConnection,
     StoredGrant,
 )
+from dlightrag.application.connections.naming import name_catalogue
 from dlightrag.application.connections.policy import ConnectionPolicy
 from dlightrag.engine.agent.session.effects import canonical_json, schema_digest
 from dlightrag.engine.agent.session.operation import ToolEffectPending, decode_operation_state
@@ -748,7 +750,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         expected_revision: str,
         command: ConnectionCommand,
         policy: ConnectionPolicy,
-        candidate: tuple[CatalogueTool, ...] | None = None,
+        candidate: tuple[RemoteTool, ...] | None = None,
     ) -> None:
         async def operation(conn: Any) -> None:
             async with conn.transaction():
@@ -836,7 +838,13 @@ class PGConnectionsStore(PostgresOperationRunner):
                                 generation,
                                 command.endpoint,
                                 None,
-                                candidate,
+                                await self._named(
+                                    conn,
+                                    owner_id,
+                                    identity,
+                                    command.label or row["label"],
+                                    candidate,
+                                ),
                             )
                             await conn.execute(
                                 "UPDATE dlightrag_connection_heads SET head_generation=$3,observed_status='ready' WHERE owner_id=$1 AND connection_id=$2",
@@ -1399,7 +1407,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         key_id: str,
         envelope: str,
         scopes: tuple[str, ...],
-        catalogue: tuple[CatalogueTool, ...],
+        catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
     ) -> None:
         """Publish a new Grant as a Settings command at the owner's ``expected_revision``."""
@@ -1442,7 +1450,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         key_id: str,
         envelope: str,
         scopes: tuple[str, ...],
-        catalogue: tuple[CatalogueTool, ...],
+        catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
     ) -> None:
         """Publish a finished flow's Grant onto the head revision the flow began at.
@@ -1511,13 +1519,14 @@ class PGConnectionsStore(PostgresOperationRunner):
         key_id: str,
         envelope: str,
         scopes: tuple[str, ...],
-        catalogue: tuple[CatalogueTool, ...],
+        catalogue: tuple[RemoteTool, ...],
         policy: ConnectionPolicy,
     ) -> None:
         """Replace the locked head's Grants with a new one and publish its first generation."""
         owner_id, connection_id = row["owner_id"], row["connection_id"]
+        named = await self._named(conn, owner_id, connection_id, row["label"], catalogue)
         if row["enabled"]:
-            await self._check_tool_quota(conn, owner_id, connection_id, len(catalogue), policy)
+            await self._check_tool_quota(conn, owner_id, connection_id, len(named), policy)
         await conn.execute(
             "UPDATE dlightrag_connection_grants SET status='retired',encrypted_envelope=NULL,secret_version=secret_version+1,refresh_epoch=refresh_epoch+1 WHERE owner_id=$1 AND connection_id=$2",
             owner_id,
@@ -1537,9 +1546,7 @@ class PGConnectionsStore(PostgresOperationRunner):
             json.dumps(scopes),
         )
         generation = row["head_generation"] + 1
-        await self._generation(
-            conn, owner_id, connection_id, generation, endpoint, grant_id, catalogue
-        )
+        await self._generation(conn, owner_id, connection_id, generation, endpoint, grant_id, named)
         await conn.execute(
             """UPDATE dlightrag_connection_heads SET head_generation=$3,revision=revision+1,
             refresh_epoch=refresh_epoch+1,refresh_owner=NULL,refresh_expires_at=NULL,
@@ -1578,6 +1585,38 @@ class PGConnectionsStore(PostgresOperationRunner):
             grant,
             encoded,
             hashlib.sha256(encoded.encode()).hexdigest() if encoded is not None else None,
+        )
+
+    @staticmethod
+    async def _named(
+        conn: Any, owner: str, identity: str, label: str, catalogue: tuple[RemoteTool, ...]
+    ) -> tuple[CatalogueTool, ...]:
+        """Name a catalogue apart from what the owner's other live Connections publish.
+
+        Every publication holds the owner lock, so no other Connection of this owner can take
+        the same names before this one commits. A Connection publishes all its tools under one
+        Connection part, so one name from each shows every part taken. The part is read from
+        each one's latest catalogue with tools, not only its head: a head left without one, as
+        a bearer save leaves it until its probe publishes, keeps its part.
+        """
+        others = await conn.fetch(
+            """SELECT latest.name FROM dlightrag_connection_heads h
+            CROSS JOIN LATERAL (
+                SELECT g.catalogue_json->0->>'local_name' AS name
+                FROM dlightrag_connection_generations g
+                WHERE g.owner_id=h.owner_id AND g.connection_id=h.connection_id
+                AND jsonb_array_length(g.catalogue_json)>0
+                ORDER BY g.generation DESC LIMIT 1
+            ) latest
+            WHERE h.owner_id=$1 AND h.connection_id<>$2 AND h.tombstoned_at IS NULL""",
+            owner,
+            identity,
+        )
+        return name_catalogue(
+            catalogue,
+            label=label,
+            connection_id=identity,
+            others=(row["name"] for row in others),
         )
 
     async def _check_tool_quota(
@@ -1655,7 +1694,7 @@ class PGConnectionsStore(PostgresOperationRunner):
         self,
         *,
         claim: RefreshClaim,
-        catalogue: tuple[CatalogueTool, ...] | None,
+        catalogue: tuple[RemoteTool, ...] | None,
         error: str | None,
         retry_seconds: float,
         policy: ConnectionPolicy,
@@ -1702,15 +1741,24 @@ class PGConnectionsStore(PostgresOperationRunner):
                     ):
                         return False
                 active_error = error
-                if catalogue is not None and head["enabled"]:
+                named = None
+                if catalogue is not None:
+                    try:
+                        named = await self._named(
+                            conn, item.owner_id, item.connection_id, head["label"], catalogue
+                        )
+                    except ConnectionsError:
+                        # A catalogue whose names collide fails like any invalid discovery.
+                        active_error = "discovery"
+                if named is not None and head["enabled"]:
                     try:
                         await self._check_tool_quota(
-                            conn, item.owner_id, item.connection_id, len(catalogue), policy
+                            conn, item.owner_id, item.connection_id, len(named), policy
                         )
                     except ConnectionsError:
                         active_error = "quota"
                 generation = item.generation
-                if catalogue is not None and active_error is None:
+                if named is not None and active_error is None:
                     generation += 1
                     await self._generation(
                         conn,
@@ -1719,7 +1767,7 @@ class PGConnectionsStore(PostgresOperationRunner):
                         generation,
                         item.endpoint,
                         item.grant_id,
-                        catalogue,
+                        named,
                     )
                 status = (
                     "ready"

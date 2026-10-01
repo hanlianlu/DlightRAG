@@ -12,6 +12,15 @@ from typing import Any, Protocol
 
 from dlightrag.engine.agent.tools import AgentTool
 
+#: Every Connection tool's name starts with this and no other tool's does, so the name itself
+#: tells the model that an external server the user connected provides the tool.
+CONNECTION_TOOL_PREFIX = "mcp__"
+
+
+def is_connection_tool(name: str) -> bool:
+    """Whether a Research tool name is a Connection tool's."""
+    return name.startswith(CONNECTION_TOOL_PREFIX)
+
 
 @dataclass(frozen=True, slots=True)
 class RunConnectionBinding:

@@ -71,8 +71,8 @@ capability one sentence at a time. The rule partitions the tool surface once:
 composition offers — the path tools (`bash`, `write`, `edit`, `read`, `ls`,
 `find`, `grep`), retrieval and reading (`search_knowledge_base`, `search_web`,
 `view`), `recall_memory`, `load_skill`, the child's own `ask_parent`, and every
-tool a Connection contributes (`mcp_<server>_<tool>`), which the owner's enabling
-of that Connection authorizes for that owner's Runs.
+tool a Connection contributes (`mcp__<connection>__<tool>`), which the owner's
+enabling of that Connection authorizes for that owner's Runs.
 
 **The default is computed, not listed.** A child's set is the parent's composed
 set minus the forbidden set, computed in one place, instead of a hardcoded
