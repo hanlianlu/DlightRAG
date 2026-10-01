@@ -1004,7 +1004,7 @@ RUN_MIGRATIONS = (
     ),
     Migration(
         "corpus_mutation_runtime",
-        "Add fenced Corpus Mutation checkpoints and remove the legacy ingest lifecycle",
+        "Add fenced Corpus Mutation checkpoints",
         (
             "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS handoff_started_at TIMESTAMPTZ",
             "ALTER TABLE dlightrag_runs ADD COLUMN IF NOT EXISTS superseded_by_run_id UUID",
