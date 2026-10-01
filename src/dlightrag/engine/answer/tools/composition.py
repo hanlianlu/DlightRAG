@@ -199,7 +199,6 @@ def compose_research_tools(
     output_stage_factory: Any | None = None,
     artifacts_root: Path | None = None,
     publication_limits: PublicationLimits | None = None,
-    ripgrep: str = "rg",
     search_toolchain: SearchToolchain | None = None,
     image_preparer: ImagePreparer | None = None,
     subagent_host: SubagentHost | None = None,
@@ -230,7 +229,7 @@ def compose_research_tools(
         child=child,
         tool_names=tool_names,
     )
-    toolchain = search_toolchain or SearchToolchain(ripgrep=ripgrep)
+    toolchain = search_toolchain or SearchToolchain()
     bindings: dict[str, Callable[[], AgentTool]] = {
         "search_knowledge_base": lambda: knowledge_base_search_tool(
             retrieve=retrieve_knowledge_base, evidence=evidence, trace=trace

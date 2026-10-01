@@ -704,12 +704,9 @@ def grep_tool(
     environment: ExecutionEnvironment,
     scheduler: AccessScheduler,
     *,
-    ripgrep: str = "rg",
-    search_toolchain: SearchToolchain | None = None,
+    search_toolchain: SearchToolchain,
     output_stage_factory: OutputStageFactory | None = None,
 ) -> AgentTool:
-    toolchain = search_toolchain or SearchToolchain(ripgrep=ripgrep)
-
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         grep_args = cast(GrepArgs, args)
         if blocked := _integrity_blocked(environment):
@@ -722,7 +719,7 @@ def grep_tool(
             return ToolResult.text(str(exc), is_error=True)
         target = root.relative_to(environment.root).as_posix() if root != environment.root else "."
         try:
-            ripgrep = await toolchain.path("rg")
+            ripgrep = await search_toolchain.path("rg")
         except RuntimeError as exc:
             return ToolResult.text(str(exc), is_error=True)
         await runtime.emit_update(ToolResult.text("", subject=grep_args.pattern))
@@ -1089,12 +1086,9 @@ def find_tool(
     environment: ExecutionEnvironment,
     scheduler: AccessScheduler,
     *,
-    fd: str = "fd",
-    search_toolchain: SearchToolchain | None = None,
+    search_toolchain: SearchToolchain,
     spill: SpillWriter | None = None,
 ) -> AgentTool:
-    toolchain = search_toolchain or SearchToolchain(fd=fd)
-
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         find_args = cast(FindArgs, args)
         if blocked := _integrity_blocked(environment):
@@ -1108,7 +1102,7 @@ def find_tool(
                     f"find path is not a directory: {_escape_path(find_args.path)}",
                     is_error=True,
                 )
-            fd = await toolchain.path("fd")
+            fd = await search_toolchain.path("fd")
         except (PathRejected, OSError, RuntimeError) as exc:
             return ToolResult.text(str(exc), is_error=True)
         await runtime.emit_update(ToolResult.text("", subject=find_args.pattern))

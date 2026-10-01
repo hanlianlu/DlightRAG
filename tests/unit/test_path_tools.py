@@ -662,7 +662,7 @@ async def test_grep_limits_json_matches_for_single_and_multiple_files(
     (tmp_path / "single.txt").write_text(
         "".join(f"hit {i}\n" for i in range(1, 12)), encoding="utf-8"
     )
-    tool = grep_tool(env, scheduler, ripgrep=rg)
+    tool = grep_tool(env, scheduler, search_toolchain=SearchToolchain(ripgrep=rg))
     # JSON events are normalized to workspace-relative path:line:text records.
     single = await tool.execute(GrepArgs(pattern="hit", path="single.txt", limit=3), tool_runtime())
 
@@ -697,7 +697,7 @@ async def test_grep_uses_argv_not_a_shell(tmp_path: Path) -> None:
     env, scheduler = _env(tmp_path)
     (tmp_path / "hit.txt").write_text("needle", encoding="utf-8")
 
-    tool = grep_tool(env, scheduler, ripgrep=str(fake))
+    tool = grep_tool(env, scheduler, search_toolchain=SearchToolchain(ripgrep=str(fake)))
     result = await tool.execute(GrepArgs(pattern="$(touch injected)"), tool_runtime())
     argv = (tmp_path / "argv.txt").read_text(encoding="utf-8").splitlines()
     assert result.is_error is False
@@ -717,7 +717,7 @@ async def test_grep_searches_hidden_ignored_and_limits_matching_lines(
     (tmp_path / ".hidden.txt").write_text("hidden needle\n", encoding="utf-8")
     (tmp_path / "ignored.txt").write_text("ignored needle\n", encoding="utf-8")
     (tmp_path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
-    tool = grep_tool(env, scheduler, ripgrep=rg)
+    tool = grep_tool(env, scheduler, search_toolchain=SearchToolchain(ripgrep=rg))
     result = await tool.execute(
         GrepArgs(pattern="NEEDLE", ignore_case=True, limit=2), tool_runtime()
     )
@@ -738,7 +738,7 @@ async def test_grep_literal_flag_disables_regex_and_relative_paths_are_posix(
     env, scheduler = _env(tmp_path)
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "dots.txt").write_text("a.b literal\naxb\n", encoding="utf-8")
-    tool = grep_tool(env, scheduler, ripgrep=rg)
+    tool = grep_tool(env, scheduler, search_toolchain=SearchToolchain(ripgrep=rg))
     regex = await tool.execute(GrepArgs(pattern="a.b", path="sub"), tool_runtime())
     assert "axb" in regex.text_content
     literal = await tool.execute(GrepArgs(pattern="a.b", path="sub", literal=True), tool_runtime())
