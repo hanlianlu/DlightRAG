@@ -147,22 +147,41 @@ def test_binding_wire_is_bounded_and_rejects_duplicates():
             decode_connection_bindings(payload)
 
 
+class _ModelCalled(Exception):
+    """Ends a driven Run at its first model call."""
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["fast", "research"])
-async def test_executor_resolver_claim_comes_from_run_session_not_prepared_arguments(mode):
+async def test_only_research_offers_connection_tools_restored_under_the_session_claim(
+    mode, tmp_path
+):
+    """Research restores its pinned Connection tools under the claim of the worker running it.
+
+    The claim comes from the RunSession, never from prepared input a caller or model could
+    shape, and the restored tools are what the Research model is offered. A Run routed to
+    Fast never restores them.
+    """
+    from types import SimpleNamespace
     from typing import Any, cast
     from unittest.mock import MagicMock
 
+    from dlightrag.engine.ai.capacity import ModelProfile
+    from dlightrag.engine.answer.capabilities import RequestModelContext
     from dlightrag.engine.runtime.coordinator import RunSession
     from dlightrag.engine.runtime.errors import RunExecutionError
+    from dlightrag.engine.runtime.progress import StageCommit
+    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
     from tests.in_memory_session_repository import MemoryAgentSessionRepository
     from tests.unit.test_answer_executor import _executor
 
+    executor = _executor()
     accepted_store = _Store()
     binding = bound()
-    await _service(store=accepted_store, bind_research=AsyncMock(return_value=binding)).create(
-        request=_request(mode="research"), owner_id="owner-1", auth_mode="jwt"
-    )
+    service = _service(store=accepted_store, bind_research=AsyncMock(return_value=binding))
+    # Acceptance pins the Agent Plan this executor composes, as the composition root wires it.
+    service._research_tool_declarations = executor.research_tool_declarations
+    await service.create(request=_request(mode="research"), owner_id="owner-1", auth_mode="jwt")
     payload = {
         **accepted_store.created[0]["prepared_input"],
         "owner_id": "model-forged",
@@ -170,34 +189,82 @@ async def test_executor_resolver_claim_comes_from_run_session_not_prepared_argum
         "fencing_epoch": 999,
     }
     request = AnswerRunInput.from_prepared_input(payload)
-    resolver = AsyncMock(return_value=binding.tools)
-    executor = _executor()
+
+    resolver = AsyncMock(return_value=tuple(tool.bind(AsyncMock()) for tool in binding.tools))
     executor._connection_tool_resolver = resolver
     executor.validate_pinned_model_profiles = MagicMock(
         return_value={p.role: p.profile for p in request.pinned_models}
     )
     executor._store.load_routing = AsyncMock(return_value=MagicMock(resolved_mode=mode))
-    executor.prepare_orchestrated_run = AsyncMock(
-        side_effect=RunExecutionError("test_stop", "Prepared")
+    executor._store.list_child_sessions = AsyncMock(return_value=[])
+    executor._store.load_pending_agent_controls = AsyncMock(return_value=[])
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    models = RequestModelContext(extract=profile, query=profile, vlm=profile)
+    executor._capabilities.request_model_context = MagicMock(return_value=models)
+    executor._resources.resolve = AsyncMock(
+        return_value=SimpleNamespace(
+            models=models,
+            current_images=[],
+            web_sources=None,
+            registry=None,
+            resource_manifest=(),
+            image_budget=None,
+            query_images=None,
+            current_image_count=0,
+        )
     )
+    executor._planning = _Retrieval()
+    executor._workspace_root_setting = str(tmp_path / "workspaces")
+    (tmp_path / "corpus").mkdir()
+    executor._working_dir = str(tmp_path / "corpus")
+
+    offered: list[set[str]] = []
+
+    class _ResearchModel:
+        async def __call__(self, **kwargs: Any) -> Any:
+            offered.append({tool.name for tool in kwargs["tools"]})
+            raise _ModelCalled
+
+        async def stream_text(self, **_kwargs: Any) -> Any:
+            raise AssertionError("the first model call ends the Run")
+
+    class _FastGeneration:
+        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
+            offered.append({tool.name for tool in kwargs.get("tools") or ()})
+            raise _ModelCalled
+
+    executor._models.query_tool_model = MagicMock(return_value=_ResearchModel())
+    executor._models.answer_synthesizer = MagicMock(return_value=_FastGeneration())
+
     session = MagicMock(
         owner_id="owner-1",
         run_id="trusted-run",
         worker_id="trusted-worker",
         fencing_epoch=7,
         prepared_input=payload,
+        durable_progress_version=0,
+        workspace_epoch=None,
+        checkpoint=None,
     )
-    session.check_cancelled = AsyncMock()
-    session.enter_phase = AsyncMock()
+    for method in ("check_cancelled", "enter_phase", "emit_token", "flush_tokens", "reset_output"):
+        setattr(session, method, AsyncMock())
+    progress = MagicMock()
+    progress.load_stage = AsyncMock(return_value=None)
+    progress.settle_stage = AsyncMock(
+        return_value=StageCommit(progress_version=1, stage_intent_id=MagicMock(), evidence_count=0)
+    )
     session.execution.session_repository = MemoryAgentSessionRepository[Any](fencing_epoch=11)
+    session.execution.workspace_store = InMemoryWorkspaceStore()
+    session.execution.progress_store = progress
     session.execution.fencing_epoch = 11
-    with pytest.raises(RunExecutionError) as error:
+
+    with pytest.raises(RunExecutionError):
         await executor.execute(cast(RunSession, session))
-    assert error.value.kind == "test_stop", repr(error.value.__cause__)
-    assert executor.prepare_orchestrated_run.await_args is not None
+
+    assert len(offered) == 1, "the Run never reached its model"
     if mode == "fast":
         resolver.assert_not_awaited()
-        assert executor.prepare_orchestrated_run.await_args.kwargs["connection_tools"] == ()
+        assert offered == [set()]
     else:
         resolver.assert_awaited_once()
         assert resolver.await_args is not None
@@ -210,9 +277,7 @@ async def test_executor_resolver_claim_comes_from_run_session_not_prepared_argum
         )
         assert claim.check_cancelled is session.check_cancelled
         assert resolver.await_args.kwargs["bindings"] == binding.bindings
-        assert (
-            executor.prepare_orchestrated_run.await_args.kwargs["connection_tools"] == binding.tools
-        )
+        assert "mcp_fixture" in offered[0]
 
 
 @pytest.mark.asyncio
