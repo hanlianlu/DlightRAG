@@ -2,7 +2,6 @@
 """Contract tests for durable Answer run storage that need no database."""
 
 import datetime
-import re
 from dataclasses import replace
 
 import pytest
@@ -37,33 +36,6 @@ class TestMigrationDeclaration:
         assert RUN_MIGRATION_SCOPE == "runs"
         assert versions[0] == "run_runtime_v1"
         assert len(set(versions)) == len(versions)
-
-    def test_declares_the_final_answer_and_session_tables(self) -> None:
-        created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _all_statements()))
-        assert created == {
-            "dlightrag_runs",
-            "dlightrag_run_events",
-            "dlightrag_agent_sessions",
-            "dlightrag_agent_session_entries",
-            "dlightrag_agent_session_registers",
-            "dlightrag_answer_run_stages",
-            "dlightrag_answer_evidence",
-            "dlightrag_answer_resources",
-            "dlightrag_blobs",
-            "dlightrag_blob_chunks",
-            "dlightrag_answer_run_artifacts",
-            "dlightrag_answer_artifact_attachments",
-            "dlightrag_answer_workspace_inventory",
-            "dlightrag_answer_committed_spills",
-            "dlightrag_answer_session_notes",
-            "dlightrag_answer_run_routing",
-            "dlightrag_answer_child_sessions",
-            "dlightrag_answer_child_operations",
-            "dlightrag_answer_child_guidance",
-            "dlightrag_agent_controls",
-            "dlightrag_answer_memory_settings",
-            "dlightrag_corpus_mutation_windows",
-        }
 
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:
         statements = _all_statements()

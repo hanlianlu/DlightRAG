@@ -179,13 +179,9 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
         probed["model"] = model
         return ImageProbeOutcome(status="supported")
 
-    class _StubProvider:
-        async def aclose(self) -> None:
-            pass
-
     def fake_get_provider(*_args, **kwargs):
         probed["api_key"] = kwargs["api_key"]
-        return _StubProvider()
+        return _Provider()
 
     monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", fake_get_provider)
     monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", fake_probe)
@@ -209,13 +205,9 @@ async def test_image_probe_runs_on_the_configured_wire_and_keys_its_cache_on_it(
     """A Response-family model is probed over the Response wire, not Chat Completions."""
     families: list[str] = []
 
-    class _StubProvider:
-        async def aclose(self) -> None:
-            pass
-
     def fake_get_provider(*_args, **kwargs):
         families.append(kwargs["api_family"])
-        return _StubProvider()
+        return _Provider()
 
     async def fake_probe(provider, *, model, model_kwargs=None):
         return ImageProbeOutcome(status="supported")
@@ -383,6 +375,18 @@ async def test_reprobe_respects_cooldown_when_still_unknown(
 # --- Role-specific capability resolved from each role's own model config ------
 
 
+class _Provider:
+    """A provider the image probe is handed; the probe itself is the test's."""
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _install_probe(monkeypatch: pytest.MonkeyPatch, probe: Any) -> None:
+    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: _Provider())
+    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
+
+
 def _probed_models(monkeypatch: pytest.MonkeyPatch, *statuses: ImageCapabilityStatus) -> list[str]:
     """Record every probed model, replying with *statuses* in order (last repeats)."""
     probed: list[str] = []
@@ -392,14 +396,7 @@ def _probed_models(monkeypatch: pytest.MonkeyPatch, *statuses: ImageCapabilitySt
         probed.append(model)
         return ImageProbeOutcome(status=replies[min(len(probed) - 1, len(replies) - 1)])
 
-    class _StubProvider:
-        async def aclose(self) -> None:
-            pass
-
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: _StubProvider()
-    )
-    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", fake_probe)
+    _install_probe(monkeypatch, fake_probe)
     return probed
 
 
@@ -454,12 +451,7 @@ async def test_distinct_capability_probes_share_scheduler_limit(
             await release_first.wait()
         return ImageProbeOutcome(status="supported")
 
-    class Provider:
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: Provider())
-    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
+    _install_probe(monkeypatch, probe)
     capabilities = ModelImageCapabilities(scheduler=scheduler)
     first = asyncio.create_task(
         capabilities.resolve(ModelSettings(provider="openai", model="first", api_key="k"))
@@ -496,12 +488,7 @@ async def test_clear_during_inflight_probe_discards_the_stale_result(
             return ImageProbeOutcome(status="supported")
         return ImageProbeOutcome(status="unsupported")
 
-    class Provider:
-        async def aclose(self) -> None:
-            return None
-
-    monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: Provider())
-    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
+    _install_probe(monkeypatch, probe)
     capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
     settings = ModelSettings(provider="openai", model="changed", api_key="k")
 
@@ -547,22 +534,10 @@ async def test_only_unknown_reprobes_and_only_once_per_cooldown(
     await capabilities.resolve(unknown)
     assert probed == ["flaky", "flaky"]
 
-    probed.clear()
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.vision.probe_image_capability",
-        _recording_probe(probed, "supported"),
-    )
+    probed = _probed_models(monkeypatch, "supported")
     await capabilities.resolve(terminal)
     await capabilities.resolve(terminal)
     assert probed == ["steady"]
-
-
-def _recording_probe(sink: list[str], status: ImageCapabilityStatus):
-    async def probe(_provider, *, model, model_kwargs=None):
-        sink.append(model)
-        return ImageProbeOutcome(status=status)
-
-    return probe
 
 
 async def test_a_slow_probe_does_not_spend_its_own_cooldown(
@@ -578,14 +553,7 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
         await asyncio.sleep(0.05)
         return ImageProbeOutcome(status="unknown", failure_kind="TimeoutError")
 
-    class _StubProvider:
-        async def aclose(self) -> None:
-            pass
-
-    monkeypatch.setattr(
-        "dlightrag.engine.ai.providers.get_provider", lambda *_a, **_k: _StubProvider()
-    )
-    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", slow_probe)
+    _install_probe(monkeypatch, slow_probe)
     capabilities = ModelImageCapabilities(
         scheduler=ModelScheduler(max_concurrency=1),
         reprobe_cooldown_seconds=0.04,

@@ -517,12 +517,6 @@ async def test_fast_host_decodes_long_history_once_across_accept_complete_fail_a
     assert repository.decoded_rows == 1000
     assert all(boundary.entries[index] is canonical.entries[index] for index in range(1000))
 
-    # The replaced raw-load seam decoded the whole growing snapshot at each boundary.
-    legacy_full_loads = 1 + repository.refresh_calls
-    legacy_decoded_rows = 1000 + sum((1000, 1001, 1002, 1003, 1003, 1003))
-    assert legacy_full_loads == 7
-    assert legacy_decoded_rows == 7012
-
 
 @pytest.mark.asyncio
 async def test_first_host_refresh_observes_lane_fork_committed_after_initial_snapshot() -> None:

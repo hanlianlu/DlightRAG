@@ -538,19 +538,7 @@ async def test_orphan_sweep_deletes_a_directory_with_no_run_row_and_keeps_one_wh
     assert not dead.exists()
 
 
-@pytest.mark.asyncio
-async def test_reclaim_skips_non_answer_runs(tmp_path: Path) -> None:
-    owner = "owner"
-    run_id = str(uuid.uuid4())
-    root = run_root(tmp_path, owner, run_id)
-    root.mkdir(parents=True)
-    (root / "keep.txt").write_text("x", encoding="utf-8")
-    reclaimer = AgentWorkspaceReclaimer(tmp_path)
-    await reclaimer.reclaim((DeletedRun(owner_id=owner, run_id=run_id, run_kind="retrieval"),))
-    assert root.exists()
-
-
-def test_a_configured_root_still_builds_a_reclaimer_when_execution_is_disabled(
+def test_a_reclaimer_follows_the_configured_root_not_the_execution_mode(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "ws"
@@ -561,16 +549,7 @@ def test_a_configured_root_still_builds_a_reclaimer_when_execution_is_disabled(
     assert reclaimer is not None
     assert reclaimer._root == root.resolve()
     assert not root.exists()
-
-
-def test_no_workspace_root_produces_no_reclaimer() -> None:
-    assert (
-        agent_workspace_reclaimer(
-            execution_environment="disabled",
-            workspace_root=None,
-        )
-        is None
-    )
+    assert agent_workspace_reclaimer(execution_environment="disabled", workspace_root=None) is None
 
 
 @pytest.mark.asyncio

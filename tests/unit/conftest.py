@@ -6,21 +6,12 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag.engine.ai.catalog import current_model_catalog_revision
-from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.engine.ai.structured_transport import JSON_SCHEMA_TRANSPORT_CACHE
 from dlightrag.engine.answer.capabilities import AnswerCapabilities
-from dlightrag.engine.answer.execution.input import (
-    AnswerRunInput,
-    AnswerRunRequest,
-    PinnedModelProfile,
-    new_resource_identity,
-)
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.images import AnswerImagePolicy
-from dlightrag.engine.answer.resources.models import ResourceInput
 
 
 def answer_image_policy(**overrides: int) -> AnswerImagePolicy:
@@ -52,39 +43,6 @@ def answer_model_profile(**overrides: int | bool | None) -> ModelProfile:
 def answer_capabilities(answer: AnswerImageCapability | None = None) -> AnswerCapabilities:
     """The capability snapshot a transport test's answers double reports."""
     return AnswerCapabilities(answer=answer, vlm_status="unknown")
-
-
-async def prepare_test_answer_run_input(
-    request: AnswerRunRequest,
-    *,
-    resources: list[ResourceInput] | None,  # noqa: ARG001
-    idempotency_fingerprint: str,
-) -> AnswerRunInput:
-    """Pin one normalized request for tests that do not exercise model resolution."""
-    return AnswerRunInput(
-        query=request.query,
-        workspaces=request.workspaces,
-        history=request.history,
-        retrieval=request.retrieval,
-        filters=request.filters,
-        semantic_highlights=request.semantic_highlights,
-        links=request.links,
-        attachments=request.attachments,
-        history_attachments=request.history_attachments,
-        pinned_models=(
-            PinnedModelProfile(
-                role="query",
-                fingerprint=ModelInvocationFingerprint(
-                    "openai", "test-model", None, "chat_completion"
-                ),
-                profile=answer_model_profile(),
-            ),
-        ),
-        context_policy_revision=CONTEXT_POLICY_REVISION,
-        model_catalog_revision=current_model_catalog_revision(),
-        idempotency_fingerprint=idempotency_fingerprint,
-        resource_identity=new_resource_identity(),
-    )
 
 
 @pytest.fixture(autouse=True)

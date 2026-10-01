@@ -216,15 +216,25 @@ def test_an_explicit_fast_request_that_cannot_hold_its_reserve_names_the_planner
         )
 
 
-def test_execution_reserves_the_memory_acceptance_recorded() -> None:
-    reserved = reserved_auto_recall_text()
+@pytest.mark.parametrize(
+    ("recorded", "reserves"),
+    [
+        pytest.param({"auth_mode": "jwt", "profile_memory_enabled": True}, True, id="memory-on"),
+        pytest.param({"auth_mode": "jwt"}, True, id="memory-unrecorded"),
+        pytest.param({"auth_mode": "jwt", "profile_memory_enabled": False}, False, id="memory-off"),
+        # A shared simple-auth caller owns no memory, so nothing is reserved for it.
+        pytest.param({"auth_mode": "simple"}, False, id="shared-caller"),
+    ],
+)
+def test_execution_reserves_the_memory_acceptance_recorded(
+    recorded: dict[str, Any], reserves: bool
+) -> None:
+    accepted = reserved_memory_text(
+        auth_mode=recorded["auth_mode"], enabled=recorded.get("profile_memory_enabled", True)
+    )
 
-    assert reserved_memory_text(auth_mode="jwt", enabled=True) == reserved
-    assert reserved_memory_text(auth_mode="jwt", enabled=False) == ""
-    assert reserved_memory_text(auth_mode="simple", enabled=True) == ""
-    assert _worst_case_recall_block(
-        {"auth_mode": "jwt", "profile_memory_enabled": True}
-    ) == reserved_memory_text(auth_mode="jwt", enabled=True)
+    assert accepted == (reserved_auto_recall_text() if reserves else "")
+    assert _worst_case_recall_block(recorded) == accepted
 
 
 class _DistinctProfileCapabilities(_Capabilities):

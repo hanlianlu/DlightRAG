@@ -2,9 +2,11 @@
 """The one durable-event streaming contract REST and the browser both follow.
 
 Cursor resolution, keepalive cadence, and subscriber detach are transport
-neutral, so they are proven once here and each transport contributes only its
-event-to-frame projection. The two projections must stay distinct: REST serves
-the canonical result, the browser serves rendered presentation.
+neutral: both transports resolve cursors with one function, whose forms the REST
+endpoint tests prove, and the follow loop is proven once here. Each transport
+contributes only its event-to-frame projection. The two projections must stay
+distinct: REST serves the canonical result, the browser serves rendered
+presentation.
 """
 
 import asyncio
@@ -14,8 +16,6 @@ from functools import partial
 from typing import Any
 
 import pytest
-from fastapi.exceptions import RequestValidationError
-from starlette.requests import Request
 
 import dlightrag.adapters.http.browser.answer_events as web_events
 import dlightrag.adapters.http.browser.routes.chat as web_routes
@@ -35,18 +35,6 @@ _RENDERERS = {
     ),
     "web": partial(web_events.browser_frame, downloadable_workspaces=None, visual_workspaces=None),
 }
-
-
-def _request(*, header: str | None = None, query: str | None = None) -> Request:
-    return Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/answer/run/events",
-            "query_string": b"" if query is None else f"after={query}".encode(),
-            "headers": [] if header is None else [(b"last-event-id", header.encode())],
-        }
-    )
 
 
 def _event(sequence: int, event_type: str, payload: dict[str, Any]) -> RunEvent:
@@ -86,45 +74,6 @@ class _QuietSubscription:
 def test_both_transports_resolve_the_same_cursor_implementation() -> None:
     assert rest_routes.resume_cursor is resume_cursor
     assert web_routes.resume_cursor is resume_cursor
-
-
-@pytest.mark.parametrize(
-    ("header", "query", "expected"),
-    [
-        (None, None, 0),
-        ("7", None, 7),
-        (None, "3", 3),
-        ("", None, 0),
-        ("2", "2", 2),
-        (None, "0", 0),
-    ],
-    ids=["no-cursor", "last-event-id", "after", "blank-last-event-id", "matching", "zero"],
-)
-def test_the_resume_cursor_comes_from_either_form(
-    header: str | None, query: str | None, expected: int
-) -> None:
-    assert resume_cursor(_request(header=header, query=query)) == expected
-
-
-@pytest.mark.parametrize(
-    ("header", "query", "location"),
-    [
-        ("1", "2", ("query", "after")),
-        (None, "abc", ("query", "after")),
-        (None, "-1", ("query", "after")),
-        (None, "1.5", ("query", "after")),
-        (None, "", ("query", "after")),
-        ("abc", None, ("header", "Last-Event-ID")),
-    ],
-    ids=["conflicting", "non-numeric", "negative", "fractional", "blank-after", "bad-header"],
-)
-def test_an_unusable_cursor_is_request_validation(
-    header: str | None, query: str | None, location: tuple[str, str]
-) -> None:
-    with pytest.raises(RequestValidationError) as failure:
-        resume_cursor(_request(header=header, query=query))
-
-    assert [error["loc"] for error in failure.value.errors()] == [location]
 
 
 # ---------------------------------------------------------------------------

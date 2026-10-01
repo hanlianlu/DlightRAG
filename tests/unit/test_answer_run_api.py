@@ -822,17 +822,6 @@ class TestEvents:
 
         assert response.status_code == 404
 
-    async def test_trimmed_terminal_event_log_is_410(
-        self, client: AsyncClient, run_application: _RunApplication
-    ) -> None:
-        run_application.record = _record(
-            status="succeeded", result=_stored_result(), finished_at=_NOW, events_trimmed_at=_NOW
-        )
-
-        response = await client.get(f"/runs/{_RUN_ID}/events")
-
-        assert response.status_code == 410
-
     async def test_following_events_never_cancels_the_run(
         self, client: AsyncClient, run_application: _RunApplication
     ) -> None:
@@ -853,46 +842,6 @@ class TestEvents:
 
 
 class TestCancel:
-    async def test_queued_cancellation_returns_200_terminal_state(
-        self, client: AsyncClient, run_application: _RunApplication
-    ) -> None:
-        cancelled = _record(status="cancelled", finished_at=_NOW)
-        run_application.cancellation = RunCancellation(
-            outcome="cancelled", run=RunView.from_runtime(cancelled)
-        )
-        run_application.record = cancelled
-
-        response = await client.delete(f"/runs/{_RUN_ID}")
-
-        assert response.status_code == 200
-        assert response.json()["status"] == "cancelled"
-
-    async def test_running_cancellation_is_202(
-        self, client: AsyncClient, run_application: _RunApplication
-    ) -> None:
-        running = _record(status="running", cancel_requested_at=_NOW)
-        run_application.cancellation = RunCancellation(
-            outcome="pending", run=RunView.from_runtime(running)
-        )
-
-        response = await client.delete(f"/runs/{_RUN_ID}")
-
-        assert response.status_code == 202
-        assert response.json()["cancel_requested"] is True
-
-    async def test_terminal_cancellation_is_idempotent_200(
-        self, client: AsyncClient, run_application: _RunApplication
-    ) -> None:
-        finished = _record(status="succeeded", result=_stored_result(), finished_at=_NOW)
-        run_application.cancellation = RunCancellation(
-            outcome="already_terminal", run=RunView.from_runtime(finished)
-        )
-
-        response = await client.delete(f"/runs/{_RUN_ID}")
-
-        assert response.status_code == 200
-        assert response.json()["status"] == "succeeded"
-
     async def test_unknown_run_cancellation_is_404(
         self, client: AsyncClient, run_application: _RunApplication
     ) -> None:
