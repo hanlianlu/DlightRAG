@@ -248,6 +248,25 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
         reset_config()
 
 
+async def _attach_hot_partition(conn: Any, *, table_name: str, workspace: str) -> str:
+    """Create one workspace child directly, as a planner fixture.
+
+    The promotion cutover instead ATTACHes a detached, pre-indexed staging
+    table; these planner tests only need the child to exist. The workspace is
+    bound as a quoted literal, never as an identifier.
+    """
+    from dlightrag.adapters.postgres.core.identifiers import pg_identifier
+    from dlightrag.adapters.postgres.corpus.partition_foundation import child_partition_name
+
+    parent = pg_identifier(table_name)
+    child = child_partition_name(parent, workspace)
+    literal = await conn.fetchval("SELECT quote_literal($1)", str(workspace))
+    await conn.execute(
+        f"CREATE TABLE IF NOT EXISTS {child} PARTITION OF {parent} FOR VALUES IN ({literal})"
+    )
+    return child
+
+
 async def _table_state(conn: Any, table_name: str) -> dict[str, Any]:
     row = await conn.fetchrow(
         """
@@ -394,7 +413,6 @@ async def test_generic_prepared_plan_prunes_to_the_hot_partition(
     writer_corpus: WriterCorpus,
 ) -> None:
     from dlightrag.adapters.postgres.corpus.partition_foundation import (
-        attach_workspace_partition,
         child_partition_name,
         default_child_name,
     )
@@ -406,7 +424,7 @@ async def test_generic_prepared_plan_prunes_to_the_hot_partition(
             f"DELETE FROM {writer_corpus.vector_table} WHERE workspace = ANY($1::text[])",
             [_WORKSPACE_A, _WORKSPACE_HOT],
         )
-        hot_child = await attach_workspace_partition(
+        hot_child = await _attach_hot_partition(
             conn, table_name=writer_corpus.vector_table, workspace=_WORKSPACE_HOT
         )
         assert hot_child == child_partition_name(writer_corpus.vector_table, _WORKSPACE_HOT)
@@ -474,10 +492,6 @@ async def test_generic_prepared_plan_prunes_to_the_hot_partition(
 async def test_chunk_parent_isolates_workspaces_across_default_and_hot_partitions(
     writer_corpus: WriterCorpus,
 ) -> None:
-    from dlightrag.adapters.postgres.corpus.partition_foundation import (
-        attach_workspace_partition,
-    )
-
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     hot_child = None
     try:
@@ -485,7 +499,7 @@ async def test_chunk_parent_isolates_workspaces_across_default_and_hot_partition
             "DELETE FROM lightrag_doc_chunks WHERE workspace = ANY($1::text[])",
             [_WORKSPACE_A, _WORKSPACE_HOT],
         )
-        hot_child = await attach_workspace_partition(
+        hot_child = await _attach_hot_partition(
             conn, table_name="lightrag_doc_chunks", workspace=_WORKSPACE_HOT
         )
         await conn.execute(

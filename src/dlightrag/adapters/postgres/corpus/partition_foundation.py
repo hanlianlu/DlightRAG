@@ -385,29 +385,6 @@ async def verify_partitioned_tables(
         await _validate_partitioned_state(conn, spec)
 
 
-async def attach_workspace_partition(
-    conn: Any,
-    *,
-    table_name: str,
-    workspace: str,
-) -> str:
-    """Create one deterministic attached child for compact planner tests.
-
-    This helper creates a new ``PARTITION OF`` directly. The production
-    promotion cutover instead uses ``ATTACH PARTITION`` for its detached,
-    pre-indexed staging table. The raw workspace value is bound as a quoted literal, never
-    as an identifier.
-    """
-    parent = pg_identifier(table_name)
-    child = child_partition_name(parent, workspace)
-    literal = await conn.fetchval("SELECT quote_literal($1)", str(workspace))
-    await conn.execute(
-        f"CREATE TABLE IF NOT EXISTS {child} "  # noqa: S608 - generated identifier
-        f"PARTITION OF {parent} FOR VALUES IN ({literal})"
-    )
-    return child
-
-
 class PGPartitionFoundation(PostgresOperationRunner):
     """Runner facade for the partition seam over the domain pool."""
 
@@ -432,7 +409,6 @@ __all__ = [
     "PARTITION_COLUMN",
     "PGPartitionFoundation",
     "PartitionedTableSpec",
-    "attach_workspace_partition",
     "child_partition_name",
     "default_child_name",
     "ensure_partitioned_tables",

@@ -41,7 +41,7 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
     child_partition_name,
     default_child_name,
 )
-from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
+from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore, mark_done_in
 from dlightrag.adapters.postgres.corpus.promotion_worker import (
     PGPromotionWorker,
     staging_partition_name,
@@ -890,22 +890,28 @@ async def test_stale_lease_generation_cannot_complete_a_newer_claim(
     assert int(second["lease_generation"]) == first_generation + 1
 
     # The stale worker's completion is refused; the current one succeeds.
-    assert (
-        await jobs.mark_done(
-            job_id=int(first["job_id"]),
-            owner="worker-old",
-            lease_generation=first_generation,
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        assert (
+            await mark_done_in(
+                conn,
+                job_id=int(first["job_id"]),
+                owner="worker-old",
+                lease_generation=first_generation,
+            )
+            is False
         )
-        is False
-    )
-    assert (
-        await jobs.mark_done(
-            job_id=int(second["job_id"]),
-            owner="worker-new",
-            lease_generation=int(second["lease_generation"]),
+        assert (
+            await mark_done_in(
+                conn,
+                job_id=int(second["job_id"]),
+                owner="worker-new",
+                lease_generation=int(second["lease_generation"]),
+            )
+            is True
         )
-        is True
-    )
+    finally:
+        await conn.close()
 
 
 class _ClaimResponseLostOnce(PGPromotionJobStore):

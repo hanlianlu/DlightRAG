@@ -101,18 +101,8 @@ async def test_registry_control_plane_fields_are_durable_and_constrained(pool: A
         assert row["storage_tier"] == "shared"
         assert row["promotion_state"] == "none"
 
-        # Counters are monotonic across repeated additive deltas.
-        assert await registry.add_ingested_counts(workspace=_WORKSPACE, docs=3, chunks=41)
-        assert await registry.add_ingested_counts(workspace=_WORKSPACE, docs=2, chunks=9)
-        row = await registry.get_row(_WORKSPACE)
-        assert row is not None
-        assert row["ingested_docs_total"] == 5
-        assert row["ingested_chunks_total"] == 50
-
-        # Tier + promotion observability transitions, with retry bookkeeping.
+        # Promotion observability transitions, with retry bookkeeping.
         assert await registry.set_promotion_state(workspace=_WORKSPACE, state="pending")
-        assert await registry.set_storage_tier(workspace=_WORKSPACE, tier="hot")
-        assert not await registry.set_storage_tier(workspace=_WORKSPACE, tier="shared")
         retry_at = datetime.datetime.now(datetime.UTC)
         assert await registry.set_promotion_state(
             workspace=_WORKSPACE,
@@ -122,7 +112,6 @@ async def test_registry_control_plane_fields_are_durable_and_constrained(pool: A
         )
         row = await registry.get_row(_WORKSPACE)
         assert row is not None
-        assert row["storage_tier"] == "hot"
         assert row["promotion_state"] == "failed"
         assert row["promotion_last_error"] == "cutover invariant mismatch"
         assert row["promotion_retry_count"] == 1
@@ -168,7 +157,15 @@ async def test_registry_control_plane_fields_are_durable_and_constrained(pool: A
 
 
 async def test_promotion_jobs_are_idempotent_leased_and_fenced(pool: Any) -> None:
-    from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
+    from dlightrag.adapters.postgres.corpus.promotion_jobs import (
+        PGPromotionJobStore,
+        mark_done_in,
+        mark_failed_in,
+    )
+
+    async def mark_done(**identity: Any) -> bool:
+        async with pool.acquire() as conn, conn.transaction():
+            return await mark_done_in(conn, **identity)
 
     store = PGPromotionJobStore(pool=pool)
     await store.initialize()
@@ -187,16 +184,8 @@ async def test_promotion_jobs_are_idempotent_leased_and_fenced(pool: Any) -> Non
 
         # Owner + monotonically increasing generation + lease time form the
         # fencing identity. A different owner cannot finish this attempt.
-        assert not await store.mark_done(
-            job_id=job_id,
-            owner="worker-2",
-            lease_generation=generation,
-        )
-        assert await store.mark_done(
-            job_id=job_id,
-            owner="worker-1",
-            lease_generation=generation,
-        )
+        assert not await mark_done(job_id=job_id, owner="worker-2", lease_generation=generation)
+        assert await mark_done(job_id=job_id, owner="worker-1", lease_generation=generation)
 
         # Terminal jobs stay as history; a new live job can be enqueued. Failed
         # jobs remain the one live row and retry that same identity after backoff.
@@ -206,13 +195,15 @@ async def test_promotion_jobs_are_idempotent_leased_and_fenced(pool: Any) -> Non
         retry_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=1)
         retry_job_id = int(claimed["job_id"])
         retry_generation = int(claimed["lease_generation"])
-        assert await store.mark_failed(
-            job_id=retry_job_id,
-            owner="worker-1",
-            lease_generation=retry_generation,
-            error="promotion staging verification failed",
-            next_retry_at=retry_at,
-        )
+        async with pool.acquire() as conn, conn.transaction():
+            assert await mark_failed_in(
+                conn,
+                job_id=retry_job_id,
+                owner="worker-1",
+                lease_generation=retry_generation,
+                error="promotion staging verification failed",
+                next_retry_at=retry_at,
+            )
         assert not await store.enqueue(_WORKSPACE_B)
 
         async with pool.acquire() as conn:
@@ -246,12 +237,10 @@ async def test_promotion_jobs_are_idempotent_leased_and_fenced(pool: Any) -> Non
 
         # Even the same process owner cannot let its stale attempt commit after
         # the row has been reclaimed with a newer generation.
-        assert not await store.mark_done(
-            job_id=retry_job_id,
-            owner="worker-1",
-            lease_generation=retry_generation,
+        assert not await mark_done(
+            job_id=retry_job_id, owner="worker-1", lease_generation=retry_generation
         )
-        assert await store.mark_done(
+        assert await mark_done(
             job_id=retry_job_id,
             owner="worker-1",
             lease_generation=int(reclaimed["lease_generation"]),

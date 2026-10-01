@@ -153,7 +153,8 @@ async def test_renew_fail_and_done_require_current_generation_and_unexpired_leas
     assert "$4::timestamptz > NOW()" in sql
     assert args == (7, "worker-1", 2, "2026-04-01T01:00:00Z")
 
-    await store.mark_failed(
+    await promotion_jobs.mark_failed_in(
+        conn,
         job_id=7,
         owner="worker-1",
         lease_generation=2,
@@ -172,7 +173,7 @@ async def test_renew_fail_and_done_require_current_generation_and_unexpired_leas
         "2026-04-02T00:00:00Z",
     )
 
-    await store.mark_done(job_id=7, owner="worker-1", lease_generation=2)
+    await promotion_jobs.mark_done_in(conn, job_id=7, owner="worker-1", lease_generation=2)
     sql, args = conn.executed[-1]
     assert "SET state = 'done'" in sql
     assert "promoted_at = NOW()" in sql
@@ -182,16 +183,18 @@ async def test_renew_fail_and_done_require_current_generation_and_unexpired_leas
 
 
 async def test_transition_identity_and_retry_inputs_are_validated() -> None:
-    store = _store(_Conn())
+    conn = _Conn()
+    store = _store(conn)
 
     with pytest.raises(ValueError, match="lease owner"):
         await store.claim_next(owner=" ", lease_until="2026-04-01T00:00:00Z")
     with pytest.raises(ValueError, match="job_id"):
-        await store.mark_done(job_id=0, owner="worker", lease_generation=1)
+        await promotion_jobs.mark_done_in(conn, job_id=0, owner="worker", lease_generation=1)
     with pytest.raises(ValueError, match="lease_generation"):
-        await store.mark_done(job_id=1, owner="worker", lease_generation=0)
+        await promotion_jobs.mark_done_in(conn, job_id=1, owner="worker", lease_generation=0)
     with pytest.raises(ValueError, match="next_retry_at"):
-        await store.mark_failed(
+        await promotion_jobs.mark_failed_in(
+            conn,
             job_id=1,
             owner="worker",
             lease_generation=1,

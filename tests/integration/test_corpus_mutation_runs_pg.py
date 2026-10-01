@@ -4,11 +4,14 @@
 import datetime
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
+from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.engine.runtime.records import (
     PreparedRunEnvelope,
@@ -19,8 +22,8 @@ from tests.support.pg import PG_CONN_KWARGS, drop_database, skip_without_postgre
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
-@pytest.fixture
-async def corpus_run_pg() -> AsyncIterator[PGRunStore]:
+@asynccontextmanager
+async def _scratch_pool() -> AsyncIterator[asyncpg.Pool]:
     await skip_without_postgres()
     database = f"dlightrag_corpus_run_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**PG_CONN_KWARGS)
@@ -32,12 +35,18 @@ async def corpus_run_pg() -> AsyncIterator[PGRunStore]:
         **{**PG_CONN_KWARGS, "database": database}, min_size=1, max_size=8
     )
     try:
-        store = PGRunStore(pool=pool)
-        await store.initialize()
-        yield store
+        yield pool
     finally:
         await pool.close()
         await drop_database(database)
+
+
+@pytest.fixture
+async def corpus_run_pg() -> AsyncIterator[PGRunStore]:
+    async with _scratch_pool() as pool:
+        store = PGRunStore(pool=pool)
+        await store.initialize()
+        yield store
 
 
 def _envelope(
@@ -237,3 +246,43 @@ async def test_reset_explicitly_supersedes_only_the_same_workspace_waiting_run(
         lanes=("corpus_mutation",),
     )
     assert reset_claim is not None and reset_claim.run.run_id == reset.run.run_id
+
+
+async def test_mutation_windows_count_once_and_queue_promotion_at_the_threshold() -> None:
+    async with _scratch_pool() as pool:
+        store = PGRunStore(pool=pool, promotion_doc_threshold=5)
+        await store.initialize()
+        registry = PGWorkspaceRegistry(pool=pool)
+        await registry.initialize()
+        await PGPromotionJobStore(pool=pool).initialize()
+        await registry.upsert(workspace="alpha", display_name="Alpha", embedding_model="embed")
+        run_id = (await _accept(store, "alpha", key="alpha-ingest")).run.run_id
+
+        async def window(number: int, *, docs: int, chunks: int) -> bool:
+            return await store.record_corpus_window(
+                run_id=run_id, workspace="alpha", window_number=number, docs=docs, chunks=chunks
+            )
+
+        async def promotion() -> tuple[Any, ...]:
+            row = await registry.get_row("alpha")
+            assert row is not None
+            async with pool.acquire() as conn:
+                jobs = await conn.fetch("SELECT state FROM dlightrag_promotion_jobs")
+            return (
+                row["ingested_docs_total"],
+                row["ingested_chunks_total"],
+                row["promotion_state"],
+                [job["state"] for job in jobs],
+            )
+
+        assert await window(1, docs=3, chunks=41)
+        # A window replayed after a lost response counts once.
+        assert not await window(1, docs=3, chunks=41)
+        assert await promotion() == (3, 41, "none", [])
+
+        assert await window(2, docs=2, chunks=9)
+        assert await promotion() == (5, 50, "pending", ["pending"])
+
+        # The pending promotion is queued once, however many windows follow.
+        assert await window(3, docs=1, chunks=1)
+        assert await promotion() == (6, 51, "pending", ["pending"])

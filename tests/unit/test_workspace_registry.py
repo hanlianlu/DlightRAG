@@ -172,28 +172,9 @@ async def test_workspace_registry_rejects_an_empty_workspace() -> None:
         await registry.exists("  ")
 
 
-async def test_add_ingested_counts_only_accepts_non_negative_monotonic_deltas() -> None:
+async def test_promotion_state_is_validated() -> None:
     conn = _Conn()
     registry = PGWorkspaceRegistry(pool=_Pool(conn))
-
-    assert await registry.add_ingested_counts(workspace="research", docs=3, chunks=41) is True
-    sql, args = conn.executed[-1]
-    assert "ingested_docs_total = ingested_docs_total + $2" in sql
-    assert args == ("research", 3, 41)
-
-    with pytest.raises(ValueError, match="non-negative"):
-        await registry.add_ingested_counts(workspace="research", docs=-1, chunks=0)
-
-
-async def test_storage_tier_and_promotion_state_are_validated() -> None:
-    conn = _Conn()
-    registry = PGWorkspaceRegistry(pool=_Pool(conn))
-
-    assert await registry.set_storage_tier(workspace="research", tier="hot") is True
-    sql, _args = conn.executed[-1]
-    assert "storage_tier = 'shared' AND $2 = 'hot'" in sql
-    with pytest.raises(ValueError, match="storage tier"):
-        await registry.set_storage_tier(workspace="research", tier="promoting")
 
     assert (
         await registry.set_promotion_state(

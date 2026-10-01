@@ -55,7 +55,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
 )
 """
 
-_STORAGE_TIERS = frozenset({"shared", "hot"})
 _PROMOTION_STATES = frozenset({"none", "pending", "promoting", "failed"})
 
 _UPSERT = """
@@ -97,21 +96,6 @@ ON CONFLICT (workspace) DO NOTHING
 """
 
 _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
-
-_ADD_INGESTED_COUNTS = """
-UPDATE dlightrag_workspace_meta
-SET ingested_docs_total = ingested_docs_total + $2,
-    ingested_chunks_total = ingested_chunks_total + $3,
-    updated_at = NOW()
-WHERE workspace = $1
-"""
-
-_SET_STORAGE_TIER = """
-UPDATE dlightrag_workspace_meta
-SET storage_tier = $2, updated_at = NOW()
-WHERE workspace = $1
-  AND (storage_tier = $2 OR (storage_tier = 'shared' AND $2 = 'hot'))
-"""
 
 _SET_PROMOTION_STATE = """
 UPDATE dlightrag_workspace_meta
@@ -432,37 +416,9 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
         return await self._run(_operation)
 
     # -- Promotion control-plane state ---------------------------------------
-    # Ingestion and the promotion worker update these counters and lifecycle fields.
-
-    async def add_ingested_counts(
-        self,
-        *,
-        workspace: str,
-        docs: int,
-        chunks: int,
-    ) -> bool:
-        """Add non-negative ingestion counts; the stored totals never decrease."""
-        workspace_id = _workspace_id(workspace)
-        docs_delta = int(docs)
-        chunks_delta = int(chunks)
-        if docs_delta < 0 or chunks_delta < 0:
-            raise ValueError("ingested count deltas must be non-negative")
-
-        async def _operation(conn: Any) -> str:
-            return await conn.execute(_ADD_INGESTED_COUNTS, workspace_id, docs_delta, chunks_delta)
-
-        return (await self._run(_operation)) != "UPDATE 0"
-
-    async def set_storage_tier(self, *, workspace: str, tier: str) -> bool:
-        """Set the observed storage tier; dedicated workspaces never auto-demote."""
-        workspace_id = _workspace_id(workspace)
-        if tier not in _STORAGE_TIERS:
-            raise ValueError(f"storage tier must be one of {sorted(_STORAGE_TIERS)}")
-
-        async def _operation(conn: Any) -> str:
-            return await conn.execute(_SET_STORAGE_TIER, workspace_id, tier)
-
-        return (await self._run(_operation)) != "UPDATE 0"
+    # The promotion worker fences a workspace and records its attempts here. Each
+    # corpus mutation window adds to the ingestion counters in its own settlement
+    # (PGRunStore.record_corpus_window), and the cutover flips the tier to hot.
 
     async def set_promotion_state(
         self,

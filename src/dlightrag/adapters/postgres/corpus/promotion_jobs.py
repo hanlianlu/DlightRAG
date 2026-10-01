@@ -148,8 +148,8 @@ WHERE job_id = $1
   AND $4::timestamptz > NOW()
 """
 
-# The fenced failure and completion transitions, shared with the worker through
-# mark_failed_in and mark_done_in so one definition fences both.
+# The fenced failure and completion transitions. The worker runs them through
+# mark_failed_in and mark_done_in, so each commits with its other fenced writes.
 _MARK_FAILED = """
 UPDATE dlightrag_promotion_jobs
 SET state = 'failed',
@@ -321,45 +321,6 @@ class PGPromotionJobStore(PostgresOperationRunner):
             return await conn.execute(_RENEW_LEASE, *identity, lease_until)
 
         return (await self._run(_operation)) != "UPDATE 0"
-
-    async def mark_failed(
-        self,
-        *,
-        job_id: int,
-        owner: str,
-        lease_generation: int,
-        error: str,
-        next_retry_at: Any,
-    ) -> bool:
-        """Schedule retry for one still-current, unexpired fenced lease."""
-
-        async def _operation(conn: Any) -> bool:
-            return await mark_failed_in(
-                conn,
-                job_id=job_id,
-                owner=owner,
-                lease_generation=lease_generation,
-                error=error,
-                next_retry_at=next_retry_at,
-            )
-
-        return await self._run(_operation)
-
-    async def mark_done(
-        self,
-        *,
-        job_id: int,
-        owner: str,
-        lease_generation: int,
-    ) -> bool:
-        """Complete one still-current, unexpired fenced lease."""
-
-        async def _operation(conn: Any) -> bool:
-            return await mark_done_in(
-                conn, job_id=job_id, owner=owner, lease_generation=lease_generation
-            )
-
-        return await self._run(_operation)
 
 
 async def mark_failed_in(
