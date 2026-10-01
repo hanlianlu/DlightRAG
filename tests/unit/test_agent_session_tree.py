@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Immutable Entry Tree, Lane, fencing, and HostDelta contracts."""
+"""Immutable Entry Tree and Lane contracts."""
 
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -16,11 +16,9 @@ from dlightrag.engine.agent.session.fold import project_session_messages
 from dlightrag.engine.agent.session.ids import AttemptId, EntryId, IntentId, LaneId, SessionId
 from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
 from dlightrag.engine.agent.session.transactions import (
-    HostDeltaSettlement,
     RegisterExpectation,
     SessionTransaction,
     TransactionCommit,
-    TransactionLeaseLost,
 )
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
@@ -297,48 +295,3 @@ async def test_archive_keeps_shared_entries_and_blocks_future_writes() -> None:
                 ],
             ),
         )
-
-
-@pytest.mark.asyncio
-async def test_memory_transaction_commits_typed_host_delta_atomically() -> None:
-    store = MemoryAgentSessionRepository[dict[str, str]]()
-    session_id = SessionId.new()
-    head = LaneHead(LaneId.main(), None)
-    state = LaneState(LaneId.main())
-    intent_id = IntentId.new()
-    outcome = await store.transact(
-        session_id=session_id,
-        fencing_epoch=1,
-        transaction=SessionTransaction.from_parts(
-            register_writes=[SetRegister(head), SetRegister(state)],
-            expectations=[
-                RegisterExpectation(head.ref, None),
-                RegisterExpectation(state.ref, None),
-            ],
-            host_delta=HostDeltaSettlement(intent_id, {"evidence": "added"}),
-        ),
-    )
-    assert isinstance(outcome, TransactionCommit)
-    assert store.applied_host_deltas(session_id) == ((intent_id, {"evidence": "added"}),)
-
-
-@pytest.mark.asyncio
-async def test_transferred_lease_fences_old_epoch() -> None:
-    store = MemoryAgentSessionRepository[None](fencing_epoch=4)
-    store.transfer_lease(5)
-    session_id = SessionId.new()
-    head = LaneHead(LaneId.main(), None)
-    state = LaneState(LaneId.main())
-    outcome = await store.transact(
-        session_id=session_id,
-        fencing_epoch=4,
-        transaction=SessionTransaction.from_parts(
-            register_writes=[SetRegister(head), SetRegister(state)],
-            expectations=[
-                RegisterExpectation(head.ref, None),
-                RegisterExpectation(state.ref, None),
-            ],
-        ),
-    )
-    assert isinstance(outcome, TransactionLeaseLost)
-    assert (await store.load(session_id)).commit_sequence == 0

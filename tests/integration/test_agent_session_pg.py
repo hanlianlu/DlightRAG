@@ -871,6 +871,12 @@ async def test_pg_refresh_is_bounded_gap_free_and_metadata_only_when_unchanged(p
     assert unchanged is refreshed
     assert [(method, rows) for method, _query, rows in calls] == [("fetchrow", 1)]
 
+    with pytest.raises(ValueError, match="another Session"):
+        await measured.refresh(SessionId.new(), previous=refreshed)
+    ahead = replace(refreshed, commit_sequence=refreshed.commit_sequence + 1)
+    with pytest.raises(ValueError, match="regressed"):
+        await measured.refresh(session_id, previous=ahead)
+
 
 async def test_pg_entry_delta_validation_regressions(pool) -> None:
     claimed = await _claim(pool)
@@ -1817,6 +1823,8 @@ async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> 
     )
     assert isinstance(first, TransactionCommit)
     assert isinstance(replay, RegisterConflict)
+    # The replay's expected head is stale, so it wrote nothing: no Entry, no event.
+    assert len((await store.load(session_id)).entries) == len(snapshot.entries) + 1
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT payload FROM dlightrag_run_events"

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Canonical Memory Session transaction/store behavior."""
+"""Session snapshot and transaction rules; repository behavior is pinned on PostgreSQL."""
 
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -9,7 +9,7 @@ import pytest
 
 from dlightrag.engine.agent.session.entries import UserMessageEntry
 from dlightrag.engine.agent.session.graph import AgentSessionGraph
-from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
+from dlightrag.engine.agent.session.ids import EntryId, LaneId, OperationId, SessionId
 from dlightrag.engine.agent.session.operation import OperationMeta, ReadyForProvider
 from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
@@ -24,8 +24,6 @@ from dlightrag.engine.agent.session.registers import (
 )
 from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.transactions import (
-    HostDeltaSettlement,
-    RegisterConflict,
     RegisterExpectation,
     SessionTransaction,
     TransactionCommit,
@@ -122,109 +120,6 @@ async def _seed(store: MemoryAgentSessionRepository[None], session_id: SessionId
 
 
 @pytest.mark.asyncio
-async def test_exact_lane_cas_ignores_unrelated_branch_commit() -> None:
-    store = MemoryAgentSessionRepository[None]()
-    session_id = SessionId.new()
-    await _seed(store, session_id)
-    main = (await store.load(session_id)).tree.lane()
-    branch_id = LaneId.new()
-    await _fork_branch(
-        store,
-        session_id=session_id,
-        source_lane_id=LaneId.main(),
-        lane_id=branch_id,
-    )
-    branch = (await store.load(session_id)).tree.lane(branch_id)
-    await _append_entries(
-        store,
-        session_id=session_id,
-        lane_id=branch_id,
-        expected_head=branch.head,
-        entries=[_user(session_id, "branch")],
-    )
-    main_commit = await _append_entries(
-        store,
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=main.head,
-        entries=[_user(session_id, "main")],
-    )
-    assert isinstance(main_commit, TransactionCommit)
-
-
-@pytest.mark.asyncio
-async def test_refresh_is_identity_stable_and_merges_only_gap_free_entry_suffix() -> None:
-    store = MemoryAgentSessionRepository[None]()
-    session_id = SessionId.new()
-    await _seed(store, session_id)
-    initial = await store.load(session_id)
-
-    assert await store.refresh(session_id, previous=initial) is initial
-
-    branch_id = LaneId.new()
-    await _fork_branch(
-        store,
-        session_id=session_id,
-        source_lane_id=LaneId.main(),
-        lane_id=branch_id,
-    )
-    first_head = initial.tree.lane().head
-    first_commit = await _append_entries(
-        store,
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=first_head,
-        entries=[_user(session_id, "first delta")],
-    )
-    assert isinstance(first_commit, TransactionCommit)
-    one_delta = await store.refresh(session_id, previous=initial)
-    assert [entry.sequence for entry in one_delta.entries] == [1, 2]
-    assert one_delta.entries[0] is initial.entries[0]
-
-    second_head = one_delta.tree.lane().head
-    multiple_commit = await _append_entries(
-        store,
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=second_head,
-        entries=[_user(session_id, "second delta"), _user(session_id, "third delta")],
-    )
-    assert isinstance(multiple_commit, TransactionCommit)
-    branch = (await store.load(session_id)).tree.lane(branch_id)
-    deleted = await store.transact(
-        session_id=session_id,
-        fencing_epoch=1,
-        transaction=SessionTransaction.from_parts(
-            register_writes=[DeleteRegister(branch.head.ref), DeleteRegister(branch.state.ref)],
-            expectations=[
-                RegisterExpectation(branch.head.ref, branch.head.sequence),
-                RegisterExpectation(branch.state.ref, branch.state.sequence),
-            ],
-        ),
-    )
-    assert isinstance(deleted, TransactionCommit)
-
-    refreshed = await store.refresh(session_id, previous=one_delta)
-    full = await store.load(session_id)
-    assert [entry.sequence for entry in refreshed.entries] == [1, 2, 3, 4]
-    assert [
-        entry.content for entry in refreshed.entries if isinstance(entry, UserMessageEntry)
-    ] == [
-        "root",
-        "first delta",
-        "second delta",
-        "third delta",
-    ]
-    assert refreshed.entries[:2] == one_delta.entries
-    assert all(
-        refreshed.entries[index] is one_delta.entries[index]
-        for index in range(len(one_delta.entries))
-    )
-    assert refreshed.registers == full.registers
-    assert not any(record.ref.key == branch_id.value for record in refreshed.registers)
-
-
-@pytest.mark.asyncio
 async def test_snapshot_views_are_built_once_and_follow_each_snapshot() -> None:
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
@@ -303,7 +198,7 @@ async def test_snapshot_graph_reuses_the_lane_tree_validation(
     assert headless.graph.head_entry_id == loaded.graph.head_entry_id
 
 
-async def test_refresh_rejects_malformed_or_regressed_cursors() -> None:
+async def test_a_snapshot_rejects_an_entry_sequence_with_a_gap() -> None:
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
     await _seed(store, session_id)
@@ -317,41 +212,6 @@ async def test_refresh_rejects_malformed_or_regressed_cursors() -> None:
             entries=(replace(snapshot.entries[0], sequence=2),),
             registers=snapshot.registers,
         )
-
-    empty = MemoryAgentSessionRepository[None]()
-    with pytest.raises(ValueError, match="regressed"):
-        await empty.refresh(session_id, previous=snapshot)
-    with pytest.raises(ValueError, match="another Session"):
-        await store.refresh(SessionId.new(), previous=snapshot)
-
-
-@pytest.mark.asyncio
-async def test_same_lane_stale_head_conflicts_without_writing() -> None:
-    store = MemoryAgentSessionRepository[None]()
-    session_id = SessionId.new()
-    await _seed(store, session_id)
-    stale = (await store.load(session_id)).tree.lane().head
-    await _append_entries(
-        store,
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=stale,
-        entries=[_user(session_id, "first")],
-    )
-    conflict = await _append_entries(
-        store,
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=stale,
-        entries=[_user(session_id, "lost")],
-    )
-    assert isinstance(conflict, RegisterConflict)
-    ancestry = (await store.load(session_id)).tree.ancestry()
-    assert all(isinstance(entry, UserMessageEntry) for entry in ancestry)
-    assert [entry.content for entry in ancestry if isinstance(entry, UserMessageEntry)] == [
-        "root",
-        "first",
-    ]
 
 
 def _operation_registers() -> tuple[OperationMetaRegister, OperationStateRegister]:
@@ -426,42 +286,3 @@ def test_entry_transaction_must_advance_lane_head_to_final_entry() -> None:
             register_writes=[SetRegister(wrong_head)],
             expectations=[RegisterExpectation(wrong_head.ref, 1)],
         )
-
-
-@pytest.mark.asyncio
-async def test_memory_host_delta_is_exactly_once_under_register_cas() -> None:
-    store = MemoryAgentSessionRepository[dict[str, str]]()
-    session_id = SessionId.new()
-    head = LaneHead(LaneId.main(), None)
-    state = LaneState(LaneId.main())
-    initial = await store.transact(
-        session_id=session_id,
-        fencing_epoch=1,
-        transaction=SessionTransaction.from_parts(
-            register_writes=[SetRegister(head), SetRegister(state)],
-            expectations=[
-                RegisterExpectation(head.ref, None),
-                RegisterExpectation(state.ref, None),
-            ],
-        ),
-    )
-    assert isinstance(initial, TransactionCommit)
-    intent_id = IntentId.new()
-    transaction = SessionTransaction.from_parts(
-        register_writes=[SetRegister(state)],
-        expectations=[RegisterExpectation(state.ref, initial.commit_sequence)],
-        host_delta=HostDeltaSettlement(intent_id, {"memory": "changed"}),
-    )
-    first = await store.transact(
-        session_id=session_id,
-        fencing_epoch=1,
-        transaction=transaction,
-    )
-    replay = await store.transact(
-        session_id=session_id,
-        fencing_epoch=1,
-        transaction=transaction,
-    )
-    assert isinstance(first, TransactionCommit)
-    assert isinstance(replay, RegisterConflict)
-    assert store.applied_host_deltas(session_id) == ((intent_id, {"memory": "changed"}),)

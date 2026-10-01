@@ -1,7 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Deletion and dependency guards for the final durable Agent architecture."""
+"""Deletion guards for the final durable Agent architecture.
 
-import ast
+The Agent's import boundaries are import-linter contracts in pyproject.toml.
+"""
+
 from pathlib import Path
 
 from dlightrag.engine.agent.session.repository import AgentSessionRepository
@@ -9,24 +11,6 @@ from dlightrag.engine.agent.session.repository import AgentSessionRepository
 ROOT = Path(__file__).parents[2]
 SRC = ROOT / "src" / "dlightrag"
 AGENT = SRC / "engine" / "agent"
-
-
-def test_agent_session_runtime_never_depends_on_answer_product_modules() -> None:
-    violations: list[str] = []
-    for path in (AGENT / "session").rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
-                "dlightrag.engine.answer"
-            ):
-                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}")
-            elif isinstance(node, ast.Import):
-                violations.extend(
-                    f"{path.relative_to(ROOT)}:{node.lineno}"
-                    for alias in node.names
-                    if alias.name.startswith("dlightrag.engine.answer")
-                )
-    assert violations == []
 
 
 def test_removed_extension_entry_and_store_passthroughs_cannot_return() -> None:
