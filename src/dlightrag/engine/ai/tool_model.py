@@ -194,8 +194,12 @@ class ToolModel:
         text_length = 0
         attempts = 0
         reasoning_attempts: list[dict[str, str]] = []
+        # An explicit output cap (compaction's) is the provider's max_tokens, not a raw
+        # kwarg that only some wires would accept.
+        explicit = None if model_kwargs is None else dict(model_kwargs)
+        max_tokens = None if explicit is None else explicit.pop("max_tokens", None)
         attempt_options = self._final_attempt_options(
-            model_kwargs=model_kwargs,
+            model_kwargs=explicit,
             reasoning=reasoning,
             model_profile=model_profile,
         )
@@ -223,6 +227,7 @@ class ToolModel:
                         prepared_messages,
                         self.settings.model,
                         temperature=self.settings.temperature,
+                        max_tokens=max_tokens,
                         model_kwargs=attempt_kwargs,
                         usage_holder=attempt_usage,
                     )

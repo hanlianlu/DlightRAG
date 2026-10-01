@@ -242,6 +242,7 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
     assert seen["args"] == (messages, "query-model")
     assert seen["kwargs"] == {
         "temperature": None,
+        "max_tokens": None,
         "model_kwargs": {},
         "usage_holder": {},
     }
@@ -293,12 +294,10 @@ async def test_stream_text_reasoning_off_uses_profile_format_under_cap(
     ]
 
     assert output == ["summary"]
-    # The explicit cap wins; the provider switch sits underneath it.
+    # The explicit cap is the provider's output cap; the reasoning switch rides beside it.
     seen_kwargs = cast(dict[str, Any], seen["kwargs"])
-    assert seen_kwargs["model_kwargs"] == {
-        "reasoning": {"effort": "none"},
-        "max_tokens": 4000,
-    }
+    assert seen_kwargs["max_tokens"] == 4000
+    assert seen_kwargs["model_kwargs"] == {"reasoning": {"effort": "none"}}
 
 
 async def test_query_tool_model_retries_empty_final_stream_with_ordinary_kwargs(
