@@ -188,6 +188,8 @@ def make_resource_reader(
                     accept_language=request.accept_language,
                 ),
             )
+        elif registry.loads_on_read(resource_id):
+            await runtime.in_source_order()
         try:
             result = await registry.read(
                 resource_id,
@@ -256,6 +258,8 @@ def make_resource_viewer(
                     accept_language=options.accept_language if options else None,
                 ),
             )
+        elif registry.loads_on_read(resource_id):
+            await runtime.in_source_order()
         owner = _effect_owner(runtime)
         target = await registry.visual_target(resource_id, effect_owner=owner)
         resource_id = target.resource_id

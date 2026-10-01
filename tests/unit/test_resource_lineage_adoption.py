@@ -293,6 +293,61 @@ async def test_an_adoption_waits_for_the_calls_before_it_in_the_batch() -> None:
         assert len(lineage.recorded) == 1
 
 
+async def test_a_lazily_held_upload_spends_the_allowance_only_in_source_order() -> None:
+    """An adoption and an upload's first read spend one byte allowance, in batch order.
+
+    The adoption comes first in the batch and only one of the two fits. Loading the
+    upload before its turn would spend the allowance first and refuse the adoption.
+    """
+    product = adopted_product()
+    upload = b"u" * 20
+    turn_reached = asyncio.Event()
+    adoption_returned = asyncio.Event()
+
+    class WaitingLoader(Loader):
+        async def load(self, resource_id: str) -> LineageResourceBytes | None:
+            # Let the upload read move first: load its bytes, or wait for its turn.
+            await turn_reached.wait()
+            return await super().load(resource_id)
+
+    async def load_upload() -> bytes:
+        turn_reached.set()
+        return upload
+
+    async def after_the_adoption() -> None:
+        turn_reached.set()
+        await adoption_returned.wait()
+
+    lineage = WaitingLoader(product)
+    allowance = len(product.content) + len(upload) - 1
+    async with ResourceRegistry(max_total_attachment_bytes=allowance) as registry:
+        upload_id = registry.register(
+            ResourceInput(filename="upload.txt", declared_mime="text/plain", loader=load_upload)
+        )
+        read, _ = tools(registry, lineage=lineage)
+
+        async def adopt() -> ToolResult:
+            try:
+                return await call(read, resource_id=product.resource_id)
+            finally:
+                adoption_returned.set()
+
+        async def read_upload() -> ToolResult:
+            runtime = replace(
+                tool_runtime(tool_name=read.name), _in_source_order=after_the_adoption
+            )
+            return await read.execute(
+                read.input_model.model_validate({"resource_id": upload_id}), runtime
+            )
+
+        adopted, uploaded = await asyncio.gather(adopt(), read_upload())
+
+    assert adopted.is_error is False
+    assert len(lineage.recorded) == 1
+    assert uploaded.is_error is True
+    assert "safety_refused" in uploaded.text_content
+
+
 async def test_reading_a_document_the_earlier_run_never_converted_refuses(monkeypatch) -> None:
     """Text needs the earlier Run's own view; converting it here would invent one."""
 

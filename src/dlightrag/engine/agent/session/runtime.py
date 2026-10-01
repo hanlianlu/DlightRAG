@@ -1277,6 +1277,15 @@ class AgentSessionRuntime[HostDeltaT]:
                     session_id=view.context.session_id,
                     operation_id=view.context.operation_id,
                 )
+                pending = current.state
+                if not (
+                    isinstance(pending, ToolEffectPending)
+                    and pending.source_index == item.source_index
+                    and pending.attempt_id == attempt_id
+                ):
+                    # Only a worker that took the Operation over moves it while this
+                    # group runs, so this one must stop without writing anything.
+                    raise SessionLeaseLostError(view.context.session_id.value)
                 await self._append_tool_result(
                     current,
                     item,
@@ -1288,7 +1297,14 @@ class AgentSessionRuntime[HostDeltaT]:
         finally:
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+                if isinstance(outcome, Exception) and not isinstance(
+                    outcome, AgentOperationCancelled
+                ):
+                    logger.warning(
+                        "Agent Runtime concurrent Tool call failed outside its effect (%s)",
+                        type(outcome).__name__,
+                    )
 
     def _contract_changed(self, item: ToolBatchItem) -> bool:
         resolved = self._tools.get(item.tool_name)

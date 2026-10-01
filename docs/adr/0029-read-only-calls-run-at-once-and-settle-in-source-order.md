@@ -57,7 +57,7 @@ gate refuses a pending Connection call marked read-only.
 |---|---|
 | `search_knowledge_base` | Reads the selected corpus. It admits what it found into this Run's evidence, in source order. |
 | `search_web` | Reads a search provider. It registers result links as inert Resources and admits passages, in source order. |
-| `read` | Reads a workspace path, a Run Resource, or a public URL. A URL fetch lands in a Resource under its own intent's settlement. Adopting an earlier Run's Resource spends this Run's attachment allowance, so it waits for source order. |
+| `read` | Reads a workspace path, a Run Resource, or a public URL. A URL fetch lands in a Resource under its own intent's settlement. Adopting an earlier Run's Resource, and the first read of an upload held lazily, spend this Run's attachment allowance, so they wait for source order. |
 | `view` | Reads pixels from the same sources. It spends the shared image budget only in source order. |
 | `ls`, `grep`, `find` | Read the workspace under the access scheduler. Any output they spill goes to a uniquely named Run-owned file. |
 
@@ -82,29 +82,37 @@ of the group and its attempt, plus one attempt for each read-only call beside it
 (`concurrent_attempt_ids`). The calls then run at once. Each result commits in its
 own transaction once the results before it have, and that commit moves the pending
 record past it. The pending record always names exactly the calls that may be in
-flight, and every call before them is settled. A single call writes the same record
-as before, with no concurrent attempts.
+flight, and every call before them is settled. Before each commit the worker checks
+that the record still names that call and its attempt. Only a worker that took the
+Operation over can have moved it, so on any mismatch the stale worker stops with a
+lost lease and writes nothing. A single call writes the same record as before, with
+no concurrent attempts.
 
 **Shared state is touched in source order.** The Runtime gives each effect an
 `in_source_order` awaitable, which a Tool reaches through
 `ToolRuntime.in_source_order()`. It returns once every earlier call of the group has
 returned, and a call returns only after reaching it. A call does its own work beside
 its neighbours: a retrieval, a search, a fetch, a file read, a subprocess. It awaits
-`in_source_order` before it admits evidence, adopts an earlier Run's Resource, spends
-the image budget, or writes the trace, and the Research host awaits it before the
-freeze and the host update. Evidence, citation numbers, the image budget, the trace,
-and every settlement are therefore exactly what running the calls alone in source
-order would produce.
+`in_source_order` before it admits evidence, spends the image budget, writes the
+trace, or spends the attachment allowance. The allowance is spent by adopting an
+earlier Run's Resource and by the first read of an upload the Run holds lazily. The
+Research host awaits `in_source_order` before the freeze and the host update.
+Evidence, citation numbers, both budgets, the trace, and every settlement are
+therefore exactly what running the calls alone in source order would produce.
 
-Acquiring a Resource is not ordered. The Resource registry already shares one fetch
-and one conversion among the calls that read the same Resource, and a group relies on
-that. Only rare races there depend on timing:
+Acquiring a public Resource is not ordered. The Resource registry already shares one
+fetch and one conversion among the calls that read the same Resource, and a group
+relies on that. The registry keeps every outcome consistent: the first bytes bound to
+a Resource win, so a URL and the page it redirects to read one representation of that
+page. A fetch in flight keeps the presentation headers it started with, and a
+different header is refused exactly as it is once the fetch has finished. What can
+still vary with timing is narrow:
 
-- Reading a URL and the page it redirects to in one group can print either of two
-  handles for that page.
-- A presentation header can meet a snapshot the other call has already admitted.
-- `grep` and `find` create the shell's scratch home under `tmp/` the first time
-  either runs.
+- Which of the two handles names a redirected page.
+- Which of two reads with different headers starts the fetch. The calls start in
+  source order, but no gate enforces it.
+- Whether `ls` or `find` sees the scratch home under `tmp/` that `grep` and `find`
+  create the first time either runs.
 
 **Recovery is per call, in source order.** After a crash, recovery closes the pending
 calls one by one under the existing rule. A replayable call runs again under a fresh
@@ -156,9 +164,16 @@ time it spent waiting for an earlier call. Concurrent searches share their provi
 rate limit, and a refusal reaches the model as an ordinary Tool error.
 
 The contract binds the Tool author. A read-only Tool that touches shared state before
-`in_source_order` makes the batch nondeterministic. Tests pin the order for search
-admission, resource-backed evidence admission, adoption, both of `view`'s image paths,
-and the Research host's settlement.
+`in_source_order` makes the batch nondeterministic. Tests pin the order for:
+
+- search admission;
+- resource-backed evidence admission;
+- adoption and the first load of a lazily held upload;
+- both of `view`'s image paths;
+- the Research host's settlement.
+
+Further tests pin the registry's redirect and presentation outcomes under
+concurrent reads, and a stale group worker reporting its lost lease.
 
 Revisit this decision if any of these happens:
 

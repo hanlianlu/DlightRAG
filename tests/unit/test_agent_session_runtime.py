@@ -2373,3 +2373,75 @@ async def test_calls_with_side_effects_still_run_one_at_a_time() -> None:
     assert effects.timeline == [("start", 0), ("ordered", 0), ("start", 1), ("ordered", 1)]
     assert [event.kind for event in events].count("tool_intent_committed") == 2
     assert [entry.source_index for entry in _results(await store.load(session_id))] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_stale_group_worker_reports_its_lost_lease_and_writes_nothing() -> None:
+    """A worker whose group outlived its lease says so instead of faulting the Session.
+
+    A successor reclaims the Operation and completes it while the stale worker's second
+    call still runs. When that call returns, the stale worker finds the Operation moved
+    on and stops with a lost lease rather than an invariant failure.
+    """
+
+    class SecondOutlivesTheLease(_TimelineEffects):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.release = asyncio.Event()
+
+        async def io(self, source_index: int) -> None:
+            if source_index == 1:
+                await self.release.wait()
+            await asyncio.sleep(0)
+
+    lookup = _batch_tool("lookup", read_only=True)
+    stale_effects = SecondOutlivesTheLease([_assistant(_call(0, "lookup"), _call(1, "lookup"))])
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    first_settled = asyncio.Event()
+
+    async def observe(event: AgentSessionEvent) -> None:
+        if event.kind == "tool_result_committed" and event.data["source_index"] == 0:
+            first_settled.set()
+
+    stale = AgentSessionRuntime(
+        repository=store,
+        effects=stale_effects,
+        tools=[lookup],
+        fencing_epoch=1,
+        event_sink=observe,
+    )
+    session_id = SessionId.new()
+    accepted = await stale.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="stale-group",
+        content="question",
+        plan=_plan(lookup),
+    )
+    drive = asyncio.create_task(
+        stale.drive(session_id=session_id, operation_id=accepted.operation_id)
+    )
+    await asyncio.wait_for(first_settled.wait(), timeout=5)
+
+    store.transfer_lease(2)
+    successor = AgentSessionRuntime(
+        repository=store,
+        effects=_TimelineEffects([_assistant(text="done")]),
+        tools=[lookup],
+        fencing_epoch=2,
+    )
+    recovered = await successor.drive(session_id=session_id, operation_id=accepted.operation_id)
+    assert isinstance(recovered.state, OperationCompleted)
+    settled = await store.load(session_id)
+
+    stale_effects.release.set()
+    with pytest.raises(SessionLeaseLostError):
+        await asyncio.wait_for(drive, timeout=5)
+
+    after = await store.load(session_id)
+    assert after.commit_sequence == settled.commit_sequence
+    assert [(entry.source_index, entry.result.outcome) for entry in _results(after)] == [
+        (0, "succeeded"),
+        (1, "outcome_unknown"),
+    ]
+    assert not any(record.ref.kind == "session_fault" for record in after.registers)

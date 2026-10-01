@@ -384,10 +384,11 @@ progress then commit under the lease/epoch predicate.
 
 A call runs alone unless its Tool declares it read-only. Adjacent read-only calls,
 at most eight, run at once under one pending record that holds an attempt for each
-call. A call does its own work beside the others. It admits evidence, adopts an
-earlier Run's Resource, or spends the image budget only after every earlier call of
-its group has returned, and its result then settles in source order. Evidence,
-citations, and Host deltas are therefore what one-at-a-time execution would produce.
+call. A call does its own work beside the others. It waits until every earlier call
+of its group has returned before it admits evidence, adopts an earlier Run's
+Resource, first loads an upload held lazily, or spends the image budget. Its result
+then settles in source order. Evidence, citations, and Host deltas are therefore what
+one-at-a-time execution would produce.
 Every other call is a barrier between groups
 ([ADR 0029](adr/0029-read-only-calls-run-at-once-and-settle-in-source-order.md)).
 

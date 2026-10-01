@@ -331,13 +331,15 @@ class ResourceRegistry:
         if existing is not None:
             existing = self._canonical_resource_id(existing)
             registered = self._resources[existing]
+            # A fetch in flight already chose its presentation, as a finished one has.
+            fetched = existing in self._fetched or existing in self._fetch_tasks
             if any(
                 (presentation.user_agent, presentation.accept, presentation.accept_language)
-            ) and (existing in self._fetched or existing in self._text_views):
+            ) and (fetched or existing in self._text_views):
                 raise ResourceAdmissionError(
                     "HTTP presentation cannot replace an admitted snapshot"
                 )
-            if admission_origin == "agent" and existing not in self._fetched:
+            if admission_origin == "agent" and not fetched:
                 registered.presentation = presentation
             if caller:
                 if registered.source == "web":
@@ -1183,6 +1185,19 @@ class ResourceRegistry:
         self._converted[resource.resource_id] = entry
         self._text_views[resource.resource_id] = entry
 
+    def loads_on_read(self, resource_id: str) -> bool:
+        """Whether reading this Resource first loads bytes it holds lazily.
+
+        That load spends this Run's byte allowance, which an adoption spends too, so
+        a call running beside others waits for its source order before it reads.
+        """
+        resource = self._resources.get(self._canonical_resource_id(resource_id))
+        return (
+            resource is not None
+            and resource.loader is not None
+            and resource.resource_id not in self._fetched
+        )
+
     def has_conversion_snapshot(self, resource_id: str) -> bool:
         """Whether this Run already reads the Resource through a conversion view."""
         return self._canonical_resource_id(resource_id) in self._snapshots
@@ -1514,6 +1529,11 @@ class ResourceRegistry:
         if len(data) > self._max_attachment_bytes:
             raise ResourceAdmissionError("attachment exceeds per-attachment byte limit")
         async with self._total_lock:
+            # A redirect to this Resource may have bound its bytes while this fetch
+            # ran. The first bytes win, so every reader sees one representation.
+            first = self._fetched.get(resource_id)
+            if first is not None:
+                return first
             if charge_total and self._total_bytes + len(data) > self._max_total_attachment_bytes:
                 raise ResourceAdmissionError("total attachment bytes exceeded")
             if charge_total:

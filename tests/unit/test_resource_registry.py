@@ -807,6 +807,99 @@ async def test_failed_agent_read_can_retry_with_new_presentation_headers(
     assert [headers["user-agent"] for headers in client.headers] == ["First/1", "Second/2"]
 
 
+class _HeldResponse(_StreamResponse):
+    """A body that streams only once released, so another read can overtake it."""
+
+    def __init__(self, content: bytes, url: str, *, started: asyncio.Event) -> None:
+        super().__init__(content, url)
+        self.started = started
+        self.release = asyncio.Event()
+
+    async def aiter_bytes(self):
+        self.started.set()
+        await self.release.wait()
+        yield self._content
+
+
+async def test_a_redirect_and_a_direct_read_of_its_page_share_one_representation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first bytes bound to a page win, so two concurrent reads cannot disagree.
+
+    The page renders differently on every fetch. The direct read's fetch is still
+    streaming when the redirect binds its own render to the same Resource; letting
+    the direct fetch overwrite it made one read refuse the page and every later read
+    of it fail.
+    """
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    old, new = "https://site.example/old", "https://site.example/new"
+    direct_started = asyncio.Event()
+    held = _HeldResponse(b"render 1", new, started=direct_started)
+
+    class RenderingClient:
+        def __init__(self) -> None:
+            self.renders = 0
+
+        def stream(self, method: str, url: str, **_kwargs) -> _StreamResponse:
+            # The request names the pinned address, so the page is told apart by path.
+            if url.endswith("/old"):
+                return _StreamResponse(b"", old, status_code=301, headers={"location": new})
+            self.renders += 1
+            return held if self.renders == 1 else _StreamResponse(b"render 2", new)
+
+    async def persist(_fetched, _owner) -> None:
+        return None
+
+    def owner() -> ResourceEffectOwner:
+        return ResourceEffectOwner(execution_scope="session", intent_id=IntentId.new())
+
+    registry = ResourceRegistry(url_client=RenderingClient(), fetched_bytes_sink=persist)
+    page = registry.register_agent_url(new)
+    redirected = registry.register_agent_url(old)
+    direct = asyncio.create_task(registry.read(page, effect_owner=owner()))
+    await direct_started.wait()
+
+    via_redirect = await registry.read(redirected, effect_owner=owner())
+    held.release.set()
+    directly = await direct
+
+    assert (via_redirect.resource_id, directly.resource_id) == (page, page)
+    assert via_redirect.content == directly.content == "render 2"
+    assert (await registry.read(page, effect_owner=owner())).content == "render 2"
+
+
+async def test_a_fetch_in_flight_keeps_the_presentation_it_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later read of the same page cannot change the headers of a fetch under way.
+
+    Once a fetch has started, a read without headers shares it, and a read asking for
+    other headers is refused, exactly as both are once that fetch has finished.
+    """
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    url = "https://data.example.com/report.txt"
+    german = PublicHttpPresentation(accept_language="de")
+
+    client = _LinkClient()
+    registry = ResourceRegistry(url_client=client)
+    resource_id = registry.register_agent_url(url, presentation=german)
+    reading = asyncio.create_task(registry.read(resource_id))
+    await asyncio.sleep(0)  # the read has started its fetch, which has not run yet
+    assert registry.register_agent_url(url) == resource_id
+    await reading
+    assert [headers.get("accept-language") for headers in client.headers] == ["de"]
+
+    client = _LinkClient()
+    registry = ResourceRegistry(url_client=client)
+    resource_id = registry.register_agent_url(url)
+    reading = asyncio.create_task(registry.read(resource_id))
+    await asyncio.sleep(0)
+    with pytest.raises(ResourceAdmissionError, match="cannot replace"):
+        registry.register_agent_url(url, presentation=german)
+    await reading
+    assert [headers.get("accept-language") for headers in client.headers] == [None]
+
+
 async def test_direct_success_skips_url_text_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
