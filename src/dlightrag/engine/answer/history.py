@@ -105,10 +105,6 @@ class IncrementalHistoryProjector:
         return bool(self._resolved)
 
     @property
-    def recent_complete(self) -> bool:
-        return self._recent_complete
-
-    @property
     def needs_omitted_pairs(self) -> bool:
         return (
             bool(self._resolved)

@@ -38,10 +38,6 @@ class WebSourceService:
     def search_enabled(self) -> bool:
         return bool(self._search_providers)
 
-    @property
-    def extract_enabled(self) -> bool:
-        return bool(self._extract_providers)
-
     async def search(self, request: WebSearchRequest) -> WebSearchResult:
         failures: list[WebSourceUnavailable] = []
         for provider in self._search_providers:

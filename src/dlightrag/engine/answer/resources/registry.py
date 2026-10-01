@@ -536,10 +536,6 @@ class ResourceRegistry:
         self._fetched_ordinals[resource_id] = ordinal
         return ordinal
 
-    def fetched_replay_slots(self) -> dict[str, int]:
-        """Return each fetched resource's durable replay slot."""
-        return dict(self._fetched_ordinals)
-
     def restore_fetched_resource(
         self,
         *,
@@ -1234,22 +1230,6 @@ class ResourceRegistry:
                 f"Visuals {start + 1}-{end} of {len(view.handles)}; more: read(resource_id={resource.resource_id!r}, cursor={cursor!r})."
             )
         return tuple(selected), " ".join(notes) or None
-
-    def is_declared_image(self, resource_id: str) -> bool:
-        resource = self._require(resource_id)
-        media = (resource.declared_mime or "").split(";", 1)[0].strip().lower()
-        suffix = Path(resource.filename or "").suffix.lower()
-        return media.startswith("image/") or suffix in {
-            ".avif",
-            ".bmp",
-            ".gif",
-            ".jpeg",
-            ".jpg",
-            ".png",
-            ".tif",
-            ".tiff",
-            ".webp",
-        }
 
     async def visual_target(
         self,

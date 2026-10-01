@@ -11,7 +11,6 @@ calling a provider or opening a store.
 from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Literal
 
 from dlightrag.engine.agent.session.effects import JsonValue, canonical_json
 from dlightrag.engine.agent.session.ids import EntryId, ProjectionId
@@ -183,9 +182,6 @@ class AgentInputOverflowError(ValueError):
         )
 
 
-InputOverflowKind = Literal["context_exhausted", "hard_input_limit_exceeded"]
-
-
 def require_compactable(
     profile: ModelProfile,
     *,
@@ -282,7 +278,6 @@ __all__ = [
     "AgentInputOverflowError",
     "CompactionSummary",
     "ContextProjection",
-    "InputOverflowKind",
     "projection_source_digest",
     "projection_strictly_reduces",
     "render_compaction_summary",

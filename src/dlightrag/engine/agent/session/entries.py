@@ -44,19 +44,6 @@ class SessionEntry:
     def canonical_payload(self) -> JsonValue:
         raise NotImplementedError
 
-    def to_canonical_json(self) -> JsonValue:
-        return {
-            "entry_id": self.entry_id.value,
-            "session_id": self.session_id.value,
-            "parent_entry_id": (
-                self.parent_entry_id.value if self.parent_entry_id is not None else None
-            ),
-            "sequence": self.sequence,
-            "timestamp": self.timestamp.isoformat(),
-            "schema_version": self.schema_version,
-            "payload": self.canonical_payload(),
-        }
-
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UserMessageEntry(SessionEntry):
