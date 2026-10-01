@@ -19,7 +19,9 @@ refusals are then superseded by
 Session-owned memory, so a continuation materializes the Session's notes instead
 of copying a parent Run's, and a reclaimed parent Workspace no longer refuses a
 continuation. Fork Point resolution keeps the fail-closed refusals recorded here.
-Live specs name the terms.
+Amended: every continuation derives its history from its Session branch point. The
+path that injected a parent's accepted history for a caller with no Agent Session is
+gone, because every accepted Run records one. Live specs name the terms.
 
 Evidence for the compaction and carry experiments is unit- and integration-level
 at the product seams (the write tool, Inventory settlement, `bind_run_workspace`,
@@ -134,14 +136,14 @@ per-turn file snapshot: carrying the parent's whole Workspace is rejected (it
 propagates generated junk and multiplies the epoch-copy headroom every Run needs),
 and an empty Workspace is rejected because a branch with no tree is not a branch.
 
-**History is derived from the branch point.** A continuation whose branch point
-already contains the conversation injects no history at all; only a caller with no
-Agent Session branch point — a stateless REST or MCP call — has its parent's
-accepted history injected. Where the branch point holds a turn that never got an
-answer, the Fold carries that turn, because it is the one turn the continuation is
-continuing. `include_answer` retires to a history-only flag, and because
-turn-accurate forking already covers "redo this answer" (fork at the preceding
-turn and ask again), no separate retry operation is introduced.
+**History is derived from the branch point.** Every continuation derives its
+history from its Session branch point, which already contains the conversation, so
+it injects no history at all: every accepted Run records an Agent Session, REST and
+MCP calls included. Where the branch point holds a turn that never got an answer,
+the Fold carries that turn, because it is the one turn the continuation is
+continuing. `include_answer` only names the kind, and because turn-accurate forking
+already covers "redo this answer" (fork at the preceding turn and ask again), no
+separate retry operation is introduced.
 
 **Degradation is explicit.** A Workspace already reclaimed, a Run outside this
 Session, a missing Fork Point, or a head no longer present fails the Fork with a

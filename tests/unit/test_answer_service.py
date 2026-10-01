@@ -2078,64 +2078,22 @@ async def test_session_backed_continuations_state_the_parent_once(kind: str) -> 
     assert composed.count("parent answer") == 1
 
 
-async def test_a_continuation_without_a_session_injects_parent_history() -> None:
-    """A stateless continuation still injects history, and include_answer gates the answer."""
+async def test_a_continuation_hashes_the_submission_and_not_its_own_identities() -> None:
+    """A retry must replay, and the identities this process draws are not input.
+
+    A Fork mints a Lane per attempt, so the raw request hash differs between two
+    identical submissions; the continuation fingerprint drops the Lane and the
+    parent's Session, which is what makes the retry a replay.
+    """
     terminal = _record(
         status="succeeded",
         result={"answer": "parent answer"},
         accepted_input={
             "query": "parent question",
             "workspaces": ["finance"],
-            "history": [
-                {"role": "user", "content": "ancestor question"},
-                {"role": "assistant", "content": "ancestor answer"},
-            ],
+            "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            "agent_lane_id": "main",
         },
-    )
-    service = _service(store=_Store(run=terminal))
-    follow = await service.continuation_request(
-        owner_id=_OWNER,
-        run_id="run-1",
-        query="next question",
-        include_answer=True,
-        authorized_workspaces=("finance",),
-    )
-    fork = await service.continuation_request(
-        owner_id=_OWNER,
-        run_id="run-1",
-        query="other branch",
-        include_answer=False,
-        authorized_workspaces=("finance",),
-    )
-    assert follow is not None and fork is not None
-    assert follow.history == (
-        {"role": "user", "content": "ancestor question"},
-        {"role": "assistant", "content": "ancestor answer"},
-        {"role": "user", "content": "parent question"},
-        {"role": "assistant", "content": "parent answer"},
-    )
-    assert fork.history == (
-        {"role": "user", "content": "ancestor question"},
-        {"role": "assistant", "content": "ancestor answer"},
-        {"role": "user", "content": "parent question"},
-    )
-    assert follow.continuation_kind == "follow_up"
-    assert fork.continuation_kind == "fork"
-    assert follow.agent_session_id
-    assert fork.agent_session_id
-
-
-async def test_a_continuation_hashes_the_submission_and_not_its_own_identities() -> None:
-    """A retry must replay, and the identities this process draws are not input.
-
-    A continuation mints a Session or a Lane per attempt, so the raw request hash
-    differs between two identical submissions; the continuation fingerprint drops
-    exactly those two fields, which is what makes the retry a replay.
-    """
-    terminal = _record(
-        status="succeeded",
-        result={"answer": "parent answer"},
-        accepted_input={"query": "parent question", "workspaces": ["finance"]},
     )
     service = _service(store=_Store(run=terminal))
     import dlightrag.application.answer_runs.service as service_module

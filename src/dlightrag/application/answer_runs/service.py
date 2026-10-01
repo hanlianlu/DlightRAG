@@ -755,10 +755,10 @@ class AnswerService:
         """Hash one continuation as the caller submitted it.
 
         The admission fingerprint decides whether a keyed submission is a replay or a
-        conflict, so it has to describe what the caller asked for. A continuation
-        mints its own Session and Lane, and those two identities are this process's
-        draw rather than the caller's input: leaving them in makes every retry of an
-        identical submission look like changed input.
+        conflict, so it has to describe what the caller asked for. A continuation's
+        Session is its parent's and a Fork mints its own Lane per attempt; neither is
+        the caller's input, and leaving the Lane in makes every retry of an identical
+        submission look like changed input.
         """
         fields = dict(_normalized_request(request).as_request())
         fields.pop("agent_session_id", None)
@@ -1547,14 +1547,12 @@ class AnswerService:
     ) -> AnswerRequest | None:
         """Build one continuation's request after transport authorization.
 
-        History is derived from the branch point. A continuation whose parent
-        recorded an Agent Session injects none: the fold at that point is the
-        context, and it is the caller's arrival at this endpoint — not history —
-        that says whether the run continues the Lane or branches from a Fork Point.
-        ``include_answer`` is the endpoint's own choice of kind (a Follow-Up
-        appends to the Lane tip, a Fork opens at the recorded Fork Point) and, for
-        a caller with no Session branch point, it also decides whether the parent's
-        answer joins the history that only such a caller receives.
+        History is derived from the branch point, so a continuation injects none:
+        every accepted Run records an Agent Session, and the fold at that point is
+        the context. It is the caller's arrival at this endpoint, not history, that
+        says whether the Run continues the Lane or branches from a Fork Point:
+        ``include_answer`` is that choice of kind (a Follow-Up appends to the Lane
+        tip, a Fork opens at the recorded Fork Point).
         """
         text = query.strip()
         if not text:
@@ -1567,22 +1565,6 @@ class AnswerService:
         if authorized_workspaces is None:
             raise ValueError("continuation requires a currently authorized workspace set")
         accepted = record.request_input()
-        parent_session_id = str(accepted.get("agent_session_id") or "")
-        history: list[Mapping[str, Any]] = []
-        if not parent_session_id:
-            history = [
-                dict(message)
-                for message in accepted.get("history") or ()
-                if isinstance(message, Mapping)
-            ]
-            parent_query = str(accepted.get("query") or "")
-            if parent_query:
-                history.append({"role": "user", "content": parent_query})
-            if include_answer:
-                parent_answer = str((record.result or {}).get("answer") or "")
-                if parent_answer:
-                    history.append({"role": "assistant", "content": parent_answer})
-
         history_resources: list[AnswerHistoryResource] = []
         for reference_kind, items in (
             ("history_attachment", accepted.get("history_attachments") or ()),
@@ -1611,14 +1593,12 @@ class AnswerService:
             if isinstance(item, Mapping) and item.get("url")
         )
         filters = accepted.get("filters")
-        agent_session_id = parent_session_id or SessionId.new().value
         parent_lane_id = str(accepted.get("agent_lane_id") or LaneId.main().value)
         continuation_kind = "follow_up" if include_answer else "fork"
         agent_lane_id = parent_lane_id if include_answer else LaneId.new().value
         return AnswerRequest(
             query=text,
             workspaces=tuple(str(item) for item in authorized_workspaces),
-            history=tuple(history),
             episodic_summary=str(accepted.get("episodic_summary") or ""),
             retrieval=RetrievalOptions(
                 top_k=(int(accepted["top_k"]) if accepted.get("top_k") is not None else None),
@@ -1638,7 +1618,7 @@ class AnswerService:
             mode=str(accepted.get("mode") or "auto"),
             parent_run_id=run_id,
             continuation_kind=continuation_kind,
-            agent_session_id=agent_session_id,
+            agent_session_id=str(accepted.get("agent_session_id") or ""),
             agent_lane_id=agent_lane_id,
             source_lane_id=(parent_lane_id if not include_answer else None),
         )

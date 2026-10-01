@@ -397,11 +397,9 @@ A Follow-Up continues on the Lane it came from, at its tip. A Fork does not: it
 opens a new Lane at the state its parent Run settled at, so a branch from an earlier
 turn sees that turn's summary and retained tail rather than everything the
 conversation has since become, and it starts from that state's projection rather
-than the one the source Lane is on now. Either kind whose parent recorded an Agent
-Session injects no history: the fold at that branch point is the context. Only a
-stateless caller — a REST or MCP continuation whose parent recorded none — has the
-parent's accepted history injected, and `include_answer` only governs whether the
-parent's answer joins that injected history.
+than the one the source Lane is on now. Either kind derives its history from its
+Session branch point and injects none: every accepted Run records an Agent Session,
+so the fold at that branch point is the context.
 
 A published Artifact joins the same re-readable family: publication registers it as a
 Resource of its Agent Session ([ADR 0023](adr/0023-a-published-product-is-a-resource.md)),
