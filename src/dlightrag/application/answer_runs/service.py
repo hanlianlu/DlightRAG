@@ -1433,13 +1433,8 @@ class AnswerService:
         request = record.request_input()
         cap = max(1, min(int(limit), 100))
         session_id = str(request.get("agent_session_id") or "")
-        load_transcript = getattr(self._store, "load_agent_transcript", None)
-        if session_id and callable(load_transcript):
-            loader = cast(
-                Callable[..., Awaitable[Sequence[Mapping[str, Any]]]],
-                load_transcript,
-            )
-            canonical = await loader(
+        if session_id:
+            canonical = await self._store.load_agent_transcript(
                 owner_id=owner_id,
                 run_id=run_id,
                 session_id=session_id,

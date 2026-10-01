@@ -19,6 +19,7 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.application.corpus_admin import CorpusAdmin
 from dlightrag.application.errors import StorageSchemaError
 from dlightrag.application.health import ApplicationHealth
+from dlightrag.application.memory import MemoryService
 from dlightrag.application.retrieval import PinnedRetrievalModel, RetrievalService
 from dlightrag.application.retrieval.execution import validate_active_retrieval_input
 from dlightrag.application.settings import model_settings_for_role
@@ -267,6 +268,18 @@ class _Corpora(_Collaborator):
         if self.recovery_error is not None:
             raise self.recovery_error
 
+    def start_promotion_worker(self) -> None:
+        self._record("start_promotion_worker")
+
+
+class _Memory(_Collaborator):
+    def __init__(self, recorder: _Recorder) -> None:
+        super().__init__(recorder, "memory")
+
+    async def purge_expired(self) -> int:
+        self._record("purge_expired")
+        return 0
+
 
 class _Retrieval(_Collaborator):
     def __init__(self, recorder: _Recorder) -> None:
@@ -306,6 +319,7 @@ class _Parts:
         self.retrieval = _Retrieval(self.recorder)
         self.runs = object()
         self.answers = object()
+        self.memory = _Memory(self.recorder)
         self.web_conversations = _WebConversations(self.recorder)
         self.search_toolchain: _SearchToolchain | None = None
 
@@ -356,7 +370,7 @@ class _Parts:
                 retrieval=cast(RetrievalService, self.retrieval),
                 runs=cast(Any, self.runs),
                 answers=cast(AnswerService, self.answers),
-                memory=cast(Any, self.answers),
+                memory=cast(MemoryService, self.memory),
                 memory_store=cast(Any, self.memory_store),
                 memory_embedder=cast(Any, self.memory_embedder),
                 web_conversations=cast(WebConversationService, self.web_conversations),
@@ -470,9 +484,11 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
         "retrieval:planner_for",
         "capabilities:probe_all",
         f"pool:acquire:{normalize_workspace(test_config.deployment.workspace)}",
+        "corpora:start_promotion_worker",
         "listener:start",
         "coordinator:start",
         "web_conversations:start_retention",
+        "memory:purge_expired",
     ]
     assert application.health.is_ready is True
     assert application.answers is parts.answers

@@ -357,11 +357,8 @@ class Application:
 
     def _start_promotion_worker(self) -> None:
         """Start the background hot-workspace promotion worker (writers only)."""
-        start = getattr(self._components.corpora, "start_promotion_worker", None)
-        if start is None:
-            return
         try:
-            start()
+            self._components.corpora.start_promotion_worker()
         except Exception as exc:
             self._components.health.mark_component_degraded("corpus_storage")
             logger.warning(
@@ -453,11 +450,8 @@ class Application:
         await self._components.web_conversations.start_retention()
 
     async def _start_memory_janitor(self) -> None:
-        purge = getattr(self._components.memory, "purge_expired", None)
-        if purge is None:
-            return
         try:
-            await purge()
+            await self._components.memory.purge_expired()
         except Exception:
             logger.warning("Memory retention failed", exc_info=True)
         if self._memory_janitor is None:
