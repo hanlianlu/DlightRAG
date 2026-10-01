@@ -1707,7 +1707,7 @@ async def test_the_recorded_point_is_the_runs_lane_not_the_sessions_selected_one
 async def test_an_unreadable_plane_costs_the_run_its_notes_and_states_why(tmp_path: Path) -> None:
     """An unreadable plane is a degradation: the Run still binds its workspace."""
     from dlightrag.engine.answer.session_notes import SESSION_NOTES_PLANE_UNREADABLE
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+    from tests.support.workspace_store import InMemoryWorkspaceStore
 
     session_id = "01930000-0000-7000-8000-0000000000d2"
     store = InMemoryWorkspaceStore()
@@ -1748,7 +1748,7 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
     made before it crashed would be reverted instead of promoted.
     """
     from dlightrag.engine.answer.workspace import bind_run_workspace, run_root
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+    from tests.support.workspace_store import InMemoryWorkspaceStore
 
     session_id = "01930000-0000-7000-8000-0000000000c1"
     run_id = "01930000-0000-7000-8000-0000000000c2"
@@ -1856,7 +1856,7 @@ async def _drive_fast_execute(
     from dlightrag.engine.answer.resources.models import TextWindowBudget
     from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
     from dlightrag.engine.runtime.progress import StageCommit, StageTerminalCommit
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+    from tests.support.workspace_store import InMemoryWorkspaceStore
 
     session_id = SessionId.new()
     repository = MemoryAgentSessionRepository[Any](fencing_epoch=1)

@@ -29,11 +29,8 @@ from dlightrag.engine.answer.workspace import (
 )
 from dlightrag.engine.runtime.records import DeletedRun
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import (
-    CommittedSpillRecord,
-    InMemoryWorkspaceStore,
-    SessionNoteRecord,
-)
+from dlightrag.engine.runtime.workspace import CommittedSpillRecord, SessionNoteRecord
+from tests.support.workspace_store import InMemoryWorkspaceStore
 
 
 class RecordingWorkspaceStore(InMemoryWorkspaceStore):

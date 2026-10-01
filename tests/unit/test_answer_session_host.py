@@ -60,8 +60,8 @@ from dlightrag.engine.answer.fast.session_host import projection_from_compaction
 from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime.errors import RunExecutionError
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.workspace_store import InMemoryWorkspaceStore
 
 
 async def _no_settled_result() -> None:

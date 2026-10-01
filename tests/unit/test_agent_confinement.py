@@ -320,7 +320,7 @@ async def test_binding_a_run_grants_only_its_own_owners_skills(
     from dlightrag.engine.agent.environment.execution import TrustExecutionAdapter
     from dlightrag.engine.agent.skills import owner_skill_root
     from dlightrag.engine.answer.workspace import bind_run_workspace
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+    from tests.support.workspace_store import InMemoryWorkspaceStore
 
     policy = agent_confinement_policy(test_config)
     bound = await bind_run_workspace(

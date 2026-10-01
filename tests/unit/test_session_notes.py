@@ -22,10 +22,10 @@ from dlightrag.engine.runtime.workspace import (
     SESSION_NOTES_LEASE_LOST,
     SESSION_NOTES_MAX_BYTES,
     SESSION_NOTES_MAX_COUNT,
-    InMemoryWorkspaceStore,
     SessionNoteRecord,
     select_promotable_session_notes,
 )
+from tests.support.workspace_store import InMemoryWorkspaceStore
 
 SESSION = "01930000-0000-7000-8000-0000000000aa"
 

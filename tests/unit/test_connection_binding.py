@@ -171,8 +171,8 @@ async def test_only_research_offers_connection_tools_restored_under_the_session_
     from dlightrag.engine.runtime.coordinator import RunSession
     from dlightrag.engine.runtime.errors import RunExecutionError
     from dlightrag.engine.runtime.progress import StageCommit
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
     from tests.in_memory_session_repository import MemoryAgentSessionRepository
+    from tests.support.workspace_store import InMemoryWorkspaceStore
     from tests.unit.test_answer_executor import _executor
 
     executor = _executor()

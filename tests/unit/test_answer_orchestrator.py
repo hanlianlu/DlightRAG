@@ -30,7 +30,8 @@ from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.workspace import RunWorkspace
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
+from dlightrag.engine.runtime.workspace import CommittedSpillRecord
+from tests.support.workspace_store import InMemoryWorkspaceStore
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
@@ -214,7 +215,7 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     from dlightrag.engine.agent.tools.files import WriteArgs, write_tool
     from dlightrag.engine.answer.session_notes import SessionNotesPlane
     from dlightrag.engine.answer.workspace import bind_run_workspace
-    from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
+    from tests.support.workspace_store import InMemoryWorkspaceStore
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")

@@ -6,7 +6,6 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from heapq import nsmallest
 from typing import Protocol
 
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
@@ -211,116 +210,6 @@ class WorkspaceStore(Protocol):
     async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]: ...
 
 
-class InMemoryWorkspaceStore:
-    """Process-local workspace store for unit tests."""
-
-    def __init__(
-        self,
-        *,
-        workspace_epoch: int | None = None,
-        live: bool = True,
-        progress_version: int = 0,
-    ) -> None:
-        self.workspace_epoch = workspace_epoch
-        self.live = live
-        self.progress_version = progress_version
-        self.inventory: list[InventoryPathRecord] = []
-        self.spills: list[CommittedSpillRecord] = []
-        self.artifacts: list[RunArtifactRecord] = []
-        self.session_notes: dict[str, dict[str, bytes]] = {}
-
-    async def handoff_epoch(
-        self,
-        *,
-        expected_epoch: int | None,
-        destination_epoch: int,
-        inventory: Sequence[InventoryPathRecord],
-    ) -> HandoffResult:
-        if not self.live:
-            return HandoffLeaseLost()
-        if self.workspace_epoch != expected_epoch:
-            return HandoffConflict(
-                expected_epoch=expected_epoch, current_epoch=self.workspace_epoch
-            )
-        if destination_epoch < 1:
-            raise ValueError("destination epoch must be positive")
-        self.workspace_epoch = destination_epoch
-        self.inventory = list(inventory)
-        return HandoffCommit(workspace_epoch=destination_epoch)
-
-    async def load_inventory(self) -> tuple[InventoryPathRecord, ...]:
-        # Path order, as the durable adapter's own ORDER BY gives: the note set is
-        # a filter over this observation, and two orders would be two answers.
-        return tuple(sorted(self.inventory, key=lambda record: record.relative_path))
-
-    async def load_run_artifacts(self) -> tuple[RunArtifactRecord, ...]:
-        return tuple(sorted(self.artifacts, key=lambda record: record.relative_path))
-
-    async def load_session_notes(self, *, session_id: str) -> tuple[SessionNoteRecord, ...]:
-        return tuple(
-            SessionNoteRecord(relative_path=path, content=content)
-            for path, content in sorted(self.session_notes.get(session_id, {}).items())
-        )
-
-    async def promote_session_notes(
-        self,
-        *,
-        session_id: str,
-        upserts: Sequence[SessionNoteRecord],
-        deletes: Sequence[str] = (),
-        limits: SessionNotesLimits = DEFAULT_SESSION_NOTES_LIMITS,
-    ) -> SessionNotesPromotion:
-        if not self.live:
-            return SessionNotesPromotion(degraded_reason=SESSION_NOTES_LEASE_LOST)
-        plane = dict(self.session_notes.get(session_id, {}))
-        accepted, refused = select_promotable_session_notes(
-            existing={path: len(content) for path, content in plane.items()},
-            upserts=upserts,
-            deletes=deletes,
-            limits=limits,
-        )
-        removed = [path for path in deletes if path in plane]
-        for path in removed:
-            del plane[path]
-        for note in accepted:
-            plane[note.relative_path] = note.content
-        self.session_notes[session_id] = plane
-        return SessionNotesPromotion(
-            promoted=len(accepted),
-            deleted=len(removed),
-            refused_paths=refused,
-            degraded_reason=(SESSION_NOTES_BUDGET_REFUSED if refused else None),
-        )
-
-    async def load_spills_page(
-        self, *, after_resource_id: str | None, limit: int
-    ) -> tuple[CommittedSpillRecord, ...]:
-        _validate_spill_page_limit(limit)
-        matching = (
-            spill
-            for spill in self.spills
-            if after_resource_id is None or spill.resource_id > after_resource_id
-        )
-        return tuple(nsmallest(limit, matching, key=lambda spill: spill.resource_id))
-
-    async def load_recent_spills(self, *, limit: int) -> tuple[CommittedSpillRecord, ...]:
-        """Return this Run's newest committed spills first.
-
-        The producing effect intent is the only monotone marker a committed spill
-        carries: its resource id is a random handle and the row records no
-        settlement time. The cursor-paged recovery read stays a separate method
-        because it walks every spill, while this one only needs the newest few.
-        """
-        _validate_spill_page_limit(limit)
-        return tuple(
-            sorted(
-                self.spills,
-                key=lambda spill: (spill.intent_id, spill.resource_id),
-                reverse=True,
-            )[:limit]
-        )
-
-
 _MAX_SPILL_PAGE_LIMIT = 1_000
 
 
@@ -335,7 +224,6 @@ __all__ = [
     "HandoffConflict",
     "HandoffLeaseLost",
     "HandoffResult",
-    "InMemoryWorkspaceStore",
     "RunArtifactRecord",
     "SESSION_NOTES_BUDGET_REFUSED",
     "SESSION_NOTES_LEASE_LOST",

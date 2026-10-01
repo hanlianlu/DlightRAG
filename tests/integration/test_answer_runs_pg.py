@@ -60,7 +60,11 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
-from dlightrag.engine.runtime.workspace import CommittedSpillRecord, HandoffCommit
+from dlightrag.engine.runtime.workspace import (
+    CommittedSpillRecord,
+    HandoffCommit,
+    HandoffConflict,
+)
 from tests.conftest import FingerprintingRunStore
 from tests.support.pg import (
     PG_CONN_KWARGS,
@@ -1197,6 +1201,41 @@ class TestClaiming:
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None
         assert record.agent_workspace_epoch == claim.run.fencing_epoch
+
+    async def test_a_stale_workspace_handoff_changes_nothing_and_is_not_progress(
+        self, store, pool
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        workspace = PGWorkspaceStore(
+            pool=pool,
+            owner_id=_OWNER,
+            run_id=uuid.UUID(creation.run.run_id),
+            worker_id=_WORKER,
+            lease_owner=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        epoch = claim.run.fencing_epoch
+        handed_off = await workspace.handoff_epoch(
+            expected_epoch=None, destination_epoch=epoch, inventory=()
+        )
+        assert handed_off == HandoffCommit(workspace_epoch=epoch)
+
+        stale = await workspace.handoff_epoch(
+            expected_epoch=None,
+            destination_epoch=epoch + 1,
+            inventory=(
+                InventoryPathRecord(relative_path="notes/a.md", entry_type="file", size_bytes=1),
+            ),
+        )
+
+        assert stale == HandoffConflict(expected_epoch=None, current_epoch=epoch)
+        assert await workspace.load_inventory() == ()
+        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert record is not None
+        assert record.agent_workspace_epoch == epoch
+        # A handoff moves the workspace, never the Run's durable progress.
+        assert record.durable_progress_version == 0
 
     async def test_handoff_and_rescan_write_the_whole_inventory(self, store, pool) -> None:
         """A handoff carries the copied inventory; a settlement's rescan replaces it exactly."""
