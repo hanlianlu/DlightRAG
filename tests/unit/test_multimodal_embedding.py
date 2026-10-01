@@ -238,19 +238,36 @@ async def test_native_multimodal_provider_can_be_forced_to_text() -> None:
         await embedder.aclose()
 
 
-def test_multimodal_embedder_builds_fused_voyage_payload() -> None:
-    embedder = MultimodalEmbedder(
+def _fused_embedder() -> Any:
+    return MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
         api_key="key",
-        dim=1024,
+        dim=3,
         provider=VoyageEmbedProvider(),
     )
+
+
+async def _posted_fused_payload(items: list[tuple[str, Image.Image]]) -> dict[str, Any]:
+    """Embed items through the fused document path and return the request it posted."""
+    embedder = _fused_embedder()
+    post = AsyncMock(
+        return_value=_response(200, {"data": [{"embedding": [0.1, 0.2, 0.3]} for _ in items]})
+    )
+    embedder._client.post = post  # pyright: ignore[reportPrivateUsage]
+    try:
+        await embedder.embed_index_fused(items)
+    finally:
+        await embedder.aclose()
+    post.assert_awaited_once()
+    assert post.await_args is not None
+    return post.await_args.kwargs["json"]
+
+
+async def test_fused_document_request_sends_the_description_then_the_image() -> None:
     image = Image.new("RGB", (2, 2), "white")
     try:
-        payload = embedder._build_fused_payload(  # pyright: ignore[reportPrivateUsage]
-            [("a bar chart", image)], context="document"
-        )
+        payload = await _posted_fused_payload([("a bar chart", image)])
     finally:
         image.close()
     content = payload["inputs"][0]["content"]
@@ -260,37 +277,19 @@ def test_multimodal_embedder_builds_fused_voyage_payload() -> None:
     assert payload["input_type"] == "document"
 
 
-def test_fused_payload_degrades_to_image_only_when_description_blank() -> None:
-    embedder = MultimodalEmbedder(
-        model="voyage-multimodal-3.5",
-        base_url="https://api.voyageai.com/v1",
-        api_key="key",
-        dim=1024,
-        provider=VoyageEmbedProvider(),
-    )
+async def test_fused_document_request_is_image_only_when_description_blank() -> None:
     image = Image.new("RGB", (2, 2), "white")
     try:
-        payload = embedder._build_fused_payload(  # pyright: ignore[reportPrivateUsage]
-            [("   ", image)], context="document"
-        )
+        payload = await _posted_fused_payload([("   ", image)])
     finally:
         image.close()
-    assert payload["inputs"][0]["content"][0]["type"] == "image_base64"
+    assert [part["type"] for part in payload["inputs"][0]["content"]] == ["image_base64"]
 
 
-def test_image_embedder_bounds_oversized_images_before_send() -> None:
-    embedder = MultimodalEmbedder(
-        model="voyage-multimodal-3.5",
-        base_url="https://api.voyageai.com/v1",
-        api_key="key",
-        dim=1024,
-        provider=VoyageEmbedProvider(),
-    )
+async def test_fused_document_request_bounds_an_oversized_image() -> None:
     image = Image.new("RGB", (6000, 5000), "white")
     try:
-        payload = embedder._build_fused_payload(  # pyright: ignore[reportPrivateUsage]
-            [("", image)], context="document"
-        )
+        payload = await _posted_fused_payload([("", image)])
     finally:
         image.close()
     data_uri = payload["inputs"][0]["content"][0]["image_base64"]

@@ -160,23 +160,6 @@ class MultimodalEmbedder:
         parts.append(ImageEmbeddingInput(data_uri=data_uri))
         return MultimodalEmbeddingInput(parts=parts)
 
-    def _build_fused_payload(
-        self,
-        items: list[tuple[str, Image.Image]],
-        *,
-        context: EmbeddingContext,
-    ) -> dict[str, Any]:
-        """Build one provider batch for focused contract tests."""
-        inputs: list[EmbeddingInput] = [
-            self._fused_input(description, image) for description, image in items
-        ]
-        return self.provider.build_payload(
-            self.model,
-            inputs,
-            context=context,
-            output_dimension=self.dim,
-        )
-
     async def embed_index_fused(
         self,
         items: list[tuple[str, Image.Image]],
@@ -198,19 +181,6 @@ class MultimodalEmbedder:
             ]
         )
         return await self._embed_inputs(inputs, context="query", modality="image")
-
-    def _build_query_image_payload(self, images: list[Image.Image]) -> dict[str, Any]:
-        """Build one provider image batch for focused contract tests."""
-        inputs: list[EmbeddingInput] = [
-            ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image))
-            for image in images
-        ]
-        return self.provider.build_payload(
-            self.model,
-            inputs,
-            context="query",
-            output_dimension=self.dim,
-        )
 
     async def probe_image_embedding(self) -> None:
         """Probe both image-query and native fused-document capabilities."""
