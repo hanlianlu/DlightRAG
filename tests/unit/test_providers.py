@@ -3,7 +3,9 @@
 
 import ast
 import asyncio
+import base64
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -13,6 +15,9 @@ import httpx2
 import pytest
 
 import dlightrag
+from dlightrag.engine.agent.session.effects import canonical_json
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry
+from dlightrag.engine.agent.session.ids import EntryId, SessionId
 from dlightrag.engine.ai.messages import ToolDefinition
 from dlightrag.engine.ai.providers import (
     _PROVIDER_CLASSES,  # pyright: ignore[reportPrivateUsage]
@@ -1934,7 +1939,7 @@ class TestGeminiProvider:
                                 text=None,
                                 thought=False,
                                 function_call=function_call,
-                                thought_signature="gemini-signature",
+                                thought_signature=b"gemini-signature",
                             )
                         ]
                     ),
@@ -1954,7 +1959,9 @@ class TestGeminiProvider:
                             "name": "search_web",
                             "arguments": '{"query":"prices"}',
                         },
-                        "thought_signature": "previous-gemini-signature",
+                        "thought_signature": base64.b64encode(
+                            b"previous-gemini-signature"
+                        ).decode(),
                     }
                 ],
             },
@@ -2005,7 +2012,7 @@ class TestGeminiProvider:
                             "name": "search_web",
                             "args": {"query": "prices"},
                         },
-                        "thought_signature": "previous-gemini-signature",
+                        "thought_signature": b"previous-gemini-signature",
                     }
                 ],
             },
@@ -2025,7 +2032,20 @@ class TestGeminiProvider:
         assert turn.stop_reason == "tool_use"
         assert turn.tool_calls[0].id == "call-2"
         assert turn.tool_calls[0].arguments == {"query": "inflation"}
-        assert turn.tool_calls[0].thought_signature == "gemini-signature"
+        # The SDK's bytes are stored as base64 text, which a Session Entry can hold.
+        assert (
+            turn.tool_calls[0].thought_signature == base64.b64encode(b"gemini-signature").decode()
+        )
+        canonical_json(
+            AssistantMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=SessionId.new(),
+                timestamp=datetime.now(UTC),
+                content="",
+                stop_reason="tool_use",
+                tool_calls=turn.tool_calls,
+            ).canonical_payload()
+        )
         assert turn.usage_details == {"prompt_tokens": 8, "candidates_tokens": 3}
 
     @pytest.mark.asyncio
@@ -2066,7 +2086,7 @@ class TestGeminiProvider:
                                     text=None,
                                     thought=False,
                                     function_call=function_call,
-                                    thought_signature="signed",
+                                    thought_signature=b"signed",
                                 )
                             ]
                         ),
@@ -2097,7 +2117,7 @@ class TestGeminiProvider:
         assert turn.reasoning == "Think."
         assert turn.stop_reason == "tool_use"
         assert turn.tool_calls[0].arguments == {"query": "inflation"}
-        assert turn.tool_calls[0].thought_signature == "signed"
+        assert turn.tool_calls[0].thought_signature == base64.b64encode(b"signed").decode()
         assert turn.usage_details == {"prompt_tokens": 5, "candidates_tokens": 3}
 
     @pytest.mark.asyncio
@@ -2178,7 +2198,7 @@ class TestGeminiProvider:
                         "id": "call-1",
                         "type": "function",
                         "function": {"name": "search", "arguments": "{}"},
-                        "thought_signature": "signature",
+                        "thought_signature": base64.b64encode(b"signature").decode(),
                     }
                 ],
             },
@@ -2208,7 +2228,7 @@ class TestGeminiProvider:
         await_args = stream.await_args
         assert await_args is not None
         first_part = await_args.kwargs["contents"][0]["parts"][0]
-        assert first_part["thought_signature"] == "signature"
+        assert first_part["thought_signature"] == b"signature"
 
     @pytest.mark.asyncio
     async def test_json_schema_response_format_uses_response_schema(self):

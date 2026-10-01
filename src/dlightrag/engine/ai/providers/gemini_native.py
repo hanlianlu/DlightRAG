@@ -57,6 +57,26 @@ def _gemini_inline_part(mime_type: str, data: bytes) -> dict[str, Any]:
     return {"inline_data": {"mime_type": mime_type, "data": data}}
 
 
+def _stored_signature(value: object) -> str | None:
+    """A thought signature as a Session can store it: the SDK's bytes, as base64 text.
+
+    A Session Entry is JSON, and Research with a thinking Gemini model failed to
+    store its first tool call while the signature was still bytes.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("ascii")
+    return str(value)
+
+
+def _native_signature(value: object) -> bytes | None:
+    """The bytes Gemini expects back for a signature stored as base64 text."""
+    if value is None or isinstance(value, bytes):
+        return value
+    return base64.b64decode(str(value), validate=True)
+
+
 def _convert_content(content: str | list[Any]) -> list[dict[str, Any]]:
     """Convert OpenAI content blocks to Gemini Part dictionaries."""
     if isinstance(content, str):
@@ -146,7 +166,7 @@ def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                     arguments = json.loads(str(function.get("arguments") or "{}"))
                 except json.JSONDecodeError:
                     arguments = {}
-                part = {
+                part: dict[str, Any] = {
                     "function_call": {
                         "id": str(call.get("id") or ""),
                         "name": str(function.get("name") or ""),
@@ -154,7 +174,7 @@ def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                     }
                 }
                 if call.get("thought_signature") is not None:
-                    part["thought_signature"] = call["thought_signature"]
+                    part["thought_signature"] = _native_signature(call["thought_signature"])
                 parts.append(part)
             contents.append({"role": "model", "parts": parts})
             continue
@@ -341,7 +361,9 @@ class GeminiProvider(CompletionProvider):
                         id=str(getattr(function_call, "id", None) or f"gemini-{index}"),
                         name=str(getattr(function_call, "name", "") or ""),
                         arguments=dict(getattr(function_call, "args", None) or {}),
-                        thought_signature=getattr(part, "thought_signature", None),
+                        thought_signature=_stored_signature(
+                            getattr(part, "thought_signature", None)
+                        ),
                     )
                 )
         reasoning = "".join(reasoning_parts)
@@ -434,7 +456,9 @@ class GeminiProvider(CompletionProvider):
                             id=str(getattr(function_call, "id", None) or f"gemini-{index}"),
                             name=str(getattr(function_call, "name", "") or ""),
                             arguments=dict(getattr(function_call, "args", None) or {}),
-                            thought_signature=getattr(part, "thought_signature", None),
+                            thought_signature=_stored_signature(
+                                getattr(part, "thought_signature", None)
+                            ),
                         )
                     )
         reasoning = "".join(reasoning_parts)

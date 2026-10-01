@@ -1556,7 +1556,8 @@ async def test_tool_model_gemini_signature_round_trips_native_bytes() -> None:
                     id="call-1",
                     name="view",
                     arguments={"locator": "1"},
-                    thought_signature=_GEMINI_THOUGHT_SIGNATURE,
+                    # As a Session stores it: base64 text; Gemini gets its bytes back.
+                    thought_signature=_GEMINI_THOUGHT_SIGNATURE_B64,
                 ),
             ),
             stop_reason="tool_use",
@@ -1618,7 +1619,8 @@ async def test_completion_model_strips_cross_model_gemini_signature() -> None:
                     id="call-1",
                     name="view",
                     arguments={"locator": "1"},
-                    thought_signature=_GEMINI_THOUGHT_SIGNATURE,
+                    # As a Session stores it: base64 text; Gemini gets its bytes back.
+                    thought_signature=_GEMINI_THOUGHT_SIGNATURE_B64,
                 ),
             ),
             stop_reason="tool_use",
