@@ -28,6 +28,14 @@ _DURABLE_PG_SUITES = {
     "tests/integration/test_run_runtime_query_plans_pg.py",
     "tests/integration/test_attachment_replay_pg.py",
     "tests/integration/test_resource_review_regressions_pg.py",
+    "tests/integration/test_resource_lineage_pg.py",
+    "tests/integration/test_web_answer_runs_pg.py",
+    "tests/integration/test_connections_pg.py",
+    "tests/integration/test_connections_web_pg.py",
+    "tests/integration/test_connection_authorization_pg.py",
+    "tests/integration/test_connection_binding_pg.py",
+    "tests/integration/test_connection_dispatch_pg.py",
+    "tests/integration/test_connection_lifecycle_pg.py",
 }
 _REQUIRED_ENV = {
     "PGHOST": "localhost",
