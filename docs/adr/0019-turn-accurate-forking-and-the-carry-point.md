@@ -221,12 +221,12 @@ framework fields themselves are recomposed by each compaction from the compactin
 Run's own Evidence and Workspace. [ADR 0020](0020-uniform-environment-fast-inert-workspace.md)
 makes those planes uniform — Fast binds an inert workspace and names the notes it
 carries — and records the residual that a spill handle still cannot cross Runs; a continuation's admission
-fingerprint describes the caller's submission rather than the identities this
-process draws: a Fork mints a Lane and a stateless continuation mints a Session, and
-both are excluded from that hash, because leaving them in made every retry of an
-identical submission look like changed input. Deriving the two identities from the
-submission instead was tried and withdrawn — a Lane outlives the idempotency row
-that named it, so reusing a key after retention would have reopened the branch a
+fingerprint describes the caller's submission rather than identities the caller did
+not choose: a Fork mints a Lane per attempt and a continuation keeps its parent's
+Session, and both are excluded from that hash, because leaving the Lane in made every
+retry of an identical submission look like changed input. Deriving the two
+identities from the submission instead was tried and withdrawn — a Lane outlives the
+idempotency row that named it, so reusing a key after retention would have reopened the branch a
 previous Run left behind; existing Runs have no
 recorded Fork Point, so the new column is populated from the point of deployment
 and older Runs refuse a Fork with the remedy instead of branching from the tip

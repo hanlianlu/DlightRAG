@@ -2018,6 +2018,30 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
     assert fork_request.source_lane_id == "main"
 
 
+async def test_a_parent_without_a_session_refuses_a_continuation() -> None:
+    """A parent from before every Run recorded its Session cannot be continued.
+
+    Acceptance would mint a fresh Session for it, and the continuation would answer
+    with no history at all, so it is refused instead.
+    """
+    terminal = _record(
+        status="succeeded",
+        result={"answer": "parent answer"},
+        accepted_input={"query": "parent question", "workspaces": ["finance"]},
+    )
+    service = _service(store=_Store(run=terminal))
+
+    for include_answer in (True, False):
+        with pytest.raises(AnswerRequestError, match="no Agent Session"):
+            await service.continuation_request(
+                owner_id=_OWNER,
+                run_id="run-1",
+                query="next question",
+                include_answer=include_answer,
+                authorized_workspaces=("finance",),
+            )
+
+
 async def test_a_continuation_hashes_the_submission_and_not_its_own_identities() -> None:
     """A retry must replay, and the identities this process draws are not input.
 

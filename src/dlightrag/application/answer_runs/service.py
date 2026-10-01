@@ -1451,8 +1451,9 @@ class AnswerService:
                     status=record.status,
                     messages=tuple(dict(message) for message in canonical),
                 )
-        # Fast has no Agent Session. Project its accepted invocation and final
-        # result through the same transport-neutral message shape.
+        # A Run whose Session holds none of its turns yet (still queued, or failed
+        # before its question was accepted) projects its accepted invocation and
+        # final result through the same transport-neutral message shape.
         messages = [
             dict(message)
             for message in request.get("history") or ()
@@ -1565,6 +1566,12 @@ class AnswerService:
         if authorized_workspaces is None:
             raise ValueError("continuation requires a currently authorized workspace set")
         accepted = record.request_input()
+        session_id = str(accepted.get("agent_session_id") or "")
+        if not session_id:
+            # Every accepted Run records its Session. A parent without one was written by
+            # an older release, and acceptance would otherwise mint a fresh Session and
+            # answer the continuation with no history at all.
+            raise AnswerRequestError("the parent Run has no Agent Session to continue")
         history_resources: list[AnswerHistoryResource] = []
         for reference_kind, items in (
             ("history_attachment", accepted.get("history_attachments") or ()),
@@ -1618,7 +1625,7 @@ class AnswerService:
             mode=str(accepted.get("mode") or "auto"),
             parent_run_id=run_id,
             continuation_kind=continuation_kind,
-            agent_session_id=str(accepted.get("agent_session_id") or ""),
+            agent_session_id=session_id,
             agent_lane_id=agent_lane_id,
             source_lane_id=(parent_lane_id if not include_answer else None),
         )
