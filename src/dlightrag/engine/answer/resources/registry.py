@@ -904,8 +904,8 @@ class ResourceRegistry:
             # an external extraction provider.
             raise
         except Exception:
-            self._fetched.pop(resource.resource_id, None)
-            self._converted.pop(resource.resource_id, None)
+            # A failed fetch bound nothing, so there is nothing of this read's to
+            # forget: what the Resource holds now another read bound or admitted.
             return await self._fallback_text_view(
                 resource,
                 resource.url or url,

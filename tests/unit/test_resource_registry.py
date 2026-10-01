@@ -865,6 +865,7 @@ async def test_a_read_that_decodes_late_keeps_the_snapshot_another_read_admitted
     extracted = threading.Event()
     lock = threading.Lock()
     decodes = 0
+    waited: list[bool] = []
 
     def decode_the_second_after_the_extract(content: bytes, **kwargs: Any) -> str:
         nonlocal decodes
@@ -872,7 +873,8 @@ async def test_a_read_that_decodes_late_keeps_the_snapshot_another_read_admitted
             decodes += 1
             late = decodes == 2
         if late:
-            assert extracted.wait(5)
+            # Recorded, not asserted: the read swallows a decoder's own exception.
+            waited.append(extracted.wait(5))
         return decode(content, **kwargs)
 
     class _Extract(_CountingFallback):
@@ -898,9 +900,59 @@ async def test_a_read_that_decodes_late_keeps_the_snapshot_another_read_admitted
         registry.read(resource_id, effect_owner=second),
     )
 
+    assert waited == [True], "the second read decoded after the Extract"
     assert [result.content for result in results] == ["shared provider text"] * 2
     assert fallback.calls == 1
     assert set(owners) == {first, second}
+
+
+async def test_a_failed_fetch_leaves_the_extract_snapshot_another_read_admitted(serve) -> None:
+    """A read whose own fetch failed has no bytes of its own to drop.
+
+    The first read's fetch is refused and its Extract admits the page text. A second
+    read began fetching while that Extract ran, and its fetch fails just after: it
+    must answer with the admitted text and settle it for itself, as must every later
+    read of the Run.
+    """
+    extract_started, second_fetching, extract_returned = (asyncio.Event() for _ in range(3))
+    fetches = 0
+
+    async def fetch(url: str, **_kwargs: object) -> PublicHttpFetch:
+        nonlocal fetches
+        fetches += 1
+        if fetches == 2:
+            second_fetching.set()
+            await extract_returned.wait()
+        raise RuntimeError("HTTP 403")
+
+    class _Extract(_CountingFallback):
+        async def __call__(self, url: str) -> WebExtractResult:
+            extract_started.set()
+            await second_fetching.wait()
+            result = await super().__call__(url)
+            extract_returned.set()
+            return result
+
+    owners = []
+
+    async def persist(_fetched, owner) -> None:
+        owners.append(owner)
+
+    serve(fetch)
+    fallback = _Extract("extracted page text")
+    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    resource_id = registry.register_agent_url("https://data.example.com/report.txt")
+    first, second, third = (ResourceEffectOwner(name, IntentId.new()) for name in "abc")
+
+    first_read = asyncio.create_task(registry.read(resource_id, effect_owner=first))
+    await extract_started.wait()
+    second_read = asyncio.create_task(registry.read(resource_id, effect_owner=second))
+    results = [await first_read, await second_read]
+    results.append(await registry.read(resource_id, effect_owner=third))
+
+    assert [result.content for result in results] == ["extracted page text"] * 3
+    assert (fetches, fallback.calls) == (2, 1)
+    assert set(owners) == {first, second, third}
 
 
 async def test_extract_fallback_persists_only_the_admitted_text_snapshot(serve) -> None:
