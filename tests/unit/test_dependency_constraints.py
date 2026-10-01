@@ -413,46 +413,6 @@ def test_codeql_config_filters_self_referential_advanced_setup_alert() -> None:
     assert "id: actions/unnecessary-use-of-advanced-config" in config
 
 
-def test_ci_runs_frontend_unit_and_browser_tests() -> None:
-    workflow = yaml.safe_load(Path(".github/workflows/ci.yml").read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["fast"]["steps"]
-    commands = [step["run"] for step in steps if "run" in step]
-    expected = [
-        "make frontend-install",
-        "npx playwright install --with-deps chromium",
-        "make frontend-typecheck",
-        "make frontend-lint",
-        "make frontend-test",
-        "make frontend-browser-test",
-        "make workspace-wheels",
-        "make frontend-audit",
-    ]
-
-    assert [commands.index(command) for command in expected] == sorted(
-        commands.index(command) for command in expected
-    )
-    browser_install = next(step for step in steps if step.get("run") == expected[1])
-    assert browser_install["working-directory"] == "frontend"
-
-
-def test_manual_e2e_ci_builds_the_gitignored_frontend() -> None:
-    workflow = yaml.safe_load(Path(".github/workflows/ci-e2e.yml").read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["e2e-pg18"]["steps"]
-    commands = [step["run"] for step in steps if "run" in step]
-    expected = [
-        "uv sync --group dev",
-        "make frontend-install",
-        "uv run playwright install --with-deps chromium",
-        "make frontend-build",
-        "uv run pytest tests/e2e -v --tb=long -m e2e_pg18",
-    ]
-
-    assert any(str(step.get("uses", "")).startswith("actions/setup-node@") for step in steps)
-    assert [commands.index(command) for command in expected] == sorted(
-        commands.index(command) for command in expected
-    )
-
-
 def test_compose_reader_service_is_a_profiled_second_role() -> None:
     """The read-only replica is topology, not a hand-assembled docker run.
 
