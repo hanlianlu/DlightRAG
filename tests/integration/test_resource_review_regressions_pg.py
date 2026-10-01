@@ -767,6 +767,7 @@ async def test_fast_executor_rehydrates_historical_pixels_after_projection_and_r
             store=pg[0],
             executors={"answer": observed},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
         )
         await coordinator.start()
         coordinator.wake()
@@ -795,6 +796,7 @@ async def test_fast_executor_rehydrates_historical_pixels_after_projection_and_r
             store=pg[0],
             executors={"answer": resumed_observed},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
         )
         await coordinator.start()
         coordinator.wake()

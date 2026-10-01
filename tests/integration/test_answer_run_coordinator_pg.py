@@ -568,14 +568,20 @@ async def test_session_turn_survives_a_new_worker(store: FingerprintingRunStore)
         return Succeeded({"answer": "second attempt", "turns": snapshot.commit_sequence})
 
     first = RunCoordinator(
-        store=store, executors={"answer": _Executor(body)}, query_worker_concurrency=1
+        store=store,
+        executors={"answer": _Executor(body)},
+        query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     await first.start()
     await _settle(_session_committed(store, run_id))
     await first.aclose()
 
     second = RunCoordinator(
-        store=store, executors={"answer": _Executor(body)}, query_worker_concurrency=1
+        store=store,
+        executors={"answer": _Executor(body)},
+        query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     await second.start()
     try:
@@ -642,6 +648,7 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
         store=store,
         executors={"answer": _Executor(body)},
         query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
         maintenance_seconds=0.05,
     )
     await coordinator.start()
@@ -677,7 +684,10 @@ async def test_graceful_shutdown_requeues_without_crash_recovery(
         return Succeeded({"answer": "unreachable"})
 
     coordinator = RunCoordinator(
-        store=store, executors={"answer": _Executor(body)}, query_worker_concurrency=1
+        store=store,
+        executors={"answer": _Executor(body)},
+        query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     await coordinator.start()
     await asyncio.wait_for(running.wait(), timeout=10)
@@ -709,7 +719,10 @@ async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
         return Succeeded({"answer": "hello world"})
 
     coordinator = RunCoordinator(
-        store=store, executors={"answer": _Executor(body)}, query_worker_concurrency=1
+        store=store,
+        executors={"answer": _Executor(body)},
+        query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     await coordinator.start()
     try:
@@ -756,6 +769,7 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
         store=store,
         executors={"answer": _Executor(body)},
         query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
         heartbeat_seconds=0.05,
     )
     await coordinator.start()
@@ -793,6 +807,7 @@ async def test_accepted_cancellation_wins_coordinator_failure_settlement(
         store=store,
         executors={"answer": _Executor(body)},
         query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     await coordinator.start()
     try:
@@ -2653,6 +2668,7 @@ def _answer_runtime(
         store=store,
         executors={"answer": executor},
         query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     return application, coordinator
 

@@ -470,7 +470,7 @@ class RunCoordinator:
         store: RunStore,
         executors: Mapping[RunKind, RunExecutor],
         query_worker_concurrency: int,
-        corpus_mutation_worker_concurrency: int = 1,
+        corpus_mutation_worker_concurrency: int,
         worker_id: str | None = None,
         heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
@@ -508,9 +508,6 @@ class RunCoordinator:
             "query": asyncio.Semaphore(self._query_worker_concurrency),
             "corpus_mutation": asyncio.Semaphore(self._corpus_mutation_worker_concurrency),
         }
-        # Kept as the Query-lane test/introspection seam; scheduling uses the
-        # lane-indexed pools above.
-        self._slots = self._slots_by_lane["query"]
         self._broker = RunEventBroker()
         self._writes = DurableWrites()
         self._wake = asyncio.Event()
@@ -677,10 +674,10 @@ class RunCoordinator:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._wake.wait(), timeout=self._sweep_seconds)
 
-    def _forget(self, run_id: str, slots: asyncio.Semaphore | None = None) -> None:
+    def _forget(self, run_id: str, slots: asyncio.Semaphore) -> None:
         self._runs.pop(run_id, None)
         self._sessions.pop(run_id, None)
-        (slots or self._slots).release()
+        slots.release()
         self._wake.set()
 
     async def _sweep_forever(self) -> None:

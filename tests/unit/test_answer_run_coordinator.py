@@ -607,6 +607,7 @@ def _coordinator(
         store=store,
         executors={"answer": executor},
         query_worker_concurrency=query_worker_concurrency,
+        corpus_mutation_worker_concurrency=1,
         **kwargs,
     )
 
@@ -654,6 +655,7 @@ class TestSchedulingAndLease:
             store=store,
             executors={"answer": _Executor(body)},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             heartbeat_seconds=0.01,
         )
         store.add_run("run-a")
@@ -705,6 +707,7 @@ class TestSchedulingAndLease:
             store=store,
             executors={"answer": _Executor(body)},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             sweep_seconds=0.01,
         )
         store.add_run("run-a")
@@ -751,6 +754,7 @@ class TestRetentionMaintenance:
                 "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
             },
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             sweep_seconds=60.0,
             **kwargs,
         )
@@ -778,6 +782,7 @@ class TestRetentionMaintenance:
                 "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
             },
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             workspace_reclaimers=(reclaimer,),
         )
 
@@ -797,6 +802,7 @@ class TestRetentionMaintenance:
                 "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
             },
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             workspace_reclaimers=(_RaisingReclaimer(), reclaimer),
         )
 
@@ -817,6 +823,7 @@ class TestRetentionMaintenance:
                 "answer": _Executor(lambda session: asyncio.sleep(0, Succeeded({"answer": "x"})))
             },
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
         )
 
         await coordinator._maintain_once()
@@ -1542,6 +1549,7 @@ class TestHeartbeatResilience:
             store=store,
             executors={"answer": _Executor(body)},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             heartbeat_seconds=0.01,
         )
         await coordinator.start()
@@ -1570,6 +1578,7 @@ class TestHeartbeatResilience:
             store=store,
             executors={"answer": executor},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             heartbeat_seconds=0.01,
         )
         await coordinator.start()
@@ -1599,6 +1608,7 @@ class TestHeartbeatResilience:
             store=store,
             executors={"answer": _Executor(body)},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             heartbeat_seconds=0.01,
         )
         await coordinator.start()
@@ -1636,6 +1646,7 @@ class TestCancellationAndShutdown:
             store=store,
             executors={"answer": _Executor(body)},
             query_worker_concurrency=1,
+            corpus_mutation_worker_concurrency=1,
             heartbeat_seconds=0.01,
         )
         store.add_run("run-a")
@@ -1924,6 +1935,7 @@ def test_execution_slots_are_bounded_by_worker_concurrency(
         store=_MemoryStore(),
         executors={"answer": _Executor(_noop)},
         query_worker_concurrency=query_worker_concurrency,
+        corpus_mutation_worker_concurrency=1,
     )
     assert coordinator.query_worker_concurrency == query_worker_concurrency
 
@@ -1934,4 +1946,5 @@ def test_query_worker_concurrency_must_be_positive() -> None:
             store=_MemoryStore(),
             executors={"answer": _Executor(_noop)},
             query_worker_concurrency=0,
+            corpus_mutation_worker_concurrency=1,
         )

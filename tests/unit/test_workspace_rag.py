@@ -182,6 +182,7 @@ def test_ai_runtime_and_rag_concurrency_owners_vary_independently(test_config) -
         store=AsyncMock(),
         executors={"answer": AsyncMock()},
         query_worker_concurrency=test_config.runtime.query.worker_concurrency,
+        corpus_mutation_worker_concurrency=1,
     )
 
     assert scheduler.max_concurrency == 3

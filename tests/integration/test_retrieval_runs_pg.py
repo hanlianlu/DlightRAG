@@ -333,6 +333,7 @@ async def test_registered_retrieval_executor_runs_through_the_real_pg_coordinato
         store=store,
         executors={"retrieval": executor},
         query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
     )
     accepted = await _accept(store, key="coordinator")
     await coordinator.start()

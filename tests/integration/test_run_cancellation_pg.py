@@ -129,6 +129,7 @@ async def test_second_connection_wake_reaches_a_running_coordinator(pool, hub) -
         store=store,
         executors={"answer": _BlockedExecutor()},
         query_worker_concurrency=1,
+        corpus_mutation_worker_concurrency=1,
         worker_id="worker-1",
     )
 
