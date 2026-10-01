@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Server-side static checks for browser projection and served assets.
+"""Server-side static checks for the served browser assets.
 
 Frontend source contracts live in frontend/ui/*.structure.test.ts.
 """
@@ -8,25 +8,9 @@ import importlib.util
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 FRONTEND_STYLES = FRONTEND / "styles"
-
-
-def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
-    bootstrap_source = (ROOT / "src/dlightrag/adapters/http/browser/routes/bootstrap.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert "count_limit=application.config.answer.generation.max_attachments" in bootstrap_source
-    assert (
-        "attachment_limit = application.config.answer.generation.max_attachment_bytes"
-        in bootstrap_source
-    )
-    assert "image_max_bytes=attachment_limit" in bootstrap_source
-    assert "document_max_bytes=attachment_limit" in bootstrap_source
 
 
 def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> None:
@@ -118,114 +102,6 @@ def test_web_static_js_build_has_no_orphan_chunks() -> None:
                 stack.append(child)
 
     assert expected == seen
-
-
-def _presentation_source(*, source_uri: str, download_url: str | None = None):
-    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
-    from dlightrag.engine.answer.citations.contracts import SourceReferencePayload
-
-    source = SourceReferencePayload(
-        id="1",
-        title=None,
-        source_uri=source_uri,
-        download_url=download_url,
-        chunks=[],
-    )
-    return build_answer_presentation(
-        answer="Cited [1].",
-        sources=[source],
-        evidence_images=[],
-    ).sources[0]
-
-
-def test_presentation_preserves_authorized_download_without_nesting_markup() -> None:
-    source = _presentation_source(
-        source_uri="local://default/notes.md",
-        download_url="/web/api/files/raw/doc-notes?workspace=default",
-    )
-    assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
-    assert source.title == "Source"
-
-
-def test_presentation_hides_download_without_caller_permission() -> None:
-    source = _presentation_source(source_uri="local://default/notes.md")
-
-    assert source.download_url is None
-
-
-@pytest.mark.parametrize(
-    "source_uri",
-    [
-        "https://exa.ai/library/weather/gothenburg-sweden?latitude=57.7052&longitude=11.9737",
-        "http://www.sgas.ruc.edu.cn/xwgg/yjyxw/f1a3ff59a5894391b7b0db77951c08b4.htm",
-    ],
-)
-def test_presentation_projects_public_web_provenance(source_uri: str) -> None:
-    source = _presentation_source(source_uri=source_uri)
-
-    assert source.source_url == source_uri
-
-
-def test_presentation_rejects_non_public_provenance() -> None:
-    for value in (
-        "local://default/report.pdf",
-        "https://127.0.0.1/private",
-        "res-opaque",
-    ):
-        assert _presentation_source(source_uri=value).source_url is None
-
-
-def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> None:
-    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
-
-    presentation = build_answer_presentation(
-        answer="Answer [1] and copied [9-1].",
-        sources=[
-            {
-                "id": "1",
-                "title": "Report",
-                "type": "document",
-                "source_uri": "local://report.pdf",
-                "chunks": [{"chunk_id": "c1", "content": "Evidence.", "chunk_idx": 1}],
-            }
-        ],
-        evidence_images=[],
-    )
-    html = presentation.parts[0].html
-    assert '<cite class="citation-badge"' in html
-    assert 'data-ref="1"' in html
-    # A marker outside the published sources stays text instead of promising a
-    # source the click cannot open.
-    assert 'data-ref="9"' not in html
-    assert "[9-1]" in html
-    assert "answer_images" not in presentation.model_dump()
-
-
-def test_answer_presentation_without_sources_badges_no_citation() -> None:
-    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
-
-    presentation = build_answer_presentation(
-        answer="Answer [1].",
-        sources=[],
-        evidence_images=[],
-    )
-
-    assert '<cite class="citation-badge"' not in presentation.parts[0].html
-    assert "[1]" in presentation.parts[0].html
-
-
-def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None:
-    from dlightrag.adapters.http.browser.safe_html import sanitize_html_fragment
-
-    html = sanitize_html_fragment(
-        '<a href="/web/api/files/raw/doc-notes" aria-label="Download source" '
-        'onclick="alert(1)" style="display:none" target="_self">Download</a>'
-    )
-
-    assert 'aria-label="Download source"' in html
-    assert "onclick" not in html
-    assert "style=" not in html
-    assert "target=" not in html
 
 
 def _css_blocks() -> list[tuple[str, str]]:

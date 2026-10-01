@@ -811,6 +811,20 @@ class TestWebBootstrap:
             },
         }
 
+    async def test_advertises_the_deployment_attachment_limits(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        """The composer refuses what acceptance would, so it reads the configured limits."""
+        mutate_config(test_config, "answer.generation.max_attachments", 3)
+        mutate_config(test_config, "answer.generation.max_attachment_bytes", 2_000_000)
+
+        response = await client.get("/web/api/bootstrap")
+
+        assert response.status_code == 200
+        limits = response.json()["answer_attachments"]
+        assert limits["count_limit"] == 3
+        assert limits["image_max_bytes"] == limits["document_max_bytes"] == 2_000_000
+
     async def test_filters_saved_scope_and_primary_through_authorized_workspaces(
         self, client: AsyncClient
     ) -> None:
