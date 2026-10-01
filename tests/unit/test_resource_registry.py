@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -23,7 +25,7 @@ from dlightrag.engine.answer.resources.registry import (
     ResourceRegistry as _ResourceRegistry,
 )
 from dlightrag.engine.answer.web_sources import WebExtractResult, WebSourceUnavailable
-from dlightrag.engine.public_http import PublicHttpPresentation
+from dlightrag.engine.public_http import PublicHttpFetch, PublicHttpPresentation
 from tests.support.dns import public_dns
 
 
@@ -48,60 +50,49 @@ class ResourceRegistry(_ResourceRegistry):
         )
 
 
-class _StreamResponse:
+class _Fetch:
+    """The public HTTP transport a link read goes through, answering with one body."""
+
     def __init__(
         self,
-        content: bytes,
-        url: str,
-        *,
-        status_code: int = 200,
-        headers: dict[str, str] | None = None,
-        fail: type[BaseException] | None = None,
-    ) -> None:
-        self._content = content
-        self.url = url
-        self.status_code = status_code
-        self.headers = headers or {}
-        self._fail = fail
-
-    async def __aenter__(self) -> _StreamResponse:
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        return None
-
-    def raise_for_status(self) -> None:
-        return None
-
-    async def aiter_bytes(self):
-        if self._fail is not None:
-            raise self._fail()
-        yield self._content
-
-
-class _LinkClient:
-    def __init__(
-        self,
-        *,
         content: bytes = b"hello\nworld",
-        final_url: str = "https://data.example.com/report.txt",
+        *,
+        final_url: str | None = None,
         fail: type[BaseException] | None = None,
     ) -> None:
         self.content = content
         self.final_url = final_url
         self.fail = fail
-        self.calls = 0
-        self.closed = False
-        self.headers: list[dict[str, str]] = []
+        self.presentations: list[PublicHttpPresentation] = []
 
-    def stream(self, method: str, url: str, **_kwargs) -> _StreamResponse:
-        assert method == "GET"
-        self.calls += 1
-        self.headers.append(dict(_kwargs.get("headers") or {}))
-        return _StreamResponse(self.content, self.final_url, fail=self.fail)
+    @property
+    def calls(self) -> int:
+        return len(self.presentations)
 
-    async def aclose(self) -> None:
-        self.closed = True
+    async def __call__(
+        self, url: str, *, presentation: PublicHttpPresentation, **_kwargs: object
+    ) -> PublicHttpFetch:
+        self.presentations.append(presentation)
+        if self.fail is not None:
+            raise self.fail()
+        return PublicHttpFetch(
+            content=self.content,
+            final_url=self.final_url or url,
+            media_type=None,
+            status_code=200,
+        )
+
+
+@pytest.fixture
+def serve(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
+    """Answer the registry's link fetches; hosts resolve public for the Extract check."""
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+
+    def install(fetch: Any) -> Any:
+        monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", fetch)
+        return fetch
+
+    return install
 
 
 def test_register_returns_stable_opaque_id() -> None:
@@ -185,9 +176,9 @@ def test_discovered_links_bypass_only_the_caller_attachment_count() -> None:
         registry.register(ResourceInput(content=b"second caller attachment"))
 
 
-def test_discovered_link_deduplicates_with_a_caller_link_and_stays_inert() -> None:
-    client = _LinkClient()
-    registry = ResourceRegistry(url_client=client)
+def test_discovered_link_deduplicates_with_a_caller_link_and_stays_inert(serve) -> None:
+    fetch = serve(_Fetch())
+    registry = ResourceRegistry()
     discovered = registry.register_discovered_link("https://example.com/article#section")
     assert discovered is not None
     assert registry.evidence_source(discovered)["source_uri"] == "https://example.com/article"
@@ -210,7 +201,7 @@ def test_discovered_link_deduplicates_with_a_caller_link_and_stays_inert() -> No
         "source_download_locator": caller,
         "title": "preferred.html",
     }
-    assert client.calls == 0
+    assert fetch.calls == 0
 
 
 @pytest.mark.parametrize(
@@ -240,7 +231,7 @@ def test_discovered_link_registers_public_http() -> None:
 
 
 def test_manifest_reports_link_without_size_until_read() -> None:
-    registry = ResourceRegistry(url_client=_LinkClient())
+    registry = ResourceRegistry()
     registry.register(ResourceInput(url="https://data.example.com/report.txt"))
 
     entries = registry.manifest()
@@ -250,29 +241,21 @@ def test_manifest_reports_link_without_size_until_read() -> None:
     assert entries[0].byte_size is None
 
 
-async def test_url_fetch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    client = _LinkClient(content=b"remote body")
-    registry = ResourceRegistry(url_client=client)
+async def test_url_fetch_is_lazy(serve) -> None:
+    fetch = serve(_Fetch(b"remote body"))
+    registry = ResourceRegistry()
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
 
-    assert client.calls == 0
+    assert fetch.calls == 0
 
     result = await registry.read(resource_id)
     assert result.content == "remote body"
-    assert client.calls == 1
+    assert fetch.calls == 1
 
 
-async def test_discovered_link_has_only_per_operation_not_cumulative_web_bound(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    client = _LinkClient(content=b"12345")
-    registry = ResourceRegistry(
-        max_attachment_bytes=10,
-        max_total_attachment_bytes=6,
-        url_client=client,
-    )
+async def test_discovered_link_has_only_per_operation_not_cumulative_web_bound(serve) -> None:
+    fetch = serve(_Fetch(b"12345"))
+    registry = ResourceRegistry(max_attachment_bytes=10, max_total_attachment_bytes=6)
     registry.register(ResourceInput(content=b"123456"))
     resource_id = registry.register_discovered_link("https://data.example.com/report.txt")
     assert resource_id is not None
@@ -281,30 +264,19 @@ async def test_discovered_link_has_only_per_operation_not_cumulative_web_bound(
 
     assert result.content == "12345"
     assert registry._total_bytes == 6
-    assert client.calls == 1
+    assert fetch.calls == 1
 
 
-async def test_successful_url_read_keeps_one_fixed_snapshot_without_new_dns(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def resolver(host: str, port: int, *args: object, **kwargs: object):
-        nonlocal calls
-        calls += 1
-        return public_dns(host, port, *args, **kwargs)
-
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", resolver)
-    client = _LinkClient(content=b"safe")
-    registry = ResourceRegistry(url_client=client)
+async def test_successful_url_read_keeps_one_fixed_snapshot(serve) -> None:
+    fetch = serve(_Fetch(b"safe"))
+    registry = ResourceRegistry()
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
 
     first = await registry.read(resource_id)
     second = await registry.read(resource_id)
 
     assert first.content == second.content == "safe"
-    assert calls == 1
-    assert client.calls == 1
+    assert fetch.calls == 1
 
 
 async def test_read_uses_settled_bytes_without_live_dns_validation(
@@ -543,12 +515,9 @@ async def test_ensure_path_materializes_temp_and_aclose_cleans_up() -> None:
     assert not path.exists()
 
 
-async def test_cancellation_during_fetch_propagates_and_cleans_up(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    client = _LinkClient(fail=asyncio.CancelledError)
-    registry = ResourceRegistry(url_client=client)
+async def test_cancellation_during_fetch_propagates_and_cleans_up(serve) -> None:
+    serve(_Fetch(fail=asyncio.CancelledError))
+    registry = ResourceRegistry()
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
 
     with pytest.raises(asyncio.CancelledError):
@@ -656,37 +625,15 @@ class _CountingFallback:
         )
 
 
-async def test_redirect_final_url_becomes_citable_identity_and_alias(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    responses = iter(
-        (
-            _StreamResponse(
-                b"",
-                "https://start.example/report",
-                status_code=302,
-                headers={"location": "https://final.example/report"},
-            ),
-            _StreamResponse(b"final body", "https://final.example/report"),
-        )
-    )
-
-    class RedirectClient:
-        def stream(self, method: str, url: str, **kwargs) -> _StreamResponse:
-            return next(responses)
-
+async def test_redirect_final_url_becomes_citable_identity_and_alias(serve) -> None:
+    serve(_Fetch(b"final body", final_url="https://final.example/report"))
     admitted = []
 
     async def persist(fetched, _owner) -> None:
         admitted.append(fetched)
 
     identity_secret = b"r" * 32
-    registry = ResourceRegistry(
-        url_client=RedirectClient(),
-        fetched_bytes_sink=persist,
-        resource_secret=identity_secret,
-    )
+    registry = ResourceRegistry(fetched_bytes_sink=persist, resource_secret=identity_secret)
     final_id = registry.register_agent_url("https://final.example/report")
     requested_id = registry.register_agent_url("https://start.example/report")
     assert requested_id != final_id
@@ -730,36 +677,16 @@ async def test_redirect_final_url_becomes_citable_identity_and_alias(
 
 
 async def test_redirect_recovery_preserves_final_provenance_without_predeclared_final(
-    monkeypatch: pytest.MonkeyPatch,
+    serve,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    responses = iter(
-        (
-            _StreamResponse(
-                b"",
-                "https://start.example/report",
-                status_code=302,
-                headers={"location": "https://final.example/report"},
-            ),
-            _StreamResponse(b"final body", "https://final.example/report"),
-        )
-    )
-
-    class RedirectClient:
-        def stream(self, method: str, url: str, **kwargs) -> _StreamResponse:
-            return next(responses)
-
+    serve(_Fetch(b"final body", final_url="https://final.example/report"))
     admitted = []
 
     async def persist(fetched, _owner) -> None:
         admitted.append(fetched)
 
     identity_secret = b"r" * 32
-    registry = ResourceRegistry(
-        url_client=RedirectClient(),
-        fetched_bytes_sink=persist,
-        resource_secret=identity_secret,
-    )
+    registry = ResourceRegistry(fetched_bytes_sink=persist, resource_secret=identity_secret)
     requested_id = registry.register_agent_url("https://start.example/report")
     await registry.read(requested_id)
 
@@ -779,12 +706,9 @@ async def test_redirect_recovery_preserves_final_provenance_without_predeclared_
     assert recovered.evidence_source(requested_id)["source_uri"] == ("https://final.example/report")
 
 
-async def test_failed_agent_read_can_retry_with_new_presentation_headers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    client = _LinkClient(fail=RuntimeError)
-    registry = ResourceRegistry(url_client=client)
+async def test_failed_agent_read_can_retry_with_new_presentation_headers(serve) -> None:
+    fetch = serve(_Fetch(fail=RuntimeError))
+    registry = ResourceRegistry()
     resource_id = registry.register_agent_url(
         "https://data.example.com/report.txt",
         presentation=PublicHttpPresentation(user_agent="First/1"),
@@ -792,7 +716,7 @@ async def test_failed_agent_read_can_retry_with_new_presentation_headers(
 
     first = await registry.read(resource_id)
     assert first.evidence_available is False
-    client.fail = None
+    fetch.fail = None
     assert (
         registry.register_agent_url(
             "https://data.example.com/report.txt",
@@ -804,25 +728,14 @@ async def test_failed_agent_read_can_retry_with_new_presentation_headers(
     second = await registry.read(resource_id)
 
     assert second.content == "hello\nworld"
-    assert [headers["user-agent"] for headers in client.headers] == ["First/1", "Second/2"]
-
-
-class _HeldResponse(_StreamResponse):
-    """A body that streams only once released, so another read can overtake it."""
-
-    def __init__(self, content: bytes, url: str, *, started: asyncio.Event) -> None:
-        super().__init__(content, url)
-        self.started = started
-        self.release = asyncio.Event()
-
-    async def aiter_bytes(self):
-        self.started.set()
-        await self.release.wait()
-        yield self._content
+    assert [presentation.user_agent for presentation in fetch.presentations] == [
+        "First/1",
+        "Second/2",
+    ]
 
 
 async def test_a_redirect_and_a_direct_read_of_its_page_share_one_representation(
-    monkeypatch: pytest.MonkeyPatch,
+    serve,
 ) -> None:
     """The first bytes bound to a page win, so two concurrent reads cannot disagree.
 
@@ -831,21 +744,21 @@ async def test_a_redirect_and_a_direct_read_of_its_page_share_one_representation
     the direct fetch overwrite it made one read refuse the page and every later read
     of it fail.
     """
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     old, new = "https://site.example/old", "https://site.example/new"
-    direct_started = asyncio.Event()
-    held = _HeldResponse(b"render 1", new, started=direct_started)
+    direct_started, release = asyncio.Event(), asyncio.Event()
+    renders = 0
 
-    class RenderingClient:
-        def __init__(self) -> None:
-            self.renders = 0
+    async def render(url: str, **_kwargs: object) -> PublicHttpFetch:
+        # Every fetch renders the page anew; the old address redirects to it.
+        nonlocal renders
+        renders += 1
+        if renders == 1:
+            # The direct read's render arrives only once released.
+            direct_started.set()
+            await release.wait()
+        return PublicHttpFetch(f"render {renders}".encode(), new, None, 200)
 
-        def stream(self, method: str, url: str, **_kwargs) -> _StreamResponse:
-            # The request names the pinned address, so the page is told apart by path.
-            if url.endswith("/old"):
-                return _StreamResponse(b"", old, status_code=301, headers={"location": new})
-            self.renders += 1
-            return held if self.renders == 1 else _StreamResponse(b"render 2", new)
+    serve(render)
 
     async def persist(_fetched, _owner) -> None:
         return None
@@ -853,14 +766,14 @@ async def test_a_redirect_and_a_direct_read_of_its_page_share_one_representation
     def owner() -> ResourceEffectOwner:
         return ResourceEffectOwner(execution_scope="session", intent_id=IntentId.new())
 
-    registry = ResourceRegistry(url_client=RenderingClient(), fetched_bytes_sink=persist)
+    registry = ResourceRegistry(fetched_bytes_sink=persist)
     page = registry.register_agent_url(new)
     redirected = registry.register_agent_url(old)
     direct = asyncio.create_task(registry.read(page, effect_owner=owner()))
     await direct_started.wait()
 
     via_redirect = await registry.read(redirected, effect_owner=owner())
-    held.release.set()
+    release.set()
     directly = await direct
 
     assert (via_redirect.resource_id, directly.resource_id) == (page, page)
@@ -868,47 +781,39 @@ async def test_a_redirect_and_a_direct_read_of_its_page_share_one_representation
     assert (await registry.read(page, effect_owner=owner())).content == "render 2"
 
 
-async def test_a_fetch_in_flight_keeps_the_presentation_it_started_with(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_fetch_in_flight_keeps_the_presentation_it_started_with(serve) -> None:
     """A later read of the same page cannot change the headers of a fetch under way.
 
     Once a fetch has started, a read without headers shares it, and a read asking for
     other headers is refused, exactly as both are once that fetch has finished.
     """
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     url = "https://data.example.com/report.txt"
     german = PublicHttpPresentation(accept_language="de")
 
-    client = _LinkClient()
-    registry = ResourceRegistry(url_client=client)
+    fetch = serve(_Fetch())
+    registry = ResourceRegistry()
     resource_id = registry.register_agent_url(url, presentation=german)
     reading = asyncio.create_task(registry.read(resource_id))
     await asyncio.sleep(0)  # the read has started its fetch, which has not run yet
     assert registry.register_agent_url(url) == resource_id
     await reading
-    assert [headers.get("accept-language") for headers in client.headers] == ["de"]
+    assert [presentation.accept_language for presentation in fetch.presentations] == ["de"]
 
-    client = _LinkClient()
-    registry = ResourceRegistry(url_client=client)
+    fetch = serve(_Fetch())
+    registry = ResourceRegistry()
     resource_id = registry.register_agent_url(url)
     reading = asyncio.create_task(registry.read(resource_id))
     await asyncio.sleep(0)
     with pytest.raises(ResourceAdmissionError, match="cannot replace"):
         registry.register_agent_url(url, presentation=german)
     await reading
-    assert [headers.get("accept-language") for headers in client.headers] == [None]
+    assert [presentation.accept_language for presentation in fetch.presentations] == [None]
 
 
-async def test_direct_success_skips_url_text_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_direct_success_skips_url_text_fallback(serve) -> None:
     fallback = _CountingFallback("EXTRACTED TEXT")
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b"good body"),
-        url_text_fallback=fallback,
-    )
+    serve(_Fetch(b"good body"))
+    registry = ResourceRegistry(url_text_fallback=fallback)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -919,15 +824,10 @@ async def test_direct_success_skips_url_text_fallback(
     assert fallback.calls == 0
 
 
-async def test_direct_decode_failure_uses_one_extract_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_direct_decode_failure_uses_one_extract_fallback(serve) -> None:
     fallback = _CountingFallback("recovered text\nsecond line", provider="tavily")
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00"),
-        url_text_fallback=fallback,
-    )
+    serve(_Fetch(b"\x00\x01\x02\x03binary\x00\x00"))
+    registry = ResourceRegistry(url_text_fallback=fallback)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -939,10 +839,7 @@ async def test_direct_decode_failure_uses_one_extract_fallback(
     assert registry.evidence_source(resource_id)["acquisition"] == "tavily_extract"
 
 
-async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(serve) -> None:
     admitted = []
 
     async def persist(fetched, _owner) -> None:
@@ -950,11 +847,8 @@ async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(
 
     fallback = _CountingFallback("provider replacement")
     content = b"\x00\x01\x02\x03binary\x00\x00"
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=content),
-        url_text_fallback=fallback,
-        fetched_bytes_sink=persist,
-    )
+    serve(_Fetch(content))
+    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
     resource_id = registry.register_agent_url("https://data.example.com/report.bin")
 
     with pytest.raises(ResourceDecodeError):
@@ -966,21 +860,15 @@ async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(
     assert admitted[0].acquisition == "direct_http"
 
 
-async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(serve) -> None:
     owners = []
 
     async def persist(_fetched, owner) -> None:
         owners.append(owner)
 
     fallback = _CountingFallback("shared provider text")
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b""),
-        url_text_fallback=fallback,
-        fetched_bytes_sink=persist,
-    )
+    serve(_Fetch(b""))
+    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
     first = ResourceEffectOwner("session-a", IntentId.new())
     second = ResourceEffectOwner("session-b", IntentId.new())
@@ -994,21 +882,15 @@ async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(
     assert set(owners) == {first, second}
 
 
-async def test_extract_fallback_persists_only_the_admitted_text_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_extract_fallback_persists_only_the_admitted_text_snapshot(serve) -> None:
     admitted = []
 
     async def persist(fetched, _owner) -> None:
         admitted.append(fetched)
 
     fallback = _CountingFallback("  provider body text\n")
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b""),
-        url_text_fallback=fallback,
-        fetched_bytes_sink=persist,
-    )
+    serve(_Fetch(b""))
+    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
     resource_id = registry.register_agent_url("https://data.example.com/report.html")
 
     result = await registry.read(resource_id)
@@ -1032,15 +914,10 @@ async def test_extract_fallback_persists_only_the_admitted_text_snapshot(
     assert (await recovered.read(resource_id)).content == "  provider body text\n"
 
 
-async def test_direct_empty_triggers_extract_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_direct_empty_triggers_extract_fallback(serve) -> None:
     fallback = _CountingFallback("provider body text")
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b""),
-        url_text_fallback=fallback,
-    )
+    serve(_Fetch(b""))
+    registry = ResourceRegistry(url_text_fallback=fallback)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -1059,10 +936,8 @@ async def test_invalid_private_url_never_calls_extract_provider(
         ],
     )
     fallback = _CountingFallback("should never appear")
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b"x"),
-        url_text_fallback=fallback,
-    )
+    # The real transport refuses the private address before any connection.
+    registry = ResourceRegistry(url_text_fallback=fallback)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     with pytest.raises(ValueError):
@@ -1070,16 +945,10 @@ async def test_invalid_private_url_never_calls_extract_provider(
     assert fallback.calls == 0
 
 
-async def test_exhausted_extract_returns_no_evidence_and_does_not_pin_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_exhausted_extract_returns_no_evidence_and_does_not_pin_failure(serve) -> None:
     fallback = _CountingFallback(None)
-    client = _LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00")
-    registry = ResourceRegistry(
-        url_client=client,
-        url_text_fallback=fallback,
-    )
+    fetch = serve(_Fetch(b"\x00\x01\x02\x03binary\x00\x00"))
+    registry = ResourceRegistry(url_text_fallback=fallback)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -1090,19 +959,14 @@ async def test_exhausted_extract_returns_no_evidence_and_does_not_pin_failure(
     assert "produced no citable text" in result.content
     assert again.content == result.content
     assert fallback.calls == 2
-    assert client.calls == 2
+    assert fetch.calls == 2
 
 
-async def test_fallback_text_windows_are_cursor_paginated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+async def test_fallback_text_windows_are_cursor_paginated(serve) -> None:
     big = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
     fallback = _CountingFallback(big)
-    registry = ResourceRegistry(
-        url_client=_LinkClient(content=b""),
-        url_text_fallback=fallback,
-    )
+    serve(_Fetch(b""))
+    registry = ResourceRegistry(url_text_fallback=fallback)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     current = await registry.read(resource_id)
@@ -1115,15 +979,9 @@ async def test_fallback_text_windows_are_cursor_paginated(
     assert fallback.calls == 1
 
 
-async def test_web_reads_do_not_consume_attachment_cumulative_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    registry = ResourceRegistry(
-        max_attachment_bytes=100,
-        max_total_attachment_bytes=8,
-        url_client=_LinkClient(content=b"0123456789"),
-    )
+async def test_web_reads_do_not_consume_attachment_cumulative_budget(serve) -> None:
+    serve(_Fetch(b"0123456789"))
+    registry = ResourceRegistry(max_attachment_bytes=100, max_total_attachment_bytes=8)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -1148,18 +1006,15 @@ async def test_loader_bytes_still_use_attachment_cumulative_budget() -> None:
         await registry.read(right_id)
 
 
-async def test_concurrent_reads_same_link_share_one_fixed_fetch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
-    client = _LinkClient(content=b"0123456789")
-    registry = ResourceRegistry(url_client=client)
+async def test_concurrent_reads_same_link_share_one_fixed_fetch(serve) -> None:
+    fetch = serve(_Fetch(b"0123456789"))
+    registry = ResourceRegistry()
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     results = await asyncio.gather(*(registry.read(resource_id) for _ in range(3)))
 
     assert all(result.content == "0123456789" for result in results)
-    assert client.calls == 1
+    assert fetch.calls == 1
 
 
 async def test_durable_representation_and_cursor_survive_registry_recovery() -> None:

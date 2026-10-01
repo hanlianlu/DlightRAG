@@ -178,7 +178,6 @@ class ResourceRegistry:
         max_attachments: int = _DEFAULT_MAX_ATTACHMENTS,
         max_attachment_bytes: int = _DEFAULT_MAX_ATTACHMENT_BYTES,
         max_total_attachment_bytes: int = _DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES,
-        url_client: Any | None = None,
         url_timeout: float = 120.0,
         url_text_fallback: UrlTextFallback | None = None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
@@ -188,7 +187,6 @@ class ResourceRegistry:
         self._max_attachments = max_attachments
         self._max_attachment_bytes = max(1, int(max_attachment_bytes))
         self._max_total_attachment_bytes = max(1, int(max_total_attachment_bytes))
-        self._url_client = url_client
         self._url_timeout = url_timeout
         self._url_text_fallback = url_text_fallback
         self._fetched_bytes_sink = fetched_bytes_sink
@@ -1441,7 +1439,6 @@ class ResourceRegistry:
             max_bytes=self._max_attachment_bytes,
             timeout=self._url_timeout,
             presentation=resource.presentation,
-            client=self._url_client,
             agent_url=resource.source == "web",
         )
         resource.acquisition = "direct_http"
