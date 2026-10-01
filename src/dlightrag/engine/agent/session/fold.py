@@ -170,9 +170,10 @@ def conversation_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[st
     need, and unfinished work a model may take up instead of its own task.
 
     The images its tools viewed are what the answer saw, so they stay: as durable
-    attachments of the question that turn answered, which the Run hydrates and a
-    provider shows as images of that question. Content stays as written, so a
-    reader of words alone sees no difference.
+    attachments of the latest user message before them — the question, or a steer,
+    the turn was answering — which the Run hydrates and a provider shows, each under
+    its own name, as images of that message. Content stays as written, so a reader of
+    words alone sees no difference.
     """
     conversation: list[dict[str, Any]] = []
     viewed: list[dict[str, Any]] = []
@@ -191,12 +192,16 @@ def conversation_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[st
 
 
 def _attach_viewed(conversation: list[dict[str, Any]], viewed: list[dict[str, Any]]) -> None:
-    """Move the images a turn's tools viewed onto the question that turn answered."""
-    if not viewed:
-        return
-    if not conversation or conversation[-1]["role"] != "user":
-        conversation.append({"role": "user", "content": ""})
-    conversation[-1].setdefault("attachments", []).extend(viewed)
+    """Move the images a turn's tools viewed onto the user message that turn answered.
+
+    A history that starts after its question, which compaction never leaves, has no
+    message to carry them, and they stay out rather than arrive in an empty turn.
+    """
+    question = next(
+        (message for message in reversed(conversation) if message["role"] == "user"), None
+    )
+    if question is not None and viewed:
+        question.setdefault("attachments", []).extend(viewed)
     viewed.clear()
 
 

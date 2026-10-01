@@ -263,6 +263,10 @@ def make_resource_viewer(
         owner = _effect_owner(runtime)
         target = await registry.visual_target(resource_id, effect_owner=owner)
         resource_id = target.resource_id
+        provenance = registry.evidence_source(resource_id)
+        # Each label names the document too: a later turn, or a Fast follow-up that
+        # sees the image without this call, has no manifest that maps the id to it.
+        name = provenance["title"]
         parts = []
         attached = []
         continuation = ""
@@ -307,7 +311,7 @@ def make_resource_viewer(
         if target.kind == "image":
             if args.locator is not None or args.cursor is not None:
                 raise ResourceViewError("source image does not accept locator or cursor")
-            await attach(target.content, VisualSource(resource_id, "image"), "source image")
+            await attach(target.content, VisualSource(resource_id, "image"), name)
         elif target.kind == "pdf":
             count = await asyncio.to_thread(pdf_page_count, target.content)
             if args.locator is not None:
@@ -316,7 +320,9 @@ def make_resource_viewer(
                 page = int(args.locator)
                 raw = await asyncio.to_thread(render_pdf_page, target.content, page, overview=False)
                 await attach(
-                    raw, VisualSource(resource_id, "pdf_page", page=page), f"physical page {page}"
+                    raw,
+                    VisualSource(resource_id, "pdf_page", page=page),
+                    f"{name}, physical page {page}",
                 )
             else:
                 start = (
@@ -334,7 +340,7 @@ def make_resource_viewer(
                     if not await attach(
                         raw,
                         VisualSource(resource_id, "pdf_page", page=page, overview=True),
-                        f"physical page {page} overview",
+                        f"{name}, physical page {page} overview",
                     ):
                         break
                     end = page
@@ -364,7 +370,7 @@ def make_resource_viewer(
             await attach(
                 asset.data,
                 source,
-                f"{asset.handle_id}" + (f" @ {asset.anchor}" if asset.anchor else ""),
+                f"{name}, {asset.handle_id}" + (f" @ {asset.anchor}" if asset.anchor else ""),
             )
         else:
             raise ResourceViewError(
@@ -376,7 +382,7 @@ def make_resource_viewer(
             )
         if continuation:
             parts.append(ToolTextPart(continuation))
-        evidence = _evidence_effects(resource_id, registry.evidence_source(resource_id))
+        evidence = _evidence_effects(resource_id, provenance)
         return ToolResult(
             parts=tuple(parts),
             protected_text=continuation,

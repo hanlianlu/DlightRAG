@@ -334,13 +334,16 @@ def _viewed_question(*, hydrated: bool = True) -> dict[str, object]:
     return {"role": "user", "content": "what does page 3 show?", "attachments": [attachment]}
 
 
-def test_every_provider_shows_a_questions_attachments_as_its_images() -> None:
+def test_every_provider_shows_a_questions_attachments_as_its_named_images() -> None:
+    """Each image follows its own name, as the tool result that took it printed it:
+    two pages are otherwise two unnamed pictures the user seems to have sent."""
     question = "what does page 3 show?"
     assert _anthropic_tool_messages([_viewed_question()]) == [
         {
             "role": "user",
             "content": [
                 {"type": "text", "text": question},
+                {"type": "text", "text": "[chart.png]"},
                 {
                     "type": "image",
                     "source": {"type": "base64", "media_type": "image/png", "data": _PNG},
@@ -353,6 +356,7 @@ def test_every_provider_shows_a_questions_attachments_as_its_images() -> None:
             "role": "user",
             "parts": [
                 {"text": question},
+                {"text": "[chart.png]"},
                 {"inline_data": {"mime_type": "image/png", "data": base64.b64decode(_PNG)}},
             ],
         }
@@ -362,6 +366,7 @@ def test_every_provider_shows_a_questions_attachments_as_its_images() -> None:
             "role": "user",
             "content": [
                 {"type": "text", "text": question},
+                {"type": "text", "text": "[chart.png]"},
                 {"type": "image_url", "image_url": {"url": DATA_URL}},
             ],
         }
@@ -371,14 +376,23 @@ def test_every_provider_shows_a_questions_attachments_as_its_images() -> None:
             "role": "user",
             "content": [
                 {"type": "input_text", "text": question},
+                {"type": "input_text", "text": "[chart.png]"},
                 {"type": "input_image", "image_url": DATA_URL},
             ],
         }
     ]
 
 
-def test_an_unhydrated_attachment_leaves_the_question_as_written() -> None:
-    """Routing reads the history before the Run hydrates it; nothing is sent then."""
-    assert _openai_tool_messages([_viewed_question(hydrated=False)]) == [
+def test_an_attachment_without_bytes_leaves_the_question_as_written() -> None:
+    """An attachment the Run has not hydrated has nothing to send, in any provider."""
+    question = _viewed_question(hydrated=False)
+    assert _anthropic_tool_messages([question]) == [
         {"role": "user", "content": "what does page 3 show?"}
     ]
+    assert _gemini_tool_contents([question]) == [
+        {"role": "user", "parts": [{"text": "what does page 3 show?"}]}
+    ]
+    assert _openai_tool_messages([question]) == [
+        {"role": "user", "content": "what does page 3 show?"}
+    ]
+    assert response_input([question]) == [{"role": "user", "content": "what does page 3 show?"}]

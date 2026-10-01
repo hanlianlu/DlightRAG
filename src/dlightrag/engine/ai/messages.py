@@ -39,15 +39,19 @@ def content_with_attachments(message: Mapping[str, Any]) -> Any:
 
     A durable attachment is a reference in the Session, which the Run hydrates with a
     transport-only ``data_url``. Every provider already reads an ``image_url`` block
-    in a user turn, so that is what the attachments become. A tool result places its
-    own pixels wherever its provider allows them.
+    in a user turn, so that is what the attachments become, each after its own name,
+    as the tool result that took it printed it. Without the name, two pages read as
+    two unnamed pictures the user sent. A tool result places its own pixels wherever
+    its provider allows them.
     """
     content = message.get("content", "")
-    images = [
-        {"type": "image_url", "image_url": {"url": str(attachment["data_url"])}}
-        for attachment in message.get("attachments") or ()
-        if isinstance(attachment, Mapping) and attachment.get("data_url")
-    ]
+    images: list[dict[str, Any]] = []
+    for attachment in message.get("attachments") or ():
+        if not (isinstance(attachment, Mapping) and attachment.get("data_url")):
+            continue
+        if attachment.get("safe_name"):
+            images.append({"type": "text", "text": f"[{attachment['safe_name']}]"})
+        images.append({"type": "image_url", "image_url": {"url": str(attachment["data_url"])}})
     if not images:
         return content
     if isinstance(content, str):

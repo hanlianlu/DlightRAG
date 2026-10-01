@@ -141,6 +141,27 @@ def test_conversation_messages_keep_what_a_turn_viewed_on_the_question_it_answer
     assert conversation[0]["attachments"][0] is not page
 
 
+def test_viewed_images_join_the_latest_user_message_and_never_an_empty_one() -> None:
+    page = {"resource_id": "res-1", "media_type": "image/png", "content_digest": "a" * 64}
+    tool = {"role": "tool", "tool_call_id": "call-1", "content": "a page", "attachments": [page]}
+
+    # Viewed after an answer's words, the images still join the message it answered.
+    assert conversation_messages(
+        [
+            {"role": "user", "content": "what does page 3 show?"},
+            {"role": "assistant", "content": "Looking."},
+            tool,
+        ]
+    ) == [
+        {"role": "user", "content": "what does page 3 show?", "attachments": [page]},
+        {"role": "assistant", "content": "Looking."},
+    ]
+    # With no user message before them, no empty turn is made to carry them.
+    assert conversation_messages([tool, {"role": "assistant", "content": "Done."}]) == [
+        {"role": "assistant", "content": "Done."}
+    ]
+
+
 def test_fold_projects_only_conversation_semantics_in_source_order() -> None:
     session_id = SessionId.new()
     entries = (

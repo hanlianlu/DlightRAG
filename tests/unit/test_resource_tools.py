@@ -156,7 +156,8 @@ async def test_resource_view_spends_the_image_budget_only_in_source_order():
         result = await viewing
 
     assert tool_content_attachments(result.parts)
-    assert prepared == ["source image"]
+    # The label names the document: a later turn has no manifest to map the id.
+    assert prepared == ["plot.png"]
 
 
 async def test_workspace_read_image_is_text_and_view_rejects_escape_and_documents(tmp_path):
