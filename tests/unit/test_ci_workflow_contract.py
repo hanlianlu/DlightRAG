@@ -36,6 +36,16 @@ _DURABLE_PG_SUITES = {
     "tests/integration/test_connection_binding_pg.py",
     "tests/integration/test_connection_dispatch_pg.py",
     "tests/integration/test_connection_lifecycle_pg.py",
+    "tests/integration/test_answer_model_contract_pg.py",
+    "tests/integration/test_development_reset_pg.py",
+    "tests/integration/test_metadata_scope_pg.py",
+    "tests/integration/test_model_catalogue_pg.py",
+    "tests/integration/test_partition_foundation_pg.py",
+    "tests/integration/test_pg_notifications_pg.py",
+    "tests/integration/test_promotion_foundation_pg.py",
+    "tests/integration/test_promotion_worker_pg.py",
+    "tests/integration/test_reader_role_pg.py",
+    "tests/integration/test_rebuild_vdb_restore_pg.py",
 }
 _REQUIRED_ENV = {
     "PGHOST": "localhost",
