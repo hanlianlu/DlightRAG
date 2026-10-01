@@ -87,14 +87,9 @@ class IncrementalHistoryProjector:
     without materializing an arbitrary number of durable turns.
     """
 
-    def __init__(
-        self,
-        *,
-        targets: Sequence[HistoryProjectionTarget],
-        context_policy: ContextPolicy = CONTEXT_POLICY,
-    ) -> None:
-        self._resolved = tuple(_resolve_target(target, context_policy) for target in targets)
-        self._max_summary_tokens = context_policy.episodic_summary_tokens
+    def __init__(self, *, targets: Sequence[HistoryProjectionTarget]) -> None:
+        self._resolved = tuple(_resolve_target(target, CONTEXT_POLICY) for target in targets)
+        self._max_summary_tokens = CONTEXT_POLICY.episodic_summary_tokens
         self._kept: list[dict[str, Any]] = []
         self._recent_complete = False
         self._summary = ""
@@ -167,13 +162,9 @@ def project_history(
     messages: Sequence[dict[str, Any]],
     *,
     targets: Sequence[HistoryProjectionTarget],
-    context_policy: ContextPolicy = CONTEXT_POLICY,
 ) -> PriorTurns:
     """Keep the newest contiguous complete pairs accepted by every target."""
-    projector = IncrementalHistoryProjector(
-        targets=targets,
-        context_policy=context_policy,
-    )
+    projector = IncrementalHistoryProjector(targets=targets)
     pairs = _complete_pairs(messages)
     if not projector.accepts_history:
         return PriorTurns()

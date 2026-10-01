@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,
@@ -26,13 +26,14 @@ def _measure(fixed: int, *, pinned_summary: str = ""):
     return measure
 
 
-# These budgets pin hard_input_limit=85 and compaction_trigger=72; the 15 the
-# removed safety margin used to subtract now rides the output reserve so the
-# projection scenarios stay byte-identical.
-_POLICY = ContextPolicy(
-    requested_output_reserve_tokens=15,
-    dynamic_context_reserve_tokens=13,
-    minimum_input_tokens=0,
+# Every call is measured against the product's own policy on one profile; a test
+# names the history room it leaves by placing a call's fixed input just under
+# the limit that call is accepted against.
+_PROFILE = ModelProfile(context_window_tokens=200_000)
+_HARD_LIMIT = CONTEXT_POLICY.hard_input_limit(_PROFILE)
+_TRIGGER = CONTEXT_POLICY.compaction_trigger(_PROFILE)
+_FULL_RESERVE_TRIGGER = CONTEXT_POLICY.compaction_trigger(
+    _PROFILE, require_full_dynamic_reserve=True
 )
 
 
@@ -47,14 +48,12 @@ def _history() -> list[dict[str, Any]]:
 
 
 def test_projector_keeps_newest_pairs_before_fitting_omitted_summary() -> None:
-    profile = ModelProfile(context_window_tokens=100)
     projected = project_history(
         _history(),
         targets=(
-            HistoryProjectionTarget("planner", profile, _measure(0)),
-            HistoryProjectionTarget("fast", profile, _measure(76)),
+            HistoryProjectionTarget("planner", _PROFILE, _measure(0)),
+            HistoryProjectionTarget("fast", _PROFILE, _measure(_HARD_LIMIT - 9)),
         ),
-        context_policy=_POLICY,
     )
 
     assert projected.messages == [
@@ -65,12 +64,9 @@ def test_projector_keeps_newest_pairs_before_fitting_omitted_summary() -> None:
 
 
 def test_zero_allowance_drops_even_the_generated_continuation() -> None:
-    profile = ModelProfile(context_window_tokens=100)
-
     projected = project_history(
         _history(),
-        targets=(HistoryProjectionTarget("planner", profile, _measure(85)),),
-        context_policy=_POLICY,
+        targets=(HistoryProjectionTarget("planner", _PROFILE, _measure(_HARD_LIMIT)),),
     )
 
     assert projected.messages == []
@@ -78,13 +74,11 @@ def test_zero_allowance_drops_even_the_generated_continuation() -> None:
 
 
 def test_generated_summary_is_exactly_remeasured_in_remaining_residual() -> None:
-    profile = ModelProfile(context_window_tokens=100)
-    measure = _measure(69, pinned_summary="pin")
+    measure = _measure(_HARD_LIMIT - 16, pinned_summary="pin")
 
     projected = project_history(
         _history(),
-        targets=(HistoryProjectionTarget("fast", profile, measure),),
-        context_policy=_POLICY,
+        targets=(HistoryProjectionTarget("fast", _PROFILE, measure),),
     )
 
     assert projected.messages == [
@@ -96,51 +90,48 @@ def test_generated_summary_is_exactly_remeasured_in_remaining_residual() -> None
 
 
 def test_new_fast_session_projects_external_history_to_compaction_trigger() -> None:
-    profile = ModelProfile(context_window_tokens=100)
     history = [
         {"role": "user", "content": "u" * 30},
         {"role": "assistant", "content": "a" * 30},
     ]
+    # Under the hard limit the pair fits; Fast keeps its full dynamic reserve and
+    # leaves 52 tokens of history, too few for it.
+    measure = _measure(_FULL_RESERVE_TRIGGER - 52)
 
     hard_limit_projection = project_history(
         history,
-        targets=(HistoryProjectionTarget("generation", profile, _measure(20)),),
-        context_policy=_POLICY,
+        targets=(HistoryProjectionTarget("generation", _PROFILE, measure),),
     )
     fast_projection = project_history(
         history,
         targets=(
             HistoryProjectionTarget(
                 "fast_generation",
-                profile,
-                _measure(20),
+                _PROFILE,
+                measure,
                 proactive_compaction=True,
                 require_full_dynamic_reserve=True,
             ),
         ),
-        context_policy=_POLICY,
     )
 
     assert hard_limit_projection.messages == history
     assert fast_projection.messages == []
     assert fast_projection.episodic_summary
-    assert _measure(20)([], fast_projection.episodic_summary) <= 72
+    assert measure([], fast_projection.episodic_summary) <= _FULL_RESERVE_TRIGGER
 
 
 def test_research_seed_uses_compaction_trigger_as_acceptance_target() -> None:
-    profile = ModelProfile(context_window_tokens=100)
-
     projected = project_history(
         _history(),
         targets=(
             HistoryProjectionTarget(
                 "research_seed",
-                profile,
-                _measure(63),
+                _PROFILE,
+                _measure(_TRIGGER - 9),
                 proactive_compaction=True,
             ),
         ),
-        context_policy=_POLICY,
     )
 
     assert projected.messages == [
@@ -150,8 +141,7 @@ def test_research_seed_uses_compaction_trigger_as_acceptance_target() -> None:
 
 
 def test_incremental_durable_projection_matches_sequence_beyond_100_turns() -> None:
-    profile = ModelProfile(context_window_tokens=220)
-    target = HistoryProjectionTarget("durable", profile, _measure(40))
+    target = HistoryProjectionTarget("durable", _PROFILE, _measure(_HARD_LIMIT - 165))
     pairs = [
         (
             {"role": "user", "content": f"q{index}"},
@@ -162,9 +152,8 @@ def test_incremental_durable_projection_matches_sequence_beyond_100_turns() -> N
     expected = project_history(
         [message for pair in pairs for message in pair],
         targets=(target,),
-        context_policy=_POLICY,
     )
-    projector = IncrementalHistoryProjector(targets=(target,), context_policy=_POLICY)
+    projector = IncrementalHistoryProjector(targets=(target,))
     retained = 0
     for pair in reversed(pairs):
         if not projector.offer_newest_pair(*pair):
@@ -181,15 +170,12 @@ def test_incremental_durable_projection_matches_sequence_beyond_100_turns() -> N
 
 
 def test_fixed_envelope_overflow_names_the_failing_call() -> None:
-    profile = ModelProfile(context_window_tokens=100)
-
     with pytest.raises(HistoryProjectionOverflowError) as caught:
         project_history(
             _history(),
-            targets=(HistoryProjectionTarget("planner", profile, _measure(86)),),
-            context_policy=_POLICY,
+            targets=(HistoryProjectionTarget("planner", _PROFILE, _measure(_HARD_LIMIT + 1)),),
         )
 
     assert caught.value.target == "planner"
-    assert caught.value.fixed_input_tokens == 86
-    assert caught.value.acceptance_limit_tokens == 85
+    assert caught.value.fixed_input_tokens == _HARD_LIMIT + 1
+    assert caught.value.acceptance_limit_tokens == _HARD_LIMIT

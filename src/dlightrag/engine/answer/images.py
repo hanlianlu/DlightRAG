@@ -36,21 +36,18 @@ class AnswerImagePolicy:
     quality: int
     min_quality: int
 
-    def new_budget(self, *, max_px: int | None = None) -> AnswerImageBudget:
+    def new_budget(self) -> AnswerImageBudget:
         """Create a fresh mutable budget for one run or provider call.
 
-        ``max_px`` lowers the per-image edge for a specific call (a multi-page
-        overview packs more pages by shrinking each one). The policy is frozen and
-        every budget starts with zeroed counters.
+        The policy is frozen and every budget starts with zeroed counters.
         """
-        edge = self.max_px if max_px is None else max(1, max_px)
         return AnswerImageBudget(
             max_images=self.max_images,
             max_total_bytes=self.max_total_bytes,
             max_bytes_per_image=self.max_bytes_per_image,
             max_pixels=self.max_pixels,
-            max_px=edge,
-            min_px=min(self.min_px, edge),
+            max_px=self.max_px,
+            min_px=min(self.min_px, self.max_px),
             quality=self.quality,
             min_quality=self.min_quality,
         )

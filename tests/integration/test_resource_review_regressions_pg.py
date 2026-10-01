@@ -510,8 +510,8 @@ class _RecordingImagePolicy(AnswerImagePolicy):
         super().__init__(**fields)
         object.__setattr__(self, "_recorder", recorder)
 
-    def new_budget(self, *, max_px: int | None = None) -> AnswerImageBudget:
-        budget = super().new_budget(max_px=max_px)
+    def new_budget(self) -> AnswerImageBudget:
+        budget = super().new_budget()
         self._recorder.append(budget)
         return budget
 
