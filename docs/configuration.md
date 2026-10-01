@@ -336,25 +336,32 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 | `model` | required | Exact model/deployment ID |
 | `api_key` | unset | Endpoint credential |
 | `base_url` | provider default | Optional API root |
-| `api_family` | `chat_completion` | `chat_completion` or `response`; `response` requires `provider: openai`; a `gemini` model is always `interactions` and takes no `api_family` |
+| `api_family` | `chat_completion`; `interactions` for `gemini` | `chat_completion` or `response`; `response` requires `provider: openai`, and a `gemini` model accepts only `interactions` |
 | `structured_output` | `auto` | `auto`, `json_schema`, or `json_object` |
 | `temperature` | unset | Nonnegative provider temperature; a `gemini` model refuses one |
 | `timeout` | `240` | Request timeout seconds |
-| `max_retries` | `3` | Provider SDK retries of a transient request failure; the retrieval planner adds none |
+| `max_retries` | `3` | Provider SDK retries of a transient request failure; the retrieval planner adds none; Gemini's SDK retries at least once |
 | `reasoning` | unset | Typed reasoning level |
 | `agentic_reasoning` | inherits `reasoning` | Research-specific level; explicit `null` disables |
 | `model_kwargs` | `{}` | Provider-specific ordinary options |
 | `agentic_model_kwargs` | `{}` | Shallow Research overlay |
+
+A `models.chat.default` that leaves fields out, as when only its API key comes from
+the environment, takes them from the shipped default endpoint (`provider: openai`,
+`google/gemini-3.8-flash` on OpenRouter, `temperature: 1.0`). When the default's
+`provider` is not `openai` it describes another endpoint, Anthropic's or Gemini's,
+and inherits none of that endpoint's `base_url`, `model` or `temperature`.
 
 `models.max_concurrency` defaults to `16` and limits process-wide AI-provider
 requests.
 
 ### API Family
 
-Omitting `api_family` means **`chat_completion`**. The shipped `config.yaml`
-explicitly selects **`response` for default and Query**; Extract, Keyword and VLM
-retain complete Chat overrides, and reranking remains Voyage. The relevant
-endpoint/transport settings are below; other model options are omitted:
+For `openai` and `anthropic`, omitting `api_family` means **`chat_completion`**; a
+`gemini` model's family is always `interactions` ([Gemini](#gemini)). The shipped
+`config.yaml` explicitly selects **`response` for default and Query**; Extract,
+Keyword and VLM retain complete Chat overrides, and reranking remains Voyage. The
+relevant endpoint/transport settings are below; other model options are omitted:
 
 ```yaml
 models:
@@ -408,7 +415,7 @@ Further role changes are explicit, not automatic.
 ### Gemini
 
 `provider: gemini` calls Gemini through Google's Interactions API, statelessly. Its
-API Family is always `interactions`, and nothing configures it:
+API Family is always `interactions`, and no other value is accepted:
 
 ```yaml
 models:
@@ -420,30 +427,36 @@ models:
         reasoning: high
 ```
 
-Every request carries the full local context with `store=false`, so Google stores no
-interaction to continue from; DlightRAG never sends `previous_interaction_id`, a
-background run, a webhook, an environment, or an agent. As with Response,
-`store=false` is not a Zero Data Retention claim.
+Every request carries the full local context with `store=false`, so the API stores
+no interaction to resume or retrieve; DlightRAG never sends
+`previous_interaction_id`, a background run, a webhook, an environment, or an
+agent. As with Response, `store=false` is not Zero Data Retention.
 
-The Interactions API takes no sampling parameters. A `temperature` on a Gemini model
-or a Gemini chat reranker fails configuration, so leave it unset; overriding the
-shipped default endpoint with `provider: gemini` does not inherit its temperature or
-base URL.
+The Interactions API takes no sampling parameters: google-genai's `GenerationConfig`
+has no `temperature` or `top_p`. A `temperature` on a Gemini model or a Gemini chat
+reranker therefore fails configuration, so leave it unset; a Gemini default does
+not inherit the shipped endpoint's (see [Role Configuration](#role-configuration)).
 
 Typed `reasoning` maps through the catalogue's `gemini` format to
 `generation_config.thinking_level`: each level names `minimal`, `low`, `medium`, or
-`high`, an unsupported level clamps to the nearest supported one, and `off` cannot be
-honored because Gemini cannot turn thinking off. A configured level also asks for
+`high` (`gemini-3.8-flash` takes `low`, `medium` and `high`), an unsupported level
+clamps to the nearest supported one, and `off` cannot be honored because Gemini
+cannot turn thinking off. A configured level also asks for
 `thinking_summaries: auto`, whose text becomes the turn's reasoning. Thoughts and
 their signatures are stored with the Assistant Entry and sent back verbatim, in
 place, to the same model; another model sees only the canonical text and calls.
 
 `model_kwargs` accept `safety_settings`, in the Interactions shape
-(`{type: dangerous_content, threshold: block_only_high}`), and `service_tier`; raw
-`thinking_level` and `thinking_summaries` are accepted only where no typed level owns
-them. Any other key fails the request before it is sent. Structured output is a JSON
-`response_format` (`type: text`, `mime_type: application/json`, and the schema), and a
-Tool result's images ride inside its own `function_result`.
+(`{type: dangerous_content, threshold: block_only_high}`), and `service_tier`;
+Google's Interactions guide still lists custom safety settings among the
+`generateContent` features it does not support yet, so the API decides what it
+makes of them. Raw `thinking_level` and `thinking_summaries` are accepted only where
+no typed level owns them, and any other key fails the request before it is sent.
+Structured output is a JSON `response_format` (`type: text`,
+`mime_type: application/json`, and the schema), and a Tool result's images ride
+inside its own `function_result`. Reported output tokens include thinking, as
+Google bills them, and an overload Gemini reports inside a response or its stream
+is retried and deferred like an HTTP 503.
 [ADR 0030](adr/0030-gemini-uses-the-stateless-interactions-api.md) records the decision.
 
 ### Model Catalogue And Reasoning
