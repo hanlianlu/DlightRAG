@@ -1487,8 +1487,8 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     first, second = requests
     # This composition has no per-Run tail (no admitted evidence images and no tool
     # guidance), so the later request is a strict extension of the earlier one: the
-    # earlier request is its prefix byte for byte.
-    assert second[: len(first)] == first
+    # earlier request is its prefix byte for byte, key order included.
+    assert json.dumps(second[: len(first)]) == json.dumps(first)
     # The admitted passage arrived inside the Tool result, not as a re-rendered pack.
     tool_messages = [message for message in second if message.get("role") == "tool"]
     assert "one grounded fact" in str(tool_messages[-1]["content"])
@@ -2040,12 +2040,14 @@ def test_prompt_cache_counters_land_in_the_run_trace_and_warn_once_per_cold_turn
         "cache_hit_tokens": 120_000,
         "cold_turns": 1,
     }
-    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
-    assert len(warnings) == 1
-    assert warnings[0].levelname == "WARNING"
-    assert warnings[0].getMessage() == (
-        "prompt cache reused 0 of 60000 reusable tokens in a 132202-token prompt"
-    )
+    (warning,) = [record for record in caplog.records if record.levelname == "WARNING"]
+    fields = ("prompt_tokens", "reusable_prompt_tokens", "turn", "cache_hit_tokens")
+    assert {name: getattr(warning, name) for name in fields} == {
+        "prompt_tokens": 132_202,
+        "reusable_prompt_tokens": 60_000,
+        "turn": 2,
+        "cache_hit_tokens": 0,
+    }
 
 
 def test_a_turn_that_reuses_only_the_system_prompt_and_tools_is_cold() -> None:
@@ -2190,7 +2192,12 @@ def test_a_provider_without_cache_counters_is_not_a_cold_turn(
 
     with caplog.at_level("WARNING"):
         _record_prompt_cache(trace, turn({"input_tokens": 60_000, "output_tokens": 5}))
-        _record_prompt_cache(trace, turn({"input_tokens": 61_000, "output_tokens": 5}))
+        # Reading an unreported hit as zero would make this turn cold.
+        _record_prompt_cache(
+            trace,
+            turn({"input_tokens": 61_000, "output_tokens": 5}),
+            reusable_prompt_tokens=60_000,
+        )
 
     # A provider that reports no cache fields is a different fact from a reported
     # zero, and must not be counted as a regression.

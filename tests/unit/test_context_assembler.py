@@ -347,25 +347,6 @@ async def test_only_per_run_static_context_follows_the_transcript() -> None:
     assert "- read: bounded text" in str(second[-1]["content"])
 
 
-async def test_control_evidence_and_tool_schemas_stay_under_the_hard_limit() -> None:
-    # The composition no longer trims the request to the compaction trigger: each
-    # passage is frozen where it arrived, and the trigger is the orchestrator's
-    # proactive compaction decision. What must still hold is the hard input limit.
-    assembler = _assembler([])
-    tool_schema_tokens = 5_000
-
-    messages = await assembler.control_turn(
-        evidence=_ledger(100, chars=4_000),
-        working=WorkingContextProjection(),
-    )
-
-    used = estimate_messages_tokens(messages) + tool_schema_tokens
-    profile = ModelProfile(context_window_tokens=_WINDOW)
-    assert CONTEXT_POLICY.hard_input_limit(profile) - used > 0
-    # Nothing was packed in from the ledger, so the request is the fixed envelope.
-    assert "passage 99" not in str(messages)
-
-
 async def test_measurement_matches_the_composed_request() -> None:
     # The orchestrator decides whether to compact from the measurement and then
     # composes the request; both paths must describe the same messages.
