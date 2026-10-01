@@ -332,11 +332,13 @@ def test_parser_defaults_to_self_hosted_mineru() -> None:
     assert mineru_only.active_parser == "mineru"
     assert mineru_only.docling is None
 
-    both = ParserSidecarsSettings(
-        mineru=MinerUSidecarSettings(),
-        docling=DoclingSidecarSettings(),
-    )
-    assert both.active_parser == "mineru"
+    # The documented contract is exactly one parser block; a second one used to be
+    # ignored without a word, so a Docling configuration could silently run MinerU.
+    with pytest.raises(ValidationError, match="not both"):
+        ParserSidecarsSettings(
+            mineru=MinerUSidecarSettings(),
+            docling=DoclingSidecarSettings(),
+        )
 
 
 def test_entity_type_prompt_file_is_one_yaml_filename() -> None:

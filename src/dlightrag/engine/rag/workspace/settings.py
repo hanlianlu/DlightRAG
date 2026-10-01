@@ -149,6 +149,9 @@ class ParserSidecarsSettings(FrozenSettings):
     def _select_parser(cls, value: Any) -> Any:
         if isinstance(value, dict):
             value = dict(value)
+            if value.get("mineru") is not None and value.get("docling") is not None:
+                # One parser serves the corpus; the other block would be silently ignored.
+                raise ValueError("configure one parser sidecar, mineru or docling, not both")
             if value.get("mineru") is not None and "docling" not in value:
                 value["docling"] = None
             elif value.get("docling") is not None and "mineru" not in value:
