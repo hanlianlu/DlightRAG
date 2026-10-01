@@ -1134,6 +1134,11 @@ async def test_deleting_a_conversation_deletes_its_runs_and_frees_its_bytes(
     assert creation is not None
     await _finish(pool, creation.turn.answer_run_id, status="succeeded")
 
+    # Neither an unknown id nor another principal deletes anything.
+    assert await store.delete_conversation(_OWNER, str(uuid.uuid4())) is False
+    assert await store.delete_conversation(_OTHER_OWNER, conversation_id) is False
+    assert await _count(pool, "dlightrag_runs") == 1
+
     assert await store.delete_conversation(_OWNER, conversation_id) is True
 
     assert await _count(pool, "dlightrag_runs") == 0

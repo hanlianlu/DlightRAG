@@ -848,3 +848,37 @@ async def test_old_unpartitioned_corpus_fails_loudly_on_writer_startup() -> None
         assert state["relkind"] == "r"
     finally:
         await conn.close()
+
+
+async def test_a_missing_table_is_left_to_its_owner() -> None:
+    """A table its own migrations create may be absent; one LightRAG creates may not."""
+    from dlightrag.adapters.postgres.corpus.partition_foundation import (
+        PartitionedTableSpec,
+        ensure_partitioned_tables,
+        verify_partitioned_tables,
+    )
+    from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+
+    await _create_fresh_database(_LEGACY_DB)
+    conn = await asyncpg.connect(**_kwargs(_LEGACY_DB))
+    try:
+        # A missing_ok table is left to its migration scope: nothing is created.
+        await ensure_partitioned_tables(
+            conn,
+            specs=(PartitionedTableSpec(name="dlightrag_doc_metadata", missing_ok=True),),
+        )
+        assert await conn.fetchval("SELECT to_regclass('dlightrag_doc_metadata')") is None
+
+        # LightRAG creates its chunk table during storage init, so a writer
+        # that still cannot find it after init refuses to start.
+        with pytest.raises(CorpusSchemaError, match="missing after storage"):
+            await ensure_partitioned_tables(
+                conn, specs=(PartitionedTableSpec(name="lightrag_doc_chunks"),)
+            )
+        # A reader never creates anything; it names the writer that must.
+        with pytest.raises(CorpusSchemaError, match="is missing"):
+            await verify_partitioned_tables(
+                conn, specs=(PartitionedTableSpec(name="lightrag_doc_chunks"),)
+            )
+    finally:
+        await conn.close()

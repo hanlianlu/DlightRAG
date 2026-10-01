@@ -878,6 +878,117 @@ async def test_pg_refresh_is_bounded_gap_free_and_metadata_only_when_unchanged(p
         await measured.refresh(session_id, previous=ahead)
 
 
+@pytest.mark.parametrize(
+    ("corruption", "match"),
+    [
+        pytest.param(
+            "DELETE FROM dlightrag_agent_session_entries"
+            " WHERE owner_id = $1 AND session_id = $2 AND sequence = 3",
+            "not gap-free",
+            id="missing-entry",
+        ),
+        pytest.param(
+            "UPDATE dlightrag_agent_sessions SET commit_sequence = 0"
+            " WHERE owner_id = $1 AND session_id = $2",
+            "regressed",
+            id="regressed-cursor",
+        ),
+    ],
+)
+async def test_pg_refresh_refuses_a_gapped_or_regressed_session(
+    pool, corruption: str, match: str
+) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    previous = await store.load(session_id)
+    for content in ("second", "third"):
+        appended = await _append_transaction_entry(
+            store,
+            session_id,
+            UserMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=datetime.now(UTC),
+                content=content,
+            ),
+            fencing_epoch=epoch,
+        )
+        assert isinstance(appended, TransactionCommit)
+    async with pool.acquire() as conn:
+        await conn.execute(corruption, _OWNER, uuid.UUID(session_id.value))
+
+    with pytest.raises(ValueError, match=match):
+        await store.refresh(session_id, previous=previous)
+
+
+async def test_pg_register_conflict_names_the_first_stale_expectation(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    seeded = await _seed_transaction_session(store, session_id, epoch)
+    state = LaneState(LaneId.main())
+    head = LaneHead(LaneId.main(), None)
+
+    outcome = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(state)],
+            expectations=[
+                RegisterExpectation(state.ref, seeded.commit_sequence + 5),
+                RegisterExpectation(head.ref, seeded.commit_sequence + 7),
+            ],
+        ),
+    )
+
+    assert isinstance(outcome, RegisterConflict)
+    assert outcome.ref == state.ref
+    assert outcome.current_sequence == seeded.commit_sequence
+
+
+async def test_pg_an_unchanged_ledger_snapshot_is_stored_once(pool) -> None:
+    """A Tool that adds no Evidence must not store another copy of the whole ledger."""
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+
+    for ledger in (b'{"ledger": 1}', b'{"ledger": 1}', b'{"ledger": 2}'):
+        intent_id = IntentId.new()
+        snapshot = OpaqueEvidenceWrite(
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+            result_ordinal=0,
+            content_digest=hashlib.sha256(ledger).hexdigest(),
+            locator_digest=hashlib.sha256(b"{}").hexdigest(),
+            content=ledger,
+            locator=b"{}",
+        )
+        settled = await _append_transaction_entry(
+            store,
+            session_id,
+            _tool_result(session_id, intent_id),
+            fencing_epoch=epoch,
+            intent_id=intent_id,
+            host_delta=EffectHostUpdate(evidence=(snapshot,)),
+        )
+        assert isinstance(settled, TransactionCommit)
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT content FROM dlightrag_answer_evidence"
+            " WHERE owner_id = $1 AND run_id = $2 ORDER BY created_at",
+            _OWNER,
+            uuid.UUID(claimed.run.run_id),
+        )
+    assert [bytes(row["content"]) for row in rows] == [b'{"ledger": 1}', b'{"ledger": 2}']
+
+
 async def test_pg_entry_delta_validation_regressions(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_repository
@@ -1554,7 +1665,8 @@ async def test_an_inventory_delta_deletes_its_paths_before_its_observations(pool
         session_id,
         epoch,
         WorkspaceInventoryUpdate(
-            upserts=_files(("moved.md", 9), ("new.md", 4)),
+            # A path observed twice in one delta keeps its last observation.
+            upserts=_files(("moved.md", 5), ("moved.md", 9), ("new.md", 4)),
             deletes=("gone.md", "moved.md", "never-there.md"),
         ),
     )

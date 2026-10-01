@@ -214,3 +214,67 @@ async def test_working_dir_verification_continues_after_pg_failure(tmp_path: Pat
     # Independent file cleanup still runs and is verified.
     _reset.clear_working_dir_children(working_dir, report)
     assert _reset.verify_working_dir_empty(working_dir) == []
+
+
+async def test_workspace_reset_clears_corpus_rows_but_keeps_workspace_identity() -> None:
+    """A per-workspace corpus reset, beside the whole-database development reset above."""
+    from dlightrag.adapters.postgres.corpus.corpus import PGCorpusMaintenanceStore
+    from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
+    from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
+
+    pool = await asyncpg.create_pool(**_TEST_CONN_KWARGS, min_size=1, max_size=2)
+    try:
+        registry = PGWorkspaceRegistry(pool=pool)
+        jobs = PGPromotionJobStore(pool=pool)
+        await registry.initialize()
+        await jobs.initialize()
+        corpus_tables = ("lightrag_doc_chunks", '"lightrag_odd""name"')
+        async with pool.acquire() as conn:
+            for table in corpus_tables:
+                await conn.execute(f"CREATE TABLE {table} (workspace TEXT, id TEXT)")
+                await conn.execute(
+                    f"INSERT INTO {table} VALUES ('research', 'r1'), ('other', 'o1')"  # noqa: S608
+                )
+            await conn.execute("CREATE TABLE lightrag_without_workspace (id TEXT)")
+            await conn.execute("INSERT INTO lightrag_without_workspace VALUES ('kept')")
+        for workspace in ("research", "other"):
+            await registry.upsert(workspace=workspace, display_name=workspace, embedding_model="m")
+            await jobs.enqueue(workspace)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE dlightrag_workspace_meta SET ingested_docs_total = 5, "
+                "ingested_chunks_total = 9, promotion_state = 'pending'"
+            )
+
+        store = PGCorpusMaintenanceStore(
+            _TEST_CONN_KWARGS, workspace_registry=registry, promotion_jobs=jobs
+        )
+        assert await store.workspace_exists("research")
+        assert not await store.workspace_exists("missing")
+        assert await store.clean_orphan_rows("research") == len(corpus_tables)
+
+        async with pool.acquire() as conn:
+            for table in corpus_tables:
+                remaining = await conn.fetch(f"SELECT workspace FROM {table}")  # noqa: S608
+                assert [row["workspace"] for row in remaining] == ["other"]
+            assert await conn.fetchval("SELECT count(*) FROM lightrag_without_workspace") == 1
+            queued = await conn.fetch("SELECT workspace FROM dlightrag_promotion_jobs")
+            assert [row["workspace"] for row in queued] == ["other"]
+            meta = {
+                row["workspace"]: (
+                    row["ingested_docs_total"],
+                    row["ingested_chunks_total"],
+                    row["promotion_state"],
+                )
+                for row in await conn.fetch(
+                    "SELECT workspace, ingested_docs_total, ingested_chunks_total, "
+                    "promotion_state FROM dlightrag_workspace_meta"
+                )
+            }
+        # The workspace keeps its identity; only its corpus and counters went.
+        assert meta == {"research": (0, 0, "none"), "other": (5, 9, "pending")}
+        rows, has_more = await store.list_workspace_records_page(after_workspace=None, limit=10)
+        assert [row["workspace"] for row in rows] == ["other", "research"]
+        assert has_more is False
+    finally:
+        await pool.close()

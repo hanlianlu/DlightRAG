@@ -29,7 +29,7 @@ from dlightrag.adapters.postgres.answer.workspace import (
     write_committed_spill,
     write_inventory,
 )
-from dlightrag.adapters.postgres.core._migrations import apply_migrations
+from dlightrag.adapters.postgres.core._migrations import Migration, apply_migrations
 from dlightrag.adapters.postgres.runtime.run_blob_store import (
     BlobSizeConflict,
     PGRunBlobStore,
@@ -515,6 +515,26 @@ class TestSchema:
             )
 
             assert await catalog_definitions(conn) == baseline
+
+    async def test_a_refused_ledger_releases_the_scope_lock(self, pool) -> None:
+        """A runner that refuses its ledger must not leave other callers waiting on it."""
+        created = Migration("lock_probe", "first", ("CREATE TABLE lock_probe (id TEXT)",))
+        renamed = Migration("lock_probe_renamed", "first", ("SELECT 1",))
+        async with pool.acquire() as first, pool.acquire() as second:
+            await apply_migrations(
+                first, scope="lock_probe", migrations=(created,), schema_error=RunSchemaError
+            )
+            # The ledger records a version this declaration no longer names.
+            with pytest.raises(RunSchemaError):
+                await apply_migrations(
+                    first, scope="lock_probe", migrations=(renamed,), schema_error=RunSchemaError
+                )
+            await asyncio.wait_for(
+                apply_migrations(
+                    second, scope="lock_probe", migrations=(created,), schema_error=RunSchemaError
+                ),
+                timeout=5,
+            )
 
     async def test_fresh_catalog_is_exactly_its_declaration(self, pool) -> None:
         """Readers verify the declaration, so every object the migrations create is in it."""

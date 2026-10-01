@@ -2,7 +2,6 @@
 """Tests for DlightRAG-owned PostgreSQL schema migrations."""
 
 import re
-from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
@@ -184,11 +183,8 @@ async def test_apply_migrations_runs_only_newly_appended_versions() -> None:
     assert conn.applied == {("example", "create_table"), ("example", "add_name")}
 
 
-async def test_run_schema_changes_are_append_only_and_applied_once_in_order() -> None:
-    from dlightrag.adapters.postgres.runtime.run_store import (
-        RUN_MIGRATION_SCOPE,
-        RUN_MIGRATIONS,
-    )
+def test_run_schema_changes_are_append_only() -> None:
+    from dlightrag.adapters.postgres.runtime.run_store import RUN_MIGRATIONS
 
     expected_versions = (
         "run_runtime_v1",
@@ -210,54 +206,6 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         "artifact_attachment_video_presentation",
     )
     assert tuple(migration.version for migration in RUN_MIGRATIONS) == expected_versions
-    initial_migrations = RUN_MIGRATIONS[
-        : expected_versions.index("normalize_run_event_constraints")
-    ]
-
-    conn = _Conn()
-    await apply_migrations(
-        conn,
-        scope=RUN_MIGRATION_SCOPE,
-        migrations=initial_migrations,
-    )
-    executed_before_append = len(conn.executed)
-    await apply_migrations(conn, scope=RUN_MIGRATION_SCOPE, migrations=RUN_MIGRATIONS)
-    await apply_migrations(conn, scope=RUN_MIGRATION_SCOPE, migrations=RUN_MIGRATIONS)
-
-    recorded_versions = [
-        str(args[1])
-        for query, args in conn.executed
-        if query.startswith("INSERT INTO dlightrag_schema_migrations")
-        and args[0] == RUN_MIGRATION_SCOPE
-    ]
-    assert recorded_versions == list(expected_versions)
-    migrations_by_version = {migration.version: migration for migration in RUN_MIGRATIONS}
-    guard_statements = migrations_by_version["normalize_run_event_constraints"].statements
-    drop_statements = migrations_by_version["remove_run_active_permit"].statements
-    assert len(guard_statements) == 2
-    # The baseline is the complete current schema: it creates the event guard itself,
-    # and the guard's own migration restates it for databases created before it.
-    assert set(guard_statements) <= set(RUN_MIGRATIONS[0].statements)
-    assert len(drop_statements) == 1
-    active_permit_statements = [
-        (migration.version, statement)
-        for migration in RUN_MIGRATIONS
-        for statement in migration.statements
-        if "active_permit" in statement
-    ]
-    assert active_permit_statements == [("remove_run_active_permit", drop_statements[0])]
-    # Different declared migrations can intentionally reuse idempotent DDL.
-    # Count each declared occurrence, without replaying it on the final apply.
-    appended_statements = Counter(
-        statement
-        for migration in RUN_MIGRATIONS[len(initial_migrations) :]
-        for statement in migration.statements
-    )
-    executed_after_append = Counter(query for query, _ in conn.executed[executed_before_append:])
-    assert all(
-        executed_after_append[statement] == count
-        for statement, count in appended_statements.items()
-    )
 
 
 async def test_apply_migrations_does_not_record_failed_versions() -> None:
@@ -347,19 +295,6 @@ async def test_apply_migrations_rejects_undeclared_ledger_versions(
     assert executed_sql.count("CREATE TABLE example (id TEXT)") == 0
     assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 0
     assert conn.applied == {("example", "create_table"), ("example", "0999")}
-
-
-async def test_apply_migrations_releases_lock_when_gap_validation_fails() -> None:
-    conn = _Conn()
-    conn.applied.add(("example", "add_name"))
-
-    with pytest.raises(RuntimeError, match=r"scope 'example'"):
-        await apply_migrations(conn, scope="example", migrations=_example_migrations())
-
-    executed_sql = [query for query, _ in conn.executed]
-    assert executed_sql.count("SELECT pg_advisory_lock($1)") == 1
-    assert executed_sql.count("SELECT pg_advisory_unlock($1)") == 1
-    assert executed_sql[-1] == "SELECT pg_advisory_unlock($1)"
 
 
 async def test_apply_migrations_can_run_missing_versions_from_non_prefix_ledger() -> None:
@@ -567,41 +502,3 @@ def test_every_runs_index_statement_comes_from_its_declaration() -> None:
         for name in (*table.indexes, *table.unique_indexes)
     }
     assert verified == {index.name for index in run_store._RUN_INDEXES}
-
-
-async def test_web_conversation_migration_creates_only_final_run_links() -> None:
-    """The baseline creates only final Web conversation and run-link state."""
-    from dlightrag.adapters.postgres.web.web_conversations import WEB_CONVERSATION_MIGRATIONS
-
-    conn = _Conn()
-    await apply_migrations(
-        conn,
-        scope="web_conversations",
-        migrations=WEB_CONVERSATION_MIGRATIONS,
-    )
-
-    ddl = [query for query, _ in conn.executed if "web_conversation" in query.lower()]
-    create_index = next(
-        i
-        for i, q in enumerate(ddl)
-        if "CREATE TABLE IF NOT EXISTS web_conversation_turns" in q and "answer_run_id" in q
-    )
-    assert "REFERENCES dlightrag_runs (owner_id, run_id)" in ddl[create_index]
-    assert "ON DELETE CASCADE" in ddl[create_index]
-
-    # Nothing outside the Web conversation scope is touched.
-    executed_sql = "\n".join(query for query, _ in conn.executed)
-    for foreign in (
-        "dlightrag_doc_metadata",
-        "lightrag_doc_chunks",
-        "lightrag_graph_nodes",
-        "ingest_jobs",
-        "dlightrag_checkpoints",
-        "init.sql",
-    ):
-        assert foreign not in executed_sql
-    # Every applied version was recorded against the web_conversations scope only.
-    assert {scope for scope, _ in conn.applied} == {"web_conversations"}
-    assert conn.applied == {
-        ("web_conversations", "web_conversations"),
-    }

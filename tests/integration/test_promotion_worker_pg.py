@@ -1668,3 +1668,129 @@ async def test_stale_promoting_with_leftover_exclusion_blocks_writes_until_recla
         await conn.close()
     async with workspace_write_gate(ws):
         pass
+
+
+async def _job_row(conn: Any, workspace: str) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        "SELECT state, last_error FROM dlightrag_promotion_jobs WHERE workspace = $1", workspace
+    )
+    assert row is not None
+    return dict(row)
+
+
+async def test_a_fence_another_owner_holds_leaves_the_workspace_alone(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    ws, other = workspaces
+    await _clean_state()
+    registry = PGWorkspaceRegistry()
+    await registry.upsert(workspace=other, display_name="Other", embedding_model="m")
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await _seed_workspace(conn, other, docs=1, chunks_per_doc=1)
+    finally:
+        await conn.close()
+    until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5)
+    assert await registry.acquire_write_fence(workspace=other, owner="maintenance", until=until)
+    await PGPromotionJobStore().enqueue(other)
+
+    assert await _worker().run_once() is True
+
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        row = await _registry_row(conn, other)
+        assert row["write_fence_owner"] == "maintenance"
+        assert (row["storage_tier"], row["promotion_state"]) == ("shared", "none")
+        assert (await _job_row(conn, other))["state"] != "done"
+        assert await _dedicated_partitions(conn, other) == {
+            table: "" for table in (_METADATA_TABLE, _CHUNKS_TABLE, _VECTOR_TABLE)
+        }
+    finally:
+        await conn.close()
+
+
+async def test_a_cancelled_attempt_fails_guarded_and_cleans_its_staging(
+    corpus: None,
+    monkeypatch: pytest.MonkeyPatch,
+    workspaces: tuple[str, str],
+) -> None:
+    ws, other = workspaces
+    await _clean_state()
+    from dlightrag.adapters.postgres.corpus import promotion_worker as worker_module
+
+    registry = PGWorkspaceRegistry()
+    await registry.upsert(workspace=other, display_name="Other", embedding_model="m")
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await _seed_workspace(conn, other, docs=1, chunks_per_doc=1)
+    finally:
+        await conn.close()
+
+    async def cancelled_copy(conn: Any, parent: str, staging: str, workspace: str) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker_module, "_copy_workspace_rows", cancelled_copy)
+    await PGPromotionJobStore().enqueue(other)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _worker().run_once()
+    monkeypatch.undo()
+
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        row = await _registry_row(conn, other)
+        assert (row["storage_tier"], row["promotion_state"]) == ("shared", "failed")
+        assert row["write_fence_owner"] is None
+        job = await _job_row(conn, other)
+        assert job["state"] == "failed"
+        assert "CancelledError" in str(job["last_error"])
+        for table in (_METADATA_TABLE, _CHUNKS_TABLE, _VECTOR_TABLE):
+            staging = staging_partition_name(table, other)
+            assert await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", staging) is False
+    finally:
+        await conn.close()
+
+
+async def test_a_fence_taken_over_during_failure_handling_rolls_the_job_back(
+    corpus: None,
+    monkeypatch: pytest.MonkeyPatch,
+    workspaces: tuple[str, str],
+) -> None:
+    ws, other = workspaces
+    await _clean_state()
+    from dlightrag.adapters.postgres.corpus import promotion_worker as worker_module
+
+    registry = PGWorkspaceRegistry()
+    await registry.upsert(workspace=other, display_name="Other", embedding_model="m")
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await _seed_workspace(conn, other, docs=1, chunks_per_doc=1)
+    finally:
+        await conn.close()
+
+    async def copy_then_lose_the_fence(
+        conn: Any, parent: str, staging: str, workspace: str
+    ) -> None:
+        await conn.execute(
+            "UPDATE dlightrag_workspace_meta SET write_fence_owner = 'successor',"
+            " write_fence_until = NOW() + INTERVAL '5 minutes' WHERE workspace = $1",
+            workspace,
+        )
+        raise RuntimeError("copy failed after the fence moved")
+
+    monkeypatch.setattr(worker_module, "_copy_workspace_rows", copy_then_lose_the_fence)
+    await PGPromotionJobStore().enqueue(other)
+
+    assert await _worker().run_once() is True
+    monkeypatch.undo()
+
+    # The failed transition needs the fence this attempt no longer owns, so the
+    # job transition rolls back with it and the successor's fence stands.
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        row = await _registry_row(conn, other)
+        assert row["write_fence_owner"] == "successor"
+        assert row["promotion_state"] == "promoting"
+        assert (await _job_row(conn, other))["state"] == "promoting"
+    finally:
+        await conn.close()

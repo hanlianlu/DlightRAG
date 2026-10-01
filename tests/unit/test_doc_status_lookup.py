@@ -25,41 +25,6 @@ class _Pool:
         return _Acquire(self._connection)
 
 
-async def test_resolve_deletion_matches_uses_only_id_and_exact_path_queries() -> None:
-    class _Connection:
-        def __init__(self) -> None:
-            self.fetches: list[tuple[Any, ...]] = []
-
-        async def fetch(self, *args: Any) -> list[dict[str, str]]:
-            self.fetches.append(args)
-            if "id = ANY" in args[0]:
-                return [{"id": "doc-1", "file_path": "/tmp/report.pdf"}]
-            return [
-                {"id": "doc-1", "file_path": "/tmp/report.pdf"},
-                {"id": "dup-1", "file_path": "/tmp/report.pdf"},
-            ]
-
-    connection = _Connection()
-    lookup = PGDocStatusLookup(workspace="default", pool=_Pool(connection))
-
-    matches = await lookup.resolve_deletion_matches(
-        file_paths=("/tmp/report.pdf", "report.pdf"),
-        doc_ids=("doc-1",),
-    )
-
-    assert [(match.doc_id, match.file_path) for match in matches] == [
-        ("doc-1", "/tmp/report.pdf"),
-        ("dup-1", "/tmp/report.pdf"),
-    ]
-    assert len(connection.fetches) == 2
-    assert connection.fetches[0][1:] == ("default", ["doc-1"])
-    assert connection.fetches[1][1:] == (
-        "default",
-        ["/tmp/report.pdf", "report.pdf"],
-    )
-    assert all("get_docs_by_status" not in str(call) for call in connection.fetches)
-
-
 async def test_resolve_deletion_matches_empty_input_skips_database() -> None:
     class _Connection:
         async def fetch(self, *_args: Any) -> list[Any]:

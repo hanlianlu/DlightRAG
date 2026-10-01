@@ -627,6 +627,65 @@ async def test_metadata_subset_applies_publication_and_scope_to_only_caller_ids(
     ) == frozenset({"doc-in"})
 
 
+async def test_filename_query_widens_only_on_an_exact_miss_and_keeps_wildcards_literal(
+    writer_corpus: WriterCorpus,
+) -> None:
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+
+    index = PGMetadataIndex(workspace="ms_filename_resolution")
+    await index.clear()
+    documents = {
+        "doc-report": (
+            "report.pdf",
+            "pdf",
+            "s3://bucket/team/report.pdf",
+            {"department": "Finance"},
+        ),
+        "doc-report-2023": ("report-2023.pdf", "pdf", None, {}),
+        "doc-notes": ("Linear Algebra Notes.pdf", "pdf", None, {}),
+        "doc-notes-txt": ("Linear Algebra Notes.txt", "txt", None, {}),
+        "doc-percent": ("scan IMG%9551 final.png", "png", None, {}),
+        "doc-wildcard-bait": ("scan IMGX9551 final.png", "png", None, {}),
+    }
+    for doc_id, (filename, extension, locator, custom) in documents.items():
+        await index.upsert(
+            doc_id,
+            {
+                "filename": filename,
+                "filename_stem": filename.rsplit(".", 1)[0],
+                "file_extension": extension,
+                "download_locator": locator,
+                "custom_metadata": custom,
+                "_dlightrag_finalization_complete": True,
+            },
+        )
+
+    async def query(**filters: Any) -> list[str]:
+        return sorted(await index.query(MetadataFilter(**filters)))
+
+    # An exact name or stem hit never widens to the documents that contain it.
+    assert await query(filename="report.pdf") == ["doc-report"]
+    assert await query(filename="REPORT") == ["doc-report"]
+    # A miss widens to a literal substring and keeps every other condition.
+    assert await query(filename="Linear Algebra") == ["doc-notes", "doc-notes-txt"]
+    assert await query(filename="Linear Algebra", file_extension="txt") == ["doc-notes-txt"]
+    # The caller's % and _ are characters, not a pattern language.
+    assert await query(filename="IMG%9551") == ["doc-percent"]
+    assert await query(filename="IMG_9551") == []
+    # Custom values compare by their canonical text, as the write path stores them.
+    assert await query(custom={"department": " finance "}) == ["doc-report"]
+
+    # A download locator is matched exactly, never case-folded.
+    assert await index.find_by_download_locator("s3://bucket/team/report.pdf") == ["doc-report"]
+    assert await index.find_by_download_locator("S3://BUCKET/team/report.pdf") == []
+
+    rows = await index.get_many(["doc-report", "doc-notes", "doc-report", "doc-missing"])
+    assert sorted(rows) == ["doc-notes", "doc-report"]
+    assert rows["doc-report"]["custom_metadata"] == {"department": "Finance"}
+    assert "custom_metadata_search" not in rows["doc-report"]
+    await index.clear()
+
+
 # ---------------------------------------------------------------------------
 # Bounded scope preflight
 # ---------------------------------------------------------------------------

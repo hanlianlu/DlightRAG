@@ -604,11 +604,6 @@ class TestReadOnlyAdapter:
         assert set_workspace_calls == ["reader-workspace"]
         assert lightrag._storages_status == "initialized"
         assert lightrag._owning_loop is asyncio.get_running_loop()
-        assert any(sql == "SHOW transaction_read_only" for sql, _ in conn.fetchval_calls)
-        probed = " ".join(sql for sql, _ in conn.fetchval_calls if "SELECT 1 FROM " in sql)
-        assert "LIGHTRAG_DOC_FULL" in probed
-        assert "lightrag_graph_nodes" in probed
-        assert "lightrag_graph_edges" in probed
 
     async def test_attach_entry_point_reuses_db_and_preserves_signature_checks(
         self, monkeypatch: pytest.MonkeyPatch

@@ -134,7 +134,7 @@ async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
         )
 
 
-async def test_overwrite_chunk_vectors_updates_existing_rows_only() -> None:
+async def test_overwrite_chunk_vectors_writes_each_vector_for_its_chunk() -> None:
     class FakeDB:
         def __init__(self) -> None:
             self.executed: list[tuple] = []
@@ -157,9 +157,7 @@ async def test_overwrite_chunk_vectors_updates_existing_rows_only() -> None:
     )
 
     assert len(db.executed) == 1
-    sql, values = db.executed[0]
-    assert "UPDATE LIGHTRAG_DOC_CHUNKS" in sql
-    assert "INSERT" not in sql
+    _sql, values = db.executed[0]
     assert values[0][0] == "ws"
     assert values[0][1] == "doc-1-mm-drawing-000"
     assert values[0][2] == [0.1, 0.2, 0.3]
@@ -199,7 +197,7 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
     assert [batch[0][1] for batch in db.batches] == ["img-1", "img-2"]
 
 
-async def test_resolve_scope_probes_bounded_chunk_count_without_document_ids() -> None:
+async def test_resolve_scope_reports_the_probed_count_and_never_widens_an_exact_hit() -> None:
     from dlightrag.engine.rag.retrieval import MetadataFilter
 
     class FakeTextChunksDB:
@@ -225,12 +223,7 @@ async def test_resolve_scope_probes_bounded_chunk_count_without_document_ids() -
     assert scope.candidate_count == 12
     assert scope.candidate_count_exact is True
     assert scope.filename_mode == "exact"
-    args = db.fetches[0]
-    sql = args[0]
-    params = args[1:]
-    assert "EXISTS (SELECT 1 FROM dlightrag_doc_metadata" in sql
-    assert "count(*)" in sql
-    assert "LIMIT $6" in sql
+    params = db.fetches[0][1:]
     # One probe per attempted mode; the exact hit never widens.
     assert len(db.fetches) == 1
     # chunk workspace, then inner metadata predicates, then the probe cap.
@@ -300,7 +293,7 @@ async def test_resolve_scope_reports_the_cap_as_a_non_exact_sentinel() -> None:
     assert scope.render_candidate_count() == "3+"
 
 
-async def test_read_scoped_chunks_fuses_fetch_and_metadata_guard_in_one_query() -> None:
+async def test_read_scoped_chunks_keep_request_order_and_decode_rows() -> None:
     from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 
     class FakeTextChunksDB:
@@ -342,9 +335,6 @@ async def test_read_scoped_chunks_fuses_fetch_and_metadata_guard_in_one_query() 
     rows = await stores.read_scoped(scope, ["c1", "c2", "c2"])
 
     assert db.fetch_args is not None
-    sql = db.fetch_args[0]
-    assert "EXISTS (SELECT 1 FROM dlightrag_doc_metadata m" in sql
-    assert "c.id = ANY($2::text[])" in sql
     # Positional order with duplicates and None for missing/out-of-scope ids.
     assert rows[0] is None
     assert rows[1] is not None and rows[1]["id"] == "c2"
@@ -449,7 +439,7 @@ async def test_fetch_chunk_contents_reads_lightrag_doc_chunks() -> None:
     assert db.fetch_args[2] == ["chunk-a"]
 
 
-async def test_update_chunk_bm25_languages_uses_batch_update() -> None:
+async def test_update_chunk_bm25_languages_sends_chunks_and_languages_together() -> None:
     class FakeTextChunksDB:
         def __init__(self) -> None:
             self.execute_args: tuple | None = None
@@ -469,10 +459,6 @@ async def test_update_chunk_bm25_languages_uses_batch_update() -> None:
     await stores.update_chunk_bm25_languages({"chunk-a": "en", "chunk-b": "zh"})
 
     assert db.execute_args is not None
-    sql = db.execute_args[0]
-    assert "UPDATE LIGHTRAG_DOC_CHUNKS AS chunks" in sql
-    assert "FROM UNNEST($2::text[], $3::text[])" in sql
-    assert "dlightrag_bm25_language" in sql
     assert db.execute_args[1] == "ws"
     assert db.execute_args[2] == ["chunk-a", "chunk-b"]
     assert db.execute_args[3] == ["en", "zh"]

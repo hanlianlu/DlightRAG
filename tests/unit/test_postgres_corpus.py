@@ -504,10 +504,6 @@ async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
     assert entered is True
     assert states == ["gate-open", "gate-close"]
     assert sleepers == [5.0]  # polled the remaining fence duration once
-    assert [call[0][0] for call in fake_conn.execute.call_args_list] == [
-        "SELECT pg_advisory_lock($1)",
-        "SELECT pg_advisory_unlock($1)",
-    ]
 
 
 async def test_pipeline_recovery_cancellation_propagates_while_waiting(

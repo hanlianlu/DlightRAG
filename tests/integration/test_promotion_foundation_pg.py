@@ -101,6 +101,21 @@ async def test_registry_control_plane_fields_are_durable_and_constrained(pool: A
         assert row["storage_tier"] == "shared"
         assert row["promotion_state"] == "none"
 
+        # Creating a workspace never renames one that exists.
+        assert not await registry.insert(
+            workspace=_WORKSPACE, display_name="Renamed", embedding_model="pf-it-fake"
+        )
+        row = await registry.get_row(_WORKSPACE)
+        assert row is not None and row["display_name"] == "Promotion Workspace"
+        created = "pf_registry_created"
+        assert await registry.insert(
+            workspace=created, display_name="Created", embedding_model="pf-it-fake"
+        )
+        assert await registry.exists(created)
+        assert await registry.delete(created)
+        assert not await registry.exists(created)
+        assert not await registry.delete(created)
+
         # Promotion observability transitions, with retry bookkeeping.
         assert await registry.set_promotion_state(workspace=_WORKSPACE, state="pending")
         retry_at = datetime.datetime.now(datetime.UTC)
@@ -181,6 +196,22 @@ async def test_promotion_jobs_are_idempotent_leased_and_fenced(pool: Any) -> Non
 
         job_id = int(claimed["job_id"])
         generation = int(claimed["lease_generation"])
+
+        # Only the current owner and generation extend the lease, and only forward.
+        later = until + datetime.timedelta(minutes=5)
+        past = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=1)
+        assert await store.renew_lease(
+            job_id=job_id, owner="worker-1", lease_generation=generation, lease_until=later
+        )
+        assert not await store.renew_lease(
+            job_id=job_id, owner="worker-2", lease_generation=generation, lease_until=later
+        )
+        assert not await store.renew_lease(
+            job_id=job_id, owner="worker-1", lease_generation=generation + 1, lease_until=later
+        )
+        assert not await store.renew_lease(
+            job_id=job_id, owner="worker-1", lease_generation=generation, lease_until=past
+        )
 
         # Owner + monotonically increasing generation + lease time form the
         # fencing identity. A different owner cannot finish this attempt.

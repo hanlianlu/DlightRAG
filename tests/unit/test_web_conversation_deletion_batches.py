@@ -1,10 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Bounded-working-set contracts for PostgreSQL Web conversation deletion."""
+"""Web conversation deletion fails closed on a malformed row or store result.
+
+Batching, rollback and the bounded working set run against PostgreSQL in
+tests/integration/test_web_answer_runs_pg.py.
+"""
 
 from __future__ import annotations
 
 import copy
-import math
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -250,65 +253,6 @@ def _store(conn: _RecordingConnection, run_store: _DeletingRunStore) -> PGWebCon
 
 
 @pytest.mark.asyncio
-async def test_one_ten_thousand_run_history_uses_bounded_sequences_in_one_transaction() -> None:
-    total = 10_037
-    state = _state(conversations=1, runs_per_first=total)
-    conversation_id = next(iter(state.conversations))
-    conn = _RecordingConnection(state)
-    runs = _DeletingRunStore()
-
-    assert await _store(conn, runs).delete_conversation("owner", conversation_id) is True
-
-    expected_batches = math.ceil(total / pg_web._DELETE_BATCH_SIZE)  # pyright: ignore[reportPrivateUsage]
-    assert runs.calls == expected_batches
-    assert runs.max_run_ids == pg_web._DELETE_BATCH_SIZE  # pyright: ignore[reportPrivateUsage]
-    assert conn.max_fetched_rows == pg_web._DELETE_BATCH_SIZE  # pyright: ignore[reportPrivateUsage]
-    assert conn.transactions == 1
-    assert conn.fetch_calls == expected_batches + 1
-    assert not conn.state.conversations
-    assert not conn.state.runs
-    assert not conn.state.blobs
-
-
-@pytest.mark.asyncio
-async def test_delete_all_counts_ten_thousand_rows_without_accumulating_sessions() -> None:
-    total = 10_003
-    conn = _RecordingConnection(_state(conversations=total))
-    runs = _DeletingRunStore()
-
-    assert await _store(conn, runs).delete_all_conversations("owner") == total
-
-    conversation_batches = math.ceil(total / pg_web._DELETE_BATCH_SIZE)  # pyright: ignore[reportPrivateUsage]
-    assert conn.fetch_calls == (3 * conversation_batches) + 1
-    assert conn.max_fetched_rows == pg_web._DELETE_BATCH_SIZE  # pyright: ignore[reportPrivateUsage]
-    assert conn.max_pending_session_cleanups == pg_web._DELETE_BATCH_SIZE  # pyright: ignore[reportPrivateUsage]
-    assert conn.execute_calls == conversation_batches
-    assert conn.fetchval_calls == 0
-    assert conn.transactions == 1
-    assert runs.calls == 0
-    assert not conn.state.conversations
-    assert not conn.state.sessions
-
-
-@pytest.mark.asyncio
-async def test_failure_after_multiple_run_batches_rolls_back_every_deletion() -> None:
-    state = _state(conversations=1, runs_per_first=400)
-    conversation_id = next(iter(state.conversations))
-    state.routing = {run_id: _id(3_000_000 + index) for index, run_id in enumerate(state.blobs)}
-    state.sessions.update(state.routing.values())
-    before = copy.deepcopy(state)
-    conn = _RecordingConnection(state)
-    runs = _DeletingRunStore(fail_on_call=3)
-
-    with pytest.raises(RuntimeError, match="injected batch failure"):
-        await _store(conn, runs).delete_conversation("owner", conversation_id)
-
-    assert runs.calls == 3
-    assert conn.transactions == 1
-    assert conn.state == before
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("connection_options", "run_store_options", "message"),
     (
@@ -348,35 +292,3 @@ async def test_malformed_deletion_inputs_fail_closed(
         )
 
     assert conn.state == before
-
-
-@pytest.mark.asyncio
-async def test_missing_and_empty_single_conversation_results_are_unchanged() -> None:
-    state = _state(conversations=1)
-    conversation_id = next(iter(state.conversations))
-    conn = _RecordingConnection(state)
-    store = _store(conn, _DeletingRunStore())
-
-    assert await store.delete_conversation("owner", _id(999_999_999)) is False
-    assert conversation_id in conn.state.conversations
-    assert await store.delete_conversation("owner", conversation_id) is True
-    assert conn.transactions == 2
-
-
-def test_deletion_selectors_are_stably_ordered_limited_keysets() -> None:
-    queries = (
-        pg_web._SELECT_CONVERSATION_RUN_BATCH,  # pyright: ignore[reportPrivateUsage]
-        pg_web._LOCK_PRINCIPAL_CONVERSATION_BATCH,  # pyright: ignore[reportPrivateUsage]
-        pg_web._SELECT_LINKED_CONVERSATION_BATCH,  # pyright: ignore[reportPrivateUsage]
-        pg_web._DELETE_CONVERSATION_BATCH,  # pyright: ignore[reportPrivateUsage]
-    )
-    for query in queries:
-        normalized = " ".join(query.upper().split())
-        assert " ORDER BY " in normalized
-        assert " LIMIT " in normalized
-        assert " OFFSET " not in normalized
-    principal_lock = " ".join(
-        pg_web._LOCK_PRINCIPAL_CONVERSATION_BATCH.upper().split()  # pyright: ignore[reportPrivateUsage]
-    )
-    assert "SKIP LOCKED" not in principal_lock
-    assert not hasattr(pg_web, "_SELECT_PRINCIPAL_RUNS")

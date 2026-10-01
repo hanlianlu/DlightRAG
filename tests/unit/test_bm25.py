@@ -67,36 +67,6 @@ def _profiled_bm25(
     )
 
 
-def test_bm25_sql_filters_candidates() -> None:
-    sql = build_bm25_sql(
-        index_name="idx_lightrag_doc_chunks_bm25_en",
-        scoped=True,
-        limit=20,
-        language="en",
-        metadata_conditions=_metadata_conditions(),
-    )
-
-    assert "full_doc_id IN (SELECT doc_id FROM dlightrag_doc_metadata" in sql
-    assert "workspace = $3" in sql
-    assert "LIMIT $5" in sql
-    assert "to_bm25query" in sql
-    assert "idx_lightrag_doc_chunks_bm25_en" in sql
-    assert "dlightrag_bm25_language = 'en'" in sql
-    assert "ANY(" not in sql
-
-
-def test_bm25_sql_has_no_candidate_clause_when_unfiltered() -> None:
-    sql = build_bm25_sql(
-        index_name="idx_lightrag_doc_chunks_bm25_simple",
-        scoped=False,
-        limit=20,
-        language=None,
-    )
-
-    assert "full_doc_id IN" not in sql
-    assert "LIMIT $3" in sql
-
-
 def test_bm25_sql_rejects_scoped_without_metadata_conditions() -> None:
     with pytest.raises(ValueError, match="metadata conditions"):
         build_bm25_sql(
@@ -352,13 +322,6 @@ async def test_bm25_search_maps_rows() -> None:
         limit=3,
     )
 
-    args = conn.fetch.await_args.args
-    assert args[1] == "hello"
-    assert args[2] == "default"
-    assert args[3] == "default"  # the bound metadata-side workspace
-    assert args[4] == "x.pdf"
-    assert args[5] == 3
-    assert "full_doc_id IN (SELECT doc_id FROM dlightrag_doc_metadata" in args[0]
     assert rows == [
         {
             "chunk_id": "chunk-a",

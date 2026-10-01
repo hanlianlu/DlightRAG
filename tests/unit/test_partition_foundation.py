@@ -1,5 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the workspace-partitioning foundation seam."""
+"""Partition naming and spec validation, which hold before any statement runs.
+
+Partitioned parents, legacy shapes and missing tables run against PostgreSQL in
+tests/integration/test_partition_foundation_pg.py.
+"""
 
 import re
 from typing import Any
@@ -10,18 +14,8 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
     PartitionedTableSpec,
     child_partition_name,
     default_child_name,
-    ensure_partitioned_tables,
     verify_partitioned_tables,
 )
-from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
-
-
-class _Tx:
-    async def __aenter__(self) -> _Tx:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
 
 
 def _spec(name: str = "lightrag_doc_chunks") -> PartitionedTableSpec:
@@ -57,103 +51,13 @@ class TestPartitionNaming:
             child_partition_name("bad name; drop", "ws")
 
 
-class _FakeConn:
-    """Catalog fake: relkind answers and statement recording."""
+class _NoStatements:
+    """A connection that refuses every statement, so a refusal shows it ran none."""
 
-    def __init__(self, *, relkind: str | None, empty: bool = True) -> None:
-        self._relkind = relkind
-        self._empty = empty
-        self.executed: list[str] = []
-
-    def transaction(self) -> _Tx:
-        return _Tx()
-
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        if "c.relkind::text FROM pg_catalog.pg_class" in query:
-            if args and str(args[0]).startswith("t_"):
-                return None
-            return self._relkind
-        if "NOT EXISTS" in query:
-            return self._empty
-        return None
-
-    async def execute(self, query: str, *args: Any) -> None:
-        self.executed.append(query)
-
-
-async def test_writer_fails_loudly_on_a_populated_unpartitioned_table() -> None:
-    conn = _FakeConn(relkind="r", empty=False)
-
-    with pytest.raises(CorpusSchemaError) as excinfo:
-        await ensure_partitioned_tables(conn, specs=(_spec(),))
-
-    message = str(excinfo.value)
-    assert "lightrag_doc_chunks" in message
-    assert "reset_development.py" in message
-    assert "never rebuilt destructively" in message
-    assert "LOCK TABLE lightrag_doc_chunks IN ACCESS EXCLUSIVE MODE" in conn.executed
-    # The table lock serialized the emptiness decision, but nothing was
-    # renamed, dropped, or rebuilt.
-    assert not any(
-        statement.startswith(("CREATE", "ALTER", "DROP", "RENAME")) for statement in conn.executed
-    )
-
-
-async def test_writer_skips_a_missing_ok_table_so_migrations_can_create_it() -> None:
-    spec = PartitionedTableSpec(name="dlightrag_doc_metadata", missing_ok=True)
-    conn = _FakeConn(relkind=None)
-
-    await ensure_partitioned_tables(conn, specs=(spec,))
-
-    # Only the advisory lock ran: the table itself is left to its migration scope.
-    assert not any(
-        statement.startswith(("CREATE", "ALTER", "DROP", "RENAME")) for statement in conn.executed
-    )
-
-
-async def test_writer_rejects_an_empty_plain_dlightrag_owned_legacy_table() -> None:
-    spec = PartitionedTableSpec(
-        name="dlightrag_doc_metadata",
-        missing_ok=True,
-        convert_empty_plain=False,
-    )
-    conn = _FakeConn(relkind="r", empty=True)
-
-    with pytest.raises(CorpusSchemaError, match="fresh-schema release"):
-        await ensure_partitioned_tables(conn, specs=(spec,))
-
-    assert not any(statement.startswith(("LOCK", "ALTER", "DROP")) for statement in conn.executed)
-
-
-async def test_writer_rejects_a_missing_lightrag_owned_table() -> None:
-    conn = _FakeConn(relkind=None)
-
-    with pytest.raises(CorpusSchemaError, match="missing after storage"):
-        await ensure_partitioned_tables(conn, specs=(_spec(),))
-
-
-async def test_reader_rejects_a_plain_table() -> None:
-    conn = _FakeConn(relkind="r")
-
-    with pytest.raises(CorpusSchemaError) as excinfo:
-        await verify_partitioned_tables(conn, specs=(_spec(),))
-
-    message = str(excinfo.value)
-    assert "not partitioned by workspace" in message
-    assert "reset_development.py" in message
-
-
-async def test_reader_rejects_a_missing_table() -> None:
-    conn = _FakeConn(relkind=None)
-
-    with pytest.raises(CorpusSchemaError, match="is missing"):
-        await verify_partitioned_tables(conn, specs=(_spec(),))
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"no statement may run before the spec is validated: {name}")
 
 
 async def test_spec_names_are_validated_before_any_sql() -> None:
-    conn = _FakeConn(relkind="p")
-
     with pytest.raises(ValueError, match="Unsafe PostgreSQL identifier"):
-        await verify_partitioned_tables(conn, specs=(_spec(name="bad;name"),))
-
-    assert conn.executed == []
+        await verify_partitioned_tables(_NoStatements(), specs=(_spec(name="bad;name"),))
