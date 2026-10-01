@@ -60,15 +60,6 @@ async def drop_owned_database(admin: DropAdmin, database: str) -> None:
     raise RuntimeError(f"cannot drop {database}: backends still attached: {attached}")
 
 
-async def require_postgres() -> None:
-    """Fail a validation command before skip-capable suites if PostgreSQL is unavailable."""
-    connection = await asyncpg.connect(**PG_CONN_KWARGS)
-    try:
-        await connection.fetchval("SELECT 1")
-    finally:
-        await connection.close()
-
-
 @asynccontextmanager
 async def isolated_run_runtime(
     prefix: str,
