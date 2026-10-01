@@ -79,6 +79,7 @@ _PDF_MIME = "application/pdf"
 _CURSOR_VERSION = 1
 _CURSOR_SIGNATURE_BYTES = 8
 _CURSOR_PLACEHOLDER = "x" * 34
+_EXTRACT_ACQUISITIONS = frozenset({"exa_extract", "tavily_extract"})
 
 # A run-scoped, provider-neutral fallback that returns already-usable text for
 # a public URL, or ``None`` when it cannot. Exa owns its adapter; the registry
@@ -229,6 +230,7 @@ class ResourceRegistry:
         self._text_views: dict[str, _ConvertedResource] = {}
         self._fallback_lock = asyncio.Lock()
         self._fallback_tasks: dict[str, asyncio.Future[_ConvertedResource]] = {}
+        self._text_view_tasks: dict[str, asyncio.Future[_ConvertedResource]] = {}
         # Adoptions of earlier Runs' Resources run one at a time; see ``adopt``.
         self._adoption_lock = asyncio.Lock()
 
@@ -645,15 +647,23 @@ class ResourceRegistry:
             for item in self._resources.values()
         )
 
-    def evidence_source(self, resource_id: str) -> dict[str, str]:
-        """Return stable private provenance for evidence derived from a resource."""
+    def evidence_source(self, resource_id: str, *, text: bool = False) -> dict[str, str]:
+        """Return stable private provenance for evidence derived from a resource.
+
+        ``text`` asks for the provenance of the text a read returns, which the
+        Extract chain supplies when the Resource's own bytes hold none.
+        """
         resource = self._require(resource_id)
         source_uri = resource.url if resource.source == "web" and resource.url else resource_id
+        acquisition = resource.acquisition or ""
+        snapshot = self._snapshots.get(resource.resource_id)
+        if text and snapshot is not None and snapshot.converter in _EXTRACT_ACQUISITIONS:
+            acquisition = snapshot.converter
         return {
             "source_type": "web_search" if resource.source == "web" else "web_attachment",
             "resource_kind": "web" if resource.url else "attachment",
             "admission_origin": resource.admission_origin,
-            "acquisition": resource.acquisition or "",
+            "acquisition": acquisition,
             "source_uri": source_uri,
             "source_download_locator": source_uri,
             "title": safe_source_filename(resource.filename or source_uri),
@@ -846,7 +856,7 @@ class ResourceRegistry:
                 extraction_status="image",
                 note=f"Image ({image_media}, {len(content)} bytes). Use view(resource_id={resource.resource_id!r}).",
             )
-        elif resource.acquisition in {"exa_extract", "tavily_extract"}:
+        elif resource.acquisition in _EXTRACT_ACQUISITIONS:
             view = _ConvertedResource(text=content.decode("utf-8"), handles=())
         elif is_convertible(resource.filename, resource.declared_mime):
             view = await self._ensure_converted(resource, content)
@@ -867,16 +877,10 @@ class ResourceRegistry:
         *,
         effect_owner: ResourceEffectOwner | None,
     ) -> _ConvertedResource:
-        """Read one fixed URL snapshot, using the Extract chain only on failure."""
+        """Read one fixed URL snapshot, taking text from the Extract chain when it has none."""
         url = resource.url
         if url is None:  # pragma: no cover - only link resources are routed here
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no link")
-        restored = self._restored_bytes(resource.resource_id)
-        if restored is not None:
-            cached = self._text_views.get(resource.resource_id)
-            if cached is not None:
-                return cached
-            return await self._text_view_from_content(resource, restored)
         cached = self._text_views.get(resource.resource_id)
         if cached is not None:
             content = self._fetched.get(resource.resource_id)
@@ -887,30 +891,33 @@ class ResourceRegistry:
                     effect_owner=effect_owner,
                 )
             return cached
-        try:
-            content = await self._materialize_fetched(
-                resource.resource_id,
-                lambda: self._fetch_link(resource),
-                effect_owner=effect_owner,
-                charge_total=False,
-            )
-        except _RedirectAlias as alias:
-            return await self._read_link_text_view(
-                self._require(alias.resource_id),
-                effect_owner=effect_owner,
-            )
-        except PublicHttpPolicyError, ResourceAdmissionError:
-            # Never send a URL rejected by the local public/anonymous policy to
-            # an external extraction provider.
-            raise
-        except Exception:
-            # A failed fetch bound nothing, so there is nothing of this read's to
-            # forget: what the Resource holds now another read bound or admitted.
-            return await self._fallback_text_view(
-                resource,
-                resource.url or url,
-                effect_owner=effect_owner,
-            )
+        # Settled bytes never re-enter the network path, and read as fetched ones do.
+        content = self._restored_bytes(resource.resource_id)
+        if content is None:
+            try:
+                content = await self._materialize_fetched(
+                    resource.resource_id,
+                    lambda: self._fetch_link(resource),
+                    effect_owner=effect_owner,
+                    charge_total=False,
+                )
+            except _RedirectAlias as alias:
+                return await self._read_link_text_view(
+                    self._require(alias.resource_id),
+                    effect_owner=effect_owner,
+                )
+            except PublicHttpPolicyError, ResourceAdmissionError:
+                # Never send a URL rejected by the local public/anonymous policy to
+                # an external extraction provider.
+                raise
+            except Exception:
+                # A failed fetch bound nothing, so there is nothing of this read's to
+                # forget: what the Resource holds now another read bound or admitted.
+                return await self._fallback_text_view(
+                    resource,
+                    resource.url or url,
+                    effect_owner=effect_owner,
+                )
         try:
             view = await self._text_view_from_content(resource, content)
         except ResourceAdmissionError, UnsafeArchiveError, ConversionLimitError, MemoryError:
@@ -920,11 +927,8 @@ class ResourceRegistry:
             raise
         except Exception:
             if _is_textual_web_resource(resource):
-                self._forget_direct_bytes(resource.resource_id, content)
-                return await self._fallback_text_view(
-                    resource,
-                    resource.url or url,
-                    effect_owner=effect_owner,
+                return await self._extract_text_view(
+                    resource, resource.url or url, content, effect_owner=effect_owner
                 )
             await self._persist_fetched(
                 resource.resource_id,
@@ -934,11 +938,8 @@ class ResourceRegistry:
             raise
         if not view.text and view.extraction_status != "image":
             if _is_textual_web_resource(resource):
-                self._forget_direct_bytes(resource.resource_id, content)
-                return await self._fallback_text_view(
-                    resource,
-                    resource.url or url,
-                    effect_owner=effect_owner,
+                return await self._extract_text_view(
+                    resource, resource.url or url, content, effect_owner=effect_owner
                 )
             await self._persist_fetched(
                 resource.resource_id,
@@ -959,16 +960,76 @@ class ResourceRegistry:
             raise
         return view
 
-    def _forget_direct_bytes(self, resource_id: str, content: bytes) -> None:
-        """Forget a direct fetch that read as no text, before the Extract fallback.
+    async def _extract_text_view(
+        self,
+        resource: _Registered,
+        url: str,
+        content: bytes,
+        *,
+        effect_owner: ResourceEffectOwner | None,
+    ) -> _ConvertedResource:
+        """Read bound bytes that hold no text through the Extract chain, keeping them.
 
-        Concurrent reads share one fetch but decode it apart, so another read's
-        Extract may already have admitted its snapshot in these bytes' place.
-        That snapshot stays: dropping it left neither read to make it durable.
+        The bytes stay the Resource's one representation, so a view and a read of it
+        agree whichever comes first (ADR 0029). The Extract text becomes their text
+        view: a conversion snapshot of exactly these bytes, which settles with the
+        read and is restored with them. Concurrent reads share one Extract. When it
+        yields nothing, bytes no call has admitted are forgotten, so a later read may
+        fetch them again as after a failed fetch.
         """
-        if self._fetched.get(resource_id) is content:
-            del self._fetched[resource_id]
-        self._converted.pop(resource_id, None)
+        resource_id = resource.resource_id
+        view = self._text_views.get(resource_id)
+        if view is None:
+            async with self._fallback_lock:
+                task = self._text_view_tasks.get(resource_id)
+                if task is None:
+                    task = asyncio.ensure_future(
+                        self._adopt_extract_text_view(resource, url, content)
+                    )
+                    self._text_view_tasks[resource_id] = task
+            try:
+                view = await asyncio.shield(task)
+            except BaseException:
+                if task.done():
+                    async with self._fallback_lock:
+                        if self._text_view_tasks.get(resource_id) is task:
+                            self._text_view_tasks.pop(resource_id, None)
+                raise
+            async with self._fallback_lock:
+                if self._text_view_tasks.get(resource_id) is task:
+                    self._text_view_tasks.pop(resource_id, None)
+        if not view.evidence_available:
+            unadmitted = resource_id not in self._admitted_fetched
+            if unadmitted and resource_id not in self._durable_fetched:
+                if self._fetched.get(resource_id) is content:
+                    del self._fetched[resource_id]
+                self._converted.pop(resource_id, None)
+            return view
+        await self._persist_fetched(resource_id, content, effect_owner=effect_owner)
+        return view
+
+    async def _adopt_extract_text_view(
+        self,
+        resource: _Registered,
+        url: str,
+        content: bytes,
+    ) -> _ConvertedResource:
+        extracted = await self._extract(url)
+        if extracted is None:
+            return _unavailable_web_view()
+        self.adopt_conversion_snapshot(
+            ConversionSnapshot(
+                resource_id=resource.resource_id,
+                input_digest=hashlib.sha256(content).hexdigest(),
+                text=extracted.text,
+                visuals=(),
+                extraction_status=EXTRACTION_TEXT,
+                converter=extracted.acquisition,
+                converter_version=extracted.provider,
+                note=_extract_note(extracted),
+            )
+        )
+        return self._converted[resource.resource_id]
 
     async def _ensure_converted(
         self,
@@ -1244,7 +1305,7 @@ class ResourceRegistry:
         content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         resource = self._require(resource_id)
         resource_id = resource.resource_id
-        if resource.acquisition in {"exa_extract", "tavily_extract"}:
+        if resource.acquisition in _EXTRACT_ACQUISITIONS:
             return VisualTarget(resource_id, "opaque", content, resource.declared_mime)
         try:
             media = verify_web_image_bytes(content)
@@ -1285,6 +1346,7 @@ class ResourceRegistry:
         tasks: list[asyncio.Future[Any]] = [
             *self._fetch_tasks.values(),
             *self._fallback_tasks.values(),
+            *self._text_view_tasks.values(),
         ]
         for task in tasks:
             task.cancel()
@@ -1306,6 +1368,7 @@ class ResourceRegistry:
         self._cursor_plans.clear()
         self._fetch_tasks.clear()
         self._fallback_tasks.clear()
+        self._text_view_tasks.clear()
 
     def _canonical_resource_id(self, resource_id: str) -> str:
         seen: set[str] = set()
@@ -1599,8 +1662,30 @@ class ResourceRegistry:
         resource: _Registered,
         url: str,
     ) -> _ConvertedResource:
-        if self._url_text_fallback is None:
+        """Bind Extract text to a Resource whose fetch failed, as its representation."""
+        extracted = await self._extract(url)
+        if extracted is None:
             return _unavailable_web_view()
+        canonical = self._bind_final_url(resource, extracted.url)
+        existing_content = self._fetched.get(canonical.resource_id)
+        if existing_content is not None:
+            # Bytes bound first win, here or behind a redirect: the text yields to them.
+            return await self._text_view_from_content(canonical, existing_content)
+        resource = canonical
+        resource.acquisition = extracted.acquisition
+        resource.declared_mime = "text/markdown; charset=utf-8"
+        resource.degradation = _extract_note(extracted)
+        self._fetched[resource.resource_id] = extracted.text.encode("utf-8")
+        return _ConvertedResource(
+            text=extracted.text,
+            handles=(),
+            note=resource.degradation,
+        )
+
+    async def _extract(self, url: str) -> WebExtractResult | None:
+        """Text of one public URL from the Extract chain, or None when it has none."""
+        if self._url_text_fallback is None:
+            return None
         # Extraction providers must never receive a private or credential-bearing
         # locator, even when a caller attachment used private transport metadata.
         validate_agent_public_url(url)
@@ -1610,33 +1695,12 @@ class ResourceRegistry:
         except asyncio.CancelledError:
             raise
         except Exception:
-            return _unavailable_web_view()
-        text = extracted.text
-        if not text.strip():
-            return _unavailable_web_view()
-        data = text.encode("utf-8")
-        if len(data) > self._max_attachment_bytes:
-            return _unavailable_web_view()
-        canonical = self._bind_final_url(resource, extracted.url)
-        if canonical is not resource:
-            existing_content = self._fetched.get(canonical.resource_id)
-            if existing_content is not None:
-                return await self._text_view_from_content(canonical, existing_content)
-        resource = canonical
-        resource.acquisition = extracted.acquisition
-        resource.declared_mime = "text/markdown; charset=utf-8"
-        notes: list[str] = []
-        if extracted.dropped_results:
-            notes.append(f"Dropped {extracted.dropped_results} malformed extraction result(s).")
-        if extracted.degradation:
-            notes.append(extracted.degradation)
-        resource.degradation = " ".join(notes) or None
-        self._fetched[resource.resource_id] = data
-        return _ConvertedResource(
-            text=text,
-            handles=(),
-            note=resource.degradation,
-        )
+            return None
+        if not extracted.text.strip():
+            return None
+        if len(extracted.text.encode("utf-8")) > self._max_attachment_bytes:
+            return None
+        return extracted
 
     def _mint_resource_id(self, dedup_key: tuple[str, bytes]) -> str:
         kind, payload = dedup_key
@@ -1752,6 +1816,15 @@ def _failure_snapshot(
         else None,
         note=None if safety_refused else "Text conversion failed; no text evidence was extracted.",
     )
+
+
+def _extract_note(extracted: WebExtractResult) -> str | None:
+    notes: list[str] = []
+    if extracted.dropped_results:
+        notes.append(f"Dropped {extracted.dropped_results} malformed extraction result(s).")
+    if extracted.degradation:
+        notes.append(extracted.degradation)
+    return " ".join(notes) or None
 
 
 def _unavailable_web_view() -> _ConvertedResource:

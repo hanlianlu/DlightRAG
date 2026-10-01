@@ -97,6 +97,10 @@ Blob.
 - Direct anonymous HTTP runs first. When it fails or yields no text for a
   textual resource, the configured Extract chain supplies text once. A URL the
   local policy rejects never reaches an external provider.
+- Extract text becomes the snapshot only when the fetch failed. When the fetch
+  succeeded but its bytes hold no text, the bytes stay the snapshot and the Extract
+  text is their text view, recorded and restored with them, so `view` and `read`
+  of the same URL agree in any order.
 - The model sees an inventory of registered Resources with a kind for each:
   `image; view`, `PDF; read text or view physical pages`,
   `DOCX|PPTX|XLSX; read extracted text and embedded-image inventory`, or the

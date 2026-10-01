@@ -21,6 +21,9 @@ from dlightrag.engine.answer.resources.models import ResourceInput, ResourceRegi
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_viewer
+from dlightrag.engine.answer.web_sources import WebExtractResult
+from dlightrag.engine.public_http import PublicHttpFetch
+from tests.support.dns import public_dns
 from tests.support.resources import call, docx_images, pdf_bytes, png, preparer, tools
 from tests.tool_helpers import tool_runtime
 
@@ -254,3 +257,142 @@ async def test_conversion_cancellation_does_not_overlap_native_work_or_cleanup(m
         await second
     assert len(calls) == 1
     await registry.aclose()
+
+
+_SCAN_URL = "https://example.com/scan.pdf"
+_EXTRACT_TEXT = "Extracted text of the scanned report."
+
+
+class _ScanRun:
+    """A Run reading one scanned PDF its server labels HTML.
+
+    The PDF has pages to view and no text layer, and its label makes it a textual Web
+    resource, so a read takes its text from the Extract chain. The Run records what
+    it makes durable as a Run does: fetched bytes through the sink, and everything a
+    call attaches through that call's result.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.content = pdf_bytes(2)
+        self.fetches: list[str] = []
+        self.persisted: list = []
+        content = self.content
+        fetches = self.fetches
+
+        async def fetch(url: str, **_kwargs: object) -> PublicHttpFetch:
+            fetches.append(url)
+            return PublicHttpFetch(content, url, "text/html", 200)
+
+        monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", fetch)
+        monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+
+    async def persist(self, fetched, _owner) -> None:
+        self.persisted.append(fetched)
+
+    def registry(self) -> ResourceRegistry:
+        async def extract(url: str) -> WebExtractResult:
+            return WebExtractResult(
+                url=url, text=_EXTRACT_TEXT, provider="exa", acquisition="exa_extract"
+            )
+
+        return ResourceRegistry(
+            url_text_fallback=extract,
+            fetched_bytes_sink=self.persist,
+            resource_secret=b"scan-run",
+            cursor_secret=b"scan-cursors",
+        )
+
+    def resumed(self, *results: ToolResult) -> ResourceRegistry:
+        """A registry restored from what the Run made durable, as recovery restores one."""
+        registry = ResourceRegistry(resource_secret=b"scan-run", cursor_secret=b"scan-cursors")
+        for fetched in self.persisted:
+            registry.restore_fetched_resource(
+                resource_id=fetched.resource_id,
+                ordinal=fetched.ordinal,
+                filename=fetched.filename,
+                mime_type=fetched.mime_type,
+                url=fetched.url,
+                content=fetched.content,
+                admission_origin=fetched.admission_origin,
+                acquisition=fetched.acquisition,
+                aliases=fetched.aliases,
+            )
+        rows = [row for result in results for row in result.effects.attached_resources]
+        stored = {row.resource_id: row.content for row in rows}
+        for row in rows:
+            if row.resource_kind == "conversion_snapshot":
+                registry.adopt_conversion_snapshot(ConversionSnapshot.restore(row.content, stored))
+        return registry
+
+
+def _acquisition(result: ToolResult) -> str:
+    (source,) = result.effects.evidence_sources
+    return dict(source.attributes)["acquisition"]
+
+
+def _assert_viewed_and_read(run: _ScanRun, pages: ToolResult, text: ToolResult) -> None:
+    assert pages.is_error is False, pages.text_content
+    assert len(tool_content_attachments(pages.parts)) == 2
+    assert text.is_error is False, text.text_content
+    assert _EXTRACT_TEXT in text.text_content
+    assert "Physical PDF page count: 2." in text.text_content
+    # One fetch and one admitted representation, the bytes, whichever call came first;
+    # each call names where its own evidence came from.
+    assert run.fetches == [_SCAN_URL]
+    assert {fetched.content for fetched in run.persisted} == {run.content}
+    assert (_acquisition(pages), _acquisition(text)) == ("direct_http", "exa_extract")
+
+
+async def test_a_web_pdf_viewed_and_then_read_keeps_its_bytes_and_reads_extract_text(
+    monkeypatch,
+):
+    run = _ScanRun(monkeypatch)
+    async with run.registry() as registry:
+        read, view = tools(registry)
+        pages = await call(view, url=_SCAN_URL)
+        text = await call(read, url=_SCAN_URL)
+        again = await call(read, url=_SCAN_URL)
+
+    _assert_viewed_and_read(run, pages, text)
+    assert again.text_content == text.text_content
+
+
+async def test_a_web_pdf_read_and_then_viewed_keeps_its_bytes_and_reads_extract_text(
+    monkeypatch,
+):
+    run = _ScanRun(monkeypatch)
+    async with run.registry() as registry:
+        read, view = tools(registry)
+        text = await call(read, url=_SCAN_URL)
+        pages = await call(view, url=_SCAN_URL)
+
+    _assert_viewed_and_read(run, pages, text)
+
+
+async def test_a_web_pdf_viewed_and_read_in_one_batch_keeps_its_bytes_and_reads_extract_text(
+    monkeypatch,
+):
+    run = _ScanRun(monkeypatch)
+    async with run.registry() as registry:
+        read, view = tools(registry)
+        pages, text = await asyncio.gather(call(view, url=_SCAN_URL), call(read, url=_SCAN_URL))
+
+    _assert_viewed_and_read(run, pages, text)
+
+
+async def test_a_resumed_run_reads_and_views_a_web_pdf_as_before(monkeypatch):
+    """Recovery restores the bytes and their Extract text view, and fetches nothing."""
+    run = _ScanRun(monkeypatch)
+    async with run.registry() as registry:
+        read, view = tools(registry)
+        pages = await call(view, url=_SCAN_URL)
+        text = await call(read, url=_SCAN_URL)
+
+    async with run.resumed(pages, text) as resumed:
+        read, view = tools(resumed)
+        assert (await call(read, url=_SCAN_URL)).text_content == text.text_content
+        again = await call(view, url=_SCAN_URL)
+    assert [a.content_digest for a in tool_content_attachments(again.parts)] == [
+        a.content_digest for a in tool_content_attachments(pages.parts)
+    ]
+    assert run.fetches == [_SCAN_URL]

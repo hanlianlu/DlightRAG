@@ -205,7 +205,9 @@ def make_resource_reader(
                 effects=ToolEffects(attached_resources=registry.conversion_effects(resource_id)),
             )
         effects = (
-            _evidence_effects(result.resource_id, registry.evidence_source(result.resource_id))
+            _evidence_effects(
+                result.resource_id, registry.evidence_source(result.resource_id, text=True)
+            )
             if result.evidence_available
             else ToolEffects()
         )

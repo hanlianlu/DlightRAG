@@ -104,9 +104,13 @@ Acquiring a public Resource is not ordered. The Resource registry already shares
 fetch and one conversion among the calls that read the same Resource, and a group
 relies on that. The registry keeps every outcome consistent: the first bytes bound to
 a Resource win, so a URL and the page it redirects to read one representation of that
-page. A fetch in flight keeps the presentation headers it started with, and a
-different header is refused exactly as it is once the fetch has finished. What can
-still vary with timing is narrow:
+page. Text the Extract chain supplies because those bytes hold none is their text view,
+a conversion snapshot of exactly those bytes that settles with the read and is restored
+with them, never a second representation. A `view` of a scanned PDF and a `read` of its
+text therefore agree in either order or at once, and Extract text is the representation
+only of a Resource whose direct fetch bound nothing. A fetch in flight keeps the
+presentation headers it started with, and a different header is refused exactly as it
+is once the fetch has finished. What can still vary with timing is narrow:
 
 - Which of the two handles names a redirected page.
 - Which of two reads with different headers starts the fetch. The calls start in
@@ -173,7 +177,8 @@ The contract binds the Tool author. A read-only Tool that touches shared state b
 - the Research host's settlement.
 
 Further tests pin the registry's redirect and presentation outcomes under
-concurrent reads, and a stale group worker reporting its lost lease.
+concurrent reads, a `view` and a `read` of one Web Resource in either order or one
+group and after a resume, and a stale group worker reporting its lost lease.
 
 Revisit this decision if any of these happens:
 

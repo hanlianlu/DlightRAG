@@ -25,6 +25,7 @@ from dlightrag.engine.answer.resources.registry import (
 from dlightrag.engine.answer.resources.registry import (
     ResourceRegistry as _ResourceRegistry,
 )
+from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.web_sources import WebExtractResult, WebSourceUnavailable
 from dlightrag.engine.public_http import PublicHttpFetch, PublicHttpPresentation
 from tests.support.dns import public_dns
@@ -804,7 +805,9 @@ async def test_direct_decode_failure_uses_one_extract_fallback(serve) -> None:
     assert "recovered text" in result.content
     assert again.content == result.content
     assert fallback.calls == 1
-    assert registry.evidence_source(resource_id)["acquisition"] == "tavily_extract"
+    # The bytes stay what the Resource holds; the text a read cites came from Extract.
+    assert registry.evidence_source(resource_id)["acquisition"] == "direct_http"
+    assert registry.evidence_source(resource_id, text=True)["acquisition"] == "tavily_extract"
 
 
 async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(serve) -> None:
@@ -955,7 +958,12 @@ async def test_a_failed_fetch_leaves_the_extract_snapshot_another_read_admitted(
     assert set(owners) == {first, second, third}
 
 
-async def test_extract_fallback_persists_only_the_admitted_text_snapshot(serve) -> None:
+async def test_an_extract_text_view_settles_beside_the_bytes_it_reads(serve) -> None:
+    """The fetched bytes stay the one representation; Extract text is their view.
+
+    The bytes settle through the sink, the view with the read that took it, and
+    recovery restores both, so the resumed read returns the same text unextracted.
+    """
     admitted = []
 
     async def persist(fetched, _owner) -> None:
@@ -969,22 +977,28 @@ async def test_extract_fallback_persists_only_the_admitted_text_snapshot(serve) 
     result = await registry.read(resource_id)
 
     assert result.content == "  provider body text\n"
-    assert len(admitted) == 1
-    assert admitted[0].content == b"  provider body text\n"
-    assert admitted[0].acquisition == "exa_extract"
+    assert [(fetched.content, fetched.acquisition) for fetched in admitted] == [
+        (b"", "direct_http")
+    ]
+    view = registry.conversion_effects(resource_id)
 
     recovered = ResourceRegistry()
+    (fetched,) = admitted
     recovered.restore_fetched_resource(
         resource_id=resource_id,
-        ordinal=admitted[0].ordinal,
-        filename="report.html",
-        mime_type="text/markdown; charset=utf-8",
-        url=admitted[0].url,
-        content=admitted[0].content,
+        ordinal=fetched.ordinal,
+        filename=fetched.filename,
+        mime_type=fetched.mime_type,
+        url=fetched.url,
+        content=fetched.content,
         admission_origin="agent",
-        acquisition="exa_extract",
+        acquisition=fetched.acquisition,
     )
+    stored = {row.resource_id: row.content for row in view}
+    (snapshot,) = [row for row in view if row.resource_kind == "conversion_snapshot"]
+    recovered.adopt_conversion_snapshot(ConversionSnapshot.restore(snapshot.content, stored))
     assert (await recovered.read(resource_id)).content == "  provider body text\n"
+    assert fallback.calls == 1
 
 
 async def test_direct_empty_triggers_extract_fallback(serve) -> None:

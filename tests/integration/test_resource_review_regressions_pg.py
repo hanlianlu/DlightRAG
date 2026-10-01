@@ -24,6 +24,7 @@ from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.fold import PriorTurns, project_session_messages
 from dlightrag.engine.agent.session.ids import LaneId
+from dlightrag.engine.agent.tool_content import tool_content_attachments
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
@@ -78,6 +79,7 @@ from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.subagents import SubagentHost
+from dlightrag.engine.answer.web_sources import WebExtractResult
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import RunCoordinator
 from tests.integration.run_runtime_pg_harness import run_envelope
@@ -89,6 +91,7 @@ from tests.integration.test_attachment_replay_pg import (  # noqa: F401
     orchestrator,
     origin,
 )
+from tests.support.resources import pdf_bytes
 from tests.support.resources import png as png_bytes
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 from tests.unit.test_answer_executor import _resource_resolver
@@ -210,6 +213,80 @@ async def test_url_terminal_source_and_conversion_settle_together(
             assert result.is_error and "safety_refused" in result.text_content
         with pytest.raises(ResourceAdmissionError, match="previously refused"):
             await call(view, resource_id=resource)
+
+
+async def test_a_web_pdf_viewed_and_read_in_one_group_resumes_as_it_was_read(pg, monkeypatch):
+    """A scanned PDF whose server labels it HTML is viewed and read in one Tool group.
+
+    The view renders its bytes and the read takes Extract text, since the bytes hold
+    none. What settles is the bytes and that text as their view, so the resumed Run
+    reads and views the PDF again without fetching or extracting it.
+    """
+    session, session_id = await new_run(pg[0])
+    url = "https://example.com/scan.pdf"
+    content = pdf_bytes(2)
+    fetch = AsyncMock(
+        return_value=SimpleNamespace(content=content, final_url=url, media_type="text/html")
+    )
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", fetch)
+
+    async def extract(page: str) -> WebExtractResult:
+        return WebExtractResult(
+            url=page, text="Extracted text of the scan.", provider="exa", acquisition="exa_extract"
+        )
+
+    buffer = FetchedResourceBuffer()
+
+    async def sink(fetched, owner):
+        buffer.append(fetched, owner)
+
+    seen: list[Any] = []
+    async with ResourceRegistry(
+        resource_secret=b"scan", url_text_fallback=extract, fetched_bytes_sink=sink
+    ) as registry:
+
+        async def model(**kwargs):
+            if not seen:
+                seen.append(kwargs["messages"])
+                return AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall("view-1", "view", {"url": url}),
+                        ToolCall("read-1", "read", {"url": url}),
+                    ),
+                    stop_reason="tool_use",
+                )
+            seen.append(kwargs["messages"])
+            return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+        host = orchestrator(model, registry=registry)
+        await drive(
+            session,
+            session_id,
+            host,
+            host.prepare_run("view and read the scan", registry=registry),
+            fetched_buffer=buffer,
+        )
+        (entry,) = registry.manifest()
+    answered = str(seen[-1])
+    assert "Extracted text of the scan." in answered
+    assert "two admitted representations" not in answered
+    assert fetch.await_count == 1
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("a resumed Run neither fetches nor extracts")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", forbidden)
+    async with ResourceRegistry(resource_secret=b"scan", url_text_fallback=forbidden) as resumed:
+        await executor(pg)._restore_registry_fetches(resumed, owner_id=OWNER, run_id=session.run_id)
+        from tests.support.resources import call, tools
+
+        read, view = tools(resumed)
+        text = await call(read, resource_id=entry.resource_id)
+        pages = await call(view, resource_id=entry.resource_id)
+    assert "Extracted text of the scan." in text.text_content
+    assert pages.is_error is False
+    assert len(tool_content_attachments(pages.parts)) == 2
 
 
 @pytest.mark.parametrize(
