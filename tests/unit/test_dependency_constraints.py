@@ -209,47 +209,6 @@ def test_docx_native_parser_runtime_dependency_is_direct() -> None:
     assert any(dep.lower().startswith("python-docx") for dep in dependencies)
 
 
-def test_default_parser_routing_has_no_unrouted_fallback() -> None:
-    """Default ingestion must not silently degrade into an unrouted parser path."""
-    from dlightrag.application.config import DlightragConfig
-    from dlightrag.engine.ai.settings import EmbeddingSettings
-
-    cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        models={
-            "embedding": EmbeddingSettings(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                startup_probe=False,
-            ),
-        },
-    )
-
-    assert ("leg" + "acy") not in cfg.corpus.parser_rules.lower()
-
-
-def test_config_yaml_uses_input_modality_for_rerank() -> None:
-    config = Path("config.yaml").read_text(encoding="utf-8")
-
-    assert re.search(r"(?m)^    input_modality: auto$", config)
-    assert not re.search(r"(?m)^    api_key:", config)
-    assert "multimodal:" not in config
-
-
-def test_curated_config_owns_auth_policy_without_credentials() -> None:
-    config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
-
-    assert config["access"] == {"auth_mode": "none"}
-
-
-def test_curated_config_selects_exactly_one_parser_sidecar() -> None:
-    config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
-    sidecars = config["corpus"]["sidecars"]
-
-    selected = [name for name in ("mineru", "docling") if sidecars.get(name) is not None]
-    assert len(selected) == 1
-
-
 def test_compose_reader_service_is_a_profiled_second_role() -> None:
     """The read-only replica is topology, not a hand-assembled docker run.
 

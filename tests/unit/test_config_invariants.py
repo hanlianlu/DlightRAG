@@ -419,15 +419,6 @@ def test_incomplete_secret_only_role_error_never_echoes_key(
     assert "never-echo-role-secret" not in str(caught.value)
 
 
-def test_legacy_dotenv_key_is_rejected(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    env_file = tmp_path / ".env"
-    env_file.write_text("DLIGHTRAG_POSTGRES_HOST=legacy-db\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="postgres_host: Extra inputs"):
-        load_config(env_file)
-
-
 def test_web_source_orders_derive_from_available_credentials() -> None:
     config = WebSourcesConfig(
         exa=WebSourceProviderConfig(api_key="exa-key"),

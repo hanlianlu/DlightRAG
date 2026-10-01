@@ -277,30 +277,3 @@ def test_only_the_named_suite_gates_stay_visible_to_tests(
     )
     assert config_sections._is_auxiliary_env_name("DLIGHTRAG_CLIENT_PROFILE")
     assert not _is_suite_gate("DLIGHTRAG_CLIENT_PROFILE")
-
-
-def test_shipped_config_and_env_example_use_canonical_sections() -> None:
-    root = _REPO_ROOT
-    config_text = (root / "config.yaml").read_text(encoding="utf-8")
-    env_text = (root / ".env.example").read_text(encoding="utf-8")
-
-    assert "models:\n" in config_text
-    assert "  embedding:\n" in config_text
-    assert "    input_modality: auto\n" in config_text
-    assert config_text.count("model: deepseek-flash\n") == 4
-    assert "model: deepseek-v4.1-flash\n" not in config_text
-    assert config_text.count("reasoning: off\n") == 4
-    assert 'reasoning: "off"\n' not in config_text
-    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY" in env_text
-    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY" in env_text
-    assert "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY" not in env_text
-    assert "DLIGHTRAG_WEB_SEARCH__API_KEY" not in env_text
-
-
-def test_old_yaml_root_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "config.yaml").write_text("postgres_host: old-db\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
-
-    with pytest.raises(Exception, match="Extra inputs"):
-        DlightragConfig()

@@ -3,6 +3,8 @@
 
 import os
 import re
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -106,27 +108,30 @@ def test_nested_environment_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.corpus.promotion.doc_threshold == 3
 
 
-def test_old_flat_constructor_field_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="Extra inputs"):
-        DlightragConfig(postgres_host="old")  # type: ignore[call-arg]
-
-
 @pytest.mark.parametrize(
-    "name",
-    ["DLIGHTRAG_POSTGRES_HOST", "DLIGHTRAG_OPENAI_API_KEY", "DLIGHTRAG_POSTGRES_SHARED_BUFFERS"],
+    "source", ["constructor", "config.yaml", ".env", "environment", "lowercase environment"]
 )
-def test_retired_environment_names_are_rejected(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
-    monkeypatch.setenv(name, "old")
-    with pytest.raises(ValueError, match="Unknown DlightRAG environment variables"):
-        DlightragConfig()
-
-
-def test_the_environment_gate_ignores_case_like_the_settings_do(
-    monkeypatch: pytest.MonkeyPatch,
+def test_the_flat_postgres_host_is_refused_from_every_source(
+    source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("dlightrag_postgres_host", "old")
-    with pytest.raises(ValueError, match="dlightrag_postgres_host"):
-        DlightragConfig()
+    """The nine sections replaced the flat names, and no source may bring one back."""
+    monkeypatch.chdir(tmp_path)
+    load: Callable[[], object] = DlightragConfig
+    match source:
+        case "constructor":
+            load = partial(DlightragConfig, postgres_host="old")
+        case "config.yaml":
+            (tmp_path / "config.yaml").write_text("postgres_host: old\n", encoding="utf-8")
+        case ".env":
+            (tmp_path / ".env").write_text("DLIGHTRAG_POSTGRES_HOST=old\n", encoding="utf-8")
+            load = partial(load_config, tmp_path / ".env")
+        case "environment":
+            monkeypatch.setenv("DLIGHTRAG_POSTGRES_HOST", "old")
+        case "lowercase environment":
+            monkeypatch.setenv("dlightrag_postgres_host", "old")
+
+    with pytest.raises(ValueError, match="(?i)postgres_host"):
+        load()
 
 
 def test_a_renamed_compose_input_names_its_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,16 +151,21 @@ def test_auxiliary_environment_is_not_misread_as_server_config(
     assert DlightragConfig().interfaces.api.host == "127.0.0.1"
 
 
-@pytest.mark.parametrize("compose_file", ["docker-compose.yml", "packages/memory/compose.yaml"])
-def test_compose_uses_the_reserved_namespace_only_for_config_fields(compose_file: str) -> None:
+@pytest.mark.parametrize(
+    "shared_file", ["docker-compose.yml", "packages/memory/compose.yaml", ".env.example"]
+)
+def test_the_shared_env_uses_the_reserved_namespace_only_for_config_fields(
+    shared_file: str,
+) -> None:
     """A .env shared by Compose and the application may hold only names the application accepts.
 
-    Compose-only inputs use COMPOSE_*; any DLIGHTRAG_* name Compose reads or sets must be a
-    configuration field, or the application refuses to start from that .env.
+    Compose-only inputs use COMPOSE_*; any DLIGHTRAG_* name Compose reads or sets, or the
+    .env template offers, must be a configuration field, or the application refuses to
+    start from that .env.
     """
-    compose = (_REPO / compose_file).read_text(encoding="utf-8")
-    names = set(re.findall(r"\$\{?(DLIGHTRAG_[A-Z0-9_]+)", compose))
-    names |= set(re.findall(r"^\s+-?\s*(DLIGHTRAG_[A-Z0-9_]+)[:=]", compose, re.M))
+    text = (_REPO / shared_file).read_text(encoding="utf-8")
+    names = set(re.findall(r"\$\{?(DLIGHTRAG_[A-Z0-9_]+)", text))
+    names |= set(re.findall(r"^[\s#-]*(DLIGHTRAG_[A-Z0-9_]+)[:=]", text, re.M))
 
     assert sorted(name for name in names if not names_a_config_field(name)) == []
 
