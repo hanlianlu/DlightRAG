@@ -15,6 +15,7 @@ from dlightrag.engine.ai.messages import (
     ToolChoice,
     ToolDefinition,
     ToolStopReason,
+    content_with_attachments,
 )
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
@@ -111,6 +112,8 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         # endpoints; drop them instead of forwarding an empty list.
         if native.get("role") == "assistant" and native.get("tool_calls") == []:
             native.pop("tool_calls", None)
+        if native.get("role") == "user" and message.get("attachments"):
+            native["content"] = content_with_attachments(message)
         if message.get("role") != "tool":
             flush_images()
         converted.append(native)

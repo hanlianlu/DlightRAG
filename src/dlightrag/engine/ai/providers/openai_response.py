@@ -13,6 +13,7 @@ from dlightrag.engine.ai.messages import (
     ToolCall,
     ToolChoice,
     ToolDefinition,
+    content_with_attachments,
 )
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
@@ -342,7 +343,7 @@ def response_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "role": role,
                     "content": _response_content(
-                        message.get("content", ""), allow_images=role == "user"
+                        content_with_attachments(message), allow_images=role == "user"
                     ),
                 }
             )

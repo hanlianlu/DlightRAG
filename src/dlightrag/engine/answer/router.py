@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from dlightrag.engine.agent.session.fold import conversation_messages
+from dlightrag.engine.ai.messages import message_text
 from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.mode import ModeResource, ResolvedMode
@@ -142,7 +143,12 @@ class AnswerModeRouter:
             f"allowed: {allowed}"
         )
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-        messages.extend(conversation_messages(history))
+        # The router's model reads words: a history image is not its to see.
+        messages.extend(
+            {"role": message["role"], "content": text}
+            for message in conversation_messages(history)
+            if (text := message_text(message["content"])).strip()
+        )
         messages.append({"role": "user", "content": user})
         return messages
 

@@ -16,6 +16,7 @@ from dlightrag.engine.ai.messages import (
     ToolChoice,
     ToolDefinition,
     ToolStopReason,
+    content_with_attachments,
 )
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
@@ -158,7 +159,7 @@ def _anthropic_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
         converted.append(
             {
                 "role": str(role or "user"),
-                "content": _convert_content(message.get("content", "")),
+                "content": _convert_content(content_with_attachments(message)),
             }
         )
     return converted

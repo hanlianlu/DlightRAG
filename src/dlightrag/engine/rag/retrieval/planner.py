@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
+from dlightrag.engine.ai.messages import message_text
 from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
@@ -36,7 +37,7 @@ def _convert_history_to_text(history: PlannerHistory | None) -> str:
     lines: list[str] = []
     for message in history:
         role = message.get("role", "user")
-        lines.append(f"{role}: {message.get('content', '')}")
+        lines.append(f"{role}: {message_text(message.get('content', ''))}")
     return "\n".join(lines)
 
 

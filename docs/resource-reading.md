@@ -225,7 +225,8 @@ completeness, or untested platforms.
   selected occurrences under its own Run lease and fence, then checks each Blob
   digest; missing, mismatched, or unauthorized bytes fail explicitly. Replayed
   images are charged to the consuming model's image budget. Hydration alone
-  registers no earlier handle.
+  registers no earlier handle. Fast has no tool results to carry them in, so it
+  sends them as images of the question their turn answered.
 - Earlier uploads re-registered for a follow-up load their bytes only when read
   or viewed.
 - Lineage adoption is on by default (`answer.generation.lineage_adoption`). When

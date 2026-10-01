@@ -26,6 +26,8 @@ _DURABLE_PG_SUITES = {
     "tests/integration/test_corpus_mutation_phase_faults_pg.py",
     "tests/integration/test_run_runtime_lane_independence_pg.py",
     "tests/integration/test_run_runtime_query_plans_pg.py",
+    "tests/integration/test_attachment_replay_pg.py",
+    "tests/integration/test_resource_review_regressions_pg.py",
 }
 _REQUIRED_ENV = {
     "PGHOST": "localhost",

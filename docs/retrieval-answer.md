@@ -349,6 +349,12 @@ durable Session history against the same Fast calls before it compacts. Both
 sides build these calls in `engine/answer/execution/acceptance.py`, so they
 cannot disagree about which calls exist or how each is measured.
 
+Fast and routing continue the conversation, not the tool work in it: an earlier
+Research turn's tool calls, tool results and provider state stay out of their
+history. The images that turn's tools viewed are what its answer saw, so Fast keeps
+them as attachments of the question the turn answered, and a follow-up sees them.
+Routing and retrieval planning read the history's words alone.
+
 A Research request is the previous request plus new material, so a provider prefix
 cache can reuse it: the Session fold only appends, admitted Evidence text is frozen
 into the Tool result that produced it, and nothing is composed per turn. What a Run

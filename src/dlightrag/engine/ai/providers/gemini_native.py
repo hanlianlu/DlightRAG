@@ -17,6 +17,7 @@ from dlightrag.engine.ai.messages import (
     ToolChoice,
     ToolDefinition,
     ToolStopReason,
+    content_with_attachments,
 )
 from dlightrag.engine.ai.providers.base import (
     CompletionOutput,
@@ -166,7 +167,7 @@ def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         contents.append(
             {
                 "role": _ROLE_MAP.get(str(role), str(role or "user")),
-                "parts": _convert_content(message.get("content", "")),
+                "parts": _convert_content(content_with_attachments(message)),
             }
         )
     return contents

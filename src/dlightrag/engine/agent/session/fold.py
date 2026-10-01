@@ -168,14 +168,36 @@ def conversation_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[st
     provider state behind its answer. A call that only continues the conversation,
     as routing and Fast do, is handed none of it: hundreds of kilobytes it does not
     need, and unfinished work a model may take up instead of its own task.
+
+    The images its tools viewed are what the answer saw, so they stay: as durable
+    attachments of the question that turn answered, which the Run hydrates and a
+    provider shows as images of that question. Content stays as written, so a
+    reader of words alone sees no difference.
     """
-    return [
-        {"role": message["role"], "content": message["content"]}
-        for message in messages
-        if message.get("role") in {"user", "assistant"}
-        and not message.get("tool_calls")
-        and message.get("content")
-    ]
+    conversation: list[dict[str, Any]] = []
+    viewed: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "tool":
+            viewed.extend(dict(attachment) for attachment in message.get("attachments") or ())
+            continue
+        if role not in {"user", "assistant"} or message.get("tool_calls"):
+            continue
+        _attach_viewed(conversation, viewed)
+        if message.get("content"):
+            conversation.append({"role": role, "content": message["content"]})
+    _attach_viewed(conversation, viewed)
+    return conversation
+
+
+def _attach_viewed(conversation: list[dict[str, Any]], viewed: list[dict[str, Any]]) -> None:
+    """Move the images a turn's tools viewed onto the question that turn answered."""
+    if not viewed:
+        return
+    if not conversation or conversation[-1]["role"] != "user":
+        conversation.append({"role": "user", "content": ""})
+    conversation[-1].setdefault("attachments", []).extend(viewed)
+    viewed.clear()
 
 
 def retained_session_entries(

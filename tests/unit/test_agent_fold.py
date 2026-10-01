@@ -101,6 +101,46 @@ def test_conversation_messages_leave_out_the_work_between_turns() -> None:
     ]
 
 
+def test_conversation_messages_keep_what_a_turn_viewed_on_the_question_it_answered() -> None:
+    """Once tool work left Fast's history, a Fast follow-up after a Research turn sent
+    none of the pixels that turn viewed. They are what the earlier answer saw, so they
+    stay, as attachments of the question it answered; the question's words do not
+    change."""
+    page = {"resource_id": "res-1", "media_type": "image/png", "content_digest": "a" * 64}
+    overview = {**page, "resource_id": "res-2"}
+
+    def view(call_id: str, attachment: dict[str, str]) -> list[dict[str, object]]:
+        return [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": call_id}]},
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": "a page",
+                "attachments": [attachment],
+            },
+        ]
+
+    messages = [
+        {"role": "user", "content": "what does page 3 show?"},
+        *view("call-1", page),
+        *view("call-2", overview),
+        {"role": "assistant", "content": "A rising revenue chart."},
+        {"role": "user", "content": "and page 4?"},
+        *view("call-3", page),
+    ]
+
+    conversation = conversation_messages(messages)
+
+    assert conversation == [
+        {"role": "user", "content": "what does page 3 show?", "attachments": [page, overview]},
+        {"role": "assistant", "content": "A rising revenue chart."},
+        # A turn that stopped before its answer still keeps what it viewed.
+        {"role": "user", "content": "and page 4?", "attachments": [page]},
+    ]
+    # The Run hydrates the view's own copies, not the projection it was read from.
+    assert conversation[0]["attachments"][0] is not page
+
+
 def test_fold_projects_only_conversation_semantics_in_source_order() -> None:
     session_id = SessionId.new()
     entries = (

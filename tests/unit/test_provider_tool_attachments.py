@@ -7,6 +7,7 @@ import json
 from dlightrag.engine.ai.providers.anthropic_native import _anthropic_tool_messages
 from dlightrag.engine.ai.providers.gemini_native import _gemini_tool_contents
 from dlightrag.engine.ai.providers.openai_compatible import _openai_tool_messages
+from dlightrag.engine.ai.providers.openai_response import response_input
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
 DATA_URL = f"data:image/png;base64,{_PNG}"
@@ -323,3 +324,61 @@ def test_plain_tool_message_projects_without_any_user_turn() -> None:
     converted = _openai_tool_messages([plain])
     assert len(converted) == 1
     assert converted[0]["role"] == "tool"
+
+
+def _viewed_question(*, hydrated: bool = True) -> dict[str, object]:
+    """A question carrying the images its turn viewed, as Fast's conversation sends it."""
+    (attachment,) = _tool_message()["attachments"]  # type: ignore[misc]
+    if not hydrated:
+        attachment = {key: value for key, value in attachment.items() if key != "data_url"}
+    return {"role": "user", "content": "what does page 3 show?", "attachments": [attachment]}
+
+
+def test_every_provider_shows_a_questions_attachments_as_its_images() -> None:
+    question = "what does page 3 show?"
+    assert _anthropic_tool_messages([_viewed_question()]) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": question},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": _PNG},
+                },
+            ],
+        }
+    ]
+    assert _gemini_tool_contents([_viewed_question()]) == [
+        {
+            "role": "user",
+            "parts": [
+                {"text": question},
+                {"inline_data": {"mime_type": "image/png", "data": base64.b64decode(_PNG)}},
+            ],
+        }
+    ]
+    assert _openai_tool_messages([_viewed_question()]) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {"url": DATA_URL}},
+            ],
+        }
+    ]
+    assert response_input([_viewed_question()]) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": question},
+                {"type": "input_image", "image_url": DATA_URL},
+            ],
+        }
+    ]
+
+
+def test_an_unhydrated_attachment_leaves_the_question_as_written() -> None:
+    """Routing reads the history before the Run hydrates it; nothing is sent then."""
+    assert _openai_tool_messages([_viewed_question(hydrated=False)]) == [
+        {"role": "user", "content": "what does page 3 show?"}
+    ]

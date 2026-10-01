@@ -2,6 +2,7 @@
 """Provider-neutral contracts for one tool-capable model turn."""
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -31,6 +32,38 @@ class ToolCall:
     arguments: dict[str, Any]
     argument_error: str | None = None
     thought_signature: Any | None = None
+
+
+def content_with_attachments(message: Mapping[str, Any]) -> Any:
+    """A user message's content, followed by its hydrated attachments as images.
+
+    A durable attachment is a reference in the Session, which the Run hydrates with a
+    transport-only ``data_url``. Every provider already reads an ``image_url`` block
+    in a user turn, so that is what the attachments become. A tool result places its
+    own pixels wherever its provider allows them.
+    """
+    content = message.get("content", "")
+    images = [
+        {"type": "image_url", "image_url": {"url": str(attachment["data_url"])}}
+        for attachment in message.get("attachments") or ()
+        if isinstance(attachment, Mapping) and attachment.get("data_url")
+    ]
+    if not images:
+        return content
+    if isinstance(content, str):
+        return [*([{"type": "text", "text": content}] if content else []), *images]
+    return [*content, *images]
+
+
+def message_text(content: object) -> str:
+    """The words of a message's content: the text itself, or its text parts joined."""
+    if isinstance(content, list):
+        return "\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+        )
+    return content if isinstance(content, str) else ""
 
 
 def tool_call_message(call: ToolCall) -> dict[str, Any]:
