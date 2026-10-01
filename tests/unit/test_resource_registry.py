@@ -493,28 +493,6 @@ async def test_read_unknown_resource_raises() -> None:
         await registry.read("res-does-not-exist")
 
 
-async def test_direct_text_read_uses_no_temp_file() -> None:
-    registry = ResourceRegistry()
-    resource_id = registry.register(ResourceInput(content=b"just text"))
-
-    await registry.read(resource_id)
-
-    assert registry.has_temp_storage is False
-
-
-async def test_ensure_path_materializes_temp_and_aclose_cleans_up() -> None:
-    registry = ResourceRegistry()
-    resource_id = registry.register(ResourceInput(filename="d.txt", content=b"bytes"))
-
-    path = await registry.ensure_path(resource_id)
-    assert path.exists()
-    assert path.read_bytes() == b"bytes"
-    assert registry.has_temp_storage is True
-
-    await registry.aclose()
-    assert not path.exists()
-
-
 async def test_cancellation_during_fetch_propagates_and_cleans_up(serve) -> None:
     serve(_Fetch(fail=asyncio.CancelledError))
     registry = ResourceRegistry()
@@ -586,17 +564,6 @@ async def test_aclose_cancels_and_joins_pending_loader() -> None:
     finally:
         read_task.cancel()
         await asyncio.gather(read_task, return_exceptions=True)
-
-
-async def test_async_context_manager_closes_owned_resources() -> None:
-    registry = ResourceRegistry()
-    async with registry as active:
-        resource_id = active.register(ResourceInput(content=b"payload"))
-        path = await active.ensure_path(resource_id)
-        assert path.exists()
-
-    assert not path.exists()
-    assert registry.has_temp_storage is False
 
 
 # ---------------------------------------------------------------------------

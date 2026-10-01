@@ -6,9 +6,8 @@ public HTTP(S) locators are fetched lazily and the first successful acquisition
 becomes a fixed durable snapshot. Full bytes never enter model context — only
 bounded text windows do. Continuation cursors are opaque, run-scoped tokens bound
 to a Resource Handle and focus so they expose no path, offset, or provider
-locator. Temporary files are created only when a caller explicitly needs a
-filesystem path; direct text reads never spill to disk. ``aclose``
-deterministically releases the fetch client and temporary storage.
+locator. ``aclose`` deterministically cancels pending fetches and joins the
+conversions still running.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ import hashlib
 import hmac
 import secrets
 import struct
-import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from importlib.metadata import version
@@ -199,7 +197,6 @@ class ResourceRegistry:
         self._caller_dedup: set[tuple[str, bytes]] = set()
         self._fetched: dict[str, bytes] = {}
         self._cursor_plans: dict[tuple[str, str | None, int], tuple[tuple[int, int], ...]] = {}
-        self._paths: dict[str, Path] = {}
         self._converted: dict[str, _ConvertedResource] = {}
         self._visual_assets: dict[tuple[str, str], ExtractedVisual] = {}
         self._snapshots: dict[str, ConversionSnapshot] = {}
@@ -208,7 +205,6 @@ class ResourceRegistry:
         self._conversion_tasks: dict[str, asyncio.Task[_ConvertedResource]] = {}
         # Views of bytes this Run publishes; see ``conversion_view``.
         self._view_tasks: set[asyncio.Task[ConversionSnapshot]] = set()
-        self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._total_bytes = 0
         self._closed = False
         # Durable replay slots for run-scoped fetched bytes. An ordinal is minted
@@ -681,32 +677,6 @@ class ResourceRegistry:
     ) -> bytes:
         """Return full bytes, attributing any fetch to an explicit effect."""
         return await self._materialize_bytes(self._require(resource_id), effect_owner=effect_owner)
-
-    async def ensure_path(
-        self,
-        resource_id: str,
-        *,
-        effect_owner: ResourceEffectOwner | None = None,
-    ) -> Path:
-        """Materialize a Resource to an ephemeral temporary file and return it.
-
-        Only binary readers that need a filesystem path call this; direct text
-        reads never do, so text answers never create temporary storage.
-        """
-        resource = self._require(resource_id)
-        existing = self._paths.get(resource_id)
-        if existing is not None:
-            return existing
-        content = await self._materialize_bytes(resource, effect_owner=effect_owner)
-        resource = self._require(resource_id)
-        resource_id = resource.resource_id
-        if self._tempdir is None:
-            self._tempdir = tempfile.TemporaryDirectory(prefix="dlrag-res-")
-        name = safe_source_filename(resource.filename or resource_id)
-        path = Path(self._tempdir.name) / f"{resource_id}-{name}"
-        path.write_bytes(content)
-        self._paths[resource_id] = path
-        return path
 
     async def read(
         self,
@@ -1338,7 +1308,7 @@ class ResourceRegistry:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         # Native conversion may still be running after its caller was cancelled.
-        # Join it before releasing adopted views and storage; never launch fallback.
+        # Join it before releasing adopted views; never launch fallback.
         conversions = [*self._conversion_tasks.values(), *self._view_tasks]
         if conversions:
             await asyncio.gather(*conversions, return_exceptions=True)
@@ -1347,20 +1317,12 @@ class ResourceRegistry:
         self._snapshots.clear()
         self._pdf_counts.clear()
         self._refused.clear()
-        if self._tempdir is not None:
-            self._tempdir.cleanup()
-            self._tempdir = None
-        self._paths.clear()
         self._converted.clear()
         self._visual_assets.clear()
         self._text_views.clear()
         self._cursor_plans.clear()
         self._fetch_tasks.clear()
         self._fallback_tasks.clear()
-
-    @property
-    def has_temp_storage(self) -> bool:
-        return self._tempdir is not None
 
     def _canonical_resource_id(self, resource_id: str) -> str:
         seen: set[str] = set()
