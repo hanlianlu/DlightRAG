@@ -3,24 +3,36 @@
 
 import ast
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
 
 import pytest
 
+from dlightrag.adapters.postgres.runtime.run_store import RUN_MIGRATIONS
 from dlightrag.engine.runtime.contracts import RunKind, RunLane, RunStatus
-from dlightrag.engine.runtime.records import RunEventType
 
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_runtime_closed_lifecycle_kind_and_lane_sets() -> None:
-    assert get_args(RunStatus) == ("queued", "running", "succeeded", "failed", "cancelled")
-    assert get_args(RunKind) == ("retrieval", "answer", "corpus_mutation")
-    assert get_args(RunLane) == ("query", "corpus_mutation")
-    assert RunEventType.__value__ is str
+@pytest.mark.parametrize(
+    ("vocabulary", "constraint"),
+    [
+        (RunStatus, "dlightrag_runs_status_check"),
+        (RunKind, "dlightrag_runs_kind_check"),
+        (RunLane, "dlightrag_runs_lane_check"),
+    ],
+)
+def test_run_vocabulary_is_what_the_run_table_accepts(vocabulary: Any, constraint: str) -> None:
+    schema = "\n".join(
+        statement for migration in RUN_MIGRATIONS for statement in migration.statements
+    )
+    check = re.search(rf"CONSTRAINT {constraint}\s+CHECK \(\w+ IN \(([^)]*)\)\)", schema)
+
+    assert check is not None, constraint
+    assert get_args(vocabulary) == tuple(re.findall(r"'([^']*)'", check.group(1)))
 
 
 def test_sdk_and_runtime_import_without_composition_or_transports() -> None:
