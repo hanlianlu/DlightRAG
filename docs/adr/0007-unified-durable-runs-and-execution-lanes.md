@@ -32,9 +32,10 @@ The migration was sliced. Slice 1 removed the Answer-only lifecycle and moved
 Answer through the common Runtime. Slice 2 made top-level Retrieval durable on
 the same Query Lane while keeping Answer's internal Retrieval Stage direct.
 Slice 5 moved Corpus Mutation execution onto its dedicated lane in the same
-Runtime; Slice 6 validated both lanes' default bounds with controlled
-one-process fake-executor evidence, [recorded with its
-limits](../run-runtime-and-scaling-target.md#captured-local-load-evidence). No parallel Answer, inline
+Runtime; Slice 6 validated the local worker bounds and the Corpus Mutation
+admission limit with controlled one-process fake-executor evidence, [recorded with
+its limits](../run-runtime-and-scaling-target.md#captured-local-load-evidence); the
+Query admission limit was not reached. No parallel Answer, inline
 top-level Retrieval, or Ingest Job lifecycle
 is retained as a compatibility path. The implementation keeps the combined Application
 process topology and existing writer/reader capabilities: only writer-capable

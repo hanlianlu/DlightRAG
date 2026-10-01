@@ -1313,7 +1313,7 @@ async def test_fenced_shared_gate_fails_promptly_while_exclusive_is_held(
     async def hold_exclusive() -> None:
         async with workspace_write_gate(ws, exclusive=True):
             holder_in.set()
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(3.0)
 
     holder = asyncio.create_task(hold_exclusive())
     try:
@@ -1323,9 +1323,9 @@ async def test_fenced_shared_gate_fails_promptly_while_exclusive_is_held(
             async with workspace_write_gate(ws):
                 pytest.fail("shared gate must refuse under an active fence")
         elapsed = time.monotonic() - start
-        # Prompt refusal: the preflight raised without waiting for the
-        # exclusive holder (1.2s) to finish.
-        assert elapsed < 0.5
+        # Prompt refusal: the preflight raised without waiting for the exclusive
+        # holder (3s) to finish. Half the hold leaves a slow runner its margin.
+        assert elapsed < 1.5
         assert excinfo.value.retry_after_seconds > 0
         await asyncio.wait_for(holder, timeout=5)
     finally:

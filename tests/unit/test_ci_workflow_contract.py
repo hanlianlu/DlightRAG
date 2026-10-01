@@ -29,6 +29,29 @@ def _named_step(job: dict[str, Any], name: str) -> dict[str, Any]:
     return next(step for step in job["steps"] if step.get("name") == name)
 
 
+def test_every_gate_runs_on_each_push_and_pull_request_and_cannot_pass_by_skipping() -> None:
+    """A skipped job counts as passed, so a gate that may not run is no gate."""
+    workflow = yaml.safe_load(_CI_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = workflow.get("on", workflow.get(True))  # YAML 1.1 reads a bare `on` as true
+
+    assert {"push", "pull_request"} <= set(triggers)
+    for name in ("fast", "integration", "browser-e2e"):
+        job = workflow["jobs"][name]
+        assert "if" not in job and "needs" not in job, name
+        assert not any(step.get("continue-on-error") for step in job["steps"]), name
+    fast = "\n".join(step.get("run", "") for step in workflow["jobs"]["fast"]["steps"])
+    for gate in (
+        "make lint",
+        "make typecheck",
+        "make architecture-check",
+        "make release-check",
+        "make frontend-lint",
+        "make frontend-test",
+        "make test-unit",
+    ):
+        assert gate in fast, gate
+
+
 def test_every_postgresql_suite_runs_in_ci_or_says_why_not() -> None:
     command = _named_step(_job("integration"), _PG_TESTS)["run"]
     selected = set(re.findall(r"tests/integration/test_\w+\.py", command))

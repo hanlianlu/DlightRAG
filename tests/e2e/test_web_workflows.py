@@ -19,8 +19,15 @@ def test_a_reload_restores_the_saved_question_and_answer(page: Page) -> None:
     composer = _open_ready_chat(page)
     query = "How does DlightRAG work?"
     composer.fill(query)
-    page.get_by_label("Send").click()
 
+    with page.expect_request(lambda request: request.url.endswith("/web/api/answer")) as captured:
+        page.get_by_label("Send").click()
+
+    # The answer searches what the scope picker shows: here, every workspace.
+    payload = captured.value.post_data_json
+    assert isinstance(payload, dict)
+    assert payload["query"] == query
+    assert set(payload["workspaces"]) == {"default", "research"}
     expect(page.get_by_text("DlightRAG is a multimodal RAG system.", exact=True)).to_be_visible()
     page.wait_for_url("**/web/conversations/*")
     expect(page.locator('[data-conversation-id][aria-current="page"]')).to_have_count(1)

@@ -29,10 +29,11 @@ def test_run_vocabulary_is_what_the_run_table_accepts(vocabulary: Any, constrain
     schema = "\n".join(
         statement for migration in RUN_MIGRATIONS for statement in migration.statements
     )
-    check = re.search(rf"CONSTRAINT {constraint}\s+CHECK \(\w+ IN \(([^)]*)\)\)", schema)
+    checks = re.findall(rf"CONSTRAINT {constraint}\s+CHECK \(\w+ IN \(([^)]*)\)\)", schema)
 
-    assert check is not None, constraint
-    assert get_args(vocabulary) == tuple(re.findall(r"'([^']*)'", check.group(1)))
+    assert checks, constraint
+    # A later migration may redefine the constraint; its last definition is the live one.
+    assert set(get_args(vocabulary)) == set(re.findall(r"'([^']*)'", checks[-1]))
 
 
 def test_sdk_and_runtime_import_without_composition_or_transports() -> None:

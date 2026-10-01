@@ -161,11 +161,59 @@ def test_compose_publishes_every_port_on_host_loopback_only() -> None:
 
 
 def test_compose_mounts_the_operator_skills_root_read_only() -> None:
-    """The global Skills root is operator-provisioned and read-only for the Agent."""
-    for name, service in _compose()["services"].items():
-        for mount in service.get("volumes", []):
-            if isinstance(mount, dict) and mount.get("target") == "/home/app/.dlightrag/skills":
-                assert mount["read_only"] is True, name
+    """The global Skills root is operator-provisioned and read-only for the Agent.
+
+    Compose must not create a missing host directory: an empty root it invented would
+    hide a mistyped path behind a Run that silently has no Skills.
+    """
+    services = _compose()["services"]
+    for name in ("dlightrag-api", "dlightrag-mcp"):
+        (mount,) = (
+            mount
+            for mount in services[name]["volumes"]
+            if isinstance(mount, dict) and mount.get("target") == "/home/app/.dlightrag/skills"
+        )
+        assert mount["type"] == "bind", name
+        assert mount["read_only"] is True, name
+        assert mount["bind"]["create_host_path"] is False, name
+
+
+def test_compose_preloads_postgres_extensions() -> None:
+    """Keyword search runs on these; without the preload it fails at query time."""
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "shared_preload_libraries=pg_textsearch,pg_jieba" in compose
+
+
+def test_compose_api_healthcheck_uses_strict_readiness_endpoint() -> None:
+    """`docker compose up --wait` deploys on this check, so it must mean ready."""
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "http://127.0.0.1:8100/ready" in compose
+    assert "urllib.request.urlopen" in compose
+
+
+def test_runtime_image_precreates_default_application_paths() -> None:
+    """Named volumes take the image's ownership of these paths; absent, they are root's."""
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "/app/dlightrag_storage" in dockerfile
+    assert "/home/app/.dlightrag/agent_workspaces" in dockerfile
+
+
+def test_runtime_image_installs_the_library_the_copied_node_links() -> None:
+    """Only the node binary crosses stages, so the runtime stage owns its libatomic.
+
+    Without it node exits 127 on arm64, and every workspace tool and Skill that runs
+    node fails (f8581a4e). CI builds no image, so this is the only guard.
+    """
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    runtime_stage = dockerfile.rsplit("\nFROM ", 1)[1]
+
+    assert "COPY --from=frontend /usr/local/bin/node /usr/local/bin/node" in runtime_stage
+    assert re.search(
+        r"apt-get install -y --no-install-recommends [^\n]*\blibatomic1\b", runtime_stage
+    )
 
 
 def test_compose_mcp_local_listener_passes_security_validation() -> None:
