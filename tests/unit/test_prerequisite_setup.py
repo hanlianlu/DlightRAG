@@ -1499,7 +1499,6 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "    max_total_attachment_bytes: 134217728\n"
         "    max_images: 12\n"
         "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
-        "    docling:\n      endpoint: http://docling:5001\n"
         "deployment:\n  workspace: default\n",
         encoding="utf-8",
     )
