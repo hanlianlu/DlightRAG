@@ -402,13 +402,11 @@ def _resource_rows(tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
                 **row,
                 "chunk_id": f"{source.resource_id}::view::{attachment.resource_id}",
                 "_evidence_key": attachment.resource_id,
+                # The pixels' exact origin is the row's bookkeeping, not the document's.
+                "_visual_source": asdict(source),
+                "_content_digest": attachment.content_digest,
                 "content": f"Viewed pixels: {attachment.safe_name}",
                 "page_number": source.page,
-                "metadata": {
-                    **metadata,
-                    "visual_source": asdict(source),
-                    "content_digest": attachment.content_digest,
-                },
             }
         )
     return rows

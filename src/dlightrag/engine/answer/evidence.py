@@ -6,7 +6,6 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
@@ -15,7 +14,9 @@ from dlightrag.engine.answer.excerpts import (
     build_excerpt_lane_blocks,
     build_image_label,
     chunk_label,
+    document_name,
     format_kg_context,
+    source_handle,
 )
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
@@ -151,15 +152,7 @@ class EvidenceLedger:
             if not reference_id or reference_id in seen:
                 continue
             seen.add(reference_id)
-            metadata = row.get("metadata") or {}
-            title = (
-                str(metadata.get("title") or "")
-                or str(row.get("file_path") or "").rsplit("/", 1)[-1]
-                or "Source"
-            )
-            resource_id = str(metadata.get("resource_id") or "")
-            suffix = f" [resource: {resource_id}]" if resource_id else ""
-            handles.append(f"[{reference_id}] {title}{suffix}")
+            handles.append(source_handle(row))
         return handles
 
     def restore_ledger_state(self, state: Mapping[str, Any]) -> None:
@@ -216,15 +209,11 @@ class EvidenceLedger:
             rows: list[ContextRow] = []
             for raw in cast(list[Any], raw_rows):
                 row = dict(cast(Mapping[str, Any], raw))
-                metadata = dict(cast(Mapping[str, Any], row.get("metadata") or {}))
-                metadata.update(
-                    {
-                        "merged_from_child": True,
-                        "child_session_id": child_session_id,
-                        "parent_call_id": parent_call_id,
-                    }
-                )
-                row["metadata"] = metadata
+                # How a row arrived is the row's own bookkeeping, not the document's.
+                row["_child_lineage"] = {
+                    "child_session_id": child_session_id,
+                    "parent_call_id": parent_call_id,
+                }
                 rows.append(row)
             merged[key] = rows
         return self.add_contexts(merged)
@@ -425,7 +414,7 @@ class EvidenceLedger:
                     "text": build_image_label(
                         cite_tag=f"[{ref_id}-{chunk_index}]" if chunk_index is not None else "",
                         chunk=row,
-                        filename=str(row.get("file_path") or ""),
+                        filename=document_name(row),
                     ),
                 }
             )
@@ -563,9 +552,7 @@ def _cited_label(row: ContextRow, indexer: CitationIndexer) -> str:
     chunk_id = str(row.get("chunk_id") or "")
     chunk_index = indexer.get_chunk_idx(ref_id, chunk_id) if ref_id and chunk_id else None
     cite_tag = f"[{ref_id}-{chunk_index}]" if chunk_index is not None else ""
-    file_path = str(row.get("file_path") or "")
-    filename = Path(file_path).name if file_path else f"Source {ref_id}"
-    return chunk_label(cite_tag=cite_tag, chunk=dict(row), filename=filename)
+    return chunk_label(cite_tag=cite_tag, chunk=dict(row), filename=document_name(row))
 
 
 def _drop_empty_headings(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -621,17 +608,8 @@ def _collapsed_handle_block(collapsed: list[ContextRow]) -> dict[str, Any] | Non
         if reference_id in seen:
             continue
         seen.add(reference_id)
-        metadata = row.get("metadata") or {}
-        title = (
-            str(metadata.get("title") or "")
-            or str(row.get("file_path") or "").rsplit("/", 1)[-1]
-            or "Source"
-        )
-        resource_id = str(metadata.get("resource_id") or "")
-        resource_label = f" [resource: {resource_id}]" if resource_id else ""
         lines.append(
-            f"[{reference_id}] {title}{resource_label} - earlier evidence retained; "
-            "re-read this source for full detail."
+            f"{source_handle(row)} - earlier evidence retained; re-read this source for full detail."
         )
     return {
         "type": "text",

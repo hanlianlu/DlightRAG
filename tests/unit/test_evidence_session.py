@@ -373,9 +373,16 @@ def test_child_evidence_adoption_is_citable_idempotent_and_records_lineage() -> 
     assert first.new_chunks == 1
     assert second.new_chunks == 0
     row = parent.contexts["chunks"][0]
-    assert row["metadata"]["child_session_id"] == "child-session"
-    assert row["metadata"]["parent_call_id"] == "spawn-call"
+    assert row["_child_lineage"] == {
+        "child_session_id": "child-session",
+        "parent_call_id": "spawn-call",
+    }
     assert parent.render_blocks()[1].get_chunk_id("1", 1) == "child-c1"
+    # Lineage is the row's bookkeeping. It once printed in the heading, and every
+    # later request replayed it from the frozen Tool result.
+    _labels, text = parent.take_admitted_text(budget_tokens=1_000_000)
+    assert "### Document [1] [workspace: alpha]: report.pdf" in text.splitlines()
+    assert "child-session" not in text
 
 
 def test_ledger_state_round_trips_identities_without_image_bytes() -> None:

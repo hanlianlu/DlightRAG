@@ -8,6 +8,7 @@ from typing import Any
 from dlightrag.engine.ai.media import image_data_uri
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.citations.utils import REQUEST_OWNED_WORKSPACES, context_chunk_key
+from dlightrag.engine.network_admission import validate_public_web_url
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 _INTERNAL_KEYS: frozenset[str] = frozenset(
@@ -144,6 +145,7 @@ def build_excerpt_lane_blocks(
 #: Document metadata a heading leaves out: what citations and storage keep for
 #: themselves — where a source is stored, the name it is stored under, how it was
 #: acquired — and the resource handle, which the heading prints in its own form.
+#: How a row reached the ledger is the row's own ``_`` bookkeeping, never metadata.
 _UNLISTED_METADATA: frozenset[str] = frozenset(
     {
         "resource_id",
@@ -158,28 +160,54 @@ _UNLISTED_METADATA: frozenset[str] = frozenset(
 )
 
 
+def document_name(row: Mapping[str, Any]) -> str:
+    """The one name a document is shown, labelled and cited by.
+
+    A corpus document is named by its file. A page or resource the request holds
+    itself is named by its title, which is no path to cut at a slash.
+    """
+    file_path = str(row.get("file_path") or "")
+    request_owned = row.get("_workspace") in REQUEST_OWNED_WORKSPACES
+    name = file_path if request_owned else Path(file_path).name
+    return name or f"Source {row.get('reference_id') or ''}".rstrip()
+
+
+def source_handle(row: Mapping[str, Any]) -> str:
+    """A document's citation number, name and re-readable handle on one line."""
+    resource_id = (row.get("metadata") or {}).get("resource_id")
+    handle = f" [resource: {resource_id}]" if resource_id else ""
+    return f"[{row.get('reference_id') or ''}] {document_name(row)}{handle}"
+
+
+def _linkable(uri: object) -> bool:
+    """Whether an answer may link this address, by the test its citation links pass."""
+    try:
+        validate_public_web_url(str(uri))
+    except ValueError:
+        return False
+    return True
+
+
 def _document_heading(
     ref_id: str, chunk: Mapping[str, Any], indexer: CitationIndexer | None
 ) -> tuple[str, str]:
     """Return a document's heading and the name its passages are labelled with.
 
-    A corpus document is named by its file and labelled with its workspace. A page or
-    resource the request holds itself is named by its title, which is no path to cut
-    at a slash. The metadata describes the document: a web address stays, since an
-    answer links it, while any other source uri, such as a ``local://`` locator, is
-    storage. A value the name already gives is not repeated.
+    A corpus document is also labelled with its workspace; a request's own pages and
+    resources have none. The metadata describes the document: an address an answer
+    may link stays, while any other source uri, such as a ``local://`` locator or a
+    private host, is storage. A value the name already gives is not repeated.
     """
     metadata = chunk.get("metadata") or {}
-    file_path = str(chunk.get("file_path") or "")
+    name = document_name(chunk)
     request_owned = chunk.get("_workspace") in REQUEST_OWNED_WORKSPACES
-    name = (file_path if request_owned else Path(file_path).name) or f"Source {ref_id}"
     workspace = None if request_owned or indexer is None else indexer.get_doc_workspace(ref_id)
     resource_id = metadata.get("resource_id")
     described = [
         f"{key.removeprefix('doc_').replace('_', ' ')}: {value}"
         for key, value in metadata.items()
         if key not in _UNLISTED_METADATA
-        and (key != "source_uri" or str(value).startswith(("http://", "https://")))
+        and (key != "source_uri" or _linkable(value))
         and value is not None
         and str(value).strip()
         and str(value) != name
@@ -279,8 +307,10 @@ def build_image_label(*, cite_tag: str, chunk: dict[str, Any], filename: str) ->
 
 __all__ = [
     "build_excerpt_lane_blocks",
+    "document_name",
     "build_image_label",
     "chunk_label",
     "format_chunk_metadata",
+    "source_handle",
     "format_kg_context",
 ]

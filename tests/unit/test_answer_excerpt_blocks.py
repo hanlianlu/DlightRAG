@@ -1,12 +1,23 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for dynamic contract chunk rendering in _build_excerpt_blocks."""
 
+from dataclasses import asdict
+
+from dlightrag.engine.agent.tool_content import (
+    ToolResourceAttachmentPart,
+    ToolTextPart,
+    VisualSource,
+)
+from dlightrag.engine.agent.tools import ToolEffects, ToolResult
+from dlightrag.engine.agent.tools.contracts import EvidenceSourceFact
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
+from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.excerpts import (
     build_excerpt_lane_blocks,
     build_image_label,
     format_chunk_metadata,
 )
+from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.tools.web_search import web_context_rows
 from dlightrag.engine.answer.web_sources import WebSearchHit
 
@@ -69,6 +80,56 @@ def test_a_web_heading_names_the_page_by_its_whole_title_and_links_it() -> None:
         "### Document [1]: Bond weekly 2026/9/21-2026/9/27 [resource: res-1] "
         "(source uri: https://news.example/bonds, published date: 2026-09-28)",
         "[1-1] Bond weekly 2026/9/21-2026/9/27",
+    )
+
+
+def test_a_viewed_page_keeps_its_pixel_provenance_off_the_heading() -> None:
+    """A viewed page's exact origin printed in the heading as a dict repr once a
+    child's evidence merged it into the parent. It is the row's own bookkeeping."""
+    source = VisualSource("res-1", "pdf_page", page=3)
+    result = ToolResult(
+        parts=(
+            ToolTextPart("[resource: res-1 | q3.pdf, physical page 3]"),
+            ToolResourceAttachmentPart(
+                resource_id="res-view-1",
+                safe_name="q3.pdf, physical page 3",
+                media_type="image/png",
+                content_digest="a" * 64,
+                size_bytes=3,
+                source=source,
+            ),
+        ),
+        effects=ToolEffects(
+            evidence_sources=(EvidenceSourceFact("res-1", "web_attachment", "res-1", "q3.pdf"),)
+        ),
+    )
+    (row,) = _resource_rows("view", result)
+    assert row["_visual_source"] == asdict(source)
+    child = EvidenceLedger()
+    child.add_rows([row])
+    parent = EvidenceLedger()
+    parent.merge_child_state(child.durable_state(), child_session_id="c", parent_call_id="p")
+
+    _labels, text = parent.take_admitted_text(budget_tokens=1_000_000)
+
+    assert "### Document [1]: q3.pdf" in text.splitlines()
+    assert "visual source" not in text and "content digest" not in text
+
+
+def test_only_an_address_an_answer_may_link_is_shown() -> None:
+    row = {
+        "chunk_id": "c1",
+        "reference_id": "1",
+        "content": "Body",
+        "file_path": "q3.pdf",
+        "_workspace": "finance",
+        "metadata": {"source_uri": "http://10.0.0.7/reports/q3.pdf"},
+    }
+    assert _heading_and_label(row)[0] == "### Document [1] [workspace: finance]: q3.pdf"
+    row["metadata"] = {"source_uri": "https://example.com/reports/q3.pdf"}
+    assert _heading_and_label(row)[0] == (
+        "### Document [1] [workspace: finance]: q3.pdf "
+        "(source uri: https://example.com/reports/q3.pdf)"
     )
 
 
