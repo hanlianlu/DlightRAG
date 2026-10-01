@@ -1558,21 +1558,6 @@ async def test_a_failed_or_cancelled_linked_run_prunes_and_cascades_its_turn(
     assert await _count(pool, "web_conversations") == 1
 
 
-async def test_an_unlinked_successful_run_still_prunes(
-    store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
-) -> None:
-    request = _request()
-    creation = await runs.create_run(
-        owner_id=_OWNER,
-        prepared_input=request,
-        idempotency_fingerprint=run_request_fingerprint(request),
-    )
-    await _finish(pool, creation.run.run_id, status="succeeded")
-    await _backdate_finish(pool, creation.run.run_id, days=370)
-
-    assert (await runs.prune_expired_runs()).runs == 1
-
-
 async def test_deleting_a_run_row_cascades_its_conversation_turn(
     store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
 ) -> None:

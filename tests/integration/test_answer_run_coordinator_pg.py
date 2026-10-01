@@ -39,7 +39,6 @@ from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry, UserMessageEntry
 from dlightrag.engine.agent.session.fold import PriorTurns
-from dlightrag.engine.agent.session.fold import WorkingContextProjection as _RunWorking
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId, StageIntentId
 from dlightrag.engine.agent.session.operation import OperationCancelled
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -116,10 +115,6 @@ _REQUEST: dict[str, Any] = {
 }
 _REQUEST_FINGERPRINT = run_request_fingerprint(_REQUEST)
 _VISUAL_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
-
-
-def _episode() -> _RunWorking:
-    return _RunWorking()
 
 
 def _answer_run_input() -> AnswerRunInput:

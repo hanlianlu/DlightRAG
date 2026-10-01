@@ -80,7 +80,6 @@ def _new_workspace(prefix: str = "pw_ws") -> str:
 _CHUNKS_TABLE = "LIGHTRAG_DOC_CHUNKS"
 _METADATA_TABLE = "dlightrag_doc_metadata"
 _VECTOR_TABLE = "lightrag_vdb_chunks_8"
-_CHUNK_SCOPE_INDEX = "idx_lightrag_doc_chunks_dlightrag_full_doc_id"
 
 _DEFAULT_KWARGS: dict[str, Any] = PG_CONN_KWARGS
 
