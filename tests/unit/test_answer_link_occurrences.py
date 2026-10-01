@@ -30,16 +30,19 @@ class _Links(HTMLParser):
 
 
 @pytest.mark.parametrize("case", _FIXTURES, ids=lambda case: case["name"])
-async def test_only_actual_link_occurrences_can_trigger_reads(case: dict[str, Any]) -> None:
+async def test_only_actual_link_occurrences_can_trigger_reads(
+    case: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[str] = []
 
     async def fetch(url: str, **_kwargs: Any) -> None:
         calls.append(url)
         raise TimeoutError("a card failure must leave the original link intact")
 
+    monkeypatch.setattr("dlightrag.engine.answer.links.cards.fetch_public_http_prefix", fetch)
     expected = list(dict.fromkeys(case["hrefs"]))
     assert link_targets(case["markdown"]) == expected
-    assert await collect_link_cards(case["markdown"], fetch=fetch) == ()
+    assert await collect_link_cards(case["markdown"]) == ()
     assert calls == expected
 
     # Browser tests consume this exact sanitized HTML. In particular they offer
@@ -90,13 +93,16 @@ def test_resource_slot_contract_rejects_negative_identities() -> None:
     assert PresentationPart(type="artifact").slot is None
 
 
-async def test_duplicate_links_share_one_read_not_one_placement() -> None:
+async def test_duplicate_links_share_one_read_not_one_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[str] = []
 
     async def fetch(url: str, **_kwargs: Any) -> None:
         calls.append(url)
         raise TimeoutError
 
+    monkeypatch.setattr("dlightrag.engine.answer.links.cards.fetch_public_http_prefix", fetch)
     url = "https://example.com/clip"
-    await collect_link_cards(f"`{url}` {url} [again]({url})", fetch=fetch)
+    await collect_link_cards(f"`{url}` {url} [again]({url})")
     assert calls == [url]

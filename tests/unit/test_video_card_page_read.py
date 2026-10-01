@@ -37,7 +37,17 @@ def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-async def test_large_video_page_can_declare_metadata_after_256_kib() -> None:
+def _read_cards_through(monkeypatch: pytest.MonkeyPatch, client: httpx.AsyncClient) -> None:
+    """Serve the card reader's prefix reads from ``client`` and its mock transport."""
+    monkeypatch.setattr(
+        "dlightrag.engine.answer.links.cards.fetch_public_http_prefix",
+        partial(fetch_public_http_prefix, client=client),
+    )
+
+
+async def test_large_video_page_can_declare_metadata_after_256_kib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # The user's real YouTube page was 1.22 MB with OG at byte ~697k.
     # Its irrelevant tail must not invalidate metadata already inside the budget.
     meta = (
@@ -58,9 +68,8 @@ async def test_large_video_page_can_declare_metadata_after_256_kib() -> None:
         return httpx.Response(200, headers={"content-type": "text/html"}, stream=stream)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        cards = await collect_link_cards(
-            "https://example.com/watch", fetch=partial(fetch_public_http_prefix, client=client)
-        )
+        _read_cards_through(monkeypatch, client)
+        cards = await collect_link_cards("https://example.com/watch")
     assert [card.title for card in cards] == ["Film"]
     assert stream.closed
     assert stream.read < 3 * 1024 * 1024, "do not drain the irrelevant page tail"
@@ -88,7 +97,9 @@ async def test_prefix_closes_at_cap_but_complete_fetch_still_rejects_oversize() 
         assert streams[1].closed
 
 
-async def test_declarations_past_the_prefix_limit_do_not_authorize_a_card() -> None:
+async def test_declarations_past_the_prefix_limit_do_not_authorize_a_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stream = _Stream(
         [
             *([b"x" * (64 * 1024)] * 32),
@@ -102,12 +113,8 @@ async def test_declarations_past_the_prefix_limit_do_not_authorize_a_card() -> N
             )
         )
     ) as client:
-        assert (
-            await collect_link_cards(
-                "https://example.com/page", fetch=partial(fetch_public_http_prefix, client=client)
-            )
-            == ()
-        )
+        _read_cards_through(monkeypatch, client)
+        assert await collect_link_cards("https://example.com/page") == ()
     assert stream.read == 2 * 1024 * 1024
     assert stream.closed
 

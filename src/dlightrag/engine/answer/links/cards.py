@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -165,12 +165,7 @@ def _card(url: str, values: dict[str, str]) -> LinkCard | None:
     )
 
 
-async def _read_page(
-    address: str,
-    *,
-    fetch: Callable[..., Awaitable[Any]],
-    deadline: float,
-) -> Any:
+async def _read_page(address: str, *, deadline: float) -> Any:
     """Read one page within the whole deadline, admission included.
 
     ``fetch_public_http_prefix`` applies its timeout after taking a shared network
@@ -178,7 +173,7 @@ async def _read_page(
     the deadline, not for the queue that serves it.
     """
     async with asyncio.timeout(deadline):
-        return await fetch(
+        return await fetch_public_http_prefix(
             address,
             max_bytes=_MAX_METADATA_PREFIX_BYTES,
             timeout=deadline,
@@ -189,7 +184,6 @@ async def _read_page(
 async def collect_link_cards(
     answer: str,
     *,
-    fetch: Callable[..., Awaitable[Any]] = fetch_public_http_prefix,
     limit: int = MAX_CARDS,
     reads: int = MAX_READS,
     deadline: float = _PAGE_TIMEOUT_SECONDS,
@@ -208,7 +202,7 @@ async def collect_link_cards(
     if not addresses or limit <= 0:
         return ()
     pages = await asyncio.gather(
-        *(_read_page(address, fetch=fetch, deadline=deadline) for address in addresses),
+        *(_read_page(address, deadline=deadline) for address in addresses),
         return_exceptions=True,
     )
     cards: list[LinkCard] = []

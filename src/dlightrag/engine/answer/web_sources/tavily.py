@@ -44,10 +44,9 @@ class TavilyWebSource:
 
     name = "tavily"
 
-    def __init__(self, api_key: str, *, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(self, api_key: str) -> None:
         self._api_key = api_key
-        self._client = client if client is not None else _default_client()
-        self._owns_client = client is None
+        self._client = _default_client()
 
     async def search(self, request: WebSearchRequest) -> WebSearchResult:
         payload: dict[str, Any] = {
@@ -143,8 +142,7 @@ class TavilyWebSource:
         return decoded
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        await self._client.aclose()
 
 
 def _default_client() -> httpx.AsyncClient:

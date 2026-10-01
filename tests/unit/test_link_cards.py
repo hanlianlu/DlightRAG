@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,6 +49,17 @@ def _video_page(**overrides: str) -> _Page:
     )
 
 
+@pytest.fixture
+def serve(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
+    """Answer the card reader's anonymous prefix reads with a scripted fetch."""
+
+    def install(fetch: Any) -> Any:
+        monkeypatch.setattr("dlightrag.engine.answer.links.cards.fetch_public_http_prefix", fetch)
+        return fetch
+
+    return install
+
+
 class _Fetcher:
     """One scripted fetch surface: every call is recorded and answered by URL."""
 
@@ -74,11 +86,11 @@ def test_addresses_are_distinct_ordered_and_without_sentence_punctuation() -> No
     assert link_targets(answer) == ["https://example.com/a", "https://example.com/b"]
 
 
-async def test_a_declared_video_becomes_a_card() -> None:
+async def test_a_declared_video_becomes_a_card(serve) -> None:
     page = _video_page()
-    fetcher = _Fetcher({"https://example.com/watch": page})
+    fetcher = serve(_Fetcher({"https://example.com/watch": page}))
 
-    cards = await collect_link_cards("Watch https://example.com/watch now", fetch=fetcher)
+    cards = await collect_link_cards("Watch https://example.com/watch now")
 
     assert cards == (
         LinkCard(
@@ -92,79 +104,82 @@ async def test_a_declared_video_becomes_a_card() -> None:
     assert fetcher.calls == [("https://example.com/watch", 2 * 1024 * 1024, 4.0)]
 
 
-async def test_a_page_that_declares_a_player_needs_its_own_title() -> None:
+async def test_a_page_that_declares_a_player_needs_its_own_title(serve) -> None:
     """A card carries what the page declared; a document title is not a declaration."""
     declared = _page(
         'og:video" content="https://player.example.com/embed/1',
         'og:title" content="Clip',
     )
     only_a_title = _page('og:video" content="https://player.example.com/embed/1', title="Clip")
-    fetcher = _Fetcher(
-        {"https://example.com/declared": declared, "https://example.com/title": only_a_title}
+    serve(
+        _Fetcher(
+            {"https://example.com/declared": declared, "https://example.com/title": only_a_title}
+        )
     )
 
-    cards = await collect_link_cards(
-        "https://example.com/declared https://example.com/title", fetch=fetcher
-    )
+    cards = await collect_link_cards("https://example.com/declared https://example.com/title")
 
     assert [card.title for card in cards] == ["Clip"]
     assert cards[0].image is None
 
 
-async def test_an_ordinary_page_stays_a_link() -> None:
+async def test_an_ordinary_page_stays_a_link(serve) -> None:
     page = _page('og:type" content="website', 'og:title" content="Report')
-    fetcher = _Fetcher({"https://example.com/report": page})
+    serve(_Fetcher({"https://example.com/report": page}))
 
-    assert await collect_link_cards("See https://example.com/report", fetch=fetcher) == ()
+    assert await collect_link_cards("See https://example.com/report") == ()
 
 
-async def test_an_unreadable_or_undeclared_page_stays_a_link() -> None:
-    fetcher = _Fetcher(
-        {
-            "https://example.com/slow": TimeoutError("too slow"),
-            "https://example.com/binary": _Page(content=b"%PDF-1.7", media_type="application/pdf"),
-            "https://example.com/untitled": _page('og:type" content="video.other'),
-        }
+async def test_an_unreadable_or_undeclared_page_stays_a_link(serve) -> None:
+    serve(
+        _Fetcher(
+            {
+                "https://example.com/slow": TimeoutError("too slow"),
+                "https://example.com/binary": _Page(
+                    content=b"%PDF-1.7", media_type="application/pdf"
+                ),
+                "https://example.com/untitled": _page('og:type" content="video.other'),
+            }
+        )
     )
 
     cards = await collect_link_cards(
         "See https://example.com/slow https://example.com/binary https://example.com/untitled",
-        fetch=fetcher,
     )
 
     assert cards == ()
 
 
-async def test_only_the_first_links_are_read_and_the_first_videos_carded() -> None:
+async def test_only_the_first_links_are_read_and_the_first_videos_carded(serve) -> None:
     pages = {
         f"https://example.com/{index}": _video_page(**{"og:description": str(index)})
         for index in range(MAX_READS + 2)
     }
-    fetcher = _Fetcher(pages)
+    fetcher = serve(_Fetcher(pages))
     answer = " ".join(pages)
 
-    cards = await collect_link_cards(answer, fetch=fetcher)
+    cards = await collect_link_cards(answer)
 
     assert [card.description for card in cards] == [str(index) for index in range(MAX_CARDS)]
     assert len(fetcher.calls) == MAX_READS
 
 
-async def test_a_video_linked_after_three_articles_still_gets_its_card() -> None:
+async def test_a_video_linked_after_three_articles_still_gets_its_card(serve) -> None:
     articles = {f"https://news.example.com/{index}": _page("og:type") for index in range(3)}
     video = "https://video.example.com/watch"
-    fetcher = _Fetcher({**articles, video: _video_page()})
+    serve(_Fetcher({**articles, video: _video_page()}))
     answer = " ".join([*articles, video])
 
-    cards = await collect_link_cards(answer, fetch=fetcher)
+    cards = await collect_link_cards(answer)
 
     assert [card.url for card in cards] == [video]
 
 
-async def test_an_unsafe_cover_image_is_dropped_and_the_card_survives() -> None:
+async def test_an_unsafe_cover_image_is_dropped_and_the_card_survives(serve) -> None:
     page = _video_page(**{"og:image": "http://127.0.0.1/cover.jpg"})
-    fetcher = _Fetcher({"https://example.com/watch": page})
+    serve(_Fetcher({"https://example.com/watch": page}))
 
-    cards = await collect_link_cards("https://example.com/watch", fetch=fetcher)
+    cards = await collect_link_cards("https://example.com/watch")
 
     assert cards[0].image is None
 
@@ -197,16 +212,16 @@ def test_projection_keeps_only_public_addresses() -> None:
         ("", False),
     ],
 )
-async def test_only_a_video_declaration_is_honoured(declared: str, expected: bool) -> None:
+async def test_only_a_video_declaration_is_honoured(serve, declared: str, expected: bool) -> None:
     page = _video_page(**{"og:type": declared, "og:video": ""})
-    fetcher = _Fetcher({"https://example.com/page": page})
+    serve(_Fetcher({"https://example.com/page": page}))
 
-    cards = await collect_link_cards("https://example.com/page", fetch=fetcher)
+    cards = await collect_link_cards("https://example.com/page")
 
     assert bool(cards) is expected
 
 
-async def test_a_read_is_anonymous_and_bounded_by_its_deadline() -> None:
+async def test_a_read_is_anonymous_and_bounded_by_its_deadline(serve) -> None:
     """The deadline covers waiting for the shared network slot, not only reading."""
     import asyncio
 
@@ -222,11 +237,11 @@ async def test_a_read_is_anonymous_and_bounded_by_its_deadline() -> None:
             await asyncio.sleep(5)
             raise AssertionError("a read past the deadline must be abandoned")
 
-    slow = _Slow()
+    slow = serve(_Slow())
     started = asyncio.get_event_loop().time()
 
     cards = await collect_link_cards(
-        "See https://example.com/one https://example.com/two", fetch=slow, deadline=0.05
+        "See https://example.com/one https://example.com/two", deadline=0.05
     )
 
     elapsed = asyncio.get_event_loop().time() - started
@@ -242,10 +257,10 @@ def test_addresses_quoted_as_code_are_not_written_addresses() -> None:
     assert link_targets(answer) == []
 
 
-async def test_a_quoted_address_is_never_read() -> None:
-    fetcher = _Fetcher({"https://example.com/b": _video_page()})
+async def test_a_quoted_address_is_never_read(serve) -> None:
+    fetcher = serve(_Fetcher({"https://example.com/b": _video_page()}))
 
-    cards = await collect_link_cards("```\nhttps://example.com/b\n```\n", fetch=fetcher)
+    cards = await collect_link_cards("```\nhttps://example.com/b\n```\n")
 
     assert cards == ()
     assert fetcher.calls == []
@@ -255,33 +270,33 @@ async def test_a_quoted_address_is_never_read() -> None:
     "declared",
     ["videogame", "video", "videoplaylist"],
 )
-async def test_a_near_miss_type_is_not_a_video(declared: str) -> None:
+async def test_a_near_miss_type_is_not_a_video(serve, declared: str) -> None:
     page = _video_page(**{"og:type": declared, "og:video": ""})
-    fetcher = _Fetcher({"https://example.com/page": page})
+    serve(_Fetcher({"https://example.com/page": page}))
 
-    assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
+    assert await collect_link_cards("https://example.com/page") == ()
 
 
-async def test_a_commented_out_declaration_is_not_a_declaration() -> None:
+async def test_a_commented_out_declaration_is_not_a_declaration(serve) -> None:
     page = _Page(
         content=(
             b'<html><head><!-- <meta property="og:type" content="video.other"> -->'
             b'<meta property="og:title" content="Clip"></head></html>'
         )
     )
-    fetcher = _Fetcher({"https://example.com/page": page})
+    serve(_Fetcher({"https://example.com/page": page}))
 
-    assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
+    assert await collect_link_cards("https://example.com/page") == ()
 
 
-async def test_a_non_html_answer_with_html_words_is_not_a_page() -> None:
+async def test_a_non_html_answer_with_html_words_is_not_a_page(serve) -> None:
     page = _Page(
         content=b'og:type="video.other" og:title="Clip"',
         media_type="text/plain; note=html",
     )
-    fetcher = _Fetcher({"https://example.com/page": page})
+    serve(_Fetcher({"https://example.com/page": page}))
 
-    assert await collect_link_cards("https://example.com/page", fetch=fetcher) == ()
+    assert await collect_link_cards("https://example.com/page") == ()
 
 
 @pytest.mark.parametrize(
@@ -294,77 +309,77 @@ async def test_a_non_html_answer_with_html_words_is_not_a_page() -> None:
     ],
     ids=["indented", "unterminated-fence", "double-backtick", "tilde-fence"],
 )
-async def test_a_quoted_address_is_not_written_nor_replaced(answer: str) -> None:
-    fetcher = _Fetcher({"https://example.com/clip": _video_page()})
+async def test_a_quoted_address_is_not_written_nor_replaced(serve, answer: str) -> None:
+    fetcher = serve(_Fetcher({"https://example.com/clip": _video_page()}))
 
-    assert await collect_link_cards(answer, fetch=fetcher) == ()
+    assert await collect_link_cards(answer) == ()
     assert fetcher.calls == []
 
 
-async def test_a_long_declared_title_still_produces_a_card() -> None:
+async def test_a_long_declared_title_still_produces_a_card(serve) -> None:
     """A page's own title is truncated for the card, never dropped with the page."""
     page = _video_page(**{"og:title": "T" * 1200})
-    fetcher = _Fetcher({"https://example.com/clip": page})
+    serve(_Fetcher({"https://example.com/clip": page}))
 
-    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+    cards = await collect_link_cards("https://example.com/clip")
 
     assert len(cards) == 1
     assert cards[0].title == "T" * 200
 
 
-async def test_an_unterminated_comment_hides_everything_after_it() -> None:
+async def test_an_unterminated_comment_hides_everything_after_it(serve) -> None:
     page = _Page(
         content=(
             b'<html><head><!-- <meta property="og:type" content="video.other">'
             b'<meta property="og:title" content="Clip"></head></html>'
         )
     )
-    fetcher = _Fetcher({"https://example.com/clip": page})
+    serve(_Fetcher({"https://example.com/clip": page}))
 
-    assert await collect_link_cards("https://example.com/clip", fetch=fetcher) == ()
+    assert await collect_link_cards("https://example.com/clip") == ()
 
 
-async def test_a_comment_inside_an_attribute_invents_no_declaration() -> None:
+async def test_a_comment_inside_an_attribute_invents_no_declaration(serve) -> None:
     page = _Page(
         content=(
             b'<html><head><meta property="og:<!-- -->type" content="video.other">'
             b'<meta property="og:title" content="Clip"></head></html>'
         )
     )
-    fetcher = _Fetcher({"https://example.com/clip": page})
+    serve(_Fetcher({"https://example.com/clip": page}))
 
-    assert await collect_link_cards("https://example.com/clip", fetch=fetcher) == ()
+    assert await collect_link_cards("https://example.com/clip") == ()
 
 
-async def test_a_page_of_comment_openers_parses_within_its_budget() -> None:
+async def test_a_page_of_comment_openers_parses_within_its_budget(serve) -> None:
     """The parse is linear: a page cannot buy parsing time with comment openers."""
     import time
 
     page = _Page(content=b"<html><head>" + b"<!--" * 65536 + b"</head></html>")
-    fetcher = _Fetcher({"https://example.com/clip": page})
+    serve(_Fetcher({"https://example.com/clip": page}))
     started = time.monotonic()
 
-    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+    cards = await collect_link_cards("https://example.com/clip")
 
     assert cards == ()
     assert time.monotonic() - started < 2.0
 
 
-async def test_a_page_of_long_attributes_parses_within_its_budget() -> None:
+async def test_a_page_of_long_attributes_parses_within_its_budget(serve) -> None:
     """Attributes are length-bounded: no `=` anywhere cannot cost a quadratic scan."""
     import time
 
     page = _Page(content=b"<html><head>" + (b"<meta " + b"a" * 8185 + b">") * 32)
-    fetcher = _Fetcher({"https://example.com/clip": page})
+    serve(_Fetcher({"https://example.com/clip": page}))
     started = time.monotonic()
 
-    cards = await collect_link_cards("https://example.com/clip", fetch=fetcher)
+    cards = await collect_link_cards("https://example.com/clip")
 
     assert cards == ()
     assert time.monotonic() - started < 1.0
 
 
-async def test_a_longer_element_name_is_not_a_meta_tag() -> None:
+async def test_a_longer_element_name_is_not_a_meta_tag(serve) -> None:
     """An XML or RDF metadata element is not an HTML meta declaration."""
     page = _Page(
         content=(
@@ -372,23 +387,23 @@ async def test_a_longer_element_name_is_not_a_meta_tag() -> None:
             b'<metadata property="og:title" content="Clip"></head></html>'
         )
     )
-    fetcher = _Fetcher({"https://example.com/clip": page})
+    serve(_Fetcher({"https://example.com/clip": page}))
 
-    assert await collect_link_cards("https://example.com/clip", fetch=fetcher) == ()
+    assert await collect_link_cards("https://example.com/clip") == ()
 
-    declared = _Fetcher(
-        {
-            "https://example.com/clip": _Page(
-                content=(
-                    b'<html><head><meta property="og:type" content="video.other">'
-                    b'<meta property="og:title" content="Clip"></head></html>'
+    serve(
+        _Fetcher(
+            {
+                "https://example.com/clip": _Page(
+                    content=(
+                        b'<html><head><meta property="og:type" content="video.other">'
+                        b'<meta property="og:title" content="Clip"></head></html>'
+                    )
                 )
-            )
-        }
+            }
+        )
     )
-    assert [
-        card.title for card in await collect_link_cards("https://example.com/clip", fetch=declared)
-    ] == ["Clip"]
+    assert [card.title for card in await collect_link_cards("https://example.com/clip")] == ["Clip"]
 
 
 def test_a_stray_backtick_before_a_fence_does_not_hide_the_prose_after_it() -> None:
@@ -482,15 +497,15 @@ def test_multiline_and_single_line_code_emit_no_links() -> None:
     assert link_targets("`x` https://example.com/clip `y`") == ["https://example.com/clip"]
 
 
-async def test_repeated_quoted_addresses_are_not_read() -> None:
+async def test_repeated_quoted_addresses_are_not_read(serve) -> None:
     """Code occurrences do not emit link tokens, regardless of normalization."""
-    fetcher = _Fetcher({"https://example.com/clip": _video_page()})
+    fetcher = serve(_Fetcher({"https://example.com/clip": _video_page()}))
     answer = "> `\n> https://example.com/clip\n> ` `https://example.com/clip`"
 
-    assert await collect_link_cards(answer, fetch=fetcher) == ()
+    assert await collect_link_cards(answer) == ()
     assert fetcher.calls == []
 
     # Written once, so it is read.
     fetcher.calls.clear()
-    assert await collect_link_cards("See https://example.com/clip", fetch=fetcher)
+    assert await collect_link_cards("See https://example.com/clip")
     assert len(fetcher.calls) == 1

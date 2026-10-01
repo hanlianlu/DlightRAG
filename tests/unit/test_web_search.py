@@ -48,6 +48,19 @@ def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+@pytest.fixture
+def serve(monkeypatch: pytest.MonkeyPatch):
+    """Answer a provider adapter's own HTTP client from a mock transport."""
+
+    def install(provider: str, handler) -> None:
+        monkeypatch.setattr(
+            f"dlightrag.engine.answer.web_sources.{provider}._default_client",
+            lambda: _client(handler),
+        )
+
+    return install
+
+
 def _responds(payload: dict, status: int = 200):
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(status, json=payload)
@@ -222,7 +235,7 @@ async def test_searches_running_beside_each_other_admit_evidence_in_source_order
     ]
 
 
-async def test_exa_maps_all_search_controls_and_passages() -> None:
+async def test_exa_maps_all_search_controls_and_passages(serve) -> None:
     requests: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -232,7 +245,8 @@ async def test_exa_maps_all_search_controls_and_passages() -> None:
             json={"results": [{**_PAGE, "text": "Full body."}], "costDollars": {"total": 0.007}},
         )
 
-    provider = ExaWebSource("k", client=_client(handler))
+    serve("exa", handler)
+    provider = ExaWebSource("k")
     result = await provider.search(
         WebSearchRequest(
             "coefficients",
@@ -262,22 +276,21 @@ async def test_exa_maps_all_search_controls_and_passages() -> None:
     assert result.cost_dollars == 0.007
 
 
-async def test_exa_extract_and_malformed_partial_results() -> None:
-    provider = ExaWebSource(
-        "k",
-        client=_client(
-            _responds(
-                {
-                    "results": [
-                        {**_PAGE, "text": "  Extracted body.\n"},
-                        {"url": "https://other.example/page", "text": "other body"},
-                        {"title": "missing locator"},
-                        {"url": "http://127.0.0.1/admin", "text": "private"},
-                    ]
-                }
-            )
+async def test_exa_extract_and_malformed_partial_results(serve) -> None:
+    serve(
+        "exa",
+        _responds(
+            {
+                "results": [
+                    {**_PAGE, "text": "  Extracted body.\n"},
+                    {"url": "https://other.example/page", "text": "other body"},
+                    {"title": "missing locator"},
+                    {"url": "http://127.0.0.1/admin", "text": "private"},
+                ]
+            }
         ),
     )
+    provider = ExaWebSource("k")
 
     result = await provider.extract("https://example.org/start", effort="balanced")
 
@@ -287,8 +300,9 @@ async def test_exa_extract_and_malformed_partial_results() -> None:
     assert result.dropped_results == 3
 
 
-async def test_exa_missing_results_is_provider_failure_not_empty_success() -> None:
-    provider = ExaWebSource("k", client=_client(_responds({"unexpected": []})))
+async def test_exa_missing_results_is_provider_failure_not_empty_success(serve) -> None:
+    serve("exa", _responds({"unexpected": []}))
+    provider = ExaWebSource("k")
 
     with pytest.raises(WebSourceUnavailable) as failure:
         await provider.search(WebSearchRequest("q"))
@@ -296,7 +310,7 @@ async def test_exa_missing_results_is_provider_failure_not_empty_success() -> No
     assert failure.value.reason == "invalid_response"
 
 
-async def test_exa_auth_failure_is_not_parked() -> None:
+async def test_exa_auth_failure_is_not_parked(serve) -> None:
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -304,7 +318,8 @@ async def test_exa_auth_failure_is_not_parked() -> None:
         calls += 1
         return httpx.Response(401, json={})
 
-    provider = ExaWebSource("k", client=_client(handler))
+    serve("exa", handler)
+    provider = ExaWebSource("k")
     for _ in range(2):
         with pytest.raises(WebSourceUnavailable) as failure:
             await provider.search(WebSearchRequest("q"))
@@ -312,7 +327,7 @@ async def test_exa_auth_failure_is_not_parked() -> None:
     assert calls == 2
 
 
-async def test_tavily_maps_effort_filters_and_drops_only_bad_items() -> None:
+async def test_tavily_maps_effort_filters_and_drops_only_bad_items(serve) -> None:
     requests: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -328,7 +343,8 @@ async def test_tavily_maps_effort_filters_and_drops_only_bad_items() -> None:
             },
         )
 
-    provider = TavilyWebSource("tk", client=_client(handler))
+    serve("tavily", handler)
+    provider = TavilyWebSource("tk")
     result = await provider.search(
         WebSearchRequest(
             "q",
@@ -348,23 +364,19 @@ async def test_tavily_maps_effort_filters_and_drops_only_bad_items() -> None:
     assert result.hits[0].acquisition == "tavily_search"
 
 
-async def test_tavily_extract_keeps_one_exact_representation() -> None:
-    provider = TavilyWebSource(
-        "tk",
-        client=_client(
-            _responds(
-                {
-                    "results": [
-                        {
-                            "url": "https://a.example/page",
-                            "raw_content": "  exact body\n",
-                        },
-                        {"url": "https://b.example/page", "raw_content": "wrong body"},
-                    ]
-                }
-            )
+async def test_tavily_extract_keeps_one_exact_representation(serve) -> None:
+    serve(
+        "tavily",
+        _responds(
+            {
+                "results": [
+                    {"url": "https://a.example/page", "raw_content": "  exact body\n"},
+                    {"url": "https://b.example/page", "raw_content": "wrong body"},
+                ]
+            }
         ),
     )
+    provider = TavilyWebSource("tk")
 
     result = await provider.extract("https://a.example/start", effort="balanced")
 
@@ -373,9 +385,10 @@ async def test_tavily_extract_keeps_one_exact_representation() -> None:
     assert result.dropped_results == 1
 
 
-async def test_provider_response_bytes_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_provider_response_bytes_are_bounded(monkeypatch: pytest.MonkeyPatch, serve) -> None:
     monkeypatch.setattr("dlightrag.engine.answer.web_sources.exa._MAX_RESPONSE_BYTES", 8)
-    provider = ExaWebSource("k", client=_client(_responds({"results": []})))
+    serve("exa", _responds({"results": []}))
+    provider = ExaWebSource("k")
 
     with pytest.raises(WebSourceUnavailable) as failure:
         await provider.search(WebSearchRequest("q"))
