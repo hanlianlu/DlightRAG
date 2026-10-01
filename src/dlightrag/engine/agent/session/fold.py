@@ -327,8 +327,8 @@ class WorkingContextProjection:
     An exchange travels whole, provider-native state included. Reasoning is
     valid only as an unmodified replay: DeepSeek requires every previous turn's
     ``reasoning_content`` back on any request that carries tools and rejects a
-    partial history with HTTP 400, and Gemini signs tool calls that stop
-    verifying once filtered. Bounding the request is the compaction boundary's
+    partial history with HTTP 400, and Gemini signs thoughts that must come back
+    exactly as received. Bounding the request is the compaction boundary's
     job, where whole exchanges are replaced by one summary; stripping state from
     an exchange that is still replayed produces a history no provider ever sent.
 

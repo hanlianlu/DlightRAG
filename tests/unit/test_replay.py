@@ -16,54 +16,45 @@ def _turn() -> AssistantTurn:
     return AssistantTurn(
         text="",
         reasoning="private thought",
-        tool_calls=(
-            ToolCall(
-                id="call-1",
-                name="search",
-                arguments={"q": "x"},
-                thought_signature="opaque-tool-signature",
-            ),
-        ),
+        tool_calls=(ToolCall(id="call-1", name="search", arguments={"q": "x"}),),
         stop_reason="tool_use",
         provider_state={"reasoning_details": [{"data": "opaque-reasoning"}]},
     )
 
 
 def _message(turn: AssistantTurn) -> dict[str, object]:
-    call = turn.tool_calls[0]
     return {
         "role": "assistant",
         "content": turn.text,
         "reasoning": turn.reasoning,
-        "tool_calls": [
-            {
-                "id": call.id,
-                "name": call.name,
-                "arguments": call.arguments,
-                "thought_signature": call.thought_signature,
-            }
-        ],
+        "tool_calls": [tool_call_message(call) for call in turn.tool_calls],
         "provider_state": turn.provider_state,
     }
 
 
-def test_same_fingerprint_replays_opaque_state_and_tool_signature() -> None:
+def test_same_fingerprint_replays_opaque_state() -> None:
     bound = bind_provider_replay(_turn(), _SOURCE)
 
     prepared = messages_for_model([_message(bound)], _SOURCE)[0]
 
     assert prepared["provider_state"] == {"reasoning_details": [{"data": "opaque-reasoning"}]}
-    assert prepared["tool_calls"][0]["thought_signature"] == "opaque-tool-signature"
+    assert prepared["tool_calls"] == [tool_call_message(_turn().tool_calls[0])]
 
 
-def test_cross_model_drops_opaque_reasoning_and_tool_signatures_but_keeps_plain_text() -> None:
+def test_a_turn_without_opaque_state_is_left_unbound() -> None:
+    turn = AssistantTurn(text="answer", tool_calls=(), stop_reason="stop")
+
+    assert bind_provider_replay(turn, _SOURCE) is turn
+
+
+def test_cross_model_drops_opaque_reasoning_but_keeps_plain_text_and_calls() -> None:
     bound = bind_provider_replay(_turn(), _SOURCE)
     target = ModelInvocationFingerprint("openai", "model-b", "endpoint-a", "chat_completion")
 
     prepared = messages_for_model([_message(bound)], target)[0]
 
     assert "provider_state" not in prepared
-    assert "thought_signature" not in prepared["tool_calls"][0]
+    assert prepared["tool_calls"] == [tool_call_message(_turn().tool_calls[0])]
     assert prepared["reasoning"] == "private thought"
 
 
@@ -85,7 +76,6 @@ def test_same_model_name_at_a_different_endpoint_is_not_the_same_replay_identity
     prepared = messages_for_model([_message(bound)], target)[0]
 
     assert "provider_state" not in prepared
-    assert "thought_signature" not in prepared["tool_calls"][0]
 
 
 def test_same_endpoint_with_a_different_api_family_is_not_the_same_replay_identity() -> None:
@@ -100,7 +90,6 @@ def test_same_endpoint_with_a_different_api_family_is_not_the_same_replay_identi
     prepared = messages_for_model([_message(bound)], target)[0]
 
     assert "provider_state" not in prepared
-    assert "thought_signature" not in prepared["tool_calls"][0]
 
 
 def test_cross_family_response_reconstructs_canonical_calls_after_stripping_chat_state() -> None:

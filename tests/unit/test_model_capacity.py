@@ -127,12 +127,7 @@ def test_unknown_model_resolves_to_the_fallback_profile() -> None:
             "anthropic",
             {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
         ),
-        (
-            "gemini",
-            None,
-            "gemini",
-            {"thinking_config": {"include_thoughts": True, "thinking_level": "HIGH"}},
-        ),
+        ("gemini", None, "gemini", {"thinking_level": "high", "thinking_summaries": "auto"}),
     ],
 )
 def test_unknown_model_reasoning_uses_protocol_derived_best_effort_mapping(

@@ -5,7 +5,7 @@ import hashlib
 import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import cast, get_args
 from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.engine.ai.contracts import ApiFamily
@@ -58,7 +58,7 @@ class ModelInvocationFingerprint:
         api_family = value.get("api_family")
         if not provider or not model:
             raise ValueError("model invocation fingerprint requires provider and model")
-        if api_family not in {"chat_completion", "response"}:
+        if api_family not in get_args(ApiFamily.__value__):
             raise ValueError("model invocation fingerprint requires an explicit API family")
         endpoint = value.get("endpoint_fingerprint")
         return cls(

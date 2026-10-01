@@ -37,6 +37,8 @@ def get_provider(
     """Lazy-load and instantiate a provider by string name."""
     if api_family == "response" and provider != "openai":
         raise ValueError("response API family requires the openai provider")
+    if api_family == "interactions" and provider != "gemini":
+        raise ValueError("interactions API family requires the gemini provider")
     cls = cast(Any, _provider_class(provider))
     return cls(
         api_key=api_key,

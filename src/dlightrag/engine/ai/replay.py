@@ -22,9 +22,8 @@ def bind_provider_replay(
     turn: AssistantTurn,
     fingerprint: ModelInvocationFingerprint,
 ) -> AssistantTurn:
-    """Bind opaque response state and Tool signatures to their source model."""
-    has_tool_signature = any(call.thought_signature is not None for call in turn.tool_calls)
-    if turn.provider_state is None and not has_tool_signature:
+    """Bind opaque response state to its source model."""
+    if turn.provider_state is None:
         return turn
     return replace(
         turn,
@@ -57,18 +56,10 @@ def messages_for_model(
             continue
         message = dict(source)
         state = message.pop("provider_state", None)
-        same_invocation = _is_same_invocation_state(state, fingerprint)
-        if same_invocation and isinstance(state, Mapping):
+        if _is_same_invocation_state(state, fingerprint) and isinstance(state, Mapping):
             payload = state.get("payload")
             if payload is not None:
                 message["provider_state"] = payload
-        elif message.get("tool_calls"):
-            message["tool_calls"] = [
-                {key: value for key, value in dict(call).items() if key != "thought_signature"}
-                if isinstance(call, Mapping)
-                else call
-                for call in message["tool_calls"]
-            ]
         prepared.append(message)
     return prepared
 

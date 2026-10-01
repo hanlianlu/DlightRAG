@@ -31,7 +31,6 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
     argument_error: str | None = None
-    thought_signature: Any | None = None
 
 
 def content_with_attachments(message: Mapping[str, Any]) -> Any:
@@ -80,7 +79,7 @@ def tool_call_message(call: ToolCall) -> dict[str, Any]:
     Run's first request would otherwise diverge from the previous Run's at the first
     call with more than one argument.
     """
-    message: dict[str, Any] = {
+    return {
         "id": call.id,
         "type": "function",
         "function": {
@@ -93,9 +92,6 @@ def tool_call_message(call: ToolCall) -> dict[str, Any]:
             ),
         },
     }
-    if call.thought_signature is not None:
-        message["thought_signature"] = call.thought_signature
-    return message
 
 
 @dataclass(frozen=True, slots=True)

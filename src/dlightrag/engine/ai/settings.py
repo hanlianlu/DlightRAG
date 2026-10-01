@@ -96,6 +96,15 @@ def _canonical_provider(value: Any) -> Any:
     return value.strip().lower() if isinstance(value, str) else value
 
 
+def _refuse_gemini_temperature(provider: str | None, temperature: float | None) -> None:
+    """Gemini's Interactions API has no sampling parameters, so a configured one is an error."""
+    if provider == "gemini" and temperature is not None:
+        raise ValueError(
+            "temperature is not supported for gemini: the Interactions API accepts no "
+            "sampling parameters, so leave temperature unset (null)"
+        )
+
+
 class FrozenSettings(BaseModel):
     """Strict, frozen base for all canonical settings."""
 
@@ -122,6 +131,18 @@ class ModelSettings(FrozenSettings):
     model_kwargs: Mapping[str, Any] = Field(default_factory=dict, repr=False)
     agentic_model_kwargs: Mapping[str, Any] = Field(default_factory=dict, repr=False)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _gemini_wire(cls, value: Any) -> Any:
+        """Gemini has one wire, the Interactions API, so its API family is never a choice."""
+        if (
+            isinstance(value, Mapping)
+            and "api_family" not in value
+            and _canonical_provider(value.get("provider")) == "gemini"
+        ):
+            return {**value, "api_family": "interactions"}
+        return value
+
     @field_validator("provider", mode="before")
     @classmethod
     def _fold_provider(cls, value: Any) -> Any:
@@ -136,6 +157,11 @@ class ModelSettings(FrozenSettings):
     def _validate_model_options(self) -> Self:
         if self.api_family == "response" and self.provider != "openai":
             raise ValueError("response API family requires the openai provider")
+        if self.provider == "gemini" and self.api_family != "interactions":
+            raise ValueError("gemini always uses the interactions API family; omit api_family")
+        if self.api_family == "interactions" and self.provider != "gemini":
+            raise ValueError("interactions API family requires the gemini provider")
+        _refuse_gemini_temperature(self.provider, self.temperature)
         if self.provider == "anthropic" and self.structured_output == "json_object":
             raise ValueError("Anthropic native structured output requires json_schema")
         if self.reasoning is not None:
@@ -314,6 +340,10 @@ class ModelRoleSettings(FrozenSettings):
         if not isinstance(shipped, ModelSettings):
             raise TypeError("default model factory did not return ModelSettings")
         supplied = dict(value["default"])
+        if _canonical_provider(supplied.get("provider", shipped.provider)) != shipped.provider:
+            # Another provider is another endpoint: the shipped model, URL and sampling do
+            # not describe it, so it stands alone.
+            return value
         merged = {name: getattr(shipped, name) for name in ModelSettings.model_fields}
         merged.update(supplied)
         settings = ModelSettings.model_validate(merged)
@@ -390,6 +420,11 @@ class RerankSettings(FrozenSettings):
     def _serialize_model_kwargs(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return thaw_settings_value(value)
 
+    @model_validator(mode="after")
+    def _validate_sampling(self) -> Self:
+        _refuse_gemini_temperature(self.provider, self.temperature)
+        return self
+
     @property
     def has_explicit_auth(self) -> bool:
         if "api_key" not in self.model_fields_set:
@@ -405,7 +440,8 @@ class RerankSettings(FrozenSettings):
             model=self.model,
             api_key=self.api_key,
             base_url=self.base_url,
-            temperature=self.temperature or 0.0,
+            # Score deterministically where the wire samples; Gemini's takes no temperature.
+            temperature=None if self.provider == "gemini" else self.temperature or 0.0,
             model_kwargs=self.model_kwargs,
         )
 

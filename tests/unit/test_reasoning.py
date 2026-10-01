@@ -91,12 +91,6 @@ def test_compaction_selects_cheapest_supported_control() -> None:
             },
         ),
         ("anthropic", "off", {"thinking": {"type": "disabled"}}),
-        (
-            "gemini",
-            "high",
-            {"thinking_config": {"include_thoughts": True, "thinking_level": "HIGH"}},
-        ),
-        ("gemini", "off", {"thinking_config": {"thinking_budget": 0}}),
     ],
 )
 def test_resolved_reasoning_translates_only_by_catalogue_format(
@@ -107,6 +101,27 @@ def test_resolved_reasoning_translates_only_by_catalogue_format(
     resolved = resolve_reasoning(_profile(format=format), level)  # type: ignore[arg-type]
 
     assert reasoning_request_kwargs(resolved) == expected
+
+
+def test_gemini_reasoning_is_an_interactions_thinking_level_with_its_summary() -> None:
+    profile = _profile(format="gemini", off=None, low="low", medium="medium", max=None)
+
+    assert reasoning_request_kwargs(
+        resolve_reasoning(profile, "max"), api_family="interactions"
+    ) == {
+        "thinking_level": "high",
+        "thinking_summaries": "auto",
+    }
+    with pytest.raises(ReasoningConfigurationError, match="cannot be honored"):
+        resolve_reasoning(profile, "off")
+    with pytest.raises(ReasoningConfigurationError, match="Interactions API"):
+        reasoning_request_kwargs(resolve_reasoning(_profile(), "high"), api_family="interactions")
+
+
+@pytest.mark.parametrize("levels", [{"off": "disabled"}, {"max": "max"}, {"high": "HIGH"}])
+def test_a_gemini_profile_names_only_interactions_thinking_levels(levels: dict[str, str]) -> None:
+    with pytest.raises(ValueError, match="gemini reasoning maps levels"):
+        _profile(format="gemini", **{"off": None, "max": None, **levels})  # type: ignore[arg-type]
 
 
 def test_openrouter_off_can_map_to_a_native_effort_value() -> None:
@@ -214,7 +229,7 @@ def test_catalogue_rejects_an_unknown_reasoning_format() -> None:
         ("model_kwargs", {"reasoning": {"enabled": False}}),
         ("model_kwargs", {"thinking": {"type": "disabled"}}),
         ("model_kwargs", {"reasoning_effort": "low"}),
-        ("agentic_model_kwargs", {"thinking_config": {"thinking_budget": 0}}),
+        ("agentic_model_kwargs", {"thinking_level": "low"}),
         ("agentic_model_kwargs", {"chat_template_kwargs": {"enable_thinking": False}}),
     ],
 )

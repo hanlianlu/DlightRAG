@@ -8,6 +8,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from google.genai import interactions
+from pydantic import TypeAdapter
 
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.base import CompletionProvider
@@ -16,22 +18,18 @@ _MESSAGES = [{"role": "user", "content": "hi"}]
 
 
 class _SdkStream:
-    """An SDK response stream: one chunk, then a stalled connection.
+    """An SDK response stream: one chunk, a stalled connection, then the rest.
 
-    The OpenAI and Anthropic SDKs expose ``close()``; a Gemini stream is an
-    async generator, so it only has ``aclose()``.
+    The OpenAI, Anthropic and Gemini SDK streams all close through ``close()``.
     """
 
-    def __init__(self, first_chunk: Any, *, generator: bool) -> None:
+    def __init__(self, first_chunk: Any, *rest: Any) -> None:
         self._first_chunk = first_chunk
+        self._rest = list(rest)
         self._sent = False
         self._stalled = asyncio.Event()
         self.closed = False
         self.close_error: Exception | None = None
-        if generator:
-            self.aclose = self._close
-        else:
-            self.close = self._close
 
     def __aiter__(self) -> _SdkStream:
         return self
@@ -41,9 +39,11 @@ class _SdkStream:
             self._sent = True
             return self._first_chunk
         await self._stalled.wait()
+        if self._rest:
+            return self._rest.pop(0)
         raise StopAsyncIteration
 
-    async def _close(self) -> None:
+    async def close(self) -> None:
         self.closed = True
         if self.close_error is not None:
             raise self.close_error
@@ -59,24 +59,34 @@ def _anthropic_chunk() -> Any:
     return SimpleNamespace(type="content_block_delta", index=0, delta=delta)
 
 
-def _gemini_chunk() -> Any:
-    part = SimpleNamespace(text="partial", thought=False, function_call=None)
-    candidate = SimpleNamespace(finish_reason=None, content=SimpleNamespace(parts=[part]))
-    return SimpleNamespace(usage_metadata=None, text="partial", candidates=[candidate])
+def _gemini_events() -> tuple[Any, ...]:
+    """A text delta, and the completion that a finished stream ends with."""
+    event = TypeAdapter(interactions.InteractionSSEEvent)
+    return (
+        event.validate_python(
+            {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "partial"}}
+        ),
+        event.validate_python(
+            {
+                "event_type": "interaction.completed",
+                "interaction": {"id": "i", "status": "completed"},
+            }
+        ),
+    )
 
 
 def _provider_with_stream(name: str) -> tuple[CompletionProvider, _SdkStream, MagicMock]:
     provider = get_provider(name, api_key="test-key")
     client = MagicMock()
     if name == "openai":
-        stream = _SdkStream(_openai_chunk(), generator=False)
+        stream = _SdkStream(_openai_chunk())
         client.chat.completions.create = AsyncMock(return_value=stream)
     elif name == "anthropic":
-        stream = _SdkStream(_anthropic_chunk(), generator=False)
+        stream = _SdkStream(_anthropic_chunk())
         client.messages.create = AsyncMock(return_value=stream)
     else:
-        stream = _SdkStream(_gemini_chunk(), generator=True)
-        client.aio.models.generate_content_stream = AsyncMock(return_value=stream)
+        stream = _SdkStream(*_gemini_events())
+        client.aio.interactions.create = AsyncMock(return_value=stream)
     return provider, stream, client
 
 

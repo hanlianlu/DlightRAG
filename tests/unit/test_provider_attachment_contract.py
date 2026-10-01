@@ -57,8 +57,6 @@ _MODEL_TEXT = "ok"
 _PRIVATE_WIRE_KEYS = frozenset({"attachments", "provider_state", "is_error", "untrusted_tool_data"})
 _OPENAI_USER_KEYS = frozenset({"role", "content", "name"})
 _OPENAI_TOOL_KEYS = frozenset({"role", "content", "tool_call_id", "name"})
-_GEMINI_THOUGHT_SIGNATURE = b"native-sig-bytes"
-_GEMINI_THOUGHT_SIGNATURE_B64 = base64.b64encode(_GEMINI_THOUGHT_SIGNATURE).decode()
 _ANTHROPIC_THINKING_SIGNATURE = "anth-thinking-signature"
 _VIEW_TOOL = ToolDefinition(
     name="view",
@@ -68,7 +66,6 @@ _VIEW_TOOL = ToolDefinition(
 _MODELS = {
     "openai": "gpt-4o",
     "anthropic": "claude-sonnet-4-20250514",
-    "gemini": "gemini-2.0-flash",
 }
 _ENTRYPOINTS = (
     "complete",
@@ -402,47 +399,6 @@ def _anthropic_stream_sse() -> bytes:
     ).encode()
 
 
-def _gemini_complete_json(*, thought_signature: bytes | None = None) -> dict[str, Any]:
-    parts: list[dict[str, Any]] = [{"text": _MODEL_TEXT}]
-    if thought_signature is not None:
-        parts.append(
-            {
-                "functionCall": {"id": "call-2", "name": "view", "args": {"locator": "1"}},
-                "thoughtSignature": base64.b64encode(thought_signature).decode(),
-            }
-        )
-    return {
-        "candidates": [
-            {
-                "content": {"role": "model", "parts": parts},
-                "finishReason": "STOP",
-            }
-        ],
-        "usageMetadata": {
-            "promptTokenCount": 11,
-            "candidatesTokenCount": 2,
-            "totalTokenCount": 13,
-        },
-    }
-
-
-def _gemini_stream_sse() -> bytes:
-    payload = {
-        "candidates": [
-            {
-                "content": {"role": "model", "parts": [{"text": _MODEL_TEXT}]},
-                "finishReason": "STOP",
-            }
-        ],
-        "usageMetadata": {
-            "promptTokenCount": 11,
-            "candidatesTokenCount": 2,
-            "totalTokenCount": 13,
-        },
-    }
-    return f"data: {json.dumps(payload)}\n\n".encode()
-
-
 class _HttpCapture:
     def __init__(
         self,
@@ -464,11 +420,9 @@ class _HttpCapture:
             raise AssertionError(f"unexpected OpenAI Responses URL {url}")
         if self.provider == "anthropic" and "/v1/messages" not in url:
             raise AssertionError(f"unexpected Anthropic URL {url}")
-        if self.provider == "gemini" and "generativelanguage.googleapis.com" not in url:
-            raise AssertionError(f"unexpected Gemini URL {url}")
         body = json.loads(request.content.decode())
         self.requests.append({"url": url, "body": body})
-        streamed = bool(body.get("stream")) or "streamGenerateContent" in url
+        streamed = bool(body.get("stream"))
         if self.provider == "openai":
             if streamed:
                 return httpx2.Response(
@@ -496,13 +450,7 @@ class _HttpCapture:
                     content=_anthropic_stream_sse(),
                 )
             return httpx2.Response(200, json=_anthropic_complete_json())
-        if streamed:
-            return httpx2.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                content=_gemini_stream_sse(),
-            )
-        return httpx2.Response(200, json=_gemini_complete_json())
+        raise AssertionError(f"unexpected provider {self.provider!r}")
 
     @property
     def body(self) -> dict[str, Any]:
@@ -585,13 +533,7 @@ def _wire_images(provider: str, body: dict[str, Any]) -> list[bytes]:
                     if source.get("type") == "base64":
                         images.append(base64.b64decode(source["data"]))
         return images
-    images = []
-    for content in body["contents"]:
-        for part in content.get("parts") or ():
-            inline = part.get("inlineData")
-            if inline:
-                images.append(base64.b64decode(inline["data"]))
-    return images
+    raise AssertionError(f"unexpected provider {provider!r}")
 
 
 def _assert_no_private_fields(provider: str, body: dict[str, Any]) -> None:
@@ -612,19 +554,6 @@ def _assert_no_private_fields(provider: str, body: dict[str, Any]) -> None:
         for message in body["messages"]:
             assert set(message) <= {"role", "content"}
             assert "is_error" not in message
-    else:
-        for content in body["contents"]:
-            assert set(content) <= {"role", "parts"}
-            assert isinstance(content["parts"], list)
-            for part in content["parts"]:
-                assert isinstance(part, dict)
-                assert "is_error" not in part
-
-
-def _assert_gemini_user_text(body: dict[str, Any]) -> None:
-    first = body["contents"][0]
-    assert first["role"] == "user"
-    assert first["parts"] == [{"text": "look"}]
 
 
 async def _invoke(
@@ -675,7 +604,7 @@ async def test_unknown_invoke_entrypoint_fails_closed() -> None:
         await _invoke(object(), "not_an_entrypoint", [], "gpt-4o")
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "anthropic", "gemini"])
+@pytest.mark.parametrize("provider_name", ["openai", "anthropic"])
 @pytest.mark.parametrize("count", [0, 1, 2])
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
 async def test_sdk_http_projects_tool_attachments(
@@ -710,15 +639,6 @@ async def test_sdk_http_projects_tool_attachments(
             assert block["content"] == _TOOL_TEXT
         else:
             assert block["content"][0] == {"type": "text", "text": _TOOL_TEXT}
-    else:
-        _assert_gemini_user_text(body)
-        last = body["contents"][-1]
-        assert last["role"] == "user"
-        response = last["parts"][0]["functionResponse"]
-        assert response["id"] == "call-1"
-        assert response["name"] == "view"
-        assert response["response"]["output"] == _TOOL_TEXT
-        assert response["response"]["is_error"] is False
 
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
@@ -1538,130 +1458,6 @@ async def test_completion_model_strips_cross_model_anthropic_thinking() -> None:
     assert "Think." not in serialized
 
 
-async def test_tool_model_gemini_signature_round_trips_native_bytes() -> None:
-    settings = ModelSettings(
-        provider="gemini",
-        model="gemini-2.0-flash",
-        api_key="test-key",
-        max_retries=0,
-    )
-    capture = _HttpCapture("gemini")
-    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
-    bind_mock_http(model._provider, capture.handler)
-    bound = bind_provider_replay(
-        AssistantTurn(
-            text="",
-            tool_calls=(
-                ToolCall(
-                    id="call-1",
-                    name="view",
-                    arguments={"locator": "1"},
-                    # As a Session stores it: base64 text; Gemini gets its bytes back.
-                    thought_signature=_GEMINI_THOUGHT_SIGNATURE_B64,
-                ),
-            ),
-            stop_reason="tool_use",
-        ),
-        model.fingerprint,
-    )
-    messages = [
-        {"role": "user", "content": "look"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": bound.tool_calls[0].id,
-                    "type": "function",
-                    "function": {
-                        "name": "view",
-                        "arguments": '{"locator":"1"}',
-                    },
-                    "thought_signature": bound.tool_calls[0].thought_signature,
-                }
-            ],
-            "provider_state": bound.provider_state,
-        },
-        _tool_turn(2)[1],
-    ]
-    try:
-        turn = await model(messages=messages, tools=[_VIEW_TOOL])
-    finally:
-        await model.aclose()
-    assert turn.text == _MODEL_TEXT
-    part = capture.body["contents"][1]["parts"][0]
-    assert part["thoughtSignature"] == _GEMINI_THOUGHT_SIGNATURE_B64
-    assert base64.b64decode(part["thoughtSignature"]) == _GEMINI_THOUGHT_SIGNATURE
-    assert _wire_images("gemini", capture.body) == [PAGE_ONE, PAGE_TWO]
-
-
-async def test_completion_model_strips_cross_model_gemini_signature() -> None:
-    source = ModelSettings(
-        provider="gemini",
-        model="gemini-2.0-flash",
-        api_key="test-key",
-        max_retries=0,
-    )
-    target = ModelSettings(
-        provider="gemini",
-        model="gemini-2.5-pro",
-        api_key="test-key",
-        max_retries=0,
-    )
-    capture = _HttpCapture("gemini")
-    model = CompletionModel(target, scheduler=ModelScheduler(max_concurrency=1))
-    bind_mock_http(model._provider, capture.handler)
-    bound = bind_provider_replay(
-        AssistantTurn(
-            text="",
-            tool_calls=(
-                ToolCall(
-                    id="call-1",
-                    name="view",
-                    arguments={"locator": "1"},
-                    # As a Session stores it: base64 text; Gemini gets its bytes back.
-                    thought_signature=_GEMINI_THOUGHT_SIGNATURE_B64,
-                ),
-            ),
-            stop_reason="tool_use",
-        ),
-        model_invocation_fingerprint(source),
-    )
-    try:
-        stream = await model(
-            [
-                {"role": "user", "content": "look"},
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "call-1",
-                            "type": "function",
-                            "function": {
-                                "name": "view",
-                                "arguments": '{"locator":"1"}',
-                            },
-                            "thought_signature": bound.tool_calls[0].thought_signature,
-                        }
-                    ],
-                    "provider_state": bound.provider_state,
-                },
-            ],
-            stream=True,
-        )
-        tokens = [token async for token in stream]
-    finally:
-        await model.aclose()
-    assert tokens == [_MODEL_TEXT]
-    serialized = json.dumps(capture.body)
-    assert "thoughtSignature" not in serialized
-    assert _GEMINI_THOUGHT_SIGNATURE_B64 not in serialized
-    first = capture.body["contents"][1]["parts"][0]
-    assert "thoughtSignature" not in first
-    assert first["functionCall"]["id"] == "call-1"
-
-
 async def test_anthropic_multipage_view_uses_two_rendered_pages_through_tool_model() -> None:
     capture = _HttpCapture("anthropic")
     settings = ModelSettings(
@@ -1761,62 +1557,3 @@ async def test_anthropic_multipage_view_uses_two_rendered_pages_through_tool_mod
     ]
     assert ids == ["call-1", "call-2"]
     assert budget.count == charged
-
-
-async def test_gemini_answers_a_whole_tool_batch_in_one_matched_turn() -> None:
-    """One model turn's calls are answered by one turn holding every response.
-
-    Projecting a turn per tool message leaves the model turn under-answered and
-    strands the trailing result behind an unrelated user turn.
-    """
-    settings = ModelSettings(
-        provider="gemini",
-        model="gemini-2.0-flash",
-        api_key="test-key",
-        max_retries=0,
-    )
-    capture = _HttpCapture("gemini")
-    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
-    bind_mock_http(model._provider, capture.handler)
-    messages = [
-        {"role": "user", "content": "look"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {"name": "view", "arguments": '{"locator":"1"}'},
-                },
-                {
-                    "id": "call-2",
-                    "type": "function",
-                    "function": {"name": "view", "arguments": '{"locator":"2"}'},
-                },
-            ],
-        },
-        _tool_turn(2)[1],
-        {**_tool_turn(0)[1], "tool_call_id": "call-2"},
-    ]
-    try:
-        turn = await model(messages=messages, tools=[_VIEW_TOOL])
-    finally:
-        await model.aclose()
-    assert turn.text == _MODEL_TEXT
-    contents = capture.body["contents"]
-    assert [content["role"] for content in contents] == ["user", "model", "user"]
-    calls = contents[1]["parts"]
-    assert [part["functionCall"]["id"] for part in calls] == ["call-1", "call-2"]
-    answers = contents[2]["parts"]
-    responses = [part["functionResponse"] for part in answers if "functionResponse" in part]
-    assert [response["id"] for response in responses] == ["call-1", "call-2"]
-    # The image rides as an ordinary part of the answering turn, under the wire
-    # name inlineData. google-genai passes the blob inside through as given, and
-    # the API reads either spelling of its fields.
-    blobs = [part["inlineData"] for part in answers if "inlineData" in part]
-    assert [(blob["data"], blob.get("mimeType", blob.get("mime_type"))) for blob in blobs] == [
-        (base64.b64encode(PAGE_ONE).decode(), "image/png"),
-        (base64.b64encode(PAGE_TWO).decode(), "image/png"),
-    ]
-    assert _wire_images("gemini", capture.body) == _expected_payloads(2)

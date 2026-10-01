@@ -84,14 +84,14 @@ class LangfuseTelemetry:
         )
 
 
-_USAGE_INPUT_KEYS = ("prompt_tokens", "input_tokens", "prompt_token_count")
-_USAGE_OUTPUT_KEYS = ("completion_tokens", "output_tokens", "candidates_token_count")
-_USAGE_TOTAL_KEYS = ("total_tokens", "total_token_count")
+_USAGE_INPUT_KEYS = ("prompt_tokens", "input_tokens")
+_USAGE_OUTPUT_KEYS = ("completion_tokens", "output_tokens", "candidates_tokens")
+_USAGE_TOTAL_KEYS = ("total_tokens",)
 _USAGE_CACHED_INPUT_KEYS = (
     "prompt_tokens_details.cached_tokens",
     "prompt_cache_hit_tokens",
     "cache_read_input_tokens",
-    "cached_content_token_count",
+    "cached_content_tokens",
 )
 
 

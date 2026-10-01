@@ -337,7 +337,7 @@ def test_working_projection_replays_signed_state_without_filtering() -> None:
 
     DeepSeek requires every previous turn's ``reasoning_content`` back on a
     request that carries tools and rejects a partial history with HTTP 400, and
-    Gemini signs its tool calls. A projection that drops either produces a
+    Gemini signs its thoughts. A projection that drops either produces a
     history no provider ever sent, so bounding is the compaction boundary's job.
     """
     projection = WorkingContextProjection()

@@ -219,14 +219,14 @@ def provider_input_tokens(usage: Mapping[str, int] | None) -> int | None:
     """Return the total prompt tokens one provider billed, or None when unstated.
 
     The counters are provider-specific dialects of the same fact. A total
-    ``prompt_tokens``/``prompt_token_count`` already includes whatever the
-    provider cached; Anthropic's ``input_tokens`` excludes its cache siblings, so
-    the cache reads and writes are added back. This is the number a prefix cache
-    is measured against, never an approximation of it.
+    ``prompt_tokens`` already includes whatever the provider cached; Anthropic's
+    ``input_tokens`` excludes its cache siblings, so the cache reads and writes are
+    added back. This is the number a prefix cache is measured against, never an
+    approximation of it.
     """
     if not usage:
         return None
-    total = _first_int(usage, ("prompt_tokens", "prompt_token_count"))
+    total = _first_int(usage, ("prompt_tokens",))
     if total is not None:
         return total
     uncached = _first_int(usage, ("input_tokens",))
@@ -265,7 +265,7 @@ def provider_cache_hit_tokens(usage: Mapping[str, int] | None) -> int | None:
             "input_tokens_details.cached_tokens",
             "prompt_cache_hit_tokens",
             "cache_read_input_tokens",
-            "cached_content_token_count",
+            "cached_content_tokens",
         ),
     )
 
@@ -275,7 +275,7 @@ def usage_to_dict(usage: Any) -> dict[str, int] | None:
 
     Allow-list-free and provider-agnostic: every integer field is captured, so
     flat counters (DeepSeek ``prompt_cache_hit_tokens``, Anthropic
-    ``cache_read_input_tokens``, Gemini ``thoughts_token_count``) and future
+    ``cache_read_input_tokens``, Gemini ``total_thought_tokens``) and future
     fields surface automatically. One level of nested ``*_details`` /
     ``cache_creation`` objects is flattened to ``parent.child`` keys.
     """
@@ -329,10 +329,10 @@ def capture_stream_usage(
 async def closing_stream[S](stream: S) -> AsyncIterator[S]:
     """Close one SDK response stream however its consumer leaves it.
 
-    The OpenAI and Anthropic SDK streams release their HTTP response only when
-    read to the end or closed, and a Gemini stream is an async generator. A
-    consumer that stops early, fails, or is cancelled would otherwise leave the
-    response open until garbage collection happens to finalize it.
+    The OpenAI, Anthropic and Gemini SDK streams release their HTTP response only
+    when read to the end or closed. A consumer that stops early, fails, or is
+    cancelled would otherwise leave the response open until garbage collection
+    happens to finalize it.
 
     While the stream is already unwinding, a failure to close it is logged and
     the original exception, cancellation included, keeps propagating.

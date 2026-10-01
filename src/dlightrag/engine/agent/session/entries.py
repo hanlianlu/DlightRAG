@@ -103,7 +103,6 @@ class AssistantMessageEntry(SessionEntry):
                     "name": call.name,
                     "arguments": call.arguments,
                     "argument_error": call.argument_error,
-                    "thought_signature": call.thought_signature,
                 }
                 for call in self.tool_calls
             ],
@@ -279,7 +278,6 @@ def decode_entry_payload(
                 name=str(call["name"]),
                 arguments=dict(call.get("arguments") or {}),
                 argument_error=call.get("argument_error"),
-                thought_signature=call.get("thought_signature"),
             )
             for call in payload.get("tool_calls") or ()
         )

@@ -3,7 +3,7 @@
 
 from typing import Literal
 
-type ApiFamily = Literal["chat_completion", "response"]
+type ApiFamily = Literal["chat_completion", "response", "interactions"]
 type ChatProvider = Literal["openai", "anthropic", "gemini"]
 type InputModality = Literal["auto", "text", "multimodal"]
 type ResolvedInputModality = Literal["text", "multimodal"]

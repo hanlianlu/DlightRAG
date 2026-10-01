@@ -29,6 +29,8 @@ REASONING_LEVELS: tuple[ReasoningLevel, ...] = (
     "max",
 )
 REASONING_FORMATS = frozenset({"openrouter", "openai", "deepseek", "anthropic", "gemini"})
+#: The thinking levels Gemini's Interactions API names. It has none that turns thinking off.
+GEMINI_THINKING_LEVELS = frozenset({"minimal", "low", "medium", "high"})
 
 # Raw provider fields owned by typed reasoning configuration. A caller may use
 # them only when no semantic reasoning level is configured for that request.
@@ -37,7 +39,8 @@ PROVIDER_REASONING_KEYS = frozenset(
         "reasoning",
         "reasoning_effort",
         "thinking",
-        "thinking_config",
+        "thinking_level",
+        "thinking_summaries",
         "enable_thinking",
         "chat_template_args",
         "chat_template_kwargs",
@@ -91,6 +94,14 @@ class ReasoningProfile:
         if self.format not in REASONING_FORMATS:
             supported = ", ".join(sorted(REASONING_FORMATS))
             raise ValueError(f"reasoning format must be one of: {supported}")
+        if self.format == "gemini" and (
+            self.levels.off is not None
+            or not {value for value in self.levels.as_dict().values() if value is not None}
+            <= GEMINI_THINKING_LEVELS
+        ):
+            raise ValueError(
+                "gemini reasoning maps levels to minimal, low, medium or high, and off to null"
+            )
 
     @classmethod
     def unverified(cls, *, format: str, levels: ReasoningLevels) -> ReasoningProfile:
@@ -103,8 +114,17 @@ class ReasoningProfile:
 
 
 def best_effort_reasoning_profile(format_name: str) -> ReasoningProfile:
-    """Build an unverified protocol mapping for one uncatalogued endpoint."""
-    off = "disabled" if format_name in {"openrouter", "deepseek", "anthropic", "gemini"} else "none"
+    """Build an unverified protocol mapping for one uncatalogued endpoint.
+
+    Gemini's protocol names exactly its four thinking levels, so higher requests clamp
+    to ``high`` and ``off`` cannot be honored.
+    """
+    if format_name == "gemini":
+        levels = {
+            level: level if level in GEMINI_THINKING_LEVELS else None for level in REASONING_LEVELS
+        }
+        return ReasoningProfile.unverified(format=format_name, levels=ReasoningLevels(**levels))
+    off = "disabled" if format_name in {"openrouter", "deepseek", "anthropic"} else "none"
     return ReasoningProfile.unverified(
         format=format_name,
         levels=ReasoningLevels(
@@ -226,6 +246,11 @@ def reasoning_request_kwargs(
     value = resolved.provider_value
     format_name = resolved.profile.format
 
+    if api_family == "interactions" and format_name != "gemini":
+        raise ReasoningConfigurationError(
+            f"reasoning format {format_name!r} cannot be represented by the Interactions API"
+        )
+
     if api_family == "response":
         if format_name not in {"openai", "openrouter", "deepseek"}:
             raise ReasoningConfigurationError(
@@ -272,14 +297,9 @@ def reasoning_request_kwargs(
         }
 
     if format_name == "gemini":
-        if level == "off":
-            return {"thinking_config": {"thinking_budget": 0}}
-        return {
-            "thinking_config": {
-                "include_thoughts": True,
-                "thinking_level": value.upper(),
-            }
-        }
+        # The level is a thinking_level as written (a gemini profile has no off), and a
+        # summary is the only readable reasoning the Interactions API returns.
+        return {"thinking_level": value, "thinking_summaries": "auto"}
 
     return {}
 
@@ -304,6 +324,7 @@ def merge_reasoning_kwargs(
 
 
 __all__ = [
+    "GEMINI_THINKING_LEVELS",
     "PROVIDER_REASONING_KEYS",
     "REASONING_FORMATS",
     "REASONING_LEVELS",

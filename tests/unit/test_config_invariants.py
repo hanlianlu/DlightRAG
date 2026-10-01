@@ -83,7 +83,7 @@ def test_model_defaults_and_case_folding() -> None:
     assert settings.temperature is None
     assert settings.timeout == 240.0
     assert settings.max_retries == 3
-    assert settings.api_family == "chat_completion"
+    assert settings.api_family == "interactions"
     assert settings.structured_output == "auto"
 
 
