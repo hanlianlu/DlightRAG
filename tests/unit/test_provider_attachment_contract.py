@@ -15,7 +15,6 @@ from typing import Any
 import httpx2
 import pytest
 from anthropic import AsyncAnthropic
-from google import genai
 from openai import APIStatusError, AsyncOpenAI
 
 from dlightrag.engine.agent.environment import AccessScheduler
@@ -35,7 +34,6 @@ from dlightrag.engine.ai.messages import (
 )
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.anthropic_native import AnthropicProvider
-from dlightrag.engine.ai.providers.gemini_native import GeminiProvider
 from dlightrag.engine.ai.providers.openai_compatible import OpenAICompatibleProvider
 from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
 from dlightrag.engine.ai.replay import bind_provider_replay
@@ -476,12 +474,6 @@ def bind_mock_http(provider: object, handler: Callable[..., Any]) -> None:
             timeout=provider._timeout,
             max_retries=0,
             http_client=http,
-        )
-        return
-    if isinstance(provider, GeminiProvider):
-        provider._client = genai.Client(
-            api_key=provider._api_key or "test-key",
-            http_options=genai.types.HttpOptions(httpx_async_client=http),
         )
         return
     raise TypeError(f"unsupported provider {type(provider)!r}")

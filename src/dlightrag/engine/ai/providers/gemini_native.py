@@ -3,13 +3,12 @@
 
 import json
 import re
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 
 from google import genai
-from google.genai._gaos.lib.compat_errors import APIStatusError
 
 from dlightrag.engine.ai.messages import (
     AssistantTurn,
@@ -27,6 +26,7 @@ from dlightrag.engine.ai.providers.base import (
     usage_to_dict,
 )
 from dlightrag.engine.ai.structured import json_schema_from_response_format
+from dlightrag.engine.dependencies import TransientDependencyError
 
 #: ``provider_state`` key holding one model turn's output steps as Gemini returned them,
 #: so its thoughts and their signatures go back verbatim, in place.
@@ -38,11 +38,17 @@ _MODEL_KWARGS = frozenset(
 _GENERATION_KWARGS = ("thinking_level", "thinking_summaries")
 _TOOL_CHOICE = {"auto": "auto", "required": "any", "none": "none"}
 _DATA_URL = re.compile(r"^data:([^;,]+);base64,(.+)$", re.DOTALL)
-#: Interactions usage under the counter names DlightRAG reads for Gemini.
+_TERMINAL_STATUSES = frozenset(
+    {"completed", "requires_action", "incomplete", "failed", "cancelled"}
+)
+#: Canonical status names, letters only, of in-band failures a later attempt can outlast.
+_TRANSIENT_CODES = frozenset(
+    {"unavailable", "resourceexhausted", "deadlineexceeded", "internal", "aborted"}
+)
+#: Interactions usage under the counter names DlightRAG reads.
 _USAGE_KEYS = {
     "total_input_tokens": "prompt_tokens",
     "total_cached_tokens": "cached_content_tokens",
-    "total_output_tokens": "candidates_tokens",
     "total_thought_tokens": "thoughts_tokens",
     "total_tool_use_tokens": "tool_use_prompt_tokens",
 }
@@ -54,6 +60,34 @@ class InteractionRequestError(ValueError):
 
 class InteractionStatusError(RuntimeError):
     """A Gemini interaction ended without one usable model output."""
+
+
+class InteractionUnavailableError(InteractionStatusError, TransientDependencyError):
+    """An interaction that failed in-band for a reason a later attempt can outlast.
+
+    An overload reported inside a 200 response or its stream is the same outage an
+    HTTP 503 is, so it is retried and deferred like one.
+    """
+
+    def __init__(self, message: str) -> None:
+        TransientDependencyError.__init__(self, "providers", message)
+
+
+def _failure(message: str, codes: Iterable[str]) -> InteractionStatusError:
+    """The provider failure for in-band error ``codes``, transient when any one is.
+
+    The API documents a code only as a URI naming the error type, so a canonical status
+    name is recognized as any segment of it, whatever its case or separators.
+    """
+    named = [code for code in codes if code]
+    detail = f"{message} ({', '.join(named)})" if named else message
+    segments = {
+        re.sub(r"[^a-z]", "", segment)
+        for code in named
+        for segment in re.split(r"[/#:.]", code.lower())
+    }
+    transient = not segments.isdisjoint(_TRANSIENT_CODES)
+    return InteractionUnavailableError(detail) if transient else InteractionStatusError(detail)
 
 
 def _plain(value: Any) -> Any:
@@ -239,8 +273,9 @@ def interaction_request(
         generation["max_output_tokens"] = max_tokens
     system, steps = interaction_input(messages)
     # Stateless by design: DlightRAG's Sessions own the conversation (durable history,
-    # forks, compaction, crash replay, switching providers), so Google holds no second
-    # copy, and store=true would retain users' evidence (55 days by default on paid tiers).
+    # forks, compaction, crash replay, switching providers), so no interaction is stored
+    # to resume from; store=true would keep users' evidence for 55 days on paid tiers.
+    # store=false is not zero data retention.
     request: dict[str, Any] = {"model": model, "input": steps, "store": False, **options}
     if system is not None:
         request["system_instruction"] = system
@@ -266,7 +301,13 @@ def _usage(usage: object) -> dict[str, int] | None:
     counters = usage_to_dict(usage)
     if not counters:
         return None
-    return {_USAGE_KEYS.get(key, key): value for key, value in counters.items()}
+    output = counters.pop("total_output_tokens", None)
+    named = {_USAGE_KEYS.get(key, key): value for key, value in counters.items()}
+    if output is not None or "thoughts_tokens" in named:
+        # Interactions count thoughts apart from the output; the output DlightRAG reports
+        # includes them, as every other provider's does and as Google bills them.
+        named["completion_tokens"] = (output or 0) + named.get("thoughts_tokens", 0)
+    return named
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,9 +334,7 @@ class _Outcome:
 
 def _assistant_turn(outcome: _Outcome) -> AssistantTurn:
     if outcome.status not in {"completed", "requires_action", "incomplete"}:
-        codes = ", ".join(code for code in outcome.errors if code)
-        suffix = f" ({codes})" if codes else ""
-        raise InteractionStatusError(f"Gemini interaction ended {outcome.status!r}{suffix}")
+        raise _failure(f"Gemini interaction ended {outcome.status!r}", outcome.errors)
     text, reasoning, calls = _turn_parts(outcome.steps)
     if outcome.status == "incomplete":
         # Out of output tokens: the text so far stands, and an unfinished call never runs.
@@ -341,16 +380,18 @@ def _append_text(items: list[dict[str, Any]], text: str) -> None:
 
 
 class _InteractionStream:
-    """One streamed interaction: text as it arrives, then the steps it completed with.
+    """One streamed interaction: text as it arrives, then the turn its steps make.
 
-    The completed event's own steps win; a completed event that carries none is
-    answered from the steps the deltas built, so call arguments and signatures are whole.
+    The steps are built from the deltas, since a completed event carries only status
+    and usage; steps it does carry win. A terminal status update ends the turn as a
+    completed event does, and only a stream that ends with neither was cut short.
     """
 
     def __init__(self) -> None:
         self._steps: dict[int, dict[str, Any]] = {}
         self._arguments: dict[int, list[str]] = {}
         self._usage: Any = None
+        self._status: str | None = None
         self._terminal: Any = None
 
     def accept(self, event: Any) -> str | None:
@@ -358,8 +399,7 @@ class _InteractionStream:
         kind = getattr(event, "event_type", None)
         if kind == "error":
             code = getattr(getattr(event, "error", None), "code", None)
-            suffix = f" ({code})" if code else ""
-            raise InteractionStatusError(f"Gemini interaction stream failed{suffix}")
+            raise _failure("Gemini interaction stream failed", [str(code or "")])
         if kind == "step.start":
             step = _plain(event.step)
             self._steps[event.index] = step
@@ -375,6 +415,8 @@ class _InteractionStream:
             return self._delta(event.index, _plain(event.delta))
         elif kind == "step.stop":
             self._usage = getattr(event, "usage", None) or self._usage
+        elif kind == "interaction.status_update":
+            self._status = str(getattr(event, "status", None) or "")
         elif kind == "interaction.completed":
             self._terminal = event.interaction
         return None
@@ -401,9 +443,12 @@ class _InteractionStream:
         return None
 
     def outcome(self) -> _Outcome:
-        if self._terminal is None:
-            raise InteractionStatusError("Gemini interaction stream ended before completing")
-        outcome = _Outcome.of(self._terminal)
+        if self._terminal is not None:
+            outcome = _Outcome.of(self._terminal)
+        elif self._status in _TERMINAL_STATUSES:
+            outcome = _Outcome(self._status, [], None)
+        else:
+            raise InteractionUnavailableError("Gemini interaction stream ended before completing")
         steps = outcome.steps or [self._assembled(index) for index in sorted(self._steps)]
         usage = outcome.usage or _usage(self._usage)
         return _Outcome(outcome.status, steps, usage, outcome.errors)
@@ -442,7 +487,13 @@ class GeminiProvider(CompletionProvider):
 
     def _get_client(self) -> Any:
         if self._client is None:
-            options: dict[str, Any] = {}
+            # google-genai's Interactions client reads HttpRetryOptions.attempts as its
+            # retry count (it documents attempts as including the first request), so this
+            # is max_retries itself. google-genai raises an attempts of 0 to 1 before that
+            # client reads it, so a Gemini request retries at least once.
+            options: dict[str, Any] = {
+                "retry_options": genai.types.HttpRetryOptions(attempts=self._max_retries)
+            }
             if self._base_url is not None:
                 options["base_url"] = self._base_url
             if self._timeout:
@@ -453,22 +504,15 @@ class GeminiProvider(CompletionProvider):
             )
         return self._client
 
-    def _interactions(self) -> Any:
-        interactions = self._get_client().aio.interactions
-        # The SDK retries a transient failure max_retries times. google-genai's Interactions
-        # bridge reads HttpRetryOptions.attempts as that retry count, not as attempts, and
-        # cannot express zero, so the budget is set on the resource itself.
-        interactions.sdk_configuration.retry_config.max_retries = self._max_retries
-        return interactions
-
     async def _create(self, request: dict[str, Any]) -> Any:
         try:
-            return await self._interactions().create(**request)
-        except APIStatusError as exc:
-            # The HTTP status is the verdict. An error body the SDK's schema does not expect
-            # is chained as a parse failure whose "expected schema" text would read as a
-            # non-retryable request fault, so nothing is chained behind it.
-            exc.__cause__ = exc.__context__ = None
+            return await self._get_client().aio.interactions.create(**request)
+        except Exception as exc:
+            if isinstance(getattr(exc, "status_code", None), int):
+                # The HTTP status is the verdict. An error body the SDK's schema does not
+                # expect is chained as a parse failure whose "expected schema" text would
+                # read as a non-retryable request fault, so nothing is chained behind it.
+                exc.__cause__ = exc.__context__ = None
             raise
 
     async def _events(

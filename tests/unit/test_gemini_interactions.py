@@ -1,8 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Gemini through the Interactions API: what Gemini receives and what a Session keeps.
 
-Each case drives production models through google-genai's own Interactions client.
-Only the HTTP transport is replaced, and the assertions read the REST bodies sent.
+Each case drives production models through the client the provider builds itself,
+with google-genai's own Interactions transport replaced by a scripted endpoint. The
+assertions read the REST bodies sent. Streams follow the shape of Google's own SSE
+example: a thought starts with an empty signature and its first summary, and the
+completed event carries status and usage but no steps.
 """
 
 from __future__ import annotations
@@ -59,7 +62,6 @@ from tests.support.loopback import (
     loopback_server,
     reset_on_accept,
 )
-from tests.unit.test_provider_attachment_contract import bind_mock_http
 
 _MODEL = "gemini-3.8-flash"
 _URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
@@ -76,24 +78,26 @@ _VIEW = ToolDefinition(
 )
 _QUESTION = {"role": "user", "content": "What does page 2 show?"}
 _ASKED = {"type": "user_input", "content": [{"type": "text", "text": "What does page 2 show?"}]}
+_SIGNATURE = "c2lnbmVkIHRob3VnaHQgb25l"
 _THOUGHT = {
     "type": "thought",
-    "signature": "c2lnbmVkIHRob3VnaHQgb25l",
+    "signature": _SIGNATURE,
     "summary": [{"type": "text", "text": "Page 2 holds the table."}],
 }
+# Google's own stream example: 62 + 171 + 297 = 530, so the output excludes thoughts.
 _USAGE = {
-    "total_input_tokens": 1_200,
-    "total_cached_tokens": 800,
-    "total_output_tokens": 40,
-    "total_thought_tokens": 300,
-    "total_tokens": 1_540,
+    "total_input_tokens": 62,
+    "total_cached_tokens": 40,
+    "total_output_tokens": 171,
+    "total_thought_tokens": 297,
+    "total_tokens": 530,
 }
 _COUNTERS = {
-    "prompt_tokens": 1_200,
-    "cached_content_tokens": 800,
-    "candidates_tokens": 40,
-    "thoughts_tokens": 300,
-    "total_tokens": 1_540,
+    "prompt_tokens": 62,
+    "cached_content_tokens": 40,
+    "completion_tokens": 468,
+    "thoughts_tokens": 297,
+    "total_tokens": 530,
 }
 _ENTRYPOINTS = (
     "complete",
@@ -134,9 +138,16 @@ def _interaction(*steps: dict[str, Any], status: str = "completed", **fields: An
 
 def _sse(*events: dict[str, Any]) -> httpx2.Response:
     body = "".join(f"event: {e['event_type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+    body += "event: done\ndata: [DONE]\n\n"
     return httpx2.Response(
         200, headers={"content-type": "text/event-stream"}, content=body.encode()
     )
+
+
+_CREATED = {
+    "event_type": "interaction.created",
+    "interaction": {"id": "i-1", "status": "in_progress", "object": "interaction"},
+}
 
 
 def _start(index: int, step: dict[str, Any]) -> dict[str, Any]:
@@ -147,15 +158,40 @@ def _delta(index: int, **delta: Any) -> dict[str, Any]:
     return {"event_type": "step.delta", "index": index, "delta": delta}
 
 
-def _completed(**interaction: Any) -> dict[str, Any]:
-    return {"event_type": "interaction.completed", "interaction": {"id": "i-1", **interaction}}
+def _stop(index: int) -> dict[str, Any]:
+    return {"event_type": "step.stop", "index": index}
 
 
-def _streamed_text(text: str) -> httpx2.Response:
+def _completed(status: str = "completed") -> dict[str, Any]:
+    """The terminal event as Google's example sends it: status and usage, no steps."""
+    return {
+        "event_type": "interaction.completed",
+        "interaction": {"id": "i-1", "status": status, "usage": _USAGE},
+    }
+
+
+def _thought_events(index: int) -> list[dict[str, Any]]:
+    """A thought as Google streams it: an empty signature and the first summary, then the
+    signature in a delta of its own."""
+    first, rest = "Page 2 holds ", "the table."
+    return [
+        _start(
+            index,
+            {"signature": "", "summary": [{"text": first, "type": "text"}], "type": "thought"},
+        ),
+        _delta(index, type="thought_summary", content={"type": "text", "text": rest}),
+        _delta(index, type="thought_signature", signature=_SIGNATURE),
+        _stop(index),
+    ]
+
+
+def _streamed_text(first: str, *rest: str, status: str = "completed") -> httpx2.Response:
     return _sse(
-        _start(0, {"type": "model_output", "content": []}),
-        _delta(0, type="text", text=text),
-        _completed(status="completed", usage=_USAGE),
+        _CREATED,
+        _start(0, {"content": [{"text": first, "type": "text"}], "type": "model_output"}),
+        *(_delta(0, type="text", text=text) for text in rest),
+        _stop(0),
+        _completed(status),
     )
 
 
@@ -176,6 +212,14 @@ class _Gemini:
         return [json.loads(request.content) for request in self.requests]
 
 
+def _bind(provider: CompletionProvider, gemini: _Gemini) -> None:
+    """Keep the client and options the provider builds; replace only its HTTP transport."""
+    client = provider._get_client()  # pyright: ignore[reportAttributeAccessIssue]
+    client._api_client._async_httpx_client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(gemini)
+    )
+
+
 class _WithoutPauses(ModuleType):
     """asyncio as the SDK's retry loop sees it, minus its backoff sleeps."""
 
@@ -194,13 +238,13 @@ def no_retry_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _settings(**values: Any) -> ModelSettings:
     return ModelSettings.model_validate(
-        {"provider": "gemini", "model": _MODEL, "api_key": "test-key", "max_retries": 0, **values}
+        {"provider": "gemini", "model": _MODEL, "api_key": "test-key", "max_retries": 1, **values}
     )
 
 
 def _provider(gemini: _Gemini, **values: Any) -> CompletionProvider:
     provider = provider_for(_settings(**values))
-    bind_mock_http(provider, gemini)
+    _bind(provider, gemini)
     return provider
 
 
@@ -208,7 +252,7 @@ def _tool_model(gemini: _Gemini, **values: Any) -> ToolModel:
     model = ToolModel(
         _settings(**values), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
     )
-    bind_mock_http(model._provider, gemini)
+    _bind(model._provider, gemini)
     return model
 
 
@@ -216,7 +260,7 @@ def _completion_model(gemini: _Gemini, **values: Any) -> CompletionModel:
     model = CompletionModel(
         _settings(**values), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
     )
-    bind_mock_http(model._provider, gemini)
+    _bind(model._provider, gemini)
     return model
 
 
@@ -291,6 +335,16 @@ async def _invoke(provider: CompletionProvider, entrypoint: str) -> str:
     return "".join([token async for token in stream])
 
 
+async def _stream_turn(model: ToolModel) -> tuple[AssistantTurn, list[str]]:
+    emitted: list[str] = []
+
+    async def emit(text: str) -> None:
+        emitted.append(text)
+
+    turn = await model.stream_turn(messages=[_QUESTION], tools=[_VIEW], emit_text=emit)
+    return turn, emitted
+
+
 async def test_a_completion_is_one_stateless_interaction_with_its_thinking_controls() -> None:
     gemini = _Gemini(_interaction(_THOUGHT, _text("Revenue by quarter.")))
     model = _completion_model(gemini, reasoning="high")
@@ -354,11 +408,9 @@ async def test_reasoning_off_fails_before_gemini_is_asked() -> None:
 
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
-async def test_every_entrypoint_sends_full_context_and_stores_nothing_at_google(
-    entrypoint: str,
-) -> None:
+async def test_every_entrypoint_sends_full_context_with_store_false(entrypoint: str) -> None:
     streamed = "stream" in entrypoint
-    gemini = _Gemini(_streamed_text("ok") if streamed else _interaction(_text("ok")))
+    gemini = _Gemini(_streamed_text("o", "k") if streamed else _interaction(_text("ok")))
     provider = _provider(gemini)
     try:
         assert await _invoke(provider, entrypoint) == "ok"
@@ -373,20 +425,8 @@ async def test_every_entrypoint_sends_full_context_and_stores_nothing_at_google(
         assert remote_state not in body
 
 
-async def test_streamed_text_arrives_as_deltas_and_the_terminal_usage_is_kept() -> None:
-    gemini = _Gemini(
-        _sse(
-            {
-                "event_type": "interaction.created",
-                "interaction": {"id": "i-1", "status": "in_progress"},
-            },
-            _start(0, {"type": "model_output", "content": []}),
-            _delta(0, type="text", text="Revenue "),
-            _delta(0, type="text", text="by quarter."),
-            {"event_type": "step.stop", "index": 0},
-            _completed(status="completed", usage=_USAGE),
-        )
-    )
+async def test_streamed_text_arrives_as_it_comes_and_the_terminal_usage_is_kept() -> None:
+    gemini = _Gemini(_streamed_text("Revenue ", "by ", "quarter."))
     model = _completion_model(gemini)
     usage: dict[str, Any] = {}
     try:
@@ -395,7 +435,7 @@ async def test_streamed_text_arrives_as_deltas_and_the_terminal_usage_is_kept() 
     finally:
         await model.aclose()
 
-    assert tokens == ["Revenue ", "by quarter."]
+    assert tokens == ["Revenue ", "by ", "quarter."]
     assert usage == {"usage_details": _COUNTERS}
     assert gemini.bodies == [{"model": _MODEL, "input": [_ASKED], "store": False, "stream": True}]
     assert gemini.requests[0].headers["accept"] == "text/event-stream"
@@ -557,7 +597,7 @@ async def test_another_invocations_state_is_stripped_to_the_canonical_turn(
         _call("call-1", 2),
         _function_result("call-1", "Page 2 rendered."),
     ]
-    assert _THOUGHT["signature"] not in json.dumps(body)
+    assert _SIGNATURE not in json.dumps(body)
 
 
 async def test_a_same_model_replay_that_contradicts_its_canonical_turn_fails() -> None:
@@ -574,34 +614,44 @@ async def test_a_same_model_replay_that_contradicts_its_canonical_turn_fails() -
     assert len(gemini.requests) == 1
 
 
-async def test_a_streamed_tool_turn_is_assembled_from_deltas_when_completion_has_no_steps() -> None:
-    signature = str(_THOUGHT["signature"])
-    gemini = _Gemini(
-        _sse(
-            _start(0, {"type": "thought"}),
-            _delta(0, type="thought_summary", content={"type": "text", "text": "Page 2 holds "}),
-            _delta(0, type="thought_summary", content={"type": "text", "text": "the table."}),
-            _delta(0, type="thought_signature", signature=signature[:10]),
-            _delta(0, type="thought_signature", signature=signature[10:]),
-            _start(1, {"type": "model_output", "content": []}),
-            _delta(1, type="text", text="Let me "),
-            _delta(1, type="text", text="look."),
-            _start(2, {"type": "function_call", "id": "call-1", "name": "view", "arguments": {}}),
-            _delta(2, type="arguments_delta", arguments='{"pa'),
-            _delta(2, type="arguments_delta", arguments='ge": 2}'),
-            {"event_type": "step.stop", "index": 2, "usage": _USAGE},
-            _completed(status="requires_action"),
-        ),
-        _interaction(_text("Page 2 shows revenue.")),
+def _streamed_tool_turn(*terminal: dict[str, Any]) -> httpx2.Response:
+    """A thought, a sentence and a call, streamed as Google streams them."""
+    return _sse(
+        _CREATED,
+        *_thought_events(0),
+        _start(1, {"content": [{"text": "Let me ", "type": "text"}], "type": "model_output"}),
+        _delta(1, type="text", text="look."),
+        _stop(1),
+        _start(2, {"arguments": {}, "id": "call-1", "name": "view", "type": "function_call"}),
+        _delta(2, type="arguments_delta", arguments='{"pa'),
+        _delta(2, type="arguments_delta", arguments='ge": 2}'),
+        {**_stop(2), "usage": _USAGE},
+        *terminal,
     )
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        [_completed("requires_action")],
+        # No completed event: the terminal status update ends the turn just the same.
+        [
+            {
+                "event_type": "interaction.status_update",
+                "interaction_id": "i-1",
+                "status": "requires_action",
+            }
+        ],
+    ],
+    ids=["completed", "status-update"],
+)
+async def test_a_streamed_tool_turn_is_assembled_from_its_deltas(
+    terminal: list[dict[str, Any]],
+) -> None:
+    gemini = _Gemini(_streamed_tool_turn(*terminal), _interaction(_text("Page 2 shows revenue.")))
     model = _tool_model(gemini)
-    emitted: list[str] = []
-
-    async def emit(text: str) -> None:
-        emitted.append(text)
-
     try:
-        turn = await model.stream_turn(messages=[_QUESTION], tools=[_VIEW], emit_text=emit)
+        turn, emitted = await _stream_turn(model)
         await model(
             messages=[_QUESTION, _stored(turn), _result("call-1", "Page 2 rendered.")],
             tools=[_VIEW],
@@ -616,32 +666,28 @@ async def test_a_streamed_tool_turn_is_assembled_from_deltas_when_completion_has
     assert turn.stop_reason == "tool_use"
     assert turn.usage_details == _COUNTERS
     assert gemini.bodies[0]["stream"] is True
+    # The signature that arrived after the empty one goes back with the whole summary.
     assert gemini.bodies[1]["input"][1:4] == [_THOUGHT, _text("Let me look."), _call("call-1", 2)]
 
 
-async def test_a_streamed_turn_keeps_the_steps_its_completion_carries() -> None:
+async def test_a_streamed_turn_keeps_steps_a_completion_does_carry() -> None:
     final = [_THOUGHT, _text("Revenue.")]
+    completed = _completed()
+    completed["interaction"]["steps"] = final
     gemini = _Gemini(
         _sse(
-            _start(0, {"type": "model_output", "content": []}),
-            _delta(0, type="text", text="Revenue."),
-            _completed(status="completed", steps=final, usage=_USAGE),
+            _start(0, {"content": [{"text": "Revenue.", "type": "text"}], "type": "model_output"}),
+            completed,
         )
     )
     model = _tool_model(gemini)
-    emitted: list[str] = []
-
-    async def emit(text: str) -> None:
-        emitted.append(text)
-
     try:
-        turn = await model.stream_turn(messages=[_QUESTION], tools=[_VIEW], emit_text=emit)
+        turn, emitted = await _stream_turn(model)
     finally:
         await model.aclose()
 
     assert emitted == ["Revenue."]
-    assert turn.text == "Revenue."
-    assert turn.stop_reason == "stop"
+    assert (turn.text, turn.stop_reason) == ("Revenue.", "stop")
     assert turn.provider_state is not None
     assert turn.provider_state["payload"] == {"interaction_steps": final}
 
@@ -678,8 +724,8 @@ async def test_a_questions_attachments_become_its_own_named_images() -> None:
     ]
 
 
-async def test_usage_keeps_cached_and_thought_tokens_where_accounting_reads_them() -> None:
-    usage = {**_USAGE, "input_tokens_by_modality": [{"modality": "text", "tokens": 1_200}]}
+async def test_usage_counts_thinking_as_output_and_keeps_cache_hits() -> None:
+    usage = {**_USAGE, "input_tokens_by_modality": [{"modality": "text", "tokens": 62}]}
     gemini = _Gemini(_interaction(_THOUGHT, _text("ok"), usage=usage))
     model = _tool_model(gemini)
     try:
@@ -687,14 +733,16 @@ async def test_usage_keeps_cached_and_thought_tokens_where_accounting_reads_them
     finally:
         await model.aclose()
 
+    # Output is 171 visible plus 297 thought tokens, as Google bills it and as every other
+    # provider reports reasoning; input plus output is the total again.
     assert turn.usage_details == _COUNTERS
-    assert provider_input_tokens(turn.usage_details) == 1_200
-    assert provider_cache_hit_tokens(turn.usage_details) == 800
+    assert provider_input_tokens(turn.usage_details) == 62
+    assert provider_cache_hit_tokens(turn.usage_details) == 40
     assert _langfuse_usage_details(_COUNTERS) == {
-        "input": 1_200,
-        "output": 40,
-        "total": 1_540,
-        "input_cached_tokens": 800,
+        "input": 62,
+        "output": 468,
+        "total": 530,
+        "input_cached_tokens": 40,
     }
 
 
@@ -703,6 +751,7 @@ def test_gemini_always_uses_the_interactions_api_family() -> None:
     fingerprint = model_invocation_fingerprint(settings)
 
     assert settings.api_family == "interactions"
+    assert _settings(api_family="interactions").api_family == "interactions"
     assert fingerprint.api_family == "interactions"
     assert ModelInvocationFingerprint.from_json(fingerprint.as_json()) == fingerprint
     with pytest.raises(ValidationError, match="gemini always uses the interactions API family"):
@@ -725,8 +774,8 @@ def test_a_configured_temperature_is_refused_for_gemini() -> None:
         ModelRoleSettings.model_validate(
             {"default": {"provider": "gemini", "model": _MODEL, "temperature": 1.0}}
         )
-    # A Gemini default is its own endpoint: it inherits neither the shipped OpenRouter
-    # URL nor that endpoint's sampling.
+    # A default on another provider is its own endpoint: it inherits neither the shipped
+    # OpenRouter URL nor that endpoint's sampling.
     default = ModelRoleSettings.model_validate(
         {"default": {"provider": "gemini", "model": _MODEL}}
     ).default
@@ -802,21 +851,18 @@ async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_runs_no_call()
 async def test_a_stream_cut_off_mid_call_keeps_its_text_and_runs_no_call() -> None:
     gemini = _Gemini(
         _sse(
-            _start(0, {"type": "model_output", "content": []}),
-            _delta(0, type="text", text="Let me look."),
-            _start(1, {"type": "function_call", "id": "call-1", "name": "view", "arguments": {}}),
+            _start(
+                0, {"content": [{"text": "Let me look.", "type": "text"}], "type": "model_output"}
+            ),
+            _stop(0),
+            _start(1, {"arguments": {}, "id": "call-1", "name": "view", "type": "function_call"}),
             _delta(1, type="arguments_delta", arguments='{"pa'),
-            _completed(status="incomplete", usage=_USAGE),
+            _completed("incomplete"),
         )
     )
     model = _tool_model(gemini)
-    emitted: list[str] = []
-
-    async def emit(text: str) -> None:
-        emitted.append(text)
-
     try:
-        turn = await model.stream_turn(messages=[_QUESTION], tools=[_VIEW], emit_text=emit)
+        turn, emitted = await _stream_turn(model)
     finally:
         await model.aclose()
 
@@ -826,18 +872,19 @@ async def test_a_stream_cut_off_mid_call_keeps_its_text_and_runs_no_call() -> No
 
 
 @pytest.mark.parametrize(
-    ("status", "steps", "failure"),
+    ("status", "steps", "code", "failure", "transient"),
     [
-        ("failed", [], "Gemini interaction ended 'failed' (resource_exhausted)"),
-        ("cancelled", [], "Gemini interaction ended 'cancelled'"),
-        ("requires_action", [_text("I will look.")], "requires action but made no call"),
-        ("completed", [_THOUGHT], "completed without text or calls"),
+        ("failed", [], "resource_exhausted", "ended 'failed' (resource_exhausted)", True),
+        ("failed", [], "invalid_argument", "ended 'failed' (invalid_argument)", False),
+        ("cancelled", [], None, "ended 'cancelled'", False),
+        ("requires_action", [_text("I will look.")], None, "requires action but made no", False),
+        ("completed", [_THOUGHT], None, "completed without text or calls", False),
     ],
 )
 async def test_an_interaction_without_usable_output_is_a_provider_failure(
-    status: str, steps: list[dict[str, Any]], failure: str
+    status: str, steps: list[dict[str, Any]], code: str | None, failure: str, transient: bool
 ) -> None:
-    errors = [{"code": "resource_exhausted", "message": "Quota for user 42 exceeded."}]
+    errors = [{"code": code, "message": "Quota for user 42 exceeded."}] if code else []
     gemini = _Gemini(_interaction(*steps, status=status, errors=errors))
     model = _tool_model(gemini)
     try:
@@ -847,15 +894,28 @@ async def test_an_interaction_without_usable_output_is_a_provider_failure(
         await model.aclose()
 
     assert "user 42" not in str(raised.value)
-    assert classify_transient_dependency(raised.value, component_hint="providers") is None
+    # An overload reported in-band is the outage an HTTP 503 is: retried, then deferred.
+    expected = "providers" if transient else None
+    assert classify_transient_dependency(raised.value, component_hint="providers") == expected
 
 
-async def test_a_stream_error_event_fails_the_turn() -> None:
+@pytest.mark.parametrize(
+    ("code", "transient"),
+    [
+        ("unavailable", True),
+        ("DEADLINE_EXCEEDED", True),
+        # The API documents a code as a URI naming the error type.
+        ("https://errors.example/gemini#resource-exhausted", True),
+        ("invalid_argument", False),
+    ],
+)
+async def test_a_stream_error_event_fails_the_turn_retryably_when_its_code_is_an_outage(
+    code: str, transient: bool
+) -> None:
     gemini = _Gemini(
         _sse(
-            _start(0, {"type": "model_output", "content": []}),
-            _delta(0, type="text", text="Let me"),
-            {"event_type": "error", "error": {"code": "internal", "message": "Backend failure."}},
+            _start(0, {"content": [{"text": "Let me", "type": "text"}], "type": "model_output"}),
+            {"event_type": "error", "error": {"code": code, "message": "Backend failure."}},
         )
     )
     model = _tool_model(gemini)
@@ -865,24 +925,38 @@ async def test_a_stream_error_event_fails_the_turn() -> None:
         emitted.append(text)
 
     try:
-        with pytest.raises(InteractionStatusError, match=re.escape("stream failed (internal)")):
+        with pytest.raises(
+            InteractionStatusError, match=re.escape(f"stream failed ({code})")
+        ) as raised:
             await model.stream_turn(messages=[_QUESTION], tools=[_VIEW], emit_text=emit)
     finally:
         await model.aclose()
 
     assert emitted == ["Let me"]
+    expected = "providers" if transient else None
+    assert classify_transient_dependency(raised.value, component_hint="providers") == expected
 
 
-async def test_a_stream_that_never_completes_is_a_provider_failure() -> None:
+async def test_a_stream_that_ends_without_a_terminal_status_was_cut_short() -> None:
     gemini = _Gemini(
-        _sse(_start(0, {"type": "model_output", "content": []}), _delta(0, type="text", text="Le"))
+        _sse(
+            _CREATED,
+            _start(0, {"content": [{"text": "Le", "type": "text"}], "type": "model_output"}),
+            {
+                "event_type": "interaction.status_update",
+                "interaction_id": "i-1",
+                "status": "in_progress",
+            },
+        )
     )
     provider = _provider(gemini)
     try:
-        with pytest.raises(InteractionStatusError, match="ended before completing"):
+        with pytest.raises(InteractionStatusError, match="ended before completing") as raised:
             [token async for token in provider.stream([_QUESTION], _MODEL)]
     finally:
         await provider.aclose()
+
+    assert classify_transient_dependency(raised.value, component_hint="providers") == "providers"
 
 
 _OVERLOADED = {"error": {"code": "unavailable", "message": "The model is overloaded."}}
@@ -894,12 +968,16 @@ _OVERLOADED_RPC = {
 
 
 @pytest.mark.usefixtures("no_retry_pauses")
-@pytest.mark.parametrize("max_retries", [0, 2])
+@pytest.mark.parametrize(
+    ("max_retries", "requests"),
+    # google-genai raises an attempts of 0 to 1 before its Interactions client reads it.
+    [(0, 2), (1, 2), (3, 4)],
+)
 @pytest.mark.parametrize("body", [_OVERLOADED, _OVERLOADED_RPC], ids=["interactions", "rpc"])
 async def test_an_overloaded_model_is_retried_then_deferred_as_an_outage(
-    body: dict[str, Any], max_retries: int
+    body: dict[str, Any], max_retries: int, requests: int
 ) -> None:
-    gemini = _Gemini(*(httpx2.Response(503, json=body) for _ in range(4)))
+    gemini = _Gemini(*(httpx2.Response(503, json=body) for _ in range(requests)))
     model = _tool_model(gemini, max_retries=max_retries)
     try:
         with pytest.raises(Exception) as raised:  # noqa: B017 - the SDK's status error
@@ -907,7 +985,7 @@ async def test_an_overloaded_model_is_retried_then_deferred_as_an_outage(
     finally:
         await model.aclose()
 
-    assert len(gemini.requests) == max_retries + 1
+    assert len(gemini.requests) == requests
     assert getattr(raised.value, "status_code", None) == 503
     assert classify_transient_dependency(raised.value, component_hint="providers") == "providers"
 
@@ -944,15 +1022,9 @@ async def test_a_rejected_request_is_named_and_never_retried(
 
 
 @pytest.mark.usefixtures("no_retry_pauses")
-async def test_the_endpoint_timeout_and_retry_budget_reach_the_wire() -> None:
+async def test_the_endpoint_and_timeout_reach_the_wire() -> None:
     gemini = _Gemini(httpx2.Response(503, json=_OVERLOADED), _interaction(_text("ok")))
-    provider = provider_for(
-        _settings(base_url="https://gateway.example/gemini", timeout=12.5, max_retries=1)
-    )
-    client = provider._get_client()  # pyright: ignore[reportAttributeAccessIssue]
-    client._api_client._async_httpx_client = httpx2.AsyncClient(
-        transport=httpx2.MockTransport(gemini)
-    )
+    provider = _provider(gemini, base_url="https://gateway.example/gemini", timeout=12.5)
     try:
         assert await provider.complete([_QUESTION], _MODEL) == "ok"
     finally:
@@ -980,6 +1052,7 @@ async def _transport_failure(base_url: str) -> BaseException:
     raise AssertionError("the request did not fail")
 
 
+@pytest.mark.usefixtures("no_retry_pauses")
 async def test_a_dropped_connection_is_a_provider_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     bypass_proxies(monkeypatch)
     async with loopback_server(reset_on_accept) as port:
@@ -988,6 +1061,7 @@ async def test_a_dropped_connection_is_a_provider_outage(monkeypatch: pytest.Mon
     assert classify_transient_dependency(failure, component_hint="providers") == "providers"
 
 
+@pytest.mark.usefixtures("no_retry_pauses")
 async def test_an_untrusted_endpoint_is_misconfiguration_not_an_outage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
