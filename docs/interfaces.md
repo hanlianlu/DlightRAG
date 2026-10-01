@@ -543,11 +543,9 @@ async for event in application.answers.answer_stream(
 await only detaches and does not cancel its accepted Run. `RunService` exposes
 common status, listing, subscription, and cancellation.
 
-Files/URLs become `ResourceInput` values through
-`AnswerAttachment.from_path/from_bytes/from_url` and
-`resource_inputs_from_attachments`. `AnswerService` owns Answer-specific
-steering, continuation, transcript, Child Session roster/observation, and child
-control/reply methods. There is no separate public Python SDK for remote callers.
+`AnswerService` owns Answer-specific steering, continuation, transcript, Child
+Session roster/observation, and child control/reply methods. There is no separate
+public Python SDK for remote callers.
 
 ### MCP Server
 
