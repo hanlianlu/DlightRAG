@@ -170,8 +170,8 @@ def _record(
     )
 
 
-def _service(*, store: Any | None = None, coordinator: Any | None = None) -> RetrievalService:
-    return RetrievalService(
+def _service(*, store: Any, coordinator: Any) -> RetrievalService:
+    service = RetrievalService(
         pool=AsyncMock(),
         planners=_Planners(),
         schema_lookup=AsyncMock(return_value={}),
@@ -189,11 +189,11 @@ def _service(*, store: Any | None = None, coordinator: Any | None = None) -> Ret
             query_image_limit=3,
         ),
         telemetry=NoopTelemetry(),
-        store=store,
-        coordinator=coordinator,
         model_profile_for_role=lambda _role: _PROFILE,
         model_invocation_fingerprint_for_role=lambda _role: _FINGERPRINT,
     )
+    service.bind_runtime(store=store, coordinator=coordinator)
+    return service
 
 
 async def test_create_pins_normalized_recovery_input_and_seven_day_retention() -> None:

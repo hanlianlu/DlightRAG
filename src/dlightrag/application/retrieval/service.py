@@ -166,8 +166,6 @@ class RetrievalService:
         projector: RetrievalProjection,
         settings: RetrievalSettings,
         telemetry: Telemetry,
-        store: RetrievalRunRepository | None = None,
-        coordinator: RetrievalRunScheduler | None = None,
         model_profile_for_role: Callable[[ModelRole], ModelProfile] | None = None,
         model_invocation_fingerprint_for_role: Callable[[ModelRole], ModelInvocationFingerprint]
         | None = None,
@@ -182,8 +180,9 @@ class RetrievalService:
         self._projector = projector
         self._settings = settings
         self._telemetry = telemetry
-        self._store = store
-        self._coordinator = coordinator
+        # Bound by bind_runtime once the coordinator that executes this service exists.
+        self._store: RetrievalRunRepository | None = None
+        self._coordinator: RetrievalRunScheduler | None = None
         self._model_profile_for_role = model_profile_for_role
         self._model_invocation_fingerprint_for_role = model_invocation_fingerprint_for_role
         self._run_retention_seconds = int(run_retention_seconds)

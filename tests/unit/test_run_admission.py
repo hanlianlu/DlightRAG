@@ -174,7 +174,7 @@ async def _submit_answer(service: Any, key: str | None) -> RunCreation:
 
 
 def _retrieval(store: _Store, scheduler: _Scheduler, _root: Path) -> RetrievalService:
-    return RetrievalService(
+    service = RetrievalService(
         pool=AsyncMock(),
         planners=Mock(),
         schema_lookup=AsyncMock(return_value={}),
@@ -187,8 +187,6 @@ def _retrieval(store: _Store, scheduler: _Scheduler, _root: Path) -> RetrievalSe
             query_image_limit=3,
         ),
         telemetry=NoopTelemetry(),
-        store=cast(Any, store),
-        coordinator=cast(Any, scheduler),
         model_profile_for_role=lambda _role: ModelProfile(context_window_tokens=128_000),
         model_invocation_fingerprint_for_role=lambda _role: ModelInvocationFingerprint(
             provider="openai",
@@ -197,6 +195,8 @@ def _retrieval(store: _Store, scheduler: _Scheduler, _root: Path) -> RetrievalSe
             api_family="chat_completion",
         ),
     )
+    service.bind_runtime(store=cast(Any, store), coordinator=cast(Any, scheduler))
+    return service
 
 
 async def _submit_retrieval(service: Any, key: str | None) -> RunCreation:
