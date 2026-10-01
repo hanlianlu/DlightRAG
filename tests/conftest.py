@@ -42,6 +42,8 @@ class FingerprintingRunStore(PGRunStore):
 
     ``create_run`` and ``create_run_in`` build an Answer envelope from a raw
     request, or pass a ready one through, to ``accept_run`` and ``accept_run_in``.
+    Answer acceptance always writes a routing row. A raw run has one only when
+    the caller passes ``routing``, and the Answer executor refuses a run without it.
     """
 
     async def create_run(
@@ -88,6 +90,7 @@ class FingerprintingRunStore(PGRunStore):
                 idempotency_key=idempotency_key,
                 artifacts=artifacts,
                 references=references,
+                routing=routing,
                 connection_bindings=connection_bindings,
             )
         request = request or {}
@@ -103,6 +106,7 @@ class FingerprintingRunStore(PGRunStore):
             idempotency_key=idempotency_key,
             artifacts=artifacts,
             references=references,
+            routing=routing,
             connection_bindings=connection_bindings,
         )
 
@@ -115,6 +119,7 @@ class FingerprintingRunStore(PGRunStore):
         idempotency_key: str | None,
         artifacts: Sequence[PendingArtifact],
         references: Sequence[PendingArtifactReference],
+        routing: RoutingAcceptance | None,
         connection_bindings: tuple[RunConnectionBinding, ...],
     ) -> RunCreation:
         run_id = str(uuid7())
@@ -128,6 +133,7 @@ class FingerprintingRunStore(PGRunStore):
             run_id=run_id,
             artifacts=artifacts,
             references=references,
+            routing=routing,
             connection_bindings=connection_bindings,
         )
 
