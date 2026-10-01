@@ -41,6 +41,7 @@ from dlightrag.engine.ai.providers.openai_response import ResponseStatusError
 from dlightrag.engine.ai.replay import bind_provider_replay
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
@@ -918,6 +919,7 @@ async def test_response_tool_loop_replays_finalized_native_items_and_exact_call_
             max_retries=0,
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     provider = model._provider
     bind_mock_http(provider, capture.handler)
@@ -1082,6 +1084,7 @@ async def test_response_replays_phases_and_final_ciphertext_from_a_non_tool_turn
             provider="openai", model="gpt-5.4", api_family="response", api_key="test-key"
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     bind_mock_http(model._provider, handler)
     user = {"role": "user", "content": "Get ready."}
@@ -1368,7 +1371,9 @@ async def test_completion_model_replays_same_model_anthropic_thinking_bytes() ->
         max_retries=0,
     )
     capture = _HttpCapture("anthropic")
-    model = CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    model = CompletionModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     bind_mock_http(model._provider, capture.handler)
     bound = bind_provider_replay(
         AssistantTurn(
@@ -1426,7 +1431,9 @@ async def test_completion_model_strips_cross_model_anthropic_thinking() -> None:
         max_retries=0,
     )
     capture = _HttpCapture("anthropic")
-    model = CompletionModel(target, scheduler=ModelScheduler(max_concurrency=1))
+    model = CompletionModel(
+        target, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     bind_mock_http(model._provider, capture.handler)
     bound = bind_provider_replay(
         AssistantTurn(
@@ -1473,7 +1480,9 @@ async def test_anthropic_multipage_view_uses_two_rendered_pages_through_tool_mod
         api_key="test-key",
         max_retries=0,
     )
-    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     bind_mock_http(model._provider, capture.handler)
     budget = answer_image_policy(max_images=4).new_budget()
 

@@ -33,6 +33,7 @@ from dlightrag.engine.ai.providers.embed_providers import (
     VoyageEmbedProvider as _VoyageEmbedProvider,
 )
 from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from tests.support.loopback import bypass_proxies, loopback_server, reset_on_accept
 
 
@@ -89,9 +90,11 @@ class TinyImageBudgetVoyageProvider(VoyageEmbedProvider):
 
 def MultimodalEmbedder(**kwargs):
     scheduler = kwargs.pop("scheduler", ModelScheduler(max_concurrency=4))
+    telemetry = kwargs.pop("telemetry", NOOP_TELEMETRY)
     return _MultimodalEmbedder(
         fingerprint=_TEST_FINGERPRINT,
         scheduler=scheduler,
+        telemetry=telemetry,
         **kwargs,
     )
 
@@ -171,6 +174,7 @@ async def test_embedding_fingerprint_includes_endpoint_identity() -> None:
             endpoint_fingerprint="endpoint-hash",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     try:
         assert embedder.embedding_fingerprint == "test:test-model@endpoint-hash"

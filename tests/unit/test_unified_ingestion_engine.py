@@ -23,6 +23,7 @@ from lightrag.utils_pipeline import (
 from PIL import Image
 
 from dlightrag.application.config import DlightragConfig
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.dependencies import ParserUnavailableError, classify_transient_dependency
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
@@ -158,6 +159,7 @@ def _make_engine(**overrides):
         "input_root": _PARSER_INPUT_ROOTS[-1],
         "parser_rules": "docx:native-iteP,*:mineru-iteP",
         "chunk_options": {},
+        "telemetry": NOOP_TELEMETRY,
     }
     defaults.update(overrides)
     defaults["metadata_index"].get.return_value = None

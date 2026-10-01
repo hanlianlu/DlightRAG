@@ -16,6 +16,7 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
     ModelsSettings,
 )
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 
 
 def _cfg() -> DlightragConfig:
@@ -90,6 +91,7 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
             ),
         ),
         scheduler=scheduler,
+        telemetry=NOOP_TELEMETRY,
     )
 
     result = await bundle.default_func(
@@ -151,6 +153,7 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
                 ),
             ),
             scheduler=ModelScheduler(max_concurrency=1),
+            telemetry=NOOP_TELEMETRY,
         )
 
     assert len(FakeCompletionModel.instances) == 1
@@ -185,6 +188,7 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
                 ),
             ),
             scheduler=ModelScheduler(max_concurrency=1),
+            telemetry=NOOP_TELEMETRY,
         )
 
 

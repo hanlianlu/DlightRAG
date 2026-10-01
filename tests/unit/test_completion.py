@@ -17,6 +17,7 @@ from dlightrag.engine.ai.response_policy import ResponseRequestError
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 
 
 class RecordingObservation:
@@ -69,6 +70,7 @@ async def test_response_family_uses_response_reasoning_shape_in_completion_reque
             model_kwargs={"top_p": 0.9},
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     profile = ModelProfile(
         context_window_tokens=128_000,
@@ -146,6 +148,7 @@ async def test_response_family_rejects_product_owned_raw_model_kwargs(
             model_kwargs={field: "override"},
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     with pytest.raises(ResponseRequestError, match=field):
@@ -362,6 +365,7 @@ async def test_json_object_folds_hint_into_system(monkeypatch) -> None:
     model = CompletionModel(
         ModelSettings(provider="openai", model="compat", structured_output="json_object"),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     await model(
         messages=[
@@ -408,6 +412,7 @@ async def test_json_schema_failure_retries_json_object_with_system_hint(monkeypa
             structured_output="auto",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     await model(
         messages=[{"role": "system", "content": "Pick a mode."}],
@@ -442,6 +447,7 @@ async def test_json_schema_unrelated_failure_is_not_retried(monkeypatch) -> None
             structured_output="auto",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     with pytest.raises(RuntimeError, match="context length exceeded"):
@@ -486,6 +492,7 @@ async def test_stream_retries_json_object_when_json_schema_type_is_unavailable(
             structured_output="auto",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     stream = await model(
         messages=[{"role": "system", "content": "Pick a mode."}],
@@ -528,6 +535,7 @@ async def test_json_schema_type_rejection_does_not_poison_other_endpoints(
             structured_output="auto",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     healthy = CompletionModel(
         ModelSettings(
@@ -537,6 +545,7 @@ async def test_json_schema_type_rejection_does_not_poison_other_endpoints(
             structured_output="auto",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     messages = [{"role": "system", "content": "Pick a mode."}]
 
@@ -575,7 +584,9 @@ async def test_schema_validation_rejection_retries_without_being_remembered(
         base_url="https://api.openai.com/v1",
         structured_output="auto",
     )
-    model = CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    model = CompletionModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     messages = [{"role": "system", "content": "Pick a mode."}]
 
     await model(messages=messages, structured_output=_MODE_OUTPUT)
@@ -614,10 +625,12 @@ async def test_remembered_rejection_is_reused_across_instances_and_modes(
     auto = CompletionModel(
         ModelSettings(**common, structured_output="auto"),  # type: ignore[arg-type]
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     explicit = CompletionModel(
         ModelSettings(**common, structured_output="json_schema"),  # type: ignore[arg-type]
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     messages = [{"role": "system", "content": "Pick a mode."}]
 

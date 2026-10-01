@@ -4,6 +4,7 @@
 from typing import Any
 
 from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from tests.e2e.pg18_harness import (
     install_fake_model_functions,
     missing_preload_libraries,
@@ -75,6 +76,7 @@ async def test_pg18_fake_model_factories_match_service_initialization(monkeypatc
     chat_models = await service_module.LightRagChatModels.acreate(
         config,
         scheduler=scheduler,
+        telemetry=NOOP_TELEMETRY,
     )
     assert chat_models.default_func is not None
     assert (
@@ -83,9 +85,13 @@ async def test_pg18_fake_model_factories_match_service_initialization(monkeypatc
             scoring_settings=None,
             scheduler=scheduler,
             supports_vision=True,
+            telemetry=NOOP_TELEMETRY,
         )
         is None
     )
     assert chat_models.role_configs is None
-    assert service_module.create_embedding_model(config, scheduler=scheduler) is embedder
+    assert (
+        service_module.create_embedding_model(config, scheduler=scheduler, telemetry=NOOP_TELEMETRY)
+        is embedder
+    )
     assert service_module.build_lightrag_embedding(config, embedder).embedding_dim == 8

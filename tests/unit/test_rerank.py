@@ -26,6 +26,7 @@ from dlightrag.engine.ai.providers.rerank_providers import (
 from dlightrag.engine.ai.rerank import RerankModel
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.rag.retrieval.rerank import (
     ListwiseScoreValidationError,
     RerankBatchError,
@@ -72,6 +73,7 @@ async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None
             api_key="key",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     scores = await model.score("query", [("text", None)], top_n=1)
     await model.aclose()
@@ -99,6 +101,7 @@ async def test_rerank_requests_share_scheduler_limit() -> None:
         RerankSettings(strategy="voyage_reranker", model="rerank-2.5", api_key="key"),
         provider,
         scheduler=scheduler,
+        telemetry=NOOP_TELEMETRY,
     )
 
     async def post(*_args: Any, **_kwargs: Any) -> Any:
@@ -413,6 +416,7 @@ class TestBuildRerankFunc:
             RerankSettings(strategy="chat_llm_reranker"),
             scheduler=ModelScheduler(max_concurrency=1),
             scoring_settings=ModelSettings(provider="openai", model="scoring-model"),
+            telemetry=NOOP_TELEMETRY,
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -426,6 +430,7 @@ class TestBuildRerankFunc:
         fn = build_rerank_func(
             RerankSettings(strategy="voyage_reranker", api_key="voyage-key"),
             scheduler=ModelScheduler(max_concurrency=1),
+            telemetry=NOOP_TELEMETRY,
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -443,6 +448,7 @@ class TestBuildRerankFunc:
                 score_threshold=0.42,
             ),
             scheduler=ModelScheduler(max_concurrency=1),
+            telemetry=NOOP_TELEMETRY,
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -454,6 +460,7 @@ class TestBuildRerankFunc:
             build_rerank_func(
                 RerankSettings(strategy="voyage_reranker"),
                 scheduler=ModelScheduler(max_concurrency=1),
+                telemetry=NOOP_TELEMETRY,
             )
 
     def test_provider_requires_base_url(self):
@@ -461,6 +468,7 @@ class TestBuildRerankFunc:
             build_rerank_func(
                 RerankSettings(strategy="aliyun_reranker", api_key="k"),
                 scheduler=ModelScheduler(max_concurrency=1),
+                telemetry=NOOP_TELEMETRY,
             )
 
     def test_multimodal_on_text_only_provider_raises(self):
@@ -472,6 +480,7 @@ class TestBuildRerankFunc:
                     input_modality="multimodal",
                 ),
                 scheduler=ModelScheduler(max_concurrency=1),
+                telemetry=NOOP_TELEMETRY,
             )
 
     async def test_http_rerank_keeps_bounded_orchestration_observation(
@@ -1304,6 +1313,7 @@ class TestRunHttpRerankIntegration:
             ),
             VoyageRerankProvider(),
             scheduler=ModelScheduler(max_concurrency=1),
+            telemetry=NOOP_TELEMETRY,
         )
         model._client = cast(Any, client)
 

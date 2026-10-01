@@ -13,7 +13,7 @@ from lightrag.utils import EmbeddingFunc, TruncatedResponse
 from dlightrag.engine.ai.completion import CompletionModel
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.ai.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class LightRagChatModels:
         settings: ModelRoleSettings,
         *,
         scheduler: ModelScheduler,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> LightRagChatModels:
         """Build all role models, closing earlier providers if construction fails."""
         models: list[CompletionModel] = []

@@ -19,7 +19,7 @@ from dlightrag.engine.ai.providers.rerank_base import (
 from dlightrag.engine.ai.rerank import RerankModel, create_rerank_model, rerank_accepts_images
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, bounded_telemetry_text
+from dlightrag.engine.ai.telemetry import Telemetry, bounded_telemetry_text
 from dlightrag.engine.rag.retrieval.rerank_fallback import RerankBatchError
 
 logger = logging.getLogger(__name__)
@@ -351,7 +351,7 @@ def build_rerank_func(
     scheduler: ModelScheduler,
     scoring_settings: ModelSettings | None = None,
     supports_vision: bool | None = None,
-    telemetry: Telemetry = NOOP_TELEMETRY,
+    telemetry: Telemetry,
 ) -> Callable[..., Any] | None:
     """Build one closeable rerank orchestration from immutable settings.
 

@@ -23,7 +23,7 @@ from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 from dlightrag.engine.ai.response_policy import validate_response_extensions
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
+from dlightrag.engine.ai.telemetry import Telemetry, telemetry_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class ToolModel:
         settings: ModelSettings,
         *,
         scheduler: ModelScheduler,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> None:
         self.settings = settings
         self.fingerprint = model_invocation_fingerprint(settings)

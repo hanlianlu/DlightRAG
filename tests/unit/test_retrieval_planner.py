@@ -18,6 +18,7 @@ from dlightrag.engine.ai.providers import openai_compatible
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
 from dlightrag.engine.rag.retrieval.planner import (
@@ -674,6 +675,7 @@ class TestPlannerRetryOwnership:
                 max_retries=2,
             ),
             scheduler=ModelScheduler(max_concurrency=1),
+            telemetry=NOOP_TELEMETRY,
         )
         planner = RetrievalPlanner(
             llm_func=partial(model, model_profile=_TEST_PROFILE),

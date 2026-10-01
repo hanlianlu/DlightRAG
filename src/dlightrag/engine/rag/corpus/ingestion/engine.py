@@ -23,7 +23,7 @@ from lightrag.parser.routing import (
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.dependencies import ParserUnavailableError
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
@@ -177,7 +177,7 @@ class UnifiedIngestionEngine:
         chunk_options: dict[str, Any] | None,
         bm25_language_classifier: Any | None = None,
         image_margin: float = DEFAULT_IMAGE_MARGIN,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> None:
         self._lightrag = lightrag
         self._stores = stores

@@ -29,7 +29,6 @@ from dlightrag.engine.ai.structured_transport import (
     rejects_json_schema,
 )
 from dlightrag.engine.ai.telemetry import (
-    NOOP_TELEMETRY,
     Telemetry,
     telemetry_error_message,
     telemetry_messages,
@@ -101,7 +100,7 @@ class CompletionModel:
         settings: ModelSettings,
         *,
         scheduler: ModelScheduler,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> None:
         self.settings = settings
         self.fingerprint = model_invocation_fingerprint(settings)

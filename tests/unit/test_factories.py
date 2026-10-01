@@ -26,6 +26,7 @@ from dlightrag.engine.ai.settings import (
     RerankSettings,
 )
 from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tool_model import ToolModel
 
 
@@ -180,8 +181,8 @@ def test_chat_models_pass_api_family_to_provider_construction(
     monkeypatch.setattr("dlightrag.engine.ai.providers.get_provider", provider_factory)
     settings = ModelSettings(model="model-a", api_family="response")
 
-    CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
-    ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY)
+    ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY)
 
     assert received == ["response", "response"]
 
@@ -272,6 +273,7 @@ async def test_root_maps_embedding_settings_into_ai_factory() -> None:
     model = embedding.create_embedding_model(
         settings,
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     assert settings.timeout == 45
@@ -372,6 +374,7 @@ async def test_structured_output_uses_openai_json_schema(monkeypatch) -> None:
     model = CompletionModel(
         ModelSettings(provider="openai", model="gpt-5.4-mini", api_key="sk-test"),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     await model(
@@ -397,6 +400,7 @@ async def test_structured_output_auto_prefers_json_schema_for_compatible_endpoin
             base_url="https://api.deepseek.com",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     await model(
@@ -421,6 +425,7 @@ async def test_explicit_json_schema_overrides_custom_endpoint(monkeypatch) -> No
             structured_output="json_schema",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     await model(
@@ -445,6 +450,7 @@ async def test_native_provider_auto_uses_json_schema(
     model = CompletionModel(
         ModelSettings(provider=provider, model=model_name, api_key="sk-test"),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     await model(
@@ -486,6 +492,7 @@ async def test_openai_strict_schema_failure_retries_json_object(monkeypatch) -> 
     model = CompletionModel(
         ModelSettings(provider="openai", model="local-model", api_key="sk-test"),
         scheduler=scheduler,
+        telemetry=NOOP_TELEMETRY,
     )
 
     async def structured_request() -> str:

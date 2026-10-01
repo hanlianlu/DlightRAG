@@ -17,7 +17,7 @@ from lightrag.constants import PARSED_DIR_NAME
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.engine.ai.telemetry import NoopTelemetry
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, NoopTelemetry
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
@@ -3274,6 +3274,7 @@ class TestWorkspaceRagLightRAGMainPath:
             input_root=service._workspace_input_root(),
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
+            telemetry=NOOP_TELEMETRY,
         )
 
         result = await service.aretry_failed_docs(cohort_doc_ids=(candidate_id,))
@@ -3389,6 +3390,7 @@ class TestWorkspaceRagLightRAGMainPath:
             input_root=service._workspace_input_root(),
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
+            telemetry=NOOP_TELEMETRY,
         )
         source = MagicMock()
 
@@ -3763,6 +3765,7 @@ class TestWorkspaceRagLightRAGMainPath:
             input_root=service._workspace_input_root(),
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
+            telemetry=NOOP_TELEMETRY,
         )
         _set_failed_docs(
             service,

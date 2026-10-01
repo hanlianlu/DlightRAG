@@ -1735,6 +1735,7 @@ async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wir
             max_retries=0,
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
     bind_mock_http(model._provider, wire)  # pyright: ignore[reportPrivateUsage]
 

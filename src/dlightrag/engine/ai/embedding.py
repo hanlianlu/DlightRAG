@@ -35,7 +35,7 @@ from dlightrag.engine.ai.providers.embed_base import (
 from dlightrag.engine.ai.providers.embed_providers import get_embed_provider
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import EmbeddingSettings
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
+from dlightrag.engine.ai.telemetry import Telemetry, telemetry_error_message
 from dlightrag.engine.dependencies import is_transient_request_failure
 
 _MAX_RETRIES = 2
@@ -91,7 +91,7 @@ class MultimodalEmbedder:
         timeout: float = 120.0,
         fingerprint: ModelEndpointFingerprint,
         scheduler: ModelScheduler,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> None:
         if dim < 1:
             raise ValueError("Embedding dimension must be positive")
@@ -401,7 +401,7 @@ def create_embedding_model(
     settings: EmbeddingSettings,
     *,
     scheduler: ModelScheduler,
-    telemetry: Telemetry = NOOP_TELEMETRY,
+    telemetry: Telemetry,
 ) -> MultimodalEmbedder:
     """Build a closeable embedding model from immutable settings."""
     provider = get_embed_provider(settings.provider)

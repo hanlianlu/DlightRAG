@@ -9,7 +9,7 @@ from dlightrag.engine.ai.providers.rerank_base import PreparedDocument, RerankPr
 from dlightrag.engine.ai.providers.rerank_providers import RERANK_PROVIDERS
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import RerankSettings
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
+from dlightrag.engine.ai.telemetry import Telemetry, telemetry_error_message
 
 
 def _provider_for(settings: RerankSettings) -> RerankProvider:
@@ -33,7 +33,7 @@ class RerankModel:
         provider: RerankProvider,
         *,
         scheduler: ModelScheduler,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> None:
         self.settings = settings
         self.provider = provider
@@ -96,7 +96,7 @@ def create_rerank_model(
     settings: RerankSettings,
     *,
     scheduler: ModelScheduler,
-    telemetry: Telemetry = NOOP_TELEMETRY,
+    telemetry: Telemetry,
 ) -> RerankModel:
     """Validate and build one configured HTTP rerank model."""
     provider = _provider_for(settings)

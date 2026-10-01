@@ -49,6 +49,7 @@ from dlightrag.engine.ai.replay import bind_provider_replay
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelRoleSettings, ModelSettings, RerankSettings
 from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.engine.ai.vision import probe_image_capability
 from dlightrag.engine.dependencies import classify_transient_dependency
@@ -204,13 +205,17 @@ def _provider(gemini: _Gemini, **values: Any) -> CompletionProvider:
 
 
 def _tool_model(gemini: _Gemini, **values: Any) -> ToolModel:
-    model = ToolModel(_settings(**values), scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        _settings(**values), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     bind_mock_http(model._provider, gemini)
     return model
 
 
 def _completion_model(gemini: _Gemini, **values: Any) -> CompletionModel:
-    model = CompletionModel(_settings(**values), scheduler=ModelScheduler(max_concurrency=1))
+    model = CompletionModel(
+        _settings(**values), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     bind_mock_http(model._provider, gemini)
     return model
 

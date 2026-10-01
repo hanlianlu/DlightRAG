@@ -15,7 +15,7 @@ from typing import Any, Literal
 from dlightrag.engine.ai.providers import provider_for
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.ai.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class ModelImageCapabilities:
         *,
         scheduler: ModelScheduler,
         reprobe_cooldown_seconds: float = _REPROBE_COOLDOWN_SECONDS,
-        telemetry: Telemetry = NOOP_TELEMETRY,
+        telemetry: Telemetry,
     ) -> None:
         self._cooldown_seconds = reprobe_cooldown_seconds
         self._scheduler = scheduler

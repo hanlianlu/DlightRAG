@@ -14,6 +14,7 @@ from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tool_model import ToolModel
 
 
@@ -36,6 +37,7 @@ async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> 
             agentic_model_kwargs={"reasoning": {"enabled": True}},
         ),
         scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=NOOP_TELEMETRY,
     )
 
     turn = await model(messages=[{"role": "user", "content": "q"}], tools=[])
@@ -61,7 +63,9 @@ async def test_tool_model_routes_streaming_turns_through_the_provider(monkeypatc
         "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     emitted: list[str] = []
 
     async def emit_text(text: str) -> None:
@@ -155,7 +159,9 @@ async def test_tool_model_passes_provider_settings_and_agentic_options(monkeypat
         agentic_model_kwargs={"thinking": {"type": "enabled"}},
     )
 
-    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     await model(messages=[{"role": "user", "content": "q"}], tools=[])
 
     assert seen["provider"] == "openai"
@@ -188,7 +194,9 @@ async def test_query_tool_model_owns_query_role_provider_and_closes_it(monkeypat
         model_kwargs={"enable_thinking": False},
         agentic_model_kwargs={"enable_thinking": True},
     )
-    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     tool = ToolDefinition(name="search", description="Search.", parameters={"type": "object"})
 
     turn = await model(
@@ -233,7 +241,9 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
         "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     messages = [{"role": "user", "content": "answer now"}]
 
     output = [token async for token in model.stream_text(messages=messages)]
@@ -266,7 +276,9 @@ async def test_stream_text_reasoning_off_uses_profile_format_under_cap(
         "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
 
     output = [
         token
@@ -326,7 +338,9 @@ async def test_query_tool_model_retries_empty_final_stream_with_ordinary_kwargs(
         model_kwargs={"thinking": {"type": "disabled"}},
         agentic_model_kwargs={"thinking": {"type": "enabled"}},
     )
-    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        settings, scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
 
     output = [
         token
@@ -358,7 +372,9 @@ async def test_query_tool_model_rejects_repeated_empty_final_stream(monkeypatch)
         "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
 
     with pytest.raises(RuntimeError, match="empty final answer"):
         _ = [
@@ -390,7 +406,9 @@ async def test_tool_model_stream_abandonment_closes_provider_iterator(monkeypatc
         "dlightrag.engine.ai.providers.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+    model = ToolModel(
+        _query_settings(), scheduler=ModelScheduler(max_concurrency=1), telemetry=NOOP_TELEMETRY
+    )
     stream = model.stream_text(messages=[{"role": "user", "content": "answer now"}])
 
     assert await anext(stream) == "first"
