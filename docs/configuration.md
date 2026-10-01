@@ -303,7 +303,7 @@ before changing an existing workspace's vector space.
 |---|---|---|
 | `openai` | Chat Completions or Responses, selected per model | OpenAI, DeepSeek, OpenRouter, Azure OpenAI, vLLM, Ollama, other compatible APIs |
 | `anthropic` | Anthropic native SDK | Claude |
-| `gemini` | Google GenAI SDK | Gemini |
+| `gemini` | Google GenAI SDK, Interactions API ([Gemini](#gemini)) | Gemini |
 
 Select OpenAI-compatible vendors with `base_url`; unknown provider names are
 rejected. Model IDs are endpoint-specific: DeepSeek-V4.1-Flash uses
@@ -336,9 +336,9 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 | `model` | required | Exact model/deployment ID |
 | `api_key` | unset | Endpoint credential |
 | `base_url` | provider default | Optional API root |
-| `api_family` | `chat_completion` | `chat_completion` or `response`; `response` requires `provider: openai` |
+| `api_family` | `chat_completion` | `chat_completion` or `response`; `response` requires `provider: openai`; a `gemini` model is always `interactions` and takes no `api_family` |
 | `structured_output` | `auto` | `auto`, `json_schema`, or `json_object` |
-| `temperature` | unset | Nonnegative provider temperature |
+| `temperature` | unset | Nonnegative provider temperature; a `gemini` model refuses one |
 | `timeout` | `240` | Request timeout seconds |
 | `max_retries` | `3` | Provider SDK retries of a transient request failure; the retrieval planner adds none |
 | `reasoning` | unset | Typed reasoning level |
@@ -404,6 +404,47 @@ is **experimental and mock-contract tested, not live-qualified**. Endpoint/model
 verification and quality limits are in the [qualification record](response-api-qualification.md);
 [ADR 0027](adr/0027-api-family-selects-the-provider-wire.md) records the decision.
 Further role changes are explicit, not automatic.
+
+### Gemini
+
+`provider: gemini` calls Gemini through Google's Interactions API, statelessly. Its
+API Family is always `interactions`, and nothing configures it:
+
+```yaml
+models:
+  chat:
+    roles:
+      query:
+        provider: gemini
+        model: gemini-3.8-flash
+        reasoning: high
+```
+
+Every request carries the full local context with `store=false`, so Google stores no
+interaction to continue from; DlightRAG never sends `previous_interaction_id`, a
+background run, a webhook, an environment, or an agent. As with Response,
+`store=false` is not a Zero Data Retention claim.
+
+The Interactions API takes no sampling parameters. A `temperature` on a Gemini model
+or a Gemini chat reranker fails configuration, so leave it unset; overriding the
+shipped default endpoint with `provider: gemini` does not inherit its temperature or
+base URL.
+
+Typed `reasoning` maps through the catalogue's `gemini` format to
+`generation_config.thinking_level`: each level names `minimal`, `low`, `medium`, or
+`high`, an unsupported level clamps to the nearest supported one, and `off` cannot be
+honored because Gemini cannot turn thinking off. A configured level also asks for
+`thinking_summaries: auto`, whose text becomes the turn's reasoning. Thoughts and
+their signatures are stored with the Assistant Entry and sent back verbatim, in
+place, to the same model; another model sees only the canonical text and calls.
+
+`model_kwargs` accept `safety_settings`, in the Interactions shape
+(`{type: dangerous_content, threshold: block_only_high}`), and `service_tier`; raw
+`thinking_level` and `thinking_summaries` are accepted only where no typed level owns
+them. Any other key fails the request before it is sent. Structured output is a JSON
+`response_format` (`type: text`, `mime_type: application/json`, and the schema), and a
+Tool result's images ride inside its own `function_result`.
+[ADR 0030](adr/0030-gemini-uses-the-stateless-interactions-api.md) records the decision.
 
 ### Model Catalogue And Reasoning
 
@@ -485,8 +526,9 @@ of paying the same 400 again, for both complete and streaming calls. Only an
 explicit "type unavailable" rejection is remembered; a schema-validation
 complaint retries once without becoming a permanent verdict. Restarting the
 process probes the endpoint again. Chat writes the contract under `response_format`;
-Response writes it under `text.format`. Changing API Family does not inherit the
-other family's rejection verdict.
+Response writes it under `text.format`; Gemini writes it as a JSON text
+`response_format`. Changing API Family does not inherit the other family's
+rejection verdict.
 
 ```yaml
 models:

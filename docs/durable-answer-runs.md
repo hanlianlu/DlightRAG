@@ -397,6 +397,9 @@ Response-native replay belongs to a complete Assistant Entry, bound to the pinne
 provider/model/endpoint/API-Family invocation. Matching items replace synthesized
 assistant output once; another invocation uses canonical text and calls instead.
 Malformed matching replay fails, and stream fragments never become Tool intents.
+Gemini's Interactions steps follow the same rule: a turn that thought keeps its
+steps, and the same invocation gets each thought and signature back verbatim, in
+place ([ADR 0030](adr/0030-gemini-uses-the-stateless-interactions-api.md)).
 
 Recovery and Fork rebuild from the selected local Context Projection, not a
 remote response or Conversation ID. Compaction keeps or removes whole assistant/

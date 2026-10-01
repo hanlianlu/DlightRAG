@@ -423,10 +423,10 @@ _Avoid_: scratchpad, agent journal, second transcript, Memory Record, Artifact, 
 ## Configuration And Deployment
 
 **API Family**:
-The per-model provider wire selected for one invocation: `chat_completion` or
-`response`. It neither selects the provider or model nor grants a provider's
-remote state authority over the Agent Session, and it states no retention
-policy.
+The per-model provider wire of one invocation: `chat_completion` or `response` for
+an OpenAI-compatible model, and `interactions`, Gemini's only wire. It neither
+selects the provider or model nor grants a provider's remote state authority over
+the Agent Session, and it states no retention policy.
 _Avoid_: Provider, Model Profile, Responses dialect, ZDR mode
 
 **Application Configuration**:

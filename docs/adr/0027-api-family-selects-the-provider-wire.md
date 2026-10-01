@@ -10,7 +10,8 @@ Responses implementation.
 
 Accepted and implemented. See the [qualification record](../response-api-qualification.md)
 for verification and remaining limits, and [Configuration](../configuration.md#api-family)
-for current role selection.
+for current role selection. [ADR 0030](0030-gemini-uses-the-stateless-interactions-api.md)
+adds the `interactions` API Family, which only `provider: gemini` uses and always does.
 
 This decision extends the [API Family](../domain-language.md#configuration-and-deployment)
 term. It does not revise [ADR 0019](0019-turn-accurate-forking-and-the-carry-point.md):
