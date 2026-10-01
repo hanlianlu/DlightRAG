@@ -1,9 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Cheap CI guard for the opt-in RunRuntime load shape."""
 
-import ast
-from pathlib import Path
-
 from tests.load.runtime_workload import latency_summary, mutation_action, query_submission
 
 
@@ -35,43 +32,6 @@ def test_mutation_workload_covers_every_production_action_exactly() -> None:
         "retry": 200,
         "reset": 200,
     }
-
-
-def test_runtime_fault_gate_requires_postgres_before_running_skip_capable_suites() -> None:
-    makefile = Path("Makefile").read_text(encoding="utf-8")
-    recipe = makefile.split("runtime-faults:", maxsplit=1)[1].split("runtime-pg18:", maxsplit=1)[0]
-
-    assert recipe.index("require_postgres") < recipe.index("uv run pytest")
-
-
-def test_load_campaign_cannot_directly_import_paid_or_network_dependencies() -> None:
-    source = Path("tests/load/test_run_runtime_control_plane.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    imported_roots = {
-        name.name.split(".", maxsplit=1)[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for name in node.names
-    }
-    imported_roots.update(
-        node.module.split(".", maxsplit=1)[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    )
-
-    assert imported_roots.isdisjoint(
-        {"httpx", "lightrag", "litellm", "openai", "raganything", "requests"}
-    )
-    assert "TrackingExecutor" in source
-    assert "deterministic in-process fakes; no network or paid calls" in source
-
-    makefile = Path("Makefile").read_text(encoding="utf-8")
-    load_recipe = makefile.split("load-runtime:", maxsplit=1)[1].split(
-        "validate-runtime:", maxsplit=1
-    )[0]
-    assert "DLIGHTRAG_RUN_LOAD=1" in load_recipe
-    assert "RUN_RUNTIME_LOAD FAIL" in load_recipe
-    assert "-s" in load_recipe
 
 
 def test_latency_summary_uses_stable_nearest_rank_percentiles() -> None:

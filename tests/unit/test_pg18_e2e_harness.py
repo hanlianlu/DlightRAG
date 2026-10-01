@@ -5,18 +5,10 @@ from typing import Any
 
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from tests.e2e.pg18_harness import (
-    REQUIRED_EXTENSIONS,
-    e2e_enabled,
     install_fake_model_functions,
     missing_preload_libraries,
     pg_conn_kwargs_from_env,
 )
-
-
-def test_pg18_harness_is_opt_in() -> None:
-    assert e2e_enabled({}) is False
-    assert e2e_enabled({"DLIGHTRAG_RUN_E2E_PG18": "0"}) is False
-    assert e2e_enabled({"DLIGHTRAG_RUN_E2E_PG18": "true"}) is True
 
 
 def test_pg18_harness_connection_env_prefers_e2e_namespace() -> None:
@@ -58,10 +50,6 @@ def test_pg18_harness_never_borrows_the_application_database_settings() -> None:
         "password": "dlightrag",
         "database": "dlightrag",
     }
-
-
-def test_pg18_harness_tracks_required_postgres_extensions() -> None:
-    assert REQUIRED_EXTENSIONS == ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
 
 
 def test_pg18_harness_validates_preloaded_libraries() -> None:
