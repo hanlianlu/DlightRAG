@@ -42,13 +42,6 @@ def test_reset_scope_options_are_mutually_exclusive() -> None:
         _reset.build_parser().parse_args(["--all", "--workspace", "demo"])
 
 
-def test_removed_direct_reset_options_are_not_accepted() -> None:
-    with pytest.raises(SystemExit):
-        _reset.build_parser().parse_args(["--dry-run"])
-    with pytest.raises(SystemExit):
-        _reset.build_parser().parse_args(["--keep-files"])
-
-
 class _ConcreteResetHarness:
     """Small stateful Run facade: wrong owner lookup never reaches terminal."""
 

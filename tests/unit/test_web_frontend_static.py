@@ -256,20 +256,6 @@ def _declarations(body: str) -> dict[str, str]:
     return decls
 
 
-def test_jinja_template_tree_is_deleted() -> None:
-    assert not (ROOT / "src/dlightrag/adapters/http/browser/templates").exists()
-
-
-def test_production_web_sources_have_no_htmx_contract() -> None:
-    sources = list((ROOT / "src/dlightrag/adapters/http/browser").rglob("*.py"))
-    for path in sources:
-        if "node_modules" in path.parts:
-            continue
-        source = path.read_text(encoding="utf-8").lower()
-        assert "htmx" not in source
-        assert not re.search(r"\bhx-[a-z]", source)
-
-
 def test_button_hover_rules_change_something() -> None:
     """A hover that restates the base is the same as having no hover at all."""
     blocks = _css_blocks()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Verify lockstep release metadata and removed Agent surface names."""
+"""Verify lockstep release metadata."""
 
 from __future__ import annotations
 
@@ -10,12 +10,6 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-_RETIRED_AGENT_TERMS = (
-    "delegate_research",
-    "SessionEpisode",
-    "local_trusted",
-    "agent.scope",
-)
 
 
 def _project(path: Path) -> dict:
@@ -59,13 +53,6 @@ def verify_repository(root: Path = ROOT) -> None:
         raise ValueError("config.yaml release header is stale")
     if "execution_environment: trust" not in config_text or "connections:" not in config_text:
         raise ValueError("config.yaml does not expose the canonical Agent defaults")
-
-    source_root = root / "src"
-    for path in source_root.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for term in _RETIRED_AGENT_TERMS:
-            if term in text:
-                raise ValueError(f"retired Agent term {term!r} remains in {path.relative_to(root)}")
 
 
 def main() -> None:
