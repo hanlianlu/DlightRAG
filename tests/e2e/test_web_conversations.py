@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Browser coverage for the Web conversation lifecycle shell."""
 
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -10,6 +11,8 @@ from uuid import uuid4
 
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
+
+from tests.e2e.test_source_panel import _inject_answer_with_sources, _open_ready_page
 
 
 @dataclass
@@ -725,6 +728,7 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
     ).to_be_visible()
     expect(page.get_by_role("heading", name="Files", exact=True)).to_be_visible()
     assert page.get_by_role("button", name="Choose folder").is_visible()
+    expect(page.get_by_role("button", name="Choose files")).to_have_count(1)
     assert page.get_by_role("button", name="Upload files").count() == 0
     assert not files_trigger.is_visible()
     page.wait_for_timeout(220)
@@ -841,22 +845,51 @@ def test_escape_closes_files_workspace_popover_without_closing_panel(page: Page)
     assert page.locator("#panel").evaluate("element => element.classList.contains('open')") is True
 
 
-@pytest.mark.e2e
-def test_composer_attachment_picker_keeps_files_panel_open(page: Page) -> None:
-    _install_conversation_routes(page)
-    page.set_viewport_size({"width": 1440, "height": 900})
+_OPEN = re.compile(r"\bopen\b")
+
+
+def _open_files_panel(page: Page) -> None:
     page.goto("/web/")
-    page.locator("[aria-current='page']").wait_for()
     page.get_by_role("button", name="Files", exact=True).click()
     page.locator("#upload-zone").wait_for()
 
-    panel = page.locator("#panel")
+
+def _open_sources_panel(page: Page) -> None:
+    _open_ready_page(page)
+    _inject_answer_with_sources(page)
+    page.locator("[data-answer-ref]").last.click()
+    page.locator('#panel-content [data-ref="1"][data-expanded]').wait_for()
+
+
+def _attach_a_file(page: Page, _panel: Locator) -> None:
     with page.expect_file_chooser() as chooser_info:
         page.get_by_role("button", name="Attach files").click()
-    chooser_info.value.set_files([])
+    chooser_info.value.set_files(
+        {"name": "notes.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-1.4 notes"}
+    )
 
-    assert panel.evaluate("element => element.classList.contains('open')") is True
-    assert panel.get_attribute("data-panel-kind") == "files"
+
+def _choose_the_dark_theme(page: Page, panel: Locator) -> None:
+    page.get_by_role("button", name="Appearance").click()
+    expect(panel).to_have_class(_OPEN)
+    page.locator("#theme-menu [data-theme-value='dark']").click()
+    expect(page.locator("html")).to_have_attribute("data-color-mode", "dark")
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("control", ["attach", "theme"])
+@pytest.mark.parametrize("kind", ["files", "sources"])
+def test_attaching_or_choosing_a_theme_keeps_the_open_panel(
+    page: Page, kind: str, control: str
+) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    (_open_files_panel if kind == "files" else _open_sources_panel)(page)
+    panel = page.locator("#panel")
+
+    (_attach_a_file if control == "attach" else _choose_the_dark_theme)(page, panel)
+
+    expect(panel).to_have_class(_OPEN)
+    expect(panel).to_have_attribute("data-panel-kind", kind)
 
 
 @pytest.mark.e2e

@@ -9,26 +9,6 @@ from playwright.sync_api import expect
 
 
 @pytest.mark.e2e
-def test_ingestion_panel_opens(page):
-    """Click the Files panel trigger → panel slides in with file-related controls."""
-    page.goto("/web/")
-    page.wait_for_selector(".app", timeout=10000)
-
-    page.click("#files-btn")
-
-    page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
-    expect(page.get_by_role("heading", name="Files", exact=True)).to_be_visible()
-    expect(
-        page.get_by_role("button", name="Files in Default; choose file workspace")
-    ).to_be_visible()
-    assert not page.locator("#files-btn").is_visible()
-    page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
-    upload_zone = page.locator("#upload-zone")
-    assert upload_zone.get_attribute("role") is None
-    assert upload_zone.locator(":scope > [data-upload-file-action]").count() == 1
-
-
-@pytest.mark.e2e
 def test_file_panel_loads_older_keyset_page_through_accessible_control(page):
     def route_files(route):
         query = parse_qs(urlparse(route.request.url).query)

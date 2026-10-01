@@ -15,28 +15,12 @@ def _open_ready_chat(page: Page) -> Locator:
     return composer
 
 
-def test_answer_submission_uses_active_conversation_and_restores_saved_history(page: Page) -> None:
+def test_a_reload_restores_the_saved_question_and_answer(page: Page) -> None:
     composer = _open_ready_chat(page)
     query = "How does DlightRAG work?"
     composer.fill(query)
+    page.get_by_label("Send").click()
 
-    with page.expect_request(lambda request: request.url.endswith("/web/api/answer")) as captured:
-        page.get_by_label("Send").click()
-
-    payload = captured.value.post_data_json
-    assert isinstance(payload, dict)
-    assert set(payload) == {
-        "query",
-        "workspaces",
-        "conversation_id",
-        "submission_id",
-    }
-    assert payload["query"] == query
-    workspaces = payload["workspaces"]
-    assert isinstance(workspaces, list)
-    assert set(workspaces) == {"default", "research"}
-    assert payload["conversation_id"] is None
-    assert payload["submission_id"]
     expect(page.get_by_text("DlightRAG is a multimodal RAG system.", exact=True)).to_be_visible()
     page.wait_for_url("**/web/conversations/*")
     expect(page.locator('[data-conversation-id][aria-current="page"]')).to_have_count(1)

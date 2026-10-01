@@ -191,33 +191,3 @@ def test_theme_storage_event_syncs_across_tabs(
     second_root = second.locator("html")
     expect(second_root).to_have_attribute("data-theme", "light")
     expect(second_root).to_have_attribute("data-color-mode", "light")
-
-
-@pytest.mark.e2e
-def test_theme_attrs_stable_when_opening_files_panel(page: Page) -> None:
-    page.goto("/web/")
-    _wait_ui_ready(page)
-    _choose_theme(page, "light")
-
-    root = page.locator("html")
-    expect(root).to_have_attribute("data-theme", "light")
-    expect(root).to_have_attribute("data-color-mode", "light")
-
-
-@pytest.mark.e2e
-def test_theme_menu_and_selection_keep_files_panel_open(page: Page) -> None:
-    page.set_viewport_size({"width": 1440, "height": 900})
-    page.goto("/web/")
-    _wait_ui_ready(page)
-    page.click("#files-btn")
-    panel = page.locator("#panel")
-    expect(panel).to_have_attribute("data-panel-kind", "files")
-    assert panel.evaluate("element => element.classList.contains('open')") is True
-
-    _open_theme_menu(page)
-    assert panel.evaluate("element => element.classList.contains('open')") is True
-    page.locator("#theme-menu [data-theme-value='dark']").click()
-
-    expect(page.locator("html")).to_have_attribute("data-color-mode", "dark")
-    assert panel.evaluate("element => element.classList.contains('open')") is True
-    expect(panel).to_have_attribute("data-panel-kind", "files")

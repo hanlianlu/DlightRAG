@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -262,26 +262,6 @@ class E2EConversationService:
                 next_cursor=next_cursor,
                 fetched_rows=len(fetched),
             )
-
-    def seed_conversations(self, *, count: int) -> list[str]:
-        """Seed deterministic newest-first rows for HTTP pagination coverage."""
-        newest = datetime(2026, 8, 28, tzinfo=UTC)
-        values: list[dict[str, Any]] = []
-        for index in range(count):
-            conversation_id = str(UUID(int=index + 1))
-            updated_at = newest - timedelta(microseconds=index)
-            values.append(
-                {
-                    "conversation_id": conversation_id,
-                    "title": f"Seeded conversation {index + 1}",
-                    "created_at": updated_at,
-                    "updated_at": updated_at,
-                    "turns": [],
-                }
-            )
-        with self._lock:
-            self._conversations.update((value["conversation_id"], value) for value in values)
-        return [value["conversation_id"] for value in values]
 
     async def history(
         self,

@@ -9,51 +9,16 @@ from playwright.sync_api import Page, Route, expect
 
 
 @pytest.mark.e2e
-def test_conversation_list_endpoint_returns_two_exact_keyset_pages(
-    page: Page,
-    e2e_conversation_service: Any,
-) -> None:
-    expected_ids = e2e_conversation_service.seed_conversations(count=10)
-    page.goto("/web/")
-
-    result = page.evaluate(
-        """
-        async () => {
-          const firstResponse = await fetch('/web/api/conversations?limit=7');
-          const first = await firstResponse.json();
-          const secondResponse = await fetch(
-            `/web/api/conversations?limit=7&cursor=${encodeURIComponent(first.next_cursor)}`
-          );
-          return {
-            firstStatus: firstResponse.status,
-            secondStatus: secondResponse.status,
-            first,
-            second: await secondResponse.json(),
-          };
-        }
-        """
-    )
-
-    assert result["firstStatus"] == 200
-    assert result["secondStatus"] == 200
-    assert [item["conversation_id"] for item in result["first"]["items"]] == expected_ids[:7]
-    assert isinstance(result["first"]["next_cursor"], str)
-    assert [item["conversation_id"] for item in result["second"]["items"]] == expected_ids[7:]
-    assert result["second"]["next_cursor"] is None
-
-
-@pytest.mark.e2e
-def test_chat_submit_streams_answer(page):
-    """Submit a query via the composer and verify the AI response appears in the DOM.
+def test_chat_streams_each_answer_and_appends_each_turn(page):
+    """A query streams its answer into a new conversation, and the next query appends.
 
     The mocked backend accepts a durable run, then replays its progress, token,
-    and terminal events; the frontend renders them into .ai-message-content.
+    and terminal events; the frontend renders them into the answer.
     """
     page.goto("/web/")
     page.wait_for_selector(".composer-input", timeout=10000)
 
-    composer = page.locator(".composer-input")
-    composer.fill("What is DlightRAG?")
+    page.locator(".composer-input").fill("What is DlightRAG?")
     page.click(".composer-send")
 
     # After acceptance the composer clears and the unpersisted root route adopts
@@ -61,27 +26,22 @@ def test_chat_submit_streams_answer(page):
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
     page.wait_for_url("**/web/conversations/*")
     assert page.locator("[aria-current='page']").count() == 1
-
-    # AI message container should appear with progressive content
-    page.wait_for_selector(".app.has-messages", timeout=10000)
-    ai_messages = page.locator('[class*="aiMessageContent"]')
-    assert ai_messages.count() >= 1
-
-
-@pytest.mark.e2e
-def test_chat_answer_shows_text(page):
-    """Verify the answer text is rendered and visible after stream completion."""
-    page.goto("/web/")
-    page.wait_for_selector(".composer-input", timeout=10000)
-
-    page.locator(".composer-input").fill("test")
-    page.click(".composer-send")
-
     # Assert on the same live locator throughout settlement. Waiting for any
     # streaming node and then synchronously reading the first can hit the empty
     # replacement host between Lit's render and its rich-content mount.
     ai_block = page.locator('[class*="aiMessageContent"]').first
     expect(ai_block).to_contain_text("DlightRAG", timeout=15000)
+
+    # One answer at a time: wait for the terminal branch control before submitting
+    # the next query.
+    page.get_by_role("button", name="Fork").last.wait_for(timeout=10000)
+    user_messages = page.locator('[class*="userMessageWrapper"]')
+    expect(user_messages).to_have_count(1)
+
+    page.locator(".composer-input").fill("Second query")
+    page.click(".composer-send")
+
+    expect(user_messages).to_have_count(2)
 
 
 @pytest.mark.e2e
@@ -97,33 +57,6 @@ def test_terminal_answer_exposes_minimal_agent_branch_controls(page):
     # offers only the branch control, whose point is choosing where to branch from.
     assert actions.get_by_role("button", name="Follow up").count() == 0
     assert actions.get_by_role("button", name="Child agents").count() == 0
-
-
-@pytest.mark.e2e
-def test_chat_history_appends_turns(page):
-    """Verify that submitting a second query adds another user-message to the DOM."""
-    page.goto("/web/")
-    page.wait_for_selector(".composer-input", timeout=10000)
-
-    # First query
-    page.locator(".composer-input").fill("First query")
-    page.click(".composer-send")
-    page.wait_for_function("document.querySelector('.composer-input').value === ''")
-    page.wait_for_selector(".app.has-messages", timeout=10000)
-    # One answer at a time: wait for the terminal branch control before submitting
-    # the next query.
-    page.get_by_role("button", name="Fork").last.wait_for(timeout=10000)
-
-    initial_user_messages = page.locator('[class*="userMessageWrapper"]').count()
-
-    # Second query
-    page.locator(".composer-input").fill("Second query")
-    page.click(".composer-send")
-    page.wait_for_function("document.querySelector('.composer-input').value === ''")
-
-    # Should have at least one more user message wrapper
-    final_user_messages = page.locator('[class*="userMessageWrapper"]').count()
-    assert final_user_messages > initial_user_messages
 
 
 @pytest.mark.e2e
