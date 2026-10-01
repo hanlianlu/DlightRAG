@@ -1376,7 +1376,9 @@ async def test_a_continuation_of_a_failed_fast_turn_still_sees_its_question(
     histories: list[PriorTurns] = []
 
     class FailingSynthesizer:
-        async def generate_stream(self, *_args: Any, **_kwargs: Any) -> Any:
+        async def generate_stream(self, *_args: Any, **kwargs: Any) -> Any:
+            # What the answer model would have received, not a value prepared before it.
+            histories.append(kwargs["conversation_history"])
             raise RuntimeError("generation failed")
 
     profile = ModelProfile(context_window_tokens=1_000_000)
@@ -1388,7 +1390,7 @@ async def test_a_continuation_of_a_failed_fast_turn_still_sees_its_question(
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
     )
-    application, coordinator = _answer_runtime(store, orchestrator=failing, history_sink=histories)
+    application, coordinator = _answer_runtime(store, orchestrator=failing)
     await coordinator.start()
     try:
         request = _answer_run_request()
@@ -2607,7 +2609,7 @@ def _answer_runtime(
     components = _compose(config)
     application = Application(config, components)
     orchestrator = orchestrator or AnswerOrchestrator(
-        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer(history_sink)),
         retrieve_knowledge_base=_retrieve_visual,
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
@@ -2640,8 +2642,6 @@ def _answer_runtime(
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:
         projected: PriorTurns = kwargs.get("projected_history") or PriorTurns()
-        if history_sink is not None:
-            history_sink.append(projected)
         return OrchestratorRun(
             orchestrator=orchestrator,
             image_descriptions=[],
@@ -2663,6 +2663,12 @@ def _answer_runtime(
 
 
 class _CitingSynthesizer:
+    #: The history each answer received: what its model would see.
+    _history_sink: list[PriorTurns] | None = None
+
+    def __init__(self, history_sink: list[PriorTurns] | None = None) -> None:
+        self._history_sink = history_sink
+
     async def generate_stream(
         self,
         query: str,
@@ -2673,6 +2679,8 @@ class _CitingSynthesizer:
         image_budget: Any = None,
     ) -> tuple[Any, AsyncIterator[str]]:
         del current_images, memory_text, image_budget
+        if self._history_sink is not None:
+            self._history_sink.append(conversation_history or PriorTurns())
 
         async def _stream() -> AsyncIterator[str]:
             yield "the drawing shows it [1]"

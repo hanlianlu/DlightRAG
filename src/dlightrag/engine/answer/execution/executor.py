@@ -1175,12 +1175,11 @@ class AnswerExecutor:
             authoritative_messages = project_session_messages(
                 canonical_snapshot.tree.graph.ancestry(fork_head),
                 fork_projection,
-                included_incomplete_host_user_entry_id=_trailing_unanswered_host_turn(
+                included_incomplete_host_user_entry_ids=_continued_turns(
                     canonical_snapshot.tree.graph.ancestry(fork_head)
                 ),
-                # Pre-routing: this fold serves the router and, for Fast, the
-                # synthesizer's history. Research's model-facing fold is the
-                # orchestrator's own, and Fast composes no tools at all.
+                # Pre-routing: this fold serves the router. Research folds its own
+                # history, and Fast folds its own once its turn is reserved.
                 re_readable_handles=False,
             )
         else:
@@ -1198,12 +1197,11 @@ class AnswerExecutor:
             authoritative_messages = project_session_messages(
                 canonical_snapshot.tree.ancestry(history_lane_id),
                 selected_snapshot.active_projection,
-                included_incomplete_host_user_entry_id=_trailing_unanswered_host_turn(
+                included_incomplete_host_user_entry_ids=_continued_turns(
                     canonical_snapshot.tree.ancestry(history_lane_id)
                 ),
-                # Pre-routing: this fold serves the router and, for Fast, the
-                # synthesizer's history. Research's model-facing fold is the
-                # orchestrator's own, and Fast composes no tools at all.
+                # Pre-routing: this fold serves the router. Research folds its own
+                # history, and Fast folds its own once its turn is reserved.
                 re_readable_handles=False,
             )
         has_agent_history = bool(authoritative_messages)
@@ -1221,13 +1219,9 @@ class AnswerExecutor:
             history=routing_history.messages,
         )
         await session.enter_phase("planning")
-        projected_history = (
-            PriorTurns(conversation_messages(authoritative_messages))
-            if has_agent_history and resolved_mode == "fast"
-            else PriorTurns()
-            if has_agent_history
-            else routing_history
-        )
+        # A Session's history is folded where it is sent: Research folds its own, and
+        # Fast folds the one its model receives once its turn is reserved, below.
+        projected_history = PriorTurns() if has_agent_history else routing_history
 
         fast_boundaries: FastRunBoundaries | None = None
         fast_session_host: FastSessionHost | None = None
@@ -2736,7 +2730,12 @@ def _project_fast_history_before_current_user(
     messages = project_session_messages(
         ancestry,
         projection,
-        included_incomplete_host_user_entry_id=accepted_user_entry_id,
+        # A failed or cancelled turn this one continues stays: it is the question
+        # being continued. The current query is removed again below.
+        included_incomplete_host_user_entry_ids=(
+            *_continued_turns(semantic_entries[:-1]),
+            accepted_user_entry_id,
+        ),
         # Fast composes no tools, so its history must not name re-read calls.
         re_readable_handles=False,
     )
@@ -2928,7 +2927,7 @@ def _worst_case_recall_block(prepared_input: Mapping[str, Any] | None) -> str:
     )
 
 
-def _trailing_unanswered_host_turn(entries: Sequence[SessionEntry]) -> EntryId | None:
+def _continued_turns(entries: Sequence[SessionEntry]) -> tuple[EntryId, ...]:
     """Return the host turn a branch ends on while it still has no answer.
 
     A continuation of a failed or cancelled Fast turn continues that question, and
@@ -2938,16 +2937,16 @@ def _trailing_unanswered_host_turn(entries: Sequence[SessionEntry]) -> EntryId |
     already folded, so this names nothing for it.
     """
     if not entries or not isinstance(entries[-1], UserMessageEntry):
-        return None
+        return ()
     last = entries[-1]
     if last.acceptance_id is None:
-        return None
+        return ()
     if any(
         isinstance(entry, AssistantMessageEntry) and entry.acceptance_id == last.acceptance_id
         for entry in entries
     ):
-        return None
-    return last.entry_id
+        return ()
+    return (last.entry_id,)
 
 
 def _lane_projection(

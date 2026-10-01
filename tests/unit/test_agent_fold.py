@@ -246,7 +246,7 @@ def test_fold_omits_incomplete_fast_host_users_from_authoritative_history() -> N
         message["content"]
         for message in fold_entries(
             entries,
-            included_incomplete_host_user_entry_id=current.entry_id,
+            included_incomplete_host_user_entry_ids=(current.entry_id,),
         )
     ] == ["successful question", "successful answer", "current question"]
 

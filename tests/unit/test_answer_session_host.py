@@ -918,7 +918,16 @@ async def test_staged_fast_result_settles_active_reservation_without_regeneratio
 
 
 @pytest.mark.asyncio
-async def test_fast_compaction_omits_a_failed_user_between_succeeded_and_current_turns() -> None:
+async def test_fast_history_carries_the_failed_turn_it_continues_but_not_the_current_query() -> (
+    None
+):
+    """The turn a continuation continues is its context, answered or not (ADR 0019).
+
+    An unanswered Host turn is not history in general. The one at the branch point is
+    the question being continued, and this is the history Fast's model receives: it
+    once dropped that question, while only a value prepared before it and never sent
+    carried it.
+    """
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
     host = await _fast_host(store, session_id)
@@ -973,10 +982,9 @@ async def test_fast_compaction_omits_a_failed_user_between_succeeded_and_current
         accepted_user_entry_id=current.user_entry_id,
     )
 
-    assert len(history.messages) == 1
+    assert len(history.messages) == 2
     assert "successful turn" in str(history.messages[0]["content"])
-    assert all(message.get("content") != "failed question" for message in history.messages)
-    assert all(message.get("content") != "current question" for message in history.messages)
+    assert history.messages[1] == {"role": "user", "content": "failed question"}
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ to the same bounded projection directly.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, cast
 
 from dlightrag.engine.agent.session.entries import (
@@ -96,16 +96,17 @@ def fold_tool_message(entry: ToolResultMessageEntry) -> dict[str, Any]:
 def fold_entries(
     entries: Sequence[SessionEntry],
     *,
-    included_incomplete_host_user_entry_id: EntryId | None = None,
+    included_incomplete_host_user_entry_ids: Collection[EntryId] = (),
 ) -> list[dict[str, Any]]:
     """Fold ordered non-projection entries into model-context messages.
 
     Compaction entries are audit facts, not chronological messages. The active
     projection is materialized once by ``project_session_messages`` before its
     retained suffix. Fast Host user entries carry an ``acceptance_id``; only a
-    matching Assistant makes that turn model history. The Fast projection path
-    may include one exact current reserved User Entry, which it removes again
-    before serializing the separately supplied query.
+    matching Assistant makes that turn model history. A Fast fold names the exact
+    unanswered turns it keeps anyway: a failed or cancelled turn it continues, and
+    the current reserved User Entry, which it removes again before serializing the
+    separately supplied query.
     """
     completed_host_turns = {
         entry.acceptance_id
@@ -118,7 +119,7 @@ def fold_entries(
             if (
                 entry.acceptance_id is not None
                 and entry.acceptance_id not in completed_host_turns
-                and entry.entry_id != included_incomplete_host_user_entry_id
+                and entry.entry_id not in included_incomplete_host_user_entry_ids
             ):
                 continue
             messages.append({"role": "user", "content": entry.content})
@@ -137,7 +138,7 @@ def project_session_messages(
     entries: Sequence[SessionEntry],
     projection: object | None,
     *,
-    included_incomplete_host_user_entry_id: EntryId | None = None,
+    included_incomplete_host_user_entry_ids: Collection[EntryId] = (),
     re_readable_handles: bool = True,
 ) -> list[dict[str, Any]]:
     """Materialize one active summary before its retained non-compaction suffix."""
@@ -155,7 +156,7 @@ def project_session_messages(
     messages.extend(
         fold_entries(
             retained,
-            included_incomplete_host_user_entry_id=included_incomplete_host_user_entry_id,
+            included_incomplete_host_user_entry_ids=included_incomplete_host_user_entry_ids,
         )
     )
     return messages
