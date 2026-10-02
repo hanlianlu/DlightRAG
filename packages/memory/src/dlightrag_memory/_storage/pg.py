@@ -213,20 +213,24 @@ class PostgresMemoryStore:
 
     async def initialize(self) -> None:
         async def operation(conn: PGConnection) -> None:
-            await conn.execute(_RECORDS_TABLE)
-            await conn.execute(_OPERATIONS_TABLE)
-            for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
-                await conn.execute(statement)
-            for statement in extension_bootstrap_sql():
-                await conn.execute(statement)
-            available = await text_configs_available(conn)
-            self._bm25_indexes = await ensure_bm25_indexes(conn, available=available)
-            if self._dense:
-                dim = int(self._embedder.dim)
-                if dim < 1:
-                    raise ValueError("embedder dim must be positive for the dense leg")
-                await conn.execute(_embedding_column_sql(dim))
-                await conn.execute(_embedding_index_sql())
+            async with conn.transaction():
+                # Writers that start together migrate one at a time; the later
+                # one finds every table and index in place and changes nothing.
+                await conn.execute(_LOCK_SCHEMA)
+                await conn.execute(_RECORDS_TABLE)
+                await conn.execute(_OPERATIONS_TABLE)
+                for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
+                    await conn.execute(statement)
+                for statement in extension_bootstrap_sql():
+                    await conn.execute(statement)
+                available = await text_configs_available(conn)
+                self._bm25_indexes = await ensure_bm25_indexes(conn, available=available)
+                if self._dense:
+                    dim = int(self._embedder.dim)
+                    if dim < 1:
+                        raise ValueError("embedder dim must be positive for the dense leg")
+                    await conn.execute(_embedding_column_sql(dim))
+                    await conn.execute(_embedding_index_sql())
 
         acquire = await self._acquire_context()
         async with acquire as conn:
@@ -1131,6 +1135,7 @@ ON CONFLICT (owner_id, memory_id) DO NOTHING
 """
 
 _LOCK_OWNER = "SELECT pg_advisory_xact_lock(hashtext($1))"
+_LOCK_SCHEMA = "SELECT pg_advisory_xact_lock(hashtext('dlightrag-memory-schema'))"
 
 _SELECT_OPERATION = """
 SELECT request_fingerprint, receipt, before_records, undone_by

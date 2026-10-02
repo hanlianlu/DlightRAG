@@ -713,6 +713,24 @@ async def test_pg_recall_gives_preferences_the_character_budget_first(
     assert result.content_chars <= RECALL_CHAR_BUDGET
 
 
+async def test_pg_writers_starting_together_both_initialize() -> None:
+    await skip_without_postgres()
+    db_name = f"dlightrag_mem_{uuid.uuid4().hex[:12]}"
+    admin = await asyncpg.connect(**_PG)
+    try:
+        await admin.execute(f'CREATE DATABASE "{db_name}"')
+    finally:
+        await admin.close()
+    pool = await asyncpg.create_pool(**{**_PG, "database": db_name}, min_size=2, max_size=4)
+    try:
+        # The API and MCP processes are both writers and start at once.
+        writers = [PostgresMemoryStore(pool=pool, embedder=NullEmbedder()) for _ in range(2)]
+        await asyncio.gather(*(writer.initialize() for writer in writers))
+    finally:
+        await pool.close()
+        await drop_database(db_name)
+
+
 async def test_pg_bm25_indexes_follow_the_served_configs(store: PostgresMemoryStore) -> None:
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
