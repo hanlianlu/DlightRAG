@@ -268,7 +268,8 @@ async def test_one_thousand_warm_callers_share_one_workspace_flight() -> None:
 
     pool = _pool(build)
     warmups = [asyncio.create_task(pool.warm(["research", "research"])) for _ in range(1000)]
-    await asyncio.wait_for(build_started.wait(), timeout=1)
+    # A bound against a hang, not a latency claim: slow CI runners need seconds.
+    await asyncio.wait_for(build_started.wait(), timeout=10)
 
     assert calls == 1
     assert len(pool._workspace_flights) == 1
