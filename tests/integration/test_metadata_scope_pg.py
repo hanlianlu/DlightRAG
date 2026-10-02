@@ -9,10 +9,12 @@ Proves on compact fixtures:
 * the bounded scope preflight stops at ``threshold + 1`` and never exact-counts
   a whole match set (0, at/below-threshold, and sentinel cases), including the
   exact-then-contains filename widening;
-* forced generic plans reach the HNSW and BM25 indexes through the database-side
-  metadata semi-join with no corpus-scale sequential scan on indexed paths;
+* forced generic plans of the statements the HNSW and BM25 legs send reach their
+  indexes through the database-side metadata semi-join with no corpus-scale
+  sequential scan on indexed paths;
 * the exact and HNSW vector legs and the BM25 leg fill ``top_k`` when matches
-  are reachable within the existing search budgets;
+  are reachable within the existing search budgets, and never return an
+  out-of-scope chunk however near or well matched;
 * the one-query graph chunk guard returns positional rows with ``None`` for
   out-of-scope ids;
 * the canonical custom JSONB containment predicate rides the GIN index.
@@ -23,6 +25,7 @@ import datetime
 import hashlib
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -555,6 +558,80 @@ async def seeded(writer_corpus: WriterCorpus) -> AsyncIterator[None]:
         await conn.close()
 
 
+# The decoy chunks sit exactly on this query vector, so every in-scope chunk is
+# farther from it than every decoy.
+_DECOY_VECTOR = [1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+
+
+@pytest.fixture
+async def decoyed(writer_corpus: WriterCorpus, seeded: None) -> AsyncIterator[None]:
+    """Add a published out-of-scope document whose chunks beat every in-scope one.
+
+    Its chunks are the nearest vectors to ``_DECOY_VECTOR`` and the best BM25
+    matches for "alpha beta", so a scoped leg that lost its metadata semi-join
+    returns them first. ``seeded`` removes them with the rest of the workspace.
+    """
+    decoys = [(_WORKSPACE, f"c-decoy-{i}", "doc-decoy", "alpha beta alpha beta") for i in range(3)]
+    vector = "[" + ",".join(str(value) for value in _DECOY_VECTOR) + "]"
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await conn.execute(
+            "INSERT INTO dlightrag_doc_metadata "
+            "(workspace, doc_id, filename, filename_stem, _dlightrag_finalization_complete) "
+            "VALUES ($1, 'doc-decoy', 'decoy.pdf', 'decoy', TRUE)",
+            _WORKSPACE,
+        )
+        await conn.executemany(
+            "INSERT INTO lightrag_doc_chunks "
+            "(workspace, id, full_doc_id, content, dlightrag_bm25_language) "
+            "VALUES ($1, $2, $3, $4, 'en')",
+            decoys,
+        )
+        await conn.executemany(
+            f"INSERT INTO {writer_corpus.vector_table} "
+            "(workspace, id, full_doc_id, content, content_vector) "
+            "VALUES ($1, $2, $3, $4, $5::vector)",
+            [(*decoy, vector) for decoy in decoys],
+        )
+    finally:
+        await conn.close()
+    yield None
+
+
+class _FetchRecorder:
+    """A connection that records each statement it fetches with, then runs it."""
+
+    def __init__(self, connection: Any, fetched: list[tuple[str, tuple[Any, ...]]]) -> None:
+        self._connection = connection
+        self._fetched = fetched
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    async def fetch(self, query: str, *args: Any) -> Any:
+        self._fetched.append((query, args))
+        return await self._connection.fetch(query, *args)
+
+
+class _RecordingPool:
+    def __init__(self, pool: Any, fetched: list[tuple[str, tuple[Any, ...]]]) -> None:
+        self._pool = pool
+        self._fetched = fetched
+
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[Any]:
+        async with self._pool.acquire() as connection:
+            yield _FetchRecorder(connection, self._fetched)
+
+
+def _plan_params(args: tuple[Any, ...]) -> list[Any]:
+    """The bound values of a recorded statement, with a vector as its text literal."""
+    return [
+        "[" + ",".join(str(float(value)) for value in arg) + "]" if hasattr(arg, "tolist") else arg
+        for arg in args
+    ]
+
+
 async def _plan_text(
     conn: Any,
     sql: str,
@@ -686,6 +763,86 @@ async def test_filename_query_widens_only_on_an_exact_miss_and_keeps_wildcards_l
     await index.clear()
 
 
+async def test_deletion_name_and_locator_lookups_stay_in_their_workspace(
+    writer_corpus: WriterCorpus,
+) -> None:
+    """A deletion resolves a full name or a locator inside its own workspace only."""
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+
+    home = PGMetadataIndex(workspace="ms_lookup_home")
+    away = PGMetadataIndex(workspace="ms_lookup_away")
+    documents = (
+        (home, "doc-home", "report.pdf", "s3://bucket/report.pdf"),
+        (home, "doc-home-longer", "my report.pdf", None),
+        (home, "doc-home-stem", "report.docx", None),
+        (away, "doc-away", "report.pdf", "s3://bucket/report.pdf"),
+    )
+    try:
+        for index, doc_id, filename, locator in documents:
+            await index.upsert(
+                doc_id,
+                {
+                    "filename": filename,
+                    "filename_stem": filename.rsplit(".", 1)[0],
+                    "download_locator": locator,
+                    "_dlightrag_finalization_complete": True,
+                },
+            )
+
+        # The full name matches, folded the way every filename comparison is; a
+        # longer name or a shared stem does not.
+        assert await home.find_by_filename("report.pdf") == ["doc-home"]
+        assert await home.find_by_filename(" REPORT.PDF ") == ["doc-home"]
+        assert await home.find_by_download_locator("s3://bucket/report.pdf") == ["doc-home"]
+        assert await away.find_by_filename("report.pdf") == ["doc-away"]
+        assert await away.find_by_download_locator("s3://bucket/report.pdf") == ["doc-away"]
+    finally:
+        await home.clear()
+        await away.clear()
+
+
+async def test_doc_status_deletion_lookup_never_widens(writer_corpus: WriterCorpus) -> None:
+    """Deletion by path matches the stored path exactly, in this workspace only."""
+    from dlightrag.adapters.postgres.corpus.doc_status_lookup import PGDocStatusLookup
+
+    workspace = "ms_deletion_home"
+    other_workspace = "ms_deletion_away"
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    pool = await asyncpg.create_pool(**_kwargs(_TEST_DB), min_size=1, max_size=1)
+    try:
+        await conn.executemany(
+            "INSERT INTO lightrag_doc_status (workspace, id, status, file_path)"
+            " VALUES ($1, $2, $3, $4)",
+            [
+                (workspace, "doc-exact", "processed", "report.pdf"),
+                (workspace, "doc-duplicate", "failed", "report.pdf"),
+                (workspace, "doc-case", "processed", "Report.pdf"),
+                (workspace, "doc-suffix", "processed", "/a/report.pdf"),
+                (workspace, "doc-other", "processed", "other.pdf"),
+                (other_workspace, "doc-foreign", "processed", "report.pdf"),
+                (other_workspace, "doc-foreign-id", "processed", "elsewhere.pdf"),
+            ],
+        )
+
+        matches = await PGDocStatusLookup(workspace=workspace, pool=pool).resolve_deletion_matches(
+            file_paths=("report.pdf",),
+            doc_ids=("doc-other", "doc-foreign-id"),
+        )
+
+        assert [(match.doc_id, match.file_path) for match in matches] == [
+            ("doc-duplicate", "report.pdf"),
+            ("doc-exact", "report.pdf"),
+            ("doc-other", "other.pdf"),
+        ]
+    finally:
+        await conn.execute(
+            "DELETE FROM lightrag_doc_status WHERE workspace = ANY($1::varchar[])",
+            [workspace, other_workspace],
+        )
+        await conn.close()
+        await pool.close()
+
+
 # ---------------------------------------------------------------------------
 # Bounded scope preflight
 # ---------------------------------------------------------------------------
@@ -808,33 +965,35 @@ async def test_probe_statement_uses_indexed_metadata_paths(
 # ---------------------------------------------------------------------------
 
 
+# Both vector strategies serve a scope: exact ordering at or below the exact
+# threshold, the HNSW index above it (8192 candidates in production, lowered to
+# _THRESHOLD here), so each is checked against the nearer out-of-scope decoys.
+
+
 async def test_exact_vector_leg_fills_top_k_through_the_metadata_semi_join(
     writer_corpus: WriterCorpus,
-    seeded: None,
+    decoyed: None,
 ) -> None:
     from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
 
     search = PGFilteredVectorSearch(writer_corpus.lightrag.chunks_vdb, exact_threshold=_THRESHOLD)
-    rows = await search.search(
-        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
-        scope=_scope(candidate_count=1),
-        top_k=3,
-    )
+    rows = await search.search(_DECOY_VECTOR, scope=_scope(candidate_count=1), top_k=3)
 
-    # Only the in-scope document's chunks are reachable, in distance order.
+    # The decoys are the nearest chunks of all, yet only the in-scope document's
+    # chunks are reachable.
     assert len(rows) == 3
     assert all(str(row["full_doc_id"]) == "doc-in" for row in rows)
 
 
 async def test_hnsw_leg_fills_top_k_and_keeps_the_limit_outside_the_filter(
     writer_corpus: WriterCorpus,
-    seeded: None,
+    decoyed: None,
 ) -> None:
     from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
 
     search = PGFilteredVectorSearch(writer_corpus.lightrag.chunks_vdb, exact_threshold=_THRESHOLD)
     rows = await search.search(
-        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+        _DECOY_VECTOR,
         scope=_scope(candidate_count=_THRESHOLD + 1, candidate_count_exact=False),
         top_k=2,
     )
@@ -846,26 +1005,33 @@ async def test_hnsw_leg_fills_top_k_and_keeps_the_limit_outside_the_filter(
 async def test_forced_generic_hnsw_plan_rides_the_index_through_the_semi_join(
     writer_corpus: WriterCorpus,
     seeded: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+
+    # Record the statement the HNSW strategy itself sends, then plan exactly that.
+    storage = writer_corpus.lightrag.chunks_vdb
+    fetched: list[tuple[str, tuple[Any, ...]]] = []
+    run_with_retry = storage.db._run_with_retry
+
+    async def recorded(operation: Any, **kwargs: Any) -> Any:
+        return await run_with_retry(
+            lambda connection: operation(_FetchRecorder(connection, fetched)), **kwargs
+        )
+
+    monkeypatch.setattr(storage.db, "_run_with_retry", recorded)
+    await PGFilteredVectorSearch(storage, exact_threshold=_THRESHOLD).search(
+        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        scope=_scope(candidate_count=_THRESHOLD + 1, candidate_count_exact=False),
+        top_k=3,
+    )
+    monkeypatch.undo()
+    [(sql, args)] = fetched
+
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
-        sql = (
-            f"SELECT id FROM {writer_corpus.vector_table} "
-            "WHERE workspace = $2 "
-            "AND full_doc_id IN ("
-            "SELECT doc_id FROM dlightrag_doc_metadata "
-            "WHERE workspace = $3 "
-            "AND (LOWER(TRIM(filename)) = LOWER(TRIM($4)) "
-            "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM($4)))) "
-            "ORDER BY content_vector <=> $1::vector LIMIT $5"
-        )
         plan = await _plan_text(
-            conn,
-            sql,
-            ["[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]", _WORKSPACE, _WORKSPACE, "report.pdf", 3],
-            generic=True,
-            no_seqscan=True,
-            no_sort=True,
+            conn, sql, _plan_params(args), generic=True, no_seqscan=True, no_sort=True
         )
         assert "Seq Scan" not in plan
         assert "Index Scan" in plan
@@ -881,11 +1047,12 @@ async def test_forced_generic_hnsw_plan_rides_the_index_through_the_semi_join(
 
 async def test_bm25_leg_fills_top_k_through_the_metadata_semi_join(
     writer_corpus: WriterCorpus,
-    seeded: None,
+    decoyed: None,
 ) -> None:
     scope = _scope(candidate_count=3)
     rows = await writer_corpus.stores.bm25.search("alpha beta", scope=scope, top_k=3)
 
+    # The decoys match "alpha beta" better than any in-scope chunk.
     assert len(rows) == 3
     assert all(str(row["full_doc_id"]) == "doc-in" for row in rows)
 
@@ -894,37 +1061,32 @@ async def test_forced_generic_bm25_plan_rides_the_index_through_the_semi_join(
     writer_corpus: WriterCorpus,
     seeded: None,
 ) -> None:
+    from dlightrag.adapters.postgres.corpus.corpus_bm25 import PGBM25ProfileSearch
+
+    # Record the statement the scoped BM25 search itself sends, then plan exactly that.
+    fetched: list[tuple[str, tuple[Any, ...]]] = []
+    pool = await asyncpg.create_pool(**_kwargs(_TEST_DB), min_size=1, max_size=1)
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
-        index_rows = await conn.fetch(
-            "SELECT indexname FROM pg_indexes "
-            "WHERE tablename = 'lightrag_doc_chunks' AND indexdef ILIKE '%USING bm25%' "
-            "AND indexdef ILIKE '%text_config=simple%'"
+        await PGBM25ProfileSearch(
+            pool=_RecordingPool(pool, fetched), workspace=_WORKSPACE, profiles=()
+        ).search_profile(
+            "alpha beta",
+            profile_name="simple",
+            language=None,
+            scope=_scope(candidate_count=3),
+            limit=3,
         )
-        assert index_rows
-        index_name = str(index_rows[0]["indexname"])
-        sql = (
-            "SELECT id FROM lightrag_doc_chunks "
-            f"WHERE workspace = $2 AND full_doc_id IN ("
-            "SELECT doc_id FROM dlightrag_doc_metadata "
-            "WHERE workspace = $3 "
-            "AND (LOWER(TRIM(filename)) = LOWER(TRIM($4)) "
-            "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM($4)))) "
-            f"ORDER BY content <@> to_bm25query($1, '{index_name}') LIMIT $5"
-        )
+        [(sql, args)] = fetched
         plan = await _plan_text(
-            conn,
-            sql,
-            ["alpha beta", _WORKSPACE, _WORKSPACE, "report.pdf", 3],
-            generic=True,
-            no_seqscan=True,
-            no_sort=True,
+            conn, sql, _plan_params(args), generic=True, no_seqscan=True, no_sort=True
         )
         assert "Seq Scan" not in plan
         assert "Index Scan" in plan
         assert "content_idx" in plan  # the child BM25 index
     finally:
         await conn.close()
+        await pool.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1118,53 +1280,229 @@ async def test_custom_containment_matches_numbers_bools_and_nulls_like_storage(
     seeded: None,
 ) -> None:
     from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
 
-    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    metadata = PGMetadataIndex(workspace=_WORKSPACE)
     try:
-        await conn.execute(
-            """
-            INSERT INTO dlightrag_doc_metadata
-                (workspace, doc_id, filename, filename_stem, custom_metadata,
-                 _dlightrag_finalization_complete)
-            VALUES ($1, 'doc-shapes', 'shapes.pdf', 'shapes', $2::jsonb, TRUE)
-            """,
-            _WORKSPACE,
-            json.dumps(
-                {
+        await metadata.upsert(
+            "doc-shapes",
+            {
+                "filename": "shapes.pdf",
+                "filename_stem": "shapes",
+                "custom_metadata": {
                     "pages": 7,
                     "reviewed": True,
                     "note": None,
                     "nested": {"leaf": "Text"},
                     "team": " Core ",
-                }
-            ),
-        )
-        await conn.execute(
-            """
-            UPDATE dlightrag_doc_metadata
-            SET custom_metadata_search = dlightrag_canonical_custom_metadata(custom_metadata)
-            WHERE workspace = $1 AND doc_id = 'doc-shapes'
-            """,
-            _WORKSPACE,
+                },
+                "_dlightrag_finalization_complete": True,
+            },
         )
         chunks = PGCorpusChunkStore(writer_corpus.lightrag, exact_threshold=_THRESHOLD)
 
-        scope = await chunks.resolve_scope(
-            MetadataFilter(
-                filename="shapes.pdf",
-                custom={"pages": 7, "reviewed": True, "note": None, "nested": {"leaf": "Text"}},
-            )
-        )
-        assert scope.doc_exists is True
+        async def matches(custom: dict[str, Any]) -> bool:
+            scope = await chunks.resolve_scope(MetadataFilter(filename="shapes.pdf", custom=custom))
+            return scope.doc_exists
 
-        mismatch = await chunks.resolve_scope(
-            MetadataFilter(filename="shapes.pdf", custom={"pages": "8"})
+        assert await matches(
+            {"pages": 7, "reviewed": True, "note": None, "nested": {"leaf": "Text"}}
         )
-        assert bool(mismatch) is False
+        # Every value compares by its canonical text: the text "7" is the stored 7.
+        assert await matches({"pages": "7", "reviewed": "TRUE", "team": "core"})
+        assert not await matches({"pages": "8"})
+    finally:
+        await metadata.delete("doc-shapes")
+
+
+async def test_a_patched_or_restated_custom_key_is_filterable(writer_corpus: WriterCorpus) -> None:
+    """Both write paths recompute the search column from the merged custom metadata."""
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+
+    index = PGMetadataIndex(workspace="ms_custom_patch")
+
+    async def query(**custom: Any) -> list[str]:
+        return await index.query(MetadataFilter(custom=custom))
+
+    try:
+        await index.upsert(
+            "doc-patched",
+            {
+                "filename": "patched.pdf",
+                "custom_metadata": {"team": "Core"},
+                "_dlightrag_finalization_complete": True,
+            },
+        )
+        assert await index.merge_custom_metadata(
+            "doc-patched", {"custom_metadata": {"stage": "Draft"}}
+        )
+        assert await query(stage="draft") == ["doc-patched"]
+        assert await query(team="core", stage="draft") == ["doc-patched"]
+
+        await index.upsert("doc-patched", {"custom_metadata": {"stage": "Final"}})
+        assert await query(stage="final") == ["doc-patched"]
+        assert await query(stage="draft") == []
+        assert await query(team="core") == ["doc-patched"]
+    finally:
+        await index.clear()
+
+
+async def test_author_title_and_creation_date_filter_exactly(writer_corpus: WriterCorpus) -> None:
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+
+    index = PGMetadataIndex(workspace="ms_field_filters")
+    day = datetime.datetime(2024, 6, 1)
+    # A title past one B-tree index page (~2.7KB) that does not compress below it:
+    # only the fixed-width MD5 index key lets it be stored at all.
+    long_title = "".join(hashlib.sha256(f"title {i}".encode()).hexdigest() for i in range(80))
+    documents = {
+        "doc-match": ("Ada Lovelace", "Notes on the Engine", day),
+        "doc-other-title": ("Ada Lovelace", "Sketch of the Engine", day),
+        "doc-other-author": ("Charles Babbage", "Notes on the Engine", day),
+        "doc-earlier": ("Ada Lovelace", "Notes on the Engine", day - datetime.timedelta(seconds=1)),
+        "doc-last": ("Ada Lovelace", "Notes on the Engine", day + datetime.timedelta(days=30)),
+        "doc-long": ("Ada Lovelace", long_title, day),
+    }
+    try:
+        for doc_id, (author, title, created) in documents.items():
+            await index.upsert(
+                doc_id,
+                {
+                    "filename": f"{doc_id}.pdf",
+                    "author": author,
+                    "title": title,
+                    "creation_date": created,
+                    "_dlightrag_finalization_complete": True,
+                },
+            )
+
+        async def query(**filters: Any) -> list[str]:
+            return sorted(await index.query(MetadataFilter(**filters)))
+
+        # Author and title together, each folded for case and padding.
+        assert await query(author=" ada LOVELACE ", title="notes on the engine") == [
+            "doc-earlier",
+            "doc-last",
+            "doc-match",
+        ]
+        # Both date bounds are inclusive, to the second.
+        assert await query(
+            title="Notes on the Engine",
+            creation_date_from=day,
+            creation_date_to=day + datetime.timedelta(days=30),
+        ) == ["doc-last", "doc-match", "doc-other-author"]
+        assert (
+            await query(
+                title="Notes on the Engine",
+                creation_date_from=day + datetime.timedelta(seconds=1),
+                creation_date_to=day + datetime.timedelta(days=30) - datetime.timedelta(seconds=1),
+            )
+            == []
+        )
+        assert await query(title=long_title.upper()) == ["doc-long"]
+    finally:
+        await index.clear()
+
+
+async def test_overwriting_chunk_vectors_updates_only_existing_rows(
+    writer_corpus: WriterCorpus,
+    seeded: None,
+) -> None:
+    from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+
+    table = writer_corpus.vector_table
+    other_workspace = "ms_vectors_away"
+    original = "[0.9,0.9,0.9,0.9,0.9,0.9,0.9,0.9]"
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        # Another workspace holds a chunk under the same id.
+        await conn.execute(
+            f"INSERT INTO {table} (workspace, id, full_doc_id, content, content_vector) "
+            "VALUES ($1, 'c-in-0', 'doc-in', 'alpha beta gamma 0', $2::vector)",
+            other_workspace,
+            original,
+        )
+        replacement = [0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.1, 0.2]
+
+        await PGCorpusChunkStore(writer_corpus.lightrag).overwrite_chunk_vectors(
+            {"c-in-0": replacement, "c-never-stored": replacement},
+            embedding_dim=8,
+        )
+
+        rows = await conn.fetch(
+            f"SELECT workspace, id, content_vector::text AS vector FROM {table} "
+            "WHERE id IN ('c-in-0', 'c-never-stored') ORDER BY workspace",
+        )
+        assert [(row["workspace"], row["id"]) for row in rows] == [
+            (_WORKSPACE, "c-in-0"),
+            (other_workspace, "c-in-0"),
+        ]
+        stored = {row["workspace"]: json.loads(row["vector"]) for row in rows}
+        # Stored at the column's half precision.
+        assert stored[_WORKSPACE] == pytest.approx(replacement, abs=1e-3)
+        assert stored[other_workspace] == pytest.approx(json.loads(original), abs=1e-3)
+    finally:
+        await conn.execute(f"DELETE FROM {table} WHERE workspace = $1", other_workspace)
+        await conn.close()
+
+
+async def test_failed_files_page_past_several_rows_and_prefer_the_error(
+    writer_corpus: WriterCorpus,
+) -> None:
+    from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
+    from dlightrag.application.corpus_admin import FilePanelCursor, FilePanelPageRequest
+
+    workspace = "ms_failed_files"
+    newer = datetime.datetime(2026, 3, 4, 5, 6, 7)
+    older = newer - datetime.timedelta(days=1)
+    oldest = older - datetime.timedelta(days=1)
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        # Four failed rows in pages of two: the second page is exactly full.
+        await conn.executemany(
+            "INSERT INTO lightrag_doc_status "
+            "(workspace, id, status, file_path, error_msg, content_summary, updated_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            [
+                (workspace, "failed-a", "failed", "/a.pdf", "parser failed", "a summary", newer),
+                (workspace, "failed-b", "failed", "/b.pdf", None, "only a summary", older),
+                (workspace, "failed-c", "failed", "/c.pdf", "timed out", None, older),
+                (workspace, "failed-d", "failed", "/d.pdf", "quota", "d summary", oldest),
+                (workspace, "processed", "processed", "/p.pdf", None, "fine", newer),
+                ("ms_failed_away", "failed-away", "failed", "/x.pdf", "elsewhere", None, newer),
+            ],
+        )
+        store = PGFilePanelStore()
+
+        first = await store.list_failed_files(workspace, page=FilePanelPageRequest(limit=2))
+        assert [(item.doc_id, item.error) for item in first.items] == [
+            ("failed-a", "parser failed"),
+            ("failed-b", "only a summary"),
+        ]
+        assert (first.has_more, first.fetched_rows) == (True, 3)
+
+        last_item = first.items[-1]
+        second = await store.list_failed_files(
+            workspace,
+            page=FilePanelPageRequest(
+                limit=2,
+                cursor=FilePanelCursor(
+                    workspace=workspace,
+                    updated_at=last_item.updated_at,
+                    doc_id=last_item.doc_id,
+                    view="failed",
+                ),
+            ),
+        )
+        assert [(item.doc_id, item.error) for item in second.items] == [
+            ("failed-c", "timed out"),
+            ("failed-d", "quota"),
+        ]
+        assert (second.has_more, second.fetched_rows) == (False, 2)
     finally:
         await conn.execute(
-            "DELETE FROM dlightrag_doc_metadata WHERE workspace = $1 AND doc_id = 'doc-shapes'",
-            _WORKSPACE,
+            "DELETE FROM lightrag_doc_status WHERE workspace = ANY($1::varchar[])",
+            [workspace, "ms_failed_away"],
         )
         await conn.close()
 
