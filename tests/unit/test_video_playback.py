@@ -1,11 +1,27 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Reader-activated playback is independent of settlement metadata."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
 from dlightrag.adapters.http.browser import video_playback
 from dlightrag.adapters.http.browser.presentation import build_answer_presentation
 from dlightrag.engine.public_http import PublicHttpFetch
+
+
+@pytest.fixture
+def serve_oembed(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
+    """Answer the playback resolver's oEmbed reads with a scripted fetch."""
+
+    def install(fetch: Any) -> Any:
+        monkeypatch.setattr(
+            "dlightrag.adapters.http.browser.video_playback.fetch_public_http", fetch
+        )
+        return fetch
+
+    return install
 
 
 def test_metadata_free_video_links_offer_playback_without_rewriting_the_answer():
@@ -88,7 +104,9 @@ def test_non_link_occurrences_do_not_offer_playback(answer):
 
 
 @pytest.mark.parametrize("media_type", ["application/json", "application/json; charset=utf-8"])
-async def test_clicked_video_uses_bounded_oembed_but_never_executes_provider_html(media_type):
+async def test_clicked_video_uses_bounded_oembed_but_never_executes_provider_html(
+    serve_oembed, media_type
+):
     import json
 
     calls = []
@@ -109,9 +127,9 @@ async def test_clicked_video_uses_bounded_oembed_but_never_executes_provider_htm
             200,
         )
 
+    serve_oembed(fetch)
     player = await video_playback.resolve_video_playback(
         "https://youtu.be/abcdefghijk?si=tracking",
-        fetch=fetch,
     )
     assert player is not None
     assert (
@@ -144,12 +162,13 @@ async def test_clicked_video_uses_bounded_oembed_but_never_executes_provider_htm
         "https://example.com/video",
     ],
 )
-async def test_unsupported_or_credential_urls_never_trigger_resolution(url):
+async def test_unsupported_or_credential_urls_never_trigger_resolution(serve_oembed, url):
     async def fetch(*args, **kwargs):
         pytest.fail("unrecognized/credential URLs must not reach transport")
 
     assert video_playback.video_playback_link(url) is None
-    assert await video_playback.resolve_video_playback(url, fetch=fetch) is None
+    serve_oembed(fetch)
+    assert await video_playback.resolve_video_playback(url) is None
 
 
 @pytest.mark.parametrize(
@@ -178,12 +197,13 @@ async def test_unsupported_or_credential_urls_never_trigger_resolution(url):
     ],
 )
 async def test_official_mappings_survive_missing_metadata_and_preserve_playback_offsets(
-    url, expected
+    serve_oembed, url, expected
 ):
     async def fetch(*args, **kwargs):
         raise TimeoutError("metadata is not playback permission")
 
-    player = await video_playback.resolve_video_playback(url, fetch=fetch)
+    serve_oembed(fetch)
+    player = await video_playback.resolve_video_playback(url)
     assert player is not None
     assert player.embed_url == expected
     assert player.aspect_ratio == 16 / 9
@@ -199,7 +219,7 @@ async def test_official_mappings_survive_missing_metadata_and_preserve_playback_
         "<script>evil()</script>",
     ],
 )
-async def test_untrusted_oembed_cannot_change_the_selected_official_player(markup):
+async def test_untrusted_oembed_cannot_change_the_selected_official_player(serve_oembed, markup):
     import json
 
     async def fetch(url, **kwargs):
@@ -210,9 +230,8 @@ async def test_untrusted_oembed_cannot_change_the_selected_official_player(marku
             200,
         )
 
-    player = await video_playback.resolve_video_playback(
-        "https://youtu.be/abcdefghijk", fetch=fetch
-    )
+    serve_oembed(fetch)
+    player = await video_playback.resolve_video_playback("https://youtu.be/abcdefghijk")
     assert player is not None
     assert (
         player.embed_url
@@ -230,13 +249,14 @@ async def test_untrusted_oembed_cannot_change_the_selected_official_player(marku
         (200, "application/json", b"invalid JSON"),
     ],
 )
-async def test_unavailable_or_invalid_oembed_keeps_the_official_mapping(status, media_type, body):
+async def test_unavailable_or_invalid_oembed_keeps_the_official_mapping(
+    serve_oembed, status, media_type, body
+):
     async def fetch(url, **kwargs):
         return PublicHttpFetch(body, url, media_type, status)
 
-    player = await video_playback.resolve_video_playback(
-        "https://youtu.be/abcdefghijk", fetch=fetch
-    )
+    serve_oembed(fetch)
+    player = await video_playback.resolve_video_playback("https://youtu.be/abcdefghijk")
     assert player is not None
     assert (
         player.embed_url
@@ -247,11 +267,10 @@ async def test_unavailable_or_invalid_oembed_keeps_the_official_mapping(status, 
 
 async def test_provider_http_reads_are_anonymous_pinned_and_redirects_are_revalidated(monkeypatch):
     import socket
-    from functools import partial
 
     import httpx
 
-    from dlightrag.engine.public_http import fetch_public_http
+    from tests.support.public_http import serve_public_http
 
     monkeypatch.setattr(
         socket,
@@ -266,23 +285,11 @@ async def test_provider_http_reads_are_anonymous_pinned_and_redirects_are_revali
         calls.append(request)
         assert request.url.host == "93.184.216.34"
         assert request.headers["host"] == "www.youtube.com"
-        assert not any(
-            name in request.headers for name in ("cookie", "authorization", "referer", "x-private")
-        )
+        assert not any(name in request.headers for name in ("cookie", "authorization", "referer"))
         return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(serve),
-        headers={
-            "authorization": "secret",
-            "cookie": "session=secret",
-            "referer": "private",
-            "x-private": "secret",
-        },
-    ) as client:
-        player = await video_playback.resolve_video_playback(
-            "https://youtu.be/abcdefghijk", fetch=partial(fetch_public_http, client=client)
-        )
+    serve_public_http(monkeypatch, serve)
+    player = await video_playback.resolve_video_playback("https://youtu.be/abcdefghijk")
     assert len(calls) == 1
     assert player is not None
     assert player.embed_url.startswith("https://www.youtube-nocookie.com/embed/abcdefghijk?")

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -21,7 +20,6 @@ from pydantic import Field
 from dlightrag.adapters.http.browser.oembed_catalogue import oembed_provider, permitted_player
 from dlightrag.engine.answer.client_contracts import ClientContractModel
 from dlightrag.engine.public_http import (
-    PublicHttpFetch,
     fetch_public_http,
     validate_agent_public_url,
 )
@@ -256,11 +254,7 @@ def _player_url(target: _Target) -> str:
     return source
 
 
-async def resolve_video_playback(
-    url: str,
-    *,
-    fetch: Callable[..., Awaitable[PublicHttpFetch]] = fetch_public_http,
-) -> VideoPlayer | None:
+async def resolve_video_playback(url: str) -> VideoPlayer | None:
     """Use the shared oEmbed path; small official mappings survive metadata failure."""
     candidate = _candidate(url)
     if candidate is None:
@@ -275,7 +269,9 @@ async def resolve_video_playback(
         try:
             # Includes waiting for shared network admission, not just reading.
             async with asyncio.timeout(4.0):
-                result = await fetch(endpoint, max_bytes=65536, timeout=4.0, agent_url=True)
+                result = await fetch_public_http(
+                    endpoint, max_bytes=65536, timeout=4.0, agent_url=True
+                )
                 media_type = (result.media_type or "").partition(";")[0].strip().lower()
                 if result.status_code == 200 and media_type == "application/json":
                     player = _video_response(result.content, tuple(candidate.link.player_domains))

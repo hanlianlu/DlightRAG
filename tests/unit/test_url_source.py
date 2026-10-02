@@ -19,6 +19,7 @@ from dlightrag.engine.rag.corpus.sources.base import SourceDocument
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.corpus.sources.uri import parse_remote_uri
 from dlightrag.engine.rag.corpus.sources.url import URLDataSource
+from tests.support.public_http import serve_public_http
 
 
 class _Response:
@@ -96,6 +97,30 @@ def _logical_url(url: str, kwargs: dict) -> str:
     parts = urlsplit(url)
     host = (kwargs.get("headers") or {}).get("host", parts.netloc)
     return urlunsplit((parts.scheme, host, parts.path, parts.query, ""))
+
+
+class _Served:
+    """Requests public HTTP acquisition sent, each answered by a redirect or a body."""
+
+    def __init__(self, *, body: bytes = b"final body", redirects: dict[str, str] | None = None):
+        self.body = body
+        self.redirects = redirects or {}
+        self.requests: list[httpx.Request] = []
+
+    @property
+    def urls(self) -> list[str]:
+        """The logical URL of each request, which goes to its pinned address."""
+        return [
+            urlunsplit((r.url.scheme, r.headers["host"], r.url.path, r.url.query.decode(), ""))
+            for r in self.requests
+        ]
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        target = self.redirects.get(self.urls[-1])
+        if target is not None:
+            return httpx.Response(302, headers={"location": target})
+        return httpx.Response(200, content=self.body)
 
 
 @pytest.fixture(autouse=True)
@@ -413,99 +438,90 @@ def test_parse_remote_uri_treats_http_and_https_as_url_source() -> None:
     )
 
 
-async def test_fetch_public_http_returns_bounded_content_and_final_identity() -> None:
-    client = _Client(content=b"hello world", final_url="https://cdn.example.com/report.txt")
+async def test_fetch_public_http_returns_bounded_content_and_final_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served = _Served(body=b"hello world")
+    serve_public_http(monkeypatch, served)
 
-    result = await fetch_public_http(
-        "https://cdn.example.com/report.txt", max_bytes=1024, client=client
-    )
+    result = await fetch_public_http("https://cdn.example.com/report.txt", max_bytes=1024)
 
     assert result.content == b"hello world"
     assert result.final_url == "https://cdn.example.com/report.txt"
-    assert client.urls == ["https://cdn.example.com/report.txt"]
+    assert served.urls == ["https://cdn.example.com/report.txt"]
 
 
-async def test_injected_httpx_client_cannot_add_credentials_or_arbitrary_headers() -> None:
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, content=b"body")
-
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        headers={"authorization": "Bearer secret", "x-extra": "forbidden"},
-        cookies={"session": "secret"},
-    ) as client:
-        result = await fetch_public_http(
-            "https://cdn.example.com/report.txt",
-            max_bytes=1024,
-            presentation=PublicHttpPresentation(user_agent="Allowed/1"),
-            client=client,
-        )
-
-    assert result.content == b"body"
-    assert requests[0].headers["user-agent"] == "Allowed/1"
-    assert requests[0].extensions["sni_hostname"] == "cdn.example.com"
-    assert "authorization" not in requests[0].headers
-    assert "cookie" not in requests[0].headers
-    assert "x-extra" not in requests[0].headers
-
-
-async def test_fetch_public_http_enforces_max_bytes() -> None:
-    client = _Client(content=b"x" * 100, final_url="https://cdn.example.com/big.txt")
-    with pytest.raises(ValueError, match="maximum"):
-        await fetch_public_http("https://cdn.example.com/big.txt", max_bytes=10, client=client)
-
-
-async def test_fetch_public_http_follows_redirects_and_pins_validated_ip() -> None:
-    client = _RedirectClient(
-        "https://cdn.example.com/start.txt",
-        "https://cdn.example.com/final.txt",
-    )
+async def test_a_fetch_is_anonymous_and_sends_only_its_presentation_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served = _Served(body=b"body")
+    serve_public_http(monkeypatch, served)
 
     result = await fetch_public_http(
-        "https://cdn.example.com/start.txt", max_bytes=1024, client=client
+        "https://cdn.example.com/report.txt",
+        max_bytes=1024,
+        presentation=PublicHttpPresentation(user_agent="Allowed/1"),
     )
+
+    assert result.content == b"body"
+    (request,) = served.requests
+    assert request.headers["user-agent"] == "Allowed/1"
+    assert request.extensions["sni_hostname"] == "cdn.example.com"
+    assert "authorization" not in request.headers
+    assert "cookie" not in request.headers
+
+
+async def test_fetch_public_http_enforces_max_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    serve_public_http(monkeypatch, _Served(body=b"x" * 100))
+    with pytest.raises(ValueError, match="maximum"):
+        await fetch_public_http("https://cdn.example.com/big.txt", max_bytes=10)
+
+
+async def test_fetch_public_http_follows_redirects_and_pins_validated_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served = _Served(
+        redirects={"https://cdn.example.com/start.txt": "https://cdn.example.com/final.txt"}
+    )
+    serve_public_http(monkeypatch, served)
+
+    result = await fetch_public_http("https://cdn.example.com/start.txt", max_bytes=1024)
 
     assert result.content == b"final body"
     assert result.final_url == "https://cdn.example.com/final.txt"
-    assert client.urls == [
+    assert served.urls == [
         "https://cdn.example.com/start.txt",
         "https://cdn.example.com/final.txt",
     ]
+    assert {request.url.host for request in served.requests} == {"93.184.216.34"}
 
 
-async def test_fetch_public_http_accepts_http_and_http_to_https() -> None:
-    client = _RedirectClient(
-        "http://cdn.example.com/start.txt",
-        "https://cdn.example.com/final.txt",
+async def test_fetch_public_http_accepts_http_and_http_to_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serve_public_http(
+        monkeypatch,
+        _Served(
+            redirects={"http://cdn.example.com/start.txt": "https://cdn.example.com/final.txt"}
+        ),
     )
-    result = await fetch_public_http(
-        "http://cdn.example.com/start.txt", max_bytes=1024, client=client
-    )
+    result = await fetch_public_http("http://cdn.example.com/start.txt", max_bytes=1024)
     assert result.content == b"final body"
 
 
-async def test_fetch_public_http_rejects_scheme_downgrade_and_private_redirect() -> None:
-    with pytest.raises(ValueError, match="downgrade"):
-        await fetch_public_http(
-            "https://cdn.example.com/start.txt",
-            max_bytes=1024,
-            client=_RedirectClient(
-                "https://cdn.example.com/start.txt",
-                "http://cdn.example.com/final.txt",
-            ),
-        )
-    with pytest.raises(ValueError, match="public"):
-        await fetch_public_http(
-            "https://cdn.example.com/start.txt",
-            max_bytes=1024,
-            client=_RedirectClient(
-                "https://cdn.example.com/start.txt",
-                "https://127.0.0.1/admin.txt",
-            ),
-        )
+@pytest.mark.parametrize(
+    ("target", "refusal"),
+    [
+        ("http://cdn.example.com/final.txt", "downgrade"),
+        ("https://127.0.0.1/admin.txt", "public"),
+    ],
+)
+async def test_fetch_public_http_rejects_scheme_downgrade_and_private_redirect(
+    monkeypatch: pytest.MonkeyPatch, target: str, refusal: str
+) -> None:
+    serve_public_http(monkeypatch, _Served(redirects={"https://cdn.example.com/start.txt": target}))
+    with pytest.raises(ValueError, match=refusal):
+        await fetch_public_http("https://cdn.example.com/start.txt", max_bytes=1024)
 
 
 async def test_fetch_rejects_redirect_hostname_that_resolves_private(
@@ -516,13 +532,13 @@ async def test_fetch_rejects_redirect_hostname_that_resolves_private(
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", resolver)
-    client = _RedirectClient(
-        "https://public.example/start.txt",
-        "https://private.example/admin.txt",
+    served = _Served(
+        redirects={"https://public.example/start.txt": "https://private.example/admin.txt"}
     )
+    serve_public_http(monkeypatch, served)
     with pytest.raises(ValueError, match="public"):
-        await fetch_public_http("https://public.example/start.txt", max_bytes=1024, client=client)
-    assert client.urls == ["https://public.example/start.txt"]
+        await fetch_public_http("https://public.example/start.txt", max_bytes=1024)
+    assert served.urls == ["https://public.example/start.txt"]
 
 
 async def test_public_url_dns_validation_runs_off_the_event_loop(

@@ -2,13 +2,13 @@
 """Real HTTP streaming semantics, not an already-materialized tiny OG fixture."""
 
 import socket
-from functools import partial
 
 import httpx
 import pytest
 
 from dlightrag.engine.answer.links.cards import collect_link_cards
 from dlightrag.engine.public_http import fetch_public_http, fetch_public_http_prefix
+from tests.support.public_http import serve_public_http
 
 
 class _Stream(httpx.AsyncByteStream):
@@ -37,14 +37,6 @@ def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _read_cards_through(monkeypatch: pytest.MonkeyPatch, client: httpx.AsyncClient) -> None:
-    """Serve the card reader's prefix reads from ``client`` and its mock transport."""
-    monkeypatch.setattr(
-        "dlightrag.engine.answer.links.cards.fetch_public_http_prefix",
-        partial(fetch_public_http_prefix, client=client),
-    )
-
-
 async def test_large_video_page_can_declare_metadata_after_256_kib(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,15 +59,16 @@ async def test_large_video_page_can_declare_metadata_after_256_kib(
         assert "cookie" not in request.headers
         return httpx.Response(200, headers={"content-type": "text/html"}, stream=stream)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        _read_cards_through(monkeypatch, client)
-        cards = await collect_link_cards("https://example.com/watch")
+    serve_public_http(monkeypatch, serve)
+    cards = await collect_link_cards("https://example.com/watch")
     assert [card.title for card in cards] == ["Film"]
     assert stream.closed
     assert stream.read < 3 * 1024 * 1024, "do not drain the irrelevant page tail"
 
 
-async def test_prefix_closes_at_cap_but_complete_fetch_still_rejects_oversize() -> None:
+async def test_prefix_closes_at_cap_but_complete_fetch_still_rejects_oversize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     streams: list[_Stream] = []
 
     def serve(request: httpx.Request) -> httpx.Response:
@@ -83,18 +76,18 @@ async def test_prefix_closes_at_cap_but_complete_fetch_still_rejects_oversize() 
         streams.append(stream)
         return httpx.Response(200, headers={"content-type": "text/html"}, stream=stream)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        prefix = await fetch_public_http_prefix(
-            "https://example.com/page", max_bytes=40, client=client, agent_url=True
-        )
-        assert prefix.content == b"a" * 32 + b"b" * 8
-        assert prefix.media_type == "text/html"
-        assert prefix.final_url == "https://example.com/page"
-        assert streams[0].read == 64
-        assert streams[0].closed
-        with pytest.raises(ValueError, match="exceeds maximum size"):
-            await fetch_public_http("https://example.com/page", max_bytes=40, client=client)
-        assert streams[1].closed
+    serve_public_http(monkeypatch, serve)
+    prefix = await fetch_public_http_prefix(
+        "https://example.com/page", max_bytes=40, agent_url=True
+    )
+    assert prefix.content == b"a" * 32 + b"b" * 8
+    assert prefix.media_type == "text/html"
+    assert prefix.final_url == "https://example.com/page"
+    assert streams[0].read == 64
+    assert streams[0].closed
+    with pytest.raises(ValueError, match="exceeds maximum size"):
+        await fetch_public_http("https://example.com/page", max_bytes=40)
+    assert streams[1].closed
 
 
 async def test_declarations_past_the_prefix_limit_do_not_authorize_a_card(
@@ -106,41 +99,35 @@ async def test_declarations_past_the_prefix_limit_do_not_authorize_a_card(
             b'<meta property="og:type" content="video.other"><meta property="og:title" content="Too late">',
         ]
     )
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200, headers={"content-type": "text/html"}, stream=stream
-            )
-        )
-    ) as client:
-        _read_cards_through(monkeypatch, client)
-        assert await collect_link_cards("https://example.com/page") == ()
+    serve_public_http(
+        monkeypatch,
+        lambda request: httpx.Response(200, headers={"content-type": "text/html"}, stream=stream),
+    )
+    assert await collect_link_cards("https://example.com/page") == ()
     assert stream.read == 2 * 1024 * 1024
     assert stream.closed
 
 
-async def test_prefix_does_not_inherit_auth_cookies_or_headers() -> None:
+async def test_a_prefix_read_is_anonymous_and_pinned_to_the_validated_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requests: list[httpx.Request] = []
 
     def serve(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(200, content=b"ok")
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(serve),
-        auth=("user", "password"),
-        cookies={"session": "secret"},
-        headers={"x-api-key": "secret"},
-    ) as client:
-        result = await fetch_public_http_prefix(
-            "https://example.com/page", max_bytes=40, client=client, agent_url=True
-        )
+    serve_public_http(monkeypatch, serve)
+    result = await fetch_public_http_prefix(
+        "https://example.com/page", max_bytes=40, agent_url=True
+    )
     assert result.content == b"ok"
-    assert len(requests) == 1
-    assert requests[0].url.host == "93.184.216.34"
-    assert requests[0].extensions["sni_hostname"] == "example.com"
-    for name in ("authorization", "cookie", "x-api-key"):
-        assert name not in requests[0].headers
+    (request,) = requests
+    assert request.url.host == "93.184.216.34"
+    assert request.headers["host"] == "example.com"
+    assert request.extensions["sni_hostname"] == "example.com"
+    for name in ("authorization", "cookie", "referer"):
+        assert name not in request.headers
 
 
 @pytest.mark.parametrize(
@@ -151,7 +138,9 @@ async def test_prefix_does_not_inherit_auth_cookies_or_headers() -> None:
         "https://example.com/watch?token=secret",
     ],
 )
-async def test_prefix_revalidates_every_redirect(target: str) -> None:
+async def test_prefix_revalidates_every_redirect(
+    monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
     requests: list[httpx.Request] = []
     stream = _Stream([])
 
@@ -159,20 +148,20 @@ async def test_prefix_revalidates_every_redirect(target: str) -> None:
         requests.append(request)
         return httpx.Response(302, headers={"location": target}, stream=stream)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        with pytest.raises(ValueError):
-            await fetch_public_http_prefix(
-                "https://example.com/start", max_bytes=40, client=client, agent_url=True
-            )
+    serve_public_http(monkeypatch, serve)
+    with pytest.raises(ValueError):
+        await fetch_public_http_prefix("https://example.com/start", max_bytes=40, agent_url=True)
     assert len(requests) == 1
     assert stream.closed
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1/page", "https://example.com/?token=secret"])
-async def test_prefix_rejects_private_or_credential_bearing_targets_before_fetch(url: str) -> None:
+async def test_prefix_rejects_private_or_credential_bearing_targets_before_fetch(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
     def serve(request: httpx.Request) -> httpx.Response:
         raise AssertionError("unsafe target reached transport")
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        with pytest.raises(ValueError):
-            await fetch_public_http_prefix(url, max_bytes=40, client=client, agent_url=True)
+    serve_public_http(monkeypatch, serve)
+    with pytest.raises(ValueError):
+        await fetch_public_http_prefix(url, max_bytes=40, agent_url=True)

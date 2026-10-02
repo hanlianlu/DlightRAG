@@ -2,6 +2,8 @@
 """Publishers outside the qualification examples use one registry-driven path."""
 
 import json
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -12,6 +14,19 @@ from dlightrag.adapters.http.browser.video_playback import (
     video_playback_link,
 )
 from dlightrag.engine.public_http import PublicHttpFetch
+
+
+@pytest.fixture
+def serve_oembed(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
+    """Answer the playback resolver's oEmbed reads with a scripted fetch."""
+
+    def install(fetch: Any) -> Any:
+        monkeypatch.setattr(
+            "dlightrag.adapters.http.browser.video_playback.fetch_public_http", fetch
+        )
+        return fetch
+
+    return install
 
 
 @pytest.mark.parametrize(
@@ -44,7 +59,7 @@ from dlightrag.engine.public_http import PublicHttpFetch
     ],
 )
 async def test_registry_publishers_use_generic_video_resolution_without_site_adapters(
-    url, provider, endpoint, frame
+    serve_oembed, url, provider, endpoint, frame
 ):
     calls = []
 
@@ -68,7 +83,8 @@ async def test_registry_publishers_use_generic_video_resolution_without_site_ada
     assert presentation.video_links[0].provider == provider
     assert presentation.link_cards == []
     assert "iframe" not in presentation.parts[0].html
-    player = await resolve_video_playback(url, fetch=fetch)
+    serve_oembed(fetch)
+    player = await resolve_video_playback(url)
     assert player is not None
     assert player.embed_url == frame
     assert player.aspect_ratio == 4 / 3
@@ -104,14 +120,14 @@ async def test_registry_publishers_use_generic_video_resolution_without_site_ada
         },
     ],
 )
-async def test_registry_response_cannot_authorize_non_video_or_unrelated_frames(payload):
+async def test_registry_response_cannot_authorize_non_video_or_unrelated_frames(
+    serve_oembed, payload
+):
     async def fetch(url, **kwargs):
         return PublicHttpFetch(json.dumps(payload).encode(), url, "application/json", 200)
 
-    assert (
-        await resolve_video_playback("https://www.dailymotion.com/video/fixture", fetch=fetch)
-        is None
-    )
+    serve_oembed(fetch)
+    assert await resolve_video_playback("https://www.dailymotion.com/video/fixture") is None
 
 
 @pytest.mark.parametrize(
@@ -125,18 +141,20 @@ async def test_registry_response_cannot_authorize_non_video_or_unrelated_frames(
         "https://www.dailymotion.com/video/fixture?access_token=secret",
     ],
 )
-async def test_registry_schemes_do_not_treat_paths_as_provider_authorities(url):
+async def test_registry_schemes_do_not_treat_paths_as_provider_authorities(serve_oembed, url):
     async def fetch(*args, **kwargs):
         pytest.fail("unrecognized URLs cannot reach a provider endpoint")
 
     assert video_playback_link(url) is None
-    assert await resolve_video_playback(url, fetch=fetch) is None
+    serve_oembed(fetch)
+    assert await resolve_video_playback(url) is None
 
 
-async def test_registry_candidates_fall_back_to_the_link_when_metadata_is_unavailable():
+async def test_registry_candidates_fall_back_to_the_link_when_metadata_is_unavailable(serve_oembed):
     async def fetch(*args, **kwargs):
         raise TimeoutError
 
     url = "https://www.dailymotion.com/video/fixture"
     assert video_playback_link(url) is not None
-    assert await resolve_video_playback(url, fetch=fetch) is None
+    serve_oembed(fetch)
+    assert await resolve_video_playback(url) is None

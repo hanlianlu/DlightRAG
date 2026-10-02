@@ -103,7 +103,6 @@ async def fetch_public_http(
     timeout: float = 120.0,
     presentation: PublicHttpPresentation | None = None,
     allow_private_hosts: Sequence[str] = (),
-    client: Any | None = None,
     agent_url: bool = False,
 ) -> PublicHttpFetch:
     """Fetch one public HTTP(S) URL under redirect, SSRF, and byte bounds."""
@@ -127,7 +126,7 @@ async def fetch_public_http(
             timeout=timeout,
             presentation=presentation or PublicHttpPresentation(),
             allow_private_hosts=_normalize_host_patterns(allow_private_hosts),
-            client=client,
+            client=None,
             agent_url=agent_url,
             consume=consume,
         )
@@ -145,7 +144,6 @@ async def fetch_public_http_prefix(
     max_bytes: int,
     timeout: float = 120.0,
     presentation: PublicHttpPresentation | None = None,
-    client: Any | None = None,
     agent_url: bool = False,
 ) -> PublicHttpPrefix:
     """Read a bounded prefix and close the stream without draining the body.
@@ -176,7 +174,7 @@ async def fetch_public_http_prefix(
             timeout=timeout,
             presentation=presentation or PublicHttpPresentation(),
             allow_private_hosts=frozenset(),
-            client=client,
+            client=None,
             agent_url=agent_url,
             consume=consume,
         )
