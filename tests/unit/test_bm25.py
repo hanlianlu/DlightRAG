@@ -145,9 +145,10 @@ def test_bm25_required_extensions_follow_profile_text_configs() -> None:
     assert required_postgres_extensions(
         [BM25Profile(name="en", text_config="english", languages=("en",))]
     ) == ("pg_textsearch",)
-    assert required_postgres_extensions(
-        [BM25Profile(name="zh", text_config="public.jiebacfg", languages=("zh",))]
-    ) == ("pg_textsearch", "pg_jieba")
+    for jieba in ("public.jiebacfg", "jiebaqry"):
+        assert required_postgres_extensions(
+            [BM25Profile(name="zh", text_config=jieba, languages=("zh",))]
+        ) == ("pg_textsearch", "pg_jieba")
 
 
 def _bm25_config(*, enabled: bool, is_reader: bool = False):
@@ -344,11 +345,12 @@ async def test_bm25_sends_jieba_queries_without_whitespace_terms() -> None:
         workspace="default",
         profiles=(
             BM25Profile(name="zh", text_config="public.jiebacfg", languages=("zh",)),
+            BM25Profile(name="zq", text_config="jiebaqry", languages=("ja",)),
             BM25Profile(name="en", text_config="english", languages=("en",)),
         ),
     )
 
-    for profile_name in ("zh", "en"):
+    for profile_name in ("zh", "zq", "en"):
         await bm25.search_profile(
             "量化 交易\t策略", profile_name=profile_name, language=None, scope=None, limit=3
         )
@@ -356,6 +358,7 @@ async def test_bm25_sends_jieba_queries_without_whitespace_terms() -> None:
     # pg_jieba would index each whitespace run as a term; a full-width comma
     # splits the same words and is a jieba stopword. english needs no help.
     assert [call.args[1] for call in conn.fetch.await_args_list] == [
+        "量化，交易，策略",
         "量化，交易，策略",
         "量化 交易\t策略",
     ]

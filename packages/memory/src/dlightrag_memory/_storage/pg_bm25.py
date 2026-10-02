@@ -172,9 +172,11 @@ async def ensure_bm25_index(conn: Any, *, verify_only: bool = False) -> BM25Inde
                 f"BM25 index {option.index_name} is missing or does not match configured "
                 "options; initialize it on the writer first"
             )
-        if indexdef:
-            await conn.execute(f"DROP INDEX IF EXISTS {option.index_name}")
-        await conn.execute(option.create_index_sql())
+        # Readers wait on the drop's lock instead of finding no index mid-rebuild.
+        async with conn.transaction():
+            if indexdef:
+                await conn.execute(f"DROP INDEX IF EXISTS {option.index_name}")
+            await conn.execute(option.create_index_sql())
     if not verify_only:
         for row in await conn.fetch(_PREFIXED_INDEXES_SQL, f"{_INDEX_PREFIX}_%"):
             if row["indexname"] != option.index_name:

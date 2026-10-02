@@ -11,7 +11,8 @@ DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 
 - `pgvector` for vector search
 - `pg_textsearch` for BM25
-- `pg_jieba` for the Chinese `public.jiebacfg` BM25 profile
+- `pg_jieba` for Chinese BM25: the corpus `public.jiebacfg` profile and
+  Profile Memory
 
 No fuzzy-search or separate Chinese-parser extension is required. Metadata
 filtering compares `LOWER(TRIM(...))` on both sides, over the built-in columns
@@ -55,7 +56,7 @@ others down:
 `pg_textsearch` refuses to install unless the server preloads it, which managed
 providers rarely expose — that, not the extension catalog, usually decides
 whether BM25 is available. `pg_jieba` installs and tokenizes without preloading,
-and is needed only for the `public.jiebacfg` BM25 profile.
+and is needed by any jieba BM25 profile and by Profile Memory.
 
 ## Tuning Boundaries
 
@@ -203,16 +204,18 @@ so any pg_jieba build serves Chinese BM25 correctly:
 - **Whitespace becomes a term.** Each run of spaces, tabs, newlines, or
   ideographic spaces is indexed as its own lexeme, so a spaced query would match
   nearly every chunk through the space alone. Every query DlightRAG sends to a
-  `public.jiebacfg` index replaces whitespace runs with a full-width comma, which
+  jieba index (`jiebacfg` or `jiebaqry`) replaces whitespace runs with a
+  full-width comma, which
   jieba splits on and drops as a stopword: segmentation is unchanged and no
   whitespace term remains. Indexed whitespace still counts toward document
   length, a small uniform bias in BM25 length normalization.
 - **Listing jieba token types crashes the server.** `jieba_lextype` writes one
   entry past its allocation, and PostgreSQL restarts every backend to recover.
   DlightRAG never calls it: user text reaches pg_jieba only to be tokenized,
-  when chunks and memory bodies are indexed and when `to_bm25query` reads a
-  query, and tokenizing never lists token types. Operators must not run `ts_debug` or `ts_token_type` on a
-  jieba parser or configuration, `\dF+ jiebacfg` or `\dFp+ jieba` in psql,
+  when chunks and memory bodies are indexed or scored and when `to_bm25query`
+  reads a query, and tokenizing never lists token types. Operators must not
+  run `ts_debug` or `ts_token_type` on a jieba parser or configuration,
+  `\dF+ jiebacfg` or `\dFp+ jieba` in psql,
   `ALTER TEXT SEARCH CONFIGURATION ... MAPPING FOR` on a jieba configuration, or
   `pg_dump` of a custom configuration built on the jieba parser. Tokenizing with
   `to_tsvector('public.jiebacfg', ...)` is safe. `pg_upgrade` dumps extension

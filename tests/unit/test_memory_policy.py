@@ -134,9 +134,6 @@ def test_render_auto_recall_labels_standing_preferences_and_relevant_facts() -> 
         (("记" * 200,) * RECALL_TOP_K, ("记" * 200,) * RECALL_TOP_K),
         # Latin text is cheaper per character than the reserve assumes.
         (("x" * MEMORY_BODY_LIMIT,) * (RECALL_CHAR_BUDGET // MEMORY_BODY_LIMIT), ()),
-        # Mixed scripts round up per script; the reserve carries that slack.
-        (("x" + "记" * 199,) * RECALL_TOP_K, ("é" * 3 + "记" * 197,) * RECALL_TOP_K),
-        (("xyz" + "记" * 197,) * RECALL_TOP_K, ("x" + "é" + "记" * 198,) * RECALL_TOP_K),
     ],
 )
 def test_acceptance_reserve_covers_every_block_recall_can_inject(

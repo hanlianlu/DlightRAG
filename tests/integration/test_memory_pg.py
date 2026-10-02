@@ -1923,19 +1923,24 @@ async def test_pg_recall_tool_lists_the_ids_a_correction_needs(
     store: PostgresMemoryStore,
 ) -> None:
     memory = Memory(store)
-    seeds: tuple[tuple[MemoryKind, str], ...] = (
-        ("preference", "No email."),
-        ("fact", "Lives in Berlin."),
+    provenance = MemoryProvenance(origin_kind="answer_run", origin_id="seed")
+    berlin = await memory.remember(
+        owner_id="o",
+        kind="fact",
+        body="Lives in Berlin.",
+        provenance=provenance,
+        idempotency_key="berlin",
     )
-    preference, berlin = [
+    # Ten newer preferences fill the standing section and the newest records.
+    preferences = [
         await memory.remember(
             owner_id="o",
-            kind=kind,
-            body=body,
-            provenance=MemoryProvenance(origin_kind="answer_run", origin_id="seed"),
-            idempotency_key=body,
+            kind="preference",
+            body=f"Style rule {index}.",
+            provenance=provenance,
+            idempotency_key=f"style-{index}",
         )
-        for kind, body in seeds
+        for index in range(RECALL_TOP_K)
     ]
     updates: list[ToolResult] = []
 
@@ -1947,7 +1952,7 @@ async def test_pg_recall_tool_lists_the_ids_a_correction_needs(
 
     assert result.text_content.splitlines() == [
         "Standing preferences:",
-        f"- {preference.memory_id} No email.",
+        *(f"- {p.memory_id} Style rule {index}." for index, p in enumerate(preferences)),
         "Other recent memories:",
         f"- {berlin.memory_id} (fact) Lives in Berlin.",
     ]

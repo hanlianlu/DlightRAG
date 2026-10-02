@@ -189,11 +189,12 @@ class Memory:
         included.
         """
         recalled = await self.recall(owner_id=owner_id, query=query)
-        newest, _ = await self.browse(owner_id=owner_id, limit=RECALL_TOP_K)
         shown = {record.memory_id for record in recalled.records}
-        return replace(
-            recalled, recent=tuple(record for record in newest if record.memory_id not in shown)
-        )
+        # Fetch past everything recall already shows, so ten newer preferences
+        # cannot crowd the record a correction replaces out of the list.
+        newest, _ = await self.browse(owner_id=owner_id, limit=RECALL_TOP_K + len(shown))
+        others = [record for record in newest if record.memory_id not in shown]
+        return replace(recalled, recent=_chronological(others[:RECALL_TOP_K]))
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         return await self._store.purge_superseded(older_than=older_than)
