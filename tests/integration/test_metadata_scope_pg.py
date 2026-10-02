@@ -1062,6 +1062,7 @@ async def test_forced_generic_bm25_plan_rides_the_index_through_the_semi_join(
     seeded: None,
 ) -> None:
     from dlightrag.adapters.postgres.corpus.corpus_bm25 import PGBM25ProfileSearch
+    from dlightrag.engine.rag.retrieval.bm25 import BM25_PROFILE_FALLBACK
 
     # Record the statement the scoped BM25 search itself sends, then plan exactly that.
     fetched: list[tuple[str, tuple[Any, ...]]] = []
@@ -1069,7 +1070,9 @@ async def test_forced_generic_bm25_plan_rides_the_index_through_the_semi_join(
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
         await PGBM25ProfileSearch(
-            pool=_RecordingPool(pool, fetched), workspace=_WORKSPACE, profiles=()
+            pool=_RecordingPool(pool, fetched),
+            workspace=_WORKSPACE,
+            profiles=(BM25_PROFILE_FALLBACK,),
         ).search_profile(
             "alpha beta",
             profile_name="simple",
