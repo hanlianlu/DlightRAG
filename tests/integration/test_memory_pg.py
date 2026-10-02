@@ -418,11 +418,27 @@ async def test_pg_deactivation_and_clear_invalidate_run_epochs(
     assert not await service.capability_current(owner_id="alpha", epoch=1)
 
 
+async def _page_through(service: MemoryService, *, limit: int, max_pages: int) -> list[list[str]]:
+    """Every page's bodies, failing instead of looping when a cursor never ends."""
+    pages: list[list[str]] = []
+    request = MemoryListPageRequest(limit=limit)
+    for _ in range(max_pages):
+        page = await service.list_active_page(owner_id="alpha", auth_mode="jwt", page=request)
+        pages.append([record.body for record in page.records])
+        if page.next_cursor is None:
+            return pages
+        request = MemoryListPageRequest(limit=limit, cursor=page.next_cursor)
+    pytest.fail(f"paging did not end within {max_pages} pages")
+
+
+# Six records fill the last page exactly: it must end the listing, not promise an
+# empty page after it.
+@pytest.mark.parametrize(("count", "page_sizes"), [(7, [3, 3, 1]), (6, [3, 3])])
 async def test_pg_service_pages_active_memories_with_continuation(
-    store: PostgresMemoryStore,
+    store: PostgresMemoryStore, count: int, page_sizes: list[int]
 ) -> None:
     service = await _service(store)
-    for index in range(7):
+    for index in range(count):
         await service.remember(
             owner_id="alpha",
             auth_mode="jwt",
@@ -431,18 +447,13 @@ async def test_pg_service_pages_active_memories_with_continuation(
             provenance=_management(),
             idempotency_key=f"key-{index}",
         )
-    seen: list[str] = []
-    page_request: MemoryListPageRequest | None = MemoryListPageRequest(limit=3)
-    while page_request is not None:
-        page = await service.list_active_page(owner_id="alpha", auth_mode="jwt", page=page_request)
-        assert len(page.records) <= 3
-        seen.extend(record.body for record in page.records)
-        page_request = (
-            MemoryListPageRequest(limit=3, cursor=page.next_cursor)
-            if page.next_cursor is not None
-            else None
-        )
-    assert sorted(seen) == [f"Memory {index}." for index in range(7)]
+
+    pages = await _page_through(service, limit=3, max_pages=len(page_sizes) + 1)
+
+    assert [len(page) for page in pages] == page_sizes
+    assert sorted(body for page in pages for body in page) == [
+        f"Memory {index}." for index in range(count)
+    ]
 
 
 async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemoryStore) -> None:
@@ -473,6 +484,15 @@ async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemorySt
     assert [row.body for row in await _active(memory)] == ["Lives in Beijing."]
     current = await store.get(owner_id="alpha", memory_id=replacement.memory_id or "")
     assert current is not None and current.status == "superseded"
+    # The undo restores the original as a new row that supersedes the replacement.
+    back = await store.get(owner_id="alpha", memory_id=undone.memory_id or "")
+    assert back is not None
+    assert back.memory_id != old.memory_id
+    assert (back.body, back.status, back.supersedes_id) == (
+        "Lives in Beijing.",
+        "active",
+        replacement.memory_id,
+    )
 
     forgotten = await memory.forget(
         owner_id="alpha",
