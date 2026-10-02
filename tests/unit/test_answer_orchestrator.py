@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, ProjectionId, SessionId
@@ -52,6 +53,7 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode=mode,  # type: ignore[arg-type]
+        search_toolchain=SearchToolchain(),
     )
 
 

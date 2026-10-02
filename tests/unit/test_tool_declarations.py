@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from dlightrag.application.connections.models import CatalogueTool
 from dlightrag.application.connections.service import Connections
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.session.plan import AgentRunPlan, AgentToolPlan
@@ -125,6 +126,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         injected_tools=[connection.bind(AsyncMock())],
         child=child,
         tool_names=narrow,
+        search_toolchain=SearchToolchain(),
     )
     assert [AgentToolPlan.from_tool(tool) for tool in bound] == [
         AgentToolPlan.from_tool(tool) for tool in declared

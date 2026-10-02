@@ -416,7 +416,7 @@ class AnswerExecutor:
         shell_confinement: ConfinementPolicy,
         workspace_root: str | None = None,
         session_notes_limits: SessionNotesLimits | None = None,
-        search_toolchain: SearchToolchain | None = None,
+        search_toolchain: SearchToolchain,
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,

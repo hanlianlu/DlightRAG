@@ -4,6 +4,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.skills import SkillCatalog, SkillsBundle, builtin_skills_root
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.composition import compose_research_tools
@@ -77,6 +78,7 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
         environment=MagicMock(),
         artifacts_root=Path("/unused/artifacts"),
         child=True,
+        search_toolchain=SearchToolchain(),
     )
     with_council = compose_research_tools(
         evidence=EvidenceLedger(),
@@ -89,6 +91,7 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
         artifacts_root=Path("/unused/artifacts"),
         skill_tools=list(bundled.tools(child=True)),
         child=True,
+        search_toolchain=SearchToolchain(),
     )
     without_names = {tool.name for tool in without_skills}
     with_names = {tool.name for tool in with_council}

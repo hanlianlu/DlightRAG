@@ -17,6 +17,7 @@ from PIL import Image
 from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
 from dlightrag.application.errors import CorpusUnavailableError
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -348,6 +349,7 @@ def _executor() -> AnswerExecutor:
         telemetry=NOOP_TELEMETRY,
         model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         shell_confinement=ConfinementPolicy(),
+        search_toolchain=SearchToolchain(),
     )
 
     # These unit doubles replace execution; dedicated model-contract tests exercise preflight.
@@ -446,6 +448,7 @@ def test_research_declarations_include_every_configured_surface_without_binding(
         skills_bundle_factory=SkillsBundleFactory(
             global_root=Path("/nonexistent-global-skills"),
         ),
+        search_toolchain=SearchToolchain(),
     )
 
     def forbid_execution_setup(*_args, **_kwargs):
@@ -545,6 +548,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
         shell_confinement=ConfinementPolicy(),
+        search_toolchain=SearchToolchain(),
     )
     accepted = executor.research_tool_declarations(
         web_search=False, memory=True, model_guidance="", injected=()
@@ -569,6 +573,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         publication_limits=executor._settings.publication,
         subagent_host=SubagentHost(model_guidance=""),
         skill_tools=[],
+        search_toolchain=SearchToolchain(),
     )
     runtime_by_name = {tool.name: tool for tool in runtime_tools}
     runtime_surface = tuple(runtime_by_name[tool.name] for tool in accepted)
@@ -1893,6 +1898,7 @@ async def _drive_fast_execute(
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
+        search_toolchain=SearchToolchain(),
     )
 
     async def prepare(**_kwargs: Any) -> OrchestratorRun:

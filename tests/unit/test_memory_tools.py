@@ -8,6 +8,7 @@ tests/integration/test_memory_pg.py.
 from dlightrag_memory import Memory
 from dlightrag_memory.postgres import PostgresMemoryStore
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.composition import compose_research_tools
 from dlightrag.engine.answer.tools.memory import (
@@ -51,6 +52,7 @@ def test_child_can_recall_but_cannot_mutate_profile() -> None:
         injected_tools=[],
         register_web_source=None,
         memory_host=host,
+        search_toolchain=SearchToolchain(),
     )
     child = compose_research_tools(
         evidence=EvidenceLedger(),
@@ -61,6 +63,7 @@ def test_child_can_recall_but_cannot_mutate_profile() -> None:
         register_web_source=None,
         memory_host=host,
         child=True,
+        search_toolchain=SearchToolchain(),
     )
     assert {"remember", "forget", "recall_memory"} <= {tool.name for tool in parent}
     assert {tool.name for tool in child} & {"remember", "forget"} == set()

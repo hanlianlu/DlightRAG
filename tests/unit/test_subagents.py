@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -519,6 +520,7 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
         injected_tools=[],
         register_web_source=None,
         subagent_host=host,
+        search_toolchain=SearchToolchain(),
     )
     child = compose_research_tools(
         evidence=EvidenceLedger(),
@@ -529,6 +531,7 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
         register_web_source=None,
         subagent_host=host,
         child=True,
+        search_toolchain=SearchToolchain(),
     )
     controls = {
         "subagent_status",
@@ -1242,6 +1245,7 @@ def _child_orchestrator(
         text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
         subagent_host=SubagentHost() if subagent_host is None else subagent_host,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
 
 

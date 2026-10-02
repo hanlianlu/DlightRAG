@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
 from dlightrag.engine.agent.tools import (
@@ -40,6 +41,7 @@ def prepared_run(
         text_window_budget=TextWindowBudget(profile.context_window_tokens),
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     if workspace:
         orchestrator.bind_workspace(

@@ -34,6 +34,7 @@ from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationS
 from dlightrag.application import Application
 from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, RuntimeConfig
 from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.effects import canonical_json
@@ -510,6 +511,7 @@ def _async_child_orchestrator(
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
         subagent_host=SubagentHost(),
+        search_toolchain=SearchToolchain(),
     )
 
 
@@ -1222,6 +1224,7 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
+        search_toolchain=SearchToolchain(),
     )
     application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
     creation = await store.create_run(
@@ -1338,6 +1341,7 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
+        search_toolchain=SearchToolchain(),
     )
     application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
     await coordinator.start()
@@ -1399,6 +1403,7 @@ async def test_a_continuation_of_a_failed_fast_turn_still_sees_its_question(
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
+        search_toolchain=SearchToolchain(),
     )
     application, coordinator = _answer_runtime(store, orchestrator=failing)
     await coordinator.start()
@@ -2036,6 +2041,7 @@ async def test_workspace_link_correction_attaches_and_publishes_the_report(
         injected_tools=[
             attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
         ],
+        search_toolchain=SearchToolchain(),
     )
     monkeypatch.setattr(orchestrator, "artifact_root", lambda: root)
     plan = AgentRunPlan.from_tools(
@@ -2145,6 +2151,7 @@ async def test_the_terminal_commit_stores_a_converted_products_view_from_the_run
         injected_tools=[
             attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
         ],
+        search_toolchain=SearchToolchain(),
     )
     monkeypatch.setattr(orchestrator, "artifact_root", lambda: root)
     plan = AgentRunPlan.from_tools(
@@ -2274,6 +2281,7 @@ async def test_publication_correction_is_one_linked_agent_operation(
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     probe = orchestrator.prepare_run("why")
     plan = AgentRunPlan.from_tools(
@@ -2565,6 +2573,7 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     plan = AgentRunPlan.from_tools(
         orchestrator.prepare_run("why").tools,
@@ -2625,6 +2634,7 @@ def _answer_runtime(
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
+        search_toolchain=SearchToolchain(),
     )
 
     executor = AnswerExecutor(
@@ -2648,6 +2658,7 @@ def _answer_runtime(
         ),
         execution_environment=config.answer.agent.execution_environment,
         shell_confinement=ConfinementPolicy(),
+        search_toolchain=SearchToolchain(),
     )
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:

@@ -201,7 +201,7 @@ class AnswerOrchestrator:
         context_policy: ContextPolicy = CONTEXT_POLICY,
         publication_limits: PublicationLimits | None = None,
         telemetry: Telemetry,
-        search_toolchain: SearchToolchain | None = None,
+        search_toolchain: SearchToolchain,
         resource_reader: ResourceReader | None = None,
         resource_viewer: ResourceViewer | None = None,
         resolved_mode: ResolvedMode,

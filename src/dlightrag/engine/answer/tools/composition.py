@@ -199,7 +199,7 @@ def compose_research_tools(
     output_stage_factory: Any | None = None,
     artifacts_root: Path | None = None,
     publication_limits: PublicationLimits | None = None,
-    search_toolchain: SearchToolchain | None = None,
+    search_toolchain: SearchToolchain,
     image_preparer: ImagePreparer | None = None,
     subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
@@ -229,7 +229,6 @@ def compose_research_tools(
         child=child,
         tool_names=tool_names,
     )
-    toolchain = search_toolchain or SearchToolchain()
     bindings: dict[str, Callable[[], AgentTool]] = {
         "search_knowledge_base": lambda: knowledge_base_search_tool(
             retrieve=retrieve_knowledge_base, evidence=evidence, trace=trace
@@ -274,11 +273,14 @@ def compose_research_tools(
         "grep": lambda: grep_tool(
             cast(ExecutionEnvironment, environment),
             access,
-            search_toolchain=toolchain,
+            search_toolchain=search_toolchain,
             output_stage_factory=output_stage_factory,
         ),
         "find": lambda: find_tool(
-            cast(ExecutionEnvironment, environment), access, search_toolchain=toolchain, spill=spill
+            cast(ExecutionEnvironment, environment),
+            access,
+            search_toolchain=search_toolchain,
+            spill=spill,
         ),
         "ls": lambda: _stating(
             ls_tool(cast(ExecutionEnvironment, environment), access), _WORKSPACE_FACT

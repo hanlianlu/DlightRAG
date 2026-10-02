@@ -12,6 +12,7 @@ import pytest
 
 from dlightrag.adapters.postgres.answer.attachment_replay import retain_attachment_occurrences
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.session.fold import project_session_messages
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.operation import OperationCompleted
@@ -132,6 +133,7 @@ def orchestrator(model, *, registry=None, max_images=8):
         resolved_mode="research",
         resource_reader=make_resource_reader(registry, budget) if registry else None,
         resource_viewer=make_resource_viewer(registry) if registry else None,
+        search_toolchain=SearchToolchain(),
     )
 
 

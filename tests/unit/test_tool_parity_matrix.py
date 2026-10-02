@@ -10,6 +10,7 @@ in an Agent Workspace and backed by the resource reader and viewer.
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.tools.contracts import AgentTool
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -82,6 +83,7 @@ def _tools(tmp_path: Path) -> list[AgentTool]:
         resource_reader=AsyncMock(),
         resource_viewer=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path),
+        search_toolchain=SearchToolchain(),
     )
     return [tool for tool in composed if tool.name in MATRIX]
 

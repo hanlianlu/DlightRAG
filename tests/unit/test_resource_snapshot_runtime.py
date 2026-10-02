@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.session.entries import ToolResultMessageEntry
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.operation import OperationCompleted
@@ -120,6 +121,7 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
             resource_reader=make_resource_reader(registry, budget),
             resource_viewer=make_resource_viewer(registry),
             resolved_mode="research",
+            search_toolchain=SearchToolchain(),
         )
         prepared = orchestrator.prepare_run("read then view", registry=registry)
         plan = AgentRunPlan.from_tools(

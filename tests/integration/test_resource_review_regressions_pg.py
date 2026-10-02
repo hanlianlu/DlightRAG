@@ -21,6 +21,7 @@ import pytest
 from docx import Document
 
 from dlightrag.adapters.postgres.runtime.run_blob_store import PGRunBlobStore
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.fold import PriorTurns, project_session_messages
 from dlightrag.engine.agent.session.ids import LaneId
@@ -530,6 +531,7 @@ async def test_research_view_to_fast_uses_one_consuming_budget(
         text_window_budget=TextWindowBudget(4000),
         telemetry=NOOP_TELEMETRY,
         resolved_mode="fast",
+        search_toolchain=SearchToolchain(),
     )
     try:
         if not vision or own_images + 2 > max_images:
@@ -738,6 +740,7 @@ def _fast_executor(pg, provider: _FastProjectionProvider, profile):
         ),
         execution_environment="disabled",
         shell_confinement=ConfinementPolicy(),
+        search_toolchain=SearchToolchain(),
     )
 
 

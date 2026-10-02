@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
+from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.session.effects import EffectIntent
 from dlightrag.engine.agent.session.entries import (
@@ -835,6 +836,7 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     prepared = orchestrator.prepare_run("question")
     plan = AgentRunPlan.from_tools(
@@ -1049,6 +1051,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
         telemetry=NOOP_TELEMETRY,
         resource_reader=read_resource,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     prepared = orchestrator.prepare_run("read the attachment")
     plan = AgentRunPlan.from_tools(
@@ -1160,6 +1163,7 @@ async def test_research_reads_run_at_once_yet_cite_and_settle_in_source_order() 
         telemetry=NOOP_TELEMETRY,
         resource_reader=read_resource,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     prepared = orchestrator.prepare_run("read both attachments")
     plan = AgentRunPlan.from_tools(
@@ -1277,6 +1281,7 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     prepared = orchestrator.prepare_run(question)
     plan = replace(
@@ -1446,6 +1451,7 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     prepared = orchestrator.prepare_run("What changed?")
     plan = AgentRunPlan.from_tools(
@@ -1550,6 +1556,7 @@ async def _drive_research_run(
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
         resource_manifest=resource_manifest,
+        search_toolchain=SearchToolchain(),
     )
     orchestrator.bind_recall(memory_text)
     prepared = orchestrator.prepare_run(question, query_images=query_images)
@@ -1837,6 +1844,7 @@ async def test_a_compaction_that_covers_the_question_restates_it_after_the_summa
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
+        search_toolchain=SearchToolchain(),
     )
     prepared = orchestrator.prepare_run(question)
     plan = AgentRunPlan.from_tools(
