@@ -614,12 +614,14 @@ class PGWebConversationStore(PostgresOperationRunner):
                 conn,
                 scope=RUN_MIGRATION_SCOPE,
                 migrations=RUN_MIGRATIONS,
+                tables=RUN_SCHEMA_TABLES,
                 schema_error=RunSchemaError,
             )
             await apply_migrations(
                 conn,
                 scope="web_conversations",
                 migrations=WEB_CONVERSATION_MIGRATIONS,
+                tables=WEB_CONVERSATION_SCHEMA_TABLES,
                 schema_error=WebConversationSchemaError,
             )
 

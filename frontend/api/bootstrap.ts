@@ -43,7 +43,7 @@ export type AgentEffortBootstrap = v.InferOutput<typeof agentEffortBootstrap>;
 
 const webBootstrap = v.pipe(
   v.object({
-    contract_version: v.literal(4),
+    contract_version: v.literal(5),
     workspaces: v.array(workspacePageItem),
     workspaces_next_cursor: v.optional(v.nullable(v.string())),
     primary_workspace: v.string(),

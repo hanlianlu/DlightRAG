@@ -5,18 +5,24 @@ import {corpusRunReceipt, type WebCorpusRunReceipt} from './corpus-runs.ts';
 import {csrfHeaders} from './csrf.ts';
 import {parseWire} from './wire.ts';
 
-const createdWorkspace = v.pipe(
-  v.object({workspace: v.string(), display_name: v.string()}),
-  v.transform((w) => ({workspace: w.workspace, displayName: w.display_name})),
-);
-export type CreatedWorkspace = v.InferOutput<typeof createdWorkspace>;
+/** The Corpus Mutations there are; a workspace lists the ones its caller may request. */
+export const WORKSPACE_CHANGES = [
+  'ingest', 'replace', 'delete', 'retry', 'reset', 'delete_workspace',
+] as const;
+export type WorkspaceChange = (typeof WORKSPACE_CHANGES)[number];
 
 export const workspacePageItem = v.pipe(
-  v.object({workspace: v.string(), display_name: v.string(), embedding_model: v.string()}),
+  v.object({
+    workspace: v.string(),
+    display_name: v.string(),
+    embedding_model: v.string(),
+    changes: v.array(v.picklist(WORKSPACE_CHANGES)),
+  }),
   v.transform((w) => ({
     workspace: w.workspace,
     displayName: w.display_name,
     embeddingModel: w.embedding_model,
+    changes: w.changes as readonly WorkspaceChange[],
   })),
 );
 export type WorkspacePageItem = v.InferOutput<typeof workspacePageItem>;
@@ -57,11 +63,11 @@ async function post<Input, Output>(
 export function createWorkspaceRequest(
   name: string,
   signal?: AbortSignal,
-): Promise<CreatedWorkspace> {
+): Promise<WorkspacePageItem> {
   return post(
     '/web/api/workspaces/create',
     {workspace_name: name},
-    createdWorkspace,
+    workspacePageItem,
     signal,
   );
 }

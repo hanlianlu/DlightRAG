@@ -655,19 +655,25 @@ class WorkspaceRag:
         """Shutdown LightRAG priority-queue worker pools."""
         await shutdown_lightrag_worker_pools(self.lightrag)
 
-    async def _create_workspace_meta(self, *, display_name: str | None = None) -> bool:
-        """Create this workspace's registry identity; False when it already exists."""
+    async def aregister_workspace(
+        self,
+        *,
+        display_name: str | None = None,
+        created_by: str,
+    ) -> bool:
+        """Make this initialized workspace discoverable; False when it already exists.
+
+        ``created_by`` is the owner the host attributes the workspace to, kept
+        verbatim beside its identity.
+        """
         self._require_writer("workspace registration")
+        self._ensure_initialized()
         return await self.backend.maintenance.create_workspace_record(
             workspace=self.workspace_id,
             display_name=display_name or self.workspace_id,
             embedding_model=self.settings.embedding.model,
+            created_by=created_by,
         )
-
-    async def aregister_workspace(self, *, display_name: str | None = None) -> bool:
-        """Make this initialized workspace discoverable; False when it already exists."""
-        self._ensure_initialized()
-        return await self._create_workspace_meta(display_name=display_name)
 
     # === INGESTION API ===
 

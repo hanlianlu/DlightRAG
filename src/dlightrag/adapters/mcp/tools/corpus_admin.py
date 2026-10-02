@@ -123,6 +123,7 @@ async def create_workspace_tool(
     await application.corpora.create_workspace(
         normalized_workspace,
         display_name=normalized_display_name,
+        created_by=mcp_server._owner_id(),
     )
     return {
         "workspace": normalized_workspace,

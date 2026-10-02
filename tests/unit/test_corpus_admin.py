@@ -128,7 +128,7 @@ async def test_a_reader_refuses_workspace_and_metadata_writes_with_the_remedy() 
     with pytest.raises(
         CorpusMutationUnavailableError, match="Send the workspace creation to a writer"
     ):
-        await reader.create_workspace("finance")
+        await reader.create_workspace("finance", created_by="owner-1")
     with pytest.raises(
         CorpusMutationUnavailableError, match="Send the metadata update to a writer"
     ):
@@ -144,11 +144,11 @@ async def test_create_workspace_refuses_an_existing_identity_instead_of_renaming
     runtime.aregister_workspace = AsyncMock(return_value=False)
 
     with pytest.raises(WorkspaceExistsError, match="'Finance' already exists"):
-        await admin.create_workspace("finance", display_name="Finance")
+        await admin.create_workspace("finance", display_name="Finance", created_by="owner-1")
 
     runtime.aregister_workspace = AsyncMock(return_value=True)
-    await admin.create_workspace("legal", display_name="Legal")
-    runtime.aregister_workspace.assert_awaited_once_with(display_name="Legal")
+    await admin.create_workspace("legal", display_name="Legal", created_by="owner-1")
+    runtime.aregister_workspace.assert_awaited_once_with(display_name="Legal", created_by="owner-1")
 
 
 async def test_initialize_registers_default_only_for_writer() -> None:

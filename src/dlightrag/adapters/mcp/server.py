@@ -41,7 +41,6 @@ from dlightrag.application.access import (
     NoQueryableWorkspacesError,
     RequestScope,
     WorkspaceRecord,
-    access_control_from_settings,
     current_request_scope,
     owner_id_from_principal,
     request_scope_context,
@@ -57,7 +56,6 @@ from dlightrag.application.errors import (
 from dlightrag.application.runs import (
     RunView,
 )
-from dlightrag.application.settings import access_settings
 from dlightrag.engine.answer.client_contracts import (
     MAX_HISTORY_MESSAGES,
     MAX_QUERY_IMAGES,
@@ -334,10 +332,7 @@ async def _enforce_access(
 
 
 def _access_gate(application: Application) -> AccessGate:
-    return AccessGate(
-        access_control_from_settings(access_settings(application.config)),
-        current_request_scope(),
-    )
+    return AccessGate(application.access_control, current_request_scope())
 
 
 async def _filter_workspace_records(

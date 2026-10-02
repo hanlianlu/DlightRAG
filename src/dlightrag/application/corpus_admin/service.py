@@ -561,12 +561,19 @@ class CorpusAdmin:
         workspace_id: str,
         *,
         display_name: str | None = None,
-    ) -> None:
+        created_by: str,
+    ) -> WorkspaceRecord:
+        """Create one workspace, attributed to the owner that asked for it, and return it."""
         self._require_writer("workspace creation")
         workspace = require_canonical_workspace_id(workspace_id)
         runtime = await _acquire_workspace(self._pool, workspace)
-        if not await runtime.aregister_workspace(display_name=display_name):
+        if not await runtime.aregister_workspace(display_name=display_name, created_by=created_by):
             raise WorkspaceExistsError(f"Workspace '{display_name or workspace}' already exists")
+        return {
+            "workspace": workspace,
+            "display_name": display_name or workspace,
+            "embedding_model": runtime.settings.embedding.model,
+        }
 
     async def file_panel_snapshot(
         self,

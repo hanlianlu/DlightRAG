@@ -378,7 +378,11 @@ class PGConnectionsStore(PostgresOperationRunner):
                 )
             else:
                 await apply_migrations(
-                    conn, scope="connections", migrations=_MIGRATIONS, schema_error=ConnectionsError
+                    conn,
+                    scope="connections",
+                    migrations=_MIGRATIONS,
+                    tables=_TABLES,
+                    schema_error=ConnectionsError,
                 )
 
         await self._run(operation)

@@ -7,13 +7,10 @@ from fastapi import Cookie, HTTPException, Request
 
 from dlightrag.adapters.http.application import get_application
 from dlightrag.application.access import (
-    AccessControl,
     AccessDeniedError,
     AccessGate,
     WorkspaceRecord,
-    access_control_from_settings,
 )
-from dlightrag.application.settings import access_settings
 
 if TYPE_CHECKING:
     from dlightrag.application.web_conversations import WebConversationService
@@ -43,15 +40,9 @@ def get_web_conversation_service(request: Request) -> WebConversationService:
     return get_application(request).web_conversations
 
 
-def _web_access_control(request: Request) -> AccessControl:
-    return getattr(request.app.state, "access_control", None) or access_control_from_settings(
-        access_settings(get_application(request).config)
-    )
-
-
 def get_web_access_gate(request: Request) -> AccessGate:
     return AccessGate(
-        _web_access_control(request),
+        get_application(request).access_control,
         getattr(request.state, "user_context", None),
     )
 

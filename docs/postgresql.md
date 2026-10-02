@@ -255,7 +255,10 @@ DlightRAG ensures the current idempotent DDL baseline on writer startup and
 records its versions in the ledger; readers validate the same versions without
 issuing DDL. Because the project is pre-release, a ledger version not declared
 by the running revision is incompatible: both roles fail startup and require a
-full development-data reset rather than attempting an old-data migration.
+full development-data reset rather than attempting an old-data migration. A
+recorded version never re-runs, so a database created before its baseline grew
+an object never gains it; writers therefore read their declared objects back
+after migrating, as readers do, and refuse such a database the same way.
 Run `uv run scripts/reset_development.py --mode docker` (or `--mode native`)
 to perform that reset; it also recreates the required PostgreSQL extensions
 and verifies the empty database. See

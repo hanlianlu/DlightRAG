@@ -158,8 +158,8 @@ async def test_apply_migrations_skips_versions_already_recorded_for_scope() -> N
     conn = _Conn()
     migrations = _example_migrations()
 
-    await apply_migrations(conn, scope="example", migrations=migrations)
-    await apply_migrations(conn, scope="example", migrations=migrations)
+    await apply_migrations(conn, scope="example", migrations=migrations, tables=())
+    await apply_migrations(conn, scope="example", migrations=migrations, tables=())
 
     executed_sql = [query for query, _ in conn.executed]
     assert executed_sql.count("CREATE TABLE example (id TEXT)") == 1
@@ -174,8 +174,8 @@ async def test_apply_migrations_runs_only_newly_appended_versions() -> None:
         Migration("add_name", "second", ("ALTER TABLE example ADD COLUMN name TEXT",)),
     )
 
-    await apply_migrations(conn, scope="example", migrations=initial)
-    await apply_migrations(conn, scope="example", migrations=appended)
+    await apply_migrations(conn, scope="example", migrations=initial, tables=())
+    await apply_migrations(conn, scope="example", migrations=appended, tables=())
 
     executed_sql = [query for query, _ in conn.executed]
     assert executed_sql.count("CREATE TABLE example (id TEXT)") == 1
@@ -217,7 +217,7 @@ async def test_apply_migrations_does_not_record_failed_versions() -> None:
     conn.failures["ALTER TABLE example ADD COLUMN name TEXT"] = 1
 
     with pytest.raises(RuntimeError, match="ALTER TABLE example ADD COLUMN name TEXT"):
-        await apply_migrations(conn, scope="example", migrations=migrations)
+        await apply_migrations(conn, scope="example", migrations=migrations, tables=())
 
     assert conn.applied == {("example", "create_table")}
     assert ("example", "add_name") not in conn.applied
@@ -233,8 +233,8 @@ async def test_apply_migrations_isolates_applied_versions_per_scope() -> None:
     conn = _Conn()
     migrations = _example_migrations()
 
-    await apply_migrations(conn, scope="alpha", migrations=migrations)
-    await apply_migrations(conn, scope="beta", migrations=migrations)
+    await apply_migrations(conn, scope="alpha", migrations=migrations, tables=())
+    await apply_migrations(conn, scope="beta", migrations=migrations, tables=())
 
     assert conn.applied == {
         ("alpha", "create_table"),
@@ -260,7 +260,7 @@ async def test_apply_migrations_rejects_gapped_current_ledger_before_running_mig
             r"out-of-order recorded current versions: add_name"
         ),
     ):
-        await apply_migrations(conn, scope="example", migrations=migrations)
+        await apply_migrations(conn, scope="example", migrations=migrations, tables=())
 
     executed_sql = [query for query, _ in conn.executed]
     assert "CREATE TABLE example (id TEXT)" not in executed_sql
@@ -288,6 +288,7 @@ async def test_apply_migrations_rejects_undeclared_ledger_versions(
             conn,
             scope="example",
             migrations=migrations,
+            tables=(),
             require_applied_prefix=require_applied_prefix,
         )
 
@@ -305,6 +306,7 @@ async def test_apply_migrations_can_run_missing_versions_from_non_prefix_ledger(
         conn,
         scope="example",
         migrations=_three_migrations(),
+        tables=(),
         require_applied_prefix=False,
     )
 
@@ -330,7 +332,7 @@ async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() 
     )
 
     with pytest.raises(ValueError, match="Duplicate schema migration version: create_table"):
-        await apply_migrations(conn, scope="example", migrations=duplicate)
+        await apply_migrations(conn, scope="example", migrations=duplicate, tables=())
 
     assert conn.executed == []
 
@@ -367,7 +369,7 @@ def _example_catalog() -> dict[str, dict[str, Any]]:
 async def test_verify_migrations_accepts_a_fully_applied_scope_without_any_ddl() -> None:
     conn = _Conn(catalog=_example_catalog())
     migrations = _example_migrations()
-    await apply_migrations(conn, scope="example", migrations=migrations)
+    await apply_migrations(conn, scope="example", migrations=migrations, tables=(_example_table(),))
     conn.executed.clear()
 
     await verify_migrations(
@@ -502,3 +504,18 @@ def test_every_runs_index_statement_comes_from_its_declaration() -> None:
         for name in (*table.indexes, *table.unique_indexes)
     }
     assert verified == {index.name for index in run_store._RUN_INDEXES}
+
+
+async def test_apply_migrations_refuses_a_recorded_scope_missing_a_declared_object() -> None:
+    """A recorded version never re-runs, so a baseline that later grew an object is refused."""
+    conn = _Conn(catalog=_damaged_catalog("column"))
+    conn.applied.update({("example", "create_table"), ("example", "add_name")})
+
+    with pytest.raises(_SchemaError, match=r"column example\.name.*reset the development database"):
+        await apply_migrations(
+            conn, scope="example", migrations=_example_migrations(), tables=(_example_table(),)
+        )
+
+    executed_sql = [query for query, _ in conn.executed]
+    assert "ALTER TABLE example ADD COLUMN name TEXT" not in executed_sql
+    assert executed_sql[-1] == "SELECT pg_advisory_unlock($1)"

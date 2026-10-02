@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {IngestStore} from './ingest-store.ts';
 import {WorkspaceStore} from './workspace-store.ts';
+import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
 
 const originalDocument = globalThis.document;
 
@@ -19,8 +20,8 @@ test.afterEach(() => {
 function stores(): {workspaces: WorkspaceStore; ingest: IngestStore; published: () => number} {
   const workspaces = new WorkspaceStore();
   workspaces.init([
-    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
+    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed', changes: EVERY_CHANGE},
   ], ['default'], 'default', null, null, null, 'default');
   const ingest = new IngestStore(workspaces);
   let count = 0;

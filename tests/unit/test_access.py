@@ -1,7 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Behavioral contract for the transport-neutral Access module."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 import pytest
@@ -26,6 +27,16 @@ from dlightrag.application.settings import access_settings
 from tests.config_helpers import mutate_config, replace_config
 
 
+class _Creators:
+    """The registry's creator column, as the policy reads it."""
+
+    def __init__(self, creators: Mapping[str, str] | None = None) -> None:
+        self._creators = dict(creators or {})
+
+    async def workspace_creators(self, workspaces: Sequence[str]) -> dict[str, str]:
+        return {name: self._creators[name] for name in workspaces if name in self._creators}
+
+
 class _WorkspaceCatalog:
     async def alist_workspace_records(self) -> list[WorkspaceRecord]:
         return [
@@ -47,6 +58,11 @@ class _FinanceOnlyAccess:
         assert action == AccessAction.WORKSPACE_QUERY
         return [workspace for workspace in workspaces if workspace == "finance"]
 
+    async def filter_run_submitters(
+        self, subject: Any, *, workspace: str, submitters: AbstractSet[str]
+    ) -> set[str]:
+        return set()
+
 
 async def test_all_workspaces_expands_only_to_authorized_catalog_entries() -> None:
     gate = AccessGate(
@@ -64,7 +80,9 @@ async def test_all_workspaces_expands_only_to_authorized_catalog_entries() -> No
 
 
 async def test_allow_all_access_control_is_default(test_config: DlightragConfig) -> None:
-    access_control = access_control_from_settings(access_settings(test_config))
+    access_control = access_control_from_settings(
+        access_settings(test_config), creators=_Creators()
+    )
 
     await access_control.check(
         UserContext(user_id="anonymous", auth_mode="none"),
@@ -93,7 +111,9 @@ async def test_jwt_claims_access_control_matches_claim_workspace_and_action(
             ],
         ),
     )
-    access_control = access_control_from_settings(access_settings(test_config))
+    access_control = access_control_from_settings(
+        access_settings(test_config), creators=_Creators()
+    )
     user = UserContext(
         user_id="alice",
         auth_mode="jwt",
@@ -109,6 +129,131 @@ async def test_jwt_claims_access_control_matches_claim_workspace_and_action(
 
     with pytest.raises(AccessDeniedError):
         await access_control.check(user, AccessAction.WORKSPACE_RESET, workspace="finance_reports")
+
+
+_TEAM = "https://team.cloudflareaccess.com"
+
+
+def _person(subject: str, email: str) -> UserContext:
+    return UserContext(
+        user_id=subject,
+        auth_mode="jwt",
+        claims={"iss": _TEAM, "sub": subject, "email": email},
+    )
+
+
+async def test_people_hold_the_workspaces_they_create_and_see_no_one_elses(
+    test_config: DlightragConfig,
+) -> None:
+    """The admin holds everything; everyone else reads the default and owns their own."""
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="email", value="admin@example.com", workspaces=["*"], actions=["admin"]
+                ),
+                AccessControlRuleConfig(
+                    claim="iss", value=_TEAM, workspaces=["default"], actions=["reader"]
+                ),
+                AccessControlRuleConfig(
+                    claim="iss",
+                    value=_TEAM,
+                    workspaces=["*"],
+                    actions=[AccessAction.WORKSPACE_CREATE],
+                ),
+            ],
+        ),
+    )
+    admin = _person("admin", "admin@example.com")
+    alice = _person("alice", "alice@example.com")
+    bob = _person("bob", "bob@example.com")
+    access = access_control_from_settings(
+        access_settings(test_config),
+        creators=_Creators(
+            {"alice_notes": owner_id_from_user(alice), "bob_notes": owner_id_from_user(bob)}
+        ),
+    )
+    catalog = ["default", "alice_notes", "bob_notes"]
+
+    assert await access.filter_workspaces(alice, AccessAction.WORKSPACE_QUERY, catalog) == [
+        "default",
+        "alice_notes",
+    ]
+    assert await access.filter_workspaces(admin, AccessAction.WORKSPACE_QUERY, catalog) == catalog
+    for action in (
+        AccessAction.WORKSPACE_INGEST,
+        AccessAction.WORKSPACE_RESET,
+        AccessAction.WORKSPACE_DELETE,
+    ):
+        await access.check(alice, action, workspace="alice_notes")
+        await access.check(admin, action, workspace="bob_notes")
+        for refused in ("default", "bob_notes"):
+            with pytest.raises(AccessDeniedError):
+                await access.check(alice, action, workspace=refused)
+    await access.check(alice, AccessAction.WORKSPACE_CREATE, workspace="alice_drafts")
+    # Operator facts and deployment-wide changes stay with the rules.
+    with pytest.raises(AccessDeniedError):
+        await access.check(alice, AccessAction.WORKSPACE_STORAGE_STATUS, workspace="alice_notes")
+    with pytest.raises(AccessDeniedError):
+        await access.check(alice, AccessAction.MODEL_CATALOGUE_WRITE)
+    await access.check(admin, AccessAction.MODEL_CATALOGUE_WRITE)
+
+
+async def test_a_run_shows_to_its_submitter_and_never_to_the_next_holder_of_its_name(
+    test_config: DlightragConfig,
+) -> None:
+    """A deleted workspace keeps showing its runs to whoever submitted them, and to no one
+    who later creates the same name; a workspace without a creator shows its rule holders
+    every run. Seeing a run never lets anyone change it without current access."""
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="iss", value=_TEAM, workspaces=["default"], actions=["reader"]
+                )
+            ],
+        ),
+    )
+    alice = _person("alice", "alice@example.com")
+    bob = _person("bob", "bob@example.com")
+    alice_id, bob_id = owner_id_from_user(alice), owner_id_from_user(bob)
+    settings = access_settings(test_config)
+    # Alice deleted "notes": its registry row, and so its creator, are gone.
+    gone = access_control_from_settings(settings, creators=_Creators())
+    # Bob then created "notes" again.
+    recreated = access_control_from_settings(settings, creators=_Creators({"notes": bob_id}))
+    both = {alice_id, bob_id}
+
+    assert await gone.filter_run_submitters(alice, workspace="notes", submitters=both) == {alice_id}
+    assert await recreated.filter_run_submitters(bob, workspace="notes", submitters=both) == {
+        bob_id
+    }
+    assert await recreated.filter_run_submitters(
+        bob, workspace="default", submitters={"admin"}
+    ) == {"admin"}
+
+    # Alice still sees her old run, but cannot resume it into Bob's "notes";
+    # Bob holds "notes" but never sees, so never resumes, Alice's run.
+    ingest = corpus_mutation_access_action("ingest")
+    await AccessGate(recreated, alice).check_run(
+        workspace="notes", submitted_by=alice_id, change=None
+    )
+    for gate in (AccessGate(recreated, alice), AccessGate(recreated, bob)):
+        with pytest.raises(AccessDeniedError):
+            await gate.check_run(workspace="notes", submitted_by=alice_id, change=ingest)
+    await AccessGate(recreated, bob).check_run(
+        workspace="notes", submitted_by=bob_id, change=ingest
+    )
 
 
 def _preset_access_control(preset: str, test_config: DlightragConfig):
@@ -134,7 +279,7 @@ def _preset_access_control(preset: str, test_config: DlightragConfig):
         auth_mode="jwt",
         claims={"roles": [f"finance.{preset}"]},
     )
-    return access_control_from_settings(access_settings(test_config)), user
+    return access_control_from_settings(access_settings(test_config), creators=_Creators()), user
 
 
 async def test_reader_preset_allows_reads_and_denies_writes(
@@ -212,7 +357,9 @@ async def test_workspace_wildcard_rule_matches_any_canonical_workspace(
             ],
         ),
     )
-    access_control = access_control_from_settings(access_settings(test_config))
+    access_control = access_control_from_settings(
+        access_settings(test_config), creators=_Creators()
+    )
     user = UserContext(user_id="alice", auth_mode="jwt", claims={"roles": ["reader"]})
 
     await access_control.check(user, AccessAction.WORKSPACE_QUERY, workspace="finance_reports")

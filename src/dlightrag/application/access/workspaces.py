@@ -1,11 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Authorized workspace selection and catalog filtering."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Sequence, Set
 from dataclasses import dataclass
 from typing import NotRequired, Protocol, Required, TypedDict
 
-from dlightrag.application.access.control import AccessAction, AccessControl, AccessSubject
+from dlightrag.application.access.control import (
+    AccessAction,
+    AccessControl,
+    AccessDeniedError,
+    AccessSubject,
+)
 from dlightrag.application.errors import ApplicationInputError
 
 
@@ -95,6 +100,24 @@ class AccessGate:
 
     async def check(self, action: str, *, workspace: str | None = None) -> None:
         await self.access_control.check(self.subject, action, workspace=workspace)
+
+    async def check_run(self, *, workspace: str, submitted_by: str, change: str | None) -> None:
+        """Allow seeing one Corpus Mutation Run, and with ``change``, cancelling or resuming it.
+
+        A Run shows to its submitter even after they lose its workspace, but a
+        change needs its action on the workspace now: an old Run never carries
+        access its submitter has lost, or writes into a reused name.
+        """
+        if change is not None:
+            await self.check(change, workspace=workspace)
+        if not await self.run_submitters(workspace=workspace, submitters={submitted_by}):
+            raise AccessDeniedError(f"Access denied for a Run on workspace={workspace}")
+
+    async def run_submitters(self, *, workspace: str, submitters: Set[str]) -> set[str]:
+        """The submitters among these whose Runs on ``workspace`` this caller may see."""
+        return await self.access_control.filter_run_submitters(
+            self.subject, workspace=workspace, submitters=submitters
+        )
 
     async def filter_workspace_records(
         self,

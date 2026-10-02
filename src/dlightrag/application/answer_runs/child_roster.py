@@ -74,15 +74,14 @@ class ChildRosterPage:
 
 
 class ChildRosterCursorCodec:
-    """Encode roster ordering facts as a signed, opaque, run-bound token."""
+    """Encode roster ordering facts as a sealed, opaque, run-bound token."""
 
     def __init__(self, secret: bytes) -> None:
         self._envelope = OpaqueCursorEnvelope(
             secret,
             domain="child-roster",
             scope="child-roster",
-            fields_by_version={1: {"child_session_id", "created_at", "run_id"}},
-            current_version=1,
+            fields={"child_session_id", "created_at", "run_id"},
         )
 
     def encode(self, cursor: ChildRosterCursor) -> str:

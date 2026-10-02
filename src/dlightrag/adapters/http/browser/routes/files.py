@@ -90,7 +90,11 @@ async def _resolve_registered_workspace(
 
 
 async def _workspace_is_registered(request: Request, workspace: str) -> bool:
-    """Return whether a workspace is registered; fail open on registry outages."""
+    """Return whether a workspace is registered; fail open on registry outages.
+
+    Callers check access first, so a workspace a caller may not use looks the
+    same whether or not it is registered.
+    """
     try:
         return bool(await get_application(request).corpora.workspace_exists(workspace))
     except Exception:
@@ -149,10 +153,9 @@ async def file_list(
 ) -> WebFilePanelSnapshot:
     """Return one typed Files panel snapshot."""
     selected_workspace = _resolve_workspace(workspace_name, workspace)
-    selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
-    if selected_workspace is None:
-        _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
+    if await _resolve_registered_workspace(request, selected_workspace) is None:
+        _stale_workspace()
     application = get_application(request)
     try:
         decoded_cursor = (
@@ -211,10 +214,9 @@ async def failed_file_list(
     cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> WebFailedFilesPage:
     selected_workspace = _resolve_workspace(workspace_name, workspace)
-    selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
-    if selected_workspace is None:
-        _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
+    if await _resolve_registered_workspace(request, selected_workspace) is None:
+        _stale_workspace()
     application = get_application(request)
     try:
         decoded_cursor = (
@@ -264,9 +266,9 @@ async def start_failed_file_retry(
     workspace_name: str | None = Query(default=None, alias="workspace"),
 ) -> WebCorpusRunReceipt:
     selected_workspace = _resolve_workspace(workspace_name, workspace)
+    await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         _stale_workspace()
-    await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
     try:
         creation = await get_application(request).corpus_mutations.create_retry(
             workspace=selected_workspace,
@@ -309,9 +311,9 @@ async def upload_files(
     limits = application.corpus_mutations.upload_limits
 
     selected_workspace = _resolve_workspace(workspace_name, workspace)
+    await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         _stale_workspace()
-    await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
 
     run_id = str(uuid7())
     stage_owned = True
@@ -394,9 +396,9 @@ async def delete_files(
     file_paths = [file_path] if file_path else []
     application = get_application(request)
     selected_workspace = _resolve_workspace(request.query_params.get("workspace"), workspace)
+    await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         _stale_workspace()
-    await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
 
     if not file_paths:
         raise HTTPException(status_code=422, detail="file_path is required")

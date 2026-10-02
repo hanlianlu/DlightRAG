@@ -2,8 +2,23 @@
 """Transport-neutral caller identity and durable owner projection."""
 
 import hashlib
+from collections.abc import Mapping
+from typing import Protocol
 
 from pydantic import BaseModel, Field
+
+
+class Principal(Protocol):
+    """Authenticated caller facts every transport's identity carries."""
+
+    @property
+    def user_id(self) -> str: ...
+
+    @property
+    def auth_mode(self) -> str: ...
+
+    @property
+    def claims(self) -> Mapping[str, object]: ...
 
 
 class UserContext(BaseModel, frozen=True):
@@ -35,7 +50,7 @@ def owner_id_from_principal(
     return hashlib.sha256(namespace.encode("utf-8")).hexdigest()
 
 
-def owner_id_from_user(user: UserContext | None) -> str:
+def owner_id_from_user(user: Principal | None) -> str:
     """Return the owner that scopes this caller's runs, events, and artifacts."""
     if user is None:
         return DEPLOYMENT_OWNER_ID
@@ -48,6 +63,7 @@ def owner_id_from_user(user: UserContext | None) -> str:
 
 __all__ = [
     "DEPLOYMENT_OWNER_ID",
+    "Principal",
     "UserContext",
     "owner_id_from_principal",
     "owner_id_from_user",

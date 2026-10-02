@@ -68,7 +68,7 @@ class WorkspaceCatalogPage:
 
 
 class WorkspaceCatalogCursorCodec:
-    """Encode workspace ordering facts as a signed, opaque continuation token.
+    """Encode workspace ordering facts as a sealed, opaque continuation token.
 
     The cursor carries no authorization state: every page re-runs the caller's
     access gate over the returned rows, exactly like the full-catalog reads.
@@ -79,8 +79,7 @@ class WorkspaceCatalogCursorCodec:
             secret,
             domain="workspace-catalog",
             scope="workspace-catalog",
-            fields_by_version={1: {"after_workspace"}},
-            current_version=1,
+            fields={"after_workspace"},
         )
 
     def encode(self, cursor: WorkspaceCatalogCursor) -> str:

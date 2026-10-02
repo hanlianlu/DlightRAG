@@ -12,9 +12,18 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.server import create_app
-from dlightrag.application.access import DEPLOYMENT_OWNER_ID
+from dlightrag.application.access import (
+    DEPLOYMENT_OWNER_ID,
+    WorkspaceRecord,
+    access_control_from_settings,
+    owner_id_from_principal,
+)
 from dlightrag.application.answer_runs.service import AgentEffortOffer
-from dlightrag.application.config import DlightragConfig
+from dlightrag.application.config import (
+    AccessControlConfig,
+    AccessControlRuleConfig,
+    DlightragConfig,
+)
 from dlightrag.application.corpus_admin import (
     FilePanelCursor,
     FilePanelCursorCodec,
@@ -26,6 +35,7 @@ from dlightrag.application.corpus_admin import (
     WorkspaceNotFoundError,
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
+from dlightrag.application.settings import access_settings
 from dlightrag.engine.agent.skills import owner_skill_root
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
@@ -83,6 +93,20 @@ BUILTIN_SKILL_CREATOR = {
     ),
     "source": "builtin",
 }
+# Allow-all deployments offer every Corpus Mutation, and the default is never deleted.
+_EVERY_CHANGE = ["ingest", "replace", "delete", "retry", "reset", "delete_workspace"]
+_DEFAULT_CHANGES = ["ingest", "replace", "delete", "retry", "reset"]
+
+
+class _Creators:
+    """The registry's creator column, as the access policy reads it."""
+
+    def __init__(self, creators: dict[str, str]) -> None:
+        self._creators = creators
+
+    async def workspace_creators(self, workspaces) -> dict[str, str]:
+        return {name: self._creators[name] for name in workspaces if name in self._creators}
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -764,6 +788,57 @@ class TestWebIndex:
 # ---------------------------------------------------------------------------
 
 
+async def test_a_person_lists_the_default_and_their_own_workspaces_with_their_changes(
+    client: AsyncClient, test_config: DlightragConfig, mock_application
+) -> None:
+    """Everyone reads the default; a person changes only what they created; nobody else's shows."""
+    team = "https://team.cloudflareaccess.com"
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-only-web-jwt-key-32-bytes!!")
+    mutate_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="iss", value=team, workspaces=["default"], actions=["reader"]
+                )
+            ],
+        ),
+    )
+    alice = owner_id_from_principal(auth_mode="jwt", user_id="alice", issuer=team)
+    mock_application.access_control = access_control_from_settings(
+        access_settings(test_config),
+        creators=_Creators({"alice_notes": alice, "bob_notes": "bob"}),
+    )
+    mock_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=tuple(
+            {"workspace": name, "display_name": name, "embedding_model": "e"}
+            for name in ("alice_notes", "bob_notes", "default")
+        ),
+        next_cursor=None,
+        fetched_rows=3,
+    )
+    token = jwt.encode(
+        {
+            "iss": team,
+            "sub": "alice",
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        },
+        "test-only-web-jwt-key-32-bytes!!",
+        algorithm="HS256",
+    )
+
+    resp = await client.get("/web/api/workspaces", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    assert [(item["workspace"], item["changes"]) for item in resp.json()["workspaces"]] == [
+        ("alice_notes", _EVERY_CHANGE),
+        ("default", []),
+    ]
+
+
 class TestWebBootstrap:
     async def test_returns_one_typed_authorized_startup_snapshot(
         self, client: AsyncClient, test_config: DlightragConfig
@@ -772,17 +847,19 @@ class TestWebBootstrap:
 
         assert response.status_code == 200
         assert response.json() == {
-            "contract_version": 4,
+            "contract_version": 5,
             "workspaces": [
                 {
                     "workspace": "default",
                     "display_name": "Default",
                     "embedding_model": "voyage-multimodal-3.5",
+                    "changes": _DEFAULT_CHANGES,
                 },
                 {
                     "workspace": "test_ws",
                     "display_name": "Test Workspace",
                     "embedding_model": "voyage-multimodal-3.5",
+                    "changes": _EVERY_CHANGE,
                 },
             ],
             "workspaces_next_cursor": None,
@@ -1193,6 +1270,7 @@ class TestWebFiles:
             started_at=now,
             finished_at=None,
             access_scope_kind="workspace",
+            submitted_by=DEPLOYMENT_OWNER_ID,
             access_scope_id="default",
             events_trimmed_at=None,
             request_input=lambda: {"action": "delete"},
@@ -1228,6 +1306,7 @@ class TestWebFiles:
             started_at=now,
             finished_at=None,
             access_scope_kind="workspace",
+            submitted_by=DEPLOYMENT_OWNER_ID,
             access_scope_id="default",
             events_trimmed_at=None,
             request_input=lambda: {"action": "delete"},
@@ -1490,12 +1569,22 @@ class TestWebWorkspaceCreate:
             "test_ws",
             "new_workspace",
         ]
+        mock_application.corpora.create_workspace.return_value = {
+            "workspace": "new_workspace",
+            "display_name": "new workspace",
+            "embedding_model": "voyage-multimodal-3.5",
+        }
         resp = await client.post(
             "/web/api/workspaces/create",
             data={"workspace_name": "new workspace"},
         )
         assert resp.status_code == 200
-        assert resp.json() == {"workspace": "new_workspace", "display_name": "new workspace"}
+        assert resp.json() == {
+            "workspace": "new_workspace",
+            "display_name": "new workspace",
+            "embedding_model": "voyage-multimodal-3.5",
+            "changes": _EVERY_CHANGE,
+        }
         set_cookies = resp.headers.get_list("set-cookie")
         assert any(
             cookie.startswith("dlightrag_workspace=new_workspace;") for cookie in set_cookies
@@ -1506,6 +1595,7 @@ class TestWebWorkspaceCreate:
         mock_application.corpora.create_workspace.assert_awaited_once_with(
             "new_workspace",
             display_name="new workspace",
+            created_by=DEPLOYMENT_OWNER_ID,
         )
 
     async def test_create_workspace_duplicate(
@@ -1559,6 +1649,31 @@ async def test_bootstrap_falls_back_to_the_configured_default_workspace(
     assert unscoped["default_workspace"] == "test_ws"
     assert unscoped["primary_workspace"] == "test_ws"
     assert stale["primary_workspace"] == "test_ws"
+
+
+async def test_bootstrap_carries_the_primary_beyond_the_first_page(
+    client: AsyncClient, mock_application
+) -> None:
+    """The Files panel targets the primary and offers only what its record allows."""
+    catalog: list[WorkspaceRecord] = [
+        {"workspace": name, "display_name": name, "embedding_model": "e"}
+        for name in ("default", "finance", "research")
+    ]
+    mock_application.corpora.list_workspace_records_page.return_value = WorkspaceCatalogPage(
+        items=(catalog[0],),
+        next_cursor=WorkspaceCatalogCursor(after_workspace="default"),
+        fetched_rows=2,
+    )
+    mock_application.corpora.alist_workspace_records.return_value = catalog
+    client.cookies.set("dlightrag_workspace", "research")
+
+    body = (await client.get("/web/api/bootstrap")).json()
+
+    assert body["primary_workspace"] == "research"
+    assert [(item["workspace"], item["changes"]) for item in body["workspaces"]] == [
+        ("default", _DEFAULT_CHANGES),
+        ("research", _EVERY_CHANGE),
+    ]
 
 
 async def test_bootstrap_bounds_the_visible_array_but_keeps_full_authorization_inputs(
@@ -1635,6 +1750,7 @@ async def test_web_workspaces_page_roundtrips_an_opaque_cursor(
             "workspace": "finance",
             "display_name": "Finance",
             "embedding_model": "voyage-multimodal-3.5",
+            "changes": _EVERY_CHANGE,
         }
     ]
     assert body["next_cursor"] is not None

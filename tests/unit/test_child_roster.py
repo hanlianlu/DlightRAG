@@ -1,11 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Opaque child-roster cursor and page request contracts."""
 
-import base64
 import datetime
-import hashlib
-import hmac
-import json
 from typing import Any, cast
 from uuid import UUID
 
@@ -30,29 +26,11 @@ def _cursor() -> ChildRosterCursor:
     return ChildRosterCursor(run_id=_RUN_ID, created_at=_TS, child_session_id=_CHILD_ID)
 
 
-def _signed(payload: dict[str, Any]) -> str:
-    body = (
-        base64.urlsafe_b64encode(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-        )
-        .rstrip(b"=")
-        .decode()
-    )
-    mac = hmac.new(
-        _SECRET,
-        b"child-roster\0" + base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)),
-        hashlib.sha256,
-    ).digest()[:16]
-    return f"{body}.{base64.urlsafe_b64encode(mac).rstrip(b'=').decode()}"
-
-
 def _payload_fields() -> dict[str, Any]:
     return {
         "child_session_id": str(_CHILD_ID),
         "created_at": "2026-03-04T05:06:07.123456Z",
         "run_id": str(_RUN_ID),
-        "scope": "child-roster",
-        "v": 1,
     }
 
 
@@ -80,32 +58,22 @@ def test_codec_rejects_tampered_or_malformed_tokens() -> None:
         other.decode(token)
 
 
-def test_codec_rejects_unknown_scope_or_version() -> None:
-    codec = ChildRosterCursorCodec(_SECRET)
-
-    scope = dict(_payload_fields(), scope="other")
-    with pytest.raises(ChildRosterCursorError):
-        codec.decode(_signed(scope))
-
-    version = dict(_payload_fields(), v=2)
-    with pytest.raises(ChildRosterCursorError):
-        codec.decode(_signed(version))
-
-
 def test_codec_rejects_noncanonical_uuids_and_timestamps() -> None:
+    """Defense in depth: a sealed token is trusted for its shape, never its values."""
     codec = ChildRosterCursorCodec(_SECRET)
+    seal = codec._envelope.encode
 
     upper_run = dict(_payload_fields(), run_id=str(_RUN_ID).upper())
     with pytest.raises(ChildRosterCursorError):
-        codec.decode(_signed(upper_run))
+        codec.decode(seal(upper_run))
 
     offset_timestamp = dict(_payload_fields(), created_at="2026-03-04T05:06:07.123456+00:00")
     with pytest.raises(ChildRosterCursorError):
-        codec.decode(_signed(offset_timestamp))
+        codec.decode(seal(offset_timestamp))
 
     naive_timestamp = dict(_payload_fields(), created_at="2026-03-04T05:06:07.123456")
     with pytest.raises(ChildRosterCursorError):
-        codec.decode(_signed(naive_timestamp))
+        codec.decode(seal(naive_timestamp))
 
 
 def test_cursor_requires_aware_timestamp_and_uuid_fields() -> None:

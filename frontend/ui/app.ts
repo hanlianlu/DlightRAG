@@ -55,7 +55,7 @@ import './toast.ts';
 import './workspace-scope.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
-  contractVersion: 4,
+  contractVersion: 5,
   workspaces: [],
   primaryWorkspace: '',
   activeWorkspaces: [],
@@ -185,11 +185,7 @@ export class DlApp extends LightElement {
       if (this.#controller !== controller) return;
       this.#bootstrap = bootstrap;
       this.handles.workspaces.init(
-        bootstrap.workspaces.map((workspace) => ({
-          workspace: workspace.workspace,
-          displayName: workspace.displayName,
-          embeddingModel: workspace.embeddingModel,
-        })),
+        bootstrap.workspaces,
         bootstrap.activeWorkspaces,
         bootstrap.primaryWorkspace,
         (cursor, signal) => getWorkspacesPage(cursor, signal),

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import { Store } from './base.ts';
-import type {WorkspacePage, WorkspacePageItem} from '../api/workspaces.ts';
+import type {WorkspaceChange, WorkspacePage, WorkspacePageItem} from '../api/workspaces.ts';
 import {KeysetPager, type KeysetPagerStatus} from '../lib/paged.ts';
 
 export type WorkspaceRecord = WorkspacePageItem;
@@ -35,6 +35,11 @@ export class WorkspaceStore extends Store {
 
   get records(): readonly WorkspaceRecord[] {
     return this.#records;
+  }
+
+  /** The corpus changes this caller may make to one workspace; none when it is not listed. */
+  changes(workspace: string): readonly WorkspaceChange[] {
+    return this.#records.find((record) => record.workspace === workspace)?.changes ?? [];
   }
 
   get knownWorkspaces(): readonly string[] {
@@ -91,11 +96,7 @@ export class WorkspaceStore extends Store {
       for (const item of page.workspaces) {
         if (!item.workspace || known.has(item.workspace)) continue;
         known.add(item.workspace);
-        appended.push({
-          workspace: item.workspace,
-          displayName: item.displayName || item.workspace,
-          embeddingModel: item.embeddingModel || '',
-        });
+        appended.push({...item, displayName: item.displayName || item.workspace});
       }
       this.#records = [...this.#records, ...appended];
     });

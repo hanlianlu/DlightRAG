@@ -13,6 +13,7 @@ from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.application import application as application_module
+from dlightrag.application.access import AllowAllAccessControl
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.application import _ApplicationComponents
 from dlightrag.application.config import DlightragConfig
@@ -367,6 +368,7 @@ class _Parts:
                 cancellation_listener=cast(Any, self.cancellation_listener),
                 validate_active_runs=validate_active_runs,
                 corpora=cast(CorpusAdmin, self.corpora),
+                access_control=AllowAllAccessControl(),
                 retrieval=cast(RetrievalService, self.retrieval),
                 runs=cast(Any, self.runs),
                 answers=cast(AnswerService, self.answers),

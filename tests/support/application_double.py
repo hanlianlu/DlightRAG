@@ -30,11 +30,13 @@ hand-built fake stays behind the autospec instead, through ``delegate``.
 
 import inspect
 import typing
+from collections.abc import Sequence
 from types import FunctionType
 from typing import Any
 from unittest.mock import NonCallableMagicMock, create_autospec
 
 from dlightrag.application import Application
+from dlightrag.application.access import AccessControl, access_control_from_settings
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.connections import Connections
@@ -44,6 +46,7 @@ from dlightrag.application.memory import MemoryService
 from dlightrag.application.model_catalogue import ModelCatalogueAdmin
 from dlightrag.application.retrieval import RetrievalService
 from dlightrag.application.runs import RunService
+from dlightrag.application.settings import access_settings
 from dlightrag.application.web_conversations import WebConversationService
 
 # Application imports its service types under TYPE_CHECKING only, so its property
@@ -51,6 +54,7 @@ from dlightrag.application.web_conversations import WebConversationService
 _ANNOTATED_TYPES: dict[str, Any] = {
     service_type.__name__: service_type
     for service_type in (
+        AccessControl,
         AnswerService,
         ApplicationHealth,
         Connections,
@@ -134,8 +138,31 @@ class _ServiceDouble(NonCallableMagicMock):
         return super()._get_child_mock(**kwargs)
 
 
+class _NoCreators:
+    """A catalog in which no workspace names a creator."""
+
+    async def workspace_creators(self, workspaces: Sequence[str]) -> dict[str, str]:
+        return {}
+
+
 class _ApplicationDouble(NonCallableMagicMock):
     """Admits Application's public attributes and builds each on first access."""
+
+    @property
+    def access_control(self) -> AccessControl:
+        """The real policy over this double's config, as the Application composes it.
+
+        Derived on each read, so a test that reconfigures access sees its own policy;
+        a test may also assign a policy of its own.
+        """
+        assigned = self.__dict__.get("_assigned_access_control")
+        if assigned is not None:
+            return assigned
+        return access_control_from_settings(access_settings(self.config), creators=_NoCreators())
+
+    @access_control.setter
+    def access_control(self, policy: AccessControl) -> None:
+        self.__dict__["_assigned_access_control"] = policy
 
     def _get_child_mock(self, /, **kwargs: Any) -> Any:
         name = str(kwargs.get("_new_name"))

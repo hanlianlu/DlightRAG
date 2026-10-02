@@ -53,11 +53,7 @@ export class DlWorkspaceCreate extends LightElement {
       if (
         lifecycle.signal.aborted || this.#lifecycle !== lifecycle || !this.isConnected
       ) return;
-      this.handles.workspaces.add({
-        workspace: created.workspace,
-        displayName: created.displayName,
-        embeddingModel: '',
-      });
+      this.handles.workspaces.add(created);
       this.handles.ingest.set(created.workspace);
       input.value = '';
       requestToast(this, {

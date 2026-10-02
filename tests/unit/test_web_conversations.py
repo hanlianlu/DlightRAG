@@ -1,10 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the Web conversation lifecycle routes and their failure contract."""
 
-import base64
 import datetime
-import hashlib
-import hmac
 import json
 from typing import Any
 from unittest.mock import AsyncMock
@@ -703,46 +700,22 @@ async def test_application_page_uses_extra_row_proof_and_last_returned_item_curs
     )
 
 
-def test_cursor_codec_rejects_tampering_and_round_trips_canonical_facts() -> None:
-    codec = ConversationCursorCodec(b"unit-test-cursor-secret")
-    cursor = ConversationCursor(
-        updated_at=datetime.datetime(2026, 7, 12, 3, 4, 5, 123456, tzinfo=datetime.UTC),
-        conversation_id=UUID(_CID),
-    )
-    encoded = codec.encode(cursor)
-    body = encoded.split(".", 1)[0]
-    payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
-
-    assert codec.decode(encoded) == cursor
-    assert payload["scope"] == "conversation-list"
-    assert payload["v"] == 1
-    replacement = "A" if encoded[-1] != "A" else "B"
-    with pytest.raises(ValueError, match="invalid conversation page cursor"):
-        codec.decode(f"{encoded[:-1]}{replacement}")
-
-
-def test_conversation_cursor_rejects_pre_scope_legacy_token() -> None:
+def test_cursor_codec_round_trips_and_rejects_tampered_or_foreign_tokens() -> None:
     secret = b"unit-test-cursor-secret"
     codec = ConversationCursorCodec(secret)
     cursor = ConversationCursor(
         updated_at=datetime.datetime(2026, 7, 12, 3, 4, 5, 123456, tzinfo=datetime.UTC),
         conversation_id=UUID(_CID),
     )
-    payload = json.dumps(
-        {
-            "conversation_id": str(cursor.conversation_id),
-            "updated_at": "2026-07-12T03:04:05.123456Z",
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
-    mac = hmac.new(secret, b"conversation-list\0" + payload, hashlib.sha256).digest()[:16]
+    encoded = codec.encode(cursor)
+    history = ConversationHistoryCursorCodec(secret).encode(
+        ConversationHistoryCursor(conversation_id=UUID(_CID), before_turn_number=2)
+    )
 
-    def encode(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
-
-    with pytest.raises(ValueError, match="invalid conversation page cursor"):
-        codec.decode(f"{encode(payload)}.{encode(mac)}")
+    assert codec.decode(encoded) == cursor
+    for value in (("A" if encoded[0] != "A" else "B") + encoded[1:], history):
+        with pytest.raises(ValueError, match="invalid conversation page cursor"):
+            codec.decode(value)
 
 
 @pytest.mark.parametrize("limit", [0, 101, True, 1.5])

@@ -615,13 +615,15 @@ class TestWorkspaceRagAingest:
         backend = _backend("test_fallback_ws", read_only=False)
         backend.maintenance = maintenance
         service = _service(test_config, backend=backend)
+        service._initialized = True
 
-        assert await service._create_workspace_meta() is True
+        assert await service.aregister_workspace(created_by="owner-1") is True
 
         maintenance.create_workspace_record.assert_awaited_once_with(
             workspace="test_fallback_ws",
             display_name="test_fallback_ws",
             embedding_model=test_config.models.embedding.model,
+            created_by="owner-1",
         )
 
     async def test_aingest_not_initialized_raises(self, test_config: DlightragConfig) -> None:

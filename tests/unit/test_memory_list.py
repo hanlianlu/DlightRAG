@@ -88,77 +88,29 @@ def test_malformed_tokens_are_rejected(token: str) -> None:
         _codec().decode(token)
 
 
-def test_tampered_payload_fails_integrity() -> None:
+def test_tampered_token_fails_integrity() -> None:
     codec = _codec()
     cursor = MemoryListCursor(
         updated_at=datetime.datetime(2026, 3, 4, 5, 6, 7, 123456, tzinfo=_UTC),
         memory_id=uuid.UUID("12345678-1234-5678-1234-567812345678"),
     )
     token = codec.encode(cursor)
-    encoded, encoded_mac = token.split(".")
-    tampered = encoded[:-1] + ("A" if encoded[-1] != "A" else "B")
     with pytest.raises(MemoryListCursorError):
-        codec.decode(f"{tampered}.{encoded_mac}")
-
-
-def test_wrong_scope_and_version_are_rejected() -> None:
-    import base64
-    import hashlib
-    import hmac
-    import json
-
-    secret = b"memory-list-tests"
-
-    def make(scope: str, version: int) -> str:
-        payload = json.dumps(
-            {
-                "memory_id": "12345678-1234-5678-1234-567812345678",
-                "scope": scope,
-                "updated_at": "2026-03-04T05:06:07.123456Z",
-                "v": version,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
-        mac = hmac.new(secret, b"memory-list\0" + payload, hashlib.sha256).digest()[:16]
-        encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
-        encoded_mac = base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
-        return f"{encoded}.{encoded_mac}"
-
-    with pytest.raises(MemoryListCursorError):
-        _codec().decode(make("other-scope", 1))
-    with pytest.raises(MemoryListCursorError):
-        _codec().decode(make("memory-list", 2))
-    with pytest.raises(MemoryListCursorError):
-        _codec().decode(make("memory-list", True))  # type: ignore[arg-type]
+        codec.decode(("A" if token[0] != "A" else "B") + token[1:])
 
 
 def test_noncanonical_uuid_and_timestamp_are_rejected() -> None:
+    """Defense in depth: a sealed token is trusted for its shape, never its values."""
     codec = _codec()
 
     def token(overrides: dict[str, Any]) -> str:
-        import base64
-        import hashlib
-        import hmac
-        import json
-
-        payload = json.dumps(
+        return codec._envelope.encode(
             {
                 "memory_id": "12345678-1234-5678-1234-567812345678",
-                "scope": "memory-list",
                 "updated_at": "2026-03-04T05:06:07.123456Z",
-                "v": 1,
                 **overrides,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
-        mac = hmac.new(b"memory-list-tests", b"memory-list\0" + payload, hashlib.sha256).digest()[
-            :16
-        ]
-        encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
-        encoded_mac = base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
-        return f"{encoded}.{encoded_mac}"
+            }
+        )
 
     with pytest.raises(MemoryListCursorError):
         codec.decode(token({"memory_id": "not-a-uuid"}))

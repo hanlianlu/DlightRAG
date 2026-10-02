@@ -32,9 +32,9 @@ test('bootstrap rejects malformed success JSON through its typed error', async (
   );
 });
 
-test('bootstrap v4 requires the agent effort offer', async () => {
+test('bootstrap v5 requires the agent effort offer', async () => {
   const fixture = {
-    contract_version: 4, workspaces: [], primary_workspace: '', active_workspaces: [],
+    contract_version: 5, workspaces: [], primary_workspace: '', active_workspaces: [],
     answer_attachments: {count_limit: 0, image_max_bytes: 1, document_max_bytes: 1,
       extensions: [], image_capability: 'unknown', image_limit: 0, accept: ''},
     active_html_preview_enabled: false,
@@ -43,7 +43,7 @@ test('bootstrap v4 requires the agent effort offer', async () => {
   globalThis.fetch = async () => Response.json(fixture);
   const bootstrap = await getWebBootstrap();
   assert.deepEqual(bootstrap.agentEffort, {levels: ['low', 'high', 'max'], default: 'high'});
-  globalThis.fetch = async () => Response.json({...fixture, contract_version: 3});
+  globalThis.fetch = async () => Response.json({...fixture, contract_version: 4});
   await assert.rejects(getWebBootstrap(), ApiError);
   const {agent_effort: _offer, ...missing} = fixture;
   globalThis.fetch = async () => Response.json(missing);

@@ -4,7 +4,7 @@
 import datetime
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -15,6 +15,7 @@ from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextC
 
 from dlightrag.adapters.mcp import server as mcp_server
 from dlightrag.application.access import (
+    JwtClaimsAccessControl,
     RequestScope,
     owner_id_from_principal,
     request_scope_context,
@@ -38,6 +39,7 @@ from dlightrag.application.retrieval import (
 )
 from dlightrag.application.retrieval._answer_projection import project_answer_retrieval
 from dlightrag.application.runs import RunView
+from dlightrag.application.settings import access_settings
 from dlightrag.engine.runtime.records import (
     RunAccessScope,
     RunRecord,
@@ -514,20 +516,35 @@ async def test_mcp_surfaces_an_application_access_denial(mock_mcp_application: A
     assert _tool_text(result) == "Error: Access denied for action=workspace.query workspace=finance"
 
 
-async def test_mcp_workspace_run_lookup_hides_a_denial_but_not_an_outage(
-    mock_mcp_application: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from dlightrag.adapters.mcp.errors import ToolRejection
+class _Catalog:
+    """The workspace catalog the access policy consults for creators."""
 
+    def __init__(self) -> None:
+        self.down = False
+
+    async def workspace_creators(self, workspaces: Sequence[str]) -> dict[str, str]:
+        if self.down:
+            raise RuntimeError("catalog down")
+        return {}
+
+
+async def test_mcp_workspace_run_lookup_hides_a_denial_but_not_an_outage(
+    mock_mcp_application: Any, test_config: DlightragConfig
+) -> None:
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    mutate_config(test_config, "access.control", AccessControlConfig(mode="jwt_claims"))
+    catalog = _Catalog()
+    mock_mcp_application.access_control = JwtClaimsAccessControl(
+        access_settings(test_config), creators=catalog
+    )
+    # Bob neither submitted this Run nor reads its workspace.
     mock_mcp_application.runs.get.return_value = _run_record(run_kind="corpus_mutation")
-    monkeypatch.setattr(
-        mcp_server, "_enforce_access", AsyncMock(side_effect=ToolRejection("Access denied"))
-    )
-    denied = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
-    monkeypatch.setattr(
-        mcp_server, "_enforce_access", AsyncMock(side_effect=RuntimeError("gate store down"))
-    )
-    outage = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
+
+    with request_scope_context(RequestScope(user_id="bob", auth_mode="jwt", claims={})):
+        denied = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
+        catalog.down = True
+        outage = await mcp_server.mcp_app.call_tool("get_run", {"run_id": _RUN_ID})
 
     assert _tool_text(denied) == f"Error: Run not found: {_RUN_ID}"
     assert _tool_text(outage) == "Error: internal tool failure"
@@ -976,6 +993,7 @@ async def test_mcp_create_workspace_uses_corpus_catalog(mock_mcp_application) ->
     mock_mcp_application.corpora.create_workspace.assert_awaited_once_with(
         "new_workspace",
         display_name="New Workspace",
+        created_by=_EXPECTED_OWNER,
     )
 
 

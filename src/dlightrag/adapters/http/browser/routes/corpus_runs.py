@@ -9,14 +9,20 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from dlightrag.adapters.http.browser.deps import enforce_web_access, get_application
+from dlightrag.adapters.http.browser.deps import (
+    get_application,
+    get_web_access_gate,
+)
 from dlightrag.adapters.http.browser.file_models import WebCorpusRunReceipt, WebCorpusRunStatus
 from dlightrag.adapters.http.streaming.answer_stream import (
     follow_run_frames,
     resume_cursor,
     sse_frame,
 )
-from dlightrag.application.access import AccessAction, corpus_mutation_access_action
+from dlightrag.application.access import (
+    AccessDeniedError,
+    corpus_mutation_access_action,
+)
 from dlightrag.application.runs import RunEvent, RunView
 
 router = APIRouter(prefix="/corpus-runs")
@@ -75,14 +81,12 @@ async def _authorized_corpus_run(
         or record.access_scope_kind != "workspace"
     ):
         raise HTTPException(status_code=404, detail="Corpus Mutation Run not found")
-    action = (
-        corpus_mutation_access_action(record.request_input().get("action"))
-        if cancel
-        else AccessAction.WORKSPACE_LIST_FILES
-    )
+    change = corpus_mutation_access_action(record.request_input().get("action")) if cancel else None
     try:
-        await enforce_web_access(request, action, record.access_scope_id)
-    except HTTPException:
+        await get_web_access_gate(request).check_run(
+            workspace=record.access_scope_id, submitted_by=record.submitted_by, change=change
+        )
+    except AccessDeniedError:
         raise HTTPException(status_code=404, detail="Corpus Mutation Run not found") from None
     return record
 

@@ -13,6 +13,7 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.application.errors import ApplicationClosedError
 
 if TYPE_CHECKING:
+    from dlightrag.application.access import AccessControl
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
@@ -60,6 +61,7 @@ class _ApplicationComponents:
     cancellation_listener: Any
     validate_active_runs: Callable[[], Awaitable[None]]
     corpora: CorpusAdmin
+    access_control: AccessControl
     retrieval: RetrievalService
     runs: RunService
     answers: AnswerService
@@ -141,6 +143,11 @@ class Application:
     @property
     def corpora(self) -> CorpusAdmin:
         return self._open().corpora
+
+    @property
+    def access_control(self) -> AccessControl:
+        """Who may do what to which workspace, over this deployment's catalog."""
+        return self._open().access_control
 
     @property
     def corpus_mutations(self) -> CorpusMutationService:

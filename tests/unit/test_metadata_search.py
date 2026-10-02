@@ -5,10 +5,6 @@ The exact-then-contains traversal runs against PostgreSQL in
 tests/integration/test_pg_storage.py and test_metadata_scope_pg.py.
 """
 
-import base64
-import hashlib
-import hmac
-import json
 from typing import Any, cast
 
 import pytest
@@ -18,6 +14,8 @@ from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
 )
 from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
 from dlightrag.application.corpus_admin import (
+    FilePanelCursor,
+    FilePanelCursorCodec,
     MetadataSearchCursor,
     MetadataSearchCursorCodec,
     MetadataSearchCursorError,
@@ -56,16 +54,6 @@ class _Conn:
         return []
 
 
-def _signed_token(secret: bytes, payload: dict[str, Any]) -> str:
-    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    mac = hmac.new(secret, b"metadata-match\0" + raw, hashlib.sha256).digest()[:16]
-
-    def encode(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
-
-    return f"{encode(raw)}.{encode(mac)}"
-
-
 # ---------------------------------------------------------------------------
 # Cursor codec
 # ---------------------------------------------------------------------------
@@ -81,71 +69,28 @@ def test_metadata_search_cursor_round_trips_both_modes_and_max_doc_id() -> None:
         assert codec.decode(codec.encode(cursor)) == cursor
 
 
-def test_metadata_search_cursor_rejects_tamper_malformed_scope_version_and_mode() -> None:
+def test_metadata_search_cursor_rejects_tampered_foreign_and_invalid_tokens() -> None:
     secret = b"cursor-secret"
     codec = MetadataSearchCursorCodec(secret)
     token = codec.encode(
         MetadataSearchCursor(workspace="finance", after_doc_id="doc-1", mode="exact")
     )
-    encoded, mac = token.split(".")
-
-    invalid = [
-        token + "x",
-        "not-a-token",
-        f"{encoded}=.{mac}",
-        _signed_token(
-            secret,
-            {
-                "after_doc_id": "doc-1",
-                "mode": "exact",
-                "scope": "file-panel",
-                "v": 1,
-                "workspace": "finance",
-            },
-        ),
-        _signed_token(
-            secret,
-            {
-                "after_doc_id": "doc-1",
-                "mode": "exact",
-                "scope": "metadata-match",
-                "v": 2,
-                "workspace": "finance",
-            },
-        ),
-        _signed_token(
-            secret,
-            {
-                "after_doc_id": "doc-1",
-                "mode": "regex",
-                "scope": "metadata-match",
-                "v": 1,
-                "workspace": "finance",
-            },
-        ),
-        _signed_token(
-            secret,
-            {
-                "after_doc_id": "doc-1",
-                "mode": ["exact"],
-                "scope": "metadata-match",
-                "v": 1,
-                "workspace": "finance",
-            },
-        ),
-        _signed_token(
-            secret,
-            {
-                "after_doc_id": "doc-1",
-                "mode": "exact",
-                "scope": "metadata-match",
-                "v": 1,
-                "workspace": "finance",
-                "extra": True,
-            },
-        ),
+    foreign = FilePanelCursorCodec(secret).encode(
+        FilePanelCursor(workspace="finance", updated_at=None, doc_id="doc-1")
+    )
+    # Defense in depth: a sealed token is trusted for its shape, never its values.
+    invalid_modes = [
+        codec._envelope.encode({"after_doc_id": "doc-1", "mode": mode, "workspace": "finance"})
+        for mode in ("regex", ["exact"])
     ]
-    for value in invalid:
+
+    for value in (
+        token + "x",
+        ("A" if token[0] != "A" else "B") + token[1:],
+        "not-a-token",
+        foreign,
+        *invalid_modes,
+    ):
         with pytest.raises(MetadataSearchCursorError):
             codec.decode(value)
 

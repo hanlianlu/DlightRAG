@@ -211,8 +211,7 @@ class ConversationCursorCodec:
             secret,
             domain="conversation-list",
             scope="conversation-list",
-            fields_by_version={1: {"conversation_id", "updated_at"}},
-            current_version=1,
+            fields={"conversation_id", "updated_at"},
         )
 
     def encode(self, cursor: ConversationCursor) -> str:
@@ -245,15 +244,14 @@ class ConversationCursorCodec:
 
 
 class ConversationHistoryCursorCodec:
-    """Signed, opaque, conversation-bound turn cursor with canonical decoding."""
+    """Sealed, opaque, conversation-bound turn cursor with canonical decoding."""
 
     def __init__(self, secret: bytes) -> None:
         self._envelope = OpaqueCursorEnvelope(
             secret,
             domain="conversation-history",
             scope="conversation-history",
-            fields_by_version={1: {"before_turn_number", "conversation_id"}},
-            current_version=1,
+            fields={"before_turn_number", "conversation_id"},
         )
 
     def encode(self, cursor: ConversationHistoryCursor) -> str:

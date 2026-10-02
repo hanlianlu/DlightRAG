@@ -1,21 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Authorization policy for DlightRAG product resources."""
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Protocol
 
-
-class Principal(Protocol):
-    """Authenticated facts required by authorization policy."""
-
-    @property
-    def auth_mode(self) -> str: ...
-
-    @property
-    def claims(self) -> Mapping[str, object]: ...
-
+from dlightrag.application.access.principal import Principal, owner_id_from_user
 
 type AccessSubject = Principal | None
 
@@ -66,6 +57,13 @@ _EDITOR_ACTIONS: tuple[str, ...] = (
     AccessAction.WORKSPACE_UPDATE_METADATA,
     AccessAction.WORKSPACE_DELETE_FILES,
 )
+# A workspace's creator holds everything an editor does on it, and may reset or
+# delete it. Operator-facing storage status stays with deployment rules.
+CREATOR_ACTIONS: tuple[str, ...] = (
+    *_EDITOR_ACTIONS,
+    AccessAction.WORKSPACE_RESET,
+    AccessAction.WORKSPACE_DELETE,
+)
 ACTION_PRESETS: dict[str, tuple[str, ...]] = {
     "reader": _READER_ACTIONS,
     "editor": _EDITOR_ACTIONS,
@@ -99,6 +97,12 @@ class AccessDeniedError(PermissionError):
     """Raised when an authenticated user is not authorized for a resource."""
 
 
+class WorkspaceCreators(Protocol):
+    """The owner that created each of these workspaces, where one did."""
+
+    async def workspace_creators(self, workspaces: Sequence[str]) -> Mapping[str, str]: ...
+
+
 class AccessControl(Protocol):
     async def check(
         self,
@@ -114,6 +118,16 @@ class AccessControl(Protocol):
         action: str,
         workspaces: Sequence[str],
     ) -> list[str]: ...
+
+    async def filter_run_submitters(
+        self,
+        subject: AccessSubject,
+        *,
+        workspace: str,
+        submitters: Set[str],
+    ) -> set[str]:
+        """The submitters among these whose Runs on ``workspace`` the subject may see."""
+        ...
 
 
 class AllowAllAccessControl:
@@ -134,10 +148,22 @@ class AllowAllAccessControl:
     ) -> list[str]:
         return list(workspaces)
 
+    async def filter_run_submitters(
+        self,
+        subject: AccessSubject,
+        *,
+        workspace: str,
+        submitters: Set[str],
+    ) -> set[str]:
+        return set(submitters)
+
 
 class JwtClaimsAccessControl:
-    def __init__(self, settings: AccessSettings) -> None:
+    """Deployment rules over JWT claims; each workspace's creator also holds it."""
+
+    def __init__(self, settings: AccessSettings, creators: WorkspaceCreators) -> None:
         self._rules = settings.rules
+        self._creators = creators
 
     async def check(
         self,
@@ -146,7 +172,11 @@ class JwtClaimsAccessControl:
         *,
         workspace: str | None = None,
     ) -> None:
-        if self._allows(subject, action, workspace):
+        if workspace is None:
+            allowed = self._ruled(subject, action, None)
+        else:
+            allowed = bool(await self.filter_workspaces(subject, action, [workspace]))
+        if allowed:
             return
         target = f" workspace={workspace}" if workspace else ""
         raise AccessDeniedError(f"Access denied for action={action}{target}")
@@ -157,9 +187,39 @@ class JwtClaimsAccessControl:
         action: str,
         workspaces: Sequence[str],
     ) -> list[str]:
-        return [workspace for workspace in workspaces if self._allows(subject, action, workspace)]
+        ruled = {workspace for workspace in workspaces if self._ruled(subject, action, workspace)}
+        created = await self._created(
+            subject, action, [workspace for workspace in workspaces if workspace not in ruled]
+        )
+        return [workspace for workspace in workspaces if workspace in ruled | created]
 
-    def _allows(self, subject: AccessSubject, action: str, workspace: str | None) -> bool:
+    async def filter_run_submitters(
+        self,
+        subject: AccessSubject,
+        *,
+        workspace: str,
+        submitters: Set[str],
+    ) -> set[str]:
+        """A Run shows to its submitter; others see it by listing its workspace's files.
+
+        A workspace its creator holds shows others only the Runs that creator
+        submitted, so a deleted workspace's history never passes to whoever
+        creates the same name next.
+        """
+        own = (
+            {owner_id_from_user(subject)} & submitters
+            if subject is not None and subject.auth_mode == "jwt"
+            else set()
+        )
+        others = submitters - own
+        if not others or not await self.filter_workspaces(
+            subject, AccessAction.WORKSPACE_LIST_FILES, [workspace]
+        ):
+            return own
+        creator = (await self._creators.workspace_creators([workspace])).get(workspace)
+        return own | (others if creator is None else others & {creator})
+
+    def _ruled(self, subject: AccessSubject, action: str, workspace: str | None) -> bool:
         if subject is None or subject.auth_mode != "jwt":
             return False
         return any(
@@ -169,10 +229,32 @@ class JwtClaimsAccessControl:
             for rule in self._rules
         )
 
+    async def _created(
+        self,
+        subject: AccessSubject,
+        action: str,
+        workspaces: Sequence[str],
+    ) -> set[str]:
+        """The workspaces among these that this subject created, for a creator action."""
+        if (
+            not workspaces
+            or subject is None
+            or subject.auth_mode != "jwt"
+            or action not in CREATOR_ACTIONS
+        ):
+            return set()
+        creator = owner_id_from_user(subject)
+        creators = await self._creators.workspace_creators(workspaces)
+        return {workspace for workspace in workspaces if creators.get(workspace) == creator}
 
-def access_control_from_settings(settings: AccessSettings) -> AccessControl:
+
+def access_control_from_settings(
+    settings: AccessSettings,
+    *,
+    creators: WorkspaceCreators,
+) -> AccessControl:
     if settings.mode == "jwt_claims":
-        return JwtClaimsAccessControl(settings)
+        return JwtClaimsAccessControl(settings, creators)
     return AllowAllAccessControl()
 
 
@@ -214,6 +296,6 @@ __all__ = [
     "AccessSubject",
     "AllowAllAccessControl",
     "JwtClaimsAccessControl",
-    "Principal",
+    "WorkspaceCreators",
     "access_control_from_settings",
 ]

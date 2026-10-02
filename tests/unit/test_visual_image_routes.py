@@ -38,11 +38,11 @@ def _api_client(application: object) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _web_client(application: object, access_control: object | None = None) -> AsyncClient:
+def _web_client(application: Any, access_control: object | None = None) -> AsyncClient:
+    if access_control is not None:
+        application.access_control = access_control
     app = FastAPI()
     app.state.application = application
-    if access_control is not None:
-        app.state.access_control = access_control
     app.include_router(web_images_router)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 

@@ -261,6 +261,7 @@ class PGPromotionJobStore(PostgresOperationRunner):
                 conn,
                 scope="promotion_jobs",
                 migrations=_SCHEMA_MIGRATIONS,
+                tables=_SCHEMA_TABLES,
                 schema_error=CorpusSchemaError,
             )
 

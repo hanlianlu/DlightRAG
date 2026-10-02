@@ -85,6 +85,7 @@ class CorpusMaintenanceStore(Protocol):
         workspace: str,
         display_name: str,
         embedding_model: str,
+        created_by: str,
     ) -> bool:
         """Create one Workspace identity; False when it already exists."""
         ...

@@ -6,6 +6,7 @@ display labels. LightRAG stores own document/KG/vector data per workspace;
 this table owns the user-facing workspace list, including empty workspaces.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from dlightrag.adapters.postgres.core._migrations import (
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
     promotion_next_retry_at TIMESTAMPTZ,
     write_fence_owner      TEXT,
     write_fence_until      TIMESTAMPTZ,
+    created_by      TEXT,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT dlightrag_workspace_meta_counters_nonnegative
@@ -90,9 +92,14 @@ SELECT EXISTS (
 """
 
 _INSERT = """
-INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model)
-VALUES ($1, $2, $3)
+INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model, created_by)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (workspace) DO NOTHING
+"""
+_CREATORS = """
+SELECT workspace, created_by
+FROM dlightrag_workspace_meta
+WHERE workspace = ANY($1::text[]) AND created_by IS NOT NULL
 """
 
 _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
@@ -289,6 +296,7 @@ _SCHEMA_TABLES = (
             "promotion_next_retry_at",
             "write_fence_owner",
             "write_fence_until",
+            "created_by",
             "created_at",
             "updated_at",
         ),
@@ -318,6 +326,7 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
                 conn,
                 scope="workspace_registry",
                 migrations=_SCHEMA_MIGRATIONS,
+                tables=_SCHEMA_TABLES,
                 schema_error=CorpusSchemaError,
             )
 
@@ -396,14 +405,28 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
         workspace: str,
         display_name: str,
         embedding_model: str,
+        created_by: str,
     ) -> bool:
         """Create one registry row; False when the workspace identity already exists."""
         workspace_id = _workspace_id(workspace)
 
         async def _operation(conn: Any) -> str:
-            return await conn.execute(_INSERT, workspace_id, display_name, embedding_model)
+            return await conn.execute(
+                _INSERT, workspace_id, display_name, embedding_model, created_by
+            )
 
         return (await self._run(_operation)) != "INSERT 0 0"
+
+    async def workspace_creators(self, workspaces: Sequence[str]) -> dict[str, str]:
+        """The owner that created each of these workspaces, where one did."""
+        workspace_ids = [_workspace_id(workspace) for workspace in workspaces]
+
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(_CREATORS, workspace_ids)
+
+        if not workspace_ids:
+            return {}
+        return {row["workspace"]: row["created_by"] for row in await self._run(_operation)}
 
     async def delete(self, workspace: str) -> bool:
         """Delete one workspace registry row."""

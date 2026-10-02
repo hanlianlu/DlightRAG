@@ -169,10 +169,10 @@ async def test_download_authorization_precedes_metadata_lookup(
     )
     set_config(config)
     application = application_double(config)
+    application.access_control = DenyFinanceWorkspace()
     with caplog.at_level(logging.INFO, logger="dlightrag.adapters.http.rest.routes.files"):
         app = create_app()
         app.state.application = application
-        app.state.access_control = DenyFinanceWorkspace()
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",

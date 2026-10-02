@@ -2666,6 +2666,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 conn,
                 scope=RUN_MIGRATION_SCOPE,
                 migrations=RUN_MIGRATIONS,
+                tables=RUN_SCHEMA_TABLES,
                 schema_error=RunSchemaError,
             )
 

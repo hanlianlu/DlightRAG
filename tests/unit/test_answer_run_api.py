@@ -665,7 +665,7 @@ class TestResultProjection:
         self, client: AsyncClient, run_application: _RunApplication, _app: FastAPI
     ) -> None:
         run_application.record = _record(status="succeeded", result=_stored_result())
-        _app.state.access_control = _QueryOnlyAccess()
+        run_application.application.access_control = _QueryOnlyAccess()
 
         result = (await client.get(f"/runs/{_RUN_ID}")).json()["result"]
 

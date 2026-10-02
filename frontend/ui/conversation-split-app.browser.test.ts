@@ -5,13 +5,14 @@ import {type DlSplitLayout, defineDesignSystemElements } from '../design-system/
 import './app.ts';
 import type {DlApp} from './app.ts';
 import {initializeBrowserAdapters} from './browser-adapters.ts';
+import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
 
 defineDesignSystemElements();
 
 const bootstrap = {
-  contract_version: 4,
+  contract_version: 5,
   workspaces: [
-    {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
+    {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test', changes: [...DEFAULT_CHANGES]},
   ],
   workspaces_next_cursor: null,
   primary_workspace: 'default',

@@ -3,8 +3,6 @@
 
 import base64
 import hashlib
-import hmac
-import json
 
 import pytest
 
@@ -16,14 +14,12 @@ from dlightrag.application.opaque_cursor import (
 )
 
 
-def _encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
-
-
-def _signed(secret: bytes, domain: str, payload: dict[str, object]) -> str:
-    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    mac = hmac.new(secret, domain.encode() + b"\0" + raw, hashlib.sha256).digest()[:16]
-    return f"{_encode(raw)}.{_encode(mac)}"
+def _envelope(
+    fields: set[str], *, scope: str = "item-list", domain: str = "items"
+) -> OpaqueCursorEnvelope:
+    return OpaqueCursorEnvelope(
+        b"opaque-cursor-test-secret", domain=domain, scope=scope, fields=fields
+    )
 
 
 def test_secret_box_is_stable_domain_separated() -> None:
@@ -48,104 +44,54 @@ def test_secret_box_rejects_missing_or_non_byte_material(material: object) -> No
         CursorSecretBox(material)  # type: ignore[arg-type]
 
 
-def test_envelope_requires_explicit_secret_and_declared_current_shape() -> None:
+def test_envelope_requires_explicit_secret_and_a_field_shape() -> None:
     with pytest.raises(ValueError, match="explicit non-empty"):
-        OpaqueCursorEnvelope(
-            None,
-            domain="items",
-            scope="items",
-            fields_by_version={1: {"after"}},
-            current_version=1,
-        )
-    with pytest.raises(ValueError, match="declared field shape"):
-        OpaqueCursorEnvelope(
-            b"secret",
-            domain="items",
-            scope="items",
-            fields_by_version={1: {"after"}},
-            current_version=2,
-        )
+        OpaqueCursorEnvelope(None, domain="items", scope="items", fields={"after"})
+    with pytest.raises(ValueError, match="non-empty and exclude scope"):
+        OpaqueCursorEnvelope(b"secret", domain="items", scope="items", fields={"scope"})
 
 
-def test_envelope_round_trips_current_and_accepts_declared_prior_versions() -> None:
-    secret = b"opaque-cursor-test-secret"
-    envelope = OpaqueCursorEnvelope(
-        secret,
-        domain="items",
-        scope="item-list",
-        fields_by_version={1: {"after"}, 2: {"after", "view"}},
-        current_version=2,
-    )
+def test_envelope_round_trips_its_fields() -> None:
+    envelope = _envelope({"after", "view"})
 
-    current = envelope.encode({"after": "item-1", "view": "active"})
-    prior = _signed(
-        secret,
-        "items",
-        {"after": "item-0", "scope": "item-list", "v": 1},
-    )
+    token = envelope.encode({"after": "item-1", "view": "active"})
 
-    assert envelope.decode(current) == {
-        "after": "item-1",
-        "scope": "item-list",
-        "v": 2,
-        "view": "active",
-    }
-    assert envelope.decode(prior) == {
-        "after": "item-0",
-        "scope": "item-list",
-        "v": 1,
-    }
+    assert envelope.decode(token) == {"after": "item-1", "view": "active"}
 
 
 @pytest.mark.parametrize(
-    "payload",
-    [
-        {"after": "item", "scope": "wrong", "v": 2, "view": "active"},
-        {"after": "item", "scope": "item-list", "v": 3, "view": "active"},
-        {
-            "after": "item",
-            "extra": True,
-            "scope": "item-list",
-            "v": 2,
-            "view": "active",
-        },
-    ],
+    ("scope", "shape"),
+    [("wrong", {"after", "view"}), ("item-list", {"after", "extra", "view"})],
+    ids=["scope", "shape"],
 )
-def test_envelope_rejects_signed_scope_version_and_shape_drift(
-    payload: dict[str, object],
-) -> None:
-    secret = b"opaque-cursor-test-secret"
-    envelope = OpaqueCursorEnvelope(
-        secret,
-        domain="items",
-        scope="item-list",
-        fields_by_version={2: {"after", "view"}},
-        current_version=2,
-    )
+def test_envelope_rejects_scope_and_shape_drift(scope: str, shape: set[str]) -> None:
+    reader = _envelope({"after", "view"})
+    issuer = _envelope(shape, scope=scope)
 
     with pytest.raises(OpaqueCursorError):
-        envelope.decode(_signed(secret, "items", payload))
+        reader.decode(issuer.encode(dict.fromkeys(shape, "item")))
+
+
+def test_a_sealed_cursor_reveals_none_of_its_fields() -> None:
+    """A catalog cursor names a row its holder may not see, so no field may show."""
+    envelope = _envelope({"after"})
+
+    token = envelope.encode({"after": "someone-elses-workspace"})
+    sealed = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+
+    assert b"someone-elses-workspace" not in sealed
+    assert b"item-list" not in sealed
+    assert envelope.encode({"after": "someone-elses-workspace"}) == token
 
 
 def test_envelope_rejects_cross_domain_replay_and_tamper() -> None:
-    secret = b"opaque-cursor-test-secret"
-    first = OpaqueCursorEnvelope(
-        secret,
-        domain="first",
-        scope="items",
-        fields_by_version={1: {"after"}},
-        current_version=1,
-    )
-    second = OpaqueCursorEnvelope(
-        secret,
-        domain="second",
-        scope="items",
-        fields_by_version={1: {"after"}},
-        current_version=1,
-    )
+    first = _envelope({"after"}, domain="first")
+    second = _envelope({"after"}, domain="second")
     token = first.encode({"after": "item-1"})
+    flipped = token[:-1] + ("A" if token[-1] != "A" else "B")
 
+    for forged in (token + "x", flipped, "not-a-token"):
+        with pytest.raises(OpaqueCursorError):
+            first.decode(forged)
     with pytest.raises(OpaqueCursorError):
         second.decode(token)
-    with pytest.raises(OpaqueCursorError):
-        first.decode(token + "x")

@@ -92,15 +92,23 @@ async def test_registry_control_plane_fields_are_durable_and_constrained(pool: A
 
     # Creating a workspace never renames one that exists.
     assert not await registry.insert(
-        workspace=_WORKSPACE, display_name="Renamed", embedding_model="pf-it-fake"
+        workspace=_WORKSPACE,
+        display_name="Renamed",
+        embedding_model="pf-it-fake",
+        created_by="owner-b",
     )
     row = await registry.get_row(_WORKSPACE)
     assert row is not None and row["display_name"] == "Promotion Workspace"
     created = "pf_registry_created"
     assert await registry.insert(
-        workspace=created, display_name="Created", embedding_model="pf-it-fake"
+        workspace=created,
+        display_name="Created",
+        embedding_model="pf-it-fake",
+        created_by="owner-a",
     )
     assert await registry.exists(created)
+    # Only a created workspace names its creator; the registered one has none.
+    assert await registry.workspace_creators([created, _WORKSPACE]) == {created: "owner-a"}
     assert await registry.delete(created)
     assert not await registry.exists(created)
     assert not await registry.delete(created)

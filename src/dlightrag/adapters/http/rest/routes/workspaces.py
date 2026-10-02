@@ -11,7 +11,7 @@ from dlightrag.adapters.http.rest.models import (
     WorkspaceCreateResponse,
     WorkspacesResponse,
 )
-from dlightrag.application.access import AccessAction, UserContext
+from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
 from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
@@ -97,7 +97,9 @@ async def create_workspace(
     application = get_application(request)
     workspace, display_name = _normalize_create_body(body)
     await enforce_access(request, user, AccessAction.WORKSPACE_CREATE, workspace=workspace)
-    await application.corpora.create_workspace(workspace, display_name=display_name)
+    await application.corpora.create_workspace(
+        workspace, display_name=display_name, created_by=owner_id_from_user(user)
+    )
     return {
         "workspace": workspace,
         "display_name": display_name,

@@ -10,6 +10,8 @@ import type {DlIngestTarget} from './ingest-target.ts';
 import './ingest-target.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
+import type {WorkspacePage} from '../api/workspaces.ts';
+import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
 
 const {ingest: ingestStore, workspaces: workspaceStore} = productionHandles();
 
@@ -55,7 +57,7 @@ async function mountFiles(): Promise<DlInspectorFiles> {
 
 beforeEach(() => {
   workspaceStore.init([
-    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
+    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
   ], ['default'], 'default');
   ingestStore.resetToPrimary();
 });
@@ -67,7 +69,8 @@ afterEach(() => {
 
 it('owns a native expanded trigger and closes after typed creation intent', async () => {
   window.fetch = async () => new Response(JSON.stringify({
-    workspace: 'research', display_name: 'Research',
+    workspace: 'research', display_name: 'Research', embedding_model: 'embed',
+    changes: [...EVERY_CHANGE],
   }), {status: 200, headers: {'Content-Type': 'application/json'}});
   const scope = mountScope();
   await scope.updateComplete;
@@ -159,7 +162,8 @@ it('keeps submitted creation connected while its popover is dismissed', async ()
   expect(scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')?.hidden)
     .to.equal(true);
   resolveCreate(new Response(JSON.stringify({
-    workspace: 'research', display_name: 'Research',
+    workspace: 'research', display_name: 'Research', embedding_model: 'embed',
+    changes: [...EVERY_CHANGE],
   }), {status: 200, headers: {'Content-Type': 'application/json'}}));
   await waitFor(() => workspaceStore.primary === 'research');
 
@@ -248,8 +252,8 @@ it('explains a refused workspace command instead of echoing the access rule', as
 
 it('keeps a pending reset modal and isolates the next reset operation', async () => {
   workspaceStore.init([
-    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
+    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed', changes: EVERY_CHANGE},
   ], ['default'], 'default');
   const requests: Array<(response: Response) => void> = [];
   window.fetch = async () => await new Promise<Response>((resolve) => { requests.push(resolve); });
@@ -315,8 +319,8 @@ it('keeps a pending reset modal and isolates the next reset operation', async ()
 
 it('uses native dialog popover controls and restores ingest-trigger focus', async () => {
   workspaceStore.init([
-    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
+    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed', changes: EVERY_CHANGE},
   ], ['default'], 'default');
   const ingest = document.createElement('dl-ingest-target') as DlIngestTarget;
   ingest.active = true;
@@ -433,15 +437,15 @@ it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async 
     }
     return {
       workspaces: [
-        {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-        {workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed'},
-        {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
+        {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+        {workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed', changes: EVERY_CHANGE},
+        {workspace: 'research', displayName: 'Research', embeddingModel: 'embed', changes: EVERY_CHANGE},
       ],
       nextCursor: olderRequests === 2 ? 'cursor-2' : null,
     };
   };
   workspaceStore.init(
-    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES}],
     ['default'],
     'default',
     loader,
@@ -469,13 +473,13 @@ it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async 
 });
 
 it('rejects stale load-more pages after a fresh init invalidates the flight', async () => {
-  let resolve!: (page: {workspaces: {workspace: string; displayName: string; embeddingModel: string}[]; nextCursor: string | null}) => void;
-  const pending = new Promise<{workspaces: {workspace: string; displayName: string; embeddingModel: string}[]; nextCursor: string | null}>((done) => {
+  let resolve!: (page: WorkspacePage) => void;
+  const pending = new Promise<WorkspacePage>((done) => {
     resolve = done;
   });
   const loader = async () => await pending;
   workspaceStore.init(
-    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES}],
     ['default'],
     'default',
     loader,
@@ -484,13 +488,13 @@ it('rejects stale load-more pages after a fresh init invalidates the flight', as
 
   const flight = workspaceStore.loadMoreWorkspaces();
   workspaceStore.init(
-    [{workspace: 'fresh', displayName: 'Fresh', embeddingModel: 'embed'}],
+    [{workspace: 'fresh', displayName: 'Fresh', embeddingModel: 'embed', changes: EVERY_CHANGE}],
     ['fresh'],
     'fresh',
     loader,
     'cursor-fresh',
   );
-  resolve({workspaces: [{workspace: 'stale', displayName: 'Stale', embeddingModel: 'e'}],
+  resolve({workspaces: [{workspace: 'stale', displayName: 'Stale', embeddingModel: 'e', changes: EVERY_CHANGE}],
     nextCursor: null});
   await flight;
 
@@ -501,11 +505,11 @@ it('rejects stale load-more pages after a fresh init invalidates the flight', as
 
 it('renders an accessible load-more workspaces control in the picker', async () => {
   const loader = async () => ({
-    workspaces: [{workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed'}],
+    workspaces: [{workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed', changes: EVERY_CHANGE}],
     nextCursor: null,
   });
   workspaceStore.init(
-    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES}],
     ['default'],
     'default',
     loader,
@@ -536,7 +540,7 @@ it('renders an accessible load-more workspaces control in the picker', async () 
 
 it('preserves server-validated active and primary beyond the first display page', async () => {
   const loader = async () => ({
-    workspaces: [{workspace: 'archive', displayName: 'Archive', embeddingModel: 'embed'}],
+    workspaces: [{workspace: 'archive', displayName: 'Archive', embeddingModel: 'embed', changes: EVERY_CHANGE}],
     nextCursor: null,
   });
   // biome-ignore lint/suspicious/noDocumentCookie: clearing the preference channel under test
@@ -544,7 +548,7 @@ it('preserves server-validated active and primary beyond the first display page'
   // biome-ignore lint/suspicious/noDocumentCookie: clearing the preference channel under test
   document.cookie = 'dlightrag_workspace=;path=/;SameSite=Lax;Max-Age=0';
   workspaceStore.init(
-    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES}],
     ['default', 'finance', 'research'],
     'finance',
     loader,
@@ -569,8 +573,8 @@ it('preserves server-validated active and primary beyond the first display page'
 it('turns All workspaces off again, back to the default workspace alone', async () => {
   workspaceStore.init(
     [
-      {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-      {workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed'},
+      {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+      {workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed', changes: EVERY_CHANGE},
     ],
     ['finance'],
     'finance',
@@ -671,8 +675,8 @@ async function confirmWorkspaceAction(
 
 function initTwoWorkspaces(): void {
   workspaceStore.init([
-    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
+    {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+    {workspace: 'research', displayName: 'Research', embeddingModel: 'embed', changes: EVERY_CHANGE},
   ], ['default', 'research'], 'research', null, null, null, 'default');
 }
 

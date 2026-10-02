@@ -119,6 +119,7 @@ class PGModelCatalogueStore(PostgresOperationRunner):
                     conn,
                     scope=MODEL_CATALOGUE_MIGRATION_SCOPE,
                     migrations=MODEL_CATALOGUE_MIGRATIONS,
+                    tables=MODEL_CATALOGUE_SCHEMA_TABLES,
                     schema_error=ModelCatalogueSchemaError,
                 )
                 await conn.execute(_INSERT_INITIAL, self._initial_revision, "[]")

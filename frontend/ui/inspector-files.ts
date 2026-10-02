@@ -240,6 +240,10 @@ export class DlInspectorFiles extends LightElement {
       return;
     }
     const workspace = this.handles.ingest.workspace;
+    if (!this.handles.workspaces.changes(workspace).includes('ingest')) {
+      requestToast(this, {message: authRefusalMessage(403), duration: 3000});
+      return;
+    }
     this.#invalidateOlderFiles();
     this.#workspace = workspace;
     const {controller, generation} = this.#startRequest();
@@ -687,9 +691,15 @@ export class DlInspectorFiles extends LightElement {
     const snapshot = this.snapshot;
     const files = snapshot?.files ?? [];
     const actionsBusy = this.loading || this.hasActiveMutation || this.#tracker.active;
+    const workspace = this.handles.ingest.workspace;
+    const changes = this.handles.workspaces.changes(workspace);
+    const isDefault = workspace === this.handles.workspaces.deploymentDefault;
+    const resettable = changes.includes('reset');
+    const deletable = changes.includes('delete_workspace');
     return html`
       ${this.#progress()}
       ${this.error ? html`<div class="file-error" role="alert">${this.error}</div>` : nothing}
+      ${changes.includes('ingest') ? html`
       <div class=${`${fileStyles['upload-zone']}${this.uploading ? ` ${fileStyles['is-uploading']}` : ''}`} id="upload-zone">
         <button type="button" class=${fileStyles['upload-zone-file-action']}
                 data-upload-file-action
@@ -705,11 +715,14 @@ export class DlInspectorFiles extends LightElement {
                @change=${(event: Event) => { this.#folderInputChanged(event); }}>
         <div id="upload-spinner" class=${fileStyles['file-status']}>${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
       </div>
+      ` : nothing}
+      ${changes.includes('retry') ? html`
       <dl-failed-file-recovery
-        .workspace=${this.handles.ingest.workspace}
+        .workspace=${workspace}
         .active=${this.active}
         @dl-failed-file-recovery-complete=${() => { this.#reloadAfterMutations(); }}
       ></dl-failed-file-recovery>
+      ` : nothing}
       ${this.loading ? html`
         <div class=${fileStyles['file-status']}><div class=${fileStyles.spinner}></div><span>${msg('Loading files...', {id: 'inspectorFiles.loadingFiles'})}</span></div>
       ` : nothing}
@@ -721,6 +734,7 @@ export class DlInspectorFiles extends LightElement {
             (file) => html`
               <div class=${fileStyles['file-item']} role="listitem" data-file-item>
                 <span class=${fileStyles['file-name']} title=${file.filePath}>${file.fileName}</span>
+                ${changes.includes('delete') ? html`
                 <button class=${fileStyles['file-delete']} type="button" data-file-delete
                         aria-label=${msg(str`Delete ${file.fileName}`, {id: 'inspectorFiles.deleteFileAria'})}
                         @click=${(event: Event) => {
@@ -729,6 +743,7 @@ export class DlInspectorFiles extends LightElement {
                         }}>
                   ${icon('close', {size: 'sm', className: fileStyles['file-delete-icon']})}
                 </button>
+                ` : nothing}
               </div>
             `,
           )}
@@ -755,25 +770,30 @@ export class DlInspectorFiles extends LightElement {
           ${msg(str`${this.acceptedFiles} new file(s) accepted for ingest`, {id: 'inspectorFiles.acceptedForIngest'})}
         </div>
       ` : nothing}
+      ${resettable || deletable ? html`
       <details class="workspace-actions">
         <summary>${msg('Workspace actions', {id: 'inspectorFiles.workspaceActions'})}</summary>
         <div class="workspace-actions-body">
+          ${resettable ? html`
           <button type="button" class="dl-btn dl-btn-danger-text" data-reset-workspace
                   ?disabled=${actionsBusy}
                   @click=${(event: Event) => { void this.#requestWorkspaceAction(
                     'reset', event.currentTarget as HTMLElement,
                   ); }}>${msg('Reset Corpus…', {id: 'inspectorFiles.resetAction'})}</button>
-          ${this.handles.ingest.workspace === this.handles.workspaces.deploymentDefault ? html`
+          ` : nothing}
+          ${isDefault && resettable ? html`
             <p class="workspace-actions-note">${msg('The default workspace can be reset but not deleted.', {id: 'inspectorFiles.defaultWorkspaceKept'})}</p>
-          ` : html`
+          ` : nothing}
+          ${deletable ? html`
             <button type="button" class="dl-btn dl-btn-danger-text" data-delete-workspace
                     ?disabled=${actionsBusy}
                     @click=${(event: Event) => { void this.#requestWorkspaceAction(
                       'delete', event.currentTarget as HTMLElement,
                     ); }}>${msg('Delete workspace…', {id: 'inspectorFiles.deleteWorkspaceAction'})}</button>
-          `}
+          ` : nothing}
         </div>
       </details>
+      ` : nothing}
       ${this.#workspaceActionDialog()}
       ${this.#deleteDialog()}
     `;

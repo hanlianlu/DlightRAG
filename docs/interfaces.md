@@ -303,7 +303,7 @@ failed-finalization, legacy-unproven, and direct-LightRAG-bypass rows behave as
 not found on these surfaces.
 
 `POST /metadata/search` returns document IDs ordered by `doc_id`, with `limit`
-(1–100, default 50) and a signed opaque `cursor`. The cursor is bound to the
+(1–100, default 50) and a sealed opaque `cursor`. The cursor is bound to the
 workspace, request filters, and filename match mode. Invalid or cross-workspace
 cursors return 422 before storage access.
 
@@ -598,12 +598,16 @@ Memory package's separately bound MCP server retains its own four-tool contract.
 ### Web
 
 Web routes under `/web/api/*` are browser contracts, not compatibility aliases
-for REST. `GET /web/api/bootstrap` (bootstrap contract version 4) returns
+for REST. `GET /web/api/bootstrap` (bootstrap contract version 5) returns
 authorized workspace state, Files target, attachment limits, image capability,
 the document types admitted by their extension (`answer_attachments.extensions`,
 the Engine's list above, which is what the composer offers),
 and `agent_effort: {levels, default}` — the efforts this deployment applies and,
 when it is one of them, its own configured level — never bearer or edge tokens.
+Each workspace it lists, like each one `/web/api/workspaces` pages and the one
+`/web/api/workspaces/create` returns, carries `changes`: the Corpus Mutations its
+caller may request there, of `ingest`, `replace`, `delete`, `retry`, `reset`, and
+`delete_workspace`. The default workspace never offers `delete_workspace`.
 `POST /web/api/answer` accepts the same optional `effort` as REST and MCP, on
 both its JSON and its multipart form.
 Route families cover:
@@ -662,7 +666,7 @@ typed `AnswerPresentation` (`answer_text`, `parts`, `sources`,
 uses the same shape. Pending, failed, and cancelled turns remain visible;
 only succeeded turns become model history.
 
-History defaults to the newest 40 turns and accepts a signed cursor plus a limit
+History defaults to the newest 40 turns and accepts a sealed cursor plus a limit
 up to 100. Attachments are owner-scoped, content-addressed run blobs and are
 re-registered lazily for continuations. Count, per-file, and total-byte limits are
 validated before acceptance; read failures after acceptance produce a terminal
@@ -810,7 +814,7 @@ validation failure), and the Run trace's `agent_effort` records the level that r
 | Route | Contract |
 |---|---|
 | `GET /workspaces` | Page the authorized workspace catalogue. |
-| `POST /workspaces` | Create an empty workspace (201; duplicate 409). |
+| `POST /workspaces` | Create an empty workspace attributed to the caller (201; duplicate 409). |
 | `GET /workspaces/{workspace}/storage` | Read operator storage/promotion state. |
 | `POST /runs/corpus/reset` | Accept Corpus Reset while retaining Workspace identity and history. |
 | `POST /runs/corpus/delete-workspace` | Accept Workspace Delete for an explicitly named, registered, non-default workspace (404 once it is gone). Like reset, it may name the Workspace's waiting mutation as `supersedes_run_id`. |
@@ -837,8 +841,9 @@ curl -X POST http://localhost:8100/runs/corpus/reset \
 ```
 
 `GET /workspaces` orders by workspace ID and pages with `limit` (default 50,
-maximum 100) plus a signed cursor. Access filtering happens after catalog
-paging. The response contains `workspaces`, `records`, and `next_cursor`. MCP
+maximum 100) plus a sealed cursor. Access filtering happens after catalog
+paging; the cursor is encrypted, so it names no row its caller cannot see. The
+response contains `workspaces`, `records`, and `next_cursor`. MCP
 `list_workspaces` returns only the first 50 plus `has_more`.
 
 Corpus deletion, reset, and Workspace Delete are durable Run actions rather than
@@ -857,7 +862,7 @@ registry, access scope, and history.
 Workspace Delete also removes the Workspace from the catalogue and cancels
 mutations queued behind it; Runs and Conversations stay. Either may supersede
 one mutation waiting for repair. Web
-Files uses a workspace-bound signed keyset cursor, defaults
+Files uses a workspace-bound sealed keyset cursor, defaults
 to 50 files (maximum 100), and orders by `updated_at DESC, id ASC`; processed
 rows appear only after Product Document finalization. An ingest finalizes each
 document as soon as LightRAG has settled it, so a multi-document ingest's rows
@@ -872,7 +877,7 @@ publication.
 | `GET /models/catalogue` | Effective runtime overlay with revision. |
 | `PUT /models/catalogue` | Upsert one complete endpoint profile under optimistic revision; requires `model_catalogue.write`. |
 | `DELETE /models/catalogue` | Remove one overlay entry under optimistic revision; requires `model_catalogue.write`. |
-| `GET /memory` | Newest-first active records with `limit` 1–100 and signed cursor. |
+| `GET /memory` | Newest-first active records with `limit` 1–100 and sealed cursor. |
 | `POST /memory` | Remember one owner-scoped Profile Memory record. |
 | `DELETE /memory/{memory_id}` | Forget a record. |
 | `POST /memory/changes/{change_id}/undo` | Apply the compensating undo. |
@@ -883,7 +888,7 @@ The Web adapter exposes the same paginated `GET /web/api/memory` contract for
 the Settings memory list; per-record forget and undo use the existing Web
 mutation routes and owner policy. Settings opens independently of Memory reads.
 
-Memory cursors are signed and owner-independent as tokens; owner scope remains
+Memory cursors are sealed and owner-independent as tokens; owner scope remains
 an authenticated query predicate. Invalid cursors return 422 before storage.
 When Memory is disabled, mutation/recall operations are unavailable except
 reading/changing the setting.

@@ -76,15 +76,14 @@ class MetadataSearchPage:
 
 
 class MetadataSearchCursorCodec:
-    """Encode metadata-search ordering facts as a signed, workspace-bound token."""
+    """Encode metadata-search ordering facts as a sealed, workspace-bound token."""
 
     def __init__(self, secret: bytes) -> None:
         self._envelope = OpaqueCursorEnvelope(
             secret,
             domain="metadata-match",
             scope="metadata-match",
-            fields_by_version={1: {"after_doc_id", "mode", "workspace"}},
-            current_version=1,
+            fields={"after_doc_id", "mode", "workspace"},
         )
 
     def encode(self, cursor: MetadataSearchCursor) -> str:

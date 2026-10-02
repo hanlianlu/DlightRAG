@@ -9,6 +9,7 @@ import './inspector.ts';
 defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import {buttonNamed, waitFor} from '../testing/dom.ts';
+import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
 
 const {ingest: ingestStore, workspaces: workspaceStore} = productionHandles();
 
@@ -52,8 +53,8 @@ const presentation: AnswerPresentation = {
 beforeEach(() => {
   workspaceStore.init(
     [
-      {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
-      {workspace: 'secondary', displayName: 'Secondary', embeddingModel: 'embed'},
+      {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+      {workspace: 'secondary', displayName: 'Secondary', embeddingModel: 'embed', changes: EVERY_CHANGE},
     ],
     ['default'],
     'default',

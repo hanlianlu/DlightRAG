@@ -185,18 +185,14 @@ class FailedFileRowPage:
 
 
 class FilePanelCursorCodec:
-    """Encode file ordering facts as a signed, opaque, workspace-bound token."""
+    """Encode file ordering facts as a sealed, opaque, workspace-bound token."""
 
     def __init__(self, secret: bytes) -> None:
         self._envelope = OpaqueCursorEnvelope(
             secret,
             domain="file-panel",
             scope="file-panel",
-            fields_by_version={
-                1: {"doc_id", "updated_at", "workspace"},
-                2: {"doc_id", "updated_at", "view", "workspace"},
-            },
-            current_version=2,
+            fields={"doc_id", "updated_at", "view", "workspace"},
         )
 
     def encode(self, cursor: FilePanelCursor) -> str:
@@ -212,8 +208,7 @@ class FilePanelCursorCodec:
     def decode(self, token: str) -> FilePanelCursor:
         try:
             decoded = self._envelope.decode(token)
-            version = decoded["v"]
-            view = "processed" if version == 1 else decoded["view"]
+            view = decoded["view"]
             doc_id = decoded["doc_id"]
             workspace = decoded["workspace"]
             timestamp_value = decoded["updated_at"]

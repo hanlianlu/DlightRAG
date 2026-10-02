@@ -7,6 +7,8 @@ import './inspector-files.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import {waitFor} from '../testing/dom.ts';
+import {DEFAULT_CHANGES, EVERY_CHANGE} from '../testing/workspaces.ts';
+import type {ToastRequestDetail} from './toast.ts';
 
 const {workspaces: workspaceStore, ingest: ingestStore} = productionHandles();
 
@@ -19,7 +21,7 @@ function confirmDeleteDialog(panel: DlInspectorFiles, value: string): void {
 
 beforeEach(() => {
   workspaceStore.init(
-    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES}],
     ['default'],
     'default',
   );
@@ -55,6 +57,38 @@ it('renders typed file data as escaped Lit text without an HTML fragment sink', 
   expect(panel.querySelector<HTMLButtonElement>('[data-file-delete]')?.ariaLabel).to.equal(
     'Delete <img src=x>',
   );
+});
+
+it('offers only the corpus changes the caller may make, and refuses a dropped upload', async () => {
+  workspaceStore.init(
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: []}],
+    ['default'],
+    'default',
+  );
+  ingestStore.resetToPrimary();
+  const requests: string[] = [];
+  window.fetch = async (input) => {
+    requests.push(String(input));
+    return Response.json(snapshot([{file_name: 'report.pdf', file_path: '/docs/report.pdf'}], null));
+  };
+  const toasts: string[] = [];
+  document.body.addEventListener('dl-toast-request', (event) => {
+    toasts.push((event as CustomEvent<ToastRequestDetail>).detail.message);
+  });
+  const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+  panel.active = true;
+  document.body.appendChild(panel);
+  await waitFor(() => panel.loading === false);
+
+  expect(panel.querySelector('.file-name')?.textContent).to.equal('report.pdf');
+  expect(panel.querySelector('#upload-zone')).to.equal(null);
+  expect(panel.querySelector('[data-file-delete]')).to.equal(null);
+  expect(panel.querySelector('.workspace-actions')).to.equal(null);
+
+  const sent = requests.length;
+  await panel.upload([new File(['x'], 'notes.txt')]);
+  expect(requests.length).to.equal(sent);
+  expect(toasts).to.include('You do not have permission to do that.');
 });
 
 function snapshot(
@@ -577,6 +611,15 @@ it('cancelling the delete dialog keeps the file and restores trigger focus', asy
 });
 
 it('clears prior-workspace rows when the selected workspace reload fails', async () => {
+  workspaceStore.init(
+    [
+      {workspace: 'default', displayName: 'Default', embeddingModel: 'embed', changes: DEFAULT_CHANGES},
+      {workspace: 'secondary', displayName: 'Secondary', embeddingModel: 'embed', changes: EVERY_CHANGE},
+    ],
+    ['default'],
+    'default',
+  );
+  ingestStore.resetToPrimary();
   const staleDefault = deferredResponse();
   const secondaryFailure = deferredResponse();
   let deferDefault = false;

@@ -17,6 +17,7 @@ from dlightrag.adapters.http.streaming.answer_stream import (
 )
 from dlightrag.application.access import (
     AccessAction,
+    AccessDeniedError,
     UserContext,
     corpus_mutation_access_action,
     owner_id_from_user,
@@ -30,7 +31,7 @@ from dlightrag.application.runs import RunEvent, RunView
 from dlightrag.engine.answer.citations.sources import SourceDownloadLinkBuilder
 from dlightrag.engine.answer.results import project_answer_result
 
-from .deps import authorized_workspaces, enforce_access, get_application
+from .deps import authorized_workspaces, enforce_access, get_access_gate, get_application
 
 router = APIRouter()
 
@@ -123,6 +124,10 @@ async def list_runs(
     )
     if workspace is not None:
         rows = tuple(row for row in rows if row.access_scope_kind == "workspace")
+        visible = await get_access_gate(request, user).run_submitters(
+            workspace=owner, submitters={row.submitted_by for row in rows}
+        )
+        rows = tuple(row for row in rows if row.submitted_by in visible)
     return {"runs": [run_descriptor(record) for record in rows]}
 
 
@@ -238,12 +243,12 @@ async def _authorized_run(
         if record.access_scope_id != owner_id_from_user(user):
             raise HTTPException(status_code=404, detail="Run not found")
         return record
-    action = AccessAction.WORKSPACE_LIST_FILES
-    if cancel:
-        action = corpus_mutation_access_action(record.request_input().get("action"))
+    change = corpus_mutation_access_action(record.request_input().get("action")) if cancel else None
     try:
-        await enforce_access(request, user, action, workspace=record.access_scope_id)
-    except HTTPException:
+        await get_access_gate(request, user).check_run(
+            workspace=record.access_scope_id, submitted_by=record.submitted_by, change=change
+        )
+    except AccessDeniedError:
         # Unknown and unauthorized are deliberately indistinguishable.
         raise HTTPException(status_code=404, detail="Run not found") from None
     return record

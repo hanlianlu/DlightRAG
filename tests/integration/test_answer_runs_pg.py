@@ -504,6 +504,7 @@ class TestSchema:
                 conn,
                 scope=RUN_MIGRATION_SCOPE,
                 migrations=RUN_MIGRATIONS[:1],
+                tables=RUN_SCHEMA_TABLES,
                 schema_error=RunSchemaError,
             )
             baseline = await catalog_definitions(conn)
@@ -511,6 +512,7 @@ class TestSchema:
                 conn,
                 scope=RUN_MIGRATION_SCOPE,
                 migrations=RUN_MIGRATIONS,
+                tables=RUN_SCHEMA_TABLES,
                 schema_error=RunSchemaError,
             )
 
@@ -521,19 +523,13 @@ class TestSchema:
         created = Migration("lock_probe", "first", ("CREATE TABLE lock_probe (id TEXT)",))
         renamed = Migration("lock_probe_renamed", "first", ("SELECT 1",))
         async with pool.acquire() as first, pool.acquire() as second:
-            await apply_migrations(
-                first, scope="lock_probe", migrations=(created,), schema_error=RunSchemaError
-            )
+            probe = {"scope": "lock_probe", "tables": (), "schema_error": RunSchemaError}
+            await apply_migrations(first, migrations=(created,), **probe)
             # The ledger records a version this declaration no longer names.
             with pytest.raises(RunSchemaError):
-                await apply_migrations(
-                    first, scope="lock_probe", migrations=(renamed,), schema_error=RunSchemaError
-                )
+                await apply_migrations(first, migrations=(renamed,), **probe)
             await asyncio.wait_for(
-                apply_migrations(
-                    second, scope="lock_probe", migrations=(created,), schema_error=RunSchemaError
-                ),
-                timeout=5,
+                apply_migrations(second, migrations=(created,), **probe), timeout=5
             )
 
     async def test_fresh_catalog_is_exactly_its_declaration(self, pool) -> None:

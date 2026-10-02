@@ -250,14 +250,14 @@ workspace.
 
 ```text
 verified JWT claims
-  -> deployment Access Rules
+  -> deployment Access Rules, and the Workspace's creator
   -> canonical Workspace + Action
   -> allow or deny
 ```
 
-A rule matches claim name/value, workspace pattern, and action pattern. Rules
-combine with OR semantics; there are no deny rules, and no allow match means
-deny.
+A rule matches claim name/value, workspace pattern, and action pattern. Rules,
+and the creator grant below, combine with OR semantics; there are no deny rules,
+and no allow match means deny.
 
 ```yaml
 access:
@@ -279,6 +279,38 @@ access:
 to `allow_all`. Claim values may be strings or list members. Workspace patterns
 are a canonical ID or `*`. Action patterns may be exact, `*`, a prefix such as
 `workspace.*`, or a preset.
+
+### Workspace Creators
+
+Each workspace records the owner that created it. Under `jwt_claims` its creator
+holds `editor`, `workspace.reset`, and `workspace.delete` on it beyond what rules
+grant, so a person sees and changes the workspaces they create, and others only
+where rules grant them.
+Operator facts (`workspace.storage_status`) and deployment-wide actions stay with
+rules. A workspace the deployment registers itself, such as the default, has no
+creator. Workspace ids remain deployment-wide: creating a name someone else holds
+is refused as existing.
+
+One administrator, a default everyone reads, and workspaces of their own for
+everyone else:
+
+```yaml
+access:
+  control:
+    mode: jwt_claims
+    rules:
+      - {claim: email, value: admin@example.com, workspaces: ["*"], actions: [admin]}
+      - {claim: iss, value: "https://<team>.cloudflareaccess.com", workspaces: [default], actions: [reader]}
+      - {claim: iss, value: "https://<team>.cloudflareaccess.com", workspaces: ["*"], actions: [workspace.create]}
+```
+
+A Corpus Mutation Run shows to whoever submitted it. Others reach it through its
+workspace, and a workspace its creator holds shows them only the Runs that creator
+submitted, so a deleted workspace's history never passes to whoever creates the
+same name next. Seeing a Run never lets anyone cancel or resume it: that needs the
+Run's action on its workspace now. The Web offers on each workspace only the
+changes its caller may make.
+[ADR 0031](adr/0031-a-workspace-creator-holds-it.md) records the decision.
 
 ### Actions And Presets
 
@@ -309,7 +341,8 @@ require `workspaces: ["*"]`.
 ### Source Of Truth And Revocation
 
 The IdP owns users/claims; deployment configuration owns claim-to-workspace
-rules. DlightRAG stores no users, custom roles, invitations, or membership ACLs.
+rules. DlightRAG stores no users, custom roles, invitations, or membership ACLs;
+it records only which owner created each workspace.
 PostgreSQL is trusted application storage without row-level security; this is
 not database-enforced tenant isolation.
 
@@ -319,13 +352,14 @@ recheck permission against the actual workspace.
 
 An accepted Retrieval or Answer Run pins its resolved Workspace set for
 execution, not mutable claims. Later rule or IdP changes do not revoke execution
-of that Run; follow-up/fork recheck current access. Corpus Mutation status,
-events, cancellation, and repair resumption recheck access to the Run's declared
-Workspace and fail closed. REST status/event projection and MCP status
-projection recheck current source-download and visual-asset actions; canonical
-results never persist authorization-dependent URLs. Trusted Application callers
-supply their own Retrieval projection. JWT changes become visible when a new
-token arrives, so use short lifetimes where revocation latency matters.
+of that Run; follow-up/fork recheck current access. Corpus Mutation status and
+events recheck that the caller may see the Run, through its declared Workspace or
+as its submitter; cancellation and repair resumption also recheck the Run's
+action on that Workspace. All fail closed. REST status/event projection and MCP
+status projection recheck current source-download and visual-asset actions;
+canonical results never persist authorization-dependent URLs. Trusted Application
+callers supply their own Retrieval projection. JWT changes become visible when a
+new token arrives, so use short lifetimes where revocation latency matters.
 
 Use a policy/membership store for user-managed, deny, hierarchy, or resource-level
 policy. Use separate deployments/databases or PostgreSQL RLS where regulation

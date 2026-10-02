@@ -19,6 +19,7 @@ from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application import ApplicationClosedError
 from dlightrag.application.access import (
+    DEPLOYMENT_OWNER_ID,
     AuthenticationError,
     UserContext,
     authenticate_bearer_token,
@@ -486,6 +487,7 @@ class TestWorkspaceLifecycleAPI:
         mock_application.corpora.create_workspace.assert_awaited_once_with(
             "new_workspace",
             display_name="New Workspace",
+            created_by=DEPLOYMENT_OWNER_ID,
         )
 
     async def test_create_workspace_rejects_duplicate(
@@ -1266,12 +1268,9 @@ class TestRetrieveEndpoint:
             },
             workspaces=("finance",),
         )
+        mock_application.access_control = QueryOnlyAccess()
         app.state.application = mock_application
-        app.state.access_control = QueryOnlyAccess()
-        try:
-            response = await client.get("/runs/0199a0a0-0000-7000-8000-0000000000aa")
-        finally:
-            del app.state.access_control
+        response = await client.get("/runs/0199a0a0-0000-7000-8000-0000000000aa")
 
         result = response.json()["result"]
         assert result["sources"][0]["download_url"] is None
@@ -2509,13 +2508,9 @@ class TestMetadataAPI:
             async def filter_workspaces(self, user, action, workspaces):
                 return []
 
+        mock_application.access_control = DenyAllAccess()
         app.state.application = mock_application
-        app.state.access_control = DenyAllAccess()
-
-        try:
-            resp = await client.post("/metadata/search", json={"nonsense": "x"})
-        finally:
-            del app.state.access_control
+        resp = await client.post("/metadata/search", json={"nonsense": "x"})
 
         assert resp.status_code == 403
         mock_application.corpora.search_metadata.assert_not_awaited()

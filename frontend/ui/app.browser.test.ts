@@ -20,11 +20,12 @@ import type {DlSettingsDialog} from './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
 import {waitFor} from '../testing/dom.ts';
+import {DEFAULT_CHANGES} from '../testing/workspaces.ts';
 
 const bootstrap = {
-  contract_version: 4,
+  contract_version: 5,
   workspaces: [
-    {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
+    {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test', changes: [...DEFAULT_CHANGES]},
   ],
   workspaces_next_cursor: null,
   primary_workspace: 'default',
@@ -125,8 +126,8 @@ it('renders the application shell from the typed bootstrap before resolving read
   const loaded = await app.ready;
 
   expect(loaded).to.deep.equal({
-    contractVersion: 4,
-    workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test'}],
+    contractVersion: 5,
+    workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test', changes: DEFAULT_CHANGES}],
     workspacesNextCursor: null,
     primaryWorkspace: 'default',
     activeWorkspaces: ['default'],

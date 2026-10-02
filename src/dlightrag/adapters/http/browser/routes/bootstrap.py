@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from dlightrag.adapters.http.browser.deps import (
     filter_web_workspace_records,
     get_application,
+    get_web_access_gate,
     get_workspace,
 )
 from dlightrag.adapters.http.browser.workspace_models import (
     WebBootstrapWorkspace,
-    project_workspace_record,
+    project_workspace_records,
 )
 from dlightrag.application.access import AccessAction, WorkspaceRecord
 from dlightrag.application.corpus_admin import (
@@ -52,7 +53,7 @@ class WebAnswerEffort(ClientContractModel):
 
 
 class WebBootstrap(ClientContractModel):
-    contract_version: Literal[4] = 4
+    contract_version: Literal[5] = 5
     workspaces: list[WebBootstrapWorkspace]
     workspaces_next_cursor: str | None = None
     primary_workspace: str
@@ -71,6 +72,7 @@ async def build_web_bootstrap(
 ) -> WebBootstrap:
     """Build the one authorized startup snapshot consumed by the browser."""
     application = get_application(request)
+    default_workspace = application.config.deployment.workspace_id
     capabilities = await application.answers.capabilities()
     effort_offer = application.answers.agent_effort_offer()
     records: list[WorkspaceRecord]
@@ -97,7 +99,9 @@ async def build_web_bootstrap(
             AccessAction.WORKSPACE_QUERY,
             list(catalog_page.items),
         )
-        workspaces = [project_workspace_record(record) for record in page_records]
+        workspaces = await project_workspace_records(
+            get_web_access_gate(request), page_records, default_workspace=default_workspace
+        )
         next_cursor = (
             application.corpora.workspace_catalog_cursor_codec.encode(catalog_page.next_cursor)
             if catalog_page.next_cursor is not None
@@ -109,15 +113,6 @@ async def build_web_bootstrap(
         raise WebBootstrapUnavailableError from exc
 
     known = set(record["workspace"] for record in records)
-    default_workspace = application.config.deployment.workspace_id
-    if next_cursor is None:
-        # Degraded catalog fallback: a synthetic default record the full
-        # authorization list carries but the registry page could not may only
-        # be appended when the catalog traversal is exhausted, preserving order.
-        shown = {workspace.workspace for workspace in workspaces}
-        for record in records:
-            if record["workspace"] not in shown:
-                workspaces.append(project_workspace_record(record))
 
     # Active/primary computation keeps the full authorized catalog; the bounded
     # workspaces array above is presentation-only.
@@ -135,6 +130,21 @@ async def build_web_bootstrap(
             if default_workspace in known
             else (authorized_full[0] if authorized_full else "")
         )
+    # Once the catalog traversal is exhausted, every authorized record the page
+    # lacks (such as the synthetic default of a degraded registry) joins it in
+    # order. Until then only the primary does: it is the Files panel's target, and
+    # that panel offers what its record says the caller may change.
+    shown = {item.workspace for item in workspaces}
+    workspaces += await project_workspace_records(
+        get_web_access_gate(request),
+        [
+            record
+            for record in records
+            if record["workspace"] not in shown
+            and (next_cursor is None or record["workspace"] == primary)
+        ],
+        default_workspace=default_workspace,
+    )
 
     capability = capabilities.answer
     if capability is None:

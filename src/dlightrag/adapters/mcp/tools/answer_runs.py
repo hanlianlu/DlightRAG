@@ -23,6 +23,7 @@ from dlightrag.adapters.mcp.server import (
 )
 from dlightrag.application.access import (
     AccessAction,
+    AccessDeniedError,
     corpus_mutation_access_action,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
@@ -254,12 +255,12 @@ async def _authorized_run(application: Any, run_id: str, *, cancel: bool) -> Run
         if record.access_scope_id != mcp_server._owner_id():
             raise ToolRejection(f"Run not found: {run_id}")
         return record
-    action = AccessAction.WORKSPACE_LIST_FILES
-    if cancel:
-        action = corpus_mutation_access_action(record.request_input().get("action"))
+    change = corpus_mutation_access_action(record.request_input().get("action")) if cancel else None
     try:
-        await mcp_server._enforce_access(action, record.access_scope_id, application=application)
-    except ToolRejection:
+        await mcp_server._access_gate(application).check_run(
+            workspace=record.access_scope_id, submitted_by=record.submitted_by, change=change
+        )
+    except AccessDeniedError:
         # A denied caller learns no more than a missing run would tell it.
         raise ToolRejection(f"Run not found: {run_id}") from None
     return record

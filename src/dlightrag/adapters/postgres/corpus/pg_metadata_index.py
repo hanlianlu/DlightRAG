@@ -926,6 +926,7 @@ class PGMetadataIndex(PostgresOperationRunner):
                 conn,
                 scope="doc_metadata",
                 migrations=_SCHEMA_MIGRATIONS,
+                tables=_SCHEMA_TABLES,
                 schema_error=CorpusSchemaError,
                 require_applied_prefix=False,
             )

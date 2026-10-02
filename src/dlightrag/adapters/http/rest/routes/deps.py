@@ -7,17 +7,14 @@ from fastapi import HTTPException, Request
 
 from dlightrag.adapters.http.application import get_application
 from dlightrag.application.access import (
-    AccessControl,
     AccessDeniedError,
     AccessGate,
     AccessSubject,
     NoQueryableWorkspacesError,
     WorkspaceRecord,
     WorkspaceSelectionConflictError,
-    access_control_from_settings,
 )
 from dlightrag.application.corpus_admin import workspace_id_for_name, workspace_ids_for_names
-from dlightrag.application.settings import access_settings
 
 
 def idempotency_key(request: Request) -> str | None:
@@ -32,14 +29,8 @@ def resolve_workspace(ws: str | None, request: Request) -> str:
     return get_application(request).config.deployment.workspace_id
 
 
-def get_access_control(request: Request) -> AccessControl:
-    return getattr(request.app.state, "access_control", None) or access_control_from_settings(
-        access_settings(get_application(request).config)
-    )
-
-
 def get_access_gate(request: Request, subject: AccessSubject) -> AccessGate:
-    return AccessGate(get_access_control(request), subject)
+    return AccessGate(get_application(request).access_control, subject)
 
 
 async def enforce_access(

@@ -4,11 +4,7 @@
 Page traversal and its indexes run against PostgreSQL in tests/integration/test_pg_storage.py.
 """
 
-import base64
 import datetime
-import hashlib
-import hmac
-import json
 from typing import Any
 
 import pytest
@@ -19,6 +15,8 @@ from dlightrag.application.corpus_admin import (
     FilePanelCursorCodec,
     FilePanelCursorError,
     FilePanelPageRequest,
+    MetadataSearchCursor,
+    MetadataSearchCursorCodec,
 )
 
 
@@ -52,16 +50,6 @@ class _Conn:
         return []
 
 
-def _signed_token(secret: bytes, payload: dict[str, Any]) -> str:
-    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    mac = hmac.new(secret, b"file-panel\0" + raw, hashlib.sha256).digest()[:16]
-
-    def encode(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
-
-    return f"{encode(raw)}.{encode(mac)}"
-
-
 def test_file_panel_cursor_round_trips_null_and_naive_microseconds() -> None:
     codec = FilePanelCursorCodec(b"cursor-secret")
     timestamp = datetime.datetime(2026, 3, 4, 5, 6, 7, 123456)
@@ -78,56 +66,21 @@ def test_file_panel_cursor_round_trips_null_and_naive_microseconds() -> None:
     ):
         assert codec.decode(codec.encode(cursor)) == cursor
 
-    legacy = _signed_token(
-        b"cursor-secret",
-        {
-            "doc_id": "legacy-processed",
-            "scope": "file-panel",
-            "updated_at": None,
-            "v": 1,
-            "workspace": "finance",
-        },
-    )
-    assert codec.decode(legacy) == FilePanelCursor(
-        workspace="finance",
-        updated_at=None,
-        doc_id="legacy-processed",
-    )
 
-
-def test_file_panel_cursor_rejects_tamper_malformed_scope_version_and_noncanonical() -> None:
+def test_file_panel_cursor_rejects_tampered_and_foreign_tokens() -> None:
     secret = b"cursor-secret"
     codec = FilePanelCursorCodec(secret)
-    cursor = FilePanelCursor(workspace="finance", updated_at=None, doc_id="doc-1")
-    token = codec.encode(cursor)
-    encoded, mac = token.split(".")
+    token = codec.encode(FilePanelCursor(workspace="finance", updated_at=None, doc_id="doc-1"))
+    foreign = MetadataSearchCursorCodec(secret).encode(
+        MetadataSearchCursor(workspace="finance", after_doc_id="doc-1", mode="exact")
+    )
 
-    invalid = [
+    for value in (
         token + "x",
+        ("A" if token[0] != "A" else "B") + token[1:],
         "not-a-token",
-        f"{encoded}=.{mac}",
-        _signed_token(
-            secret,
-            {
-                "doc_id": "doc-1",
-                "scope": "conversation-history",
-                "updated_at": None,
-                "v": 1,
-                "workspace": "finance",
-            },
-        ),
-        _signed_token(
-            secret,
-            {
-                "doc_id": "doc-1",
-                "scope": "file-panel",
-                "updated_at": None,
-                "v": 2,
-                "workspace": "finance",
-            },
-        ),
-    ]
-    for value in invalid:
+        foreign,
+    ):
         with pytest.raises(FilePanelCursorError):
             codec.decode(value)
 

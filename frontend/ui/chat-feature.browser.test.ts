@@ -34,6 +34,7 @@ import {
 } from './chat-message-list.ts';
 import {webRouter} from './router.ts';
 import {waitFor} from '../testing/dom.ts';
+import {EVERY_CHANGE} from '../testing/workspaces.ts';
 
 const {attachments: attachmentStore, conversations: conversationStore, workspaces: workspaceStore} = productionHandles();
 
@@ -504,8 +505,8 @@ it('forces a submitted turn into view without forcing later stream updates', asy
 
 it('Edit restores the original query, mode, workspaces, and attachment lease', async () => {
   workspaceStore.init([
-    {workspace: 'alpha', displayName: 'Alpha', embeddingModel: ''},
-    {workspace: 'beta', displayName: 'Beta', embeddingModel: ''},
+    {workspace: 'alpha', displayName: 'Alpha', embeddingModel: '', changes: EVERY_CHANGE},
+    {workspace: 'beta', displayName: 'Beta', embeddingModel: '', changes: EVERY_CHANGE},
   ], ['alpha'], 'alpha');
   const submissionIds: string[] = [];
   window.fetch = async (_input, init) => {
@@ -2440,7 +2441,7 @@ it('counts published reference sources', async () => {
 
 async function submissionFailureText(respond: () => Response): Promise<string | undefined> {
   workspaceStore.init([
-    {workspace: 'alpha', displayName: 'Alpha', embeddingModel: ''},
+    {workspace: 'alpha', displayName: 'Alpha', embeddingModel: '', changes: EVERY_CHANGE},
   ], ['alpha'], 'alpha');
   window.fetch = async (input) => String(input).includes('/answer-submissions/')
     ? new Response(null, {status: 404})

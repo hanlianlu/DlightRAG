@@ -66,15 +66,14 @@ class MemoryListPage:
 
 
 class MemoryListCursorCodec:
-    """Encode memory ordering facts as a signed, opaque, owner-free token."""
+    """Encode memory ordering facts as a sealed, opaque, owner-free token."""
 
     def __init__(self, secret: bytes) -> None:
         self._envelope = OpaqueCursorEnvelope(
             secret,
             domain="memory-list",
             scope="memory-list",
-            fields_by_version={1: {"memory_id", "updated_at"}},
-            current_version=1,
+            fields={"memory_id", "updated_at"},
         )
 
     def encode(self, cursor: MemoryListCursor) -> str:

@@ -6,6 +6,8 @@ import pytest
 from dlightrag.application.corpus_admin import (
     WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
     WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
+    FilePanelCursor,
+    FilePanelCursorCodec,
     WorkspaceCatalogCursor,
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogCursorError,
@@ -37,66 +39,36 @@ def test_cursor_rejects_noncanonical_workspace(workspace: str) -> None:
         WorkspaceCatalogCursor(after_workspace=workspace)
 
 
-def test_decode_rejects_tampered_mac() -> None:
+def test_decode_rejects_tampered_and_foreign_tokens() -> None:
     codec = _codec()
     token = codec.encode(WorkspaceCatalogCursor(after_workspace="finance"))
-    payload, mac = token.split(".")
-    tampered = f"{payload}.{('A' + mac[1:])}"
+    foreign = [
+        WorkspaceCatalogCursorCodec(b"other-secret").encode(
+            WorkspaceCatalogCursor(after_workspace="finance")
+        ),
+        FilePanelCursorCodec(b"catalog-test-secret").encode(
+            FilePanelCursor(workspace="finance", updated_at=None, doc_id="doc-1")
+        ),
+    ]
 
-    with pytest.raises(WorkspaceCatalogCursorError):
-        codec.decode(tampered)
-
-
-def test_decode_rejects_modified_payload() -> None:
-    codec = _codec()
-    token = codec.encode(WorkspaceCatalogCursor(after_workspace="finance"))
-    payload, mac = token.split(".")
-    tampered = f"{payload[:-2]}AA.{mac}"
-
-    with pytest.raises(WorkspaceCatalogCursorError):
-        codec.decode(tampered)
+    for value in (("A" if token[0] != "A" else "B") + token[1:], token + "x", *foreign):
+        with pytest.raises(WorkspaceCatalogCursorError):
+            codec.decode(value)
 
 
-@pytest.mark.parametrize(
-    "token",
-    [
-        "",
-        "no-dot",
-        ".mac-only",
-        "payload.",
-        "not-base64!....",
-    ],
-)
+@pytest.mark.parametrize("token", ["", "not-a-cursor", "not-base64!....", "A" * 64])
 def test_decode_rejects_malformed_tokens(token: str) -> None:
     with pytest.raises(WorkspaceCatalogCursorError):
         _codec().decode(token)
 
 
-def test_decode_rejects_wrong_scope_and_version() -> None:
-    codec = WorkspaceCatalogCursorCodec(b"catalog-test-secret")
-    import base64
-    import hashlib
-    import hmac
-    import json
+def test_decode_rejects_invalid_sealed_values() -> None:
+    """Defense in depth: a sealed token is trusted for its shape, never its values."""
+    codec = _codec()
 
-    def sign(payload: bytes) -> bytes:
-        mac = hmac.new(b"catalog-test-secret", b"workspace-catalog\0" + payload, hashlib.sha256)
-        return mac.digest()[:16]
-
-    def encode(value: dict[str, object]) -> str:
-        payload = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-        encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
-        mac = base64.urlsafe_b64encode(sign(payload)).rstrip(b"=").decode()
-        return f"{encoded}.{mac}"
-
-    with pytest.raises(WorkspaceCatalogCursorError):
-        codec.decode(encode({"after_workspace": "finance", "scope": "other", "v": 1}))
-    with pytest.raises(WorkspaceCatalogCursorError):
-        codec.decode(encode({"after_workspace": "finance", "scope": "workspace-catalog", "v": 2}))
-    with pytest.raises(WorkspaceCatalogCursorError):
-        codec.decode(
-            encode({"after_workspace": "finance", "scope": "workspace-catalog", "v": 1, "extra": 1})
-        )
+    for after_workspace in ("Finance", 7):
+        with pytest.raises(WorkspaceCatalogCursorError):
+            codec.decode(codec._envelope.encode({"after_workspace": after_workspace}))
 
 
 def test_page_request_defaults_and_bounds() -> None:

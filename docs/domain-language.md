@@ -134,6 +134,12 @@ One deployment-configured allow mapping from a verified JWT claim value to
 Workspace patterns and Action patterns. Rules are not durable user memberships.
 _Avoid_: Database role, Workspace membership, deny policy
 
+**Workspace Creator**:
+The owner that created a Workspace, recorded with its catalog identity. Under
+`jwt_claims` it holds `editor`, reset, and delete on that Workspace beyond what
+Access Rules grant; a Workspace the deployment registers itself has none.
+_Avoid_: Workspace owner (an owner scopes Runs and history), Workspace membership
+
 **Action Preset**:
 A named expansion (`reader`, `editor`, or `admin`) into product Actions inside an
 Access Rule. It is not a stored role assignment and never bypasses the rule's

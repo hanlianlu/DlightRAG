@@ -100,9 +100,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
+    from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
     from dlightrag.adapters.postgres.model_catalogue import PGModelCatalogueStore
     from dlightrag.adapters.postgres.runtime import PGRunBlobStore, PGRunStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
+    from dlightrag.application.access import access_control_from_settings
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.connections.credentials import CredentialCipher
@@ -126,6 +128,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.application.runs import RunService
     from dlightrag.application.settings import (
+        access_settings,
         answer_capability_settings,
         answer_executor_settings,
         answer_model_runtime_settings,
@@ -272,6 +275,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         file_panel_cursor_secret=cursor_secrets.derive("dlightrag-file-panel-cursor"),
         metadata_search_cursor_secret=cursor_secrets.derive("dlightrag-metadata-search-cursor"),
         workspace_catalog_cursor_secret=cursor_secrets.derive("dlightrag-workspace-catalog-cursor"),
+    )
+    access_control = access_control_from_settings(
+        access_settings(config), creators=PGWorkspaceRegistry()
     )
 
     model_catalogue = ModelCatalogueAdmin(
@@ -557,6 +563,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         cancellation_listener=cancellation_listener,
         validate_active_runs=validate_active_runs,
         corpora=corpora,
+        access_control=access_control,
         corpus_mutations=corpus_mutations,
         retrieval=retrieval,
         runs=runs,

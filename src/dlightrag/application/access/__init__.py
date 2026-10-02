@@ -17,12 +17,13 @@ from dlightrag.application.access.control import (
     AccessSubject,
     AllowAllAccessControl,
     JwtClaimsAccessControl,
-    Principal,
+    WorkspaceCreators,
     access_control_from_settings,
     corpus_mutation_access_action,
 )
 from dlightrag.application.access.principal import (
     DEPLOYMENT_OWNER_ID,
+    Principal,
     UserContext,
     owner_id_from_principal,
     owner_id_from_user,
@@ -62,6 +63,7 @@ __all__ = [
     "RequestScope",
     "UserContext",
     "WorkspaceCatalog",
+    "WorkspaceCreators",
     "WorkspaceRecord",
     "WorkspaceSelectionConflictError",
     "access_control_from_settings",

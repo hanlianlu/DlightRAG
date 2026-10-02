@@ -11,12 +11,13 @@ from dlightrag.adapters.http.browser.deps import (
     enforce_web_access,
     filter_web_workspace_records,
     get_application,
+    get_web_access_gate,
 )
 from dlightrag.adapters.http.browser.file_models import WebCorpusRunReceipt
 from dlightrag.adapters.http.browser.routes.corpus_runs import corpus_run_receipt
 from dlightrag.adapters.http.browser.workspace_models import (
     WebBootstrapWorkspace,
-    project_workspace_record,
+    project_workspace_records,
 )
 from dlightrag.application.access import AccessAction, WorkspaceRecord, owner_id_from_user
 from dlightrag.application.corpus_admin import (
@@ -165,7 +166,11 @@ async def list_workspaces_page(
         list(page.items),
     )
     return {
-        "workspaces": [project_workspace_record(record) for record in records],
+        "workspaces": await project_workspace_records(
+            get_web_access_gate(request),
+            records,
+            default_workspace=application.config.deployment.workspace_id,
+        ),
         "next_cursor": (
             application.corpora.workspace_catalog_cursor_codec.encode(page.next_cursor)
             if page.next_cursor is not None
@@ -174,12 +179,12 @@ async def list_workspaces_page(
     }
 
 
-@router.post("/workspaces/create")
+@router.post("/workspaces/create", response_model=WebBootstrapWorkspace)
 async def create_workspace(
     request: Request,
     workspace_name: str = Form(default=""),
 ):
-    """Create a new workspace and return updated workspace list."""
+    """Create a workspace, attributed to the caller, and return it as the Web lists it."""
     from dlightrag.application.corpus_admin import validate_workspace_name
 
     application = get_application(request)
@@ -194,7 +199,11 @@ async def create_workspace(
 
     # Initialize workspace (creates the WorkspaceRag); the registry keeps it unique.
     try:
-        await application.corpora.create_workspace(ws, display_name=name)
+        created = await application.corpora.create_workspace(
+            ws,
+            display_name=name,
+            created_by=owner_id_from_user(getattr(request.state, "user_context", None)),
+        )
     except ApplicationError:
         # An existing name, a read-only replica, or unavailable storage answer as themselves.
         raise
@@ -205,7 +214,12 @@ async def create_workspace(
             detail="Failed to create workspace; see server logs for details.",
         ) from None
 
-    response = JSONResponse({"workspace": ws, "display_name": name})
+    (item,) = await project_workspace_records(
+        get_web_access_gate(request),
+        [created],
+        default_workspace=application.config.deployment.workspace_id,
+    )
+    response = JSONResponse(item.model_dump(mode="json"))
     visible_workspaces = await _visible_workspace_names(request, application)
     _set_workspace_cookies(
         response,

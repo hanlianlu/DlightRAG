@@ -179,10 +179,16 @@ async def apply_migrations(
     *,
     scope: str,
     migrations: tuple[Migration, ...],
+    tables: tuple[TableRequirement, ...],
     schema_error: type[RuntimeError],
     require_applied_prefix: bool = True,
 ) -> None:
-    """Ensure idempotent migrations and record their versions in the ledger.
+    """Ensure idempotent migrations, record their versions, and read back ``tables``.
+
+    A recorded version never re-runs, so a database a writer created before this
+    revision's baseline grew an object never gains it: the writer refuses it as
+    the reader does, and the remedy is a development-data reset, never a
+    migration of old data.
 
     A per-scope session advisory lock serializes concurrent callers (e.g. app
     replicas first-touching a lazily-initialized store), so they cannot race on
@@ -215,6 +221,12 @@ async def apply_migrations(
                     await conn.execute(statement)
                 await conn.execute(_INSERT_APPLIED, scope, migration.version, migration.description)
             applied_versions.add(migration.version)
+        absent = [name for table in tables for name in await _absent_table_objects(conn, table)]
+        if absent:
+            raise schema_error(
+                f"Schema migration scope '{scope}' is missing: {'; '.join(absent)}; reset the "
+                "development database before starting this revision"
+            )
     finally:
         await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
 
