@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Narrow host interface for independent Profile Memory."""
 
-__version__ = "2.0.36"
+__version__ = "2.0.37"
 
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.memory import Memory, RecallResult
