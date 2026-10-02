@@ -6,10 +6,12 @@ shares DlightRAG's answer-run migrations or tables. Preferences are read as a
 standing set; facts are searched by three legs behind the neutral ports, and
 each leg returns only facts it has evidence for:
 
-- exact:  ``normalized_body`` btree equality (Python-side NFKC normalization)
+- exact:  ``normalized_body`` equality (Python-side NFKC normalization) on a
+  unique index: an owner holds one active record per normalized body
 - sparse: pg_textsearch BM25 with the corpus-tuned k1/b over one stopword-aware
   config (``public.jiebacfg``, else ``english``); a fact must share a content
-  word with the query
+  word with the query. The extensions are created where the server allows and
+  the leg serves whatever is installed, so their absence never blocks startup
 - dense:  optional ``halfvec`` column + HNSW index when a TextEmbedder is bound;
   a fact must reach the embedder's calibrated relevance floor, and a query
   embedding that outlasts its deadline only skips this leg
@@ -42,7 +44,7 @@ from dlightrag_memory._storage.pg_bm25 import (
     bm25_query_text,
     build_bm25_sql,
     ensure_bm25_index,
-    extension_bootstrap_sql,
+    install_text_search,
 )
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import (
@@ -150,8 +152,11 @@ _RECORD_INDEXES = (
     "ON dlightrag_memory_records (owner_id, status, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_list "
     "ON dlightrag_memory_records (owner_id, status, updated_at DESC, memory_id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_exact "
-    "ON dlightrag_memory_records (owner_id, normalized_body)",
+    # One active record per owner and normalized body: the database keeps the
+    # invariant every remember, re-file and undo relies on.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_memory_records_active_body "
+    "ON dlightrag_memory_records (owner_id, normalized_body) WHERE status = 'active'",
+    "DROP INDEX IF EXISTS idx_dlightrag_memory_records_exact",
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_purge "
     "ON dlightrag_memory_records (status, updated_at) "
     "WHERE status = 'superseded'",
@@ -228,8 +233,7 @@ class PostgresMemoryStore:
                 await conn.execute(_OPERATIONS_TABLE)
                 for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
                     await conn.execute(statement)
-                for statement in extension_bootstrap_sql():
-                    await conn.execute(statement)
+                await install_text_search(conn)
                 self._bm25_index = await ensure_bm25_index(conn)
                 if self._dense:
                     dim = int(self._embedder.dim)
@@ -581,6 +585,19 @@ class PostgresMemoryStore:
                 )
             current = _row(current_row)
             if target_receipt.supersedes_id and before:
+                if await _restores_an_active_body(
+                    conn, operation.owner_id, before, replacing=current.memory_id
+                ):
+                    return (
+                        operation_receipt(
+                            operation,
+                            change_id,
+                            "conflict",
+                            target_change_id=target_id,
+                            now=now,
+                        ),
+                        (),
+                    )
                 await conn.execute(
                     _MARK_SUPERSEDED,
                     operation.owner_id,
@@ -677,10 +694,7 @@ class PostgresMemoryStore:
                 ),
                 (),
             )
-        bodies = sorted({normalized_body(old.body) for old in before})
-        if await conn.fetchval(
-            _SELECT_ACTIVE_NORMALIZED_CONFLICT_EXISTS, operation.owner_id, bodies
-        ):
+        if await _restores_an_active_body(conn, operation.owner_id, before):
             return (
                 operation_receipt(
                     operation,
@@ -782,50 +796,6 @@ class PostgresMemoryStore:
             return int(await conn.fetchval(_COUNT_ACTIVE, owner_id) or 0)
 
         return await self._read(operation)
-
-    async def insert(self, record: MemoryRecord) -> None:
-        embedding = await self._embedding(record.body) if self._dense else None
-
-        async def operation(conn: PGConnection) -> None:
-            async with conn.transaction():
-                if embedding is None:
-                    await conn.execute(_INSERT, *_insert_params(self, record=record))
-                else:
-                    await conn.execute(
-                        _INSERT_WITH_EMBEDDING,
-                        *_insert_params(self, record=record),
-                        _vector_text(embedding),
-                    )
-                current = await conn.fetchrow(
-                    _SELECT_ONE, record.owner_id, _uuid(record.memory_id, label="memory_id")
-                )
-                if current is None or _row(current) != record:
-                    raise ValueError("memory id already exists with different content")
-
-        await self._write(operation)
-
-    async def supersede(self, *, owner_id: str, old_id: str, new: MemoryRecord) -> None:
-        if new.owner_id != owner_id:
-            raise ValueError("supersede cannot change owner")
-        embedding = await self._embedding(new.body) if self._dense else None
-
-        async def operation(conn: PGConnection) -> None:
-            async with conn.transaction():
-                tag = await conn.execute(
-                    _MARK_SUPERSEDED, owner_id, _uuid(old_id, label="memory_id")
-                )
-                if str(tag).endswith(" 0"):
-                    raise KeyError(old_id)
-                if embedding is None:
-                    await conn.execute(_INSERT, *_insert_params(self, record=new))
-                else:
-                    await conn.execute(
-                        _INSERT_WITH_EMBEDDING,
-                        *_insert_params(self, record=new),
-                        _vector_text(embedding),
-                    )
-
-        await self._write(operation)
 
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None:
         async def operation(conn: PGConnection) -> MemoryRecord | None:
@@ -959,6 +929,27 @@ class PostgresMemoryStore:
     async def _read(self, operation: Any) -> Any:
         async with await self._acquire_context() as conn:
             return await operation(conn)
+
+
+async def _restores_an_active_body(
+    conn: PGConnection,
+    owner_id: str,
+    restoring: tuple[MemoryRecord, ...],
+    *,
+    replacing: str | None = None,
+) -> bool:
+    """Whether an undo would restore a body another active record already holds.
+
+    ``replacing`` is the record the undo retires itself, never a conflict.
+    """
+    return bool(
+        await conn.fetchval(
+            _SELECT_ACTIVE_NORMALIZED_CONFLICT_EXISTS,
+            owner_id,
+            sorted({normalized_body(record.body) for record in restoring}),
+            [] if replacing is None else [_uuid(replacing, label="memory_id")],
+        )
+    )
 
 
 async def _insert_record(
@@ -1237,6 +1228,7 @@ SELECT EXISTS (
     SELECT 1
     FROM dlightrag_memory_records
     WHERE owner_id = $1 AND status = 'active' AND normalized_body = ANY($2::text[])
+      AND memory_id <> ALL($3::uuid[])
 )
 """
 

@@ -52,11 +52,16 @@ others down:
 | PostgreSQL 18 | Hard stop, no fallback |
 | pgvector ≥ 0.7 | `storage.lightrag.vector_index_type: HNSW` |
 | `pg_textsearch` | `corpus.retrieval.bm25_enabled: false` (vector-only) |
+| `pg_jieba` | `corpus.retrieval.bm25_profiles` without a jieba profile |
 
 `pg_textsearch` refuses to install unless the server preloads it, which managed
 providers rarely expose — that, not the extension catalog, usually decides
-whether BM25 is available. `pg_jieba` installs and tokenizes without preloading,
-and is needed by any jieba BM25 profile and by Profile Memory.
+whether BM25 is available. `pg_jieba` installs and tokenizes without preloading.
+Neither is a trusted extension, so only a superuser can create them. Profile
+Memory never needs either to start: it creates both where the server allows,
+falls back to the `english` configuration without `pg_jieba`, matches facts by
+exact and embedding similarity alone without `pg_textsearch`, and logs a
+warning in each case.
 
 ## Tuning Boundaries
 

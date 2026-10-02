@@ -12,10 +12,15 @@ words of other languages still count.
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
+import asyncpg
+
+_logger = logging.getLogger(__name__)
 _ENGLISH_CONFIG = "english"
 _JIEBA_CONFIG = "public.jiebacfg"
 _INDEX_PREFIX = "idx_dlightrag_memory_records_bm25"
@@ -103,30 +108,38 @@ def _validate_index_name(name: str) -> str:
     return name
 
 
-def extension_bootstrap_sql() -> tuple[str, ...]:
-    """The extensions the sparse leg needs, bootstrapped like root does."""
-    return (
-        "CREATE EXTENSION IF NOT EXISTS pg_textsearch",
-        "CREATE EXTENSION IF NOT EXISTS pg_jieba",
-    )
+async def install_text_search(conn: Any) -> None:
+    """Create the text-search extensions this server allows, and skip those it refuses.
 
-
-async def served_index(conn: Any) -> BM25IndexOptions:
-    """The one index this database can serve: jieba when installed, else english.
-
-    ``english`` is pg_catalog built-in; ``public.jiebacfg`` comes from the
-    pg_jieba extension, matching the corpus BM25 profiles.
+    Neither is a trusted extension, so a managed server without a superuser
+    refuses them; the sparse leg then serves whatever the operator installed.
     """
-    jieba = await conn.fetchval(
+    for extension in ("pg_textsearch", "pg_jieba"):
+        with contextlib.suppress(asyncpg.PostgresError):
+            await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+
+
+async def served_index(conn: Any) -> BM25IndexOptions | None:
+    """The one index this database can serve: jieba, else english, else none.
+
+    pg_textsearch provides BM25 at all; ``public.jiebacfg`` comes from pg_jieba,
+    matching the corpus BM25 profiles; ``english`` is pg_catalog built-in.
+    """
+    row = await conn.fetchrow(
         """
-        SELECT 1
-        FROM pg_ts_config c
-        JOIN pg_namespace n ON n.oid = c.cfgnamespace
-        WHERE n.nspname = 'public' AND c.cfgname = 'jiebacfg'
-        LIMIT 1
+        SELECT
+            EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_textsearch') AS bm25,
+            EXISTS (
+                SELECT 1
+                FROM pg_ts_config c
+                JOIN pg_namespace n ON n.oid = c.cfgnamespace
+                WHERE n.nspname = 'public' AND c.cfgname = 'jiebacfg'
+            ) AS jieba
         """
     )
-    if jieba:
+    if not row["bm25"]:
+        return None
+    if row["jieba"]:
         return BM25IndexOptions(index_name=index_name("jieba"), text_config=_JIEBA_CONFIG)
     return BM25IndexOptions(index_name=index_name("english"), text_config=_ENGLISH_CONFIG)
 
@@ -154,8 +167,8 @@ def build_bm25_sql(*, index_name: str, limit: int) -> str:
     )
 
 
-async def ensure_bm25_index(conn: Any, *, verify_only: bool = False) -> BM25IndexOptions:
-    """Provision or validate the memory-table BM25 index.
+async def ensure_bm25_index(conn: Any, *, verify_only: bool = False) -> BM25IndexOptions | None:
+    """Provision or validate the memory-table BM25 index; None without pg_textsearch.
 
     With ``verify_only`` this performs no DDL: readers load the served index and
     fail when it is missing, matching the corpus verify path. Otherwise every
@@ -163,6 +176,11 @@ async def ensure_bm25_index(conn: Any, *, verify_only: bool = False) -> BM25Inde
     keeps paying write cost.
     """
     option = await served_index(conn)
+    if option is None:
+        _logger.warning("Profile Memory matches facts without BM25: pg_textsearch is missing")
+        return None
+    if option.text_config != _JIEBA_CONFIG:
+        _logger.warning("Profile Memory BM25 runs on english: pg_jieba is missing")
     indexdef = await conn.fetchval(
         "SELECT indexdef FROM pg_indexes WHERE indexname = $1", option.index_name
     )
@@ -189,8 +207,8 @@ __all__ = [
     "bm25_query_text",
     "build_bm25_sql",
     "ensure_bm25_index",
-    "extension_bootstrap_sql",
     "index_name",
+    "install_text_search",
     "served_index",
     "validate_text_config",
 ]
