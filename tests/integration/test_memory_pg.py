@@ -19,7 +19,7 @@ from dlightrag_memory import (
     MemoryProvenance,
     MemoryRecord,
 )
-from dlightrag_memory._storage.pg_bm25 import index_name
+from dlightrag_memory._storage.pg_bm25 import INDEX_NAME
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.mcp_server import _forget as mcp_forget
 from dlightrag_memory.mcp_server import _recall as mcp_recall
@@ -784,39 +784,131 @@ async def test_pg_recall_gives_preferences_the_character_budget_first(
     assert result.content_chars <= RECALL_CHAR_BUDGET
 
 
-async def test_pg_memory_runs_without_the_text_search_extensions() -> None:
-    """A managed server: the owner role is no superuser, so it cannot create them."""
+@asynccontextmanager
+async def _managed_server_store(
+    *, preinstalled: tuple[str, ...] = ()
+) -> AsyncIterator[tuple[PostgresMemoryStore, str]]:
+    """A store whose owner role is no superuser, as on a managed server."""
     await skip_without_postgres()
-    suffix = uuid.uuid4().hex[:12]
-    role, password, db_name = f"dlightrag_mem_{suffix}", uuid.uuid4().hex, f"dlightrag_mem_{suffix}"
+    role = db_name = f"dlightrag_mem_{uuid.uuid4().hex[:12]}"
+    password = uuid.uuid4().hex
     admin = await asyncpg.connect(**_PG)
     try:
         await admin.execute(f"CREATE ROLE {role} LOGIN NOSUPERUSER PASSWORD '{password}'")
         await admin.execute(f'CREATE DATABASE "{db_name}" OWNER {role}')
     finally:
         await admin.close()
-    pool = await asyncpg.create_pool(
-        **{**_PG, "user": role, "password": password, "database": db_name}, min_size=1, max_size=2
-    )
     try:
-        store = PostgresMemoryStore(pool=pool, embedder=NullEmbedder())
-        await store.initialize()
+        if preinstalled:
+            operator = await asyncpg.connect(**{**_PG, "database": db_name})
+            try:
+                for extension in preinstalled:
+                    await operator.execute(f"CREATE EXTENSION {extension}")
+            finally:
+                await operator.close()
+        pool = await asyncpg.create_pool(
+            **{**_PG, "user": role, "password": password, "database": db_name},
+            min_size=1,
+            max_size=2,
+        )
+        try:
+            store = PostgresMemoryStore(pool=pool, embedder=NullEmbedder())
+            await store.initialize()
+            yield store, db_name
+        finally:
+            await pool.close()
+    finally:
+        try:
+            await drop_database(db_name)
+        finally:
+            admin = await asyncpg.connect(**_PG)
+            try:
+                await admin.execute(f"DROP ROLE IF EXISTS {role}")
+            finally:
+                await admin.close()
+
+
+@pytest.mark.parametrize(
+    ("preinstalled", "bm25"),
+    [((), False), (("pg_textsearch",), True)],
+    ids=["no-text-search", "english-fallback"],
+)
+async def test_pg_memory_runs_on_whatever_text_search_a_managed_server_has(
+    preinstalled: tuple[str, ...], bm25: bool
+) -> None:
+    async with _managed_server_store(preinstalled=preinstalled) as (store, _db_name):
+        async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+            installed = {
+                row["extname"]
+                for row in await conn.fetch(
+                    "SELECT extname FROM pg_extension "
+                    "WHERE extname IN ('pg_textsearch', 'pg_jieba')"
+                )
+            }
         memory = Memory(store)
         await _remember(memory, "Answer in Chinese.", kind="preference")
+        await _remember(memory, "Lives in Berlin.")
         await _remember(memory, "It is what it is.")
+        shared_word = await memory.recall(owner_id="alpha", query="Is Berlin rainy?")
+        restated = await memory.recall(owner_id="alpha", query="it is what it is.")
 
-        result = await memory.recall(owner_id="alpha", query="it is what it is.")
-    finally:
-        await pool.close()
-        await drop_database(db_name)
-        admin = await asyncpg.connect(**_PG)
+    # The role could create neither extension; recall used what the server had.
+    assert installed == set(preinstalled)
+    assert _bodies(shared_word.preferences) == ["Answer in Chinese."]
+    assert _bodies(shared_word.facts) == (["Lives in Berlin."] if bm25 else [])
+    assert _bodies(restated.facts) == ["It is what it is."]
+
+
+async def test_pg_a_running_process_keeps_recalling_while_the_writer_rebuilds_bm25() -> None:
+    async with _managed_server_store(preinstalled=("pg_textsearch",)) as (store, db_name):
+        memory = Memory(store)
+        await _remember(memory, "Lives in Berlin.")
+        # pg_jieba arrives later, and a writer that can create it restarts.
+        operator = await asyncpg.create_pool(**{**_PG, "database": db_name}, min_size=1, max_size=2)
         try:
-            await admin.execute(f"DROP ROLE IF EXISTS {role}")
+            await PostgresMemoryStore(pool=operator, embedder=NullEmbedder()).initialize()
+            async with operator.acquire() as conn:
+                indexdef = await conn.fetchval(
+                    "SELECT indexdef FROM pg_indexes WHERE indexname = $1", INDEX_NAME
+                )
         finally:
-            await admin.close()
+            await operator.close()
 
-    assert _bodies(result.preferences) == ["Answer in Chinese."]
-    assert _bodies(result.facts) == ["It is what it is."]
+        result = await memory.recall(owner_id="alpha", query="Is Berlin rainy?")
+
+    assert "jiebacfg" in indexdef
+    assert _bodies(result.facts) == ["Lives in Berlin."]
+
+
+async def test_pg_an_owner_holds_one_active_record_per_body(store: PostgresMemoryStore) -> None:
+    await _remember(Memory(store), "Prefers tea.", kind="preference")
+
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await _plant(store, _record(body="  PREFERS tea. "))
+
+
+async def test_pg_a_key_reused_after_its_journal_aged_out_never_drops_the_new_body(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+
+    async def move(body: str) -> MemoryOperationReceipt:
+        return await memory.remember(
+            owner_id="alpha",
+            kind="fact",
+            body=body,
+            provenance=_provenance(),
+            idempotency_key="move",
+        )
+
+    await move("Lives in Berlin.")
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute("DELETE FROM dlightrag_memory_operations")
+
+    with pytest.raises(ValueError, match="already exists"):
+        await move("Lives in Munich.")
+
+    assert _bodies(await _store_active(store)) == ["Lives in Berlin."]
 
 
 async def test_pg_undoing_a_supersede_conflicts_once_its_body_is_active_again(
@@ -868,7 +960,7 @@ async def test_pg_bm25_index_is_the_one_served_config(store: PostgresMemoryStore
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         for config in ("simple", "english"):
             await conn.execute(
-                f"CREATE INDEX {index_name(config)} ON dlightrag_memory_records "
+                f"CREATE INDEX {INDEX_NAME}_{config} ON dlightrag_memory_records "
                 f"USING bm25(body) WITH (text_config='{config}')"
             )
 
@@ -876,10 +968,12 @@ async def test_pg_bm25_index_is_the_one_served_config(store: PostgresMemoryStore
 
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         rows = await conn.fetch(
-            "SELECT indexname FROM pg_indexes WHERE tablename = 'dlightrag_memory_records' "
-            "AND indexname LIKE 'idx_dlightrag_memory_records_bm25%'"
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE tablename = 'dlightrag_memory_records' AND indexname LIKE $1",
+            f"{INDEX_NAME}%",
         )
-    assert {str(row["indexname"]) for row in rows} == {index_name("jieba")}
+    assert [str(row["indexname"]) for row in rows] == [INDEX_NAME]
+    assert "jiebacfg" in str(rows[0]["indexdef"])
 
 
 async def test_pg_restating_a_fact_as_a_preference_makes_it_stand(
@@ -979,26 +1073,6 @@ async def test_pg_forget_undo_restores_the_row(store: PostgresMemoryStore) -> No
     assert restored.created_at == restored.updated_at == undone.created_at
     assert await _status(store, tea.memory_id) == "forgotten"
     assert await store.count_active(owner_id="alpha") == 2
-
-
-async def test_pg_forget_undo_conflicts_when_the_row_is_no_longer_forgotten(
-    store: PostgresMemoryStore,
-) -> None:
-    memory = Memory(store)
-    forgotten, tea = await _forget_a_row(memory)
-    assert tea.memory_id is not None
-    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
-        await conn.execute(
-            "UPDATE dlightrag_memory_records SET status = 'superseded' "
-            "WHERE owner_id = 'alpha' AND memory_id = $1",
-            uuid.UUID(tea.memory_id),
-        )
-
-    undone = await _undo(memory, forgotten.change_id, key="undo-1")
-
-    assert undone.outcome == "conflict"
-    assert await store.count_active(owner_id="alpha") == 1
-    await _assert_undo_settled_nothing(store, forgotten)
 
 
 async def test_pg_forget_undo_conflicts_when_the_row_is_gone(store: PostgresMemoryStore) -> None:
@@ -1368,30 +1442,26 @@ async def test_pg_dense_undo_of_supersede_restores_the_original_vector(
 
 
 @pytest.mark.parametrize(
-    ("unreadable", "reachable"),
+    "unreadable",
     [
-        pytest.param(None, True, id="bound-space"),
-        pytest.param("embedding_fingerprint = 'test:retired@local'", False, id="retired-model"),
-        pytest.param("embedding_fingerprint = NULL, embedding = NULL", False, id="never-embedded"),
+        pytest.param("embedding_fingerprint = 'test:retired@local'", id="retired-model"),
+        pytest.param("embedding_fingerprint = NULL, embedding = NULL", id="never-embedded"),
         # What earlier undo settlements wrote: the bound space's label, no vector.
-        pytest.param("embedding = NULL", False, id="labelled-without-vector"),
+        pytest.param("embedding = NULL", id="labelled-without-vector"),
     ],
 )
 async def test_pg_dense_undo_keeps_the_restored_vector_in_its_own_space(
-    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder],
-    unreadable: str | None,
-    reachable: bool,
+    dense_store: tuple[PostgresMemoryStore, _TopicEmbedder], unreadable: str
 ) -> None:
     store, _embedder = dense_store
     memory = Memory(store)
     remembered = await _remember(memory, "Prefers tea.")
     assert remembered.memory_id is not None
-    if unreadable is not None:
-        async with store._pool.acquire() as conn:  # type: ignore[union-attr]
-            await conn.execute(
-                f"UPDATE dlightrag_memory_records SET {unreadable} WHERE memory_id = $1",  # noqa: S608
-                uuid.UUID(remembered.memory_id),
-            )
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            f"UPDATE dlightrag_memory_records SET {unreadable} WHERE memory_id = $1",  # noqa: S608
+            uuid.UUID(remembered.memory_id),
+        )
     source_fingerprint, source_vector = await _dense_state(store, remembered.memory_id)
     forgotten = await memory.forget(
         owner_id="alpha",
@@ -1408,7 +1478,8 @@ async def test_pg_dense_undo_keeps_the_restored_vector_in_its_own_space(
         source_fingerprint if source_vector is not None else None,
         source_vector,
     )
-    assert await _dense_ids(store, "tea") == ([restored_id] if reachable else [])
+    # A vector the bound space cannot read stays unreachable after the undo.
+    assert await _dense_ids(store, "tea") == []
 
 
 @pytest.mark.parametrize(

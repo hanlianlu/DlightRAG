@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 # One-command PostgreSQL for the dlightrag-memory package.
 #
-# The memory adapter's three recall legs need pgvector, pg_textsearch, and
-# pg_jieba; this stack starts exactly that database. The MCP server and every
-# host adapter connect over DSN and never manage this service themselves.
+# The memory adapter's recall legs use pgvector, pg_textsearch, and pg_jieba
+# when present; this stack starts a database with all three. The MCP server and
+# every host adapter connect over DSN and never manage this service themselves.
 #
 #   docker compose -f packages/memory/compose.yaml up -d
 #   dlightrag-memory-mcp --dsn postgres://dlightrag:dlightrag@127.0.0.1:5432/dlightrag

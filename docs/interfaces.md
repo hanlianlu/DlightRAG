@@ -896,7 +896,8 @@ above the model's calibrated relevance floor. Content words come from one BM25
 index over `public.jiebacfg`, which drops English and Chinese function words and
 matches words in the same form ("cats" is not "cat"); other languages' function
 words still count. Without pg_jieba the index falls back to `english`, where
-Chinese function words count too. Only `voyage-multimodal-3.5` has a floor today,
+Chinese function words count too; without pg_textsearch there is no BM25 index,
+and facts need an exact restatement or embedding similarity. Only `voyage-multimodal-3.5` has a floor today,
 0.35, calibrated at 1,024 dimensions; with other models, and whenever the query
 embedding misses its two-second deadline, facts are recalled by their words.
 Both sections share a 4,000-character budget, and preferences claim it first.

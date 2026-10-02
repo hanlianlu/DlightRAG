@@ -40,11 +40,11 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from dlightrag_memory._storage.pg_bm25 import (
-    BM25IndexOptions,
     bm25_query_text,
     build_bm25_sql,
     ensure_bm25_index,
     install_text_search,
+    served_bm25_index,
 )
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import (
@@ -198,7 +198,7 @@ class PostgresMemoryStore:
         self._owned_pool: Any = None
         self._embedder = embedder
         self._dense = not isinstance(embedder, NullEmbedder)
-        self._bm25_index: BM25IndexOptions | None = None
+        self._bm25_index: str | None = None
         self._initialized = False
 
     async def aclose(self) -> None:
@@ -234,7 +234,7 @@ class PostgresMemoryStore:
                 for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
                     await conn.execute(statement)
                 await install_text_search(conn)
-                self._bm25_index = await ensure_bm25_index(conn)
+                await ensure_bm25_index(conn)
                 if self._dense:
                     dim = int(self._embedder.dim)
                     if dim < 1:
@@ -289,7 +289,7 @@ class PostgresMemoryStore:
                 missing_columns = names - by_table.get(table, set())
                 if missing_columns:
                     raise RuntimeError(f"{table} is missing {', '.join(sorted(missing_columns))}")
-            self._bm25_index = await ensure_bm25_index(conn, verify_only=True)
+            self._bm25_index = await served_bm25_index(conn)
 
         acquire = await self._acquire_context()
         async with acquire as conn:
@@ -503,7 +503,7 @@ class PostgresMemoryStore:
             )
         else:
             rows = await conn.fetch(
-                _SELECT_ACTIVE_NORMALIZED_ALL_FOR_UPDATE,
+                _SELECT_ACTIVE_NORMALIZED_FOR_UPDATE,
                 operation.owner_id,
                 normalized_body(operation.body),
             )
@@ -657,9 +657,7 @@ class PostgresMemoryStore:
         # before record belongs to this owner, memory ids are unique and, in
         # order, exactly the target receipt's memory_ids), every target id
         # must still exist for this owner as a forgotten row, and no active
-        # record outside the batch may share a normalized body (siblings
-        # inside the batch compensate the exact prior forget and are never
-        # conflicts).
+        # record may share a restored normalized body.
         if (
             not before
             or any(old.owner_id != operation.owner_id for old in before)
@@ -869,13 +867,8 @@ class PostgresMemoryStore:
                 SearchCandidate(record=_row(row), leg="exact", score=2.0)
                 for row in await conn.fetch(_SEARCH_EXACT, owner_id, key, cap)
             ]
-            index = self._bm25_index
-            if index is not None:
-                rows = await conn.fetch(
-                    build_bm25_sql(index_name=index.index_name, limit=cap),
-                    bm25_query_text(index.text_config, query),
-                    owner_id,
-                )
+            if self._bm25_index is not None:
+                rows = await conn.fetch(build_bm25_sql(limit=cap), bm25_query_text(query), owner_id)
                 for row in rows:
                     score = float(row["score"])
                     if score <= 0:
@@ -960,13 +953,17 @@ async def _insert_record(
     embedding: Vector | None,
 ) -> None:
     if embedding is None:
-        await conn.execute(_INSERT, *_insert_params(store, record=record))
+        inserted = await conn.fetchval(_INSERT, *_insert_params(store, record=record))
     else:
-        await conn.execute(
+        inserted = await conn.fetchval(
             _INSERT_WITH_EMBEDDING,
             *_insert_params(store, record=record),
             _vector_text(embedding),
         )
+    if inserted is None:
+        # An idempotency key reused after its journal row aged out derives an
+        # id another record already holds; never report its body as stored.
+        raise ValueError("memory id already exists with different content")
 
 
 def _receipt_json(receipt: MemoryOperationReceipt) -> dict[str, Any]:
@@ -1142,6 +1139,7 @@ INSERT INTO dlightrag_memory_records (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (owner_id, memory_id) DO NOTHING
+RETURNING memory_id
 """
 
 _INSERT_WITH_EMBEDDING = """
@@ -1151,6 +1149,7 @@ INSERT INTO dlightrag_memory_records (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $15::halfvec, $13, $14)
 ON CONFLICT (owner_id, memory_id) DO NOTHING
+RETURNING memory_id
 """
 
 _LOCK_OWNER = "SELECT pg_advisory_xact_lock(hashtext($1))"
@@ -1185,20 +1184,11 @@ SET undone_by = $3
 WHERE owner_id = $1 AND change_id = $2 AND undone_by IS NULL
 """
 
+# At most one row: the unique active-body index keeps it so.
 _SELECT_ACTIVE_NORMALIZED_FOR_UPDATE = f"""
 SELECT {_RECORD_COLUMNS}
 FROM dlightrag_memory_records
 WHERE owner_id = $1 AND status = 'active' AND normalized_body = $2
-ORDER BY updated_at DESC
-LIMIT 1
-FOR UPDATE
-"""  # noqa: S608
-
-_SELECT_ACTIVE_NORMALIZED_ALL_FOR_UPDATE = f"""
-SELECT {_RECORD_COLUMNS}
-FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active' AND normalized_body = $2
-ORDER BY updated_at DESC
 FOR UPDATE
 """  # noqa: S608
 
@@ -1363,7 +1353,6 @@ _SEARCH_EXACT = f"""
 SELECT {_RECORD_COLUMNS}
 FROM dlightrag_memory_records
 WHERE owner_id = $1 AND status = 'active' AND kind = 'fact' AND normalized_body = $2
-ORDER BY updated_at DESC
 LIMIT $3
 """  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
 

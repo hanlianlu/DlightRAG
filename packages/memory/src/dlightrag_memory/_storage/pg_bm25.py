@@ -8,11 +8,14 @@ dlightrag.engine.rag. One stopword-aware index serves the table:
 Chinese and English function words, else ``english``. A positive score means
 the query and a fact share a content word, never just "the" or "的"; function
 words of other languages still count.
+
+The index keeps one name whatever its configuration, and queries read the same
+text under either, so a process started before an extension appeared keeps
+querying while the writer rebuilds the index in place.
 """
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import re
 from dataclasses import dataclass
@@ -23,192 +26,158 @@ import asyncpg
 _logger = logging.getLogger(__name__)
 _ENGLISH_CONFIG = "english"
 _JIEBA_CONFIG = "public.jiebacfg"
-_INDEX_PREFIX = "idx_dlightrag_memory_records_bm25"
+INDEX_NAME = "idx_dlightrag_memory_records_bm25"
 _K1 = 1.2
 _B = 0.75
 
-_CONFIG_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$")
 _WHITESPACE = re.compile(r"\s+")
+_INDEXDEF_SQL = "SELECT indexdef FROM pg_indexes WHERE indexname = $1"
 _PREFIXED_INDEXES_SQL = (
     "SELECT indexname FROM pg_indexes "
     "WHERE tablename = 'dlightrag_memory_records' AND indexname LIKE $1"
 )
+_SERVED_CONFIG_SQL = """
+SELECT
+    EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_textsearch') AS bm25,
+    EXISTS (
+        SELECT 1
+        FROM pg_ts_config c
+        JOIN pg_namespace n ON n.oid = c.cfgnamespace
+        WHERE n.nspname = 'public' AND c.cfgname = 'jiebacfg'
+    ) AS jieba
+"""
 
 
-def bm25_query_text(text_config: str, query: str) -> str:
-    """The query text one index's tokenizer should see.
+def bm25_query_text(query: str) -> str:
+    """The query text the memory index's tokenizer should see.
 
     pg_jieba indexes each whitespace run as a term (jaiminpan/pg_jieba#47), so a
     spaced query would match every record that contains a space. A full-width
-    comma is both a jieba separator and a jieba stopword: it splits words
-    exactly where the whitespace did and adds no term.
+    comma splits words exactly where the whitespace did: jieba drops it as a
+    stopword, and the english configuration's parser reads it as a separator.
     """
-    return _WHITESPACE.sub("，", query) if text_config == _JIEBA_CONFIG else query
-
-
-def _format_float(value: float) -> str:
-    return f"{float(value):g}"
-
-
-def validate_text_config(text_config: str) -> str:
-    value = str(text_config).strip()
-    if not _CONFIG_NAME_RE.fullmatch(value):
-        raise ValueError(f"unsafe BM25 text_config: {text_config!r}")
-    return value
+    return _WHITESPACE.sub("，", query)
 
 
 @dataclass(frozen=True)
 class BM25IndexOptions:
-    """One memory-table BM25 index with the corpus-tuned parameters."""
+    """The memory-table BM25 index under one configuration."""
 
-    index_name: str
     text_config: str
-    k1: float = _K1
-    b: float = _B
-
-    def __post_init__(self) -> None:
-        if self.k1 <= 0:
-            raise ValueError("BM25 k1 must be positive")
-        if not 0 <= self.b <= 1:
-            raise ValueError("BM25 b must be between 0 and 1")
-        validate_text_config(self.text_config)
 
     def create_index_sql(self) -> str:
-        config = validate_text_config(self.text_config)
         return (
-            f"CREATE INDEX {self.index_name} ON dlightrag_memory_records "
-            f"USING bm25(body) WITH (text_config='{config}', "
-            f"k1={_format_float(self.k1)}, b={_format_float(self.b)})"
+            f"CREATE INDEX {INDEX_NAME} ON dlightrag_memory_records "
+            f"USING bm25(body) WITH (text_config='{self.text_config}', k1={_K1:g}, b={_B:g})"
         )
 
     def matches_indexdef(self, indexdef: str | None) -> bool:
         if not indexdef:
             return False
         normalized = re.sub(r"\s+", "", indexdef.lower().replace('"', "").replace("'", ""))
-        config = validate_text_config(self.text_config).lower()
+        config = self.text_config.lower()
         return (
-            self.index_name.lower() in normalized
-            and "usingbm25(body)" in normalized
+            "usingbm25(body)" in normalized
             and (
-                f"text_config={config}" in normalized
-                or f"text_config={config}::regconfig" in normalized
+                f"text_config={config}," in normalized
+                or f"text_config={config}::regconfig," in normalized
             )
-            and f"k1={_format_float(self.k1)}" in normalized
-            and f"b={_format_float(self.b)}" in normalized
+            and f"k1={_K1:g}" in normalized
+            and f"b={_B:g}" in normalized
         )
 
 
-def index_name(suffix: str) -> str:
-    return _validate_index_name(f"{_INDEX_PREFIX}_{suffix}")
-
-
-def _validate_index_name(name: str) -> str:
-    if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
-        raise ValueError(f"unsafe index name: {name!r}")
-    return name
-
-
 async def install_text_search(conn: Any) -> None:
-    """Create the text-search extensions this server allows, and skip those it refuses.
+    """Create pg_textsearch, then pg_jieba beside it, where the server allows.
 
     Neither is a trusted extension, so a managed server without a superuser
     refuses them; the sparse leg then serves whatever the operator installed.
+    Each statement runs in its own (sub)transaction, so a refusal leaves the
+    connection usable.
     """
     for extension in ("pg_textsearch", "pg_jieba"):
-        with contextlib.suppress(asyncpg.PostgresError):
-            await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        try:
+            async with conn.transaction():
+                await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        except asyncpg.PostgresError as exc:
+            _logger.warning("Profile Memory could not create %s: %s", extension, exc)
+            return  # pg_jieba serves nothing here without pg_textsearch
 
 
-async def served_index(conn: Any) -> BM25IndexOptions | None:
-    """The one index this database can serve: jieba, else english, else none.
-
-    pg_textsearch provides BM25 at all; ``public.jiebacfg`` comes from pg_jieba,
-    matching the corpus BM25 profiles; ``english`` is pg_catalog built-in.
-    """
-    row = await conn.fetchrow(
-        """
-        SELECT
-            EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_textsearch') AS bm25,
-            EXISTS (
-                SELECT 1
-                FROM pg_ts_config c
-                JOIN pg_namespace n ON n.oid = c.cfgnamespace
-                WHERE n.nspname = 'public' AND c.cfgname = 'jiebacfg'
-            ) AS jieba
-        """
-    )
+async def served_config(conn: Any) -> str | None:
+    """jiebacfg, else english, else None when pg_textsearch is not installed."""
+    row = await conn.fetchrow(_SERVED_CONFIG_SQL)
     if not row["bm25"]:
         return None
-    if row["jieba"]:
-        return BM25IndexOptions(index_name=index_name("jieba"), text_config=_JIEBA_CONFIG)
-    return BM25IndexOptions(index_name=index_name("english"), text_config=_ENGLISH_CONFIG)
+    return _JIEBA_CONFIG if row["jieba"] else _ENGLISH_CONFIG
 
 
-def build_bm25_sql(*, index_name: str, limit: int) -> str:
+async def ensure_bm25_index(conn: Any) -> None:
+    """Build or rebuild the BM25 index for the served configuration (writer only).
+
+    A rebuild drops and recreates the one index in a transaction, so a
+    concurrent recall waits instead of finding no index. Every other index
+    under the BM25 prefix is dropped, so a retired name never keeps paying
+    write cost.
+    """
+    config = await served_config(conn)
+    if config is None:
+        return
+    option = BM25IndexOptions(text_config=config)
+    indexdef = await conn.fetchval(_INDEXDEF_SQL, INDEX_NAME)
+    if not option.matches_indexdef(indexdef):
+        async with conn.transaction():
+            if indexdef:
+                await conn.execute(f"DROP INDEX IF EXISTS {INDEX_NAME}")
+            await conn.execute(option.create_index_sql())
+    for row in await conn.fetch(_PREFIXED_INDEXES_SQL, f"{INDEX_NAME}_%"):
+        await conn.execute(f'DROP INDEX IF EXISTS "{row["indexname"]}"')
+
+
+async def served_bm25_index(conn: Any) -> str | None:
+    """The BM25 index this process may query, or None; never DDL.
+
+    Any configuration the writer built serves: a process never fails because
+    an extension appeared after it started, or before the writer rebuilt.
+    """
+    indexdef = await conn.fetchval(_INDEXDEF_SQL, INDEX_NAME)
+    if not indexdef or "usingbm25(body)" not in re.sub(r"\s+", "", indexdef.lower()):
+        _logger.warning("Profile Memory matches facts without BM25: no index is built")
+        return None
+    if "jiebacfg" not in indexdef:
+        _logger.warning("Profile Memory BM25 runs on english: pg_jieba is missing")
+    return INDEX_NAME
+
+
+def build_bm25_sql(*, limit: int) -> str:
     """Rank one owner's active facts against ``$1``; non-matching facts score 0.
 
     Ordering by the score itself keeps the plan on the owner's rows whatever the
     table statistics say, instead of a BM25 index scan over every owner.
     """
-    safe_index = _validate_index_name(index_name)
     limit_value = int(limit)
     if limit_value < 1:
         raise ValueError("BM25 limit must be positive")
-    return (  # noqa: S608 - interpolates only the validated index name
-        "SELECT owner_id, memory_id, kind, body, normalized_body, "  # noqa: S608
+    return (
+        "SELECT owner_id, memory_id, kind, body, normalized_body, "  # noqa: S608 - fixed name
         "origin_kind, origin_id, run_id, session_id, status, supersedes_id, "
         "embedding_fingerprint, "
         "created_at, updated_at, "
-        f"-(body <@> to_bm25query($1, '{safe_index}')) AS score "  # noqa: S608
+        f"-(body <@> to_bm25query($1, '{INDEX_NAME}')) AS score "
         "FROM dlightrag_memory_records "
         "WHERE owner_id = $2 AND status = 'active' AND kind = 'fact' "
         "ORDER BY score DESC "
-        "LIMIT " + str(limit_value)
+        f"LIMIT {limit_value}"
     )
-
-
-async def ensure_bm25_index(conn: Any, *, verify_only: bool = False) -> BM25IndexOptions | None:
-    """Provision or validate the memory-table BM25 index; None without pg_textsearch.
-
-    With ``verify_only`` this performs no DDL: readers load the served index and
-    fail when it is missing, matching the corpus verify path. Otherwise every
-    other index under the BM25 prefix is dropped, so a retired config never
-    keeps paying write cost.
-    """
-    option = await served_index(conn)
-    if option is None:
-        _logger.warning("Profile Memory matches facts without BM25: pg_textsearch is missing")
-        return None
-    if option.text_config != _JIEBA_CONFIG:
-        _logger.warning("Profile Memory BM25 runs on english: pg_jieba is missing")
-    indexdef = await conn.fetchval(
-        "SELECT indexdef FROM pg_indexes WHERE indexname = $1", option.index_name
-    )
-    if not option.matches_indexdef(indexdef):
-        if verify_only:
-            raise RuntimeError(
-                f"BM25 index {option.index_name} is missing or does not match configured "
-                "options; initialize it on the writer first"
-            )
-        # Readers wait on the drop's lock instead of finding no index mid-rebuild.
-        async with conn.transaction():
-            if indexdef:
-                await conn.execute(f"DROP INDEX IF EXISTS {option.index_name}")
-            await conn.execute(option.create_index_sql())
-    if not verify_only:
-        for row in await conn.fetch(_PREFIXED_INDEXES_SQL, f"{_INDEX_PREFIX}_%"):
-            if row["indexname"] != option.index_name:
-                await conn.execute(f"DROP INDEX IF EXISTS {_validate_index_name(row['indexname'])}")
-    return option
 
 
 __all__ = [
+    "INDEX_NAME",
     "BM25IndexOptions",
     "bm25_query_text",
     "build_bm25_sql",
     "ensure_bm25_index",
-    "index_name",
     "install_text_search",
-    "served_index",
-    "validate_text_config",
+    "served_bm25_index",
+    "served_config",
 ]
