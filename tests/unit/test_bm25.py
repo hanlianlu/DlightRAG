@@ -334,6 +334,33 @@ async def test_bm25_search_maps_rows() -> None:
     ]
 
 
+async def test_bm25_sends_jieba_queries_without_whitespace_terms() -> None:
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__.return_value = conn
+    bm25 = PGBM25ProfileSearch(
+        pool=pool,
+        workspace="default",
+        profiles=(
+            BM25Profile(name="zh", text_config="public.jiebacfg", languages=("zh",)),
+            BM25Profile(name="en", text_config="english", languages=("en",)),
+        ),
+    )
+
+    for profile_name in ("zh", "en"):
+        await bm25.search_profile(
+            "量化 交易\t策略", profile_name=profile_name, language=None, scope=None, limit=3
+        )
+
+    # pg_jieba would index each whitespace run as a term; a full-width comma
+    # splits the same words and is a jieba stopword. english needs no help.
+    assert [call.args[1] for call in conn.fetch.await_args_list] == [
+        "量化，交易，策略",
+        "量化 交易\t策略",
+    ]
+
+
 async def test_bm25_search_uses_default_pool_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

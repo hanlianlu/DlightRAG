@@ -43,6 +43,8 @@ _VERIFY_SCHEMA_SQL = (
     "SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2 LIMIT 1"
 )
 _STALE_INDEXES_SQL = "SELECT indexname FROM pg_indexes WHERE tablename = $1 AND indexname LIKE $2"
+JIEBA_TEXT_CONFIG = "public.jiebacfg"
+_WHITESPACE = re.compile(r"\s+")
 
 
 def _format_float(value: float) -> str:
@@ -65,9 +67,20 @@ def _index_name(profile_name: str) -> str:
     return pg_identifier(f"{BM25_INDEX_PREFIX}_{pg_identifier(profile_name)}")
 
 
+def bm25_query_text(text_config: str, query: str) -> str:
+    """The query text one profile's tokenizer should see.
+
+    pg_jieba indexes each whitespace run as a term (jaiminpan/pg_jieba#47), so a
+    spaced query would match nearly every chunk through the space alone. A
+    full-width comma is both a jieba separator and a jieba stopword: it splits
+    words exactly where the whitespace did and adds no term.
+    """
+    return _WHITESPACE.sub("，", query) if text_config == JIEBA_TEXT_CONFIG else query
+
+
 def required_postgres_extensions(profiles: Iterable[BM25Profile]) -> tuple[str, ...]:
     extensions = ["pg_textsearch"]
-    if any(profile.text_config == "public.jiebacfg" for profile in profiles):
+    if any(profile.text_config == JIEBA_TEXT_CONFIG for profile in profiles):
         extensions.append("pg_jieba")
     return tuple(extensions)
 
@@ -204,6 +217,7 @@ class PGBM25ProfileSearch(PostgresOperationRunner):
         super().__init__(pool=pool)
         self._workspace = workspace
         self._profiles = profiles
+        self._text_configs = {profile.name: profile.text_config for profile in profiles}
 
     async def ensure_indexes(self, *, k1: float = 1.2, b: float = 0.75) -> None:
         options_by_profile = [
@@ -256,6 +270,7 @@ class PGBM25ProfileSearch(PostgresOperationRunner):
         scope: MetadataScope | None,
         limit: int,
     ) -> list[ContextRow]:
+        query = bm25_query_text(self._text_configs[profile_name], query)
         if scope is not None:
             conditions, params = metadata_match_conditions(
                 self._workspace,

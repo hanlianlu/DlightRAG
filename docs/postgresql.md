@@ -195,6 +195,29 @@ representative `EXPLAIN (ANALYZE, BUFFERS)` plans and latency. External
 PostgreSQL deployments should set the equivalent GUCs in their own server or
 session configuration.
 
+## pg_jieba Caveats
+
+pg_jieba v2.0.1 has two defects that DlightRAG works around rather than patches,
+so any pg_jieba build serves Chinese BM25 correctly:
+
+- **Whitespace becomes a term.** Each run of spaces, tabs, newlines, or
+  ideographic spaces is indexed as its own lexeme, so a spaced query would match
+  nearly every chunk through the space alone. Every query DlightRAG sends to a
+  `public.jiebacfg` index replaces whitespace runs with a full-width comma, which
+  jieba splits on and drops as a stopword: segmentation is unchanged and no
+  whitespace term remains. Indexed whitespace still counts toward document
+  length, a small uniform bias in BM25 length normalization.
+- **Listing jieba token types crashes the server.** `jieba_lextype` writes one
+  entry past its allocation, and PostgreSQL restarts every backend to recover.
+  DlightRAG never calls it, and user input reaches pg_jieba only through
+  `to_bm25query`. Operators must not run `ts_debug` or `ts_token_type` on a
+  jieba parser or configuration, `\dF+ jiebacfg` or `\dFp+ jieba` in psql,
+  `ALTER TEXT SEARCH CONFIGURATION ... MAPPING FOR` on a jieba configuration, or
+  `pg_dump` of a custom configuration built on the jieba parser. Tokenizing with
+  `to_tsvector('public.jiebacfg', ...)` is safe. `pg_upgrade` dumps extension
+  members in binary-upgrade mode and hits the same function, so patch pg_jieba,
+  or drop and later recreate it, before a major-version upgrade.
+
 ## DlightRAG Schema Migrations
 
 DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
