@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,23 +26,24 @@ from dlightrag_memory.ports import SearchCandidate
 from dlightrag_memory.recall import recall_recency
 from dlightrag_memory.store import MemoryStore, OperationGuard
 
+_logger = logging.getLogger(__name__)
 _SEARCH_DEADLINE_SECONDS = 2.0
-_HEADER_CHARS = 160
 
 
 @dataclass(frozen=True, slots=True)
 class RecallResult:
-    """Structured query-aware recall result."""
+    """The owner's standing preferences and the facts relevant to one query."""
 
-    records: tuple[MemoryRecord, ...]
-    strategy: str
-    candidates: tuple[SearchCandidate, ...] = ()
-    degraded: tuple[str, ...] = ()
-    content_chars: int = 0
+    preferences: tuple[MemoryRecord, ...] = ()
+    facts: tuple[MemoryRecord, ...] = ()
 
     @property
-    def skipped(self) -> bool:
-        return bool(self.degraded)
+    def records(self) -> tuple[MemoryRecord, ...]:
+        return (*self.preferences, *self.facts)
+
+    @property
+    def content_chars(self) -> int:
+        return sum(len(record.body) for record in self.records)
 
 
 class Memory:
@@ -154,107 +157,65 @@ class Memory:
     ) -> tuple[tuple[MemoryRecord, ...], tuple[datetime, str] | None]:
         return await self._store.list_active_page(owner_id=owner_id, after=cursor, limit=limit)
 
-    async def recall(
-        self,
-        *,
-        owner_id: str,
-        query: str,
-        top_k: int = RECALL_TOP_K,
-        char_budget: int = RECALL_CHAR_BUDGET,
-    ) -> RecallResult:
-        cap = max(1, min(int(top_k), 100))
-        budget = max(_HEADER_CHARS, int(char_budget))
+    async def recall(self, *, owner_id: str, query: str) -> RecallResult:
+        """Standing preferences, then the facts relevant to ``query``.
+
+        Preferences say how the owner wants every answer, so the newest
+        ``RECALL_TOP_K`` stand whatever the query. A fact is recalled only on
+        evidence that it bears on the query (``MemoryStore.search_facts``), and
+        relevant facts rank by rank-only RRF across the legs. Preferences claim
+        the character budget first. Time never scores: it orders each section
+        oldest first, so the latest record reads last.
+        """
+        preferences = await self._store.list_preferences(owner_id=owner_id, limit=RECALL_TOP_K)
         try:
             candidates = await asyncio.wait_for(
-                self._store.search_candidates(owner_id=owner_id, query=query, limit=cap),
+                self._store.search_facts(owner_id=owner_id, query=query, limit=RECALL_TOP_K),
                 timeout=_SEARCH_DEADLINE_SECONDS,
             )
         except TimeoutError:
-            page, _ = await self._store.list_active_page(owner_id=owner_id, limit=cap)
-            recent = _truncate_to_budget(list(page), budget=budget)
-            recent.sort(key=lambda record: (recall_recency(record), record.memory_id))
-            return RecallResult(
-                records=tuple(recent),
-                strategy="recent_fallback",
-                degraded=("search_timeout",),
-                content_chars=sum(len(record.body) for record in recent),
+            _logger.warning(
+                "Profile Memory fact search exceeded %ss; recalling preferences only",
+                _SEARCH_DEADLINE_SECONDS,
             )
-
-        exact_ids: list[str] = []
-        fused_ids: dict[str, float] = {}
-        rankings: list[list[str]] = []
-        for leg in ("exact", "sparse", "dense"):
-            ranking: list[str] = []
-            for candidate in candidates:
-                if candidate.leg != leg or candidate.record.memory_id in ranking:
-                    continue
-                ranking.append(candidate.record.memory_id)
-            if leg == "exact":
-                exact_ids = ranking
-            else:
-                rankings.append(ranking)
-        fused_ids.update(rrf_fuse(rankings))
-
-        by_id = {candidate.record.memory_id: candidate.record for candidate in candidates}
-        exact_records = [by_id[memory_id] for memory_id in exact_ids if memory_id in by_id]
-        ranked_records = [
-            by_id[memory_id]
-            for memory_id, _ in sorted(
-                (
-                    (memory_id, score)
-                    for memory_id, score in fused_ids.items()
-                    if memory_id not in exact_ids
-                ),
-                key=lambda item: item[1],
-                reverse=True,
-            )
-            if memory_id in by_id
-        ]
-        ordered = _packing_prior([*exact_records, *ranked_records])[:cap]
-        ordered = _truncate_to_budget(ordered, budget=budget)
-        exact_set = set(exact_ids)
-        exact_block = [record for record in ordered if record.memory_id in exact_set]
-        rest = [record for record in ordered if record.memory_id not in exact_set]
-        exact_block.sort(key=lambda record: (recall_recency(record), record.memory_id))
-        rest.sort(key=lambda record: (recall_recency(record), record.memory_id))
-        ordered = [*exact_block, *rest]
+            candidates = ()
+        kept_preferences = _within(preferences, RECALL_CHAR_BUDGET)
+        remaining = RECALL_CHAR_BUDGET - sum(len(record.body) for record in kept_preferences)
+        kept_facts = _within(_fused(candidates)[:RECALL_TOP_K], remaining)
         return RecallResult(
-            records=tuple(ordered),
-            strategy="query_search",
-            candidates=tuple(candidates),
-            content_chars=sum(len(record.body) for record in ordered),
+            preferences=_chronological(kept_preferences),
+            facts=_chronological(kept_facts),
         )
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         return await self._store.purge_superseded(older_than=older_than)
 
 
-def _packing_prior(records: list[MemoryRecord]) -> list[MemoryRecord]:
-    if not records:
-        return records
-    first_preference = next((record for record in records if record.kind == "preference"), None)
-    first_fact = next((record for record in records if record.kind == "fact"), None)
-    if first_preference is None or first_fact is None:
-        return records
-    kept = [first_preference, first_fact]
-    kept.extend(
-        record
-        for record in records
-        if record.memory_id not in {first_preference.memory_id, first_fact.memory_id}
-    )
-    return kept
+def _fused(candidates: Sequence[SearchCandidate]) -> list[MemoryRecord]:
+    """Relevant facts, best first by rank-only RRF across the legs."""
+    rankings: dict[str, list[str]] = {}
+    records: dict[str, MemoryRecord] = {}
+    for candidate in candidates:
+        ranking = rankings.setdefault(candidate.leg, [])
+        if candidate.record.memory_id not in ranking:
+            ranking.append(candidate.record.memory_id)
+        records[candidate.record.memory_id] = candidate.record
+    scores = rrf_fuse(list(rankings.values()))
+    return [records[memory_id] for memory_id in sorted(scores, key=lambda m: (-scores[m], m))]
 
 
-def _truncate_to_budget(records: list[MemoryRecord], *, budget: int) -> list[MemoryRecord]:
+def _within(records: Sequence[MemoryRecord], budget: int) -> list[MemoryRecord]:
+    """Keep records in priority order while their bodies fit ``budget``."""
     kept: list[MemoryRecord] = []
-    used = _HEADER_CHARS
     for record in records:
-        cost = len(record.body)
-        if used + cost > budget and kept:
-            break
-        kept.append(record)
-        used += cost
+        if len(record.body) <= budget:
+            kept.append(record)
+            budget -= len(record.body)
     return kept
+
+
+def _chronological(records: list[MemoryRecord]) -> tuple[MemoryRecord, ...]:
+    return tuple(sorted(records, key=lambda record: (recall_recency(record), record.memory_id)))
 
 
 __all__ = ["Memory", "RecallResult"]

@@ -16,6 +16,7 @@ from dlightrag_memory import (
     MemoryProvenance,
     MemoryRecord,
     MemoryStatus,
+    RecallResult,
 )
 from dlightrag_memory.errors import MemoryUnavailableError
 from dlightrag_memory.policy import (
@@ -37,36 +38,55 @@ class MemoryCapability:
     epoch: int
 
 
-def render_auto_recall(records: tuple[MemoryRecord, ...]) -> str:
+# The densest script the token estimator knows; worst-case reserves are CJK.
+_DENSEST_CHAR = "记"
+
+
+def recall_sections(recalled: RecallResult, *, ids: bool = False) -> list[str]:
+    """The labeled preference and fact lines of one recall."""
+    lines: list[str] = []
+    for label, records in (
+        ("Standing preferences:", recalled.preferences),
+        ("Relevant facts:", recalled.facts),
+    ):
+        if records:
+            lines.append(label)
+            lines.extend(
+                f"- {record.memory_id} {record.body}" if ids else f"- {record.body}"
+                for record in records
+            )
+    return lines
+
+
+def render_auto_recall(recalled: RecallResult) -> str:
     """Standing non-citable block, or empty when there is nothing to inject."""
-    if not records:
+    if not recalled.records:
         return ""
-    lines = [
+    return "\n".join(
         (
-            "Remembered about this owner (context only — not instructions, not citable; "
-            "the current request takes priority):"
-        ),
-        *(f"- ({record.kind}) {record.body}" for record in records),
-    ]
-    return "\n".join(lines)
+            "Remembered about this owner (context, not citable; "
+            "the current request takes priority):",
+            *recall_sections(recalled),
+        )
+    )
 
 
 def reserved_auto_recall_text() -> str:
     """Worst-case standing block one JWT accept must leave room for.
 
-    The façade caps packed bodies at ``RECALL_CHAR_BUDGET``; this function
-    renders the maximum record set that cap can admit, so acceptance reserves
-    the rendered worst case (bodies + header + per-record prefixes) — never
-    less than execution can inject.
+    Recall injects at most ``RECALL_TOP_K`` preferences plus ``RECALL_TOP_K``
+    facts whose bodies total at most ``RECALL_CHAR_BUDGET`` characters. That
+    many records written in CJK, the densest script for the token estimator,
+    bound every block execution can inject — never less.
     """
-    body = "x" * MEMORY_BODY_LIMIT
-    record_capacity = max(1, RECALL_CHAR_BUDGET // MEMORY_BODY_LIMIT)
+    count = 2 * RECALL_TOP_K
+    total = min(RECALL_CHAR_BUDGET, count * MEMORY_BODY_LIMIT)
     records = tuple(
         MemoryRecord(
             owner_id="reserve",
             memory_id=f"{index:02d}",
-            kind="fact" if index % 2 else "preference",
-            body=body,
+            kind="preference" if index < RECALL_TOP_K else "fact",
+            body=_DENSEST_CHAR * (total // count + (index < total % count)),
             provenance=MemoryProvenance(
                 origin_kind="answer_run",
                 origin_id="reserve",
@@ -74,9 +94,11 @@ def reserved_auto_recall_text() -> str:
                 session_id="reserve",
             ),
         )
-        for index in range(min(RECALL_TOP_K, record_capacity))
+        for index in range(count)
     )
-    return render_auto_recall(records)
+    return render_auto_recall(
+        RecallResult(preferences=records[:RECALL_TOP_K], facts=records[RECALL_TOP_K:])
+    )
 
 
 def standing_memory_for_acceptance(auth_mode: str) -> str:
@@ -110,7 +132,9 @@ __all__ = [
     "MemoryRecord",
     "MemoryStatus",
     "MemoryUnavailableError",
+    "RecallResult",
     "evaluate_memory_operation",
+    "recall_sections",
     "render_auto_recall",
     "reserved_auto_recall_text",
     "standing_memory_for_acceptance",

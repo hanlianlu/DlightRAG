@@ -28,10 +28,8 @@ _MemoryKind = Literal["preference", "fact"]
 async def _recall(memory: Memory, *, subject: str, query: str) -> dict[str, Any]:
     result = await memory.recall(owner_id=subject, query=query)
     return {
-        "records": [
-            {"memory_id": record.memory_id, "kind": record.kind, "body": record.body}
-            for record in result.records
-        ]
+        section: [{"memory_id": record.memory_id, "body": record.body} for record in records]
+        for section, records in (("preferences", result.preferences), ("facts", result.facts))
     }
 
 
@@ -101,8 +99,8 @@ def build_memory_server(memory: Memory, *, subject: str) -> MCPServer:
     @server.tool(
         name="memory_recall",
         description=(
-            "Recall owner preferences and facts relevant to a query, including ids needed "
-            "before replacing or forgetting one. Context only; never citable."
+            "Recall the owner's standing preferences and the facts relevant to a query, "
+            "with the ids needed before replacing or forgetting one. Context only; never citable."
         ),
         annotations=ToolAnnotations(read_only_hint=True),
     )

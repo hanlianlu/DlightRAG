@@ -45,7 +45,9 @@ class MemoryStore(Protocol):
 
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None: ...
 
-    async def search_candidates(
+    async def list_preferences(self, *, owner_id: str, limit: int) -> tuple[MemoryRecord, ...]: ...
+
+    async def search_facts(
         self, *, owner_id: str, query: str, limit: int
     ) -> tuple[SearchCandidate, ...]: ...
 

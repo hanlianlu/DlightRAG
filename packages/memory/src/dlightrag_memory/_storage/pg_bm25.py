@@ -1,12 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """pg_textsearch BM25 mechanics for the memory sparse leg.
 
-A faithful, narrow port of the corpus BM25 quality knobs (same extension,
-same k1/b, same textsearch configs) kept private to this package so the
-memory adapter never depends on dlightrag.engine.rag. Two unconditional indexes —
-``simple`` and ``public.jiebacfg`` — serve one table; queries hit both and
-merge by best score, so Chinese and Latin bodies keep their tuned configs
-without a per-row language column.
+A narrow port of the corpus BM25 knobs (same extension, same k1/b) kept
+private to this package so the memory adapter never depends on
+dlightrag.engine.rag. Two stopword-aware configs serve one table: ``english``
+stems Latin text and ``public.jiebacfg`` segments Chinese. Queries hit both and
+keep each record's best score, so a positive score means the query and the
+record share a content word, never just "the" or "的".
 """
 
 from __future__ import annotations
@@ -15,14 +15,29 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-_FALLBACK_CONFIG = "simple"
+_LATIN_CONFIG = "english"
 _JIEBA_CONFIG = "public.jiebacfg"
 _INDEX_PREFIX = "idx_dlightrag_memory_records_bm25"
-_INDEX_SUFFIXES = ("simple", "jieba")
 _K1 = 1.2
 _B = 0.75
 
 _CONFIG_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$")
+_WHITESPACE = re.compile(r"\s+")
+_PREFIXED_INDEXES_SQL = (
+    "SELECT indexname FROM pg_indexes "
+    "WHERE tablename = 'dlightrag_memory_records' AND indexname LIKE $1"
+)
+
+
+def bm25_query_text(text_config: str, query: str) -> str:
+    """The query text one index's tokenizer should see.
+
+    pg_jieba indexes each whitespace run as a term (jaiminpan/pg_jieba#47), so a
+    spaced query would match every record that contains a space. A full-width
+    comma is both a jieba separator and a jieba stopword: it splits words
+    exactly where the whitespace did and adds no term.
+    """
+    return _WHITESPACE.sub("，", query) if text_config == _JIEBA_CONFIG else query
 
 
 def _format_float(value: float) -> str:
@@ -98,7 +113,7 @@ def extension_bootstrap_sql() -> tuple[str, ...]:
 async def text_configs_available(conn: Any) -> tuple[str, ...]:
     """Return the installed textsearch configs this adapter can serve.
 
-    ``simple`` is pg_catalog built-in; ``public.jiebacfg`` comes from the
+    ``english`` is pg_catalog built-in; ``public.jiebacfg`` comes from the
     pg_jieba extension, matching the corpus BM25 profiles.
     """
     jieba = await conn.fetchval(
@@ -110,18 +125,19 @@ async def text_configs_available(conn: Any) -> tuple[str, ...]:
         LIMIT 1
         """
     )
-    return (_FALLBACK_CONFIG, _JIEBA_CONFIG) if jieba else (_FALLBACK_CONFIG,)
+    return (_LATIN_CONFIG, _JIEBA_CONFIG) if jieba else (_LATIN_CONFIG,)
 
 
 def desired_indexes(available: tuple[str, ...]) -> tuple[BM25IndexOptions, ...]:
-    """The indexes to provision: simple always, jieba when installed."""
-    options = [BM25IndexOptions(index_name=index_name("simple"), text_config=_FALLBACK_CONFIG)]
+    """The indexes to provision: english always, jieba when installed."""
+    options = [BM25IndexOptions(index_name=index_name("english"), text_config=_LATIN_CONFIG)]
     if _JIEBA_CONFIG in available:
         options.append(BM25IndexOptions(index_name=index_name("jieba"), text_config=_JIEBA_CONFIG))
     return tuple(options)
 
 
 def build_bm25_sql(*, index_name: str, limit: int) -> str:
+    """Rank one owner's active facts against ``$1``; non-matching facts score 0."""
     safe_index = _validate_index_name(index_name)
     limit_value = int(limit)
     if limit_value < 1:
@@ -133,7 +149,7 @@ def build_bm25_sql(*, index_name: str, limit: int) -> str:
         "created_at, updated_at, "
         f"-(body <@> to_bm25query($1, '{safe_index}')) AS score "  # noqa: S608
         "FROM dlightrag_memory_records "
-        "WHERE owner_id = $2 AND status = 'active' "
+        "WHERE owner_id = $2 AND status = 'active' AND kind = 'fact' "
         f"ORDER BY body <@> to_bm25query($1, '{safe_index}') "  # noqa: S608
         "LIMIT " + str(limit_value)
     )
@@ -144,12 +160,13 @@ async def ensure_bm25_indexes(
     *,
     available: tuple[str, ...] | None = None,
     verify_only: bool = False,
-) -> tuple[str, ...]:
+) -> tuple[BM25IndexOptions, ...]:
     """Provision or validate the memory-table BM25 indexes.
 
-    With ``verify_only`` this performs no DDL: readers load the served index
-    names and fail when a configured index is missing, matching the corpus
-    verify path.
+    With ``verify_only`` this performs no DDL: readers load the served indexes
+    and fail when a configured index is missing, matching the corpus verify
+    path. Otherwise every other index under the BM25 prefix is dropped, so a
+    retired config never keeps paying write cost.
     """
     installed = available if available is not None else await text_configs_available(conn)
     options = desired_indexes(installed)
@@ -168,14 +185,16 @@ async def ensure_bm25_indexes(
             await conn.execute(f"DROP INDEX IF EXISTS {option.index_name}")
         await conn.execute(option.create_index_sql())
     if not verify_only:
-        for suffix in _INDEX_SUFFIXES:
-            if not any(option.index_name == index_name(suffix) for option in options):
-                await conn.execute(f"DROP INDEX IF EXISTS {index_name(suffix)}")
-    return tuple(option.index_name for option in options)
+        served = {option.index_name for option in options}
+        for row in await conn.fetch(_PREFIXED_INDEXES_SQL, f"{_INDEX_PREFIX}_%"):
+            if row["indexname"] not in served:
+                await conn.execute(f"DROP INDEX IF EXISTS {_validate_index_name(row['indexname'])}")
+    return options
 
 
 __all__ = [
     "BM25IndexOptions",
+    "bm25_query_text",
     "build_bm25_sql",
     "desired_indexes",
     "ensure_bm25_indexes",

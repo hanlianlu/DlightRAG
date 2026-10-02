@@ -1441,7 +1441,7 @@ class AnswerExecutor:
                         owner_id=session.owner_id,
                         query=request.query,
                     )
-                    memory_text = render_auto_recall(recalled.records)
+                    memory_text = render_auto_recall(recalled)
                     memory_recall_record_count = len(recalled.records)
                     memory_recall_chars = recalled.content_chars
                 run.orchestrator.bind_recall(memory_text)
@@ -1633,7 +1633,7 @@ class AnswerExecutor:
                         owner_id=session.owner_id,
                         query=request.query,
                     )
-                    memory_text = render_auto_recall(recalled.records)
+                    memory_text = render_auto_recall(recalled)
                     memory_recall_record_count = len(recalled.records)
                     memory_recall_chars = recalled.content_chars
                 run.orchestrator.bind_recall(memory_text)

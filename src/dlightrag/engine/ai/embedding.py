@@ -145,6 +145,11 @@ class MultimodalEmbedder:
         return await self.embed_text(text)
 
     @property
+    def relevance_floor(self) -> float | None:
+        """Similarity at or above which a query and a remembered fact are related."""
+        return self._capabilities.relevance_floor
+
+    @property
     def embedding_fingerprint(self) -> str:
         """Return the canonical embedding-space identity for storage ports."""
         endpoint = self.fingerprint.endpoint_fingerprint

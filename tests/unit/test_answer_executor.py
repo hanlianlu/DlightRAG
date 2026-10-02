@@ -1979,7 +1979,7 @@ async def test_fast_sends_recalled_profile_memory_and_no_tools(tmp_path: Path) -
 
     class _Memory:
         async def recall(self, **_kwargs: Any) -> RecallResult:
-            return RecallResult(records=(record,), strategy="test", content_chars=len(record.body))
+            return RecallResult(facts=(record,))
 
     executor, session, sent = await _drive_fast_execute(tmp_path=tmp_path, memory=_Memory())
     with pytest.raises(RunExecutionError):
@@ -1989,7 +1989,10 @@ async def test_fast_sends_recalled_profile_memory_and_no_tools(tmp_path: Path) -
     # Fast composes no tools, so its one answer call offers the model none.
     assert "tools" not in request
     # The recalled block rides last, after the request it must not outrank.
-    assert request["messages"][-1] == {"role": "user", "content": render_auto_recall((record,))}
+    assert request["messages"][-1] == {
+        "role": "user",
+        "content": render_auto_recall(RecallResult(facts=(record,))),
+    }
 
 
 @pytest.mark.asyncio

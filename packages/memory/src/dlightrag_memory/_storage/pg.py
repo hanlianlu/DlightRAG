@@ -2,16 +2,20 @@
 """PostgreSQL adapter for the Memory facade.
 
 Owns its own schema, namespace, and migration registry: the package never
-shares DlightRAG's answer-run migrations or tables. The three recall legs are
-implemented here behind the neutral ports:
+shares DlightRAG's answer-run migrations or tables. Preferences are read as a
+standing set; facts are searched by three legs behind the neutral ports, and
+each leg returns only facts it has evidence for:
 
 - exact:  ``normalized_body`` btree equality (Python-side NFKC normalization)
-- sparse: pg_textsearch BM25 with the corpus-tuned k1/b and both textsearch
-  configs (``simple`` + ``public.jiebacfg``), merged by best score into one
-  ranking so a record never double-counts in fusion
-- dense:  optional ``halfvec`` column + HNSW index when a TextEmbedder is bound
+- sparse: pg_textsearch BM25 with the corpus-tuned k1/b and two stopword-aware
+  configs (``english`` + ``public.jiebacfg``), merged by best score into one
+  ranking so a record never double-counts in fusion; a fact must share a
+  content word with the query
+- dense:  optional ``halfvec`` column + HNSW index when a TextEmbedder is bound;
+  a fact must reach the embedder's calibrated relevance floor
 
-Dense is opt-in: with the NullEmbedder the adapter runs exact + sparse only.
+Dense is opt-in: with the NullEmbedder, or an embedder without a relevance
+floor, the adapter searches with exact + sparse only.
 A changed embedder fingerprint leaves old rows out of the dense leg (exact and
 sparse still reach them); rows are never re-embedded in bulk. A remember that
 restates an active record gives it the current vector when the dense leg
@@ -32,6 +36,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from dlightrag_memory._storage.pg_bm25 import (
+    BM25IndexOptions,
+    bm25_query_text,
     build_bm25_sql,
     ensure_bm25_indexes,
     extension_bootstrap_sql,
@@ -182,7 +188,7 @@ class PostgresMemoryStore:
         self._owned_pool: Any = None
         self._embedder = embedder
         self._dense = not isinstance(embedder, NullEmbedder)
-        self._bm25_indexes: tuple[str, ...] = ()
+        self._bm25_indexes: tuple[BM25IndexOptions, ...] = ()
         self._initialized = False
 
     async def aclose(self) -> None:
@@ -840,45 +846,55 @@ class PostgresMemoryStore:
 
         return await self._write(operation)
 
-    async def search_candidates(
+    async def list_preferences(self, *, owner_id: str, limit: int) -> tuple[MemoryRecord, ...]:
+        """The owner's active preferences, newest first."""
+        cap = max(1, min(int(limit), 100))
+
+        async def operation(conn: PGConnection) -> tuple[MemoryRecord, ...]:
+            return tuple(_row(row) for row in await conn.fetch(_SELECT_PREFERENCES, owner_id, cap))
+
+        return await self._read(operation)
+
+    async def search_facts(
         self, *, owner_id: str, query: str, limit: int
     ) -> tuple[SearchCandidate, ...]:
-        """Return leg-tagged candidates in per-leg rank order, no cross-leg merge.
+        """Return the facts each leg has evidence for, in per-leg rank order.
 
-        The sparse leg merges both BM25 configs by best score into ONE ranking
-        (a record matching both configs must not double-count in RRF); the
-        façade fuses exact/sparse/dense with RRF.
+        Exact matches restate the query. Sparse keeps facts sharing a content
+        word with it (BM25 score above zero), both configs merged by best score
+        into ONE ranking so a fact never double-counts in RRF. Dense keeps facts
+        at or above the embedder's relevance floor. The façade fuses the legs.
         """
         cap = max(1, min(int(limit), 100))
         key = normalized_body(query)
+        floor = self._embedder.relevance_floor if self._dense else None
 
         async def operation(conn: PGConnection) -> tuple[SearchCandidate, ...]:
-            candidates: list[SearchCandidate] = []
-            exact_rows = await conn.fetch(_SEARCH_EXACT, owner_id, key, cap)
-            candidates.extend(
-                SearchCandidate(record=_row(row), leg="exact", score=2.0) for row in exact_rows
-            )
+            candidates = [
+                SearchCandidate(record=_row(row), leg="exact", score=2.0)
+                for row in await conn.fetch(_SEARCH_EXACT, owner_id, key, cap)
+            ]
             sparse_by_id: dict[str, SearchCandidate] = {}
-            for bm25_index in self._bm25_indexes:
+            for index in self._bm25_indexes:
                 rows = await conn.fetch(
-                    build_bm25_sql(index_name=bm25_index, limit=cap), query, owner_id
+                    build_bm25_sql(index_name=index.index_name, limit=cap),
+                    bm25_query_text(index.text_config, query),
+                    owner_id,
                 )
                 for row in rows:
-                    record = _row(row)
                     score = float(row["score"])
+                    if score <= 0:
+                        break
+                    record = _row(row)
                     existing = sparse_by_id.get(record.memory_id)
                     if existing is None or score > existing.score:
                         sparse_by_id[record.memory_id] = SearchCandidate(
                             record=record, leg="sparse", score=score
                         )
             candidates.extend(
-                sorted(
-                    sparse_by_id.values(),
-                    key=lambda candidate: candidate.score,
-                    reverse=True,
-                )[:cap]
+                sorted(sparse_by_id.values(), key=lambda c: c.score, reverse=True)[:cap]
             )
-            if self._dense:
+            if floor is not None:
                 vector = await self._query_embedding(query)
                 dense_rows = await conn.fetch(
                     _SEARCH_DENSE,
@@ -890,6 +906,7 @@ class PostgresMemoryStore:
                 candidates.extend(
                     SearchCandidate(record=_row(row), leg="dense", score=float(row["score"]))
                     for row in dense_rows
+                    if float(row["score"]) >= floor
                 )
             return tuple(candidates)
 
@@ -1308,10 +1325,18 @@ DELETE FROM dlightrag_memory_operations
 WHERE created_at < $1
 """
 
+_SELECT_PREFERENCES = f"""
+SELECT {_RECORD_COLUMNS}
+FROM dlightrag_memory_records
+WHERE owner_id = $1 AND status = 'active' AND kind = 'preference'
+ORDER BY updated_at DESC, memory_id DESC
+LIMIT $2
+"""  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
+
 _SEARCH_EXACT = f"""
 SELECT {_RECORD_COLUMNS}
 FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active' AND normalized_body = $2
+WHERE owner_id = $1 AND status = 'active' AND kind = 'fact' AND normalized_body = $2
 ORDER BY updated_at DESC
 LIMIT $3
 """  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
@@ -1319,7 +1344,7 @@ LIMIT $3
 _SEARCH_DENSE = f"""
 SELECT {_RECORD_COLUMNS}, 1 - (embedding <=> $3::halfvec) AS score
 FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active'
+WHERE owner_id = $1 AND status = 'active' AND kind = 'fact'
   AND embedding_fingerprint = $2
   AND embedding IS NOT NULL
 ORDER BY embedding <=> $3::halfvec

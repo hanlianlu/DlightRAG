@@ -263,6 +263,10 @@ _VOYAGE_MULTIMODAL = EmbedModelCapabilities(
         send_upstream=True,
         allowed=(256, 512, 1024, 2048),
     ),
+    # Calibrated on bilingual query/fact pairs at 1024 dimensions: unrelated
+    # pairs peaked at 0.33 and document questions at 0.33, while topical
+    # matches reached 0.54.
+    relevance_floor=0.35,
 )
 
 

@@ -888,6 +888,15 @@ an authenticated query predicate. Invalid cursors return 422 before storage.
 When Memory is disabled, mutation/recall operations are unavailable except
 reading/changing the setting.
 
+Recall injects two labeled sections. **Standing preferences** apply to every
+answer: the owner's ten newest preferences, whatever the question. **Relevant
+facts** are the ten best facts with evidence that they bear on the question: a
+word-for-word restatement, a shared content word (BM25 over stopword-aware
+`english` and `public.jiebacfg` indexes), or embedding similarity at or above the
+model's calibrated relevance floor. Only `voyage-multimodal-3.5` has a floor
+today (0.35); with other models, facts are recalled by their words. Both sections
+share a 4,000-character budget, and preferences claim it first.
+
 ## Health And Errors
 
 `GET /health` is liveness: it returns in-process state without model, parser,

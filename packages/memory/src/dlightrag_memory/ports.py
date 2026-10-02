@@ -23,11 +23,17 @@ class TextEmbedder(Protocol):
 
     ``embedding_fingerprint`` identifies the embedding model; an adapter
     stores it with every vector so a model change invalidates the dense index
-    instead of silently comparing across spaces.
+    instead of silently comparing across spaces. ``relevance_floor`` is the
+    cosine similarity at or above which a query and a remembered fact are
+    related in this space; ``None`` means the model is uncalibrated, so dense
+    similarity alone never makes a fact relevant.
     """
 
     @property
     def embedding_fingerprint(self) -> str: ...
+
+    @property
+    def relevance_floor(self) -> float | None: ...
 
     dim: int
 
@@ -45,6 +51,10 @@ class NullEmbedder:
     def embedding_fingerprint(self) -> str:
         return "none"
 
+    @property
+    def relevance_floor(self) -> float | None:
+        return None
+
     async def aclose(self) -> None:
         return None
 
@@ -59,7 +69,7 @@ SearchLeg = Literal["dense", "sparse", "exact"]
 
 
 class SearchCandidate:
-    """One recalled record with its source leg and a comparable score."""
+    """One matching record, the leg that matched it, and that leg's own score."""
 
     __slots__ = ("record", "leg", "score")
 

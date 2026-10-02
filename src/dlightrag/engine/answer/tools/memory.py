@@ -17,6 +17,7 @@ from dlightrag_memory import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
+from dlightrag.engine.answer.memory import recall_sections
 from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 MemoryKindInput = Literal["preference", "fact"]
@@ -153,8 +154,9 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 def recall_memory_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         "recall_memory",
-        "Recall owner preferences and facts relevant to a query, including ids needed "
-        "before replacing or forgetting one. Context only; never evidence or a citation.",
+        "Recall the owner's standing preferences and the facts relevant to a query, with "
+        "the ids needed before replacing or forgetting one. Context only; never evidence "
+        "or a citation.",
         RecallInput,
         replay_policy="replayable",
     )
@@ -174,9 +176,8 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         await runtime.emit_update(ToolResult.text("", subject=args.query))
         result = await host.memory.recall(owner_id=host.owner_id, query=args.query)
         if not result.records:
-            return ToolResult.text("No relevant memories.")
-        lines = [f"- {row.memory_id} ({row.kind}) {row.body}" for row in result.records]
-        return ToolResult.text("Relevant memories:\n" + "\n".join(lines))
+            return ToolResult.text("No standing preferences or relevant facts.")
+        return ToolResult.text("\n".join(recall_sections(result, ids=True)))
 
     return recall_memory_declaration().bind(execute)
 

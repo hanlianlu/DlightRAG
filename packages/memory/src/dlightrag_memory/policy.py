@@ -9,6 +9,8 @@ from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import MemoryOperation
 
 MEMORY_BODY_LIMIT = 500
+# One recall injects at most RECALL_TOP_K standing preferences plus at most
+# RECALL_TOP_K relevant facts, within RECALL_CHAR_BUDGET body characters.
 RECALL_TOP_K = 10
 RECALL_CHAR_BUDGET = 4000
 MEMORY_SUPERSEDE_RETENTION_DAYS = 365

@@ -61,6 +61,9 @@ class EmbedModelCapabilities:
     max_inputs: int = 64
     max_image_bytes_per_request: int | None = None
     output_dimension: OutputDimensionPolicy = OutputDimensionPolicy()
+    # Cosine similarity at or above which a query and a short remembered fact
+    # are related in this space; None until the model has been calibrated.
+    relevance_floor: float | None = None
 
     @property
     def native_multimodal(self) -> bool:

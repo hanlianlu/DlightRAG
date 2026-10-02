@@ -11,7 +11,7 @@ from typing import Any
 
 import asyncpg
 import pytest
-from dlightrag_memory import Memory, MemoryOperation, MemoryProvenance, MemoryRecord
+from dlightrag_memory import Memory, MemoryKind, MemoryOperation, MemoryProvenance, MemoryRecord
 from dlightrag_memory._storage.pg_bm25 import index_name
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.mcp_server import _forget as mcp_forget
@@ -19,6 +19,7 @@ from dlightrag_memory.mcp_server import _recall as mcp_recall
 from dlightrag_memory.mcp_server import _remember as mcp_remember
 from dlightrag_memory.mcp_server import _undo as mcp_undo
 from dlightrag_memory.normalize import normalized_body
+from dlightrag_memory.policy import RECALL_CHAR_BUDGET, RECALL_TOP_K
 from dlightrag_memory.ports import NullEmbedder, TextEmbedder
 from dlightrag_memory.postgres import PostgresMemoryStore
 from dlightrag_memory.store import operation_change_id, operation_record_id
@@ -90,12 +91,17 @@ class _TopicEmbedder:
     dim = 3
     _TOPICS = ("tea", "coffee", "train")
 
-    def __init__(self) -> None:
+    def __init__(self, relevance_floor: float | None = 0.5) -> None:
         self.document_calls: list[tuple[str, ...]] = []
+        self._relevance_floor = relevance_floor
 
     @property
     def embedding_fingerprint(self) -> str:
         return "test:topic@local"
+
+    @property
+    def relevance_floor(self) -> float | None:
+        return self._relevance_floor
 
     def _vector(self, text: str) -> list[float]:
         lowered = text.lower()
@@ -123,13 +129,17 @@ def _provenance(run: str = "run-1") -> MemoryProvenance:
 
 
 def _record(
-    *, owner: str = "alpha", body: str = "No email.", memory_id: str | None = None
+    *,
+    owner: str = "alpha",
+    body: str = "No email.",
+    memory_id: str | None = None,
+    kind: MemoryKind = "preference",
 ) -> MemoryRecord:
     now = datetime.now(UTC)
     return MemoryRecord(
         owner_id=owner,
         memory_id=memory_id or str(uuid.uuid4()),
-        kind="preference",
+        kind=kind,
         body=body,
         provenance=_provenance(),
         created_at=now,
@@ -551,22 +561,25 @@ async def test_pg_purge_expired_non_active_rows(store: PostgresMemoryStore) -> N
     assert await store.get(owner_id="alpha", memory_id=old.memory_id) is None
 
 
-async def test_pg_recall_legs_find_only_the_owner(store: PostgresMemoryStore) -> None:
-    await store.insert(_record(owner="alpha", body="No email."))
-    await store.insert(_record(owner="beta", body="No email."))
-    await store.insert(_record(owner="alpha", body="Deploy at midnight."))
+async def test_pg_fact_search_finds_only_the_owner(store: PostgresMemoryStore) -> None:
+    await store.insert(_record(owner="alpha", kind="fact", body="No email."))
+    await store.insert(_record(owner="beta", kind="fact", body="No email."))
+    await store.insert(_record(owner="alpha", kind="fact", body="Deploy at midnight."))
 
-    candidates = await store.search_candidates(owner_id="alpha", query="No email", limit=10)
-    assert "No email." in {candidate.record.body for candidate in candidates}
+    candidates = await store.search_facts(owner_id="alpha", query="email", limit=10)
+
+    assert {candidate.record.body for candidate in candidates} == {"No email."}
     assert all(candidate.record.owner_id == "alpha" for candidate in candidates)
 
 
-def _dated_record(memory_id: str, body: str, *, minute: int) -> MemoryRecord:
+def _dated_record(
+    memory_id: str, body: str, *, minute: int, kind: MemoryKind = "fact"
+) -> MemoryRecord:
     at = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=minute)
     return MemoryRecord(
         owner_id="alpha",
         memory_id=str(uuid.uuid5(uuid.NAMESPACE_URL, memory_id)),
-        kind="fact",
+        kind=kind,
         body=body,
         provenance=_provenance(),
         created_at=at,
@@ -574,73 +587,147 @@ def _dated_record(memory_id: str, body: str, *, minute: int) -> MemoryRecord:
     )
 
 
-async def test_pg_recall_searches_with_query(store: PostgresMemoryStore) -> None:
-    await store.insert(_record(body="No email."))
-    await store.insert(_record(body="Unrelated fact about trains."))
+def _bodies(records: Sequence[MemoryRecord]) -> list[str]:
+    return [record.body for record in records]
 
-    result = await Memory(store).recall(owner_id="alpha", query="email", top_k=5)
 
-    assert result.strategy == "query_search"
-    assert result.candidates[0].record.body == "No email."
-    assert "No email." in [record.body for record in result.records]
+async def test_pg_recall_keeps_preferences_standing_and_facts_relevant(
+    store: PostgresMemoryStore,
+) -> None:
+    await store.insert(_dated_record("lang", "Answer in Chinese.", minute=0, kind="preference"))
+    await store.insert(_dated_record("quant", "Works as a quantitative trader.", minute=1))
+    await store.insert(_dated_record("dog", "Keeps a corgi named Doudou.", minute=2))
+
+    result = await Memory(store).recall(
+        owner_id="alpha", query="How should a quantitative fund size positions?"
+    )
+
+    assert _bodies(result.preferences) == ["Answer in Chinese."]
+    assert _bodies(result.facts) == ["Works as a quantitative trader."]
     assert result.content_chars == sum(len(record.body) for record in result.records)
 
 
-async def test_pg_recall_pins_exact_matches_first_in_chronological_order(
+async def test_pg_recall_needs_a_shared_content_word_not_a_stopword(
     store: PostgresMemoryStore,
 ) -> None:
-    newer = _dated_record("new", "deploy to staging", minute=2)
-    older = _dated_record("old", "deploy to staging", minute=1)
-    related = _dated_record("related", "deploy staging servers nightly", minute=0)
-    for record in (newer, older, related):
-        await store.insert(record)
+    await store.insert(_dated_record("office", "The office is in Berlin.", minute=0))
 
-    result = await Memory(store).recall(owner_id="alpha", query="deploy to staging")
+    result = await Memory(store).recall(owner_id="alpha", query="What is the capital of Australia?")
 
-    assert [record.memory_id for record in result.records[:2]] == [
-        older.memory_id,
-        newer.memory_id,
-    ]
+    assert result.facts == ()
 
 
-async def test_pg_recall_timeout_falls_back_to_recent_records(
+async def test_pg_recall_ignores_the_whitespace_jieba_indexes(store: PostgresMemoryStore) -> None:
+    await store.insert(_dated_record("weekend", "周末 在 上海 跑步", minute=0))
+
+    unrelated = await Memory(store).recall(owner_id="alpha", query="量化 交易 策略")
+    related = await Memory(store).recall(owner_id="alpha", query="上海 天气 怎么样")
+
+    assert unrelated.facts == ()
+    assert _bodies(related.facts) == ["周末 在 上海 跑步"]
+
+
+async def test_pg_recall_finds_a_fact_restated_word_for_word(store: PostgresMemoryStore) -> None:
+    # Every word is a stopword, so only the exact leg can find it.
+    await store.insert(_dated_record("motto", "It is what it is.", minute=0))
+
+    result = await Memory(store).recall(owner_id="alpha", query="it is what it is.")
+
+    assert _bodies(result.facts) == ["It is what it is."]
+
+
+@pytest.mark.parametrize(("floor", "recalled"), [(0.5, ["Runs a small coffeehouse."]), (None, [])])
+async def test_pg_recall_trusts_dense_similarity_only_at_the_floor(
+    floor: float | None, recalled: list[str]
+) -> None:
+    async with _scratch_store(_TopicEmbedder(relevance_floor=floor)) as store:
+        memory = Memory(store)
+        for key, body in (("cafe", "Runs a small coffeehouse."), ("train", "Commutes by train.")):
+            await memory.remember(
+                owner_id="alpha",
+                kind="fact",
+                body=body,
+                provenance=_provenance(),
+                idempotency_key=key,
+            )
+
+        # No word in common with either fact: only the embedding can relate them.
+        result = await memory.recall(owner_id="alpha", query="Where can I buy good coffee?")
+
+    assert _bodies(result.facts) == recalled
+
+
+async def test_pg_recall_keeps_preferences_when_fact_search_times_out(
     store: PostgresMemoryStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await store.insert(_dated_record("earlier", "earlier profile", minute=1))
-    recent = _dated_record("recent", "recent profile", minute=2)
-    await store.insert(recent)
+    preference = _dated_record("lang", "Answer in Chinese.", minute=0, kind="preference")
+    await store.insert(preference)
+    await store.insert(_dated_record("quant", "Works as a quantitative trader.", minute=1))
 
     async def slow_search(**_kwargs: Any) -> tuple[()]:
         await asyncio.sleep(0.05)
         return ()
 
-    monkeypatch.setattr(store, "search_candidates", slow_search)
+    monkeypatch.setattr(store, "search_facts", slow_search)
     monkeypatch.setattr("dlightrag_memory.memory._SEARCH_DEADLINE_SECONDS", 0.001)
 
-    result = await Memory(store).recall(owner_id="alpha", query="anything", top_k=1)
+    result = await Memory(store).recall(owner_id="alpha", query="quantitative")
 
-    assert [record.memory_id for record in result.records] == [recent.memory_id]
-    assert result.strategy == "recent_fallback"
-    assert result.degraded == ("search_timeout",)
-
-
-async def test_pg_recall_caps_records_at_top_k(store: PostgresMemoryStore) -> None:
-    for index in range(15):
-        await store.insert(_record(body=f"project alpha item {index}"))
-
-    result = await Memory(store).recall(owner_id="alpha", query="project alpha item", top_k=5)
-
-    assert 0 < len(result.records) <= 5
+    assert [record.memory_id for record in result.preferences] == [preference.memory_id]
+    assert result.facts == ()
 
 
-async def test_pg_bm25_indexes_are_provisioned(store: PostgresMemoryStore) -> None:
+async def test_pg_recall_caps_each_section_and_keeps_the_newest_preferences(
+    store: PostgresMemoryStore,
+) -> None:
+    for minute in range(15):
+        await store.insert(
+            _dated_record(
+                f"pref-{minute}", f"Preference {minute}.", minute=minute, kind="preference"
+            )
+        )
+        await store.insert(
+            _dated_record(f"fact-{minute}", f"Milestone {minute} shipped.", minute=minute)
+        )
+
+    result = await Memory(store).recall(owner_id="alpha", query="milestone shipped")
+
+    assert _bodies(result.preferences) == [f"Preference {minute}." for minute in range(5, 15)]
+    assert len(result.facts) == RECALL_TOP_K
+
+
+async def test_pg_recall_gives_preferences_the_character_budget_first(
+    store: PostgresMemoryStore,
+) -> None:
+    for minute in range(9):
+        body = f"{minute} " + "p" * 448
+        await store.insert(_dated_record(f"pref-{minute}", body, minute=minute, kind="preference"))
+    await store.insert(_dated_record("fact", "Milestone shipped. " + "f" * 431, minute=9))
+
+    result = await Memory(store).recall(owner_id="alpha", query="milestone")
+
+    # Eight 450-character preferences take 3,600 of the 4,000; neither the
+    # oldest preference nor the matching fact fits in what is left.
+    assert [record.body[0] for record in result.preferences] == [str(m) for m in range(1, 9)]
+    assert result.facts == ()
+    assert result.content_chars <= RECALL_CHAR_BUDGET
+
+
+async def test_pg_bm25_indexes_follow_the_served_configs(store: PostgresMemoryStore) -> None:
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            f"CREATE INDEX {index_name('simple')} ON dlightrag_memory_records "
+            "USING bm25(body) WITH (text_config='simple')"
+        )
+
+    await store.initialize()
+
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
         rows = await conn.fetch(
             "SELECT indexname FROM pg_indexes WHERE tablename = 'dlightrag_memory_records' "
-            "AND indexname LIKE $1",
-            f"{index_name('simple')}%",
+            "AND indexname LIKE 'idx_dlightrag_memory_records_bm25%'"
         )
-        assert index_name("simple") in {str(row["indexname"]) for row in rows}
+    assert {str(row["indexname"]) for row in rows} == {index_name("english"), index_name("jieba")}
 
 
 async def _undo(memory: Memory, change_id: str, *, key: str):
@@ -1355,7 +1442,7 @@ async def test_pg_concurrent_multi_row_undo_has_one_winner(store: PostgresMemory
 
 
 async def _dense_ids(store: PostgresMemoryStore, query: str) -> list[str]:
-    candidates = await store.search_candidates(owner_id="alpha", query=query, limit=10)
+    candidates = await store.search_facts(owner_id="alpha", query=query, limit=10)
     return [candidate.record.memory_id for candidate in candidates if candidate.leg == "dense"]
 
 
@@ -1378,7 +1465,7 @@ async def test_pg_dense_undo_of_forget_restores_the_forgotten_vector(
     memory = Memory(store)
     remembered = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="Prefers green tea.",
         provenance=_provenance(),
         idempotency_key="remember-1",
@@ -1412,14 +1499,14 @@ async def test_pg_dense_undo_of_supersede_restores_the_original_vector(
     memory = Memory(store)
     original = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="Drinks tea.",
         provenance=_provenance(),
         idempotency_key="remember-1",
     )
     replacement = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="Drinks coffee.",
         provenance=_provenance(),
         idempotency_key="remember-2",
@@ -1443,12 +1530,12 @@ async def test_pg_dense_undo_keeps_each_restored_vector_in_its_own_space(
 ) -> None:
     store, embedder = dense_store
     memory = Memory(store)
-    current = _record(body="Prefers tea.")
-    retired = _record(body="  prefers tea.  ")
-    unembedded = _record(body="PREFERS TEA.")
+    current = _record(kind="fact", body="Prefers tea.")
+    retired = _record(kind="fact", body="  prefers tea.  ")
+    unembedded = _record(kind="fact", body="PREFERS TEA.")
     # A row labelled with the current space but carrying no vector, as earlier
     # undo settlements wrote them.
-    unlabelled = _record(body="Prefers  tea.")
+    unlabelled = _record(kind="fact", body="Prefers  tea.")
     for record in (current, retired, unembedded, unlabelled):
         await store.insert(record)
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
@@ -1510,7 +1597,7 @@ async def test_pg_restating_a_record_heals_a_vector_the_dense_leg_cannot_read(
     memory = Memory(store)
     remembered = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="Prefers green tea.",
         provenance=_provenance(),
         idempotency_key="remember-1",
@@ -1524,7 +1611,7 @@ async def test_pg_restating_a_record_heals_a_vector_the_dense_leg_cannot_read(
 
     restated = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="prefers  GREEN tea.",
         provenance=_provenance("run-2"),
         idempotency_key="remember-2",
@@ -1545,7 +1632,7 @@ async def test_pg_restating_a_record_keeps_a_vector_the_dense_leg_reads(
     memory = Memory(store)
     remembered = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="Prefers green tea.",
         provenance=_provenance(),
         idempotency_key="remember-1",
@@ -1559,7 +1646,7 @@ async def test_pg_restating_a_record_keeps_a_vector_the_dense_leg_reads(
 
     restated = await memory.remember(
         owner_id="alpha",
-        kind="preference",
+        kind="fact",
         body="Prefers green tea.",
         provenance=_provenance("run-2"),
         idempotency_key="remember-2",
@@ -1652,8 +1739,9 @@ async def test_pg_mcp_recall_returns_the_bound_subject_records(
 
     result = await mcp_recall(memory, subject="pi-user", query="email")
 
-    assert [record["body"] for record in result["records"]] == ["No email."]
-    assert result["records"][0]["memory_id"]
+    assert [record["body"] for record in result["preferences"]] == ["No email."]
+    assert result["preferences"][0]["memory_id"]
+    assert result["facts"] == []
 
 
 async def test_pg_mcp_remember_writes_mcp_provenance_and_replays(
