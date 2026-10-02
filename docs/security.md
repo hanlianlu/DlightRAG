@@ -161,6 +161,36 @@ Common mistakes:
 
 Map App Roles through `access.control.rules`, described below.
 
+### Cloudflare Access Example
+
+Each person signs in to Access with a one-time code sent to their email, and the
+Access application lists exactly the emails that may. Access then signs a JWT for
+that person (`sub` is their stable Access identity, `email` their address) and
+forwards it on every request as `Cf-Access-Jwt-Assertion`. The Web verifies it
+against the team's keys, so every email is its own owner.
+
+```yaml
+access:
+  auth_mode: jwt
+  jwt_algorithm: RS256
+  jwt_jwks_url: https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
+  jwt_issuer: https://<team>.cloudflareaccess.com
+  jwt_audience: <application-aud-tag>
+  web_identity:
+    edge: cloudflare
+    issuer: https://<team>.cloudflareaccess.com
+    audience: <application-aud-tag>
+```
+
+- Cover `/web` with the application and leave `/static` public; it holds only the
+  Web's assets.
+- Add a Bypass application for `/web/oauth/connections/mcp/client-metadata`: an
+  authorization server fetches it without an Access session.
+- REST and MCP clients present the same person's token as a bearer
+  (`cloudflared access token -app=https://<host>/web`). The `jwt_*` settings
+  verify it, so those clients act as that person too.
+- Access signs with RS256, not the HS256 default.
+
 ## Ingress Responsibilities
 
 The application enforces semantic invariants:
