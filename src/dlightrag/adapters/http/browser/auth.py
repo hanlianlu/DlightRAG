@@ -14,10 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from dlightrag.adapters.http.browser.app_shell import app_html_response
-from dlightrag.adapters.http.browser.edge_identity import (
-    EdgeIdentityError,
-    edge_identity_provider,
-)
+from dlightrag.adapters.http.browser.edge_identity import EdgeIdentityError, authenticate_edge
 from dlightrag.adapters.http.errors import error_response
 from dlightrag.application.access import (
     AuthenticationError,
@@ -25,7 +22,7 @@ from dlightrag.application.access import (
     authenticate_bearer_token,
 )
 from dlightrag.application.config import DlightragConfig, get_config
-from dlightrag.application.settings import authentication_settings
+from dlightrag.application.settings import authentication_settings, web_identity_settings
 
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
 WEB_CSRF_COOKIE = "dlightrag_web_csrf"
@@ -309,18 +306,14 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
     async def _dispatch_edge_identity(self, cfg, request: Request, call_next) -> Response:
         """Resolve the Web caller from the configured edge credential only."""
         try:
-            provider = edge_identity_provider(cfg.access.web_identity)
-            identity = provider.authenticate(request)
+            request.state.user_context = authenticate_edge(
+                request, edge=cfg.access.web_identity.edge, settings=web_identity_settings(cfg)
+            )
         except EdgeIdentityError as exc:
             if exc.kind == "misconfigured":
                 return error_response(500, str(exc))
             # The edge owns sign-in, so not even a page load goes to the paste form.
             return error_response(401, "Authentication required")
-        request.state.user_context = UserContext(
-            user_id=identity.subject,
-            auth_mode="jwt",
-            claims=identity.claims,
-        )
         if _reject_web_mutation(request):
             return _cross_origin_rejected()
         return await self._finish_web_response(request, call_next)

@@ -12,6 +12,8 @@ from pydantic import SecretStr, ValidationError
 
 from dlightrag.application.access import AuthenticationSettings
 from dlightrag.application.config import (
+    AccessControlConfig,
+    AccessControlRuleConfig,
     AccessSectionSettings,
     AnswerConfig,
     AnswerSectionSettings,
@@ -376,9 +378,21 @@ def test_jwt_jwks_and_mcp_oauth_validation() -> None:
         )
     )
     assert DlightragConfig(access=access, interfaces=interfaces).access.jwt_algorithm == "RS256"
-    with pytest.raises(ValidationError, match="requires jwt_issuer and jwt_audience"):
+    # Published keys (named or discovered) verify any token their issuer signs.
+    for published in (
+        AccessSectionSettings(auth_mode="jwt", jwt_jwks_url="https://x/jwks"),
+        AccessSectionSettings(auth_mode="jwt", jwt_issuer="https://x"),
+    ):
+        with pytest.raises(ValidationError, match="requires jwt_issuer and jwt_audience"):
+            DlightragConfig(access=published)
+    with pytest.raises(ValidationError, match="requires jwt_issuer or jwt_verification_key"):
+        DlightragConfig(access=AccessSectionSettings(auth_mode="jwt"))
+    rule = AccessControlRuleConfig(claim="email", value="a@example.com", actions=["admin"])
+    with pytest.raises(ValidationError, match="rules require auth_mode='jwt'"):
         DlightragConfig(
-            access=AccessSectionSettings(auth_mode="jwt", jwt_jwks_url="https://x/jwks")
+            access=AccessSectionSettings(
+                auth_mode="simple", api_token="token", control=AccessControlConfig(rules=[rule])
+            )
         )
 
 

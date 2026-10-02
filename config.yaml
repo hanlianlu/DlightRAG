@@ -126,9 +126,10 @@ answer:
       max_enabled_tools: 256
 
 access:
-  # Product security policy belongs here. Compose only carries the explicit
-  # local-loopback container waiver required by its 0.0.0.0 listener binding.
-  # For simple or JWT auth, keep tokens/verification keys in .env or a Secret.
+  # The development default. A deployment sets its own access in .env (see
+  # .env.example), keeping its issuer, audience, and people out of the
+  # repository. Compose only carries the explicit local-loopback container
+  # waiver required by its 0.0.0.0 listener binding.
   auth_mode: none
 
 observability:

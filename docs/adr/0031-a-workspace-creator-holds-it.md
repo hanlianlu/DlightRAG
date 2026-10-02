@@ -1,8 +1,8 @@
 # A workspace's creator holds it
 
-Each workspace records the owner that created it. Under `jwt_claims`, that
+Each workspace records the owner that created it. Once Access Rules apply, that
 creator holds `editor`, `workspace.reset`, and `workspace.delete` on the workspace
-beyond what Access Rules grant. Everything else still comes from the rules.
+beyond what they grant. Everything else still comes from the rules.
 
 ## Status
 
@@ -64,5 +64,5 @@ workspaces that only they and the administrator can see or change.
   rules.
 - Workspace ids stay deployment-wide. Creating a name someone else holds is
   refused as existing, which tells the caller that the name is taken.
-- `allow_all` deployments are unchanged. Every caller there is the deployment
-  owner and holds everything.
+- Deployments without Access Rules are unchanged: every authenticated caller
+  holds everything.

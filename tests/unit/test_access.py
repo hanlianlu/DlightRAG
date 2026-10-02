@@ -100,7 +100,6 @@ async def test_jwt_claims_access_control_matches_claim_workspace_and_action(
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="groups",
@@ -152,7 +151,6 @@ async def test_people_hold_the_workspaces_they_create_and_see_no_one_elses(
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="email", value="admin@example.com", workspaces=["*"], actions=["admin"]
@@ -216,7 +214,6 @@ async def test_a_run_shows_to_its_submitter_and_never_to_the_next_holder_of_its_
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="iss", value=_TEAM, workspaces=["default"], actions=["reader"]
@@ -263,7 +260,6 @@ def _preset_access_control(preset: str, test_config: DlightragConfig):
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="roles",
@@ -346,7 +342,6 @@ async def test_workspace_wildcard_rule_matches_any_canonical_workspace(
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="roles",

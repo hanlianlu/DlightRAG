@@ -126,17 +126,16 @@ def create_app() -> FastAPI:
     # -- Request ID middleware --
     application.add_middleware(RequestIdMiddleware)
 
-    # -- CORS middleware (config-driven; see DlightragConfig.cors_allow_origins) --
-    # allow_credentials toggles based on origin list: browsers refuse '*' +
-    # credentials, so we only enable credentials when origins are explicit.
-    allow_credentials = cfg.access.cors_allow_origins != ("*",)
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=cfg.access.cors_allow_origins,
-        allow_credentials=allow_credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # -- CORS middleware, only for origins the deployment names --
+    # Browsers refuse '*' with credentials, so credentials need explicit origins.
+    if cfg.access.cors_allow_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=cfg.access.cors_allow_origins,
+            allow_credentials=cfg.access.cors_allow_origins != ("*",),
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     install_error_handlers(application)
 

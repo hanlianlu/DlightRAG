@@ -32,10 +32,9 @@ services:
       # Compose Service DNS; the native application default remains localhost.
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       # The container binds 0.0.0.0, but the port above is published to
-      # 127.0.0.1 only, so no-auth is acceptable for local dev. Set
-      # access.auth_mode: simple in config.yaml, provide
-      # DLIGHTRAG_ACCESS__API_TOKEN as a Secret, and drop this override before
-      # publishing the port on a non-loopback address.
+      # 127.0.0.1 only, so no-auth is acceptable for local dev. Set the
+      # deployment's access in .env (see .env.example) and drop this override
+      # before publishing the port on a non-loopback address.
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
       FORWARDED_ALLOW_IPS: *local-proxies
@@ -74,9 +73,8 @@ services:
     build:
       context: .
     # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
-    # This maps the host port to 127.0.0.1 only; set access.auth_mode: simple in
-    # config.yaml and provide DLIGHTRAG_ACCESS__API_TOKEN as a Secret before
-    # exposing it on a non-loopback network.
+    # This maps the host port to 127.0.0.1 only; set the deployment's access in
+    # .env (see .env.example) before exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
     environment:

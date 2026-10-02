@@ -135,9 +135,9 @@ Workspace patterns and Action patterns. Rules are not durable user memberships.
 _Avoid_: Database role, Workspace membership, deny policy
 
 **Workspace Creator**:
-The owner that created a Workspace, recorded with its catalog identity. Under
-`jwt_claims` it holds `editor`, reset, and delete on that Workspace beyond what
-Access Rules grant; a Workspace the deployment registers itself has none.
+The owner that created a Workspace, recorded with its catalog identity. Once
+Access Rules apply it holds `editor`, reset, and delete on that Workspace beyond
+what they grant; a Workspace the deployment registers itself has none.
 _Avoid_: Workspace owner (an owner scopes Runs and history), Workspace membership
 
 **Action Preset**:

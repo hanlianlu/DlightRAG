@@ -18,6 +18,7 @@ from .projections import (
     rerank_scoring_model_settings,
     retrieval_settings,
     semantic_highlight_settings,
+    web_identity_settings,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "rerank_scoring_model_settings",
     "retrieval_settings",
     "semantic_highlight_settings",
+    "web_identity_settings",
 ]

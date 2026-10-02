@@ -37,7 +37,6 @@ from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 def access_settings(config: DlightragConfig) -> AccessSettings:
     """Snapshot root authorization configuration into immutable Access settings."""
     return AccessSettings(
-        mode=config.access.control.mode,
         rules=tuple(
             AccessRule(
                 claim=rule.claim,
@@ -72,6 +71,23 @@ def authentication_settings(
         jwt_issuer=config.access.jwt_issuer,
         jwt_audience=resolved_audience,
         jwt_algorithm=config.access.jwt_algorithm,
+    )
+
+
+def web_identity_settings(config: DlightragConfig) -> AuthenticationSettings:
+    """The verifier for the Web's edge token: the API's, field by field, unless named.
+
+    An edge token is verified against published keys only; a Web issuer of its
+    own publishes its own, found through its discovery document.
+    """
+    access = config.access
+    web = access.web_identity
+    audience = web.audience or access.jwt_audience
+    return AuthenticationSettings(
+        mode="jwt",
+        jwt_issuer=web.issuer or access.jwt_issuer,
+        jwt_audience=tuple(audience) if isinstance(audience, list) else audience,
+        jwt_jwks_url=web.jwks_url or (access.jwt_jwks_url if web.issuer is None else None),
     )
 
 

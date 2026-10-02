@@ -626,7 +626,6 @@ class TestJWTAuth:
             cfg,
             "access.control",
             AccessControlConfig(
-                mode="jwt_claims",
                 rules=[
                     AccessControlRuleConfig(
                         claim="groups",
@@ -668,7 +667,6 @@ class TestJWTAuth:
             cfg,
             "access.control",
             AccessControlConfig(
-                mode="jwt_claims",
                 rules=[
                     AccessControlRuleConfig(
                         claim="groups",
@@ -724,7 +722,6 @@ class TestJWTAuth:
             mock_config_no_auth_override,
             "access.control",
             AccessControlConfig(
-                mode="jwt_claims",
                 rules=[
                     AccessControlRuleConfig(
                         claim="groups",
@@ -2734,6 +2731,7 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
     mock_config: DlightragConfig,
 ) -> None:
     mutate_config(mock_config, "answer.generation.max_total_attachment_bytes", 64)
+    mutate_config(mock_config, "access.cors_allow_origins", ("https://example.test",))
     set_config(mock_config)
 
     async def chunks():
@@ -2762,7 +2760,25 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
     assert response.status_code == 413
     assert response.json()["error_type"] == "validation"
     assert response.headers["x-request-id"] == "body-limit-test"
-    assert response.headers["access-control-allow-origin"] == "*"
+    assert response.headers["access-control-allow-origin"] == "https://example.test"
+
+
+@pytest.mark.asyncio
+async def test_real_app_allows_no_cross_origin_caller_unless_one_is_named(
+    mock_config: DlightragConfig,
+) -> None:
+    set_config(mock_config)
+    application = create_app()
+    application.state.application = application_double(mock_config)
+
+    response = await _post(
+        application,
+        "/answer",
+        content=b"{}",
+        headers={"content-type": "application/json", "origin": "https://example.test"},
+    )
+
+    assert "access-control-allow-origin" not in response.headers
 
 
 @pytest.mark.asyncio

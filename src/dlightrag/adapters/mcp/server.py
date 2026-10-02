@@ -412,6 +412,8 @@ def create_mcp_http_app() -> ASGIApp:
         transport_security=transport_security,
         host=config.interfaces.mcp.host,
     )
+    if not config.access.cors_allow_origins:
+        return http_app
     return CORSMiddleware(
         http_app,
         allow_origins=config.access.cors_allow_origins,

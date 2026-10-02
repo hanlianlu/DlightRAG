@@ -82,7 +82,9 @@ runtime is refused the same way.
 Keep model/provider settings, parser sidecars, workspace identity,
 high-level concurrency, retrieval breadth, Answer policy, auth mode, access
 rules, and non-secret observability settings in YAML. Keep credentials out of
-YAML, and keep container topology out of it.
+YAML, and keep container topology out of it. A deployment that runs the
+checked-in file sets its own access in `.env` instead, so its issuer, audience,
+and people stay out of the repository.
 
 Usually leave these at code defaults unless measurement proves otherwise:
 
@@ -112,7 +114,8 @@ minimal topology bindings required by that workload. In particular:
   manifest because these choices vary by process role;
 - keep a development-only insecure-listener waiver beside the manifest's
   loopback-only host publication; production deployments configure an auth mode
-  in YAML instead of inheriting that waiver;
+  (in their YAML, or `.env` beside the checked-in file) instead of inheriting
+  that waiver;
 - keep ports, Services, volumes, probes, resource requests/limits, and database
   server tuning entirely outside DlightRAG application configuration.
 
@@ -1019,14 +1022,13 @@ The checked-in Compose config explicitly selects `streamable-http` on port 8101.
 | `access.auth_mode` | `none` | `none`, `simple`, or `jwt` |
 | `access.api_token` | unset | The deployment owner's bearer token for `simple` |
 | `access.allow_insecure_no_auth` | `false` | Permit non-loopback no-auth bind |
-| `access.jwt_verification_key` | unset | Static HMAC/public key |
-| `access.jwt_jwks_url` | unset | Rotating JWKS endpoint |
-| `access.jwt_issuer`, `.jwt_audience` | unset | Expected claims |
-| `access.jwt_algorithm` | `HS256` | Accepted signing algorithm |
-| `access.cors_allow_origins` | `["*"]` | REST browser origins |
-| `access.web_identity` | disabled | Edge, issuer, audience, optional JWKS |
-| `access.control.mode` | `allow_all` | `allow_all` or `jwt_claims` |
-| `access.control.rules` | `[]` | Claim/workspace/action mappings |
+| `access.jwt_verification_key` | unset | Static key: HMAC secret or public-key PEM |
+| `access.jwt_issuer`, `.jwt_audience` | unset | Expected claims; the issuer's discovery names its keys |
+| `access.jwt_jwks_url` | from discovery | Key set of an issuer without OpenID discovery |
+| `access.jwt_algorithm` | the key's | Pins one algorithm; a static key is `HS256` |
+| `access.cors_allow_origins` | `[]` | Cross-origin browser clients; the Web is same-origin |
+| `access.web_identity` | disabled | Edge; its issuer, audience, and keys default to the API's |
+| `access.control.rules` | `[]` | Claim/workspace/action mappings; any rule puts every action under rules |
 
 Do not expose listeners without auth and ingress protection. Security semantics
 are in [Security](security.md); payload contracts are in

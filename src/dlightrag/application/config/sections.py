@@ -538,11 +538,14 @@ class AccessControlRuleConfig(BaseModel):
 
 
 class AccessControlConfig(BaseModel):
-    """DlightRAG resource authorization settings."""
+    """DlightRAG resource authorization settings.
+
+    Without rules every authenticated caller holds everything; with rules, the
+    rules (and each workspace's creator) decide.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    mode: Literal["allow_all", "jwt_claims"] = "allow_all"
     rules: list[AccessControlRuleConfig] = Field(default_factory=list)
 
 
@@ -589,8 +592,8 @@ class WebIdentitySettings(BaseModel):
     The browser front door already authenticated the human (Cloudflare Access,
     Azure Easy Auth, or AWS Amplify/CloudFront); the Web surface verifies the
     edge credential per request and never renders a login page or issues a
-    token of its own. JWKS and issuer values are public material and may live
-    in ``config.yaml``.
+    token of its own. The edge token is verified like an API bearer: each unset
+    field below is the API verifier's own (``jwt_issuer``, ``jwt_audience``).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
@@ -604,21 +607,17 @@ class WebIdentitySettings(BaseModel):
     )
     issuer: ServiceUrl | None = Field(
         default=None,
-        description=(
-            "Expected edge-token issuer: https://<team>.cloudflareaccess.com for "
-            "Cloudflare, https://login.microsoftonline.com/<tenant>/v2.0 for Azure, "
-            "the IdP issuer for AWS."
-        ),
+        description="Edge-token issuer when it differs from jwt_issuer.",
     )
     audience: Annotated[str | list[str] | None, NoDecode] = Field(
         default=None,
-        description="Expected edge-token audience (Cloudflare AUD tag; AAD client id).",
+        description="Edge-token audience when it differs from jwt_audience (e.g. an AAD client id).",
     )
     jwks_url: ServiceUrl | None = Field(
         default=None,
         description=(
-            "JWKS endpoint for edge-token signing keys. Optional: Cloudflare "
-            "derives its team certs endpoint from the issuer."
+            "Edge-token keys when the issuer's OpenID discovery cannot name them. "
+            "Unset, the edge issuer's discovery document does."
         ),
     )
 
@@ -642,18 +641,6 @@ class WebIdentitySettings(BaseModel):
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
             return value
         raise ValueError("web_identity.audience must be a string or a list of strings")
-
-    @model_validator(mode="after")
-    def _validate_edge(self) -> Self:
-        if self.edge is None:
-            return self
-        if not self.issuer:
-            raise ValueError("web_identity.edge requires web_identity.issuer")
-        if not self.audience:
-            raise ValueError("web_identity.edge requires web_identity.audience")
-        if self.edge == "aws" and not self.jwks_url:
-            raise ValueError("web_identity.edge='aws' requires web_identity.jwks_url")
-        return self
 
 
 class DeploymentSettings(FrozenSettings):
@@ -819,6 +806,9 @@ class AnswerSectionSettings(FrozenSettings):
     web_sources: WebSourcesConfig = Field(default_factory=WebSourcesConfig)
 
 
+type JwtAlgorithm = Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"]
+
+
 class AccessSectionSettings(FrozenSettings):
     auth_mode: Literal["none", "simple", "jwt"] = "none"
     api_token: str | None = Field(default=None, repr=False)
@@ -827,8 +817,12 @@ class AccessSectionSettings(FrozenSettings):
     jwt_jwks_url: ServiceUrl | None = None
     jwt_issuer: ServiceUrl | None = None
     jwt_audience: Annotated[str | tuple[str, ...] | None, NoDecode] = None
-    jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = "HS256"
-    cors_allow_origins: tuple[str, ...] = ("*",)
+    # Pins the signing algorithm. Unset, a published key names its own and
+    # jwt_verification_key is HS256.
+    jwt_algorithm: JwtAlgorithm | None = None
+    # The Web is same-origin and REST/MCP clients are not browsers, so no origin
+    # is allowed unless one is named.
+    cors_allow_origins: tuple[str, ...] = ()
     web_identity: WebIdentitySettings = Field(default_factory=WebIdentitySettings)
     control: AccessControlConfig = Field(default_factory=AccessControlConfig)
 
@@ -1006,12 +1000,19 @@ class DlightragConfig(BaseSettings):
             raise ValueError("api_token is set; configure auth_mode='simple' explicitly")
         if access.auth_mode == "simple" and not access.api_token:
             raise ValueError("auth_mode='simple' requires api_token")
-        if access.auth_mode == "jwt" and not (access.jwt_verification_key or access.jwt_jwks_url):
-            raise ValueError("auth_mode='jwt' requires jwt_verification_key or jwt_jwks_url")
-        if access.jwt_jwks_url and not (access.jwt_issuer and access.jwt_audience):
-            raise ValueError("jwt_jwks_url requires jwt_issuer and jwt_audience")
-        if access.web_identity.edge and access.auth_mode != "jwt":
-            raise ValueError("web_identity.edge requires auth_mode='jwt'")
+        if access.auth_mode == "jwt":
+            if not (access.jwt_verification_key or access.jwt_jwks_url or access.jwt_issuer):
+                raise ValueError("auth_mode='jwt' requires jwt_issuer or jwt_verification_key")
+            # Published keys verify any token the issuer signs, so the audience pins ours.
+            published = access.jwt_jwks_url or not access.jwt_verification_key
+            if published and not (access.jwt_issuer and access.jwt_audience):
+                raise ValueError("verifying published keys requires jwt_issuer and jwt_audience")
+        web = access.web_identity
+        if web.edge:
+            if access.auth_mode != "jwt":
+                raise ValueError("web_identity.edge requires auth_mode='jwt'")
+            if not ((web.issuer or access.jwt_issuer) and (web.audience or access.jwt_audience)):
+                raise ValueError("web_identity.edge requires an issuer and an audience")
         if mcp.resource_server_url:
             if access.auth_mode != "jwt" or mcp.transport != "streamable-http":
                 raise ValueError("mcp.resource_server_url requires JWT and streamable-http")
@@ -1035,9 +1036,8 @@ class DlightragConfig(BaseSettings):
             warnings.warn(
                 "auth_mode is enabled but wildcard CORS rejects credentials", stacklevel=2
             )
-        if access.control.mode != "allow_all":
-            if access.auth_mode != "jwt" or not access.control.rules:
-                raise ValueError("jwt_claims access control requires JWT and rules")
+        if access.control.rules and access.auth_mode != "jwt":
+            raise ValueError("access.control.rules require auth_mode='jwt'")
 
     @property
     def working_dir_path(self) -> Path:

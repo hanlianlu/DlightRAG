@@ -533,7 +533,6 @@ async def test_mcp_workspace_run_lookup_hides_a_denial_but_not_an_outage(
 ) -> None:
     mutate_config(test_config, "access.auth_mode", "jwt")
     mutate_config(test_config, "access.jwt_verification_key", "test-key")
-    mutate_config(test_config, "access.control", AccessControlConfig(mode="jwt_claims"))
     catalog = _Catalog()
     mock_mcp_application.access_control = JwtClaimsAccessControl(
         access_settings(test_config), creators=catalog
@@ -779,7 +778,6 @@ async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="groups",
@@ -815,7 +813,6 @@ async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="groups",
@@ -887,7 +884,20 @@ async def test_mcp_all_workspaces_rejects_empty_authorized_set(
     mock_mcp_application,
     test_config: DlightragConfig,
 ) -> None:
-    mutate_config(test_config, "access.control", AccessControlConfig(mode="jwt_claims", rules=[]))
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    # A rule alice matches nothing of.
+    mutate_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups", value="finance", workspaces=["finance"], actions=["reader"]
+                )
+            ]
+        ),
+    )
 
     with request_scope_context(RequestScope(user_id="alice", auth_mode="jwt")):
         result = await mcp_server.mcp_app.call_tool(
@@ -909,7 +919,6 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="groups",

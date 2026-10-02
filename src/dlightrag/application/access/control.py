@@ -4,7 +4,7 @@
 from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Protocol
 
 from dlightrag.application.access.principal import Principal, owner_id_from_user
 
@@ -21,7 +21,7 @@ class AccessRule:
 
 @dataclass(frozen=True, slots=True)
 class AccessSettings:
-    mode: Literal["allow_all", "jwt_claims"] = "allow_all"
+    # No rules: every authenticated caller holds everything.
     rules: tuple[AccessRule, ...] = ()
 
 
@@ -253,7 +253,7 @@ def access_control_from_settings(
     *,
     creators: WorkspaceCreators,
 ) -> AccessControl:
-    if settings.mode == "jwt_claims":
+    if settings.rules:
         return JwtClaimsAccessControl(settings, creators)
     return AllowAllAccessControl()
 

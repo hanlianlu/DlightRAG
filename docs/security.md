@@ -9,6 +9,10 @@ DlightRAG verifies credentials and maps claims to workspace/actions. It does
 not issue OAuth tokens, manage users/passwords, or provide an identity-provider
 login system.
 
+Examples below are YAML. Each setting is also `DLIGHTRAG_ACCESS__<FIELD>`, which
+is where a deployment of the checked-in `config.yaml` keeps it (see
+`.env.example`), so its issuer, audience, and people stay out of the repository.
+
 ## Authentication Modes
 
 | Mode | Intended use | Owner |
@@ -23,8 +27,9 @@ between them keeps that owner's data. Use `jwt` when several people share a
 deployment.
 
 A non-loopback REST/MCP listener with `none` is refused unless
-`access.allow_insecure_no_auth: true`. With browser credentials, replace wildcard
-CORS with explicit origins.
+`access.allow_insecure_no_auth: true`. CORS stays closed: the Web is same-origin,
+so name origins in `access.cors_allow_origins` only for a cross-origin browser
+client.
 
 ### Simple Bearer
 
@@ -53,7 +58,6 @@ JWT mode requires `sub`, which becomes `user_id`.
 # config.yaml
 access:
   auth_mode: jwt
-  jwt_algorithm: HS256
 ```
 
 ```bash
@@ -61,26 +65,29 @@ access:
 DLIGHTRAG_ACCESS__JWT_VERIFICATION_KEY=<key-or-public-pem>
 ```
 
-Use the shared secret for `HS*`; use issuer public-key PEM for `RS*`/`ES*`.
-Issuer/audience claims are validated when configured. DlightRAG never signs,
-renews, or mints tokens.
+A static key is a shared `HS256` secret unless `jwt_algorithm` names another;
+name `RS*`/`ES*` for an issuer public-key PEM. Issuer/audience claims are
+validated when configured. DlightRAG never signs, renews, or mints tokens.
 
-### JWKS / OIDC
+### Published Keys (OIDC)
 
-Prefer JWKS for rotating keys from Entra, Okta, Auth0, Keycloak, and similar
-issuers:
+Prefer an issuer's published, rotating keys (Entra, Okta, Auth0, Keycloak,
+Cloudflare Access, Cognito, and similar):
 
 ```yaml
 access:
   auth_mode: jwt
-  jwt_algorithm: RS256
-  jwt_jwks_url: https://login.example.com/.well-known/jwks.json
   jwt_issuer: https://login.example.com/tenant/v2.0
   jwt_audience: api://dlightrag
 ```
 
-`issuer` and `audience` are required with `jwt_jwks_url`. Audience may be one
-value or a list; any match passes.
+DlightRAG reads the key set from the issuer's OpenID discovery document
+(`<issuer>/.well-known/openid-configuration`), which must name this exact
+issuer, and verifies each token with the algorithm its key names. Set
+`jwt_jwks_url` only for an issuer without discovery, and `jwt_algorithm` only to
+pin one algorithm. Published keys verify any token their issuer signs, so
+`audience` is required with them. It may be one value or a list; any match
+passes.
 
 ### MCP OAuth Discovery
 
@@ -90,8 +97,6 @@ the external issuer still authenticates users and issues tokens.
 ```yaml
 access:
   auth_mode: jwt
-  jwt_algorithm: RS256
-  jwt_jwks_url: https://auth.example.com/.well-known/jwks.json
   jwt_issuer: https://auth.example.com
   jwt_audience: api://dlightrag-rest
 interfaces:
@@ -114,20 +119,25 @@ continue to verify their own bearer JWTs and never accept edge assertions.
 ```yaml
 access:
   auth_mode: jwt
+  jwt_issuer: https://<team>.cloudflareaccess.com
+  jwt_audience: <application-aud-tag>
   web_identity:
     edge: cloudflare        # cloudflare | azure | aws
-    issuer: https://<team>.cloudflareaccess.com
-    audience: <application-aud-tag>
 ```
 
-| Edge | Verified credential | Required configuration |
+The edge only decides where the Web finds the token; it is verified exactly as a
+REST bearer is. `web_identity.issuer`, `.audience`, and `.jwks_url` default to
+the API's and are set only when the edge's tokens differ, such as an Azure ID
+token whose audience is the App Registration client ID.
+
+| Edge | Verified credential | Its issuer and audience |
 |---|---|---|
-| Cloudflare Access | `Cf-Access-Jwt-Assertion`, fallback `CF_Authorization` JWT cookie | Team issuer + application AUD |
+| Cloudflare Access | `Cf-Access-Jwt-Assertion`, fallback `CF_Authorization` JWT cookie | Team domain + application AUD |
 | Azure Easy Auth | `X-MS-TOKEN-AAD-ID-TOKEN` | Entra issuer + App Registration client ID |
-| AWS Amplify/CloudFront | Forwarded `Authorization` bearer | IdP issuer + JWKS URL + app client ID |
+| AWS Amplify/CloudFront | Forwarded `Authorization` bearer | IdP issuer + app client ID |
 
 Owner identity is `(iss, sub)`, so changing issuer creates a different owner even
-for the same human. Azure's unsigned `X-MS-CLIENT-PRINCIPAL` is display-only.
+for the same human. Azure's unsigned `X-MS-CLIENT-PRINCIPAL` is never read.
 Missing/invalid edge credentials return 401; DlightRAG renders no login page.
 
 The origin must accept traffic only from the configured edge. Cryptographic
@@ -145,8 +155,6 @@ scope, and optionally App Roles assigned to groups.
 ```yaml
 access:
   auth_mode: jwt
-  jwt_algorithm: RS256
-  jwt_jwks_url: https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys
   jwt_issuer: https://login.microsoftonline.com/<TENANT_ID>/v2.0
   jwt_audience: <API_CLIENT_ID>
 ```
@@ -154,7 +162,6 @@ access:
 Common mistakes:
 
 - v2 tokens use the `/v2.0` issuer and client-ID GUID audience; v1 differs.
-- Entra signs with RS256, not the HS256 default.
 - App Roles provide stable strings in `roles`; raw `groups` contains object IDs
   and can overage around 200 groups.
 - A client must request the exposed API scope to receive the API audience.
@@ -172,14 +179,10 @@ against the team's keys, so every email is its own owner.
 ```yaml
 access:
   auth_mode: jwt
-  jwt_algorithm: RS256
-  jwt_jwks_url: https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
   jwt_issuer: https://<team>.cloudflareaccess.com
   jwt_audience: <application-aud-tag>
   web_identity:
     edge: cloudflare
-    issuer: https://<team>.cloudflareaccess.com
-    audience: <application-aud-tag>
 ```
 
 - Cover `/web` with the application and leave `/static` public; it holds only the
@@ -189,7 +192,6 @@ access:
 - REST and MCP clients present the same person's token as a bearer
   (`cloudflared access token -app=https://<host>/web`). The `jwt_*` settings
   verify it, so those clients act as that person too.
-- Access signs with RS256, not the HS256 default.
 
 ## Ingress Responsibilities
 
@@ -263,7 +265,6 @@ and no allow match means deny.
 access:
   auth_mode: jwt
   control:
-    mode: jwt_claims
     rules:
       - claim: roles
         value: finance.editors
@@ -275,14 +276,15 @@ access:
         actions: [reader]
 ```
 
-`jwt_claims` requires JWT auth and at least one rule. Local development defaults
-to `allow_all`. Claim values may be strings or list members. Workspace patterns
+Rules require JWT auth, and any rule puts every action under rules. Without
+rules every authenticated caller holds every action, as in local development.
+Claim values may be strings or list members. Workspace patterns
 are a canonical ID or `*`. Action patterns may be exact, `*`, a prefix such as
 `workspace.*`, or a preset.
 
 ### Workspace Creators
 
-Each workspace records the owner that created it. Under `jwt_claims` its creator
+Each workspace records the owner that created it. Once rules apply, its creator
 holds `editor`, `workspace.reset`, and `workspace.delete` on it beyond what rules
 grant, so a person sees and changes the workspaces they create, and others only
 where rules grant them.
@@ -297,7 +299,6 @@ everyone else:
 ```yaml
 access:
   control:
-    mode: jwt_claims
     rules:
       - {claim: email, value: admin@example.com, workspaces: ["*"], actions: [admin]}
       - {claim: iss, value: "https://<team>.cloudflareaccess.com", workspaces: [default], actions: [reader]}
@@ -505,7 +506,7 @@ Artifact boundary above, fetch a video into a Run, or rewrite stored Answers.
 |---|---|
 | Local | Loopback REST/MCP + `none` |
 | Trusted internal | `simple` behind network restriction |
-| Enterprise multi-user | `jwt` + JWKS; `jwt_claims` for workspace policy |
+| Enterprise multi-user | `jwt` with an issuer's published keys; Access Rules for workspace policy |
 
 Public MCP requires non-loopback bind, authentication, and explicit
 `interfaces.mcp.allowed_hosts`/`allowed_origins`; browser clients also need

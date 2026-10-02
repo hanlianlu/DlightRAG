@@ -799,7 +799,6 @@ async def test_a_person_lists_the_default_and_their_own_workspaces_with_their_ch
         test_config,
         "access.control",
         AccessControlConfig(
-            mode="jwt_claims",
             rules=[
                 AccessControlRuleConfig(
                     claim="iss", value=team, workspaces=["default"], actions=["reader"]
