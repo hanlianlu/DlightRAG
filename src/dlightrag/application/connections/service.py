@@ -85,14 +85,14 @@ class Connections:
         *,
         store: ConnectionsStore,
         mcp: McpClientPort,
+        cipher: CredentialCipher,
         policy: ConnectionPolicy | None = None,
-        cipher: CredentialCipher | None = None,
         oauth: OAuthPort | None = None,
     ) -> None:
         self._oauth = oauth
         self._authorizations: dict[str, asyncio.Task[None]] = {}
         self._authorization_slots = asyncio.Semaphore(4)
-        self._cipher = cipher or CredentialCipher(None)
+        self._cipher = cipher
         self._store = store
         self._mcp = mcp
         self._policy = policy or ConnectionPolicy()
@@ -396,16 +396,8 @@ class Connections:
         endpoint: str | None = None,
     ) -> ConnectionsView:
         revision, items = await self._store.read(owner_id)
-        item = next((item for item in items if item.connection_id == connection_id), None)
-        if item is None:
+        if not any(item.connection_id == connection_id for item in items):
             raise ConnectionsError("Connection not found", 404)
-        if item.envelope and item.grant_id:
-            self._cipher.decrypt(
-                item.envelope,
-                owner_id=owner_id,
-                connection_id=connection_id,
-                grant_id=item.grant_id,
-            )
         value = bearer.get_secret_value()
         if (
             not value
@@ -482,13 +474,6 @@ class Connections:
             raise ConnectionsError("Connection not found", 404)
         if revision != expected_revision:
             raise ConnectionsError("Connections revision changed")
-        if item.envelope and item.grant_id:
-            self._cipher.decrypt(
-                item.envelope,
-                owner_id=owner_id,
-                connection_id=connection_id,
-                grant_id=item.grant_id,
-            )
         candidate = endpoint if endpoint is not None else item.endpoint
         self._validate_endpoint(candidate)
         flow = OAuthFlow(uuid.uuid4().hex, owner_id, connection_id, self._worker, candidate)
@@ -828,19 +813,24 @@ class Connections:
         )
 
     async def maintain(self) -> dict[str, int]:
-        """One bounded writer maintenance pass; no remote I/O or key-source reads."""
+        """One bounded writer maintenance pass; no remote I/O or key-source reads.
+
+        Grants under a retired key move to the active one. A grant no key opens is
+        left to its owner's next authorization, and never stops collection.
+        """
         rotated = 0
-        if self._cipher.active_key_id is not None:
-            grants = await self._store.rotation_candidates(
-                active_key_id=self._cipher.active_key_id, limit=100
-            )
+        if retired := self._cipher.retired_key_ids:
+            grants = await self._store.rotation_candidates(key_ids=retired, limit=100)
             for grant in grants:
-                secret = self._cipher.decrypt(
-                    grant.envelope,
-                    owner_id=grant.owner_id,
-                    connection_id=grant.connection_id,
-                    grant_id=grant.grant_id,
-                )
+                try:
+                    secret = self._cipher.decrypt(
+                        grant.envelope,
+                        owner_id=grant.owner_id,
+                        connection_id=grant.connection_id,
+                        grant_id=grant.grant_id,
+                    )
+                except ConnectionsError:
+                    continue
                 key_id, envelope = self._cipher.encrypt(
                     secret,
                     owner_id=grant.owner_id,

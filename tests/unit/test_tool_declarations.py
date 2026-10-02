@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
+from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.application.connections.models import CatalogueTool
 from dlightrag.application.connections.service import Connections
 from dlightrag.engine.agent.environment import SearchToolchain
@@ -269,7 +270,9 @@ async def test_connection_acceptance_returns_only_the_stored_declaration() -> No
     store = AsyncMock()
     store.research_catalogues.return_value = [(binding, (catalogue,))]
     mcp = AsyncMock()
-    connections = Connections(store=cast(Any, store), mcp=cast(Any, mcp))
+    connections = Connections(
+        store=cast(Any, store), mcp=cast(Any, mcp), cipher=CredentialCipher(None)
+    )
 
     accepted = await connections.bind_research(owner_id="owner")
 

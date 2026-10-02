@@ -107,7 +107,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.application.access import access_control_from_settings
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
-    from dlightrag.application.connections.credentials import CredentialCipher
+    from dlightrag.application.connections.credentials import KEYRING_FILE, deployment_cipher
     from dlightrag.application.corpus_admin import (
         CorpusAdmin,
         CorpusMutationExecutor,
@@ -390,7 +390,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         mcp=PersonalMcpClient(),
         oauth=PersonalOAuthClient(),
         policy=config.answer.agent.connections,
-        cipher=CredentialCipher(config.answer.agent.connections.credential_secret_keyring),
+        cipher=deployment_cipher(
+            config.working_dir_path / KEYRING_FILE, create=not config.is_reader
+        ),
     )
 
     answer_executor = AnswerExecutor(

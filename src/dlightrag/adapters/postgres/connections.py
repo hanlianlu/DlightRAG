@@ -9,7 +9,7 @@ import json
 import logging
 import secrets
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from typing import Any
 
@@ -1042,17 +1042,17 @@ class PGConnectionsStore(PostgresOperationRunner):
         await self._run_once(operation)
 
     async def rotation_candidates(
-        self, *, active_key_id: str, limit: int
+        self, *, key_ids: Sequence[str], limit: int
     ) -> tuple[StoredGrant, ...]:
         async def operation(conn: Any) -> tuple[StoredGrant, ...]:
             rows = await conn.fetch(
                 """SELECT r.*,g.endpoint_json FROM dlightrag_connection_grants r
                 JOIN dlightrag_connection_heads h USING(owner_id,connection_id)
                 JOIN dlightrag_connection_generations g ON (g.owner_id,g.connection_id,g.generation)=(h.owner_id,h.connection_id,h.head_generation)
-                WHERE r.status='active' AND r.encrypted_envelope IS NOT NULL AND r.key_id<>$1
+                WHERE r.status='active' AND r.encrypted_envelope IS NOT NULL AND r.key_id=ANY($1::text[])
                 AND (r.refresh_expires_at IS NULL OR r.refresh_expires_at<=clock_timestamp())
                 AND g.grant_id=r.grant_id ORDER BY r.owner_id,r.connection_id,r.grant_id LIMIT $2""",
-                active_key_id,
+                list(key_ids),
                 limit,
             )
             return tuple(

@@ -1094,23 +1094,23 @@ An empty `kg_entity_types` uses LightRAG's general taxonomy. For stronger domain
 control, set `corpus.extraction.entity_type_prompt_file` to a file under
 `prompts/entity_type/`.
 
-Personal OAuth needs no setting: the callback is `/web/oauth/connections/mcp/callback` on the address the browser reached DlightRAG at, which the Web's same-origin guard checks against the browser's own origin on every write. Set the non-secret `answer.agent.connections.oauth_callback_url` only to override it, for a proxy that rewrites paths or a provider that requires one pre-registered URI. HTTPS is required except on loopback, so a deployment reached over plain HTTP at another host cannot authorize. `oauth_timeout` defaults to 300 seconds (30–600). The existing credential secret keyring is required on every worker. Settings starts provider consent explicitly; authenticated endpoint edits use a fresh bearer or OAuth candidate, keeping the enabled old head and Grant until successful candidate discovery and revision CAS.
+Personal OAuth needs no setting: the callback is `/web/oauth/connections/mcp/callback` on the address the browser reached DlightRAG at, which the Web's same-origin guard checks against the browser's own origin on every write. Set the non-secret `answer.agent.connections.oauth_callback_url` only to override it, for a proxy that rewrites paths or a provider that requires one pre-registered URI. HTTPS is required except on loopback, so a deployment reached over plain HTTP at another host cannot authorize. `oauth_timeout` defaults to 300 seconds (30–600). Credentials are sealed under the deployment key ring the first writer creates. Settings starts provider consent explicitly; authenticated endpoint edits use a fresh bearer or OAuth candidate, keeping the enabled old head and Grant until successful candidate discovery and revision CAS.
 
 Authorization requires SDK-compatible authorization-code/PKCE discovery and registration. An expired access token is refreshed by a Grant-leased, fenced token-only preflight before the effect gate; a rejected refresh or expanded scopes leave the Connection `needs-auth` for Settings authorization, and there is no background redirect or effect replay. The initiating worker must remain alive; a callback on another worker deposits an encrypted, once-only inbox result, but cannot resume a dead initiator. Restart authorization in Settings after failure/expiry.
 
 
 ### Personal Connection credential rotation
 
-The secret-only `DLIGHTRAG_ANSWER__AGENT__CONNECTIONS__CREDENTIAL_SECRET_KEYRING`
-uses the existing process environment / explicitly selected `.env` configuration source,
-never YAML. Missing/invalid keys fail credential storage/use closed. An unreadable
-existing envelope is deployment misconfiguration, not permission to replace/reset data.
+The key ring is `connection-keyring.json` in `deployment.working_dir`; the first
+writer to start creates it, and nothing configures it. Without it, credential
+storage and use fail closed. A grant no key opens needs authorization: its owner
+saves a new bearer or authorizes again.
 
-1. Generate a fresh 32-byte CSPRNG key locally. Add its unique ID to the injected ring
-   on **all** workers while retaining the old key IDs.
-2. Switch `active` to the new ID on all workers; finish the rollout so no old-active
-   worker can re-encrypt back to the old key. Writer maintenance starts automatically
-   and runs bounded batches at most 60 seconds apart. Trusted writer hosts can also
+1. Generate a fresh 32-byte CSPRNG key locally and add it to the ring under a new
+   ID, retaining the old key IDs.
+2. Switch `active` to the new ID and restart **all** workers, so no old-active
+   worker can re-encrypt back to the old key. Writer maintenance runs bounded
+   batches at most 60 seconds apart. Trusted writer hosts can also
    `await app.connections.maintain()` for one batch; the result is counts, not secrets.
 3. Wait for old-key Grant counts to reach zero and for short-lived authorization
    inboxes to finish/expire (at most `oauth_timeout`, up to 600 seconds, plus cleanup).
@@ -1127,7 +1127,7 @@ existing envelope is deployment misconfiguration, not permission to replace/rese
    ```
 
 4. Only after both counts show no old-key ciphertext may old IDs be removed from the
-   live worker ring. Keep backup/key retention coordinated separately: deleting live
+   ring. Keep backup/key retention coordinated separately: deleting live
    ciphertext or removing a live key does **not** promise backup cryptographic erasure.
 
 Reader startup verifies current migrations but does not run writer maintenance.

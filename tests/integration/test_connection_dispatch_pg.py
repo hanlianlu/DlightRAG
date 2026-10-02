@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.answer.execution.connection_binding import ResearchToolClaim
@@ -425,7 +426,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
         fresh_claim = replace(
             claim, worker_id="replacement", fencing_epoch=reclaimed.run.fencing_epoch
         )
-        fresh = Connections(store=store, mcp=mcp)
+        fresh = Connections(store=store, mcp=mcp, cipher=CredentialCipher(None))
         (restored,) = await fresh.restore_research(bindings=bound.bindings, claim=fresh_claim)
         effects = Effects(
             [_assistant(text="Could not complete the requested external write; outcome unknown.")]

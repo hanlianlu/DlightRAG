@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 
 from dlightrag.application.connections import ConnectionPolicy, Connections
+from dlightrag.application.connections.credentials import CredentialCipher
 
 
 class _Store:
@@ -63,6 +64,7 @@ async def test_an_idle_loop_sleeps_until_the_next_refresh_is_due_and_at_most_thi
         store=cast(Any, store),
         mcp=cast(Any, None),
         policy=ConnectionPolicy(discovery_concurrency=1),
+        cipher=CredentialCipher(None),
     )
     await connections.start(validate_only=True)
     try:

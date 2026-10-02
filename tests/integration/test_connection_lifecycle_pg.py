@@ -13,6 +13,7 @@ import pytest
 from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, ConnectionPolicy, Connections
+from dlightrag.application.connections.credentials import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connection_authorization_pg import cipher
 from tests.integration.test_connection_binding_pg import enabled_connection
@@ -99,7 +100,7 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
         maintenance = Connections(store=PGConnectionsStore(pool=pool), mcp=mcp, cipher=rotated)
         # Select before the refresh claim: its version/envelope stay unchanged
         # when the lease is claimed, so only the actual CAS lease guard can win.
-        (candidate,) = await store.rotation_candidates(active_key_id="next", limit=100)
+        (candidate,) = await store.rotation_candidates(key_ids=rotated.retired_key_ids, limit=100)
         view = await service.read(owner_id="a")
         task = asyncio.create_task(
             service.change(
@@ -111,7 +112,10 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
         try:
             await asyncio.wait_for(entered.wait(), 2)
             if race == "selection":
-                assert await store.rotation_candidates(active_key_id="next", limit=100) == ()
+                assert (
+                    await store.rotation_candidates(key_ids=rotated.retired_key_ids, limit=100)
+                    == ()
+                )
                 assert (await maintenance.maintain())["reencrypted"] == 0
             else:
                 key, envelope = rotated.encrypt(
@@ -850,7 +854,11 @@ async def test_reader_validates_without_writer_gc_and_writer_shutdown_is_restart
                 kind="disable", connection_id=view.connections[0].connection_id
             ),
         )
-        reader = Connections(store=PGConnectionsStore(pool=pool, notifications=hub), mcp=mcp)
+        reader = Connections(
+            store=PGConnectionsStore(pool=pool, notifications=hub),
+            mcp=mcp,
+            cipher=CredentialCipher(None),
+        )
         await reader.start(validate_only=True)
         await asyncio.sleep(0.1)
         async with pool.acquire() as conn:
@@ -919,7 +927,7 @@ async def test_owner_authorization_quota_is_durable_across_workers():
     async with isolated_run_runtime("oauth_quota") as (_, pool):
         a, b = PGConnectionsStore(pool=pool), PGConnectionsStore(pool=pool)
         await a.initialize(validate_only=False)
-        service = Connections(store=a, mcp=FakeMcp())
+        service = Connections(store=a, mcp=FakeMcp(), cipher=CredentialCipher(None))
         view = await service.read(owner_id="a")
         revision = view.revision
         for number in range(5):

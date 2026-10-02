@@ -79,7 +79,7 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 | `engine/agent/tools/contracts.py` | `ToolRuntime.fencing_epoch`, which lets the gate fence parent and Child Session calls without owner, credential, or MCP facts in Agent Core |
 | `application/answer_runs/service.py`, `adapters/postgres/runtime/run_store.py`, `application/web_conversations/`, `adapters/postgres/web/web_conversations.py` | Binding at Answer acceptance; pins written by `accept_run` or by `accept_run_in` inside the Web turn transaction |
 | `engine/answer/execution/executor.py`, `engine/answer/tools/composition.py` | Restoring pinned tools for resolved Research, checking the accepted `AgentRunPlan`, and preview-or-spill of tool output |
-| `_compose.py`, `application/application.py`, `application/config/` | Composition, lifecycle order, the `answer.agent.connections` settings, and YAML rejection of the key ring |
+| `_compose.py`, `application/application.py`, `application/config/` | Composition (with the deployment key ring), lifecycle order, and the `answer.agent.connections` settings |
 | `adapters/http/browser/routes/connections.py`, `adapters/http/browser/auth.py` | Web routes; callback query capture and the public metadata path in the Web middleware |
 | `adapters/http/browser/routes/chat.py`, `answer_events.py` | Tool Activity labels on Run event streams |
 | `frontend/api/connections.ts`, `frontend/ui/settings-connections.ts` | Browser wire validation and the Settings feature |
@@ -167,26 +167,20 @@ pinned generation.
 
 ## Secret handling and key ring
 
-The key ring is
-`DLIGHTRAG_ANSWER__AGENT__CONNECTIONS__CREDENTIAL_SECRET_KEYRING`. The existing
-`load_config(env_file=...)` pipeline reads it from the process environment or
-the operator's `.env` (orchestrator Secrets arrive as environment) into
-`answer.agent.connections.credential_secret_keyring: SecretStr | None` with
-`exclude=True` and `repr=False`; a trusted in-process caller may pass the same
-typed field. YAML that sets the field fails configuration even when a
-higher-priority source would override it. It is a secret carried by typed
-settings, not Application Configuration or a Deployment Binding
-([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)).
+The key ring is the file `connection-keyring.json` in `deployment.working_dir`:
+beside the corpus, never in the database whose backups hold the envelopes.
+Nothing configures it. The first writer to start creates it with one fresh
+32-byte key, written whole to a private (`0600`) temporary file and linked into
+place, so of writers starting together one wins and the rest read its ring.
+Readers never create it. An orchestrator that keeps secrets elsewhere mounts its
+ring at that path.
 
-The value is JSON:
+The ring is JSON:
 `{"active":"<key-id>","keys":{"<key-id>":"<base64url 32-byte key>"}}`. Only
 those two members are allowed, duplicate JSON keys are rejected, key IDs match
 `[A-Za-z0-9_-]{1,64}`, every key decodes canonically to exactly 32 bytes, and
-`active` names a listed key. Validation errors never echo a value. Only
-`CredentialCipher` unwraps the secret. `_compose.py` also passes the whole
-`answer.agent.connections` settings object, as the policy, to `Connections`,
-which hands it to the PostgreSQL store and the MCP and OAuth adapters; they hold
-the excluded `SecretStr` without reading it.
+`active` names a listed key. An invalid ring stops startup, and validation
+errors never echo a value. Only `CredentialCipher` reads the keys.
 
 Encryption is AES-256-GCM from `cryptography`, with a fresh 12-byte nonce and
 associated data that binds the owner, Connection, and Grant or OAuth flow. The
@@ -196,17 +190,19 @@ authorization-server metadata that refresh needs, and the in-flight callback
 result and credentials of an OAuth flow.
 
 - New encryption uses `active`; decryption uses whichever listed key an envelope
-  names. Every worker needs the same ring.
-- A missing ring or an unreadable envelope fails closed with 503. A Connection
-  whose existing envelope cannot be read refuses bearer replacement and OAuth
-  instead of overwriting it. Nothing falls back to plaintext or a generated key.
+  names. Every worker reads the same ring.
+- Without a ring, storing or using a credential fails closed with 503.
+- A grant no key opens (its ring was lost, or a retired key removed early) needs
+  authorization: the Connection shows `needs-auth`, and a new bearer or OAuth
+  consent replaces the grant. Nothing falls back to plaintext.
 - No key reaches PostgreSQL, settings dumps, the UI, logs, or Run input.
 - Retiring a Grant erases its ciphertext from the live store. That does not
   erase backups a retained key can still decrypt; backup and key retention stay
   operator responsibilities.
 
-Rotation adds a key, switches `active`, lets writer maintenance re-encrypt live
-Grants, and removes the old key only after its counts reach zero; see
+Rotation adds a key, switches `active`, restarts the workers, lets writer
+maintenance re-encrypt live Grants, and removes the old key only after its
+counts reach zero; see
 [credential rotation](configuration.md#personal-connection-credential-rotation).
 
 ## Publication and discovery
@@ -458,8 +454,8 @@ refresh. DlightRAG supplies only the product integration:
    a provider that registers one fixed URI. Either must be HTTPS except on
    loopback, with no query or fragment; it is never an endpoint DlightRAG
    calls, so the outbound network policy does not apply. The request fails
-   before contacting any provider unless that holds, the key ring can encrypt,
-   and any existing envelope can be read.
+   before contacting any provider unless that holds and the key ring can
+   encrypt.
 2. A flow row records the initiating worker as `flow_owner`, the endpoint, the
    Connection head's revision, and a lifetime of `oauth_timeout`. The initiator
    renews a 10-second lease every 2 seconds. Starting again supersedes the

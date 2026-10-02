@@ -1,15 +1,25 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Versioned AES-256-GCM envelopes; key material arrives only by injection."""
+"""Versioned AES-256-GCM envelopes under the deployment's own key ring."""
 
 import base64
 import json
+import logging
 import os
 import re
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import SecretStr
 
 from .models import ConnectionsError
+
+logger = logging.getLogger(__name__)
+
+#: The key ring's file in the deployment's working directory: beside the corpus,
+#: never in the database whose backups hold the envelopes.
+KEYRING_FILE = "connection-keyring.json"
 
 
 def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -57,6 +67,11 @@ class CredentialCipher:
     def active_key_id(self) -> str | None:
         return self._active
 
+    @property
+    def retired_key_ids(self) -> tuple[str, ...]:
+        """Keys the ring keeps only to open older grants until they are re-encrypted."""
+        return tuple(sorted(key for key in self._keys if key != self._active))
+
     @staticmethod
     def _aad(owner_id: str, connection_id: str, grant_id: str) -> bytes:
         return json.dumps(
@@ -85,6 +100,8 @@ class CredentialCipher:
     def decrypt(
         self, envelope: str, *, owner_id: str, connection_id: str, grant_id: str
     ) -> SecretStr:
+        if self._active is None:
+            raise ConnectionsError("Credential deployment keyring is missing", 503)
         try:
             raw = json.loads(envelope)
             if raw["version"] != 1:
@@ -96,9 +113,52 @@ class CredentialCipher:
             )
             return SecretStr(plaintext.decode())
         except Exception:
-            raise ConnectionsError(
-                "Credential deployment keyring cannot read this grant", 503
-            ) from None
+            # Its key is gone (a lost ring, a retired key removed early): nobody can use
+            # this grant again, so its owner authorizes the Connection anew.
+            raise ConnectionsError("Connection needs authorization", 401) from None
+
+
+def deployment_cipher(path: Path, *, create: bool) -> CredentialCipher:
+    """The deployment's key ring at ``path``, which the first writer to start creates.
+
+    The ring is ``{"active": "<id>", "keys": {"<id>": "<base64url 32 bytes>"}}``. A
+    new ring is written whole to a private temporary file and linked into place, so
+    of writers starting together one wins and the rest read its ring. A reader never
+    creates one; without it, Connections that hold credentials fail closed. To rotate,
+    add a key, point ``active`` at it, and restart: writer maintenance re-encrypts
+    live grants, after which the old key may go.
+    """
+    if create and not path.exists():
+        try:
+            _create_ring(path)
+        except OSError as exc:
+            logger.warning(
+                "Cannot create the Connection key ring at %s (%s); Connections that "
+                "hold credentials stay unavailable",
+                path,
+                type(exc).__name__,
+            )
+    try:
+        return CredentialCipher(SecretStr(path.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return CredentialCipher(None)
+
+
+def _create_ring(path: Path) -> None:
+    key_id = datetime.now(UTC).strftime("%Y%m%d")
+    key = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as ring:
+            json.dump({"active": key_id, "keys": {key_id: key}}, ring)
+            ring.flush()
+            os.fsync(ring.fileno())
+        os.link(temporary, path)
+    except FileExistsError:
+        pass
+    finally:
+        os.unlink(temporary)
 
 
 def access_bearer(secret: SecretStr, *, authentication: str) -> SecretStr:

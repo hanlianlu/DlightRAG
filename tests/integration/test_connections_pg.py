@@ -7,6 +7,7 @@ import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
+from dlightrag.application.connections.credentials import CredentialCipher
 from tests.integration.run_runtime_pg_harness import drop_owned_database, isolated_run_runtime
 from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, notification_hub
 
@@ -58,7 +59,7 @@ async def test_owner_draft_probe_consent_and_revision():
     async with isolated_run_runtime("connections") as (_, pool):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
-        connections = Connections(store=store, mcp=FakeMcp())
+        connections = Connections(store=store, mcp=FakeMcp(), cipher=CredentialCipher(None))
         empty = await connections.read(owner_id="a")
         draft = await connections.change(
             owner_id="a",
@@ -175,7 +176,7 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
                 bearer=secret,
                 expected_revision="0",
             )
-        no_key = Connections(store=store, mcp=mcp)
+        no_key = Connections(store=store, mcp=mcp, cipher=CredentialCipher(None))
         with pytest.raises(ConnectionsError, match="deployment"):
             await no_key.replace_bearer(
                 owner_id="a",
@@ -216,7 +217,12 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
     ):
         mcp = ChangingMcp()
         store = PGConnectionsStore(pool=pool, notifications=hub)
-        service = Connections(store=store, mcp=mcp, policy=ConnectionPolicy(refresh_seconds=1))
+        service = Connections(
+            store=store,
+            mcp=mcp,
+            policy=ConnectionPolicy(refresh_seconds=1),
+            cipher=CredentialCipher(None),
+        )
         await service.start()
         try:
             draft = await service.change(
@@ -267,7 +273,7 @@ async def test_expired_refresh_and_disabled_worker_cannot_publish():
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
         await store.initialize(validate_only=True)
-        service = Connections(store=store, mcp=FakeMcp())
+        service = Connections(store=store, mcp=FakeMcp(), cipher=CredentialCipher(None))
         draft = await service.change(
             owner_id="a",
             expected_revision="0",
@@ -318,7 +324,7 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
         mcp = FaultMcp()
-        service = Connections(store=store, mcp=mcp)
+        service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(None))
         draft = await service.change(
             owner_id="a",
             expected_revision="0",
@@ -345,12 +351,11 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
 
 
 @pytest.mark.asyncio
-async def test_unreadable_existing_grant_cannot_be_overwritten():
+async def test_a_grant_whose_key_is_lost_needs_authorization_and_a_new_bearer_restores_it():
     import json
 
     from pydantic import SecretStr
 
-    from dlightrag.application.connections.credentials import CredentialCipher
     from tests.unit.test_connections_config import KEYRING
 
     async with isolated_run_runtime("connection_rotation") as (_, pool):
@@ -370,19 +375,28 @@ async def test_unreadable_existing_grant_cannot_be_overwritten():
         view = await service.replace_bearer(
             owner_id="a", connection_id=identity, bearer=SecretStr("fixture")
         )
-        ring = json.loads(KEYRING)
-        ring["keys"]["new"] = ring["keys"].pop("test")
-        ring["active"] = "new"
-        unreadable = Connections(
-            store=store, mcp=FakeMcp(), cipher=CredentialCipher(SecretStr(json.dumps(ring)))
+        # The ring was lost: the next writer starts with a fresh key of its own.
+        fresh_ring = {
+            "active": "fresh",
+            "keys": {"fresh": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="},
+        }
+        restarted = Connections(
+            store=store, mcp=FakeMcp(), cipher=CredentialCipher(SecretStr(json.dumps(fresh_ring)))
         )
-        with pytest.raises(ConnectionsError, match="deployment"):
-            await unreadable.replace_bearer(
-                owner_id="a",
-                connection_id=identity,
-                bearer=SecretStr("replacement"),
-            )
-        assert await service.read(owner_id="a") == view
+
+        probed = await restarted.change(
+            owner_id="a",
+            expected_revision=view.revision,
+            command=ConnectionCommand(kind="probe", connection_id=identity),
+        )
+        restored = await restarted.replace_bearer(
+            owner_id="a", connection_id=identity, bearer=SecretStr("replacement")
+        )
+
+        assert probed.connections[0].status == "needs-auth"
+        assert restored.connections[0].status == view.connections[0].status
+        # Maintenance passes over the grant no key opens instead of failing on it.
+        assert (await restarted.maintain())["reencrypted"] == 0
 
 
 @pytest.mark.asyncio
@@ -394,7 +408,7 @@ async def test_expired_worker_loses_publication_to_new_claim():
     async with isolated_run_runtime("connection_expiry") as (_, pool):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
-        service = Connections(store=store, mcp=FakeMcp())
+        service = Connections(store=store, mcp=FakeMcp(), cipher=CredentialCipher(None))
         view = await service.change(
             owner_id="a",
             expected_revision="0",
@@ -435,7 +449,9 @@ async def test_next_refresh_counts_only_heads_a_background_claim_could_take():
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
         policy = ConnectionPolicy(refresh_seconds=600)
-        service = Connections(store=store, mcp=FakeMcp(), policy=policy)
+        service = Connections(
+            store=store, mcp=FakeMcp(), policy=policy, cipher=CredentialCipher(None)
+        )
         owner = dict(owner_id="a")
         assert await store.seconds_until_refresh() is None
         view = await service.change(
@@ -490,7 +506,7 @@ async def test_endpoint_candidate_failure_keeps_enabled_head_and_success_preserv
     async with isolated_run_runtime("connection_endpoint") as (_, pool):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
-        service = Connections(store=store, mcp=EndpointMcp())
+        service = Connections(store=store, mcp=EndpointMcp(), cipher=CredentialCipher(None))
         draft = await service.change(
             owner_id="a",
             expected_revision="0",

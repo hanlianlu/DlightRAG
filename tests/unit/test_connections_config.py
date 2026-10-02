@@ -1,43 +1,63 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Secret-only Connections settings follow the existing source pipeline."""
+"""The deployment's Connection key ring: one private file every worker reads."""
 
 import json
+import stat
 
 import pytest
 from pydantic import SecretStr
 
-from dlightrag.application.config import DlightragConfig, load_config
+from dlightrag.application.connections import ConnectionsError
+from dlightrag.application.connections.credentials import (
+    KEYRING_FILE,
+    CredentialCipher,
+    deployment_cipher,
+)
 
 KEYRING = json.dumps(
     {"active": "test", "keys": {"test": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="}}
 )
-VARIABLE = "DLIGHTRAG_ANSWER__AGENT__CONNECTIONS__CREDENTIAL_SECRET_KEYRING"
 
 
-def test_keyring_env_file_and_process_precedence_are_secret_only(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
-    path = tmp_path / "fixture.env"
-    path.write_text(f"{VARIABLE}='{KEYRING}'\n")
-    config = load_config(env_file=path)
-    assert config.answer.agent.connections.credential_secret_keyring == SecretStr(KEYRING)
-    assert "credential_secret_keyring" not in config.model_dump_json()
-    assert KEYRING not in repr(config)
-    monkeypatch.setenv(VARIABLE, "replacement")
-    config = load_config(env_file=path)
-    assert config.answer.agent.connections.credential_secret_keyring == SecretStr("replacement")
+def _seal(cipher: CredentialCipher) -> str:
+    return cipher.encrypt(
+        SecretStr("fixture-bearer"), owner_id="a", connection_id="c", grant_id="g"
+    )[1]
 
 
-def test_yaml_keyring_rejected_even_when_environment_overrides(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
-    (tmp_path / "config.yaml").write_text(
-        "answer:\n  agent:\n    connections:\n      credential_secret_keyring: forbidden-value\n"
-    )
-    monkeypatch.setenv(VARIABLE, KEYRING)
-    with pytest.raises(ValueError, match="secret source") as error:
-        load_config(_env_file=None)
-    assert "forbidden-value" not in str(error.value)
+def _open(cipher: CredentialCipher, envelope: str, *, owner_id: str = "a") -> SecretStr:
+    return cipher.decrypt(envelope, owner_id=owner_id, connection_id="c", grant_id="g")
+
+
+def test_the_first_writer_creates_a_private_ring_every_worker_reads(tmp_path) -> None:
+    path = tmp_path / KEYRING_FILE
+
+    envelope = _seal(deployment_cipher(path, create=True))
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert [entry.name for entry in tmp_path.iterdir()] == [KEYRING_FILE]
+    for worker in (deployment_cipher(path, create=True), deployment_cipher(path, create=False)):
+        assert _open(worker, envelope) == SecretStr("fixture-bearer")
+
+
+def test_a_writer_adopts_the_ring_it_finds(tmp_path) -> None:
+    path = tmp_path / KEYRING_FILE
+    path.write_text(KEYRING)
+
+    envelope = _seal(CredentialCipher(SecretStr(KEYRING)))
+
+    assert _open(deployment_cipher(path, create=True), envelope) == SecretStr("fixture-bearer")
+    assert path.read_text() == KEYRING
+
+
+def test_without_a_ring_credentials_fail_closed(tmp_path) -> None:
+    path = tmp_path / KEYRING_FILE
+    reader = deployment_cipher(path, create=False)
+
+    with pytest.raises(ConnectionsError, match="keyring is missing") as raised:
+        _seal(reader)
+    assert raised.value.status == 503
+    assert not path.exists()
 
 
 @pytest.mark.parametrize(
@@ -50,35 +70,31 @@ def test_yaml_keyring_rejected_even_when_environment_overrides(tmp_path, monkeyp
     ],
 )
 def test_invalid_private_keyring_fails_closed_without_echo(ring):
-    from dlightrag.application.connections import ConnectionsError
-    from dlightrag.application.connections.credentials import CredentialCipher
-
     with pytest.raises(ConnectionsError, match="deployment") as error:
         CredentialCipher(SecretStr(ring))
     assert ring not in str(error.value)
 
 
-def test_retained_key_rotation_and_owner_authentication():
-    from dlightrag.application.connections import ConnectionsError
-    from dlightrag.application.connections.credentials import CredentialCipher
-
-    old = CredentialCipher(SecretStr(KEYRING))
-    _, envelope = old.encrypt(
-        SecretStr("fixture-bearer"), owner_id="a", connection_id="c", grant_id="g"
-    )
+def test_retired_keys_still_open_and_a_grant_no_key_opens_needs_authorization():
+    envelope = _seal(CredentialCipher(SecretStr(KEYRING)))
     ring = json.loads(KEYRING)
     ring["active"] = "next"
     ring["keys"]["next"] = "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
     rotated = CredentialCipher(SecretStr(json.dumps(ring)))
-    assert rotated.decrypt(envelope, owner_id="a", connection_id="c", grant_id="g") == SecretStr(
-        "fixture-bearer"
+    lost = CredentialCipher(
+        SecretStr(json.dumps({"active": "next", "keys": {"next": ring["keys"]["next"]}}))
     )
-    assert (
-        rotated.encrypt(SecretStr("new"), owner_id="a", connection_id="c", grant_id="g")[0]
-        == "next"
+
+    assert rotated.retired_key_ids == ("test",)
+    assert _open(rotated, envelope) == SecretStr("fixture-bearer")
+    assert rotated.encrypt(SecretStr("new"), owner_id="a", connection_id="c", grant_id="g")[0] == (
+        "next"
     )
-    with pytest.raises(ConnectionsError, match="deployment"):
-        rotated.decrypt(envelope, owner_id="b", connection_id="c", grant_id="g")
+    # Another owner's grant, or one whose key the ring lost, opens for nobody: authorize again.
+    for cipher, owner_id in ((rotated, "b"), (lost, "a")):
+        with pytest.raises(ConnectionsError, match="needs authorization") as raised:
+            _open(cipher, envelope, owner_id=owner_id)
+        assert raised.value.status == 401
 
 
 def test_config_import_does_not_eagerly_load_answer_through_connection_policy():

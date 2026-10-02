@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from dlightrag.application.connections import Connections
+from dlightrag.application.connections.credentials import CredentialCipher
 from dlightrag.application.connections.models import PinnedToolFact
 
 
@@ -26,7 +27,9 @@ class _Store:
 
 def _connections(facts: tuple[PinnedToolFact, ...] = ()) -> tuple[Connections, _Store]:
     store = _Store(facts)
-    return Connections(store=cast(Any, store), mcp=cast(Any, None)), store
+    return Connections(
+        store=cast(Any, store), mcp=cast(Any, None), cipher=CredentialCipher(None)
+    ), store
 
 
 @pytest.mark.asyncio

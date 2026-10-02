@@ -11,6 +11,7 @@ from dlightrag.adapters.http.browser.routes.connections import router
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.connections import Connections
+from dlightrag.application.connections.credentials import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import FakeMcp
 from tests.support.application_double import application_double
@@ -42,7 +43,8 @@ async def test_web_owner_lifecycle_and_csrf(mode, tmp_path, monkeypatch):
         app = FastAPI()
         app.include_router(router, prefix="/web/api")
         app.state.application = application_double(
-            config, connections=Connections(store=store, mcp=FakeMcp())
+            config,
+            connections=Connections(store=store, mcp=FakeMcp(), cipher=CredentialCipher(None)),
         )
         app.add_middleware(WebAuthMiddleware, config_getter=lambda: config)
 
@@ -278,7 +280,10 @@ async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
         published = Connections(
-            store=store, mcp=FakeMcp(), policy=ConnectionPolicy(oauth_callback_url=callback)
+            store=store,
+            mcp=FakeMcp(),
+            policy=ConnectionPolicy(oauth_callback_url=callback),
+            cipher=CredentialCipher(None),
         )
         async with AsyncClient(
             transport=ASGITransport(app_for(published)), base_url="https://app.example"
@@ -297,7 +302,9 @@ async def test_published_client_metadata_is_fetchable_without_a_session(tmp_path
 
         # Without an override the document follows the address it was fetched at, and only
         # an HTTPS deployment can publish one.
-        derived = Connections(store=store, mcp=FakeMcp(), policy=ConnectionPolicy())
+        derived = Connections(
+            store=store, mcp=FakeMcp(), policy=ConnectionPolicy(), cipher=CredentialCipher(None)
+        )
         async with AsyncClient(
             transport=ASGITransport(app_for(derived)), base_url="https://app.example"
         ) as client:

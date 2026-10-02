@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -215,7 +215,7 @@ class ConnectionsStore(Protocol):
     ) -> bool: ...
     async def release_grant_refresh(self, *, claim: GrantRefreshClaim) -> None: ...
     async def rotation_candidates(
-        self, *, active_key_id: str, limit: int
+        self, *, key_ids: Sequence[str], limit: int
     ) -> tuple[StoredGrant, ...]: ...
     async def reencrypt_grant(self, *, grant: StoredGrant, key_id: str, envelope: str) -> bool: ...
     async def collect_garbage(self, *, limit: int) -> int: ...

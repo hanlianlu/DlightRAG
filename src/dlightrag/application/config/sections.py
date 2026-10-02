@@ -27,7 +27,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SecretStr,
     field_serializer,
     field_validator,
     model_validator,
@@ -281,12 +280,6 @@ class RuntimeConfig(BaseModel):
     )
 
 
-class ConnectionsSettings(ConnectionPolicy):
-    """Non-secret network ceilings plus an excluded, injected deployment secret."""
-
-    credential_secret_keyring: SecretStr | None = Field(default=None, exclude=True, repr=False)
-
-
 class ArtifactPublicationConfig(BaseModel):
     """Independent Agent workspace, publication, and browser-preview budgets."""
 
@@ -437,7 +430,7 @@ class AgentExecutionConfig(BaseModel):
         ),
     )
     publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)
-    connections: ConnectionsSettings = Field(default_factory=ConnectionsSettings)
+    connections: ConnectionPolicy = Field(default_factory=ConnectionPolicy)
 
 
 class WebConversationsConfig(BaseModel):

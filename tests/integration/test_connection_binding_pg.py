@@ -7,6 +7,7 @@ import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections
+from dlightrag.application.connections.credentials import CredentialCipher
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime
 from tests.integration.test_connections_pg import stored_catalogue
 
@@ -40,7 +41,7 @@ async def enabled_connection(pool, owner="a", *, notifications=None):
     store = PGConnectionsStore(pool=pool, notifications=notifications)
     await store.initialize(validate_only=False)
     mcp = CatalogueMcp()
-    service = Connections(store=store, mcp=mcp)
+    service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(None))
     view = await service.change(
         owner_id=owner,
         expected_revision="0",
@@ -163,7 +164,9 @@ async def test_actual_accept_run_pins_restore_old_generation_and_prevent_gc():
                     "DELETE FROM dlightrag_connection_generations WHERE owner_id='a' AND generation=$1",
                     bound.bindings[0].generation,
                 )
-        restarted = Connections(store=PGConnectionsStore(pool=pool), mcp=mcp)
+        restarted = Connections(
+            store=PGConnectionsStore(pool=pool), mcp=mcp, cipher=CredentialCipher(None)
+        )
         cancelled = AsyncMock()
         claim = ResearchToolClaim("a", r1.run.run_id, "worker", 7, cancelled)
         restored = await restarted.restore_research(bindings=bound.bindings, claim=claim)
@@ -658,7 +661,7 @@ async def test_like_labelled_connections_bind_apart_and_a_rename_leaves_pins_alo
     async with isolated_run_runtime("binding_names") as (runs, pool):
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
-        service = Connections(store=store, mcp=CatalogueMcp())
+        service = Connections(store=store, mcp=CatalogueMcp(), cipher=CredentialCipher(None))
 
         async def command(**fields: Any) -> set[str]:
             view = await service.change(
