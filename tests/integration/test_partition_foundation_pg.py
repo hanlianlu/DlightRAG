@@ -788,6 +788,42 @@ async def test_reader_validation_passes_on_partitioned_corpus_and_fails_on_legac
         await legacy.close()
 
 
+@pytest.mark.parametrize("table", ["lightrag_graph_edges", "lightrag_doc_status"])
+async def test_reader_attach_refuses_a_corpus_missing_a_lightrag_table(
+    writer_corpus: WriterCorpus, table: str
+) -> None:
+    """A reader proves every LightRAG table when it attaches, not on its first query."""
+    from types import SimpleNamespace
+
+    from dlightrag.adapters.postgres.corpus.lightrag_readonly import (
+        _active_lightrag_storages,
+        verify_lightrag_read_only_schema,
+    )
+    from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+
+    storages = _active_lightrag_storages(writer_corpus.lightrag)
+    reader_pool = await asyncpg.create_pool(
+        **_kwargs(_TEST_DB),
+        min_size=1,
+        max_size=1,
+        server_settings={"default_transaction_read_only": "on"},
+    )
+    owner = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        reader_db = SimpleNamespace(pool=reader_pool)
+        await verify_lightrag_read_only_schema(db=reader_db, storages=storages)
+
+        await owner.execute(f"ALTER TABLE {table} RENAME TO {table}_away")
+        try:
+            with pytest.raises(CorpusSchemaError, match=f"(?i)LightRAG table {table} is missing"):
+                await verify_lightrag_read_only_schema(db=reader_db, storages=storages)
+        finally:
+            await owner.execute(f"ALTER TABLE {table}_away RENAME TO {table}")
+    finally:
+        await owner.close()
+        await reader_pool.close()
+
+
 async def test_old_unpartitioned_corpus_fails_loudly_on_writer_startup() -> None:
     from dlightrag.adapters.postgres.corpus.partition_foundation import (
         PartitionedTableSpec,

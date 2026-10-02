@@ -361,6 +361,67 @@ async def test_exclusive_gate_drains_in_flight_shared_write(
     assert entered_exclusive.is_set() is True
 
 
+async def _until_advisory_lock_waiters(waiters: int) -> None:
+    """Return once ``waiters`` sessions of the test database wait for an advisory lock."""
+    observer = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        for _ in range(10_000):
+            waiting = await observer.fetchval(
+                "SELECT count(*) FROM pg_locks"
+                " WHERE locktype = 'advisory' AND NOT granted"
+                " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+            )
+            if waiting >= waiters:
+                return
+    finally:
+        await observer.close()
+    pytest.fail(f"{waiters} session(s) never waited for the advisory lock")
+
+
+async def test_pipeline_recovery_runs_one_sweep_per_workspace_at_a_time(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    from dlightrag.adapters.postgres.corpus.corpus import PGCorpusCoordination
+
+    ws, other = workspaces
+    await _clean_state()
+    registry = PGWorkspaceRegistry()
+    for workspace in workspaces:
+        await registry.upsert(workspace=workspace, display_name=workspace, embedding_model="m")
+
+    def coordination(workspace: str) -> PGCorpusCoordination:
+        # Each process recovers through a coordination object of its own.
+        return PGCorpusCoordination(
+            connection_kwargs=_kwargs(_TEST_DB),
+            workspace=workspace,
+            reader=False,
+            require_halfvec=False,
+            required_extensions=(),
+            lightrag_pool_max_size=1,
+            domain_pool_max_size=6,
+            acquire_timeout=10.0,
+        )
+
+    second_entered = asyncio.Event()
+
+    async def second_sweep() -> None:
+        async with coordination(ws).pipeline_recovery():
+            second_entered.set()
+
+    async with coordination(ws).pipeline_recovery():
+        second = asyncio.create_task(second_sweep())
+        await _until_advisory_lock_waiters(1)
+        assert not second_entered.is_set()
+        # Another workspace's sweep is not held up by this one.
+        async with asyncio.timeout(10):
+            async with coordination(other).pipeline_recovery():
+                pass
+        assert not second_entered.is_set()
+
+    await asyncio.wait_for(second, timeout=10)
+    assert second_entered.is_set()
+
+
 # ---------------------------------------------------------------------------
 # End-to-end promotion
 # ---------------------------------------------------------------------------
