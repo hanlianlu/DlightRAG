@@ -506,8 +506,10 @@ async def test_metadata_search_traverses_contains_fallback_without_gaps() -> Non
                 [workspace, other_workspace],
             )
             rows: list[tuple[str, str, str, str]] = []
-            # 120 contains-only matches: no filename or stem equals the filter.
-            for index in range(120):
+            # 120 contains-only matches: no filename or stem equals the filter. They
+            # are stored out of doc_id order, so only the page query's ORDER BY can
+            # hand them back in keyset order.
+            for index in sorted(range(120), key=lambda value: (value * 7) % 120):
                 rows.append(
                     (
                         workspace,
