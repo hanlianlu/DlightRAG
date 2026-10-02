@@ -4,8 +4,6 @@
 Runs against a fresh scratch database (``dlightrag_promotion_worker_<hex>``)
 that this module creates and drops itself. Proves on compact fixtures:
 
-* the ingest counter ledger and the threshold trigger are idempotent per
-  job/window (replays never double-count and never double-enqueue);
 * the write fence refuses ingest claims and shared write gates, with the
   retryable error carrying the remaining fence duration;
 * the exclusive write gate drains an in-flight shared write gate;
@@ -54,6 +52,7 @@ from tests.support.pg import (
     drop_scratch_database,
     skip_without_postgres,
 )
+from tests.support.promotion import queue_promotion
 
 pytestmark = [
     pytest.mark.integration,
@@ -325,11 +324,6 @@ def _worker(*, lease_seconds: int = 600) -> PGPromotionWorker:
 
 
 # ---------------------------------------------------------------------------
-# Counter ledger + threshold trigger
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Write fence and gate behavior
 # ---------------------------------------------------------------------------
 
@@ -395,9 +389,7 @@ async def test_promotion_is_atomic_across_all_parents_and_isolated(
             )
         }
 
-        jobs = PGPromotionJobStore()
-        assert await jobs.enqueue(ws) is True
-        assert await jobs.enqueue(ws) is False  # idempotent
+        await queue_promotion(ws)
 
         worker = _worker()
         assert await worker.run_once() is True
@@ -553,7 +545,7 @@ async def test_child_partitions_carry_bm25_vector_and_metadata_indexes(
     try:
         await PGWorkspaceRegistry().upsert(workspace=ws, display_name="Hot", embedding_model="m")
         await _seed_workspace(conn, ws, docs=1, chunks_per_doc=1)
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         assert await _worker().run_once() is True
 
         for table in (_CHUNKS_TABLE, _METADATA_TABLE, _VECTOR_TABLE):
@@ -626,7 +618,7 @@ async def test_readers_validate_the_promoted_contract(
         await _seed_workspace(conn, ws, docs=1, chunks_per_doc=1)
     finally:
         await conn.close()
-    await PGPromotionJobStore().enqueue(ws)
+    await queue_promotion(ws)
     assert await _worker().run_once() is True
 
     foundation = PGPartitionFoundation()
@@ -684,8 +676,7 @@ async def test_checksum_mismatch_fails_attempt_keeps_workspace_shared(
 
     monkeypatch.setattr(worker_module, "_copy_workspace_rows", copy_then_corrupt)
 
-    jobs = PGPromotionJobStore()
-    await jobs.enqueue(other)
+    await queue_promotion(other)
     worker = _worker()
     assert await worker.run_once() is True
     monkeypatch.undo()
@@ -764,8 +755,7 @@ async def test_mid_cutover_failure_rolls_back_every_attach(
     monkeypatch.setattr(worker_module, "_discover_retrieval_parents", discover_tables)
     monkeypatch.setattr(worker_module, "_build_staging_indexes", drop_chunks_staging)
 
-    jobs = PGPromotionJobStore()
-    await jobs.enqueue(other)
+    await queue_promotion(other)
     worker = _worker()
     assert await worker.run_once() is True
     monkeypatch.undo()
@@ -837,7 +827,7 @@ async def test_stale_staging_is_dropped_on_the_next_attempt(
     finally:
         await conn.close()
 
-    await PGPromotionJobStore().enqueue(other)
+    await queue_promotion(other)
     assert await _worker().run_once() is True
 
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
@@ -862,7 +852,7 @@ async def test_stale_lease_generation_cannot_complete_a_newer_claim(
     await _clean_state()
     jobs = PGPromotionJobStore()
     await PGWorkspaceRegistry().upsert(workspace=other, display_name="Other", embedding_model="m")
-    await jobs.enqueue(other)
+    await queue_promotion(other)
     first = await jobs.claim_next(
         owner="worker-old",
         lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300),
@@ -962,8 +952,12 @@ async def test_a_replayed_claim_returns_the_job_it_already_leased(
     await _clean_state()
     config = get_config()
     backoff = config.storage.postgres.connection_retry_backoff
-    await PGPromotionJobStore().enqueue(first_ws)
-    await PGPromotionJobStore().enqueue(second_ws)
+    for workspace in workspaces:
+        await PGWorkspaceRegistry().upsert(
+            workspace=workspace, display_name=workspace, embedding_model="m"
+        )
+    await queue_promotion(first_ws)
+    await queue_promotion(second_ws)
     store = _ClaimResponseLostOnce()
 
     mutate_config(config, "storage.postgres.connection_retry_backoff", 0.0)
@@ -1001,8 +995,12 @@ async def test_a_new_claim_leaves_a_lease_the_worker_abandoned_to_expire(
     first_ws, second_ws = workspaces
     await _clean_state()
     jobs = PGPromotionJobStore()
-    await jobs.enqueue(first_ws)
-    await jobs.enqueue(second_ws)
+    for workspace in workspaces:
+        await PGWorkspaceRegistry().upsert(
+            workspace=workspace, display_name=workspace, embedding_model="m"
+        )
+    await queue_promotion(first_ws)
+    await queue_promotion(second_ws)
     first = await jobs.claim_next(
         owner="worker-same",
         lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300),
@@ -1035,24 +1033,29 @@ async def test_already_attached_workspace_reconciles_without_new_partitions(
         await _seed_workspace(conn, other, docs=1, chunks_per_doc=1)
     finally:
         await conn.close()
-    await PGPromotionJobStore().enqueue(other)
+    await queue_promotion(other)
     assert await _worker().run_once() is True
 
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
         existing = await _dedicated_partitions(conn, other)
         assert all(existing.values())
-        # A stale trigger (or an operator retry) enqueues another job for the
-        # already-hot workspace: the worker must reconcile without duplicating
-        # partitions or touching rows.
-        await PGPromotionJobStore().enqueue(other)
+        counts = await _table_counts(conn, other)
     finally:
         await conn.close()
+    # Deleting the workspace removes its registry row but not its dedicated
+    # partitions, so the same id created again is shared while its partitions
+    # stay attached. Its next promotion must reconcile them without duplicating
+    # partitions or touching rows.
+    assert await registry.delete(other)
+    await registry.upsert(workspace=other, display_name="Other", embedding_model="m")
+    await queue_promotion(other)
     assert await _worker().run_once() is True
 
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
         assert await _dedicated_partitions(conn, other) == existing
+        assert await _table_counts(conn, other) == counts
         assert (await _registry_row(conn, other))["storage_tier"] == "hot"
         job_states = await conn.fetch(
             "SELECT state FROM dlightrag_promotion_jobs WHERE workspace = $1 ORDER BY job_id",
@@ -1084,7 +1087,7 @@ async def test_worker_without_any_parent_fails_loudly(
         await PGWorkspaceRegistry().upsert(
             workspace=other, display_name="Other", embedding_model="m"
         )
-        await PGPromotionJobStore().enqueue(other)
+        await queue_promotion(other)
         assert await worker.run_once() is True
     finally:
         worker_module._discover_retrieval_parents = original  # type: ignore[assignment]
@@ -1125,7 +1128,7 @@ async def test_cutover_leaves_no_exclusion_constraint_and_reuses_prebuilt_pk(
         await _seed_workspace(conn, ws, docs=2, chunks_per_doc=2)
     finally:
         await conn.close()
-    await PGPromotionJobStore().enqueue(ws)
+    await queue_promotion(ws)
     assert await _worker().run_once() is True
 
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
@@ -1198,7 +1201,7 @@ async def test_discovery_rejects_vector_parents_without_default_and_ignores_look
         await conn.close()
 
     try:
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         assert await _worker().run_once() is True
 
         conn = await asyncpg.connect(**_kwargs(_TEST_DB))
@@ -1252,7 +1255,7 @@ async def test_detached_relation_with_the_child_name_fails_loudly(
         await conn.close()
 
     try:
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         assert await _worker().run_once() is True
         conn = await asyncpg.connect(**_kwargs(_TEST_DB))
         try:
@@ -1353,7 +1356,7 @@ async def test_discovery_requires_at_least_one_vector_parent(
         await conn.close()
 
     try:
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         assert await _worker().run_once() is True
         conn = await asyncpg.connect(**_kwargs(_TEST_DB))
         try:
@@ -1414,7 +1417,7 @@ async def test_discovery_rejects_a_broken_plain_vector_parent(
         await conn.close()
 
     try:
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         assert await _worker().run_once() is True
         conn = await asyncpg.connect(**_kwargs(_TEST_DB))
         try:
@@ -1516,7 +1519,7 @@ async def test_after_committed_not_valid_proofs_reads_and_other_workspace_dml_co
 
     monkeypatch.setattr(worker_module, "_PHASE1_PAUSE_HOOK", phase1_hook)
     try:
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         task = asyncio.create_task(_worker().run_once())
         await asyncio.wait_for(entered.wait(), timeout=10)
         release.set()
@@ -1583,7 +1586,7 @@ async def test_during_cutover_validation_reads_and_other_workspace_dml_complete_
 
     monkeypatch.setattr(worker_module, "_CUTOVER_PAUSE_HOOK", cutover_hook)
     try:
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         task = asyncio.create_task(_worker().run_once())
         await asyncio.wait_for(entered.wait(), timeout=10)
         release.set()
@@ -1621,7 +1624,7 @@ async def test_stale_promoting_with_leftover_exclusion_blocks_writes_until_recla
         await _seed_workspace(conn, ws, docs=1, chunks_per_doc=1)
         # Simulate a crashed worker: promoting state, expired fence, and a
         # committed leftover exclusion proof.
-        await PGPromotionJobStore().enqueue(ws)
+        await queue_promotion(ws)
         await conn.execute(
             "UPDATE dlightrag_promotion_jobs SET state = 'promoting', "
             "lease_owner = 'dead-worker', lease_generation = 1, "
@@ -1692,7 +1695,7 @@ async def test_a_fence_another_owner_holds_leaves_the_workspace_alone(
         await conn.close()
     until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5)
     assert await registry.acquire_write_fence(workspace=other, owner="maintenance", until=until)
-    await PGPromotionJobStore().enqueue(other)
+    await queue_promotion(other)
 
     assert await _worker().run_once() is True
 
@@ -1700,7 +1703,7 @@ async def test_a_fence_another_owner_holds_leaves_the_workspace_alone(
     try:
         row = await _registry_row(conn, other)
         assert row["write_fence_owner"] == "maintenance"
-        assert (row["storage_tier"], row["promotion_state"]) == ("shared", "none")
+        assert (row["storage_tier"], row["promotion_state"]) == ("shared", "pending")
         assert (await _job_row(conn, other))["state"] != "done"
         assert await _dedicated_partitions(conn, other) == {
             table: "" for table in (_METADATA_TABLE, _CHUNKS_TABLE, _VECTOR_TABLE)
@@ -1730,7 +1733,7 @@ async def test_a_cancelled_attempt_fails_guarded_and_cleans_its_staging(
         raise asyncio.CancelledError
 
     monkeypatch.setattr(worker_module, "_copy_workspace_rows", cancelled_copy)
-    await PGPromotionJobStore().enqueue(other)
+    await queue_promotion(other)
 
     with pytest.raises(asyncio.CancelledError):
         await _worker().run_once()
@@ -1779,7 +1782,7 @@ async def test_a_fence_taken_over_during_failure_handling_rolls_the_job_back(
         raise RuntimeError("copy failed after the fence moved")
 
     monkeypatch.setattr(worker_module, "_copy_workspace_rows", copy_then_lose_the_fence)
-    await PGPromotionJobStore().enqueue(other)
+    await queue_promotion(other)
 
     assert await _worker().run_once() is True
     monkeypatch.undo()

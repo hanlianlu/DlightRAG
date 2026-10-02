@@ -16,6 +16,7 @@ import asyncpg
 import pytest
 
 from tests.support.pg import PG_CONN_KWARGS, drop_scratch_database, skip_without_postgres
+from tests.support.promotion import queue_promotion
 
 _reset_path = Path(__file__).resolve().parents[2] / "scripts" / "reset_development.py"
 _spec = importlib.util.spec_from_file_location("reset_development_cli_pg", _reset_path)
@@ -239,12 +240,7 @@ async def test_workspace_reset_clears_corpus_rows_but_keeps_workspace_identity()
             await conn.execute("INSERT INTO lightrag_without_workspace VALUES ('kept')")
         for workspace in ("research", "other"):
             await registry.upsert(workspace=workspace, display_name=workspace, embedding_model="m")
-            await jobs.enqueue(workspace)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE dlightrag_workspace_meta SET ingested_docs_total = 5, "
-                "ingested_chunks_total = 9, promotion_state = 'pending'"
-            )
+            await queue_promotion(workspace, docs=5, chunks=9, pool=pool)
 
         store = PGCorpusMaintenanceStore(
             _TEST_CONN_KWARGS, workspace_registry=registry, promotion_jobs=jobs

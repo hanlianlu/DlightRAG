@@ -1,9 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable hot-workspace promotion jobs and their fenced adapter.
 
-The application promotion worker enqueues and drives these jobs through the
-narrow claim/transition interface. The table survives crashes, enforces its
-legal-state transitions, and exposes bounded claim scans.
+A corpus mutation window that crosses the promotion threshold queues a job
+(PGRunStore.record_corpus_window), and the application promotion worker drives
+it through the narrow claim/transition interface. The table survives crashes,
+enforces its legal-state transitions, and exposes bounded claim scans.
 
 Idempotency: at most one live/retrying job per workspace (partial unique
 index), and a replayed claim returns the job it already leased. Leasing/fencing:
@@ -59,8 +60,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_promotion_jobs (
 )
 """
 
-# Retryable failures remain live: enqueue cannot bypass their backoff by
-# inserting a fresh row. Done jobs are immutable history.
+# Retryable failures remain live, so a fresh row for the workspace cannot
+# bypass their backoff. Done jobs are immutable history.
 _ACTIVE_JOB_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dlightrag_promotion_jobs_active
 ON dlightrag_promotion_jobs (workspace)
@@ -83,12 +84,6 @@ _LEASE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_dlightrag_promotion_jobs_lease
 ON dlightrag_promotion_jobs (lease_until, job_id)
 WHERE state = 'promoting'
-"""
-
-_ENQUEUE = """
-INSERT INTO dlightrag_promotion_jobs (workspace)
-VALUES ($1)
-ON CONFLICT (workspace) WHERE state IN ('pending', 'promoting', 'failed') DO NOTHING
 """
 
 # A claim runs through the retrying operation runner. When its commit lands but
@@ -270,15 +265,6 @@ class PGPromotionJobStore(PostgresOperationRunner):
             )
 
         await self._run(_operation)
-
-    async def enqueue(self, workspace: str) -> bool:
-        """Idempotently enqueue one workspace; false if a live/retrying job exists."""
-        workspace_id = _nonempty(workspace, field="workspace")
-
-        async def _operation(conn: Any) -> str:
-            return await conn.execute(_ENQUEUE, workspace_id)
-
-        return (await self._run(_operation)) != "INSERT 0 0"
 
     async def claim_next(
         self,
