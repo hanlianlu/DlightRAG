@@ -126,7 +126,6 @@ async def fetch_public_http(
             timeout=timeout,
             presentation=presentation or PublicHttpPresentation(),
             allow_private_hosts=_normalize_host_patterns(allow_private_hosts),
-            client=None,
             agent_url=agent_url,
             consume=consume,
         )
@@ -174,7 +173,6 @@ async def fetch_public_http_prefix(
             timeout=timeout,
             presentation=presentation or PublicHttpPresentation(),
             allow_private_hosts=frozenset(),
-            client=None,
             agent_url=agent_url,
             consume=consume,
         )
@@ -193,7 +191,6 @@ async def download_public_http(
     max_bytes: int,
     timeout: float = 120.0,
     allow_private_hosts: Sequence[str] = (),
-    client: Any | None = None,
 ) -> PublicHttpDownload:
     """Stream one public HTTP(S) response to *destination* under the same policy."""
     limit = max(1, int(max_bytes))
@@ -217,7 +214,6 @@ async def download_public_http(
                 timeout=timeout,
                 presentation=PublicHttpPresentation(),
                 allow_private_hosts=_normalize_host_patterns(allow_private_hosts),
-                client=client,
                 agent_url=False,
                 consume=consume,
             )
@@ -238,7 +234,6 @@ async def _follow_and_consume[T](
     timeout: float,
     presentation: PublicHttpPresentation,
     allow_private_hosts: frozenset[str],
-    client: Any | None,
     agent_url: bool,
     consume: Callable[[Any], Awaitable[T]],
 ) -> tuple[T, _ResolvedTarget, Any]:
@@ -250,12 +245,7 @@ async def _follow_and_consume[T](
             current_url,
             allow_private_hosts=allow_private_hosts,
         )
-        async with _pinned_stream(
-            target,
-            timeout=timeout,
-            presentation=presentation,
-            client=client,
-        ) as response:
+        async with _pinned_stream(target, timeout=timeout, presentation=presentation) as response:
             if response.status_code in _REDIRECT_STATUSES:
                 current_url = _redirect_target(
                     target.url,
@@ -274,9 +264,12 @@ def _pinned_stream(
     *,
     timeout: float,
     presentation: PublicHttpPresentation,
-    client: Any | None,
 ) -> Any:
-    """Open one request against a validated address with original Host/TLS SNI."""
+    """Open one request against a validated address with original Host/TLS SNI.
+
+    Each request builds its own anonymous client: no auth, cookies, environment
+    proxies or pooled connection can follow it across hosts.
+    """
     address = target.addresses[0]
     parts = urlsplit(target.url)
     explicit_port = parts.port is not None
@@ -297,50 +290,14 @@ def _pinned_stream(
     }
     if parts.scheme.lower() == "https":
         extensions["sni_hostname"] = target.host
-    if isinstance(client, httpx.AsyncClient):
-        request = httpx.Request(
-            "GET",
-            pinned_url,
-            headers=headers,
-            extensions=extensions,
-        )
-        return _BorrowedStream(client, request)
-    active = client or httpx.AsyncClient(
+    client = httpx.AsyncClient(
         follow_redirects=False,
         timeout=httpx.Timeout(timeout),
         trust_env=False,
     )
-    stream = active.stream(
-        "GET",
-        pinned_url,
-        headers=headers,
-        extensions=extensions,
+    return _OwnedStream(
+        client, client.stream("GET", pinned_url, headers=headers, extensions=extensions)
     )
-    if client is not None:
-        return stream
-    return _OwnedStream(active, stream)
-
-
-class _BorrowedStream:
-    """Stream a raw request without inheriting client auth, cookies, or headers."""
-
-    def __init__(self, client: httpx.AsyncClient, request: httpx.Request) -> None:
-        self._client = client
-        self._request = request
-        self._response: httpx.Response | None = None
-
-    async def __aenter__(self) -> httpx.Response:
-        self._response = await self._client.send(
-            self._request,
-            stream=True,
-            auth=None,
-            follow_redirects=False,
-        )
-        return self._response
-
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        if self._response is not None:
-            await self._response.aclose()
 
 
 class _OwnedStream:

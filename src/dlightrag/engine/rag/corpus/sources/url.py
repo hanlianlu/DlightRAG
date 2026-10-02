@@ -4,7 +4,6 @@
 import logging
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 from dlightrag.engine.public_http import (
@@ -35,7 +34,6 @@ class URLDataSource(AsyncDataSource):
         source_uris: Sequence[str] | None = None,
         download_uri: str | None = None,
         download_uris: Sequence[str] | None = None,
-        client: Any | None = None,
         timeout: float = 120.0,
         max_download_bytes: int = 100 * 1024 * 1024,
         allow_private_hosts: Sequence[str] | None = None,
@@ -70,7 +68,6 @@ class URLDataSource(AsyncDataSource):
         if download_uris is not None and len(download_uris) != len(url_list):
             raise ValueError("'download_uris' must match the number of urls")
 
-        self._client = client
         self._timeout = timeout
         self._max_download_bytes = max(1, int(max_download_bytes))
         self._allow_private_hosts = tuple(allow_private_hosts or ())
@@ -166,7 +163,6 @@ class URLDataSource(AsyncDataSource):
             max_bytes=self._max_download_bytes,
             timeout=self._timeout,
             allow_private_hosts=self._allow_private_hosts,
-            client=self._client,
         )
 
     def source_uri_for_key(self, key: str) -> str:
@@ -179,8 +175,7 @@ class URLDataSource(AsyncDataSource):
         return self._download_uri_by_key[key]
 
     async def aclose(self) -> None:
-        # Shared public HTTP owns default clients per request; injected clients
-        # are caller-owned test/integration transports.
+        # Public HTTP builds and closes one client per request; nothing is held.
         return None
 
 

@@ -4,7 +4,7 @@
 import logging
 import socket
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlunsplit
 
 import httpx
 import pytest
@@ -20,83 +20,6 @@ from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_file
 from dlightrag.engine.rag.corpus.sources.uri import parse_remote_uri
 from dlightrag.engine.rag.corpus.sources.url import URLDataSource
 from tests.support.public_http import serve_public_http
-
-
-class _Response:
-    def __init__(
-        self,
-        content: bytes,
-        *,
-        url: str = "https://cdn.example.com/report.pdf",
-        status_code: int = 200,
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        self._content = content
-        self.url = url
-        self.status_code = status_code
-        self.headers = headers or {}
-
-    async def __aenter__(self) -> _Response:
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def raise_for_status(self) -> None:
-        return None
-
-    async def aiter_bytes(self):
-        midpoint = len(self._content) // 2
-        yield self._content[:midpoint]
-        yield self._content[midpoint:]
-
-
-class _Client:
-    def __init__(
-        self,
-        *,
-        content: bytes = b"document",
-        final_url: str = "https://cdn.example.com/report.pdf",
-    ) -> None:
-        self.content = content
-        self.final_url = final_url
-        self.urls: list[str] = []
-        self.closed = False
-
-    def stream(self, method: str, url: str, **kwargs) -> _Response:
-        assert method == "GET"
-        self.urls.append(_logical_url(url, kwargs))
-        return _Response(self.content, url=self.final_url)
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-class _RedirectClient:
-    def __init__(self, start_url: str, target_url: str, *, content: bytes = b"final body") -> None:
-        self.start_url = start_url
-        self.target_url = target_url
-        self.content = content
-        self.urls: list[str] = []
-
-    def stream(self, method: str, url: str, **kwargs) -> _Response:
-        assert method == "GET"
-        logical_url = _logical_url(url, kwargs)
-        self.urls.append(logical_url)
-        if logical_url == self.start_url:
-            return _Response(
-                b"",
-                url=url,
-                status_code=302,
-                headers={"location": self.target_url},
-            )
-        return _Response(self.content, url=logical_url)
-
-
-def _logical_url(url: str, kwargs: dict) -> str:
-    parts = urlsplit(url)
-    host = (kwargs.get("headers") or {}).get("host", parts.netloc)
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, ""))
 
 
 class _Served:
@@ -141,12 +64,12 @@ def test_safe_source_filename_preserves_extension_when_bounded() -> None:
     assert len(result) == 128
 
 
-async def test_url_data_source_maps_extensionless_url_to_html_filename(tmp_path: Path) -> None:
-    client = _Client()
-    source = URLDataSource(
-        urls=["https://api.bynder.com/docs/getting-started"],
-        client=client,
-    )
+async def test_url_data_source_maps_extensionless_url_to_html_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    served = _Served(body=b"document")
+    serve_public_http(monkeypatch, served)
+    source = URLDataSource(urls=["https://api.bynder.com/docs/getting-started"])
 
     documents = [d async for d in source.aiter_documents()]
     assert [document.key for document in documents] == ["getting-started.html"]
@@ -156,14 +79,13 @@ async def test_url_data_source_maps_extensionless_url_to_html_filename(tmp_path:
     destination = tmp_path / "getting-started.html"
     await source.amaterialize_document(documents[0], destination)
     assert destination.read_bytes() == b"document"
-    assert client.urls == ["https://api.bynder.com/docs/getting-started"]
+    assert served.urls == ["https://api.bynder.com/docs/getting-started"]
 
 
 async def test_url_data_source_uses_explicit_filename_for_opaque_single_url() -> None:
     source = URLDataSource(
         urls=["https://cdn.example.com/download?id=asset-1"],
         filename="asset.pdf",
-        client=_Client(),
     )
 
     documents = [d async for d in source.aiter_documents()]
@@ -176,7 +98,6 @@ async def test_url_data_source_accepts_explicit_stable_source_uri() -> None:
         urls=["https://cdn.example.com/download?id=asset-1&signature=secret"],
         filename="asset.pdf",
         source_uri="bynder://asset/asset-1",
-        client=_Client(),
     )
 
     assert source.source_uri_for_key("asset.pdf") == "bynder://asset/asset-1"
@@ -188,7 +109,6 @@ async def test_url_data_source_separates_fetch_identity_and_download_uri() -> No
         filename="asset.pdf",
         source_uri="bynder://asset/1",
         download_uri="https://cdn.example.com/assets/1.pdf",
-        client=_Client(),
     )
 
     document = ([d async for d in source.aiter_documents()])[0]
@@ -206,7 +126,6 @@ async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_ur
         source = URLDataSource(
             urls=["https://fetch.example.com/download?sig=secret"],
             filename=hostile_filename,
-            client=_Client(),
         )
 
     document = ([d async for d in source.aiter_documents()])[0]
@@ -227,7 +146,6 @@ async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_ur
 async def test_url_data_source_derives_download_uri_from_queryless_fetch_url() -> None:
     source = URLDataSource(
         urls=["https://fetch.example.com/assets/1.pdf"],
-        client=_Client(),
     )
 
     document = ([d async for d in source.aiter_documents()])[0]
@@ -246,7 +164,6 @@ async def test_url_data_source_uses_source_document_download_uri() -> None:
                 display_filename="asset.pdf",
             )
         ],
-        client=_Client(),
     )
 
     document = ([d async for d in source.aiter_documents()])[0]
@@ -259,7 +176,6 @@ def test_url_data_source_download_uri_cardinality_is_strict() -> None:
         URLDataSource(
             urls=["https://fetch.example.com/a.pdf", "https://fetch.example.com/b.pdf"],
             download_uris=["https://cdn.example.com/a.pdf"],
-            client=_Client(),
         )
 
 
@@ -268,39 +184,22 @@ def test_url_data_source_rejects_non_durable_explicit_download_uri() -> None:
         URLDataSource(
             urls=["https://fetch.example.com/download?sig=secret"],
             download_uri="https://cdn.example.com/download?sig=secret",
-            client=_Client(),
         )
 
 
-async def test_url_data_source_uses_validated_target_not_transport_reported_url(
-    tmp_path: Path,
+async def test_url_data_source_rejects_private_redirect_before_following(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = URLDataSource(
-        urls=["https://cdn.example.com/report.pdf"],
-        client=_Client(final_url="https://127.0.0.1/report.pdf"),
-    )
-    destination = tmp_path / "report.pdf"
-
-    await source.amaterialize_document(
-        ([d async for d in source.aiter_documents()])[0], destination
-    )
-
-    assert destination.read_bytes() == b"document"
-
-
-async def test_url_data_source_rejects_private_redirect_before_following(tmp_path: Path) -> None:
-    client = _RedirectClient(
-        "https://cdn.example.com/start.pdf",
-        "https://127.0.0.1/admin.pdf",
-    )
-    source = URLDataSource(urls=["https://cdn.example.com/start.pdf"], client=client)
+    served = _Served(redirects={"https://cdn.example.com/start.pdf": "https://127.0.0.1/admin.pdf"})
+    serve_public_http(monkeypatch, served)
+    source = URLDataSource(urls=["https://cdn.example.com/start.pdf"])
 
     with pytest.raises(ValueError, match="public"):
         await source.amaterialize_document(
             ([d async for d in source.aiter_documents()])[0], tmp_path / "start.pdf"
         )
 
-    assert client.urls == ["https://cdn.example.com/start.pdf"]
+    assert served.urls == ["https://cdn.example.com/start.pdf"]
     assert not (tmp_path / "start.pdf").exists()
 
 
@@ -314,12 +213,12 @@ async def test_url_data_source_rejects_redirect_hostname_that_resolves_private(
 
     monkeypatch.setattr(socket, "getaddrinfo", resolver)
 
-    client = _RedirectClient(
-        "https://public.example/start.pdf",
-        "https://private.example/admin.pdf",
-        content=b"private",
+    served = _Served(
+        body=b"private",
+        redirects={"https://public.example/start.pdf": "https://private.example/admin.pdf"},
     )
-    source = URLDataSource(urls=["https://public.example/start.pdf"], client=client)
+    serve_public_http(monkeypatch, served)
+    source = URLDataSource(urls=["https://public.example/start.pdf"])
 
     with pytest.raises(ValueError, match="public"):
         await source.amaterialize_document(
@@ -327,15 +226,14 @@ async def test_url_data_source_rejects_redirect_hostname_that_resolves_private(
             tmp_path / "start.pdf",
         )
 
-    assert client.urls == ["https://public.example/start.pdf"]
+    assert served.urls == ["https://public.example/start.pdf"]
 
 
-async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> None:
-    source = URLDataSource(
-        urls=["https://cdn.example.com/report.pdf"],
-        client=_Client(content=b"document"),
-        max_download_bytes=3,
-    )
+async def test_url_data_source_enforces_download_size_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_public_http(monkeypatch, _Served(body=b"document"))
+    source = URLDataSource(urls=["https://cdn.example.com/report.pdf"], max_download_bytes=3)
 
     with pytest.raises(ValueError, match="maximum"):
         await source.amaterialize_document(
@@ -346,20 +244,20 @@ async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> N
 
 
 def test_url_data_source_accepts_public_http_urls() -> None:
-    source = URLDataSource(urls=["http://example.com/report.pdf"], client=_Client())
+    source = URLDataSource(urls=["http://example.com/report.pdf"])
 
     assert source.source_uri_for_key("report.pdf") == "http://example.com/report.pdf"
 
 
 def test_url_data_source_rejects_non_http_or_private_urls() -> None:
     with pytest.raises(ValueError, match="http or https"):
-        URLDataSource(urls=["ftp://example.com/report.pdf"], client=_Client())
+        URLDataSource(urls=["ftp://example.com/report.pdf"])
 
     with pytest.raises(ValueError, match="public"):
-        URLDataSource(urls=["https://127.0.0.1/report.pdf"], client=_Client())
+        URLDataSource(urls=["https://127.0.0.1/report.pdf"])
 
     with pytest.raises(ValueError, match="public"):
-        URLDataSource(urls=["http://127.0.0.1/report.pdf"], client=_Client())
+        URLDataSource(urls=["http://127.0.0.1/report.pdf"])
 
 
 def test_url_data_source_rejects_hostname_that_resolves_private(
@@ -412,7 +310,6 @@ async def test_url_data_source_keeps_allowlisted_private_fetch_url_out_of_downlo
     source = URLDataSource(
         urls=["https://10.0.0.1/report.pdf"],
         allow_private_hosts=["10.*"],
-        client=_Client(),
     )
 
     document = ([d async for d in source.aiter_documents()])[0]
