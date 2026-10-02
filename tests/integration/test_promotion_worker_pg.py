@@ -1699,12 +1699,15 @@ async def test_a_fence_another_owner_holds_leaves_the_workspace_alone(
 
     assert await _worker().run_once() is True
 
+    # Recording the failure needs the fence this attempt never got, so it rolls
+    # back: the registry keeps its queued promotion and the claim stands until
+    # its lease expires.
     conn = await asyncpg.connect(**_kwargs(_TEST_DB))
     try:
         row = await _registry_row(conn, other)
         assert row["write_fence_owner"] == "maintenance"
         assert (row["storage_tier"], row["promotion_state"]) == ("shared", "pending")
-        assert (await _job_row(conn, other))["state"] != "done"
+        assert await _job_row(conn, other) == {"state": "promoting", "last_error": None}
         assert await _dedicated_partitions(conn, other) == {
             table: "" for table in (_METADATA_TABLE, _CHUNKS_TABLE, _VECTOR_TABLE)
         }
@@ -1795,5 +1798,73 @@ async def test_a_fence_taken_over_during_failure_handling_rolls_the_job_back(
         assert row["write_fence_owner"] == "successor"
         assert row["promotion_state"] == "promoting"
         assert (await _job_row(conn, other))["state"] == "promoting"
+    finally:
+        await conn.close()
+
+
+async def test_an_attempt_whose_lease_was_reclaimed_fails_without_writing(
+    corpus: None,
+    monkeypatch: pytest.MonkeyPatch,
+    workspaces: tuple[str, str],
+) -> None:
+    ws, other = workspaces
+    await _clean_state()
+    from dlightrag.adapters.postgres.corpus import promotion_worker as worker_module
+
+    registry = PGWorkspaceRegistry()
+    await registry.upsert(workspace=other, display_name="Other", embedding_model="m")
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await _seed_workspace(conn, other, docs=1, chunks_per_doc=1)
+    finally:
+        await conn.close()
+
+    async def copy_then_lose_the_lease(
+        conn: Any, parent: str, staging: str, workspace: str
+    ) -> None:
+        # The lease expires and a successor claims the job, while this attempt's
+        # fence still stands.
+        await conn.execute(
+            "UPDATE dlightrag_promotion_jobs SET lease_until = NOW() - INTERVAL '1 second'"
+            " WHERE workspace = $1",
+            workspace,
+        )
+        successor = await PGPromotionJobStore().claim_next(
+            owner="successor",
+            lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5),
+        )
+        assert successor is not None and successor["workspace"] == workspace
+        raise RuntimeError("copy failed after the lease was reclaimed")
+
+    monkeypatch.setattr(worker_module, "_copy_workspace_rows", copy_then_lose_the_lease)
+    await queue_promotion(other)
+
+    assert await _worker().run_once() is True
+    monkeypatch.undo()
+
+    # The failed transition needs the lease this attempt no longer holds, so it
+    # writes nothing: the successor keeps its claim, and the registry is neither
+    # marked failed nor freed of the fence.
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        row = await _registry_row(conn, other)
+        assert (
+            row["promotion_state"],
+            row["promotion_retry_count"],
+            row["promotion_last_error"],
+        ) == ("promoting", 0, None)
+        assert row["write_fence_owner"] is not None
+        job = await conn.fetchrow(
+            "SELECT state, lease_owner, lease_generation, last_error"
+            " FROM dlightrag_promotion_jobs WHERE workspace = $1",
+            other,
+        )
+        assert job is not None
+        assert dict(job) == {
+            "state": "promoting",
+            "lease_owner": "successor",
+            "lease_generation": 2,
+            "last_error": None,
+        }
     finally:
         await conn.close()
