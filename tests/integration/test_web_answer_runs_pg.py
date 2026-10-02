@@ -1032,6 +1032,19 @@ async def _hold_conversation_lock(conn: Any, conversation_id: str) -> Any:
     return transaction
 
 
+async def _until_blocked(pool: Any, waiters: int) -> None:
+    """Return once ``waiters`` backends of this database wait on another backend's lock."""
+    async with pool.acquire() as observer:
+        for _ in range(10_000):
+            blocked = await observer.fetchval(
+                "SELECT count(*) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0"
+            )
+            if blocked >= waiters:
+                return
+    pytest.fail(f"{waiters} backend(s) never queued behind the held lock")
+
+
 async def _link_turn(conn: Any, runs: FingerprintingRunStore, conversation_id: str) -> str:
     """Create the run and its turn the way an accepted submission would."""
     request = _request("late")
@@ -1063,7 +1076,7 @@ async def test_deleting_a_conversation_never_orphans_a_turn_committed_behind_it(
     async with pool.acquire() as holder:
         transaction = await _hold_conversation_lock(holder, conversation_id)
         deletion = asyncio.create_task(store.delete_conversation(_OWNER, conversation_id))
-        await asyncio.sleep(0.2)
+        await _until_blocked(pool, 1)
         await _link_turn(holder, runs, conversation_id)
         await transaction.commit()
 
@@ -1080,7 +1093,7 @@ async def test_deleting_every_conversation_never_orphans_a_turn_committed_behind
     async with pool.acquire() as holder:
         transaction = await _hold_conversation_lock(holder, conversation_id)
         deletion = asyncio.create_task(store.delete_all_conversations(_OWNER))
-        await asyncio.sleep(0.2)
+        await _until_blocked(pool, 1)
         await _link_turn(holder, runs, conversation_id)
         await transaction.commit()
 
@@ -1098,7 +1111,7 @@ async def test_two_delete_all_callers_wait_for_a_concurrent_submission_without_d
         transaction = await _hold_conversation_lock(holder, conversation_id)
         first = asyncio.create_task(store.delete_all_conversations(_OWNER))
         second = asyncio.create_task(store.delete_all_conversations(_OWNER))
-        await asyncio.sleep(0.2)
+        await _until_blocked(pool, 2)
         late_run_id = await _link_turn(holder, runs, conversation_id)
         await transaction.commit()
 
@@ -1409,6 +1422,70 @@ async def test_a_shared_fork_session_is_cleaned_only_after_its_final_routing_ref
     assert await _count(pool, "dlightrag_answer_run_routing") == 0
 
 
+async def _session_with_entries(conn: Any, session_id: str, *, entries: int) -> None:
+    """Store an Agent Session holding a chain of Entries, as its Runs would leave it."""
+    await conn.execute(
+        "INSERT INTO dlightrag_agent_sessions"
+        " (owner_id, session_id, lease_run_id, commit_sequence, last_sequence, fencing_epoch)"
+        " VALUES ($1, $2, $2, $3, $3, 1)",
+        _OWNER,
+        uuid.UUID(session_id),
+        entries,
+    )
+    parent: uuid.UUID | None = None
+    for sequence in range(1, entries + 1):
+        entry_id = uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_session_entries (owner_id, session_id, sequence,"
+            " entry_id, parent_entry_id, entry_type, schema_version, timestamp, payload_json)"
+            " VALUES ($1, $2, $3, $4, $5, 'user_message', 1, NOW(), '{}'::jsonb)",
+            _OWNER,
+            uuid.UUID(session_id),
+            sequence,
+            entry_id,
+            parent,
+        )
+        parent = entry_id
+
+
+async def test_deleting_every_conversation_deletes_each_unreferenced_session(
+    store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
+) -> None:
+    # One conversation's Session goes with its Runs; the other has no Run left to
+    # take it, so only the conversation deletion can.
+    with_run, without_run = await _conversation(store), await _conversation(store)
+    deleted = [with_run, without_run]
+    kept = await _conversation(store)
+    assert await _submit(store, with_run) is not None
+    async with pool.acquire() as conn:
+        for conversation_id in (*deleted, kept):
+            await _session_with_entries(conn, conversation_id, entries=2)
+    # A Run outside every conversation still routes through the last Session.
+    request = {**_request("outside"), "agent_session_id": kept}
+    submission_id = str(uuid.uuid4())
+    await runs.create_run(
+        envelope=_turn_envelope(
+            owner=_OWNER,
+            request=request,
+            submission_id=submission_id,
+            fingerprint=run_request_fingerprint(request),
+        ),
+        run_id=str(uuid.uuid7()),
+    )
+
+    assert await store.delete_all_conversations(_OWNER) == 3
+
+    async with pool.acquire() as conn:
+        sessions = await conn.fetch("SELECT session_id::text FROM dlightrag_agent_sessions")
+        entries = await conn.fetch(
+            "SELECT DISTINCT session_id::text FROM dlightrag_agent_session_entries"
+        )
+    assert [row["session_id"] for row in sessions] == [kept]
+    assert [row["session_id"] for row in entries] == [kept]
+    assert await _count(pool, "dlightrag_agent_session_entries") == 2
+    assert await _count(pool, "web_conversations") == 0
+
+
 async def test_a_successful_linked_run_prunes_after_the_retention_floor(
     store: PGWebConversationStore, runs: FingerprintingRunStore, pool: Any
 ) -> None:
@@ -1511,7 +1588,7 @@ async def test_session_delete_wins_race_before_empty_conversation_acceptance(
                 request=_request(agent_lane_id="expired-branch", source_lane_id="main"),
             )
         )
-        await asyncio.sleep(0.05)
+        await _until_blocked(pool, 1)
         assert not submission.done()
         await transaction.commit()
 
@@ -1850,7 +1927,7 @@ async def test_conversation_deletion_takes_the_same_lock_order_as_run_retention(
         )
 
         deleting = asyncio.create_task(store.delete_conversation(_OWNER, conversation_id))
-        await asyncio.sleep(0.3)
+        await _until_blocked(pool, 1)
         assert not deleting.done()
 
         await blocker.execute(
