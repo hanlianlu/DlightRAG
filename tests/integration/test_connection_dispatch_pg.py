@@ -31,21 +31,19 @@ async def dispatch_fixture(
         service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(SecretStr(KEYRING)))
         view = await service.replace_bearer(
             owner_id="a",
-            auth_mode="jwt",
             connection_id=view.connections[0].connection_id,
             expected_revision=view.revision,
             bearer=SecretStr("dispatch-test-only-token"),
         )
         view = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(
                 kind="enable", connection_id=view.connections[0].connection_id, consent_version=1
             ),
         )
     mcp.call = AsyncMock(return_value=ToolResult.text("written"))
-    bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+    bound = await service.bind_research(owner_id="a")
     envelope = run_envelope("answer", key=key, owner="a", mode="research")
     envelope = replace(
         envelope,
@@ -156,7 +154,6 @@ async def test_dispatch_authority_denials_send_zero_calls(denial):
             for kind in kinds:
                 view = await service.change(
                     owner_id="a",
-                    auth_mode="jwt",
                     expected_revision=view.revision,
                     command=ConnectionCommand(
                         kind=kind,
@@ -231,7 +228,6 @@ async def test_gate_first_revoke_is_in_flight_cancelled_unknown_without_network_
             await asyncio.wait_for(
                 service.change(
                     owner_id="a",
-                    auth_mode="jwt",
                     expected_revision=view.revision,
                     command=ConnectionCommand(
                         kind="revoke", connection_id=view.connections[0].connection_id
@@ -311,7 +307,7 @@ async def test_one_broken_connection_reports_degraded_without_disabling_other_to
         result = await tool.execute(tool.input_model.model_validate({"path": "x"}), runtime)
         assert result.is_error and "secret diagnostic" not in result.text_content
         assert "final Answer" in result.text_content and "Do not retry" in result.text_content
-        observed = await service.read(owner_id="a", auth_mode="jwt")
+        observed = await service.read(owner_id="a")
         assert observed.connections[0].status == "needs-auth"
         assert observed.connections[0].enabled
         assert observed.connections[0].generation == bound.bindings[0].generation
@@ -469,7 +465,6 @@ async def test_revoke_wins_locked_pg_gate_race_and_causes_zero_dispatch():
                 revoke = asyncio.create_task(
                     service.change(
                         owner_id="a",
-                        auth_mode="jwt",
                         expected_revision=view.revision,
                         command=ConnectionCommand(
                             kind="revoke", connection_id=bound.bindings[0].connection_id
@@ -561,9 +556,7 @@ async def test_static_grant_authority_and_audience_gate_before_io(grant_state):
                 mcp.call.call_args.kwargs["bearer"].get_secret_value() == "dispatch-test-only-token"
             )
         assert "dispatch-test-only-token" not in result.text_content
-        assert "dispatch-test-only-token" not in repr(
-            await service.read(owner_id="a", auth_mode="jwt")
-        )
+        assert "dispatch-test-only-token" not in repr(await service.read(owner_id="a"))
 
 
 @pytest.mark.asyncio
@@ -787,9 +780,7 @@ async def test_oauth_dispatch_uses_only_live_access_token_without_refresh_or_red
         if expired:
             assert result.is_error
             mcp.call.assert_not_awaited()
-            assert (await service.read(owner_id="a", auth_mode="jwt")).connections[
-                0
-            ].status == "needs-auth"
+            assert (await service.read(owner_id="a")).connections[0].status == "needs-auth"
         else:
             assert not result.is_error
             mcp.call.assert_awaited_once()

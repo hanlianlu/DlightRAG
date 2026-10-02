@@ -11,17 +11,16 @@ from dlightrag_memory import (
     Memory,
     MemoryOperationReceipt,
     MemoryProvenance,
-    MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.memory import recall_sections
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 MemoryKindInput = Literal["preference", "fact"]
 _MEMORY_MUTATION_LIMIT = 10
+_INACTIVE = "Profile Memory is not active for this owner."
 
 
 class RememberInput(BaseModel):
@@ -50,7 +49,6 @@ class MemoryHost:
     """Late-bound owner capability for one parent Research run."""
 
     owner_id: str = ""
-    auth_mode: str = "none"
     run_id: str = ""
     session_id: str = ""
     memory: Memory | None = None
@@ -60,7 +58,7 @@ class MemoryHost:
 
 
 async def _available(host: MemoryHost, *, settlement: object | None = None) -> bool:
-    if not is_personal_auth_mode(host.auth_mode) or not host.enabled:
+    if not host.enabled:
         return False
     if host.capability_current is None:
         return True
@@ -74,7 +72,7 @@ async def _available(host: MemoryHost, *, settlement: object | None = None) -> b
 async def _require_available(host: MemoryHost, settlement: object | None) -> None:
     """Recheck the run epoch inside the store's atomic settlement."""
     if not await _available(host, settlement=settlement):
-        raise MemoryWriteRejectedError("Profile Memory is not active for this owner.")
+        raise MemoryWriteRejectedError(_INACTIVE)
 
 
 def remember_declaration() -> ToolDeclaration:
@@ -94,12 +92,10 @@ def remember_declaration() -> ToolDeclaration:
 def remember_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
-        if not is_personal_auth_mode(host.auth_mode):
-            return _rejected("remember", "Long-term memory requires a personal or local owner.")
-        if not await _available(host):
-            return _rejected("remember", "Profile Memory is not active for this owner.")
+        if host.memory is None or not await _available(host):
+            return _rejected("remember", _INACTIVE)
         try:
-            receipt = await _memory(host).remember(
+            receipt = await host.memory.remember(
                 owner_id=host.owner_id,
                 kind=args.kind,
                 body=args.body,
@@ -129,12 +125,10 @@ def forget_declaration() -> ToolDeclaration:
 def forget_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
-        if not is_personal_auth_mode(host.auth_mode):
-            return _rejected("forget", "Long-term memory requires a personal or local owner.")
-        if not await _available(host):
-            return _rejected("forget", "Profile Memory is not active for this owner.")
+        if host.memory is None or not await _available(host):
+            return _rejected("forget", _INACTIVE)
         try:
-            receipt = await _memory(host).forget(
+            receipt = await host.memory.forget(
                 owner_id=host.owner_id,
                 memory_id=args.memory_id,
                 body=args.body,
@@ -165,14 +159,8 @@ def recall_memory_declaration() -> ToolDeclaration:
 def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RecallInput) else RecallInput.model_validate(raw)
-        if host.memory is None:
-            return ToolResult.text("Memory store is not bound.", is_error=True)
-        if not is_personal_auth_mode(host.auth_mode):
-            return ToolResult.text(
-                "Long-term memory requires a personal or local owner.", is_error=True
-            )
-        if not await _available(host):
-            return ToolResult.text("Profile Memory is not active for this owner.", is_error=True)
+        if host.memory is None or not await _available(host):
+            return ToolResult.text(_INACTIVE, is_error=True)
         await runtime.emit_update(ToolResult.text("", subject=args.query))
         result = await host.memory.lookup(owner_id=host.owner_id, query=args.query)
         lines = recall_sections(result, ids=True)
@@ -235,12 +223,6 @@ def _provenance(host: MemoryHost) -> MemoryProvenance:
 
 def _idempotency_key(host: MemoryHost, runtime: ToolRuntime) -> str:
     return f"answer:{host.run_id}:{host.session_id}:{runtime.call_id}"
-
-
-def _memory(host: MemoryHost) -> Memory:
-    if host.memory is None:
-        raise MemoryUnavailableError()
-    return host.memory
 
 
 __all__ = [

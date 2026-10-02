@@ -22,8 +22,7 @@ import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts'
 import {waitFor} from '../testing/dom.ts';
 
 const bootstrap = {
-  contract_version: 3,
-  personal_mcp_connections: true,
+  contract_version: 4,
   workspaces: [
     {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
   ],
@@ -126,8 +125,7 @@ it('renders the application shell from the typed bootstrap before resolving read
   const loaded = await app.ready;
 
   expect(loaded).to.deep.equal({
-    contractVersion: 3,
-    personalMcpConnections: true,
+    contractVersion: 4,
     workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test'}],
     workspacesNextCursor: null,
     primaryWorkspace: 'default',

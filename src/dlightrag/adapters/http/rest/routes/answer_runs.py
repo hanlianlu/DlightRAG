@@ -421,7 +421,6 @@ async def create_answer_run(
         request=_service_request(body, uploads, workspaces=workspaces),
         owner_id=owner_id_from_user(user),
         idempotency_key=idempotency_key(request),
-        auth_mode=user.auth_mode,
     )
     return run_descriptor(creation.run)
 
@@ -521,7 +520,6 @@ async def _continue_answer_run(
         run_id=run_id,
         query=body.content,
         idempotency_key=idempotency_key(request),
-        auth_mode=user.auth_mode,
         authorized_workspaces=authorized_workspaces,
     )
     if creation is None:

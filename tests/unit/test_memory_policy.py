@@ -16,7 +16,6 @@ from dlightrag.engine.answer.memory import (
     evaluate_memory_operation,
     render_auto_recall,
     reserved_auto_recall_text,
-    standing_memory_for_acceptance,
 )
 
 
@@ -41,14 +40,6 @@ def _operation(**overrides: object) -> MemoryOperation:
 
 def test_remember_passes() -> None:
     evaluate_memory_operation(_operation())
-
-
-def test_owner_eligibility_is_root_policy() -> None:
-    from dlightrag.engine.answer.owner import is_personal_auth_mode
-
-    assert is_personal_auth_mode("jwt")
-    assert is_personal_auth_mode("none")
-    assert not is_personal_auth_mode("simple")
 
 
 def test_empty_oversized_cited_and_credential_bodies_are_rejected() -> None:
@@ -146,10 +137,3 @@ def test_acceptance_reserve_covers_every_block_recall_can_inject(
     )
 
     assert estimate_tokens(block) <= estimate_tokens(reserved_auto_recall_text())
-
-
-def test_acceptance_reserves_full_recall_for_personal_and_local_identity() -> None:
-    reserved = reserved_auto_recall_text()
-    assert standing_memory_for_acceptance("jwt") == reserved
-    assert standing_memory_for_acceptance("none") == reserved
-    assert standing_memory_for_acceptance("simple") == ""

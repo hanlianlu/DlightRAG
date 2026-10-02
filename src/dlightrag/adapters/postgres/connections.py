@@ -50,7 +50,6 @@ from dlightrag.engine.answer.execution.connection_binding import (
     StaleConnectionBindingError,
     decode_connection_bindings,
 )
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 logger = logging.getLogger(__name__)
 
@@ -1816,11 +1815,8 @@ class PGConnectionPinWriter:
     ) -> None:
         if decode_connection_bindings(payload.get("run_connection_bindings", [])) != bindings:
             raise ValueError("Run Connection input and normalized pins differ")
-        if bindings and (
-            not is_personal_auth_mode(str(payload.get("auth_mode", "none")))
-            or payload.get("mode") == "fast"
-        ):
-            raise ValueError("Run Connections require eligible Research acceptance")
+        if bindings and payload.get("mode") == "fast":
+            raise ValueError("Run Connections require Research acceptance")
         ordered = sorted(bindings, key=lambda b: (b.owner_id, b.connection_id))
         heads = []
         # All heads precede generations/Grants; revoke and publication use the

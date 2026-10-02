@@ -34,7 +34,6 @@ async def _unreachable_pool() -> object:
 def _host(*, enabled: bool = True) -> MemoryHost:
     return MemoryHost(
         owner_id="o",
-        auth_mode="jwt",
         run_id="11111111-1111-1111-1111-111111111111",
         session_id="22222222-2222-2222-2222-222222222222",
         memory=Memory(PostgresMemoryStore(pool_factory=_unreachable_pool)),

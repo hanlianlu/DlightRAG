@@ -66,7 +66,6 @@ from dlightrag.engine.answer.mode import (
     resource_role,
     valid_modes,
 )
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 from dlightrag.engine.answer.resources.admission import require_readable_attachment
 from dlightrag.engine.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.engine.answer.resources.models import ResourceInput
@@ -595,12 +594,9 @@ def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
     return [resource.content for resource in resources if resource.content is not None]
 
 
-def _prepared_input_payload(
-    run_input: Any, *, requested_mode: str, auth_mode: str = "none"
-) -> dict[str, Any]:
+def _prepared_input_payload(run_input: Any, *, requested_mode: str) -> dict[str, Any]:
     """Encode one accepted run with its canonical Session/Lane mapping."""
     payload = dict(run_input.as_request())
-    payload["auth_mode"] = auth_mode
     payload["mode"] = requested_mode
     return payload
 
@@ -771,7 +767,6 @@ class AnswerService:
         request: AnswerRequest,
         owner_id: str,
         idempotency_key: str | None = None,
-        auth_mode: str = "none",
         idempotency_fingerprint: str | None = None,
     ) -> RunCreation:
         """Accept one durable run and return its descriptor without waiting.
@@ -787,7 +782,6 @@ class AnswerService:
             idempotency_key=idempotency_key,
             idempotency_fingerprint=idempotency_fingerprint,
             acceptor=self._store,
-            auth_mode=auth_mode,
         )
         if creation is None:
             raise RuntimeError("Answer run acceptance returned no descriptor")
@@ -801,7 +795,6 @@ class AnswerService:
         acceptor: AnswerRunAcceptor[T],
         idempotency_key: str | None = None,
         idempotency_fingerprint: str | None = None,
-        auth_mode: str = "none",
     ) -> T | None:
         """Accept one durable run through ``acceptor``, which may link it atomically.
 
@@ -852,9 +845,8 @@ class AnswerService:
             self._history_resource_input(owner_id, resource)
             for resource in request.history_resources
         )
-        memory_enabled = is_personal_auth_mode(auth_mode)
-        memory_epoch = 0
-        if memory_enabled and self._memory_capability is not None:
+        memory_enabled, memory_epoch = True, 0
+        if self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
         async with self._prepare_input(
             run_request,
@@ -862,12 +854,11 @@ class AnswerService:
             idempotency_fingerprint=fingerprint,
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
-            auth_mode=auth_mode,
             memory_enabled=memory_enabled,
         ) as prepare:
             for attempt in range(2):
                 bound = (
-                    await self._bind_research(owner_id=owner_id, auth_mode=auth_mode)
+                    await self._bind_research(owner_id=owner_id)
                     if self._bind_research is not None
                     and requested_mode != "fast"
                     and "research" in allowed_modes
@@ -875,9 +866,7 @@ class AnswerService:
                 )
                 run_input, effective_modes = await prepare(bound.tools)
                 run_input = replace(run_input, run_connection_bindings=bound.bindings)
-                prepared_input = _prepared_input_payload(
-                    run_input, requested_mode=requested_mode, auth_mode=auth_mode
-                )
+                prepared_input = _prepared_input_payload(run_input, requested_mode=requested_mode)
                 prepared_input["profile_memory_enabled"] = memory_enabled
                 prepared_input["profile_memory_epoch"] = memory_epoch
                 try:
@@ -1483,7 +1472,6 @@ class AnswerService:
         run_id: str,
         query: str,
         idempotency_key: str | None = None,
-        auth_mode: str = "none",
         authorized_workspaces: Sequence[str] | None,
     ) -> RunCreation | None:
         """Append one turn to the selected run's Lane tip through normal acceptance."""
@@ -1500,7 +1488,6 @@ class AnswerService:
             request=request,
             owner_id=owner_id,
             idempotency_key=idempotency_key,
-            auth_mode=auth_mode,
             idempotency_fingerprint=self._continuation_fingerprint(request),
         )
 
@@ -1511,7 +1498,6 @@ class AnswerService:
         run_id: str,
         query: str,
         idempotency_key: str | None = None,
-        auth_mode: str = "none",
         authorized_workspaces: Sequence[str] | None,
     ) -> RunCreation | None:
         """Start a sibling branch from the state the selected run settled at."""
@@ -1528,7 +1514,6 @@ class AnswerService:
             request=request,
             owner_id=owner_id,
             idempotency_key=idempotency_key,
-            auth_mode=auth_mode,
             idempotency_fingerprint=self._continuation_fingerprint(request),
         )
 
@@ -1778,7 +1763,6 @@ class AnswerService:
         idempotency_fingerprint: str,
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
-        auth_mode: str = "none",
         memory_enabled: bool = True,
     ) -> AsyncIterator[
         Callable[
@@ -1794,7 +1778,6 @@ class AnswerService:
             resources=resources,
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
-            auth_mode=auth_mode,
             memory_enabled=memory_enabled,
             resource_identity=resource_identity,
         ) as project:
@@ -1839,7 +1822,6 @@ class AnswerService:
         resources: list[ResourceInput] | None,
         requested_mode: AnswerMode,
         allowed_modes: frozenset[ResolvedMode],
-        auth_mode: str = "none",
         memory_enabled: bool = True,
         resource_identity: str,
     ) -> AsyncIterator[Callable[[Sequence[ToolDeclaration]], Awaitable[_AcceptanceProjection]]]:
@@ -1875,7 +1857,7 @@ class AnswerService:
                 answer_image_policy=self._capabilities.answer_image_policy,
                 image_descriptions=image_descriptions,
                 current_images=resolved.current_images,
-                memory_text=reserved_memory_text(auth_mode=auth_mode, enabled=memory_enabled),
+                memory_text=reserved_memory_text(enabled=memory_enabled),
                 episodic_summary=request.episodic_summary,
             )
             web_search = resolved.web_sources is not None and resolved.web_sources.search_enabled

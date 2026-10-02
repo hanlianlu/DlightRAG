@@ -62,7 +62,6 @@ async def list_memories(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     page = await application.memory.list_active_page(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         page=page_request,
     )
     return {
@@ -81,9 +80,7 @@ async def list_memories(
 async def memory_settings(request: Request) -> dict[str, object]:
     application = get_application(request)
     user = _user(request)
-    settings = await application.memory.settings(
-        owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
-    )
+    settings = await application.memory.settings(owner_id=owner_id_from_user(user))
     return _settings(settings)
 
 
@@ -92,7 +89,7 @@ async def update_memory_settings(request: Request, body: MemorySettingsInput) ->
     application = get_application(request)
     user = _user(request)
     settings = await application.memory.set_enabled(
-        owner_id=owner_id_from_user(user), auth_mode=user.auth_mode, enabled=body.enabled
+        owner_id=owner_id_from_user(user), enabled=body.enabled
     )
     return _settings(settings)
 
@@ -105,7 +102,6 @@ async def remember_memory(
     user = _user(request)
     receipt = await application.memory.remember(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         kind=body.kind,
         body=body.body,
         supersedes_id=body.supersedes_id,
@@ -123,7 +119,6 @@ async def forget_memory(
     user = _user(request)
     receipt = await application.memory.forget(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         memory_id=memory_id,
         provenance=MemoryProvenance(origin_kind="management", origin_id=idempotency_key),
         idempotency_key=f"web:{idempotency_key}",
@@ -139,7 +134,6 @@ async def undo_memory_change(
     user = _user(request)
     receipt = await application.memory.undo(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         change_id=change_id,
         provenance=MemoryProvenance(origin_kind="undo", origin_id=idempotency_key),
         idempotency_key=f"web:{idempotency_key}",
@@ -151,7 +145,7 @@ async def undo_memory_change(
 async def clear_memory(request: Request) -> None:
     application = get_application(request)
     user = _user(request)
-    await application.memory.clear(owner_id=owner_id_from_user(user), auth_mode=user.auth_mode)
+    await application.memory.clear(owner_id=owner_id_from_user(user))
 
 
 def _settings(settings: MemorySettings) -> dict[str, object]:

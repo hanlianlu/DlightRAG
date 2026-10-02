@@ -25,7 +25,6 @@ from dlightrag.engine.answer.client_contracts import (
     ClientContractModel,
 )
 from dlightrag.engine.answer.image_capability import ImageCapabilityStatus
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 from dlightrag.engine.answer.resources.admission import READABLE_DOCUMENT_EXTENSIONS
 
 router = APIRouter()
@@ -53,8 +52,7 @@ class WebAnswerEffort(ClientContractModel):
 
 
 class WebBootstrap(ClientContractModel):
-    contract_version: Literal[3] = 3
-    personal_mcp_connections: bool
+    contract_version: Literal[4] = 4
     workspaces: list[WebBootstrapWorkspace]
     workspaces_next_cursor: str | None = None
     primary_workspace: str
@@ -150,7 +148,6 @@ async def build_web_bootstrap(
     extensions = list(READABLE_DOCUMENT_EXTENSIONS)
     attachment_limit = application.config.answer.generation.max_attachment_bytes
     return WebBootstrap(
-        personal_mcp_connections=is_personal_auth_mode(request.state.user_context.auth_mode),
         workspaces=workspaces,
         workspaces_next_cursor=next_cursor,
         primary_workspace=primary,

@@ -387,7 +387,6 @@ async def test_pg_owner_lock_rechecks_deactivation_before_mutation_commit(
         pending = asyncio.create_task(
             service.remember(
                 owner_id="alpha",
-                auth_mode="jwt",
                 kind="fact",
                 body="Stable.",
                 provenance=_provenance(),
@@ -410,7 +409,7 @@ async def test_pg_disabled_owner_keeps_only_the_settings_control_plane(
     store: PostgresMemoryStore,
 ) -> None:
     service = await _service(store)
-    owner = {"owner_id": "alpha", "auth_mode": "jwt"}
+    owner = {"owner_id": "alpha"}
     disabled = await service.set_enabled(**owner, enabled=False)
 
     assert disabled.enabled is False
@@ -418,7 +417,7 @@ async def test_pg_disabled_owner_keeps_only_the_settings_control_plane(
     assert disabled.epoch == 1
     assert (await service.settings(**owner)).active_count is None
     with pytest.raises(MemoryDisabledError):
-        await service.list_active_page(owner_id="alpha", auth_mode="jwt")
+        await service.list_active_page(owner_id="alpha")
     with pytest.raises(MemoryDisabledError):
         await service.remember(
             **owner,
@@ -436,7 +435,7 @@ async def test_pg_deactivation_and_clear_invalidate_run_epochs(
     store: PostgresMemoryStore,
 ) -> None:
     service = await _service(store)
-    owner = {"owner_id": "alpha", "auth_mode": "jwt"}
+    owner = {"owner_id": "alpha"}
     initial = await service.settings(**owner)
     assert initial.enabled and initial.epoch == 0
     assert await service.capability_current(owner_id="alpha", epoch=0)
@@ -466,7 +465,7 @@ async def _page_through(service: MemoryService, *, limit: int, max_pages: int) -
     pages: list[list[str]] = []
     request = MemoryListPageRequest(limit=limit)
     for _ in range(max_pages):
-        page = await service.list_active_page(owner_id="alpha", auth_mode="jwt", page=request)
+        page = await service.list_active_page(owner_id="alpha", page=request)
         pages.append([record.body for record in page.records])
         if page.next_cursor is None:
             return pages
@@ -484,7 +483,6 @@ async def test_pg_service_pages_active_memories_with_continuation(
     for index in range(count):
         await service.remember(
             owner_id="alpha",
-            auth_mode="jwt",
             kind="preference",
             body=f"Memory {index}.",
             provenance=_management(),
@@ -1735,7 +1733,6 @@ async def test_pg_mcp_forget_and_undo_return_operation_receipts(
 def _host(store: PostgresMemoryStore) -> MemoryHost:
     return MemoryHost(
         owner_id="o",
-        auth_mode="jwt",
         run_id="11111111-1111-1111-1111-111111111111",
         session_id="22222222-2222-2222-2222-222222222222",
         memory=Memory(store),

@@ -923,7 +923,7 @@ Published artifacts fail whole when over budget; they are not truncated.
 Interactive HTML is separately opt-in and isolated by the Web artifact boundary.
 See [Security](security.md#answer-artifact-browser-boundary).
 
-Outbound Research tools now come only from the eligible owner's **Settings → Connections → MCP** catalogues. Deployment `outbound_mcp` declarations and stdio are rejected. Enabled Connections automatically bind future Research Runs; Fast has no external tools. Calls use bounded Streamable HTTP with static bearer, no authentication, or an unexpired SDK-authorized OAuth access token and are never automatically replayed after a possibly dispatched effect. Settings OAuth authorization and expired-token refresh use the locked SDK. Refresh is a leased, fenced token-only preflight before the final effect gate, never an effect replay; rejected refresh or expanded scopes requires Settings authorization. Retention and writer keyring maintenance are implemented; see the [contract](personal-mcp-connections.md). Only non-secret network/quota policy belongs under `answer.agent.connections`.
+Outbound Research tools now come only from the owner's **Settings → Connections → MCP** catalogues. Deployment `outbound_mcp` declarations and stdio are rejected. Enabled Connections automatically bind future Research Runs; Fast has no external tools. Calls use bounded Streamable HTTP with static bearer, no authentication, or an unexpired SDK-authorized OAuth access token and are never automatically replayed after a possibly dispatched effect. Settings OAuth authorization and expired-token refresh use the locked SDK. Refresh is a leased, fenced token-only preflight before the final effect gate, never an effect replay; rejected refresh or expanded scopes requires Settings authorization. Retention and writer keyring maintenance are implemented; see the [contract](personal-mcp-connections.md). Only non-secret network/quota policy belongs under `answer.agent.connections`.
 
 Research discovers Skill metadata from three tiers and loads content on demand:
 packaged built-ins, operator-global skills, then owner skills. A same-named
@@ -1017,7 +1017,7 @@ The checked-in Compose config explicitly selects `streamable-http` on port 8101.
 | `interfaces.mcp.resource_server_url` | unset | Public RFC 9728 resource URL |
 | `interfaces.max_upload_size_mb` | `512` | General multipart receive cap |
 | `access.auth_mode` | `none` | `none`, `simple`, or `jwt` |
-| `access.api_token` | unset | Shared token for `simple` |
+| `access.api_token` | unset | The deployment owner's bearer token for `simple` |
 | `access.allow_insecure_no_auth` | `false` | Permit non-loopback no-auth bind |
 | `access.jwt_verification_key` | unset | Static HMAC/public key |
 | `access.jwt_jwks_url` | unset | Rotating JWKS endpoint |

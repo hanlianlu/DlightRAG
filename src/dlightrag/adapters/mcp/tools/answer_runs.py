@@ -24,7 +24,6 @@ from dlightrag.adapters.mcp.server import (
 from dlightrag.application.access import (
     AccessAction,
     corpus_mutation_access_action,
-    current_request_scope,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
 from dlightrag.application.retrieval import (
@@ -132,7 +131,6 @@ async def answer_tool(
         ),
         idempotency_key=args.idempotency_key,
         owner_id=mcp_server._owner_id(),
-        auth_mode=current_request_scope().auth_mode,
     )
     return mcp_server._run_descriptor(creation.run)
 
@@ -292,7 +290,6 @@ async def _mcp_continuation(
         run_id=run_id,
         query=query,
         idempotency_key=idempotency_key,
-        auth_mode=current_request_scope().auth_mode,
         authorized_workspaces=authorized_workspaces,
     )
     if creation is None:

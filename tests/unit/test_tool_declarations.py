@@ -271,7 +271,7 @@ async def test_connection_acceptance_returns_only_the_stored_declaration() -> No
     mcp = AsyncMock()
     connections = Connections(store=cast(Any, store), mcp=cast(Any, mcp))
 
-    accepted = await connections.bind_research(owner_id="owner", auth_mode="jwt")
+    accepted = await connections.bind_research(owner_id="owner")
 
     assert accepted.bindings == (binding,)
     assert len(accepted.tools) == 1

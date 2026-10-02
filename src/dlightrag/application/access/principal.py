@@ -14,33 +14,25 @@ class UserContext(BaseModel, frozen=True):
     claims: dict[str, object] = Field(default_factory=dict)
 
 
+# Kept byte for byte: every row a none or simple deployment owns is keyed by it.
+DEPLOYMENT_OWNER_ID = hashlib.sha256(b"none\0deployment\0anonymous").hexdigest()
+
+
 def owner_id_from_principal(
     *,
     auth_mode: str,
     user_id: str,
     issuer: str | None = None,
 ) -> str:
-    """Project an authenticated principal into a stable owner namespace."""
-    if auth_mode == "none":
-        namespace = "none\0deployment\0anonymous"
-    elif auth_mode == "simple":
-        namespace = "simple\0deployment\0shared"
-    else:
-        namespace = f"jwt\0{issuer or 'unscoped'}\0{user_id}"
+    """Project an authenticated principal into a stable owner namespace.
+
+    A ``none`` or ``simple`` deployment has one owner, the deployment's: every
+    caller it admits is that owner. Only ``jwt`` tells people apart.
+    """
+    if auth_mode in {"none", "simple"}:
+        return DEPLOYMENT_OWNER_ID
+    namespace = f"jwt\0{issuer or 'unscoped'}\0{user_id}"
     return hashlib.sha256(namespace.encode("utf-8")).hexdigest()
-
-
-DEPLOYMENT_OWNER_ID = owner_id_from_principal(auth_mode="none", user_id="anonymous")
-SIMPLE_OWNER_ID = owner_id_from_principal(auth_mode="simple", user_id="shared")
-
-
-def auth_mode_for_owner(owner_id: str) -> str:
-    """Recover the auth mode that produced this owner namespace."""
-    if owner_id == DEPLOYMENT_OWNER_ID:
-        return "none"
-    if owner_id == SIMPLE_OWNER_ID:
-        return "simple"
-    return "jwt"
 
 
 def owner_id_from_user(user: UserContext | None) -> str:
@@ -56,8 +48,6 @@ def owner_id_from_user(user: UserContext | None) -> str:
 
 __all__ = [
     "DEPLOYMENT_OWNER_ID",
-    "SIMPLE_OWNER_ID",
-    "auth_mode_for_owner",
     "UserContext",
     "owner_id_from_principal",
     "owner_id_from_user",

@@ -3,7 +3,7 @@
 
 __version__ = "2.0.35"
 
-from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
+from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.memory import Memory, RecallResult
 from dlightrag_memory.models import (
     MemoryKind,
@@ -30,7 +30,6 @@ __all__ = [
     "MemoryRecord",
     "MemoryStatus",
     "MemoryStore",
-    "MemoryUnavailableError",
     "MemoryWriteRejectedError",
     "RecallResult",
     "__version__",

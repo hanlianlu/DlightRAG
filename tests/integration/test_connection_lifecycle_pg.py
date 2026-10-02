@@ -100,11 +100,10 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
         # Select before the refresh claim: its version/envelope stay unchanged
         # when the lease is claimed, so only the actual CAS lease guard can win.
         (candidate,) = await store.rotation_candidates(active_key_id="next", limit=100)
-        view = await service.read(owner_id="a", auth_mode="jwt")
+        view = await service.read(owner_id="a")
         task = asyncio.create_task(
             service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=view.revision,
                 command=ConnectionCommand(kind="probe", connection_id=identity),
             )
@@ -155,7 +154,6 @@ async def test_cosmetic_reencryption_preserves_live_rotating_refresh(race, monke
             )
             view = await next_worker.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=view.revision,
                 command=ConnectionCommand(kind="probe", connection_id=identity),
             )
@@ -200,11 +198,10 @@ async def test_probe_automatically_refreshes_same_grant_without_network_transact
             )
 
         service, store, mcp, identity = await oauth_connection(pool, remote)
-        view = await service.read(owner_id="a", auth_mode="jwt")
+        view = await service.read(owner_id="a")
         calls = mcp.calls
         view = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(kind="probe", connection_id=identity),
         )
@@ -239,10 +236,9 @@ async def test_expiring_grant_lease_and_fenced_cas_cannot_overwrite_new_authorit
         assert first is not None
         assert await b.claim_grant_refresh(**args, lease_seconds=30, worker_id="b") is None
         if winner == "revoke":
-            view = await service.read(owner_id="a", auth_mode="jwt")
+            view = await service.read(owner_id="a")
             await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=view.revision,
                 command=ConnectionCommand(kind="revoke", connection_id=identity),
             )
@@ -289,7 +285,7 @@ async def test_maintenance_retains_pins_then_run_cascade_releases_tombstone():
 
     async with isolated_run_runtime("connection_gc") as (runs, pool):
         service, store, mcp, view = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         envelope = run_envelope("answer", key="pin", owner="a", mode="research")
         envelope = replace(
             envelope,
@@ -305,7 +301,6 @@ async def test_maintenance_retains_pins_then_run_cascade_releases_tombstone():
         for _ in range(3):
             view = await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=view.revision,
                 command=ConnectionCommand(kind="probe", connection_id=identity),
             )
@@ -315,7 +310,6 @@ async def test_maintenance_retains_pins_then_run_cascade_releases_tombstone():
         ) == await stored_catalogue(store)
         view = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(kind="delete", connection_id=identity),
         )
@@ -369,10 +363,9 @@ async def test_keyring_maintenance_is_cas_safe_and_old_key_can_be_removed():
             == refresh_credentials()
         )
         assert (await workers[0].maintain())["reencrypted"] == 0
-        view = await service.read(owner_id="a", auth_mode="jwt")
+        view = await service.read(owner_id="a")
         await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(kind="revoke", connection_id=identity),
         )
@@ -502,7 +495,6 @@ async def test_sdk_effect_refresh_is_fenced_before_and_after_remote_io(outcome, 
         if outcome == "revoked-first":
             await a.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=view.revision,
                 command=ConnectionCommand(kind="revoke", connection_id=item.connection_id),
             )
@@ -537,14 +529,12 @@ async def test_sdk_effect_refresh_is_fenced_before_and_after_remote_io(outcome, 
             elif outcome == "revoke":
                 await b.change(
                     owner_id="a",
-                    auth_mode="jwt",
                     expected_revision=view.revision,
                     command=ConnectionCommand(kind="revoke", connection_id=item.connection_id),
                 )
             elif outcome == "replacement":
                 await b.replace_bearer(
                     owner_id="a",
-                    auth_mode="jwt",
                     connection_id=item.connection_id,
                     expected_revision=view.revision,
                     endpoint=item.endpoint,
@@ -791,7 +781,6 @@ async def test_in_flight_http_call_tracks_authorization_not_secret_version(
             elif mutation == "replacement":
                 await b.replace_bearer(
                     owner_id="a",
-                    auth_mode="jwt",
                     connection_id=item.connection_id,
                     expected_revision=view.revision,
                     bearer=SecretStr("replacement-token"),
@@ -810,7 +799,6 @@ async def test_in_flight_http_call_tracks_authorization_not_secret_version(
                 for kind in kinds:
                     view = await b.change(
                         owner_id="a",
-                        auth_mode="jwt",
                         expected_revision=view.revision,
                         command=ConnectionCommand(
                             kind=kind,
@@ -857,7 +845,6 @@ async def test_reader_validates_without_writer_gc_and_writer_shutdown_is_restart
         service, store, mcp, view = await enabled_connection(pool, notifications=hub)
         await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(
                 kind="disable", connection_id=view.connections[0].connection_id
@@ -933,12 +920,11 @@ async def test_owner_authorization_quota_is_durable_across_workers():
         a, b = PGConnectionsStore(pool=pool), PGConnectionsStore(pool=pool)
         await a.initialize(validate_only=False)
         service = Connections(store=a, mcp=FakeMcp())
-        view = await service.read(owner_id="a", auth_mode="jwt")
+        view = await service.read(owner_id="a")
         revision = view.revision
         for number in range(5):
             view = await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=revision,
                 command=ConnectionCommand(
                     kind="create", label=str(number), endpoint="https://example.com/mcp"

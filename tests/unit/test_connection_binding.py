@@ -49,9 +49,9 @@ async def test_acceptance_pins_tools_and_input_for_research_capable_modes(mode):
     binding = bound()
     binder = AsyncMock(return_value=binding)
     await _service(store=store, bind_research=binder).create(
-        request=_request(mode=mode), owner_id="owner-1", auth_mode="jwt"
+        request=_request(mode=mode), owner_id="owner-1"
     )
-    binder.assert_awaited_once_with(owner_id="owner-1", auth_mode="jwt")
+    binder.assert_awaited_once_with(owner_id="owner-1")
     accepted = store.created[0]
     decoded = AnswerRunInput.from_prepared_input(accepted["prepared_input"])
     assert decoded.run_connection_bindings == accepted["connection_bindings"] == binding.bindings
@@ -181,7 +181,7 @@ async def test_only_research_offers_connection_tools_restored_under_the_session_
     service = _service(store=accepted_store, bind_research=AsyncMock(return_value=binding))
     # Acceptance pins the Agent Plan this executor composes, as the composition root wires it.
     service._research_tool_declarations = executor.research_tool_declarations
-    await service.create(request=_request(mode="research"), owner_id="owner-1", auth_mode="jwt")
+    await service.create(request=_request(mode="research"), owner_id="owner-1")
     payload = {
         **accepted_store.created[0]["prepared_input"],
         "owner_id": "model-forged",
@@ -310,7 +310,7 @@ class _HeadLocks:
         return None
 
 
-async def _validate_pins(conn: _HeadLocks, *, auth_mode: str, mode: str, pinned: bool) -> None:
+async def _validate_pins(conn: _HeadLocks, *, mode: str, pinned: bool) -> None:
     from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
 
     bindings = bound().bindings if pinned else ()
@@ -318,7 +318,6 @@ async def _validate_pins(conn: _HeadLocks, *, auth_mode: str, mode: str, pinned:
         conn,
         owner_id="owner-1",
         payload={
-            "auth_mode": auth_mode,
             "mode": mode,
             "run_connection_bindings": [binding.as_json() for binding in bindings],
         },
@@ -327,29 +326,23 @@ async def _validate_pins(conn: _HeadLocks, *, auth_mode: str, mode: str, pinned:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("auth_mode", "mode"), [("simple", "research"), ("simple", "auto"), ("jwt", "fast")]
-)
-async def test_pin_writer_refuses_pins_for_an_ineligible_acceptance(auth_mode, mode):
-    """Only a personal owner's non-Fast acceptance may pin Connections.
-
-    Answer acceptance never binds for a shared ``simple`` owner or a Fast Run, so pins that
-    arrive anyway are refused before any head is locked; the same acceptance without pins
-    is an ordinary Run and passes untouched.
+async def test_pin_writer_refuses_pins_for_a_fast_acceptance():
+    """Answer acceptance never binds for a Fast Run, so pins that arrive anyway are
+    refused before any head is locked; the same acceptance without pins is an ordinary
+    Run and passes untouched.
     """
     refused = _HeadLocks()
-    with pytest.raises(ValueError, match="eligible Research acceptance"):
-        await _validate_pins(refused, auth_mode=auth_mode, mode=mode, pinned=True)
+    with pytest.raises(ValueError, match="require Research acceptance"):
+        await _validate_pins(refused, mode="fast", pinned=True)
     assert refused.statements == []
     unpinned = _HeadLocks()
-    await _validate_pins(unpinned, auth_mode=auth_mode, mode=mode, pinned=False)
+    await _validate_pins(unpinned, mode="fast", pinned=False)
     assert unpinned.statements == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", ["jwt", "none"])
-async def test_pin_writer_checks_an_eligible_acceptance_against_its_heads(auth_mode):
+async def test_pin_writer_checks_a_research_acceptance_against_its_heads():
     heads = _HeadLocks()
     with pytest.raises(StaleConnectionBindingError):
-        await _validate_pins(heads, auth_mode=auth_mode, mode="research", pinned=True)
+        await _validate_pins(heads, mode="research", pinned=True)
     assert len(heads.statements) == 1

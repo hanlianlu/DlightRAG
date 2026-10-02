@@ -146,7 +146,6 @@ from dlightrag.engine.answer.memory import render_auto_recall
 from dlightrag.engine.answer.mode import ResolvedMode
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 from dlightrag.engine.answer.publication import (
     ArtifactAttachment,
     PublicationLimits,
@@ -1221,13 +1220,12 @@ class AnswerExecutor:
             authoritative_messages,
             retained_snapshots,
         )
-        auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         prepared_input = session.prepared_input or {}
         recall_allowed = bool(prepared_input.get("profile_memory_enabled", True))
         memory_epoch = int(prepared_input.get("profile_memory_epoch") or 0)
         memory_recall_record_count = 0
         memory_recall_chars = 0
-        if self._memory is None or not is_personal_auth_mode(auth_mode):
+        if self._memory is None:
             recall_allowed = False
         elif recall_allowed and self._memory_capability_current is not None:
             recall_allowed = await self._memory_capability_current(
@@ -1291,7 +1289,6 @@ class AnswerExecutor:
                 store = self._store
                 run.orchestrator.bind_memory(
                     owner_id=session.owner_id,
-                    auth_mode=str((session.prepared_input or {}).get("auth_mode") or "none"),
                     run_id=session.run_id,
                     session_id=session_id.value,
                     store=self._memory_store,
@@ -2844,13 +2841,10 @@ def _worst_case_recall_block(prepared_input: Mapping[str, Any] | None) -> str:
     """Return the standing memory block acceptance reserved for this Run.
 
     The reservation is acceptance's, read back from what it recorded: an owner
-    whose memory was disabled, or whose auth mode owns nothing, reserved nothing.
+    whose memory was disabled reserved nothing.
     """
     prepared = prepared_input if isinstance(prepared_input, Mapping) else {}
-    return reserved_memory_text(
-        auth_mode=str(prepared.get("auth_mode") or "none"),
-        enabled=bool(prepared.get("profile_memory_enabled", True)),
-    )
+    return reserved_memory_text(enabled=bool(prepared.get("profile_memory_enabled", True)))
 
 
 def _continued_turns(entries: Sequence[SessionEntry]) -> tuple[EntryId, ...]:

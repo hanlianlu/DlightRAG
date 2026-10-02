@@ -9,12 +9,12 @@ Generation, Run Connection Binding, and Connection Activation Epoch.
 
 ## Product contract
 
-- Settings owns the path **Settings → Connections → MCP**. Each eligible owner
-  creates, authorizes, enables, disables, and deletes only their own
-  Connections.
-- JWT owners (issuer and subject, including Web identities verified at a trusted
-  edge) and the local single-user `none` owner are eligible. Shared `simple`
-  authentication has no personal Connections.
+- Settings owns the path **Settings → Connections → MCP**. Each owner creates,
+  authorizes, enables, disables, and deletes only their own Connections.
+- Every authentication mode has them. A JWT owner is one issuer and subject,
+  including Web identities verified at a trusted edge; `none` and `simple` admit
+  every caller as the one deployment owner, so whoever holds the `simple` token
+  uses that owner's Connections.
 - Every enabled Connection with a published catalogue joins each
   Research-capable Answer Run its owner accepts, whether the Answer arrives
   through Web, REST, inbound MCP, or the in-process Application. Fast has no MCP
@@ -67,7 +67,6 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 
 | Module | Responsibility |
 |---|---|
-| `engine/answer/owner.py` | `is_personal_auth_mode`: the eligibility rule (JWT or `none`), shared with Profile Memory, the Run pin writer, and the bootstrap capability |
 | `application/connections/service.py` | `Connections`: Settings commands, catalogue validation, refresh scheduling, Research binding and restore, dispatch, OAuth flows, maintenance |
 | `application/connections/models.py`, `policy.py`, `presets.py`, `client_metadata.py` | Commands, redacted views, and the store, MCP, and OAuth ports; `ConnectionPolicy`; presets; the Client ID Metadata Document |
 | `application/connections/naming.py` | `name_catalogue`: the local tool names publication gives |
@@ -82,7 +81,7 @@ Paths are under `src/dlightrag/` unless they start with `frontend/`.
 | `engine/answer/execution/executor.py`, `engine/answer/tools/composition.py` | Restoring pinned tools for resolved Research, checking the accepted `AgentRunPlan`, and preview-or-spill of tool output |
 | `_compose.py`, `application/application.py`, `application/config/` | Composition, lifecycle order, the `answer.agent.connections` settings, and YAML rejection of the key ring |
 | `adapters/http/browser/routes/connections.py`, `adapters/http/browser/auth.py` | Web routes; callback query capture and the public metadata path in the Web middleware |
-| `adapters/http/browser/routes/bootstrap.py`, `routes/chat.py`, `answer_events.py` | The `personal_mcp_connections` capability; Tool Activity labels on Run event streams |
+| `adapters/http/browser/routes/chat.py`, `answer_events.py` | Tool Activity labels on Run event streams |
 | `frontend/api/connections.ts`, `frontend/ui/settings-connections.ts` | Browser wire validation and the Settings feature |
 
 Engine owns the neutral binding contracts and imports neither Application nor
@@ -673,9 +672,7 @@ Management is a Web projection only:
   [OAuth](#oauth-and-credential-lifecycle)). Mutations need the Web session plus
   the CSRF double-submit header and same-origin checks, in `none` mode as well.
   Validation errors return a generic 422 that echoes no input, and another
-  owner's `connection_id` returns 404. An ineligible auth mode gets 403, and the
-  bootstrap capability `personal_mcp_connections` is false, which hides the
-  feature; the projection carries no eligibility flag of its own.
+  owner's `connection_id` returns 404.
 - `POST .../oauth` and the callback's 303 redirect send
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. The callback
   relies on the authenticated owner and SDK state instead of CSRF, because a
@@ -822,8 +819,8 @@ dead refresher is modeled by durable lease expiry, not by killing a process.
   `tests/unit/test_connection_client_metadata.py`: presets and the published
   metadata document.
 - `tests/unit/test_connection_binding.py`: the binding wire shape, the single
-  acceptance retry, and the pin writer's refusal of pins for a `simple` owner or
-  a Fast Run before it locks any head.
+  acceptance retry, and the pin writer's refusal of pins for a Fast Run before it
+  locks any head.
 - `tests/unit/test_connections_transport.py`: address pinning, redirect and
   header rules, pagination, result limits, and effect-replay blocking.
 - `tests/unit/test_connection_oauth.py`,

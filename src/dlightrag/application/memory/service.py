@@ -11,14 +11,12 @@ from dlightrag_memory import (
     MemoryOperationReceipt,
     MemoryProvenance,
 )
-from dlightrag_memory.errors import MemoryUnavailableError
 from dlightrag_memory.store import default_purge_cutoff
 
 from dlightrag.engine.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryCapability,
 )
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 from .errors import MemoryDisabledError
 from .memory_list import (
@@ -95,11 +93,10 @@ class MemoryService:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         page: MemoryListPageRequest | None = None,
     ) -> MemoryListPage:
         """Return one bounded newest-first active-memory page."""
-        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
+        await self._require_enabled(owner_id=owner_id)
         requested = page or MemoryListPageRequest()
         after = None
         if requested.cursor is not None:
@@ -123,14 +120,13 @@ class MemoryService:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         kind: MemoryKind,
         body: str,
         provenance: MemoryProvenance,
         idempotency_key: str,
         supersedes_id: str | None = None,
     ) -> MemoryOperationReceipt:
-        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
+        await self._require_enabled(owner_id=owner_id)
         return await self._memory.remember(
             owner_id=owner_id,
             kind=kind,
@@ -138,84 +134,64 @@ class MemoryService:
             provenance=provenance,
             idempotency_key=idempotency_key,
             supersedes_id=supersedes_id,
-            guard=lambda settlement: self._guard_enabled(
-                owner_id=owner_id,
-                auth_mode=auth_mode,
-                settlement=settlement,
-            ),
+            guard=lambda settlement: self._guard_enabled(owner_id=owner_id, settlement=settlement),
         )
 
     async def forget(
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         memory_id: str | None,
         body: str | None = None,
         provenance: MemoryProvenance,
         idempotency_key: str,
     ) -> MemoryOperationReceipt:
-        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
+        await self._require_enabled(owner_id=owner_id)
         return await self._memory.forget(
             owner_id=owner_id,
             memory_id=memory_id,
             body=body,
             provenance=provenance,
             idempotency_key=idempotency_key,
-            guard=lambda settlement: self._guard_enabled(
-                owner_id=owner_id,
-                auth_mode=auth_mode,
-                settlement=settlement,
-            ),
+            guard=lambda settlement: self._guard_enabled(owner_id=owner_id, settlement=settlement),
         )
 
     async def undo(
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         change_id: str,
         provenance: MemoryProvenance,
         idempotency_key: str,
     ) -> MemoryOperationReceipt:
-        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
+        await self._require_enabled(owner_id=owner_id)
         return await self._memory.undo(
             owner_id=owner_id,
             change_id=change_id,
             provenance=provenance,
             idempotency_key=idempotency_key,
-            guard=lambda settlement: self._guard_enabled(
-                owner_id=owner_id,
-                auth_mode=auth_mode,
-                settlement=settlement,
-            ),
+            guard=lambda settlement: self._guard_enabled(owner_id=owner_id, settlement=settlement),
         )
 
-    async def settings(self, *, owner_id: str, auth_mode: str) -> MemorySettings:
-        self._require_owner(auth_mode)
+    async def settings(self, *, owner_id: str) -> MemorySettings:
         state = await self.capability(owner_id=owner_id)
         count = await self._memory.count_active(owner_id=owner_id) if state.enabled else None
         return MemorySettings(enabled=state.enabled, epoch=state.epoch, active_count=count)
 
-    async def set_enabled(self, *, owner_id: str, auth_mode: str, enabled: bool) -> MemorySettings:
-        self._require_owner(auth_mode)
+    async def set_enabled(self, *, owner_id: str, enabled: bool) -> MemorySettings:
         state = await self._settings.set_enabled(owner_id=owner_id, enabled=enabled)
         count = await self._memory.count_active(owner_id=owner_id) if state.enabled else None
         return MemorySettings(enabled=state.enabled, epoch=state.epoch, active_count=count)
 
-    async def clear(self, *, owner_id: str, auth_mode: str) -> int:
+    async def clear(self, *, owner_id: str) -> int:
         """Physically clear enabled Profile Memory and invalidate active runs."""
-        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
+        await self._require_enabled(owner_id=owner_id)
         # Invalidate every active run before erasing package state. A failed erase
         # is safely retryable; the inverse order could let a stale run repopulate.
         await self._settings.bump_epoch(owner_id=owner_id)
         return await self._memory.clear(
             owner_id=owner_id,
-            guard=lambda settlement: self._guard_enabled(
-                owner_id=owner_id,
-                auth_mode=auth_mode,
-                settlement=settlement,
-            ),
+            guard=lambda settlement: self._guard_enabled(owner_id=owner_id, settlement=settlement),
         )
 
     async def recall_enabled(self, *, owner_id: str) -> bool:
@@ -230,10 +206,8 @@ class MemoryService:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         settlement: object | None = None,
     ) -> MemoryCapability:
-        self._require_owner(auth_mode)
         state = await self._settings.state_in_settlement(
             owner_id=owner_id,
             settlement=settlement,
@@ -246,20 +220,10 @@ class MemoryService:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         settlement: object | None,
     ) -> None:
         """Recheck activation inside the store's atomic settlement."""
-        await self._require_enabled(
-            owner_id=owner_id,
-            auth_mode=auth_mode,
-            settlement=settlement,
-        )
-
-    @staticmethod
-    def _require_owner(auth_mode: str) -> None:
-        if not is_personal_auth_mode(auth_mode):
-            raise MemoryUnavailableError()
+        await self._require_enabled(owner_id=owner_id, settlement=settlement)
 
 
 __all__ = [

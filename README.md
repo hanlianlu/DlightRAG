@@ -34,7 +34,7 @@ See [Architecture](docs/architecture.md) for module and storage ownership.
 |---|---|---|---|
 | Local Docker | Compose PG18 | Self-hosted MinerU by default | Loopback, `auth_mode: none` |
 | Native API | Compose or external PG18 | Any reachable MinerU or Docling | Local or explicit auth |
-| Shared service | Managed or self-hosted PG18 | Independently operated parser | `simple` or `jwt` |
+| Shared service | Managed or self-hosted PG18 | Independently operated parser | `jwt`; `simple` is one owner |
 | Enterprise | Managed PG18 | Independently operated parser | JWKS plus claim access control |
 
 The parser runs outside the DlightRAG app container. The checked-in Docker

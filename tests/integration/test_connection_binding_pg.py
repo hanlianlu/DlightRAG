@@ -43,7 +43,6 @@ async def enabled_connection(pool, owner="a", *, notifications=None):
     service = Connections(store=store, mcp=mcp)
     view = await service.change(
         owner_id=owner,
-        auth_mode="jwt",
         expected_revision="0",
         command=ConnectionCommand(
             kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -55,7 +54,7 @@ async def enabled_connection(pool, owner="a", *, notifications=None):
         ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
     ):
         view = await service.change(
-            owner_id=owner, auth_mode="jwt", expected_revision=view.revision, command=command
+            owner_id=owner, expected_revision=view.revision, command=command
         )
     return service, store, mcp, view
 
@@ -64,7 +63,7 @@ async def enabled_connection(pool, owner="a", *, notifications=None):
 async def test_bind_research_is_owner_scoped_schema_exact_and_network_free():
     async with isolated_run_runtime("binding") as (_, pool):
         service, store, mcp, view = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         assert mcp.calls == 1
         assert len(bound.bindings) == len(bound.tools) == 1
         assert bound.bindings[0].generation == view.connections[0].generation
@@ -73,11 +72,8 @@ async def test_bind_research_is_owner_scoped_schema_exact_and_network_free():
         )
         assert bound.tools[0].description == "Accepted description"
         assert bound.tools[0].replay_policy == "never"
-        assert (await service.bind_research(owner_id="b", auth_mode="jwt")).tools == ()
-        assert (await service.bind_research(owner_id="a", auth_mode="simple")).tools == ()
-        assert (
-            await service.bind_research(owner_id="a", auth_mode="none")
-        ).bindings == bound.bindings
+        assert (await service.bind_research(owner_id="b")).tools == ()
+        assert (await service.bind_research(owner_id="a")).bindings == bound.bindings
         assert mcp.calls == 1
 
 
@@ -99,7 +95,7 @@ async def test_actual_accept_run_pins_restore_old_generation_and_prevent_gc():
 
     async with isolated_run_runtime("binding_accept") as (runs, pool):
         service, store, mcp, view = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         envelope = run_envelope("answer", key="r1", owner="a", mode="research")
         envelope = replace(
             envelope,
@@ -114,13 +110,12 @@ async def test_actual_accept_run_pins_restore_old_generation_and_prevent_gc():
         mcp.description = "Future description"
         await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(
                 kind="probe", connection_id=view.connections[0].connection_id
             ),
         )
-        future = await service.bind_research(owner_id="a", auth_mode="jwt")
+        future = await service.bind_research(owner_id="a")
         assert future.tools[0].name == bound.tools[0].name
         assert future.tools[0].description == "Future description"
         assert future.bindings[0].generation > bound.bindings[0].generation
@@ -203,7 +198,7 @@ async def test_web_turn_run_and_pins_share_actual_transaction_and_cascade():
 
     async with isolated_run_runtime("binding_web") as (runs, pool):
         service, _, _, _ = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         web = PGWebConversationStore(pool=pool, run_store=runs)
         await web.initialize()
         envelope = run_envelope("answer", key=str(uuid7()), owner="a", mode="research")
@@ -261,11 +256,10 @@ async def test_snapshot_publication_gc_accept_race_cannot_leave_dangling_pin():
 
     async with isolated_run_runtime("binding_gc") as (runs, pool):
         service, _, _, view = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         old = bound.bindings[0]
         await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(kind="probe", connection_id=old.connection_id),
         )
@@ -294,7 +288,7 @@ async def test_snapshot_publication_gc_accept_race_cannot_leave_dangling_pin():
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT count(*) FROM dlightrag_runs") == 0
             assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_connection_pins") == 0
-        fresh = await service.bind_research(owner_id="a", auth_mode="jwt")
+        fresh = await service.bind_research(owner_id="a")
         fresh_envelope = replace(
             envelope,
             payload={
@@ -318,9 +312,9 @@ async def test_snapshot_publication_gc_accept_race_cannot_leave_dangling_pin():
     "identity,mode,expected",
     [
         ("none", "research", True),
+        ("simple", "research", True),
         ("alice", "research", True),
         ("bob", "research", False),
-        ("simple", "research", False),
         ("alice", "fast", False),
     ],
 )
@@ -356,7 +350,7 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
     )
 
     async with isolated_run_runtime("binding_surfaces") as (runs, pool):
-        connection_owner = owner_id_from_user(_ANON if identity == "none" else _ALICE)
+        connection_owner = owner_id_from_user(_ANON if identity in {"none", "simple"} else _ALICE)
         connections, _, mcp, _ = await enabled_connection(pool, connection_owner)
         application = _store_backed_application(
             runs, test_config, bind_research=connections.bind_research
@@ -376,7 +370,6 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
             created = await application.answers.create(
                 request=AnswerRequest(query="q", workspaces=("default",), mode=mode),
                 owner_id=owner,
-                auth_mode=user.auth_mode,
             )
             run_id = created.run.run_id
         elif surface == "rest":
@@ -421,7 +414,7 @@ async def test_same_owner_binding_across_application_rest_mcp_and_web(
         record = await runs.get_run(owner_id=owner, run_id=run_id)
         assert record is not None
         decoded = AnswerRunInput.from_prepared_input(record.prepared_input)
-        binding = await connections.bind_research(owner_id=connection_owner, auth_mode="jwt")
+        binding = await connections.bind_research(owner_id=connection_owner)
         assert decoded.run_connection_bindings == (binding.bindings if expected else ())
         assert decoded.agent_run_plan is not None
         personal = [t for t in decoded.agent_run_plan.tools if t.name == binding.tools[0].name]
@@ -451,7 +444,7 @@ async def test_acceptance_locks_head_before_publication_and_gc_retains_pin():
 
     async with isolated_run_runtime("binding_lock") as (runs, pool):
         service, _, _, view = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         old = bound.bindings[0]
         envelope = run_envelope("answer", key="locked", owner="a", mode="research")
         envelope = replace(
@@ -470,7 +463,6 @@ async def test_acceptance_locks_head_before_publication_and_gc_retains_pin():
                     publication = asyncio.create_task(
                         service.change(
                             owner_id="a",
-                            auth_mode="jwt",
                             expected_revision=view.revision,
                             command=ConnectionCommand(
                                 kind="probe", connection_id=old.connection_id
@@ -518,17 +510,15 @@ async def test_disable_reenable_or_retirement_cannot_accept_old_activation(mutat
 
     async with isolated_run_runtime("binding_epoch") as (runs, pool):
         service, _, _, view = await enabled_connection(pool)
-        old = await service.bind_research(owner_id="a", auth_mode="jwt")
+        old = await service.bind_research(owner_id="a")
         current = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=view.revision,
             command=ConnectionCommand(kind=mutation, connection_id=old.bindings[0].connection_id),
         )
         if mutation == "disable":
             await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=current.revision,
                 command=ConnectionCommand(
                     kind="enable", connection_id=old.bindings[0].connection_id, consent_version=1
@@ -552,7 +542,7 @@ async def test_disable_reenable_or_retirement_cannot_accept_old_activation(mutat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["accept_run", "accept_run_in"])
-@pytest.mark.parametrize("invalid", ["owner", "digest", "omitted_pins", "fast", "simple"])
+@pytest.mark.parametrize("invalid", ["owner", "digest", "omitted_pins", "fast"])
 async def test_every_accepting_path_validates_normalized_binding_before_commit(path, invalid):
     from dataclasses import replace
     from uuid import uuid7
@@ -562,7 +552,7 @@ async def test_every_accepting_path_validates_normalized_binding_before_commit(p
 
     async with isolated_run_runtime("binding_invalid") as (runs, pool):
         service, _, _, _ = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         bindings = bound.bindings
         if invalid == "owner":
             bindings = (replace(bindings[0], owner_id="b"),)
@@ -575,7 +565,6 @@ async def test_every_accepting_path_validates_normalized_binding_before_commit(p
             envelope,
             payload={
                 **envelope.payload,
-                "auth_mode": "simple" if invalid == "simple" else "jwt",
                 "run_connection_bindings": [b.as_json() for b in bindings],
             },
         )
@@ -611,7 +600,7 @@ async def test_pinned_tool_labels_resolve_a_run_and_survive_connection_deletion(
 
     async with isolated_run_runtime("binding_labels") as (runs, pool):
         service, store, mcp, view = await enabled_connection(pool)
-        bound = await service.bind_research(owner_id="a", auth_mode="jwt")
+        bound = await service.bind_research(owner_id="a")
         local_name = bound.tools[0].name
         envelope = run_envelope("answer", key="r1", owner="a", mode="research")
         envelope = replace(
@@ -630,40 +619,21 @@ async def test_pinned_tool_labels_resolve_a_run_and_survive_connection_deletion(
             connection_bindings=(),
         )
 
-        labels = await service.pinned_tool_labels(
-            owner_id="a", auth_mode="jwt", run_id=pinned.run.run_id
-        )
+        labels = await service.pinned_tool_labels(owner_id="a", run_id=pinned.run.run_id)
         assert labels == {local_name: "Fixture · read"}
-        assert (
-            await service.pinned_tool_labels(
-                owner_id="a", auth_mode="jwt", run_id=unpinned.run.run_id
-            )
-            == {}
-        )
-        assert (
-            await service.pinned_tool_labels(
-                owner_id="b", auth_mode="jwt", run_id=pinned.run.run_id
-            )
-            == {}
-        )
-        assert (
-            await service.pinned_tool_labels(
-                owner_id="a", auth_mode="simple", run_id=pinned.run.run_id
-            )
-            == {}
-        )
+        assert await service.pinned_tool_labels(owner_id="a", run_id=unpinned.run.run_id) == {}
+        assert await service.pinned_tool_labels(owner_id="b", run_id=pinned.run.run_id) == {}
 
         deleted = ConnectionCommand(kind="delete", connection_id=view.connections[0].connection_id)
         await service.change(
             owner_id="a",
-            auth_mode="jwt",
-            expected_revision=(await service.read(owner_id="a", auth_mode="jwt")).revision,
+            expected_revision=(await service.read(owner_id="a")).revision,
             command=deleted,
         )
 
-        assert await service.pinned_tool_labels(
-            owner_id="a", auth_mode="jwt", run_id=pinned.run.run_id
-        ) == {local_name: "Fixture · read"}
+        assert await service.pinned_tool_labels(owner_id="a", run_id=pinned.run.run_id) == {
+            local_name: "Fixture · read"
+        }
 
 
 @pytest.mark.asyncio
@@ -683,7 +653,7 @@ async def test_like_labelled_connections_bind_apart_and_a_rename_leaves_pins_alo
     from dlightrag.engine.answer.tools.composition import research_tool_declarations
     from tests.integration.run_runtime_pg_harness import run_envelope
 
-    owner: dict[str, Any] = {"owner_id": "a", "auth_mode": "jwt"}
+    owner: dict[str, Any] = {"owner_id": "a"}
 
     async with isolated_run_runtime("binding_names") as (runs, pool):
         store = PGConnectionsStore(pool=pool)
@@ -777,7 +747,7 @@ async def test_a_connection_keeps_its_part_while_its_head_has_no_catalogue():
                 raise RuntimeError("discovery unavailable")
             return await super().discover(**kwargs)
 
-    owner: dict[str, Any] = {"owner_id": "a", "auth_mode": "jwt"}
+    owner: dict[str, Any] = {"owner_id": "a"}
 
     async with isolated_run_runtime("binding_parts") as (_, pool):
         store = PGConnectionsStore(pool=pool)

@@ -64,9 +64,6 @@ async def test_web_owner_lifecycle_and_csrf(mode, tmp_path, monkeypatch):
             transport=ASGITransport(app), base_url="http://test", headers=auth("a")
         ) as client:
             initial = await client.get("/web/api/connections/mcp")
-            if mode == "simple":
-                assert initial.status_code == 403
-                return
             assert initial.status_code == 200
             body = {
                 "expected_revision": initial.json()["revision"],

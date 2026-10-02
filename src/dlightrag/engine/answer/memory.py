@@ -4,7 +4,7 @@
 The canonical Memory shapes, checklist, recall selection, and storage contract
 live in the independently installable ``dlightrag_memory`` package; this
 module re-exports them for Answer callers and keeps the root-owned concerns:
-owner eligibility policy and rendering the non-citable standing block.
+an owner's activation state and rendering the non-citable standing block.
 """
 
 from dataclasses import dataclass
@@ -18,7 +18,6 @@ from dlightrag_memory import (
     MemoryStatus,
     RecallResult,
 )
-from dlightrag_memory.errors import MemoryUnavailableError
 from dlightrag_memory.policy import (
     MEMORY_BODY_LIMIT,
     MEMORY_SUPERSEDE_RETENTION_DAYS,
@@ -26,8 +25,6 @@ from dlightrag_memory.policy import (
     RECALL_TOP_K,
     evaluate_memory_operation,
 )
-
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +76,7 @@ def render_auto_recall(recalled: RecallResult) -> str:
 
 
 def reserved_auto_recall_text() -> str:
-    """Worst-case standing block one JWT accept must leave room for.
+    """Worst-case standing block one accept must leave room for.
 
     Recall injects at most ``RECALL_TOP_K`` preferences plus ``RECALL_TOP_K``
     facts whose bodies total at most ``RECALL_CHAR_BUDGET`` characters. That
@@ -108,13 +105,6 @@ def reserved_auto_recall_text() -> str:
     )
 
 
-def standing_memory_for_acceptance(auth_mode: str) -> str:
-    """Reserve full auto-recall at accept so execute cannot overflow after 202."""
-    if not is_personal_auth_mode(auth_mode):
-        return ""
-    return reserved_auto_recall_text()
-
-
 def standing_memory_message(memory_text: str) -> dict[str, str] | None:
     """The low-authority injection message, or None when there is nothing.
 
@@ -138,12 +128,10 @@ __all__ = [
     "MemoryProvenance",
     "MemoryRecord",
     "MemoryStatus",
-    "MemoryUnavailableError",
     "RecallResult",
     "evaluate_memory_operation",
     "recall_sections",
     "render_auto_recall",
     "reserved_auto_recall_text",
-    "standing_memory_for_acceptance",
     "standing_memory_message",
 ]

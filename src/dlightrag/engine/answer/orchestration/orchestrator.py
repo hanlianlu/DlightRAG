@@ -378,7 +378,6 @@ class AnswerOrchestrator:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         run_id: str,
         session_id: str,
         store: Any,
@@ -393,7 +392,6 @@ class AnswerOrchestrator:
         if self._memory_host is None:
             return
         self._memory_host.owner_id = owner_id
-        self._memory_host.auth_mode = auth_mode
         self._memory_host.run_id = run_id
         self._memory_host.session_id = session_id
         self._memory_host.memory = Memory(store)

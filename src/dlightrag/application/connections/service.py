@@ -30,7 +30,6 @@ from dlightrag.engine.answer.execution.connection_binding import (
     ResearchToolClaim,
     RunConnectionBinding,
 )
-from dlightrag.engine.answer.owner import is_personal_auth_mode
 from dlightrag.engine.network_admission import (
     validate_credential_free_query,
     validate_public_http_url,
@@ -103,16 +102,8 @@ class Connections:
         self._worker = uuid.uuid4().hex
         self._tasks: list[asyncio.Task[None]] = []
 
-    def _authorize(self, owner_id: str, auth_mode: str) -> None:
-        if not owner_id or not is_personal_auth_mode(auth_mode):
-            raise ConnectionsError(
-                "Personal Connections unavailable for this authentication mode", 403
-            )
-
-    async def bind_research(self, *, owner_id: str, auth_mode: str) -> BoundResearchConnections:
+    async def bind_research(self, *, owner_id: str) -> BoundResearchConnections:
         """Read only complete enabled local definitions; never discover on acceptance."""
-        if not owner_id or not is_personal_auth_mode(auth_mode):
-            return BoundResearchConnections()
         catalogues = await self._store.research_catalogues(owner_id)
         return BoundResearchConnections(
             tools=tuple(_catalogue_declaration(tool) for _, tools in catalogues for tool in tools),
@@ -138,18 +129,14 @@ class Connections:
             restored.append(_catalogue_tool(tool, execute=execute))
         return tuple(restored)
 
-    async def pinned_tool_labels(
-        self, *, owner_id: str, auth_mode: str, run_id: str
-    ) -> Mapping[str, str]:
+    async def pinned_tool_labels(self, *, owner_id: str, run_id: str) -> Mapping[str, str]:
         """Label this Run's pinned Connection tools for a human reader.
 
         Display, not authority: the caller may only render these names for a Run
-        it already owns, and every failure mode -- an ineligible reader, a Run
-        with no pins, a retained catalogue that no longer resolves -- returns the
-        same empty mapping, so a missing label can never fail or blank a trace.
+        it already owns, and every failure mode -- a Run with no pins, a retained
+        catalogue that no longer resolves -- returns the same empty mapping, so a
+        missing label can never fail or blank a trace.
         """
-        if not owner_id or not is_personal_auth_mode(auth_mode):
-            return {}
         facts = await self._store.pinned_tool_facts(owner_id=owner_id, run_id=run_id)
         return {fact.local_name: label for fact in facts if (label := _tool_label(fact)) != ""}
 
@@ -337,8 +324,7 @@ class Connections:
             return None
         return client_metadata_document(metadata_url=metadata_url, oauth_callback_url=callback_url)
 
-    async def read(self, *, owner_id: str, auth_mode: str) -> ConnectionsView:
-        self._authorize(owner_id, auth_mode)
+    async def read(self, *, owner_id: str) -> ConnectionsView:
         revision, items = await self._store.read(owner_id)
         return ConnectionsView(
             revision=revision,
@@ -360,9 +346,8 @@ class Connections:
         )
 
     async def change(
-        self, *, owner_id: str, auth_mode: str, expected_revision: str, command: ConnectionCommand
+        self, *, owner_id: str, expected_revision: str, command: ConnectionCommand
     ) -> ConnectionsView:
-        self._authorize(owner_id, auth_mode)
         if command.kind == "create" and (not command.label or not command.endpoint):
             raise ConnectionsError("Label and endpoint are required", 422)
         candidate = None
@@ -399,19 +384,17 @@ class Connections:
             )
             if claim is not None:
                 await self._refresh(claim)
-        return await self.read(owner_id=owner_id, auth_mode=auth_mode)
+        return await self.read(owner_id=owner_id)
 
     async def replace_bearer(
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         connection_id: str,
         bearer: SecretStr,
         expected_revision: str | None = None,
         endpoint: str | None = None,
     ) -> ConnectionsView:
-        self._authorize(owner_id, auth_mode)
         revision, items = await self._store.read(owner_id)
         item = next((item for item in items if item.connection_id == connection_id), None)
         if item is None:
@@ -452,7 +435,7 @@ class Connections:
                 catalogue=catalogue,
                 policy=self._policy,
             )
-            return await self.read(owner_id=owner_id, auth_mode=auth_mode)
+            return await self.read(owner_id=owner_id)
         await self._store.replace_bearer(
             owner_id=owner_id,
             connection_id=connection_id,
@@ -469,13 +452,12 @@ class Connections:
         )
         if claim is not None:
             await self._refresh(claim)
-        return await self.read(owner_id=owner_id, auth_mode=auth_mode)
+        return await self.read(owner_id=owner_id)
 
     async def begin_authorization(
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         connection_id: str,
         expected_revision: str,
         callback_url: str,
@@ -487,7 +469,6 @@ class Connections:
         browser's own (the Web's same-origin guard ties the two): the provider sends that
         browser, with its session, back there. A configured override wins.
         """
-        self._authorize(owner_id, auth_mode)
         if self._oauth is None:
             raise ConnectionsError("OAuth callback deployment is not configured", 503)
         if len(self._authorizations) >= 4:
@@ -543,13 +524,11 @@ class Connections:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         state: str,
         code: str | None = None,
         issuer: str | None = None,
         error: str | None = None,
     ) -> None:
-        self._authorize(owner_id, auth_mode)
         if (
             not state
             or len(state) > 256

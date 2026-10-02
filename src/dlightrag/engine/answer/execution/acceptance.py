@@ -34,7 +34,7 @@ from dlightrag.engine.answer.history import (
     project_history,
 )
 from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
-from dlightrag.engine.answer.memory import standing_memory_for_acceptance
+from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.mode import AnswerMode, ModeResource, ResolvedMode, resource_role
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
@@ -63,14 +63,14 @@ class RetrievalPlanning(Protocol):
     async def schema_for(self, workspaces: Sequence[str]) -> dict[str, Any]: ...
 
 
-def reserved_memory_text(*, auth_mode: str, enabled: bool) -> str:
+def reserved_memory_text(*, enabled: bool) -> str:
     """The standing memory block a Run reserves room for before recall runs.
 
     Execution injects at most this block, so acceptance and execution measure with
     it: reserving room recall does not use is safe, under-reserving spends the
     difference on evidence the request can no longer hold.
     """
-    return standing_memory_for_acceptance(auth_mode) if enabled else ""
+    return reserved_auto_recall_text() if enabled else ""
 
 
 def routing_resources(

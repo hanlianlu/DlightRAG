@@ -12,14 +12,4 @@ class MemoryWriteRejectedError(Exception):
         self.public_message = public_message
 
 
-class MemoryUnavailableError(Exception):
-    """This principal cannot write or auto-recall Memory Records."""
-
-    error_kind = "memory_unavailable"
-
-    def __init__(self) -> None:
-        super().__init__("Profile Memory is unavailable for this caller.")
-        self.public_message = "Profile Memory is unavailable for this caller."
-
-
-__all__ = ["MemoryUnavailableError", "MemoryWriteRejectedError"]
+__all__ = ["MemoryWriteRejectedError"]

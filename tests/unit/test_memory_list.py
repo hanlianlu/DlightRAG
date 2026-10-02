@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 from dlightrag_memory import MemoryProvenance, MemoryRecord
-from dlightrag_memory.errors import MemoryUnavailableError
 from fastapi import HTTPException
 
 from dlightrag.adapters.http.browser.routes.memory import list_memories as web_list_memories
@@ -250,7 +249,6 @@ async def test_http_returns_page_with_next_cursor(list_memories, application: An
     forwarded = memory.list_active_page.await_args
     assert forwarded is not None
     assert forwarded.kwargs["owner_id"] == owner_id_from_user(_user())
-    assert forwarded.kwargs["auth_mode"] == "jwt"
     assert forwarded.kwargs["page"].limit == MEMORY_LIST_PAGE_DEFAULT_LIMIT
     assert forwarded.kwargs["page"].cursor is None
 
@@ -294,8 +292,4 @@ async def test_http_leaves_memory_refusals_to_the_shared_error_handlers(
 
     memory.list_active_page.side_effect = MemoryDisabledError()
     with pytest.raises(MemoryDisabledError):
-        await list_memories(_request(application))
-
-    memory.list_active_page.side_effect = MemoryUnavailableError()
-    with pytest.raises(MemoryUnavailableError):
         await list_memories(_request(application))

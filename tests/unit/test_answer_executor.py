@@ -1834,7 +1834,6 @@ def _fast_prepared_input(*, session_id: str) -> dict[str, Any]:
         **run_input.as_request(),
         "profile_memory_enabled": True,
         "profile_memory_epoch": 1,
-        "auth_mode": "jwt",
     }
 
 

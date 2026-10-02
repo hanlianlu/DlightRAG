@@ -219,19 +219,15 @@ def test_an_explicit_fast_request_that_cannot_hold_its_reserve_names_the_planner
 @pytest.mark.parametrize(
     ("recorded", "reserves"),
     [
-        pytest.param({"auth_mode": "jwt", "profile_memory_enabled": True}, True, id="memory-on"),
-        pytest.param({"auth_mode": "jwt"}, True, id="memory-unrecorded"),
-        pytest.param({"auth_mode": "jwt", "profile_memory_enabled": False}, False, id="memory-off"),
-        # A shared simple-auth caller owns no memory, so nothing is reserved for it.
-        pytest.param({"auth_mode": "simple"}, False, id="shared-caller"),
+        pytest.param({"profile_memory_enabled": True}, True, id="memory-on"),
+        pytest.param({}, True, id="memory-unrecorded"),
+        pytest.param({"profile_memory_enabled": False}, False, id="memory-off"),
     ],
 )
 def test_execution_reserves_the_memory_acceptance_recorded(
     recorded: dict[str, Any], reserves: bool
 ) -> None:
-    accepted = reserved_memory_text(
-        auth_mode=recorded["auth_mode"], enabled=recorded.get("profile_memory_enabled", True)
-    )
+    accepted = reserved_memory_text(enabled=recorded.get("profile_memory_enabled", True))
 
     assert accepted == (reserved_auto_recall_text() if reserves else "")
     assert _worst_case_recall_block(recorded) == accepted
@@ -280,7 +276,7 @@ async def test_acceptance_and_execution_measure_the_fast_requests_actually_sent(
         capabilities=capabilities,
         memory_capability=memory_on,
     )
-    await service.create(request=_request(mode="fast"), owner_id="owner-1", auth_mode="jwt")
+    await service.create(request=_request(mode="fast"), owner_id="owner-1")
     prepared = store.created[0]["prepared_input"]
     accepted = AnswerRunInput.from_prepared_input(prepared)
 

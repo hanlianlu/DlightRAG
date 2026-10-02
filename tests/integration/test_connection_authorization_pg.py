@@ -29,7 +29,7 @@ def cipher():
 
 
 _CALLBACK_URL = "https://app.example/web/oauth/connections/mcp/callback"
-_OWNER = {"owner_id": "a", "auth_mode": "jwt"}
+_OWNER = {"owner_id": "a"}
 
 
 @asynccontextmanager
@@ -141,7 +141,7 @@ async def test_authenticated_endpoint_candidate_keeps_old_live_until_discovery_c
         await store.initialize(validate_only=False)
         mcp = Mcp()
         service = Connections(store=store, mcp=mcp, cipher=cipher())
-        owner = dict(owner_id="a", auth_mode="jwt")
+        owner = dict(owner_id="a")
         view = await service.change(
             **owner,
             expected_revision="0",
@@ -232,7 +232,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
         b = Connections(
             store=PGConnectionsStore(pool=pool), mcp=FakeMcp(), cipher=cipher(), policy=policy
         )
-        owner = dict(owner_id="a", auth_mode="jwt")
+        owner = dict(owner_id="a")
         draft = await a.change(
             **owner,
             expected_revision="0",
@@ -258,9 +258,7 @@ async def test_sdk_flow_callback_other_worker_is_encrypted_owner_bound_and_once(
             server.authorization = parse_qs(urlsplit(start.authorization_url).query)
             state = server.authorization["state"][0]
             with pytest.raises(ConnectionsError):
-                await b.authorization_callback(
-                    owner_id="b", auth_mode="jwt", state=state, code="test-code"
-                )
+                await b.authorization_callback(owner_id="b", state=state, code="test-code")
             with pytest.raises(ConnectionsError):
                 await b.authorization_callback(**owner, state="wrong-state", code="test-code")
             deposited = await asyncio.gather(
@@ -373,7 +371,7 @@ async def test_authorization_failure_never_retires_enabled_head_and_requires_res
         b = Connections(
             store=PGConnectionsStore(pool=pool), mcp=FakeMcp(), cipher=cipher(), policy=policy
         )
-        owner = dict(owner_id="a", auth_mode="jwt")
+        owner = dict(owner_id="a")
         view = await a.change(
             **owner,
             expected_revision="0",

@@ -248,7 +248,7 @@ materially improve an answer. Explicit user selection is optional convenience,
 not a permission gate; user veto wins. Research parent runs additionally
 hold `publish_skill` and `delete_skill`, the validated owner-only publication
 channel; built-in and global Skills stay read-only to the application. Outbound
-MCP tools come from the eligible owner's enabled personal Connections, managed in
+MCP tools come from the owner's enabled personal Connections, managed in
 Settings, and automatically bind future Research Runs across every Answer interface.
 Application Connections owns immutable catalogues, encrypted Grants, SDK OAuth,
 refresh/rotation and retention. Actual accepting PostgreSQL transactions write normalized

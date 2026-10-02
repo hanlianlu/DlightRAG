@@ -235,12 +235,11 @@ def test_jwt_principal_uses_trust_domain_and_subject() -> None:
     assert owner_id_from_user(alice) != owner_id_from_user(bob)
 
 
-def test_simple_and_none_principals_are_deployment_scoped() -> None:
+def test_simple_principals_are_the_deployment_owner() -> None:
     first = UserContext(user_id="header-a", auth_mode="simple")
     second = UserContext(user_id="header-b", auth_mode="simple")
 
-    assert owner_id_from_user(first) == owner_id_from_user(second)
-    assert owner_id_from_user(None) != owner_id_from_user(first)
+    assert owner_id_from_user(first) == owner_id_from_user(second) == DEPLOYMENT_OWNER_ID
 
 
 def test_direct_in_process_calls_share_the_deployment_owner() -> None:

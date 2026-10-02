@@ -470,7 +470,6 @@ class WebConversationService:
                 owner_id=principal_id,
                 idempotency_key=submission_id,
                 idempotency_fingerprint=idempotency_fingerprint,
-                auth_mode=(user.auth_mode if user is not None else "none"),
                 acceptor=_WebAnswerAcceptor(
                     store=self._store,
                     conversation_id=conversation_id,
@@ -530,7 +529,6 @@ class WebConversationService:
             owner_id=principal_id,
             idempotency_key=submission_id,
             idempotency_fingerprint=fingerprint,
-            auth_mode=(user.auth_mode if user is not None else "none"),
             acceptor=_WebAnswerAcceptor(
                 store=self._store,
                 conversation_id=conversation_id,

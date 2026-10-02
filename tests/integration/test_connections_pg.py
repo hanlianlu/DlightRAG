@@ -59,10 +59,9 @@ async def test_owner_draft_probe_consent_and_revision():
         store = PGConnectionsStore(pool=pool)
         await store.initialize(validate_only=False)
         connections = Connections(store=store, mcp=FakeMcp())
-        empty = await connections.read(owner_id="a", auth_mode="jwt")
+        empty = await connections.read(owner_id="a")
         draft = await connections.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=empty.revision,
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -70,19 +69,15 @@ async def test_owner_draft_probe_consent_and_revision():
         )
         item = draft.connections[0]
         assert item.enabled is False
-        assert (await connections.read(owner_id="b", auth_mode="jwt")).connections == ()
+        assert (await connections.read(owner_id="b")).connections == ()
         with pytest.raises(ConnectionsError, match="not found"):
             await connections.change(
                 owner_id="b",
-                auth_mode="jwt",
                 expected_revision="0",
                 command=ConnectionCommand(kind="probe", connection_id=item.connection_id),
             )
-        with pytest.raises(ConnectionsError, match="unavailable"):
-            await connections.read(owner_id="shared", auth_mode="simple")
         ready = await connections.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=draft.revision,
             command=ConnectionCommand(kind="probe", connection_id=item.connection_id),
         )
@@ -90,13 +85,11 @@ async def test_owner_draft_probe_consent_and_revision():
         with pytest.raises(ConnectionsError, match="consent"):
             await connections.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=ready.revision,
                 command=ConnectionCommand(kind="enable", connection_id=item.connection_id),
             )
         enabled = await connections.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=ready.revision,
             command=ConnectionCommand(
                 kind="enable", connection_id=item.connection_id, consent_version=1
@@ -106,13 +99,11 @@ async def test_owner_draft_probe_consent_and_revision():
         with pytest.raises(ConnectionsError, match="revision"):
             await connections.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=ready.revision,
                 command=ConnectionCommand(kind="disable", connection_id=item.connection_id),
             )
         disabled = await connections.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=enabled.revision,
             command=ConnectionCommand(kind="disable", connection_id=item.connection_id),
         )
@@ -144,7 +135,6 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
         service = Connections(store=store, mcp=mcp, cipher=CredentialCipher(SecretStr(KEYRING)))
         view = await service.change(
             owner_id="a",
-            auth_mode="none",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="External", endpoint="https://example.com/mcp"
@@ -154,7 +144,6 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
         secret = SecretStr("test-only-personal-token")
         view = await service.replace_bearer(
             owner_id="a",
-            auth_mode="none",
             connection_id=identity,
             bearer=secret,
             expected_revision=view.revision,
@@ -164,7 +153,6 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
         with pytest.raises(ConnectionsError) as edit_error:
             await service.change(
                 owner_id="a",
-                auth_mode="none",
                 expected_revision=view.revision,
                 command=ConnectionCommand(
                     kind="edit",
@@ -173,7 +161,7 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
                 ),
             )
         assert edit_error.value.kind == "requires_reauthorization"
-        assert await service.read(owner_id="a", auth_mode="none") == view
+        assert await service.read(owner_id="a") == view
         assert "test-only-personal-token" not in json.dumps(asdict(view))
         assert "grant_id" not in json.dumps(asdict(view))
         # Persistence is an accepted seam: prove the live stored record is ciphertext.
@@ -183,7 +171,6 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
         with pytest.raises(ConnectionsError, match="not found"):
             await service.replace_bearer(
                 owner_id="b",
-                auth_mode="jwt",
                 connection_id=identity,
                 bearer=secret,
                 expected_revision="0",
@@ -192,7 +179,6 @@ async def test_bearer_encrypted_owner_bound_and_rotatable_without_echo():
         with pytest.raises(ConnectionsError, match="deployment"):
             await no_key.replace_bearer(
                 owner_id="a",
-                auth_mode="none",
                 connection_id=identity,
                 bearer=secret,
                 expected_revision=view.revision,
@@ -235,7 +221,6 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
         try:
             draft = await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision="0",
                 command=ConnectionCommand(
                     kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -244,13 +229,11 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
             identity = draft.connections[0].connection_id
             ready = await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=draft.revision,
                 command=ConnectionCommand(kind="probe", connection_id=identity),
             )
             enabled = await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=ready.revision,
                 command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
             )
@@ -262,7 +245,7 @@ async def test_refresh_auto_admits_new_tools_and_preserves_last_good_on_fault():
                     if len(catalogue) == 2:
                         break
                     await asyncio.sleep(0.05)
-            current = await service.read(owner_id="a", auth_mode="jwt")
+            current = await service.read(owner_id="a")
             assert (
                 current.connections[0].activation_epoch == enabled.connections[0].activation_epoch
             )
@@ -287,7 +270,6 @@ async def test_expired_refresh_and_disabled_worker_cannot_publish():
         service = Connections(store=store, mcp=FakeMcp())
         draft = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -306,14 +288,13 @@ async def test_expired_refresh_and_disabled_worker_cannot_publish():
         )
         disabled = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=draft.revision,
             command=ConnectionCommand(kind="disable", connection_id=identity),
         )
         assert not await store.publish(
             claim=claim, catalogue=(), error=None, retry_seconds=1, policy=ConnectionPolicy()
         )
-        assert (await service.read(owner_id="a", auth_mode="jwt")) == disabled
+        assert (await service.read(owner_id="a")) == disabled
 
 
 @pytest.mark.asyncio
@@ -340,7 +321,6 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
         service = Connections(store=store, mcp=mcp)
         draft = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -349,7 +329,6 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
         identity = draft.connections[0].connection_id
         ready = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=draft.revision,
             command=ConnectionCommand(kind="probe", connection_id=identity),
         )
@@ -357,7 +336,6 @@ async def test_bad_catalogue_preserves_entire_last_good_generation(bad):
         mcp.fault = True
         fault = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=ready.revision,
             command=ConnectionCommand(kind="probe", connection_id=identity),
         )
@@ -383,7 +361,6 @@ async def test_unreadable_existing_grant_cannot_be_overwritten():
         )
         view = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -391,7 +368,7 @@ async def test_unreadable_existing_grant_cannot_be_overwritten():
         )
         identity = view.connections[0].connection_id
         view = await service.replace_bearer(
-            owner_id="a", auth_mode="jwt", connection_id=identity, bearer=SecretStr("fixture")
+            owner_id="a", connection_id=identity, bearer=SecretStr("fixture")
         )
         ring = json.loads(KEYRING)
         ring["keys"]["new"] = ring["keys"].pop("test")
@@ -402,11 +379,10 @@ async def test_unreadable_existing_grant_cannot_be_overwritten():
         with pytest.raises(ConnectionsError, match="deployment"):
             await unreadable.replace_bearer(
                 owner_id="a",
-                auth_mode="jwt",
                 connection_id=identity,
                 bearer=SecretStr("replacement"),
             )
-        assert await service.read(owner_id="a", auth_mode="jwt") == view
+        assert await service.read(owner_id="a") == view
 
 
 @pytest.mark.asyncio
@@ -421,7 +397,6 @@ async def test_expired_worker_loses_publication_to_new_claim():
         service = Connections(store=store, mcp=FakeMcp())
         view = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -443,7 +418,7 @@ async def test_expired_worker_loses_publication_to_new_claim():
         assert not await store.publish(
             claim=old, catalogue=(), error=None, retry_seconds=1, policy=ConnectionPolicy()
         )
-        assert (await service.read(owner_id="a", auth_mode="jwt")).connections[0].generation == 1
+        assert (await service.read(owner_id="a")).connections[0].generation == 1
 
 
 @pytest.mark.asyncio
@@ -461,7 +436,7 @@ async def test_next_refresh_counts_only_heads_a_background_claim_could_take():
         await store.initialize(validate_only=False)
         policy = ConnectionPolicy(refresh_seconds=600)
         service = Connections(store=store, mcp=FakeMcp(), policy=policy)
-        owner = dict(owner_id="a", auth_mode="jwt")
+        owner = dict(owner_id="a")
         assert await store.seconds_until_refresh() is None
         view = await service.change(
             **owner,
@@ -518,7 +493,6 @@ async def test_endpoint_candidate_failure_keeps_enabled_head_and_success_preserv
         service = Connections(store=store, mcp=EndpointMcp())
         draft = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -527,29 +501,25 @@ async def test_endpoint_candidate_failure_keeps_enabled_head_and_success_preserv
         identity = draft.connections[0].connection_id
         ready = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=draft.revision,
             command=ConnectionCommand(kind="probe", connection_id=identity),
         )
         enabled = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=ready.revision,
             command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
         )
         with pytest.raises(ConnectionsError):
             await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=enabled.revision,
                 command=ConnectionCommand(
                     kind="edit", connection_id=identity, endpoint="https://unavailable.example/mcp"
                 ),
             )
-        assert await service.read(owner_id="a", auth_mode="jwt") == enabled
+        assert await service.read(owner_id="a") == enabled
         changed = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=enabled.revision,
             command=ConnectionCommand(
                 kind="edit", connection_id=identity, endpoint="https://next.example/mcp"
@@ -575,7 +545,6 @@ async def test_revoke_erases_live_grant_and_delete_tombstones_only_this_owner():
         )
         draft = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Fixture", endpoint="https://example.com/mcp"
@@ -583,7 +552,6 @@ async def test_revoke_erases_live_grant_and_delete_tombstones_only_this_owner():
         )
         other = await service.change(
             owner_id="b",
-            auth_mode="jwt",
             expected_revision="0",
             command=ConnectionCommand(
                 kind="create", label="Other", endpoint="https://example.com/mcp"
@@ -591,17 +559,15 @@ async def test_revoke_erases_live_grant_and_delete_tombstones_only_this_owner():
         )
         identity = draft.connections[0].connection_id
         ready = await service.replace_bearer(
-            owner_id="a", auth_mode="jwt", connection_id=identity, bearer=SecretStr("fixture")
+            owner_id="a", connection_id=identity, bearer=SecretStr("fixture")
         )
         enabled = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=ready.revision,
             command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
         )
         revoked = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=enabled.revision,
             command=ConnectionCommand(kind="revoke", connection_id=identity),
         )
@@ -612,15 +578,13 @@ async def test_revoke_erases_live_grant_and_delete_tombstones_only_this_owner():
         with pytest.raises(ConnectionsError):
             await service.change(
                 owner_id="a",
-                auth_mode="jwt",
                 expected_revision=revoked.revision,
                 command=ConnectionCommand(kind="enable", connection_id=identity, consent_version=1),
             )
         deleted = await service.change(
             owner_id="a",
-            auth_mode="jwt",
             expected_revision=revoked.revision,
             command=ConnectionCommand(kind="delete", connection_id=identity),
         )
         assert deleted.connections == ()
-        assert await service.read(owner_id="b", auth_mode="jwt") == other
+        assert await service.read(owner_id="b") == other

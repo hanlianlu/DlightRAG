@@ -23,9 +23,7 @@ from dlightrag.application.access.control import (
 )
 from dlightrag.application.access.principal import (
     DEPLOYMENT_OWNER_ID,
-    SIMPLE_OWNER_ID,
     UserContext,
-    auth_mode_for_owner,
     owner_id_from_principal,
     owner_id_from_user,
 )
@@ -59,7 +57,6 @@ __all__ = [
     "AllowAllAccessControl",
     "JwtClaimsAccessControl",
     "DEPLOYMENT_OWNER_ID",
-    "SIMPLE_OWNER_ID",
     "NoQueryableWorkspacesError",
     "Principal",
     "RequestScope",
@@ -69,7 +66,6 @@ __all__ = [
     "WorkspaceSelectionConflictError",
     "access_control_from_settings",
     "authenticate_bearer_token",
-    "auth_mode_for_owner",
     "corpus_mutation_access_action",
     "current_request_scope",
     "owner_id_from_principal",

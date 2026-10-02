@@ -55,8 +55,7 @@ import './toast.ts';
 import './workspace-scope.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
-  contractVersion: 3,
-  personalMcpConnections: false,
+  contractVersion: 4,
   workspaces: [],
   primaryWorkspace: '',
   activeWorkspaces: [],
@@ -203,7 +202,7 @@ export class DlApp extends LightElement {
       const callbackReturn = new URL(window.location.href);
       if (callbackReturn.searchParams.get('settings') === 'connections') {
         const settings = this.querySelector<DlSettingsDialog>('dl-settings-dialog');
-        if (settings && bootstrap.personalMcpConnections) {
+        if (settings) {
           settings.showConnections = true;
           await settings.open(null);
           settings.expandConnections();
@@ -323,7 +322,6 @@ export class DlApp extends LightElement {
           aria-label=${msg('Answer notifications', {id: 'app.answerNotificationsLabel'})} .running=${this.chatRunning}
           ?inert=${shellModal}></dl-notification-offer>
         <dl-settings-dialog
-          .personalMcpConnections=${bootstrap.personalMcpConnections}
           .handles=${this.handles}
           .deleteAllConversations=${this.#requestDeleteAllConversations}
         ></dl-settings-dialog>

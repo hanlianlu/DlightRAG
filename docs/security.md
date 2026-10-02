@@ -11,11 +11,16 @@ login system.
 
 ## Authentication Modes
 
-| Mode | Intended use |
-|---|---|
-| `none` | Loopback development only |
-| `simple` | One shared bearer behind a trusted internal boundary |
-| `jwt` | Externally issued, user-scoped signed tokens |
+| Mode | Intended use | Owner |
+|---|---|---|
+| `none` | Loopback development only | The deployment owner |
+| `simple` | One owner's deployment behind a bearer token | The deployment owner |
+| `jwt` | Externally issued, user-scoped signed tokens | One per issuer and subject |
+
+An owner holds Sessions, Runs, Profile Memory, and Personal MCP Connections.
+`none` and `simple` admit every caller as the same deployment owner, so switching
+between them keeps that owner's data. Use `jwt` when several people share a
+deployment.
 
 A non-loopback REST/MCP listener with `none` is refused unless
 `access.allow_insecure_no_auth: true`. With browser credentials, replace wildcard
@@ -34,9 +39,11 @@ access:
 DLIGHTRAG_ACCESS__API_TOKEN=<generated-by-openssl-rand-base64-32>
 ```
 
-Clients send `Authorization: Bearer <generated>`. REST may accept `X-User-Id`
-for request scope; MCP remains one anonymous principal. `simple` is admission
-control, not multi-user authorization.
+Clients send `Authorization: Bearer <generated>`. Whoever holds the token is
+the deployment owner, with its Profile Memory and its Connections, including the
+external accounts those Connections authorize: treat the token as that owner's
+password. `X-User-Id` on REST only names the actor in audit records and never
+selects an owner. `simple` is admission control, not multi-user authorization.
 
 ### Static JWT
 
@@ -438,6 +445,6 @@ even with bearer auth.
 
 ### Personal Connection authorization callback
 
-Settings OAuth uses SDK 2.2.0 PKCE/state, resource/issuer validation and TokenStorage. New consent/replacement creates a separate Grant; no old token is sent to a candidate audience. Callback deposit requires the authenticated eligible owner and SDK state, a live initiating lease, and single-use PostgreSQL inbox CAS. Codes/client state/tokens are encrypted with the deployment keyring; pending PKCE remains process-local. Expired or dead-worker flows cannot be resumed by another worker.
+Settings OAuth uses SDK 2.2.0 PKCE/state, resource/issuer validation and TokenStorage. New consent/replacement creates a separate Grant; no old token is sent to a candidate audience. Callback deposit requires the authenticated owner and SDK state, a live initiating lease, and single-use PostgreSQL inbox CAS. Codes/client state/tokens are encrypted with the deployment keyring; pending PKCE remains process-local. Expired or dead-worker flows cannot be resumed by another worker.
 
 Web middleware removes callback query data before downstream application/access logging; callback responses are no-store/no-referrer and redirect only to fixed Settings navigation without codes/state. Operators must also suppress/redact callback query strings in upstream proxies and external tracing, which are outside this application. OAuth metadata/token and same-origin redirect requests are network-admitted and IP-pinned with original Host/SNI; cookies and unrelated headers are stripped. SDK diagnostics are suppressed within these sessions, and remote catalogue echoes of known credentials are redacted. Foreground effects never negotiate OAuth or resend after rejection. Refresh preflight sends only SDK-generated requests to the persisted token origin and admitted same-origin redirects. It never sends the original MCP request or enters background consent. Grant/epoch/secret-version CAS discards stale refresh results. Writer maintenance re-encrypts live Grants and collects expired inboxes/unpinned generations; retained Run pins preserve local definitions, not live credentials. Removing live ciphertext does not erase backups.

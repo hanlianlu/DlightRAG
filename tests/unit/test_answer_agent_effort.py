@@ -216,7 +216,6 @@ async def test_a_raw_kwargs_role_admits_the_effort_and_ignores_it():
     creation = await service.create(
         request=service_request(mode="research", effort="max"),
         owner_id="owner-1",
-        auth_mode="jwt",
     )
 
     assert creation.run.run_id

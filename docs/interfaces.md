@@ -598,7 +598,7 @@ Memory package's separately bound MCP server retains its own four-tool contract.
 ### Web
 
 Web routes under `/web/api/*` are browser contracts, not compatibility aliases
-for REST. `GET /web/api/bootstrap` (bootstrap contract version 3) returns
+for REST. `GET /web/api/bootstrap` (bootstrap contract version 4) returns
 authorized workspace state, Files target, attachment limits, image capability,
 the document types admitted by their extension (`answer_attachments.extensions`,
 the Engine's list above, which is what the composer offers),

@@ -47,7 +47,7 @@ from dlightrag.adapters.http.browser.presentation import (
 from dlightrag.adapters.http.browser.routes.skills import require_known_skill
 from dlightrag.adapters.http.browser.run_resources import image_rewrites
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
-from dlightrag.application.access import AccessAction, auth_mode_for_owner, owner_id_from_user
+from dlightrag.application.access import AccessAction, owner_id_from_user
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
@@ -601,9 +601,7 @@ async def answer_run_events(
     # pinned Connection tool keeps a human name even after the Connection later
     # changes, and the durable event keeps transport-neutral identity.
     tool_labels = await get_application(request).connections.pinned_tool_labels(
-        owner_id=owner,
-        auth_mode=auth_mode_for_owner(owner),
-        run_id=run_id,
+        owner_id=owner, run_id=run_id
     )
     # The finished answer must show the same stored images a reload would, so the
     # frame resolver reads the run's own recorded sources once per subscription.

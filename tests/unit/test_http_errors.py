@@ -2,7 +2,7 @@
 """One HTTP projection for every typed failure family."""
 
 import pytest
-from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
+from dlightrag_memory.errors import MemoryWriteRejectedError
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -132,13 +132,12 @@ def test_only_an_access_denial_is_forbidden() -> None:
     ("failure", "status", "error_type"),
     [
         (MemoryDisabledError(), 409, "conflict"),
-        (MemoryUnavailableError(), 403, "auth"),
         (MemoryWriteRejectedError("Memory idempotency key was reused."), 409, "conflict"),
     ],
-    ids=["disabled", "unavailable", "write-rejected"],
+    ids=["disabled", "write-rejected"],
 )
 def test_memory_refusals_answer_with_their_public_message(
-    failure: MemoryDisabledError | MemoryUnavailableError | MemoryWriteRejectedError,
+    failure: MemoryDisabledError | MemoryWriteRejectedError,
     status: int,
     error_type: str,
 ) -> None:

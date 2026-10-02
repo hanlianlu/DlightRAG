@@ -32,21 +32,20 @@ test('bootstrap rejects malformed success JSON through its typed error', async (
   );
 });
 
-test('bootstrap v3 requires the agent effort offer and its own capabilities', async () => {
+test('bootstrap v4 requires the agent effort offer', async () => {
   const fixture = {
-    contract_version: 3, workspaces: [], primary_workspace: '', active_workspaces: [],
+    contract_version: 4, workspaces: [], primary_workspace: '', active_workspaces: [],
     answer_attachments: {count_limit: 0, image_max_bytes: 1, document_max_bytes: 1,
       extensions: [], image_capability: 'unknown', image_limit: 0, accept: ''},
-    active_html_preview_enabled: false, personal_mcp_connections: true,
+    active_html_preview_enabled: false,
     agent_effort: {levels: ['low', 'high', 'max'], default: 'high'},
   };
   globalThis.fetch = async () => Response.json(fixture);
   const bootstrap = await getWebBootstrap();
-  assert.equal(bootstrap.personalMcpConnections, true);
   assert.deepEqual(bootstrap.agentEffort, {levels: ['low', 'high', 'max'], default: 'high'});
-  globalThis.fetch = async () => Response.json({...fixture, contract_version: 2});
+  globalThis.fetch = async () => Response.json({...fixture, contract_version: 3});
   await assert.rejects(getWebBootstrap(), ApiError);
-  const {personal_mcp_connections: _capability, ...missing} = fixture;
+  const {agent_effort: _offer, ...missing} = fixture;
   globalThis.fetch = async () => Response.json(missing);
   await assert.rejects(getWebBootstrap(), ApiError);
   // A deployment that names no level, or one the three-level control cannot

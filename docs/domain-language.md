@@ -192,7 +192,7 @@ An owner-scoped, non-citable remembered preference or fact that may be recalled 
 _Avoid_: Compaction Summary, Journal Entry, PriorTurns, Evidence, Artifact, remembered citation
 
 **Memory Subject**:
-The owner identity a Memory store scopes every operation to; bound by the host (DlightRAG: JWT owner or stable local single-user owner; stdio MCP: `--subject`) and never accepted from a model tool argument. Shared simple-auth callers are not personal Memory subjects.
+The owner identity a Memory store scopes every operation to; bound by the host (DlightRAG: the JWT owner, or the deployment owner under `none` and `simple`; stdio MCP: `--subject`) and never accepted from a model tool argument.
 _Avoid_: caller-selected namespace, conversation id, Agent Session
 
 **RecallResult**:

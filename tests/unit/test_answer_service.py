@@ -652,7 +652,6 @@ async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_cap
     await service.create(
         request=_request(mode="research"),
         owner_id=_OWNER,
-        auth_mode="jwt",
     )
 
     prepared = store.created[0]["prepared_input"]
@@ -667,12 +666,10 @@ async def test_an_accepted_effort_is_recorded_and_distinguishes_replays() -> Non
     await service.create(
         request=_request(mode="research", effort="max"),
         owner_id=_OWNER,
-        auth_mode="jwt",
     )
     await service.create(
         request=_request(mode="research"),
         owner_id=_OWNER,
-        auth_mode="jwt",
     )
 
     chosen, defaulted = (row["prepared_input"] for row in store.created)
@@ -692,7 +689,6 @@ async def test_fast_acceptance_pins_profile_memory_capability() -> None:
     await service.create(
         request=_request(mode="fast"),
         owner_id=_OWNER,
-        auth_mode="jwt",
     )
 
     prepared = store.created[0]["prepared_input"]
@@ -944,7 +940,7 @@ async def test_auto_fast_capacity_includes_profile_memory(
         observed_fast_memory.append(memory_text)
         return lambda _history, _summary="": 50 + len(memory_text)
 
-    monkeypatch.setattr(acceptance, "standing_memory_for_acceptance", lambda _auth: "m" * 10_000)
+    monkeypatch.setattr(acceptance, "reserved_auto_recall_text", lambda: "m" * 10_000)
     monkeypatch.setattr(
         acceptance.AnswerSynthesizer,
         "history_input_measure",
@@ -961,7 +957,6 @@ async def test_auto_fast_capacity_includes_profile_memory(
     await service.create(
         request=_request(mode="auto"),
         owner_id=_OWNER,
-        auth_mode="jwt",
     )
 
     assert observed_fast_memory == ["m" * 10_000]

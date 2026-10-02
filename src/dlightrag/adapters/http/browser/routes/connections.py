@@ -66,9 +66,8 @@ def _reached_callback_url(request: Request) -> str:
     return str(request.url.replace(path=OAUTH_CALLBACK_PATH, query="", fragment=""))
 
 
-def _owner(request: Request) -> dict[str, str]:
-    user = request.state.user_context
-    return {"owner_id": owner_id_from_user(user), "auth_mode": user.auth_mode}
+def _owner(request: Request) -> str:
+    return owner_id_from_user(request.state.user_context)
 
 
 async def _change(
@@ -76,7 +75,7 @@ async def _change(
 ) -> dict[str, Any]:
     try:
         view = await get_application(request).connections.change(
-            **_owner(request), expected_revision=body.expected_revision, command=command
+            owner_id=_owner(request), expected_revision=body.expected_revision, command=command
         )
         return asdict(view)
     except ConnectionsError as exc:
@@ -86,7 +85,7 @@ async def _change(
 @router.get("")
 async def read_connections(request: Request) -> dict[str, Any]:
     try:
-        return asdict(await get_application(request).connections.read(**_owner(request)))
+        return asdict(await get_application(request).connections.read(owner_id=_owner(request)))
     except ConnectionsError as exc:
         raise HTTPException(exc.status, {"kind": exc.kind, "message": str(exc)}) from None
 
@@ -145,7 +144,7 @@ async def replace_bearer(connection_id: str, request: Request, body: BearerInput
     try:
         return asdict(
             await get_application(request).connections.replace_bearer(
-                **_owner(request),
+                owner_id=_owner(request),
                 connection_id=connection_id,
                 expected_revision=body.expected_revision,
                 bearer=body.bearer,
@@ -169,7 +168,7 @@ async def begin_authorization(
     try:
         return asdict(
             await get_application(request).connections.begin_authorization(
-                **_owner(request),
+                owner_id=_owner(request),
                 connection_id=connection_id,
                 expected_revision=body.expected_revision,
                 callback_url=_reached_callback_url(request),
@@ -216,7 +215,7 @@ async def authorization_callback(request: Request):
         if any(len(values) != 1 for values in query.values()):
             raise ValueError
         await get_application(request).connections.authorization_callback(
-            **_owner(request),
+            owner_id=_owner(request),
             state=query.get("state", [""])[0],
             code=query.get("code", [None])[0],
             issuer=query.get("iss", [None])[0],

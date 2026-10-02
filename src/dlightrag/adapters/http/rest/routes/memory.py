@@ -60,7 +60,6 @@ async def list_memories(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     page = await application.memory.list_active_page(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         page=page_request,
     )
     return {
@@ -85,7 +84,6 @@ async def remember_memory(
     application = get_application(request)
     receipt = await application.memory.remember(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         kind=body.kind,
         body=body.body,
         supersedes_id=body.supersedes_id,
@@ -105,7 +103,6 @@ async def forget_memory(
     application = get_application(request)
     receipt = await application.memory.forget(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         memory_id=memory_id,
         provenance=_management_provenance(idempotency_key),
         idempotency_key=f"rest:{idempotency_key}",
@@ -123,7 +120,6 @@ async def undo_memory_change(
     application = get_application(request)
     receipt = await application.memory.undo(
         owner_id=owner_id_from_user(user),
-        auth_mode=user.auth_mode,
         change_id=change_id,
         provenance=_undo_provenance(idempotency_key),
         idempotency_key=f"rest:{idempotency_key}",
@@ -136,9 +132,7 @@ async def memory_settings(
     request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     application = get_application(request)
-    settings = await application.memory.settings(
-        owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
-    )
+    settings = await application.memory.settings(owner_id=owner_id_from_user(user))
     return _settings_payload(settings)
 
 
@@ -150,7 +144,7 @@ async def update_memory_settings(
 ) -> dict[str, Any]:
     application = get_application(request)
     settings = await application.memory.set_enabled(
-        owner_id=owner_id_from_user(user), auth_mode=user.auth_mode, enabled=body.enabled
+        owner_id=owner_id_from_user(user), enabled=body.enabled
     )
     return _settings_payload(settings)
 
@@ -158,7 +152,7 @@ async def update_memory_settings(
 @router.post("/memory/clear", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_memory(request: Request, user: UserContext = Depends(get_current_user)) -> None:
     application = get_application(request)
-    await application.memory.clear(owner_id=owner_id_from_user(user), auth_mode=user.auth_mode)
+    await application.memory.clear(owner_id=owner_id_from_user(user))
 
 
 def _management_provenance(idempotency_key: str) -> MemoryProvenance:

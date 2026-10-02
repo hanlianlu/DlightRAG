@@ -24,6 +24,13 @@ function mount(): DlSettingsDialog {
   return settings;
 }
 
+/** Settings always mounts Connections; answer its read so a test sees only Memory traffic. */
+function memoryOnly(handler: typeof window.fetch): typeof window.fetch {
+  return async (input, init) => String(input).includes('/connections/')
+    ? Response.json({revision: '0', connections: [], presets: []})
+    : await handler(input, init);
+}
+
 afterEach(() => {
   window.fetch = originalFetch;
   document.body.replaceChildren();
@@ -92,7 +99,7 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
 
 it('owns an explicit memory toggle mutation and its final visible state', async () => {
   const methods: string[] = [];
-  window.fetch = async (_input, init) => {
+  window.fetch = memoryOnly(async (_input, init) => {
     methods.push(init?.method || 'GET');
     const payload = init?.method === 'PUT'
       ? {enabled: false, active_count: null}
@@ -101,7 +108,7 @@ it('owns an explicit memory toggle mutation and its final visible state', async 
       status: 200,
       headers: {'Content-Type': 'application/json'},
     });
-  };
+  });
   const settings = mount();
   await settings.open();
   await waitFor(() => !settings.memoryLoading);
@@ -144,7 +151,7 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
   const oldRead = new Promise<Response>((resolve) => { resolveOldRead = resolve; });
   const methods: string[] = [];
   let reads = 0;
-  window.fetch = async (_input, init) => {
+  window.fetch = memoryOnly(async (_input, init) => {
     const method = init?.method || 'GET';
     methods.push(method);
     if (method === 'GET') {
@@ -159,7 +166,7 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
       status: 200,
       headers: {'Content-Type': 'application/json'},
     });
-  };
+  });
   const settings = mount();
   settings.memory = {enabled: true, activeCount: 2};
 
@@ -202,7 +209,6 @@ it('renders Connections independently and never paints an unread memory state', 
   const settings = mount();
 
   const opened = settings.open();
-  settings.personalMcpConnections = true;
   await waitFor(() => Boolean(settings.querySelector('dl-settings-connections')));
 
   // The MCP section is on screen while the memory projection is still unknown,
@@ -224,16 +230,13 @@ it('renders Connections independently and never paints an unread memory state', 
   expect(settings.textContent).to.contain('3 stored items');
 });
 
-it('hides personal Connections without capability and tears the Feature down on close', async () => {
+it('tears the Connections Feature down on close', async () => {
   window.fetch = async (url) => Response.json(String(url).includes('connections')
     ? {revision: '0', connections: [], presets: []}
     : {enabled: false, active_count: 0});
   const settings = mount();
   await settings.open();
   await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  expect(settings.querySelector('dl-settings-connections')).to.equal(null);
-  settings.personalMcpConnections = true;
   await settings.updateComplete;
   expect(settings.querySelector('dl-settings-connections')).not.to.equal(null);
   settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
@@ -294,13 +297,13 @@ it('browses paginated memories, retries a page, forgets one item and restores it
 
 it('retries a failed first memory page from its own note', async () => {
   let firstPages = 0;
-  window.fetch = async (input) => {
+  window.fetch = memoryOnly(async (input) => {
     const url = new URL(String(input), window.location.origin);
     if (url.pathname.endsWith('/settings')) return Response.json({enabled: true, active_count: 1});
     firstPages += 1;
     if (firstPages === 1) return new Response('Unavailable', {status: 503});
     return Response.json({memories: [{memory_id: 'one', kind: 'fact', body: 'Lives in Sweden'}], next_cursor: null});
-  };
+  });
   const settings = mount();
   await settings.open();
   await waitFor(() => !settings.memoryLoading);
@@ -320,11 +323,11 @@ it('retries a failed first memory page from its own note', async () => {
 it('rejects a stale list page after memory is disabled, even when transport ignores abort', async () => {
   let releasePage!: (response: Response) => void;
   let pageStarted = false;
-  window.fetch = async (input, init) => {
+  window.fetch = memoryOnly(async (input, init) => {
     if (String(input).includes('/settings')) return Response.json({enabled: init?.method !== 'PUT', active_count: 1});
     pageStarted = true;
     return new Promise<Response>((resolve) => { releasePage = resolve; });
-  };
+  });
   const settings = mount();
   await settings.open();
   await waitFor(() => !settings.memoryLoading);

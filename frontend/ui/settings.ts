@@ -69,7 +69,6 @@ function memorySummary(event: MemoryOperationEvent): string {
 /** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
 export class DlSettingsDialog extends LightElement {
   static properties = {
-    personalMcpConnections: {attribute: false},
     showConnections: {state: true},
     handles: {attribute: false},
     deleteAllConversations: {attribute: false},
@@ -81,7 +80,6 @@ export class DlSettingsDialog extends LightElement {
     language: {state: true},
   };
 
-  declare personalMcpConnections: boolean;
   declare showConnections: boolean;
   declare handles: AppHandles;
   declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
@@ -104,7 +102,6 @@ export class DlSettingsDialog extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
-    this.personalMcpConnections = false;
     this.showConnections = false;
     this.handles = productionHandles();
     this.deleteAllConversations = async () => false;
@@ -214,10 +211,10 @@ export class DlSettingsDialog extends LightElement {
               <button class="panel-close settings-close" type="submit" value="close-settings"
                       aria-label=${msg('Close settings', {id: 'settings.close'})}>${icon('close', {size: 'sm'})}</button>
             </div>
-            ${this.personalMcpConnections ? html`<section class="settings-section">
+            <section class="settings-section">
               <h3 id="settings-connections">${msg('Connections', {id: 'settings.connections'})}</h3>
               ${this.showConnections ? html`<dl-settings-connections></dl-settings-connections>` : nothing}
-            </section>` : nothing}
+            </section>
             <section class="settings-section">
               <h3 id="settings-memory">${msg('Profile Memory', {id: 'settings.profileMemory'})}</h3>
               ${this.memory ? html`<label class="dl-dialog-checkbox">
