@@ -11,6 +11,10 @@ from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavaila
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
+# Each wait bounds a hang, not latency: a slow CI runner may need seconds to
+# schedule a thousand callers before the first one starts a build.
+_HANG_BOUND = 10
+
 
 def _pool(build, *, clock=lambda: 0.0) -> WorkspacePool:
     return WorkspacePool(build=build, clock=clock)
@@ -268,8 +272,7 @@ async def test_one_thousand_warm_callers_share_one_workspace_flight() -> None:
 
     pool = _pool(build)
     warmups = [asyncio.create_task(pool.warm(["research", "research"])) for _ in range(1000)]
-    # A bound against a hang, not a latency claim: slow CI runners need seconds.
-    await asyncio.wait_for(build_started.wait(), timeout=10)
+    await asyncio.wait_for(build_started.wait(), timeout=_HANG_BOUND)
 
     assert calls == 1
     assert len(pool._workspace_flights) == 1
@@ -307,7 +310,7 @@ async def test_overlapping_warm_callers_create_distinct_workspace_flights_only()
         asyncio.create_task(pool.warm(workspaces if index % 2 else tuple(reversed(workspaces))))
         for index in range(1000)
     ]
-    await asyncio.wait_for(first_wave_started.wait(), timeout=1)
+    await asyncio.wait_for(first_wave_started.wait(), timeout=_HANG_BOUND)
 
     assert peak == 8
     assert len(calls) == 8
@@ -338,7 +341,7 @@ async def test_cancelling_warm_waiters_does_not_cancel_the_shared_flight() -> No
 
     pool = _pool(build)
     waiters = [asyncio.create_task(pool.warm(["research"])) for _ in range(1000)]
-    await asyncio.wait_for(build_started.wait(), timeout=1)
+    await asyncio.wait_for(build_started.wait(), timeout=_HANG_BOUND)
 
     for waiter in waiters[:-1]:
         waiter.cancel()
@@ -376,7 +379,7 @@ async def test_warm_limits_concurrency_to_eight() -> None:
         asyncio.create_task(pool.warm([f"workspace_{index}" for index in range(5)])),
         asyncio.create_task(pool.warm([f"workspace_{index}" for index in range(5, 10)])),
     ]
-    await asyncio.wait_for(first_wave_started.wait(), timeout=1)
+    await asyncio.wait_for(first_wave_started.wait(), timeout=_HANG_BOUND)
 
     assert peak == 8
     assert len(started) == 8
@@ -424,7 +427,7 @@ async def test_close_cancels_and_joins_active_warmup() -> None:
 
     pool = _pool(build)
     warmup = asyncio.create_task(pool.warm(["research"]))
-    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.wait_for(started.wait(), timeout=_HANG_BOUND)
 
     await pool.aclose()
 
@@ -448,7 +451,7 @@ async def test_close_cancels_inflight_build_and_rejects_its_acquire() -> None:
 
     pool = _pool(build)
     acquire = asyncio.create_task(pool.acquire("research"))
-    await asyncio.wait_for(build_started.wait(), timeout=1)
+    await asyncio.wait_for(build_started.wait(), timeout=_HANG_BOUND)
     await pool.aclose()
 
     with pytest.raises(WorkspaceUnavailableError, match="closed"):
@@ -493,7 +496,7 @@ async def test_close_closes_runtime_returned_by_a_cancellation_suppressing_build
 
     pool = _pool(build)
     acquire = asyncio.create_task(pool.acquire("research"))
-    await asyncio.wait_for(build_started.wait(), timeout=1)
+    await asyncio.wait_for(build_started.wait(), timeout=_HANG_BOUND)
     await pool.aclose()
 
     with pytest.raises(WorkspaceUnavailableError, match="closed"):
@@ -523,9 +526,9 @@ async def test_cancelled_close_finishes_cleanup_before_propagating() -> None:
     pool = _pool(build)
     await pool.acquire("loaded")
     warmup = asyncio.create_task(pool.warm(["cold"]))
-    await asyncio.wait_for(cold_started.wait(), timeout=1)
+    await asyncio.wait_for(cold_started.wait(), timeout=_HANG_BOUND)
     close = asyncio.create_task(pool.aclose())
-    await asyncio.wait_for(cancellation_cleanup_started.wait(), timeout=1)
+    await asyncio.wait_for(cancellation_cleanup_started.wait(), timeout=_HANG_BOUND)
 
     close.cancel()
     hold_cancellation_cleanup.set()
@@ -555,7 +558,7 @@ async def test_cancelled_concurrent_close_waits_for_shared_cleanup() -> None:
     pool = _pool(build)
     await pool.acquire("research")
     first = asyncio.create_task(pool.aclose())
-    await asyncio.wait_for(close_started.wait(), timeout=1)
+    await asyncio.wait_for(close_started.wait(), timeout=_HANG_BOUND)
     second = asyncio.create_task(pool.aclose())
     await asyncio.sleep(0)
 
@@ -588,7 +591,7 @@ async def test_acquire_waits_while_evict_closes_loaded_runtime() -> None:
     pool = _pool(build)
     assert await pool.acquire("research") is first
     eviction = asyncio.create_task(pool.evict("research"))
-    await asyncio.wait_for(close_started.wait(), timeout=1)
+    await asyncio.wait_for(close_started.wait(), timeout=_HANG_BOUND)
     acquisition = asyncio.create_task(pool.acquire("research"))
     await asyncio.sleep(0)
 
@@ -617,7 +620,7 @@ async def test_warm_waits_for_eviction_and_replaces_the_closing_runtime() -> Non
     pool = _pool(build)
     assert await pool.acquire("research") is first
     eviction = asyncio.create_task(pool.evict("research"))
-    await asyncio.wait_for(close_started.wait(), timeout=1)
+    await asyncio.wait_for(close_started.wait(), timeout=_HANG_BOUND)
     warmup = asyncio.create_task(pool.warm(["research"]))
     await asyncio.sleep(0)
 
