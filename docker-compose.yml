@@ -14,6 +14,12 @@ x-global-skills-mount: &global-skills-mount
     # Never let Docker create an operator-managed host directory as root.
     create_host_path: false
 
+# A TLS proxy on this host (Cloudflare Tunnel, Caddy) reaches an API through the
+# Compose bridge. Trusting its X-Forwarded-Proto keeps the Web on https; without
+# it the Web's same-origin checks refuse every browser write. Only local peers
+# reach the loopback-published ports below.
+x-local-proxies: &local-proxies "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
 services:
   dlightrag-api:
     restart: unless-stopped
@@ -32,6 +38,7 @@ services:
       # publishing the port on a non-loopback address.
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
+      FORWARDED_ALLOW_IPS: *local-proxies
     env_file: .env
     configs:
       - source: dlightrag_config
@@ -120,6 +127,7 @@ services:
       DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
+      FORWARDED_ALLOW_IPS: *local-proxies
     env_file: .env
     configs:
       - source: dlightrag_config

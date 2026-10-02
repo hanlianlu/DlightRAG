@@ -202,8 +202,13 @@ credentials, endpoint URIs, or inherited environment values.
 ### Per-Surface Front Doors
 
 REST and Web share the API process (default port 8100); MCP uses a separate
-listener (8101). A browser redirect proxy may front only `/web`, while direct
-REST/MCP clients supply their bearer tokens. All tokens must remain verifiable
+listener (8101). A browser proxy may front only `/web` and the `/static` assets
+it loads, while direct REST/MCP clients supply their bearer tokens. A proxy that
+terminates TLS must be trusted for `X-Forwarded-Proto` (uvicorn's
+`FORWARDED_ALLOW_IPS`): otherwise the API sees `http`, the Web's exact
+same-origin checks refuse every browser write, and the OAuth callback is
+addressed over `http`. Compose trusts loopback and private networks, where a
+proxy on the same host connects from. All tokens must remain verifiable
 under the one configured JWT policy. If browser and REST audiences differ, list
 both under `jwt_audience`; native MCP OAuth still requires the exact public MCP
 resource URL as audience.
