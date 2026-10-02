@@ -43,7 +43,6 @@ _VERIFY_SCHEMA_SQL = (
     "SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2 LIMIT 1"
 )
 _STALE_INDEXES_SQL = "SELECT indexname FROM pg_indexes WHERE tablename = $1 AND indexname LIKE $2"
-JIEBA_TEXT_CONFIG = "public.jiebacfg"
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -67,6 +66,11 @@ def _index_name(profile_name: str) -> str:
     return pg_identifier(f"{BM25_INDEX_PREFIX}_{pg_identifier(profile_name)}")
 
 
+def _uses_jieba(text_config: str) -> bool:
+    """Whether a text search configuration is one of pg_jieba's (jiebacfg, jiebaqry)."""
+    return text_config.rsplit(".", 1)[-1].startswith("jieba")
+
+
 def bm25_query_text(text_config: str, query: str) -> str:
     """The query text one profile's tokenizer should see.
 
@@ -75,12 +79,12 @@ def bm25_query_text(text_config: str, query: str) -> str:
     full-width comma is both a jieba separator and a jieba stopword: it splits
     words exactly where the whitespace did and adds no term.
     """
-    return _WHITESPACE.sub("，", query) if text_config == JIEBA_TEXT_CONFIG else query
+    return _WHITESPACE.sub("，", query) if _uses_jieba(text_config) else query
 
 
 def required_postgres_extensions(profiles: Iterable[BM25Profile]) -> tuple[str, ...]:
     extensions = ["pg_textsearch"]
-    if any(profile.text_config == JIEBA_TEXT_CONFIG for profile in profiles):
+    if any(_uses_jieba(profile.text_config) for profile in profiles):
         extensions.append("pg_jieba")
     return tuple(extensions)
 

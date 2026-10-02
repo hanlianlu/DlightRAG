@@ -209,14 +209,17 @@ so any pg_jieba build serves Chinese BM25 correctly:
   length, a small uniform bias in BM25 length normalization.
 - **Listing jieba token types crashes the server.** `jieba_lextype` writes one
   entry past its allocation, and PostgreSQL restarts every backend to recover.
-  DlightRAG never calls it, and user input reaches pg_jieba only through
-  `to_bm25query`. Operators must not run `ts_debug` or `ts_token_type` on a
+  DlightRAG never calls it: user text reaches pg_jieba only to be tokenized,
+  when chunks and memory bodies are indexed and when `to_bm25query` reads a
+  query, and tokenizing never lists token types. Operators must not run `ts_debug` or `ts_token_type` on a
   jieba parser or configuration, `\dF+ jiebacfg` or `\dFp+ jieba` in psql,
   `ALTER TEXT SEARCH CONFIGURATION ... MAPPING FOR` on a jieba configuration, or
   `pg_dump` of a custom configuration built on the jieba parser. Tokenizing with
   `to_tsvector('public.jiebacfg', ...)` is safe. `pg_upgrade` dumps extension
   members in binary-upgrade mode and hits the same function, so patch pg_jieba,
-  or drop and later recreate it, before a major-version upgrade.
+  or drop and later recreate it, before a major-version upgrade. Between the drop
+  and the recreate no jieba BM25 index accepts writes, so do it with every
+  writer stopped.
 
 ## DlightRAG Schema Migrations
 
