@@ -80,7 +80,12 @@ from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
-from dlightrag.engine.runtime.progress import StageCommit, StageEvidenceConflict
+from dlightrag.engine.runtime.progress import (
+    StageCommit,
+    StageEvidenceConflict,
+    StageLeaseLost,
+    StageProgressConflict,
+)
 from dlightrag.engine.runtime.records import (
     ClaimedRun,
     PendingArtifact,
@@ -924,6 +929,109 @@ async def test_pg_refresh_refuses_a_gapped_or_regressed_session(
         await store.refresh(session_id, previous=previous)
 
 
+class _PausedAfterFirstRead:
+    """One connection that parks its reader after the first statement until released."""
+
+    def __init__(self, connection: Any, first_read: asyncio.Event, release: asyncio.Event) -> None:
+        self._connection = connection
+        self._first_read = first_read
+        self._release = release
+
+    def transaction(self, **kwargs: Any):
+        return self._connection.transaction(**kwargs)
+
+    async def _read(self, method: str, query: str, *args: Any) -> Any:
+        result = await getattr(self._connection, method)(query, *args)
+        if not self._first_read.is_set():
+            self._first_read.set()
+            await self._release.wait()
+        return result
+
+    async def fetch(self, query: str, *args: Any):
+        return await self._read("fetch", query, *args)
+
+    async def fetchrow(self, query: str, *args: Any):
+        return await self._read("fetchrow", query, *args)
+
+    async def fetchval(self, query: str, *args: Any):
+        return await self._read("fetchval", query, *args)
+
+
+class _PausedPool:
+    def __init__(self, pool: Any, first_read: asyncio.Event, release: asyncio.Event) -> None:
+        self._pool = pool
+        self._first_read = first_read
+        self._release = release
+
+    @asynccontextmanager
+    async def acquire(self):
+        async with self._pool.acquire() as connection:
+            yield _PausedAfterFirstRead(connection, self._first_read, self._release)
+
+
+@pytest.mark.parametrize("read", ["load", "refresh"])
+async def test_pg_a_session_read_sees_one_commit_while_another_lands(pool, read: str) -> None:
+    """Metadata, Entries and registers come from one snapshot, whatever commits between."""
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    previous = await store.load(session_id)
+
+    def entry(content: str) -> UserMessageEntry:
+        return UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            content=content,
+        )
+
+    second = await _append_transaction_entry(
+        store, session_id, entry("second"), fencing_epoch=epoch
+    )
+    assert isinstance(second, TransactionCommit)
+
+    first_read = asyncio.Event()
+    release = asyncio.Event()
+    reader = PGAgentSessionRepository(
+        pool=cast(Any, _PausedPool(pool, first_read, release)),
+        owner_id=_OWNER,
+        run_id=uuid.UUID(claimed.run.run_id),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=epoch,
+    )
+    reading = asyncio.create_task(
+        reader.load(session_id) if read == "load" else reader.refresh(session_id, previous=previous)
+    )
+    # The reader has read the Session's metadata; a third Entry and its LaneHead
+    # commit before it reads anything else.
+    await asyncio.wait_for(first_read.wait(), timeout=10)
+    third = await _append_transaction_entry(store, session_id, entry("third"), fencing_epoch=epoch)
+    assert isinstance(third, TransactionCommit)
+    release.set()
+    snapshot = await asyncio.wait_for(reading, timeout=10)
+
+    assert snapshot.commit_sequence == second.commit_sequence
+    assert [item.sequence for item in snapshot.entries] == [1, 2]
+    entry_ids = {item.entry_id for item in snapshot.entries}
+    heads = [record.value for record in snapshot.registers if isinstance(record.value, LaneHead)]
+    assert heads
+    assert all(head.entry_id in entry_ids for head in heads)
+
+
+class _MergeJoinPool:
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    @asynccontextmanager
+    async def acquire(self):
+        async with self._pool.acquire() as connection:
+            await connection.execute("SET enable_nestloop = off; SET enable_hashjoin = off")
+            yield connection
+
+
 async def test_pg_register_conflict_names_the_first_stale_expectation(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_repository
@@ -932,22 +1040,49 @@ async def test_pg_register_conflict_names_the_first_stale_expectation(pool) -> N
     seeded = await _seed_transaction_session(store, session_id, epoch)
     state = LaneState(LaneId.main())
     head = LaneHead(LaneId.main(), None)
+    # Advance the main state alone, so the two main registers hold different sequences.
+    moved = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(state)],
+            expectations=[RegisterExpectation(state.ref, seeded.commit_sequence)],
+        ),
+    )
+    assert isinstance(moved, TransactionCommit)
+    missing_branch = LaneHead(LaneId.new(), None)
+    # A planner that may neither nest loops nor hash joins merges on the register
+    # keys, so rows come back in key order unless the product asks for list order.
+    merging = PGAgentSessionRepository(
+        pool=cast(Any, _MergeJoinPool(pool)),
+        owner_id=_OWNER,
+        run_id=uuid.UUID(claimed.run.run_id),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=epoch,
+    )
 
-    outcome = await store.transact(
+    # The state expectation holds; the head one is the first stale one. They are listed
+    # against the registers' own order, so judging an expectation by another
+    # register's row blames the wrong register or reads the wrong sequence.
+    outcome = await merging.transact(
         session_id=session_id,
         fencing_epoch=epoch,
         transaction=SessionTransaction.from_parts(
             register_writes=[SetRegister(state)],
             expectations=[
-                RegisterExpectation(state.ref, seeded.commit_sequence + 5),
-                RegisterExpectation(head.ref, seeded.commit_sequence + 7),
+                RegisterExpectation(state.ref, moved.commit_sequence),
+                RegisterExpectation(head.ref, moved.commit_sequence),
+                RegisterExpectation(missing_branch.ref, moved.commit_sequence),
             ],
         ),
     )
 
-    assert isinstance(outcome, RegisterConflict)
-    assert outcome.ref == state.ref
-    assert outcome.current_sequence == seeded.commit_sequence
+    assert outcome == RegisterConflict(
+        ref=head.ref,
+        expected_sequence=moved.commit_sequence,
+        current_sequence=seeded.commit_sequence,
+    )
 
 
 async def test_pg_an_unchanged_ledger_snapshot_is_stored_once(pool) -> None:
@@ -958,7 +1093,8 @@ async def test_pg_an_unchanged_ledger_snapshot_is_stored_once(pool) -> None:
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
 
-    for ledger in (b'{"ledger": 1}', b'{"ledger": 1}', b'{"ledger": 2}'):
+    # The last snapshot repeats an earlier one but not the latest, so it is stored again.
+    for ledger in (b'{"ledger": 1}', b'{"ledger": 1}', b'{"ledger": 2}', b'{"ledger": 1}'):
         intent_id = IntentId.new()
         snapshot = OpaqueEvidenceWrite(
             session_id=session_id.value,
@@ -986,7 +1122,11 @@ async def test_pg_an_unchanged_ledger_snapshot_is_stored_once(pool) -> None:
             _OWNER,
             uuid.UUID(claimed.run.run_id),
         )
-    assert [bytes(row["content"]) for row in rows] == [b'{"ledger": 1}', b'{"ledger": 2}']
+    assert [bytes(row["content"]) for row in rows] == [
+        b'{"ledger": 1}',
+        b'{"ledger": 2}',
+        b'{"ledger": 1}',
+    ]
 
 
 async def test_pg_entry_delta_validation_regressions(pool) -> None:
@@ -1184,6 +1324,55 @@ async def test_pg_lane_pair_create_delete_and_archived_advance(pool) -> None:
     assert isinstance(deleted, TransactionCommit)
     after = await store.load(session_id)
     assert all(record.ref.key != branch_id.value for record in after.registers)
+
+
+# A Session whose stored main pair lost a half, or both halves, refuses every
+# transaction, even one that touches no Lane, and the refusal writes nothing.
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param(("lane_state",), id="one-sided-main"),
+        pytest.param(("lane_head", "lane_state"), id="no-main"),
+    ],
+)
+async def test_pg_every_transaction_needs_the_complete_main_lane_pair(
+    pool, missing: tuple[str, ...]
+) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM dlightrag_agent_session_registers"
+            " WHERE owner_id = $1 AND session_id = $2 AND register_kind = ANY($3::text[])",
+            _OWNER,
+            uuid.UUID(session_id.value),
+            list(missing),
+        )
+    arguments = ToolArguments(intent_id=IntentId.new(), canonical_input='{"value":"x"}')
+
+    with pytest.raises(ValueError, match="complete main and Lane pairs"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(arguments)],
+                expectations=[RegisterExpectation(arguments.ref, None)],
+            ),
+        )
+
+    async with pool.acquire() as conn:
+        stored = await conn.fetch(
+            "SELECT register_kind FROM dlightrag_agent_session_registers"
+            " WHERE owner_id = $1 AND session_id = $2",
+            _OWNER,
+            uuid.UUID(session_id.value),
+        )
+    assert [row["register_kind"] for row in stored] == [
+        kind for kind in ("lane_head",) if kind not in missing
+    ]
 
 
 async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) -> None:
@@ -2642,6 +2831,84 @@ async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None
         ),
         TransactionCommit,
     )
+
+
+async def _settlement_footprint(pool, run_id: str) -> tuple[Any, ...]:
+    """Everything a stage or terminal settlement writes for one Run."""
+    key = (_OWNER, uuid.UUID(run_id))
+    async with pool.acquire() as conn:
+        run = await conn.fetchrow(
+            "SELECT status, durable_progress_version FROM dlightrag_runs"
+            " WHERE owner_id = $1 AND run_id = $2",
+            *key,
+        )
+        counts = [
+            await conn.fetchval(
+                f"SELECT count(*) FROM {table} WHERE owner_id = $1 AND run_id = $2",  # noqa: S608
+                *key,
+            )
+            for table in (
+                "dlightrag_answer_run_stages",
+                "dlightrag_answer_evidence",
+                "dlightrag_run_events",
+            )
+        ]
+    assert run is not None
+    return (run["status"], run["durable_progress_version"], *counts)
+
+
+@pytest.mark.parametrize("fault", ["stale_epoch", "expired_lease", "wrong_progress"])
+async def test_progress_settlements_outside_the_fenced_run_write_nothing(pool, fault: str) -> None:
+    claimed = await _claim(pool)
+    run_id = claimed.run.run_id
+    epoch = claimed.execution.fencing_epoch
+    if fault == "expired_lease":
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE dlightrag_runs SET lease_expires_at = NOW() - INTERVAL '1 second'"
+                " WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                uuid.UUID(run_id),
+            )
+    progress = PGProgressStore(
+        pool=pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(run_id),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=epoch - 1 if fault == "stale_epoch" else epoch,
+    )
+    expected_progress = 1 if fault == "wrong_progress" else 0
+    content = b"stage evidence"
+    evidence = OpaqueEvidenceWrite(
+        session_id=SessionId.new().value,
+        intent_id=IntentId.new().value,
+        result_ordinal=0,
+        content_digest=hashlib.sha256(content).hexdigest(),
+        locator_digest=hashlib.sha256(b"locator").hexdigest(),
+        content=content,
+        locator=b"locator",
+    )
+    before = await _settlement_footprint(pool, run_id)
+
+    stage = await progress.settle_stage(
+        expected_progress_version=expected_progress,
+        stage_intent_id=StageIntentId.deterministic(run_id=run_id, name="fast:retrieval:0"),
+        stage_name="retrieval",
+        state={"results": []},
+        evidence=(evidence,),
+    )
+    terminal = await progress.settle_terminal(
+        expected_progress_version=expected_progress,
+        stage_intent_id=StageIntentId.deterministic(run_id=run_id, name="fast:final:0"),
+        state={"answer": "done"},
+        result={"answer": "done"},
+    )
+
+    refusal = StageProgressConflict if fault == "wrong_progress" else StageLeaseLost
+    assert isinstance(stage, refusal)
+    assert isinstance(terminal, refusal)
+    assert await _settlement_footprint(pool, run_id) == before
 
 
 async def test_stale_epoch_writes_zero_rows(pool) -> None:
