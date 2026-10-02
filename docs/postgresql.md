@@ -59,8 +59,8 @@ providers rarely expose — that, not the extension catalog, usually decides
 whether BM25 is available. `pg_jieba` installs and tokenizes without preloading.
 Neither is a trusted extension, so only a superuser can create them. Profile
 Memory never needs either to start: it creates both where the server allows and
-logs a warning for what it lacks. Without `pg_jieba` its BM25 index falls back
-to the `english` configuration; without `pg_textsearch` a fact is recalled only
+logs a warning for what it lacks. Without `pg_jieba` its Chinese BM25 index runs
+under `simple`; without `pg_textsearch` a fact is recalled only
 when restated exactly or, with an embedding model that has a calibrated
 relevance floor, by similarity. An extension installed later takes effect as
 each process restarts, the writer first; running processes keep recalling with

@@ -42,9 +42,9 @@ from typing import Any, Protocol
 from dlightrag_memory._storage.pg_bm25 import (
     bm25_query_text,
     build_bm25_sql,
-    ensure_bm25_index,
+    ensure_bm25_indexes,
     install_text_search,
-    served_bm25_index,
+    served_bm25_languages,
 )
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import (
@@ -55,6 +55,8 @@ from dlightrag_memory.models import (
 )
 from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.ports import (
+    BM25Languages,
+    ChineseAndEnglish,
     NullEmbedder,
     SearchCandidate,
     TextEmbedder,
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_memory_records (
     status               TEXT             NOT NULL,
     supersedes_id        UUID,
     embedding_fingerprint TEXT,
+    bm25_language        TEXT             NOT NULL DEFAULT 'simple',
     created_at           TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, memory_id),
@@ -189,6 +192,7 @@ class PostgresMemoryStore:
         dsn: str | None = None,
         pool_factory: Callable[[], Awaitable[Any]] | None = None,
         embedder: TextEmbedder = NullEmbedder(),
+        languages: BM25Languages = ChineseAndEnglish(),
     ) -> None:
         if pool is None and not dsn and pool_factory is None:
             raise ValueError("PostgresMemoryStore needs a pool, a dsn, or a pool factory")
@@ -197,8 +201,9 @@ class PostgresMemoryStore:
         self._pool_factory = pool_factory
         self._owned_pool: Any = None
         self._embedder = embedder
+        self._languages = languages
         self._dense = not isinstance(embedder, NullEmbedder)
-        self._bm25_index: str | None = None
+        self._bm25_languages: frozenset[str] = frozenset()
         self._initialized = False
 
     async def aclose(self) -> None:
@@ -230,11 +235,12 @@ class PostgresMemoryStore:
             await conn.execute(_LOCK_SCHEMA)
             try:
                 await conn.execute(_RECORDS_TABLE)
+                await conn.execute(_ADD_BM25_LANGUAGE)
                 await conn.execute(_OPERATIONS_TABLE)
                 for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
                     await conn.execute(statement)
                 await install_text_search(conn)
-                await ensure_bm25_index(conn)
+                await ensure_bm25_indexes(conn, self._languages.text_configs)
                 if self._dense:
                     dim = int(self._embedder.dim)
                     if dim < 1:
@@ -276,7 +282,12 @@ class PostgresMemoryStore:
             if "confidence" in by_table.get("dlightrag_memory_records", set()):
                 raise RuntimeError("Memory schema still contains the removed confidence column")
             required = {
-                "dlightrag_memory_records": {"origin_kind", "origin_id", "normalized_body"},
+                "dlightrag_memory_records": {
+                    "origin_kind",
+                    "origin_id",
+                    "normalized_body",
+                    "bm25_language",
+                },
                 "dlightrag_memory_operations": {
                     "change_id",
                     "request_fingerprint",
@@ -289,7 +300,9 @@ class PostgresMemoryStore:
                 missing_columns = names - by_table.get(table, set())
                 if missing_columns:
                     raise RuntimeError(f"{table} is missing {', '.join(sorted(missing_columns))}")
-            self._bm25_index = await served_bm25_index(conn)
+            self._bm25_languages = await served_bm25_languages(
+                conn, self._languages.text_configs.keys()
+            )
 
         acquire = await self._acquire_context()
         async with acquire as conn:
@@ -764,7 +777,7 @@ class PostgresMemoryStore:
             operation.provenance.origin_kind,
             operation.provenance.origin_id,
             now,
-            _restore_batch_json(restorations),
+            _restore_batch_json(restorations, language_of=self._languages.language_of),
         )
         restored_ids = {str(row["memory_id"]) for row in restored_rows}
         if len(restored_rows) != len(restorations) or restored_ids != {
@@ -867,13 +880,22 @@ class PostgresMemoryStore:
                 SearchCandidate(record=_row(row), leg="exact", score=2.0)
                 for row in await conn.fetch(_SEARCH_EXACT, owner_id, key, cap)
             ]
-            if self._bm25_index is not None:
-                rows = await conn.fetch(build_bm25_sql(limit=cap), bm25_query_text(query), owner_id)
-                for row in rows:
-                    score = float(row["score"])
+            # Each language the owner writes in, under its own analyzer: a
+            # Chinese question naming Python still meets an English fact.
+            sparse: list[SearchCandidate] = []
+            text = bm25_query_text(query)
+            for row in await conn.fetch(_OWNER_FACT_LANGUAGES, owner_id):
+                language = str(row["bm25_language"])
+                if language not in self._bm25_languages:
+                    continue
+                for hit in await conn.fetch(
+                    build_bm25_sql(language=language, limit=cap), text, owner_id
+                ):
+                    score = float(hit["score"])
                     if score <= 0:
                         break
-                    candidates.append(SearchCandidate(record=_row(row), leg="sparse", score=score))
+                    sparse.append(SearchCandidate(record=_row(hit), leg="sparse", score=score))
+            candidates.extend(sorted(sparse, key=lambda c: c.score, reverse=True)[:cap])
             if floor is not None and vector is not None:
                 dense_rows = await conn.fetch(
                     _SEARCH_DENSE,
@@ -1098,14 +1120,18 @@ def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple
         store._embedder_fingerprint() if store._dense else None,  # noqa: SLF001
         record.created_at,
         record.updated_at,
+        store._languages.language_of(record.body),  # noqa: SLF001
     )
 
 
-def _restore_batch_json(restorations: tuple[tuple[MemoryRecord, str], ...]) -> str:
+def _restore_batch_json(
+    restorations: tuple[tuple[MemoryRecord, str], ...], *, language_of: Callable[[str], str]
+) -> str:
     """Encode one undo restoration batch as a single JSONB recordset parameter."""
     return json.dumps(
         [
             {
+                "bm25_language": language_of(record.body),
                 "body": record.body,
                 "kind": record.kind,
                 "memory_id": record.memory_id,
@@ -1132,12 +1158,25 @@ def _embedding_index_sql() -> str:
     )
 
 
+# Rows written before the language label existed are indexed under simple.
+_ADD_BM25_LANGUAGE = (
+    "ALTER TABLE dlightrag_memory_records "
+    "ADD COLUMN IF NOT EXISTS bm25_language TEXT NOT NULL DEFAULT 'simple'"
+)
+
+_OWNER_FACT_LANGUAGES = """
+SELECT DISTINCT bm25_language
+FROM dlightrag_memory_records
+WHERE owner_id = $1 AND status = 'active' AND kind = 'fact'
+"""
+
 _INSERT = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
-    session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at
+    session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at,
+    bm25_language
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
 """
@@ -1145,9 +1184,10 @@ RETURNING memory_id
 _INSERT_WITH_EMBEDDING = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
-    session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at
+    session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at,
+    bm25_language
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $15::halfvec, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $16::halfvec, $13, $14, $15)
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
 """
@@ -1225,7 +1265,8 @@ SELECT EXISTS (
 _INSERT_RESTORED_BATCH = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
-    session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at
+    session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at,
+    bm25_language
 )
 SELECT
     $1,
@@ -1241,7 +1282,8 @@ SELECT
     NULLIF(record->>'supersedes_id', '')::uuid,
     NULL,
     $4,
-    $4
+    $4,
+    record->>'bm25_language'
 FROM jsonb_array_elements($5::jsonb) AS record
 ON CONFLICT (owner_id, memory_id) DO NOTHING
 RETURNING memory_id
@@ -1253,7 +1295,8 @@ RETURNING memory_id
 _INSERT_RESTORED_BATCH_WITH_EMBEDDING = """
 INSERT INTO dlightrag_memory_records (
     owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
-    session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at
+    session_id, status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at,
+    bm25_language
 )
 SELECT
     $1,
@@ -1270,7 +1313,8 @@ SELECT
     CASE WHEN source.embedding IS NOT NULL THEN source.embedding_fingerprint END,
     source.embedding,
     $4,
-    $4
+    $4,
+    record->>'bm25_language'
 FROM jsonb_array_elements($5::jsonb) AS record
 LEFT JOIN dlightrag_memory_records AS source
     ON source.owner_id = $1 AND source.memory_id = (record->>'source_id')::uuid

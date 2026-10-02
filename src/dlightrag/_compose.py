@@ -166,6 +166,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.dependencies import DependencyComponent
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.retrieval.federation import FederatedReranker
+    from dlightrag.engine.rag.retrieval.language import ProfileBM25Languages
     from dlightrag.engine.rag.retrieval.rerank import build_rerank_func
     from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
     from dlightrag.engine.rag.workspace.pool import WorkspacePool
@@ -356,6 +357,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     memory_store = PostgresMemoryStore(
         pool_factory=_operational_pool_factory(),
         embedder=memory_embedder,
+        languages=ProfileBM25Languages(config.corpus.retrieval.bm25_profiles),
     )
     memory_settings = PGMemorySettingsStore()
     memory = MemoryService(

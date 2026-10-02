@@ -892,12 +892,14 @@ Recall injects two labeled sections. **Standing preferences** apply to every
 answer: the owner's ten newest preferences, whatever the question. **Relevant
 facts** are the ten best facts with evidence that they bear on the question: a
 word-for-word restatement, a shared content word, or embedding similarity at or
-above the model's calibrated relevance floor. Content words come from one BM25
-index over `public.jiebacfg`, which drops English and Chinese function words and
-matches words in the same form ("cats" is not "cat"); other languages' function
-words still count. Without pg_jieba the index falls back to `english`, where
-Chinese function words count too; without pg_textsearch there is no BM25 index,
-and facts need an exact restatement or embedding similarity. Only `voyage-multimodal-3.5` has a floor today,
+above the model's calibrated relevance floor. Facts are indexed for BM25 the way
+corpus chunks are: the corpus language classifier labels each fact, and that
+language's profile analyzes it (jieba for Chinese, stemming and stopwords for
+English, German and the other profile languages), so function words never count.
+A question is searched in every language the owner's facts are in, so a Chinese
+question naming Python meets an English fact. Without pg_jieba Chinese facts are
+indexed under `simple`; without pg_textsearch there is no BM25 index, and facts
+need an exact restatement or embedding similarity. Only `voyage-multimodal-3.5` has a floor today,
 0.35, calibrated at 1,024 dimensions; with other models, and whenever the query
 embedding misses its two-second deadline, facts are recalled by their words.
 Both sections share a 4,000-character budget, and preferences claim it first.

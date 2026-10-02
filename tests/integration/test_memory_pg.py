@@ -19,7 +19,7 @@ from dlightrag_memory import (
     MemoryProvenance,
     MemoryRecord,
 )
-from dlightrag_memory._storage.pg_bm25 import INDEX_NAME
+from dlightrag_memory._storage.pg_bm25 import index_name
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.mcp_server import _forget as mcp_forget
 from dlightrag_memory.mcp_server import _recall as mcp_recall
@@ -27,7 +27,7 @@ from dlightrag_memory.mcp_server import _remember as mcp_remember
 from dlightrag_memory.mcp_server import _undo as mcp_undo
 from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.policy import RECALL_CHAR_BUDGET, RECALL_TOP_K
-from dlightrag_memory.ports import NullEmbedder, TextEmbedder
+from dlightrag_memory.ports import BM25Languages, ChineseAndEnglish, NullEmbedder, TextEmbedder
 from dlightrag_memory.postgres import PostgresMemoryStore
 from dlightrag_memory.store import operation_change_id, operation_record_id
 
@@ -61,6 +61,7 @@ _PG: dict[str, Any] = PG_CONN_KWARGS
 @asynccontextmanager
 async def _scratch_store(
     embedder: TextEmbedder = NullEmbedder(),
+    languages: BM25Languages = ChineseAndEnglish(),
 ) -> AsyncIterator[PostgresMemoryStore]:
     await skip_without_postgres()
     db_name = f"dlightrag_mem_{uuid.uuid4().hex[:12]}"
@@ -75,7 +76,7 @@ async def _scratch_store(
             # The host schema owns pgvector; a scratch database has to add it.
             async with pool.acquire() as conn:
                 await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        created = PostgresMemoryStore(pool=pool, embedder=embedder)
+        created = PostgresMemoryStore(pool=pool, embedder=embedder, languages=languages)
         await created.initialize()
         try:
             yield created
@@ -831,7 +832,7 @@ async def _managed_server_store(
 @pytest.mark.parametrize(
     ("preinstalled", "bm25"),
     [((), False), (("pg_textsearch",), True)],
-    ids=["no-text-search", "english-fallback"],
+    ids=["no-text-search", "text-search-without-jieba"],
 )
 async def test_pg_memory_runs_on_whatever_text_search_a_managed_server_has(
     preinstalled: tuple[str, ...], bm25: bool
@@ -862,22 +863,53 @@ async def test_pg_memory_runs_on_whatever_text_search_a_managed_server_has(
 async def test_pg_a_running_process_keeps_recalling_while_the_writer_rebuilds_bm25() -> None:
     async with _managed_server_store(preinstalled=("pg_textsearch",)) as (store, db_name):
         memory = Memory(store)
-        await _remember(memory, "Lives in Berlin.")
-        # pg_jieba arrives later, and a writer that can create it restarts.
+        await _remember(memory, "我住在柏林")
+        # Without pg_jieba the Chinese index runs under simple, which cannot
+        # split 我住在柏林; pg_jieba arrives, and a writer that can create it
+        # restarts and rebuilds that index in place.
+        before = await memory.recall(owner_id="alpha", query="柏林 天气 怎么样")
         operator = await asyncpg.create_pool(**{**_PG, "database": db_name}, min_size=1, max_size=2)
         try:
             await PostgresMemoryStore(pool=operator, embedder=NullEmbedder()).initialize()
             async with operator.acquire() as conn:
                 indexdef = await conn.fetchval(
-                    "SELECT indexdef FROM pg_indexes WHERE indexname = $1", INDEX_NAME
+                    "SELECT indexdef FROM pg_indexes WHERE indexname = $1", index_name("zh")
                 )
         finally:
             await operator.close()
 
-        result = await memory.recall(owner_id="alpha", query="Is Berlin rainy?")
+        after = await memory.recall(owner_id="alpha", query="柏林 天气 怎么样")
 
+    assert before.facts == ()
     assert "jiebacfg" in indexdef
-    assert _bodies(result.facts) == ["Lives in Berlin."]
+    assert _bodies(after.facts) == ["我住在柏林"]
+
+
+async def test_pg_facts_are_indexed_like_corpus_chunks_in_their_own_language() -> None:
+    from dlightrag.engine.rag.retrieval.language import ProfileBM25Languages
+    from dlightrag.engine.rag.workspace.settings import RetrievalSettings
+
+    languages = ProfileBM25Languages(RetrievalSettings().bm25_profiles)
+    async with _scratch_store(languages=languages) as store:
+        memory = Memory(store)
+        for body in (
+            "Der Nutzer wohnt in Berlin.",
+            "Has a daughter who is six.",
+            "Codes in Python.",
+        ):
+            await _remember(memory, body)
+
+        async def facts(query: str) -> list[str]:
+            return _bodies((await memory.recall(owner_id="alpha", query=query)).facts)
+
+        # German function words never count; German content words do.
+        assert await facts("Was ist der Unterschied zwischen Aktien und Anleihen?") == []
+        assert await facts("Wo wohnt der Nutzer heute?") == ["Der Nutzer wohnt in Berlin."]
+        # English facts are stemmed like English chunks.
+        assert await facts("Gift ideas for my daughters?") == ["Has a daughter who is six."]
+        # Every language the owner writes in is searched, so a Chinese question
+        # naming Python meets the English fact.
+        assert await facts("Python 的 GIL 怎么绕过？") == ["Codes in Python."]
 
 
 async def test_pg_an_owner_holds_one_active_record_per_body(store: PostgresMemoryStore) -> None:
@@ -956,11 +988,15 @@ async def test_pg_writers_starting_together_both_initialize() -> None:
         await drop_database(db_name)
 
 
-async def test_pg_bm25_index_is_the_one_served_config(store: PostgresMemoryStore) -> None:
+async def test_pg_bm25_indexes_follow_the_served_languages(store: PostgresMemoryStore) -> None:
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
-        for config in ("simple", "english"):
+        # Names earlier releases served: one per configuration, then one in all.
+        for name, config in (
+            ("idx_dlightrag_memory_records_bm25", "public.jiebacfg"),
+            ("idx_dlightrag_memory_records_bm25_jieba", "public.jiebacfg"),
+        ):
             await conn.execute(
-                f"CREATE INDEX {INDEX_NAME}_{config} ON dlightrag_memory_records "
+                f"CREATE INDEX {name} ON dlightrag_memory_records "
                 f"USING bm25(body) WITH (text_config='{config}')"
             )
 
@@ -970,10 +1006,12 @@ async def test_pg_bm25_index_is_the_one_served_config(store: PostgresMemoryStore
         rows = await conn.fetch(
             "SELECT indexname, indexdef FROM pg_indexes "
             "WHERE tablename = 'dlightrag_memory_records' AND indexname LIKE $1",
-            f"{INDEX_NAME}%",
+            "idx_dlightrag_memory_records_bm25%",
         )
-    assert [str(row["indexname"]) for row in rows] == [INDEX_NAME]
-    assert "jiebacfg" in str(rows[0]["indexdef"])
+    indexdefs = {str(row["indexname"]): str(row["indexdef"]) for row in rows}
+    assert set(indexdefs) == {index_name(language) for language in ("zh", "en", "simple")}
+    assert "jiebacfg" in indexdefs[index_name("zh")]
+    assert "english" in indexdefs[index_name("en")]
 
 
 async def test_pg_restating_a_fact_as_a_preference_makes_it_stand(

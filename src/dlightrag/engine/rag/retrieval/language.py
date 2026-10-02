@@ -2,7 +2,9 @@
 """Language classification for BM25 profile routing and chunk labeling."""
 
 import re
+from collections.abc import Iterable, Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Any
 
 BM25_FALLBACK_LANGUAGE = "simple"
@@ -109,3 +111,35 @@ class BM25LanguageClassifier:
         ):
             return "zh"
         return BM25_FALLBACK_LANGUAGE
+
+
+class ProfileBM25Languages:
+    """The corpus BM25 profiles and their classifier, for Profile Memory's facts.
+
+    One classification and one analyzer per language serve both the corpus and
+    Profile Memory, so a fact is indexed exactly as a chunk in its language
+    would be. ``profiles`` are the configured BM25 profiles.
+    """
+
+    def __init__(self, profiles: Iterable[Any]) -> None:
+        profiles = tuple(profiles)
+        fallback = next(
+            (profile.text_config for profile in profiles if profile.fallback),
+            BM25_FALLBACK_LANGUAGE,
+        )
+        self.text_configs: Mapping[str, str] = MappingProxyType(
+            {
+                **{
+                    normalize_language_code(language): profile.text_config
+                    for profile in profiles
+                    if not profile.fallback
+                    for language in profile.languages
+                },
+                BM25_FALLBACK_LANGUAGE: fallback,
+            }
+        )
+        self._classifier = BM25LanguageClassifier(tuple(self.text_configs))
+
+    def language_of(self, text: str) -> str:
+        language = self._classifier.detect(text)
+        return language if language in self.text_configs else BM25_FALLBACK_LANGUAGE
