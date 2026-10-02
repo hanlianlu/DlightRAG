@@ -196,7 +196,7 @@ The owner identity a Memory store scopes every operation to; bound by the host (
 _Avoid_: caller-selected namespace, conversation id, Agent Session
 
 **RecallResult**:
-The structured outcome of one query-aware Memory recall: selected records (exact matches pinned first, then chronological), the raw leg candidates the fusion consumed, degradation flags, and the recalled body character cost (rendering overhead excluded). Never a prompt fragment.
+The structured outcome of one query-aware Memory recall: the standing preferences and the relevant facts, each section oldest first, and their body character cost (rendering overhead excluded). A lookup also carries the newest other memories, so an agent can correct a record recall did not return. Never a prompt fragment.
 _Avoid_: prompt text, standing block, packed string
 
 **Memory Operation**:

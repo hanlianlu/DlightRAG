@@ -3,10 +3,11 @@
 
 A narrow port of the corpus BM25 knobs (same extension, same k1/b) kept
 private to this package so the memory adapter never depends on
-dlightrag.engine.rag. Two stopword-aware configs serve one table: ``english``
-stems Latin text and ``public.jiebacfg`` segments Chinese. Queries hit both and
-keep each record's best score, so a positive score means the query and the
-record share a content word, never just "the" or "的".
+dlightrag.engine.rag. One stopword-aware index serves the table:
+``public.jiebacfg`` when pg_jieba is installed, which segments Chinese and drops
+Chinese and English function words, else ``english``. A positive score means
+the query and a fact share a content word, never just "the" or "的"; function
+words of other languages still count.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-_LATIN_CONFIG = "english"
+_ENGLISH_CONFIG = "english"
 _JIEBA_CONFIG = "public.jiebacfg"
 _INDEX_PREFIX = "idx_dlightrag_memory_records_bm25"
 _K1 = 1.2
@@ -110,8 +111,8 @@ def extension_bootstrap_sql() -> tuple[str, ...]:
     )
 
 
-async def text_configs_available(conn: Any) -> tuple[str, ...]:
-    """Return the installed textsearch configs this adapter can serve.
+async def served_index(conn: Any) -> BM25IndexOptions:
+    """The one index this database can serve: jieba when installed, else english.
 
     ``english`` is pg_catalog built-in; ``public.jiebacfg`` comes from the
     pg_jieba extension, matching the corpus BM25 profiles.
@@ -125,19 +126,17 @@ async def text_configs_available(conn: Any) -> tuple[str, ...]:
         LIMIT 1
         """
     )
-    return (_LATIN_CONFIG, _JIEBA_CONFIG) if jieba else (_LATIN_CONFIG,)
-
-
-def desired_indexes(available: tuple[str, ...]) -> tuple[BM25IndexOptions, ...]:
-    """The indexes to provision: english always, jieba when installed."""
-    options = [BM25IndexOptions(index_name=index_name("english"), text_config=_LATIN_CONFIG)]
-    if _JIEBA_CONFIG in available:
-        options.append(BM25IndexOptions(index_name=index_name("jieba"), text_config=_JIEBA_CONFIG))
-    return tuple(options)
+    if jieba:
+        return BM25IndexOptions(index_name=index_name("jieba"), text_config=_JIEBA_CONFIG)
+    return BM25IndexOptions(index_name=index_name("english"), text_config=_ENGLISH_CONFIG)
 
 
 def build_bm25_sql(*, index_name: str, limit: int) -> str:
-    """Rank one owner's active facts against ``$1``; non-matching facts score 0."""
+    """Rank one owner's active facts against ``$1``; non-matching facts score 0.
+
+    Ordering by the score itself keeps the plan on the owner's rows whatever the
+    table statistics say, instead of a BM25 index scan over every owner.
+    """
     safe_index = _validate_index_name(index_name)
     limit_value = int(limit)
     if limit_value < 1:
@@ -150,32 +149,24 @@ def build_bm25_sql(*, index_name: str, limit: int) -> str:
         f"-(body <@> to_bm25query($1, '{safe_index}')) AS score "  # noqa: S608
         "FROM dlightrag_memory_records "
         "WHERE owner_id = $2 AND status = 'active' AND kind = 'fact' "
-        f"ORDER BY body <@> to_bm25query($1, '{safe_index}') "  # noqa: S608
+        "ORDER BY score DESC "
         "LIMIT " + str(limit_value)
     )
 
 
-async def ensure_bm25_indexes(
-    conn: Any,
-    *,
-    available: tuple[str, ...] | None = None,
-    verify_only: bool = False,
-) -> tuple[BM25IndexOptions, ...]:
-    """Provision or validate the memory-table BM25 indexes.
+async def ensure_bm25_index(conn: Any, *, verify_only: bool = False) -> BM25IndexOptions:
+    """Provision or validate the memory-table BM25 index.
 
-    With ``verify_only`` this performs no DDL: readers load the served indexes
-    and fail when a configured index is missing, matching the corpus verify
-    path. Otherwise every other index under the BM25 prefix is dropped, so a
-    retired config never keeps paying write cost.
+    With ``verify_only`` this performs no DDL: readers load the served index and
+    fail when it is missing, matching the corpus verify path. Otherwise every
+    other index under the BM25 prefix is dropped, so a retired config never
+    keeps paying write cost.
     """
-    installed = available if available is not None else await text_configs_available(conn)
-    options = desired_indexes(installed)
-    for option in options:
-        indexdef = await conn.fetchval(
-            "SELECT indexdef FROM pg_indexes WHERE indexname = $1", option.index_name
-        )
-        if option.matches_indexdef(indexdef):
-            continue
+    option = await served_index(conn)
+    indexdef = await conn.fetchval(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = $1", option.index_name
+    )
+    if not option.matches_indexdef(indexdef):
         if verify_only:
             raise RuntimeError(
                 f"BM25 index {option.index_name} is missing or does not match configured "
@@ -185,21 +176,19 @@ async def ensure_bm25_indexes(
             await conn.execute(f"DROP INDEX IF EXISTS {option.index_name}")
         await conn.execute(option.create_index_sql())
     if not verify_only:
-        served = {option.index_name for option in options}
         for row in await conn.fetch(_PREFIXED_INDEXES_SQL, f"{_INDEX_PREFIX}_%"):
-            if row["indexname"] not in served:
+            if row["indexname"] != option.index_name:
                 await conn.execute(f"DROP INDEX IF EXISTS {_validate_index_name(row['indexname'])}")
-    return options
+    return option
 
 
 __all__ = [
     "BM25IndexOptions",
     "bm25_query_text",
     "build_bm25_sql",
-    "desired_indexes",
-    "ensure_bm25_indexes",
+    "ensure_bm25_index",
     "extension_bootstrap_sql",
     "index_name",
-    "text_configs_available",
+    "served_index",
     "validate_text_config",
 ]

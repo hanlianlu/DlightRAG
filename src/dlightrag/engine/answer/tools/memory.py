@@ -154,9 +154,9 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 def recall_memory_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         "recall_memory",
-        "Recall the owner's standing preferences and the facts relevant to a query, with "
-        "the ids needed before replacing or forgetting one. Context only; never evidence "
-        "or a citation.",
+        "Recall the owner's standing preferences and the facts relevant to a query, plus "
+        "the newest other memories, with the ids needed before replacing or forgetting "
+        "one. Context only; never evidence or a citation.",
         RecallInput,
         replay_policy="replayable",
     )
@@ -174,10 +174,11 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         if not await _available(host):
             return ToolResult.text("Profile Memory is not active for this owner.", is_error=True)
         await runtime.emit_update(ToolResult.text("", subject=args.query))
-        result = await host.memory.recall(owner_id=host.owner_id, query=args.query)
-        if not result.records:
-            return ToolResult.text("No standing preferences or relevant facts.")
-        return ToolResult.text("\n".join(recall_sections(result, ids=True)))
+        result = await host.memory.lookup(owner_id=host.owner_id, query=args.query)
+        lines = recall_sections(result, ids=True)
+        if not lines:
+            return ToolResult.text("No remembered preferences or facts.")
+        return ToolResult.text("\n".join(lines))
 
     return recall_memory_declaration().bind(execute)
 

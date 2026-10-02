@@ -891,11 +891,16 @@ reading/changing the setting.
 Recall injects two labeled sections. **Standing preferences** apply to every
 answer: the owner's ten newest preferences, whatever the question. **Relevant
 facts** are the ten best facts with evidence that they bear on the question: a
-word-for-word restatement, a shared content word (BM25 over stopword-aware
-`english` and `public.jiebacfg` indexes), or embedding similarity at or above the
-model's calibrated relevance floor. Only `voyage-multimodal-3.5` has a floor
-today (0.35); with other models, facts are recalled by their words. Both sections
-share a 4,000-character budget, and preferences claim it first.
+word-for-word restatement, a shared content word, or embedding similarity at or
+above the model's calibrated relevance floor. Content words come from one
+stopword-aware BM25 index (`public.jiebacfg`, else `english`), so English and
+Chinese function words never count; other languages' function words do. Only
+`voyage-multimodal-3.5` has a floor today, 0.35 at 1,024 dimensions; with other
+models, and whenever the query embedding misses its two-second deadline, facts
+are recalled by their words. Both sections share a 4,000-character budget, and
+preferences claim it first. The `recall_memory` tool and the dlightrag-memory MCP
+`memory_recall` also list the newest other memories with their ids, so an agent
+can correct a record that recall did not find relevant.
 
 ## Health And Errors
 

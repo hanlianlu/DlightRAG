@@ -7,12 +7,12 @@ standing set; facts are searched by three legs behind the neutral ports, and
 each leg returns only facts it has evidence for:
 
 - exact:  ``normalized_body`` btree equality (Python-side NFKC normalization)
-- sparse: pg_textsearch BM25 with the corpus-tuned k1/b and two stopword-aware
-  configs (``english`` + ``public.jiebacfg``), merged by best score into one
-  ranking so a record never double-counts in fusion; a fact must share a
-  content word with the query
+- sparse: pg_textsearch BM25 with the corpus-tuned k1/b over one stopword-aware
+  config (``public.jiebacfg``, else ``english``); a fact must share a content
+  word with the query
 - dense:  optional ``halfvec`` column + HNSW index when a TextEmbedder is bound;
-  a fact must reach the embedder's calibrated relevance floor
+  a fact must reach the embedder's calibrated relevance floor, and a query
+  embedding that outlasts its deadline only skips this leg
 
 Dense is opt-in: with the NullEmbedder, or an embedder without a relevance
 floor, the adapter searches with exact + sparse only.
@@ -28,7 +28,9 @@ without an embedding call.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -39,9 +41,8 @@ from dlightrag_memory._storage.pg_bm25 import (
     BM25IndexOptions,
     bm25_query_text,
     build_bm25_sql,
-    ensure_bm25_indexes,
+    ensure_bm25_index,
     extension_bootstrap_sql,
-    text_configs_available,
 )
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import (
@@ -65,6 +66,10 @@ from dlightrag_memory.store import (
     operation_receipt,
     operation_record_id,
 )
+
+_logger = logging.getLogger(__name__)
+# Recall waits this long for the query embedding before matching facts by words.
+_QUERY_EMBEDDING_DEADLINE_SECONDS = 2.0
 
 
 class PGConnection(Protocol):
@@ -188,7 +193,7 @@ class PostgresMemoryStore:
         self._owned_pool: Any = None
         self._embedder = embedder
         self._dense = not isinstance(embedder, NullEmbedder)
-        self._bm25_indexes: tuple[BM25IndexOptions, ...] = ()
+        self._bm25_index: BM25IndexOptions | None = None
         self._initialized = False
 
     async def aclose(self) -> None:
@@ -213,24 +218,27 @@ class PostgresMemoryStore:
 
     async def initialize(self) -> None:
         async def operation(conn: PGConnection) -> None:
-            async with conn.transaction():
-                # Writers that start together migrate one at a time; the later
-                # one finds every table and index in place and changes nothing.
-                await conn.execute(_LOCK_SCHEMA)
+            # Writers that start together set up the schema one at a time: the
+            # later one finds every table and index in place and changes
+            # nothing. Each statement still commits alone, so setup never holds
+            # a table lock that a concurrent remember could deadlock against.
+            await conn.execute(_LOCK_SCHEMA)
+            try:
                 await conn.execute(_RECORDS_TABLE)
                 await conn.execute(_OPERATIONS_TABLE)
                 for statement in (*_RECORD_INDEXES, *_OPERATION_INDEXES):
                     await conn.execute(statement)
                 for statement in extension_bootstrap_sql():
                     await conn.execute(statement)
-                available = await text_configs_available(conn)
-                self._bm25_indexes = await ensure_bm25_indexes(conn, available=available)
+                self._bm25_index = await ensure_bm25_index(conn)
                 if self._dense:
                     dim = int(self._embedder.dim)
                     if dim < 1:
                         raise ValueError("embedder dim must be positive for the dense leg")
                     await conn.execute(_embedding_column_sql(dim))
                     await conn.execute(_embedding_index_sql())
+            finally:
+                await conn.execute(_UNLOCK_SCHEMA)
 
         acquire = await self._acquire_context()
         async with acquire as conn:
@@ -277,7 +285,7 @@ class PostgresMemoryStore:
                 missing_columns = names - by_table.get(table, set())
                 if missing_columns:
                     raise RuntimeError(f"{table} is missing {', '.join(sorted(missing_columns))}")
-            self._bm25_indexes = await ensure_bm25_indexes(conn, verify_only=True)
+            self._bm25_index = await ensure_bm25_index(conn, verify_only=True)
 
         acquire = await self._acquire_context()
         async with acquire as conn:
@@ -387,7 +395,18 @@ class PostgresMemoryStore:
             operation.owner_id,
             normalized_body(body),
         )
-        if duplicate_row is not None:
+        supersedes_id = operation.supersedes_id
+        if duplicate_row is not None and _row(duplicate_row).kind != (operation.kind or "fact"):
+            # The same words as another kind re-file the record: kind decides
+            # whether it stands in every answer or needs evidence to be recalled.
+            duplicate = _row(duplicate_row)
+            if supersedes_id and duplicate.memory_id != supersedes_id:
+                return (
+                    operation_receipt(operation, change_id, "conflict", body=body, now=now),
+                    (),
+                )
+            supersedes_id = duplicate.memory_id
+        elif duplicate_row is not None:
             duplicate = _row(duplicate_row)
             outcome = (
                 "conflict"
@@ -418,11 +437,11 @@ class PostgresMemoryStore:
             )
 
         before: tuple[MemoryRecord, ...] = ()
-        if operation.supersedes_id:
+        if supersedes_id:
             old_row = await conn.fetchrow(
                 _SELECT_ONE_FOR_UPDATE,
                 operation.owner_id,
-                _uuid(operation.supersedes_id, label="supersedes_id"),
+                _uuid(supersedes_id, label="supersedes_id"),
             )
             if old_row is None or str(old_row["status"]) != "active":
                 return (
@@ -434,7 +453,7 @@ class PostgresMemoryStore:
             await conn.execute(
                 _MARK_SUPERSEDED,
                 operation.owner_id,
-                _uuid(operation.supersedes_id, label="supersedes_id"),
+                _uuid(supersedes_id, label="supersedes_id"),
             )
 
         memory_id = operation_record_id(operation.owner_id, change_id)
@@ -445,7 +464,7 @@ class PostgresMemoryStore:
             body=body,
             provenance=operation.provenance,
             status="active",
-            supersedes_id=operation.supersedes_id,
+            supersedes_id=supersedes_id,
             created_at=now,
             updated_at=now,
         )
@@ -458,6 +477,7 @@ class PostgresMemoryStore:
                 memory_ids=(memory_id,),
                 kind=record.kind,
                 body=record.body,
+                supersedes_id=supersedes_id,
                 now=now,
             ),
             before,
@@ -865,21 +885,22 @@ class PostgresMemoryStore:
         """Return the facts each leg has evidence for, in per-leg rank order.
 
         Exact matches restate the query. Sparse keeps facts sharing a content
-        word with it (BM25 score above zero), both configs merged by best score
-        into ONE ranking so a fact never double-counts in RRF. Dense keeps facts
-        at or above the embedder's relevance floor. The façade fuses the legs.
+        word with it (BM25 score above zero). Dense keeps facts at or above the
+        embedder's relevance floor. The query is embedded before a connection
+        is held, under its own deadline. The façade fuses the legs.
         """
         cap = max(1, min(int(limit), 100))
         key = normalized_body(query)
         floor = self._embedder.relevance_floor if self._dense else None
+        vector = None if floor is None else await self._bounded_query_embedding(query)
 
         async def operation(conn: PGConnection) -> tuple[SearchCandidate, ...]:
             candidates = [
                 SearchCandidate(record=_row(row), leg="exact", score=2.0)
                 for row in await conn.fetch(_SEARCH_EXACT, owner_id, key, cap)
             ]
-            sparse_by_id: dict[str, SearchCandidate] = {}
-            for index in self._bm25_indexes:
+            index = self._bm25_index
+            if index is not None:
                 rows = await conn.fetch(
                     build_bm25_sql(index_name=index.index_name, limit=cap),
                     bm25_query_text(index.text_config, query),
@@ -889,17 +910,8 @@ class PostgresMemoryStore:
                     score = float(row["score"])
                     if score <= 0:
                         break
-                    record = _row(row)
-                    existing = sparse_by_id.get(record.memory_id)
-                    if existing is None or score > existing.score:
-                        sparse_by_id[record.memory_id] = SearchCandidate(
-                            record=record, leg="sparse", score=score
-                        )
-            candidates.extend(
-                sorted(sparse_by_id.values(), key=lambda c: c.score, reverse=True)[:cap]
-            )
-            if floor is not None:
-                vector = await self._query_embedding(query)
+                    candidates.append(SearchCandidate(record=_row(row), leg="sparse", score=score))
+            if floor is not None and vector is not None:
                 dense_rows = await conn.fetch(
                     _SEARCH_DENSE,
                     owner_id,
@@ -915,6 +927,22 @@ class PostgresMemoryStore:
             return tuple(candidates)
 
         return await self._read(operation)
+
+    async def _bounded_query_embedding(self, query: str) -> Vector | None:
+        """The query vector, or None when the embedding call outlasts its deadline.
+
+        The embedding endpoint queues behind chat and ingestion; a slow one only
+        drops the dense leg, never the exact and sparse evidence.
+        """
+        try:
+            async with asyncio.timeout(_QUERY_EMBEDDING_DEADLINE_SECONDS):
+                return await self._query_embedding(query)
+        except TimeoutError:
+            _logger.warning(
+                "Profile Memory query embedding exceeded %ss; facts are matched by their words",
+                _QUERY_EMBEDDING_DEADLINE_SECONDS,
+            )
+            return None
 
     async def _embedding(self, text: str) -> Vector:
         (vector,) = await self._embedder.embed_documents((text,))
@@ -1135,7 +1163,8 @@ ON CONFLICT (owner_id, memory_id) DO NOTHING
 """
 
 _LOCK_OWNER = "SELECT pg_advisory_xact_lock(hashtext($1))"
-_LOCK_SCHEMA = "SELECT pg_advisory_xact_lock(hashtext('dlightrag-memory-schema'))"
+_LOCK_SCHEMA = "SELECT pg_advisory_lock(hashtext('dlightrag-memory-schema'))"
+_UNLOCK_SCHEMA = "SELECT pg_advisory_unlock(hashtext('dlightrag-memory-schema'))"
 
 _SELECT_OPERATION = """
 SELECT request_fingerprint, receipt, before_records, undone_by

@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from dlightrag_memory.fusion import rrf_fuse
@@ -26,19 +24,22 @@ from dlightrag_memory.ports import SearchCandidate
 from dlightrag_memory.recall import recall_recency
 from dlightrag_memory.store import MemoryStore, OperationGuard
 
-_logger = logging.getLogger(__name__)
-_SEARCH_DEADLINE_SECONDS = 2.0
-
 
 @dataclass(frozen=True, slots=True)
 class RecallResult:
-    """The owner's standing preferences and the facts relevant to one query."""
+    """The owner's standing preferences and the facts relevant to one query.
+
+    ``recent`` is filled only by ``Memory.lookup``: the newest other memories,
+    listed so an agent can correct a record that recall did not find relevant.
+    """
 
     preferences: tuple[MemoryRecord, ...] = ()
     facts: tuple[MemoryRecord, ...] = ()
+    recent: tuple[MemoryRecord, ...] = ()
 
     @property
     def records(self) -> tuple[MemoryRecord, ...]:
+        """What recall injects: the standing preferences and the relevant facts."""
         return (*self.preferences, *self.facts)
 
     @property
@@ -168,23 +169,30 @@ class Memory:
         oldest first, so the latest record reads last.
         """
         preferences = await self._store.list_preferences(owner_id=owner_id, limit=RECALL_TOP_K)
-        try:
-            candidates = await asyncio.wait_for(
-                self._store.search_facts(owner_id=owner_id, query=query, limit=RECALL_TOP_K),
-                timeout=_SEARCH_DEADLINE_SECONDS,
-            )
-        except TimeoutError:
-            _logger.warning(
-                "Profile Memory fact search exceeded %ss; recalling preferences only",
-                _SEARCH_DEADLINE_SECONDS,
-            )
-            candidates = ()
+        candidates = await self._store.search_facts(
+            owner_id=owner_id, query=query, limit=RECALL_TOP_K
+        )
         kept_preferences = _within(preferences, RECALL_CHAR_BUDGET)
         remaining = RECALL_CHAR_BUDGET - sum(len(record.body) for record in kept_preferences)
         kept_facts = _within(_fused(candidates)[:RECALL_TOP_K], remaining)
         return RecallResult(
             preferences=_chronological(kept_preferences),
             facts=_chronological(kept_facts),
+        )
+
+    async def lookup(self, *, owner_id: str, query: str) -> RecallResult:
+        """Recall for an agent that may correct what it finds.
+
+        Recall needs evidence before it returns a fact, so it can miss the very
+        record a correction replaces ("I moved to Munich" shares nothing with
+        "Lives in Berlin."). A lookup also lists the newest other memories, ids
+        included.
+        """
+        recalled = await self.recall(owner_id=owner_id, query=query)
+        newest, _ = await self.browse(owner_id=owner_id, limit=RECALL_TOP_K)
+        shown = {record.memory_id for record in recalled.records}
+        return replace(
+            recalled, recent=tuple(record for record in newest if record.memory_id not in shown)
         )
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
@@ -205,7 +213,7 @@ def _fused(candidates: Sequence[SearchCandidate]) -> list[MemoryRecord]:
 
 
 def _within(records: Sequence[MemoryRecord], budget: int) -> list[MemoryRecord]:
-    """Keep records in priority order while their bodies fit ``budget``."""
+    """First fit: keep each record, in priority order, whose body still fits ``budget``."""
     kept: list[MemoryRecord] = []
     for record in records:
         if len(record.body) <= budget:

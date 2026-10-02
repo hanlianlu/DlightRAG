@@ -637,13 +637,18 @@ async def test_pg_recall_needs_a_shared_content_word_not_a_stopword(
     assert result.facts == ()
 
 
-async def test_pg_recall_ignores_the_whitespace_jieba_indexes(store: PostgresMemoryStore) -> None:
+async def test_pg_recall_needs_a_chinese_content_word_not_a_space_or_a_function_word(
+    store: PostgresMemoryStore,
+) -> None:
     await store.insert(_dated_record("weekend", "周末 在 上海 跑步", minute=0))
 
     unrelated = await Memory(store).recall(owner_id="alpha", query="量化 交易 策略")
+    function_words = await Memory(store).recall(owner_id="alpha", query="你 在 做 什么")
     related = await Memory(store).recall(owner_id="alpha", query="上海 天气 怎么样")
 
+    # pg_jieba indexes the spaces as terms, and 在 is a function word.
     assert unrelated.facts == ()
+    assert function_words.facts == ()
     assert _bodies(related.facts) == ["周末 在 上海 跑步"]
 
 
@@ -677,24 +682,31 @@ async def test_pg_recall_trusts_dense_similarity_only_at_the_floor(
     assert _bodies(result.facts) == recalled
 
 
-async def test_pg_recall_keeps_preferences_when_fact_search_times_out(
-    store: PostgresMemoryStore, monkeypatch: pytest.MonkeyPatch
+class _SlowTopicEmbedder(_TopicEmbedder):
+    """An embedding endpoint queued behind other work when a query arrives."""
+
+    async def embed_query(self, text: str) -> list[float]:
+        await asyncio.sleep(0.2)
+        return await super().embed_query(text)
+
+
+async def test_pg_recall_matches_facts_by_words_when_the_query_embedding_is_slow(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    preference = _dated_record("lang", "Answer in Chinese.", minute=0, kind="preference")
-    await store.insert(preference)
-    await store.insert(_dated_record("quant", "Works as a quantitative trader.", minute=1))
+    monkeypatch.setattr("dlightrag_memory._storage.pg._QUERY_EMBEDDING_DEADLINE_SECONDS", 0.05)
+    async with _scratch_store(_SlowTopicEmbedder()) as store:
+        memory = Memory(store)
+        await memory.remember(
+            owner_id="alpha",
+            kind="fact",
+            body="Milestone 3 shipped.",
+            provenance=_provenance(),
+            idempotency_key="milestone",
+        )
 
-    async def slow_search(**_kwargs: Any) -> tuple[()]:
-        await asyncio.sleep(0.05)
-        return ()
+        result = await memory.recall(owner_id="alpha", query="Milestone 3 shipped.")
 
-    monkeypatch.setattr(store, "search_facts", slow_search)
-    monkeypatch.setattr("dlightrag_memory.memory._SEARCH_DEADLINE_SECONDS", 0.001)
-
-    result = await Memory(store).recall(owner_id="alpha", query="quantitative")
-
-    assert [record.memory_id for record in result.preferences] == [preference.memory_id]
-    assert result.facts == ()
+    assert _bodies(result.facts) == ["Milestone 3 shipped."]
 
 
 async def test_pg_recall_caps_each_section_and_keeps_the_newest_preferences(
@@ -709,6 +721,10 @@ async def test_pg_recall_caps_each_section_and_keeps_the_newest_preferences(
         await store.insert(
             _dated_record(f"fact-{minute}", f"Milestone {minute} shipped.", minute=minute)
         )
+
+    # Fresh statistics must not move the sparse leg off the owner's rows.
+    async with store._pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute("ANALYZE dlightrag_memory_records")
 
     result = await Memory(store).recall(owner_id="alpha", query="milestone shipped")
 
@@ -751,12 +767,13 @@ async def test_pg_writers_starting_together_both_initialize() -> None:
         await drop_database(db_name)
 
 
-async def test_pg_bm25_indexes_follow_the_served_configs(store: PostgresMemoryStore) -> None:
+async def test_pg_bm25_index_is_the_one_served_config(store: PostgresMemoryStore) -> None:
     async with store._pool.acquire() as conn:  # type: ignore[union-attr]
-        await conn.execute(
-            f"CREATE INDEX {index_name('simple')} ON dlightrag_memory_records "
-            "USING bm25(body) WITH (text_config='simple')"
-        )
+        for config in ("simple", "english"):
+            await conn.execute(
+                f"CREATE INDEX {index_name(config)} ON dlightrag_memory_records "
+                f"USING bm25(body) WITH (text_config='{config}')"
+            )
 
     await store.initialize()
 
@@ -765,7 +782,39 @@ async def test_pg_bm25_indexes_follow_the_served_configs(store: PostgresMemorySt
             "SELECT indexname FROM pg_indexes WHERE tablename = 'dlightrag_memory_records' "
             "AND indexname LIKE 'idx_dlightrag_memory_records_bm25%'"
         )
-    assert {str(row["indexname"]) for row in rows} == {index_name("english"), index_name("jieba")}
+    assert {str(row["indexname"]) for row in rows} == {index_name("jieba")}
+
+
+async def test_pg_restating_a_fact_as_a_preference_makes_it_stand(
+    store: PostgresMemoryStore,
+) -> None:
+    memory = Memory(store)
+    fact = await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Answer in Chinese.",
+        provenance=_provenance(),
+        idempotency_key="as-fact",
+    )
+    preference = await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="answer in chinese.",
+        provenance=_provenance(),
+        idempotency_key="as-preference",
+    )
+    unrelated = "What is the capital of Australia?"
+
+    assert preference.outcome == "changed"
+    assert preference.supersedes_id == fact.memory_id
+    assert _bodies((await memory.recall(owner_id="alpha", query=unrelated)).preferences) == [
+        "answer in chinese."
+    ]
+
+    undone = await _undo(memory, preference.change_id, key="undo-kind")
+
+    assert undone.outcome == "changed"
+    assert (await memory.recall(owner_id="alpha", query=unrelated)).preferences == ()
 
 
 async def _undo(memory: Memory, change_id: str, *, key: str):
@@ -1780,6 +1829,7 @@ async def test_pg_mcp_recall_returns_the_bound_subject_records(
     assert [record["body"] for record in result["preferences"]] == ["No email."]
     assert result["preferences"][0]["memory_id"]
     assert result["facts"] == []
+    assert result["recent"] == []
 
 
 async def test_pg_mcp_remember_writes_mcp_provenance_and_replays(
@@ -1869,24 +1919,36 @@ async def test_pg_forget_tool_miss_is_unchanged(store: PostgresMemoryStore) -> N
     assert (result.details or {})["memory_operation"]["outcome"] == "unchanged"
 
 
-async def test_pg_recall_tool_lists_ids_with_relevant_records(
+async def test_pg_recall_tool_lists_the_ids_a_correction_needs(
     store: PostgresMemoryStore,
 ) -> None:
-    receipt = await Memory(store).remember(
-        owner_id="o",
-        kind="preference",
-        body="No email.",
-        provenance=MemoryProvenance(origin_kind="answer_run", origin_id="seed"),
-        idempotency_key="seed",
+    memory = Memory(store)
+    seeds: tuple[tuple[MemoryKind, str], ...] = (
+        ("preference", "No email."),
+        ("fact", "Lives in Berlin."),
     )
+    preference, berlin = [
+        await memory.remember(
+            owner_id="o",
+            kind=kind,
+            body=body,
+            provenance=MemoryProvenance(origin_kind="answer_run", origin_id="seed"),
+            idempotency_key=body,
+        )
+        for kind, body in seeds
+    ]
     updates: list[ToolResult] = []
 
+    # Nothing in the correction shares a word with the fact it replaces.
     result = await recall_memory_tool(host=_host(store)).execute(
-        RecallInput(query="email"),
+        RecallInput(query="I moved to Munich"),
         recording_tool_runtime(updates, tool_name="recall_memory"),
     )
 
-    assert receipt.memory_id is not None
-    assert receipt.memory_id in result.text_content
-    assert "No email." in result.text_content
-    assert [update.subject for update in updates] == ["email"]
+    assert result.text_content.splitlines() == [
+        "Standing preferences:",
+        f"- {preference.memory_id} No email.",
+        "Other recent memories:",
+        f"- {berlin.memory_id} (fact) Lives in Berlin.",
+    ]
+    assert [update.subject for update in updates] == ["I moved to Munich"]
