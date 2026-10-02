@@ -700,6 +700,16 @@ def e2e_base_url(
     async def _list_workspace_records() -> list[dict[str, str]]:
         return [dict(record) for record in workspace_records]
 
+    def _workspace_record(record: dict[str, str]) -> WorkspaceRecord:
+        workspace = str(record["workspace"])
+        return {
+            "workspace": workspace,
+            "display_name": str(record.get("display_name") or workspace),
+            "embedding_model": str(record.get("embedding_model") or ""),
+            "created_at": None,
+            "updated_at": None,
+        }
+
     async def _list_workspace_records_page(
         page: WorkspaceCatalogPageRequest | None = None,
     ) -> WorkspaceCatalogPage:
@@ -715,18 +725,8 @@ def e2e_base_url(
         if len(ordered) > requested.limit:
             next_cursor = WorkspaceCatalogCursor(after_workspace=str(rows[-1]["workspace"]))
 
-        def _to_record(record: dict[str, str]) -> WorkspaceRecord:
-            workspace = str(record["workspace"])
-            return {
-                "workspace": workspace,
-                "display_name": str(record.get("display_name") or workspace),
-                "embedding_model": str(record.get("embedding_model") or ""),
-                "created_at": None,
-                "updated_at": None,
-            }
-
         return WorkspaceCatalogPage(
-            items=tuple(_to_record(record) for record in rows),
+            items=tuple(_workspace_record(record) for record in rows),
             next_cursor=next_cursor,
             fetched_rows=min(len(ordered), requested.limit + 1),
         )
@@ -734,14 +734,16 @@ def e2e_base_url(
     async def _workspace_exists(workspace: str) -> bool:
         return any(str(record["workspace"]) == workspace for record in workspace_records)
 
-    async def _create_workspace(workspace: str, *, display_name: str) -> None:
-        workspace_records.append(
-            {
-                "workspace": workspace,
-                "display_name": display_name,
-                "embedding_model": "voyage-multimodal-3.5",
-            }
-        )
+    async def _create_workspace(
+        workspace: str, *, display_name: str, created_by: str
+    ) -> WorkspaceRecord:
+        record = {
+            "workspace": workspace,
+            "display_name": display_name,
+            "embedding_model": "voyage-multimodal-3.5",
+        }
+        workspace_records.append(record)
+        return _workspace_record(record)
 
     corpus_runs: dict[str, RunView] = {}
 
