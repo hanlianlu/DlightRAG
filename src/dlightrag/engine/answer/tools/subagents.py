@@ -53,24 +53,27 @@ class _ParentRunCancelled(asyncio.CancelledError):
     """A cooperative parent cancellation crossing the Tool execution seam."""
 
 
+# No docstring: pydantic would send it to the model as the schema's description.
 class ChildRequest(BaseModel):
-    """One bounded child invocation selected by the parent model."""
-
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
-    objective: str = Field(min_length=1, description="One concrete child objective.")
+    objective: str = Field(min_length=1, description="What the child must do and report back.")
     context: ChildContextMode = Field(
         default="isolated",
-        description="isolated starts from the objective; parent also receives parent context.",
+        description=(
+            "isolated starts from the objective, plus the Run's resources and recalled memory; "
+            "parent also receives your conversation and the evidence gathered so far."
+        ),
     )
     model_role: ChildModelRole = Field(
-        default="query", description="Configured tool-capable model role for the child."
+        default="query",
+        description="Which configured model runs this child; the roles are listed below.",
     )
     tools: tuple[str, ...] | None = Field(
         default=None,
         description=(
-            "Optional narrowing subset for this child. It can never restore what the Run "
-            "withholds: roster controls, durable owner memory writes, and publication."
+            "Restrict this child to these tools; omit for every tool a child may have. "
+            "Names this Run does not offer are ignored."
         ),
     )
 
@@ -78,12 +81,10 @@ class ChildRequest(BaseModel):
 class SpawnAgentInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # The schema text is part of every accepted spawn_agent contract, so it keeps
-    # the retired lifecycle's wording rather than change accepted Plan digests.
     children: tuple[ChildRequest, ...] = Field(
         min_length=1,
         max_length=8,
-        description="One or more foreground child requests, run in parallel when possible.",
+        description="Children to start together; their objectives must differ.",
     )
 
     @model_validator(mode="after")
@@ -96,7 +97,7 @@ class SpawnAgentInput(BaseModel):
 class ChildControlInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
-    child_session_id: str = Field(min_length=1, description="Child session id from spawn_agent.")
+    child_session_id: str = Field(min_length=1, description="The child's id, from spawn_agent.")
 
 
 class ChildMessageInput(ChildControlInput):
@@ -106,7 +107,7 @@ class ChildMessageInput(ChildControlInput):
 class GuidanceReplyInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
-    request_id: str = Field(min_length=1, description="Correlated request id from ask_parent.")
+    request_id: str = Field(min_length=1, description="The request_id shown with the question.")
     content: str = Field(min_length=1, max_length=20_000)
 
 
@@ -114,7 +115,12 @@ class AskParentInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     question: str = Field(min_length=1, max_length=20_000)
-    expires_after_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    expires_after_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=86_400,
+        description="Seconds to wait for the reply before the question expires; omit for the default.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,11 +318,18 @@ class SubagentHost:
     _semaphore: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
     _detaching: bool = field(default=False, init=False, repr=False)
     _cancel_requested: set[str] = field(default_factory=set, init=False, repr=False)
+    # Settled results the parent has been handed through status, wait or cancel.
+    _read_results: set[str] = field(default_factory=set, init=False, repr=False)
     _parent_wake: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
 
     @property
     def detaching(self) -> bool:
         return self._detaching
+
+    def note_result_read(self, outcome: ChildOutcome) -> None:
+        """Record a settled result the parent now has, so it is not sent to it again."""
+        if outcome.status != "running":
+            self._read_results.add(_result_key(outcome))
 
     def semaphore(self) -> asyncio.Semaphore:
         if self._semaphore is None:
@@ -387,15 +400,13 @@ class SubagentHost:
                 )
                 for row in dispatch_rows
             )
-            identities = sorted(
-                f"{outcome.child_session_id}:{outcome.operation_id or 'initial'}"
-                for outcome in outcomes
-            )
+            identities = sorted(_result_key(outcome) for outcome in outcomes)
             digest = hashlib.sha256("\0".join(identities).encode("utf-8")).hexdigest()[:24]
             notification_id = f"child-results:{parent_intent_id}:{digest}"
-            if notification_id in seen:
+            unread = tuple(o for o in outcomes if _result_key(o) not in self._read_results)
+            if notification_id in seen or not unread:
                 continue
-            notifications.append((notification_id, _many_result(outcomes).text_content))
+            notifications.append((notification_id, _many_result(unread).text_content))
         return tuple(notifications)
 
     def notify_parent(self) -> None:
@@ -491,18 +502,21 @@ class SubagentHost:
 
 
 _SPAWN_DESCRIPTION = (
-    "Accept one or many asynchronous child Agent Sessions and return stable handles "
-    "immediately. A child runs with its parent's tools except the ones that spend the "
-    "Run's authority — its roster controls, durable owner memory, and publication — so "
-    "pass `tools` to narrow a child (a read-only investigator, say) rather than to grant "
-    "one."
+    "Start child agents, each working on its own objective in its own context. A handle for "
+    "each comes back at once and the children run beside you, in parallel as capacity "
+    "allows. A child has your tools except those that spend the Run's authority: "
+    "controlling children, changing memory (remember, forget) and publishing "
+    "(attach_artifact, publish_skill, delete_skill). What a child finds becomes citable once "
+    "you read its result with wait_subagent or subagent_status; if you end your turn first, "
+    "the Run stays open and sends you the results when every child of this call has settled."
 )
 
 
 def subagent_declarations(*, model_guidance: str | None = None) -> tuple[ToolDeclaration, ...]:
-    """Declare the exact child-session contract without constructing a Host.
+    """Declare the child-session tools without constructing a Host.
 
-    Accepted Agent Run Plans pin these declarations byte for byte (contract 5).
+    ``version`` marks the asynchronous child lifecycle, which the executor checks;
+    a tool's wording is not part of it.
     """
     version = 5
     return (
@@ -515,42 +529,48 @@ def subagent_declarations(*, model_guidance: str | None = None) -> tuple[ToolDec
         ),
         ToolDeclaration(
             "subagent_status",
-            "Read one accepted asynchronous or completed child session status.",
+            "Read one child's state: running, or settled as succeeded, failed or cancelled, "
+            "with its result once settled. Does not wait.",
             ChildControlInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "wait_subagent",
-            "Wait for one known asynchronous child session to settle.",
+            "Wait for one child. It returns when the child settles, and earlier, with the child "
+            "still running, when another child settles or a child asks a question; call it "
+            "again if it reports running.",
             ChildControlInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "cancel_subagent",
-            "Durably cancel one known child session without cancelling its siblings.",
+            "Stop one running child; its siblings keep running. Returns its final state.",
             ChildControlInput,
             replay_policy="never",
             contract_version=version,
         ),
         ToolDeclaration(
             "steer_subagent",
-            "Queue guidance for only the current Operation of a running child.",
+            "Send guidance to a running child; it applies to the work in progress only. Once a "
+            "child has settled, use continue_subagent instead.",
             ChildMessageInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "continue_subagent",
-            "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
+            "Give a settled child a new task. It continues in the same session with its earlier "
+            "work in context, the same model and the same tools. A running child takes "
+            "steer_subagent instead.",
             ChildMessageInput,
             replay_policy="replayable",
             contract_version=version,
         ),
         ToolDeclaration(
             "reply_subagent",
-            "Reply to one correlated ask_parent request from a child.",
+            "Answer a question a child has asked you.",
             GuidanceReplyInput,
             replay_policy="replayable",
             contract_version=version,
@@ -603,7 +623,9 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         current, parent_call_id = await _roster_status(host, args.child_session_id)
         if current.status == "running":
             current = await _cancel_child(host, args.child_session_id)
-        return _single_result(_adopt_outcome(host, current, parent_call_id=parent_call_id))
+        adopted = _adopt_outcome(host, current, parent_call_id=parent_call_id)
+        host.note_result_read(adopted)
+        return _single_result(adopted)
 
     async def steer(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildMessageInput, raw)
@@ -672,7 +694,8 @@ def child_guidance_declarations() -> tuple[ToolDeclaration, ...]:
     return (
         ToolDeclaration(
             "ask_parent",
-            "Ask the parent one correlated question and wait durably for its reply.",
+            "Ask your parent a question and wait for the reply; the question expires if none arrives "
+            "in time.",
             AskParentInput,
             replay_policy="replayable",
             contract_version=4,
@@ -1144,6 +1167,10 @@ def _terminal_outcome_from_row(row: Mapping[str, Any], child_id: str) -> ChildOu
     return outcome
 
 
+def _result_key(outcome: ChildOutcome) -> str:
+    return f"{outcome.child_session_id}:{outcome.operation_id or 'initial'}"
+
+
 def _adopt_outcome(
     host: SubagentHost,
     outcome: ChildOutcome,
@@ -1222,7 +1249,9 @@ def _result_with_guidance(
     *,
     parent_call_id: str,
 ) -> ToolResult:
-    result = _single_result(_adopt_outcome(host, outcome, parent_call_id=parent_call_id))
+    adopted = _adopt_outcome(host, outcome, parent_call_id=parent_call_id)
+    host.note_result_read(adopted)
+    result = _single_result(adopted)
     notice = _guidance_notice(questions)
     if not notice:
         return result

@@ -13,7 +13,6 @@ import pytest
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
-from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
@@ -35,7 +34,6 @@ from dlightrag.engine.answer.tools.subagents import (
     ChildRequest,
     SpawnAgentInput,
     SubagentHost,
-    child_guidance_declarations,
     child_guidance_tools,
     child_session_id,
     subagent_declarations,
@@ -510,6 +508,60 @@ async def test_notification_identity_tracks_child_operation_not_only_session() -
     assert len(ledger.contexts["chunks"]) == 1
 
 
+async def test_a_result_the_parent_has_read_is_not_sent_to_it_again() -> None:
+    parent_id = SessionId.new()
+    parent_intent_id = IntentId.new().value
+    rows = {
+        name: {
+            "child_session_id": name,
+            "parent_call_id": "call",
+            "parent_intent_id": parent_intent_id,
+            "status": "succeeded",
+            "host_state": {
+                "terminal_outcome": ChildOutcome(
+                    status="succeeded", summary=f"{name} found it", child_session_id=name
+                ).durable_payload()
+            },
+        }
+        for name in ("child-a", "child-b")
+    }
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(rows.values())
+
+    async def load_child(*, child_session_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return rows[child_session_id]
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        list_children=list_children,
+        load_child=load_child,
+    )
+    status = subagent_tools(host=host)[1]
+
+    async def pending() -> str:
+        notifications = await host.completed_dispatch_notifications(seen=set())
+        return " ".join(content for _key, content in notifications)
+
+    # Both settled and unread: the parent that ends its turn is sent both.
+    before = await pending()
+    assert "child-a found it" in before and "child-b found it" in before
+
+    # Reading one result does not send it again; the unread one still arrives.
+    await status.execute(
+        ChildControlInput(child_session_id="child-a"), tool_runtime(tool_name="subagent_status")
+    )
+    after_one = await pending()
+    assert "child-a found it" not in after_one and "child-b found it" in after_one
+
+    await status.execute(
+        ChildControlInput(child_session_id="child-b"), tool_runtime(tool_name="subagent_status")
+    )
+    assert await pending() == ""
+
+
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:
     host = SubagentHost()
     parent = compose_research_tools(
@@ -787,12 +839,7 @@ async def test_process_detach_does_not_terminalize_child_as_cancelled() -> None:
     finish.assert_not_awaited()
 
 
-def test_child_contracts_keep_the_digests_accepted_plans_pinned() -> None:
-    def digest(declarations: Any) -> str:
-        return AgentRunPlan.from_tools(
-            declarations, model_role="query", context_policy_revision="pin"
-        ).digest
-
+def test_child_contracts_keep_what_recovery_compares() -> None:
     tools = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
 
     assert set(tools) == {
@@ -804,21 +851,25 @@ def test_child_contracts_keep_the_digests_accepted_plans_pinned() -> None:
         "continue_subagent",
         "reply_subagent",
     }
+    # A recovery compares replay policy, read-only, contract version and schema digest,
+    # not a tool's wording.
     assert all(tool.contract_version == 5 for tool in tools.values())
     assert tools["spawn_agent"].input_schema_digest == (
         "ea2283b72d9dce2e740dcc58abbb136c041256381956de11f00cd6aff1b65ccd"
     )
-    # Accepted Plans pin every declaration byte for byte, including the
-    # model-role guidance suffix and the Child's ask_parent contract.
-    assert digest(subagent_declarations()) == (
-        "b04f6cf3a90911f3175e04cbe124089f9203ecfb025b29550a172d205c517815"
-    )
-    assert digest(
-        subagent_declarations(model_guidance="Choose model_role query for most children.")
-    ) == ("f6f43b829bfe223ec64151f7046142220d71f7ccb59d0675c9039e06e29bf051")
-    assert digest(child_guidance_declarations()) == (
-        "a6498bd97d45703179404191b8d8611d26d085797fb73dde905341b05a418425"
-    )
+
+
+def test_spawn_agent_names_the_authority_a_child_never_holds() -> None:
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
+    declarations = subagent_declarations()
+    description = declarations[0].description
+    controls = {declaration.name for declaration in declarations}
+
+    # The table is the rule; the description says it in words, and the two must agree.
+    assert CHILD_FORBIDDEN_TOOLS - controls
+    for name in CHILD_FORBIDDEN_TOOLS - controls:
+        assert name in description
 
 
 async def test_spawn_checks_parent_cancellation_before_starting_children() -> None:
