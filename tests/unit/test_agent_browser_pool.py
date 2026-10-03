@@ -1,31 +1,27 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""How the Agent Browser pool fails: a lease raises only an Agent Browser error, and a read goes on."""
+"""How the Agent Browser pool fails: only an Agent Browser error leaves a lease, and a read goes on."""
 
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 import pytest
 
-from dlightrag.adapters.agent_browser.compose import ComposeBrowserProvider
-from dlightrag.engine.answer.agent_browser import (
-    AgentBrowserError,
-    AgentBrowserSettings,
-    BrowserHolder,
-    RunAgentBrowser,
-)
+from dlightrag.adapters.agent_browser.pool import PooledBrowserProvider
+from dlightrag.engine.answer.agent_browser import AgentBrowserError, BrowserHolder, RunAgentBrowser
 from dlightrag.engine.answer.resources.registry import AgentBrowserRender, ResourceRegistry
-from tests.support.agent_browser import FakeLeases
+from tests.support.agent_browser import FakeLeases, browser_settings
 from tests.support.dns import public_dns
 from tests.support.resources import call, tools
 
 HOLDER = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker-1", 1)
-LOGGER = "dlightrag.adapters.agent_browser.compose"
+LOGGER = "dlightrag.adapters.agent_browser.pool"
 PAGE = "https://spa.example.com/app.html"
 
 
-def pool(leases: FakeLeases, *endpoints: str) -> ComposeBrowserProvider:
-    return ComposeBrowserProvider(
+def pool(leases: FakeLeases, *endpoints: str) -> PooledBrowserProvider:
+    return PooledBrowserProvider(
         endpoints=endpoints or ("ws://pool-1/", "ws://pool-2/"),
         egress_proxy="http://egress:3128",
         connect_timeout_seconds=1.0,
@@ -35,9 +31,9 @@ def pool(leases: FakeLeases, *endpoints: str) -> ComposeBrowserProvider:
 
 @pytest.mark.parametrize("failing", ["register_endpoints", "claim"])
 async def test_a_lease_store_that_cannot_be_reached_leaves_the_pool_unreachable(
-    failing: str, caplog: pytest.LogCaptureFixture
+    failing: Literal["register_endpoints", "claim"], caplog: pytest.LogCaptureFixture
 ) -> None:
-    provider = pool(FakeLeases(failing))  # pyright: ignore[reportArgumentType]
+    provider = pool(FakeLeases(failing))
 
     with caplog.at_level(logging.ERROR, logger=LOGGER):
         with pytest.raises(AgentBrowserError) as unreachable:
@@ -81,18 +77,8 @@ async def test_a_read_goes_on_without_the_lease_store_and_says_the_browser_was_u
         raise RuntimeError("HTTP 403")
 
     monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", blocked)
-    provider = pool(FakeLeases("claim"))  # pyright: ignore[reportArgumentType]
-    browser = RunAgentBrowser(
-        provider,
-        HOLDER,
-        AgentBrowserSettings(
-            lease_wait_seconds=0,
-            navigation_timeout_seconds=5,
-            settle_timeout_seconds=0,
-            idle_release_seconds=30,
-            max_page_bytes=1_000_000,
-        ),
-    )
+    provider = pool(FakeLeases("claim"))
+    browser = RunAgentBrowser(provider, HOLDER, browser_settings(wait=0))
     async with ResourceRegistry(
         extract_chain=(AgentBrowserRender(),), page_renderer=browser.render
     ) as registry:

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The Agent Browser's leases and Compose provider, over disposable PostgreSQL and a real run-server.
+"""The Agent Browser's leases and pool provider, over disposable PostgreSQL and a real run-server.
 
 Runs are claimed through the Run store, so a lease is live exactly as long as its holder's Run
 lease is. The pool is real Playwright servers driving Chromium; the web they render is a loopback
@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.agent_browser import ComposeBrowserProvider
+from dlightrag.adapters.agent_browser import PooledBrowserProvider
 from dlightrag.adapters.postgres.runtime.browser_leases import PGAgentBrowserLeaseStore
 from dlightrag.adapters.postgres.runtime.run_store import PGRunStore
 from dlightrag.engine.answer.agent_browser import (
@@ -34,6 +34,7 @@ from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_e
 from tests.support.agent_browser import (
     Served,
     WebProxy,
+    browser_settings,
     run_server,
     sandbox_refusal,
     web_proxy,
@@ -56,7 +57,7 @@ PAGES = {
         headers={"content-type": "text/csv", "content-disposition": "attachment; filename=r.csv"},
     ),
 }
-COMPOSE_LOGGER = "dlightrag.adapters.agent_browser.compose"
+POOL_LOGGER = "dlightrag.adapters.agent_browser.pool"
 
 
 @pytest.fixture(autouse=True)
@@ -101,21 +102,15 @@ async def eventually(condition: Callable[[], Awaitable[bool]], *, seconds: float
 def settings(
     *, wait: float = 5.0, idle: float = 600.0, settle: float = 0.5
 ) -> AgentBrowserSettings:
-    return AgentBrowserSettings(
-        lease_wait_seconds=wait,
-        navigation_timeout_seconds=15.0,
-        settle_timeout_seconds=settle,
-        idle_release_seconds=idle,
-        max_page_bytes=1_000_000,
-    )
+    return browser_settings(wait=wait, navigation=15.0, settle=settle, idle=idle)
 
 
 @asynccontextmanager
 async def pool_of(
     pool: Any, *servers: str, proxy: WebProxy, connect_timeout: float = 20.0
-) -> AsyncIterator[tuple[ComposeBrowserProvider, PGAgentBrowserLeaseStore]]:
+) -> AsyncIterator[tuple[PooledBrowserProvider, PGAgentBrowserLeaseStore]]:
     leases = PGAgentBrowserLeaseStore(pool=pool)
-    provider = ComposeBrowserProvider(
+    provider = PooledBrowserProvider(
         endpoints=servers,
         egress_proxy=proxy.url,
         connect_timeout_seconds=connect_timeout,
@@ -330,7 +325,7 @@ async def test_a_claim_that_read_an_endpoint_free_does_not_take_it_from_a_claim_
             await door.execute(f"DROP OWNED BY {role}; DROP ROLE IF EXISTS {role}")
 
 
-# -- the Compose provider ------------------------------------------------------------------
+# -- the pool provider ---------------------------------------------------------------------
 
 
 async def test_a_javascript_only_page_renders_its_script_text_through_the_egress_proxy(pg) -> None:
@@ -433,7 +428,7 @@ async def test_an_endpoint_nothing_answers_on_is_skipped_and_an_empty_pool_is_un
     async with AsyncExitStack() as stack:
         proxy = await stack.enter_async_context(web_proxy(PAGES))
         provider, _ = await stack.enter_async_context(pool_of(pool, dead, proxy=proxy))
-        with caplog.at_level(logging.ERROR, logger=COMPOSE_LOGGER):
+        with caplog.at_level(logging.ERROR, logger=POOL_LOGGER):
             with pytest.raises(AgentBrowserError) as unreachable:
                 await provider.lease(holder, wait_seconds=5)
 
@@ -441,9 +436,9 @@ async def test_an_endpoint_nothing_answers_on_is_skipped_and_an_empty_pool_is_un
         # The endpoint it could not reach is not left claimed, and the log names it and
         # the failure's type, never a page.
         assert await holder_of(pool, dead) is None
-        assert [
-            record.getMessage() for record in caplog.records if record.name == COMPOSE_LOGGER
-        ] == [f"Agent Browser connect failed (Error): endpoint={dead}"]
+        assert [record.getMessage() for record in caplog.records if record.name == POOL_LOGGER] == [
+            f"Agent Browser connect failed (Error): endpoint={dead}"
+        ]
 
         live = await stack.enter_async_context(run_server())
         mixed, _ = await stack.enter_async_context(pool_of(pool, dead, live.endpoint, proxy=proxy))
@@ -578,7 +573,7 @@ async def test_an_endpoint_that_cannot_sandbox_runs_unsandboxed_and_is_remembere
         proxy = await stack.enter_async_context(web_proxy(PAGES))
         provider, _ = await stack.enter_async_context(pool_of(pool, refusal.endpoint, proxy=proxy))
 
-        with caplog.at_level(logging.WARNING, logger=COMPOSE_LOGGER):
+        with caplog.at_level(logging.WARNING, logger=POOL_LOGGER):
             first = RunAgentBrowser(provider, first_run, settings())
             assert (await first.render("http://js.example/")).status == 200
             # The sandbox is asked for first; the refusal is answered by an unsandboxed connect.
@@ -613,7 +608,7 @@ async def test_a_sandboxed_connect_nothing_answers_is_not_taken_for_a_missing_sa
         )
 
         for asked in ([True], [True, True]):
-            with caplog.at_level(logging.WARNING, logger=COMPOSE_LOGGER):
+            with caplog.at_level(logging.WARNING, logger=POOL_LOGGER):
                 with pytest.raises(AgentBrowserError) as unreachable:
                     await provider.lease(holder, wait_seconds=5)
 
@@ -636,7 +631,7 @@ async def test_an_endpoint_that_can_sandbox_does_and_asks_nothing_else_of_it(pg,
         proxy = await stack.enter_async_context(web_proxy(PAGES))
         provider, _ = await stack.enter_async_context(pool_of(pool, server.endpoint, proxy=proxy))
 
-        with caplog.at_level(logging.WARNING, logger=COMPOSE_LOGGER):
+        with caplog.at_level(logging.WARNING, logger=POOL_LOGGER):
             browser = RunAgentBrowser(provider, holder, settings())
             await browser.render("http://js.example/")
 

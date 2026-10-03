@@ -69,7 +69,6 @@ class RunAgentBrowser:
                         url,
                         navigation_timeout=self._settings.navigation_timeout_seconds,
                         settle_timeout=self._settings.settle_timeout_seconds,
-                        max_bytes=self._settings.max_page_bytes,
                     )
                 except AgentBrowserError as exc:
                     if exc.reason == "disconnected":

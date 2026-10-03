@@ -64,7 +64,7 @@ from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.agent_browser import (
-    AgentBrowserSettings,
+    AgentBrowserBinding,
     BrowserHolder,
     BrowserProvider,
 )
@@ -100,7 +100,7 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
-from tests.support.agent_browser import FakeLease, FakeProvider
+from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
 from tests.support.dns import public_dns
 from tests.support.pg import (
     PG_CONN_KWARGS,
@@ -2795,15 +2795,8 @@ def _answer_runtime(
         execution_environment=config.answer.agent.execution_environment,
         shell_confinement=ConfinementPolicy(),
         search_toolchain=SearchToolchain(),
-        browser_provider=browser_provider,
-        browser_settings=(
-            AgentBrowserSettings(
-                lease_wait_seconds=1.0,
-                navigation_timeout_seconds=5.0,
-                settle_timeout_seconds=1.0,
-                idle_release_seconds=30.0,
-                max_page_bytes=1_000_000,
-            )
+        browser=(
+            AgentBrowserBinding(browser_provider, browser_settings(idle=30.0))
             if browser_provider is not None
             else None
         ),

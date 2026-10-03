@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
@@ -160,6 +160,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
+    from dlightrag.engine.answer.agent_browser import AgentBrowserBinding
     from dlightrag.engine.answer.capabilities import (
         AnswerCapabilityCoordinator,
         AnswerCapabilityView,
@@ -398,19 +399,20 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     browser_settings = agent_browser_settings(config)
-    browser_provider = None
+    agent_browser = None
     if browser_settings is not None:
         # Playwright loads only where an Agent Browser is configured.
-        from dlightrag.adapters.agent_browser import ComposeBrowserProvider
+        from dlightrag.adapters.agent_browser import PooledBrowserProvider
         from dlightrag.adapters.postgres.runtime.browser_leases import PGAgentBrowserLeaseStore
 
-        browser = config.answer.agent.browser
-        browser_provider = ComposeBrowserProvider(
-            endpoints=browser.endpoints,
-            # AgentBrowserConfig requires the proxy whenever it has endpoints.
-            egress_proxy=cast(str, browser.egress_proxy),
-            connect_timeout_seconds=browser.connect_timeout_seconds,
-            leases=PGAgentBrowserLeaseStore(),
+        agent_browser = AgentBrowserBinding(
+            PooledBrowserProvider(
+                endpoints=browser_settings.endpoints,
+                egress_proxy=browser_settings.egress_proxy,
+                connect_timeout_seconds=browser_settings.connect_timeout_seconds,
+                leases=PGAgentBrowserLeaseStore(),
+            ),
+            browser_settings,
         )
 
     answer_executor = AnswerExecutor(
@@ -440,8 +442,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_capability_current=memory.capability_current,
         connection_tool_resolver=connections.restore_research,
         skills_bundle_factory=skills_bundle_factory(config, ensure_dirs=True),
-        browser_provider=browser_provider,
-        browser_settings=browser_settings,
+        browser=agent_browser,
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
     )

@@ -40,7 +40,7 @@ from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.agent_browser import (
-    AgentBrowserSettings,
+    AgentBrowserBinding,
     RenderedPage,
     browser_failure,
 )
@@ -93,7 +93,7 @@ from dlightrag.engine.runtime.records import (
     artifact_digest,
 )
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
-from tests.support.agent_browser import FakeProvider
+from tests.support.agent_browser import FakeProvider, browser_settings
 from tests.support.dns import public_dns
 from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
@@ -544,15 +544,6 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
 
 
-_BROWSER_SETTINGS = AgentBrowserSettings(
-    lease_wait_seconds=1.0,
-    navigation_timeout_seconds=5.0,
-    settle_timeout_seconds=1.0,
-    idle_release_seconds=1.0,
-    max_page_bytes=1000,
-)
-
-
 def test_acceptance_offers_a_rendered_read_exactly_when_a_browser_is_composed() -> None:
     def read_properties(executor: AnswerExecutor) -> dict[str, Any]:
         declarations = executor.research_tool_declarations(
@@ -562,22 +553,15 @@ def test_acceptance_offers_a_rendered_read_exactly_when_a_browser_is_composed() 
             "properties"
         ]
 
-    composed = _executor(browser_provider=FakeProvider(), browser_settings=_BROWSER_SETTINGS)
+    composed = _executor(browser=AgentBrowserBinding(FakeProvider(), browser_settings()))
 
     assert "rendered" in read_properties(composed)
     assert "rendered" not in read_properties(_executor())
 
 
-def test_an_executor_takes_a_browser_provider_and_its_settings_together() -> None:
-    with pytest.raises(ValueError, match="provider and its settings"):
-        _executor(browser_provider=FakeProvider())
-    with pytest.raises(ValueError, match="provider and its settings"):
-        _executor(browser_settings=_BROWSER_SETTINGS)
-
-
 async def test_closing_the_executor_closes_its_browser_provider_even_if_the_adapter_fails() -> None:
     provider = FakeProvider()
-    executor = _executor(browser_provider=provider, browser_settings=_BROWSER_SETTINGS)
+    executor = _executor(browser=AgentBrowserBinding(provider, browser_settings()))
     executor._execution_adapter = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("closing")))
 
     with pytest.raises(RuntimeError, match="closing"):

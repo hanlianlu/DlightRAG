@@ -1,12 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The Compose Agent Browser: a pool of Playwright run-servers, leased per Run.
+"""The Agent Browser pool: Playwright run-servers, one leased to each Run.
 
 Each pool container runs ``playwright run-server --max-clients 1``, which launches a
 fresh browser for a connection and closes it with that connection. This provider
-claims one endpoint for a Run in PostgreSQL, connects to it with the egress proxy in
-the launch options, and gives the Run a ``PlaywrightLeasedBrowser`` (ADR 0032). It
-never passes ``expose_network``, which would route browser traffic back out through
-the application's own network.
+claims one endpoint for a Run in the shared lease record, connects to it with the
+egress proxy in the launch options, and gives the Run a ``PlaywrightLeasedBrowser``
+(ADR 0032). It never passes ``expose_network``, which would route browser traffic back
+out through the application's own network.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ import logging
 import time
 from collections.abc import Sequence
 from functools import partial
-from typing import Protocol
 
 from playwright.async_api import Browser, Playwright, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -26,6 +25,7 @@ from dlightrag.adapters.agent_browser.playwright_session import PlaywrightLeased
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     BrowserHolder,
+    BrowserLeases,
     BrowserSandbox,
     LeasedBrowser,
     browser_failure,
@@ -39,19 +39,7 @@ _POLL_SECONDS = 0.5
 _STOP_SECONDS = 10.0
 
 
-class BrowserLeases(Protocol):
-    """The shared record of which Run holds each endpoint."""
-
-    async def register_endpoints(self, endpoints: Sequence[str]) -> None: ...
-
-    async def claim(
-        self, holder: BrowserHolder, endpoints: Sequence[str], exclude: Sequence[str] = ()
-    ) -> str | None: ...
-
-    async def release(self, holder: BrowserHolder, endpoint: str) -> None: ...
-
-
-def launch_options_header(proxy: str, *, sandbox: bool = True) -> str:
+def launch_options_header(proxy: str, *, sandbox: bool) -> str:
     """The ``x-playwright-launch-options`` value that launches a headless, proxied Chromium.
 
     The server honors ``chromiumSandbox`` only because it runs with ``--unsafe``, and
@@ -70,8 +58,8 @@ def _store_failure(exc: Exception) -> AgentBrowserError:
     return browser_failure("unreachable")
 
 
-class ComposeBrowserProvider:
-    """Leases a Run one browser of the Compose pool."""
+class PooledBrowserProvider:
+    """Leases a Run one browser of the pool."""
 
     def __init__(
         self,
@@ -244,4 +232,4 @@ class ComposeBrowserProvider:
         return True
 
 
-__all__ = ["BrowserLeases", "ComposeBrowserProvider", "launch_options_header"]
+__all__ = ["PooledBrowserProvider", "launch_options_header"]

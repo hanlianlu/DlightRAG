@@ -12,11 +12,10 @@ from dlightrag.adapters.agent_browser import playwright_session
 from dlightrag.adapters.agent_browser.playwright_session import PlaywrightLeasedBrowser
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
-    AgentBrowserSettings,
     BrowserHolder,
     RunAgentBrowser,
 )
-from tests.support.agent_browser import FakeLease, FakeProvider
+from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
 
 HOLDER = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker-1", 1)
 PAGE = "http://slow.example/"
@@ -79,17 +78,7 @@ async def test_a_browser_whose_context_will_not_close_is_given_up_though_its_ren
     provider = FakeProvider(
         PlaywrightLeasedBrowser(cast(Any, wedged), release, sandbox="chromium"), healthy
     )
-    browser = RunAgentBrowser(
-        provider,
-        HOLDER,
-        AgentBrowserSettings(
-            lease_wait_seconds=1,
-            navigation_timeout_seconds=5,
-            settle_timeout_seconds=0,
-            idle_release_seconds=600,
-            max_page_bytes=1_000_000,
-        ),
-    )
+    browser = RunAgentBrowser(provider, HOLDER, browser_settings())
 
     with pytest.raises(AgentBrowserError) as lost:
         # A close with no limit would hold this render for good, and the test with it.

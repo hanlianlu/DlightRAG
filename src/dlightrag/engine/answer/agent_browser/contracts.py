@@ -8,6 +8,7 @@ reading nor Run policy imports a browser driver.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -103,7 +104,7 @@ class LeasedBrowser(Protocol):
     def sandbox(self) -> BrowserSandbox: ...
 
     async def render(
-        self, url: str, *, navigation_timeout: float, settle_timeout: float, max_bytes: int
+        self, url: str, *, navigation_timeout: float, settle_timeout: float
     ) -> RenderedPage: ...
 
     async def aclose(self) -> None:
@@ -119,22 +120,51 @@ class BrowserProvider(Protocol):
     async def aclose(self) -> None: ...
 
 
+class BrowserLeases(Protocol):
+    """The shared record of which Run holds each endpoint, which a provider claims through."""
+
+    async def register_endpoints(self, endpoints: Sequence[str]) -> None: ...
+
+    async def claim(
+        self, holder: BrowserHolder, endpoints: Sequence[str], exclude: Sequence[str] = ()
+    ) -> str | None: ...
+
+    async def release(self, holder: BrowserHolder, endpoint: str) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AgentBrowserSettings:
-    """How a Run uses its browser; the pool itself is the adapter's configuration."""
+    """The Agent Browser a deployment configures.
 
+    The pool's endpoints, the egress proxy and the connect timeout are what its provider is
+    built from. The other timings are the waits a Run keeps: for a free browser, for a page
+    to load and settle, and before it gives an idle browser back.
+    """
+
+    endpoints: tuple[str, ...]
+    egress_proxy: str
+    connect_timeout_seconds: float
     lease_wait_seconds: float
     navigation_timeout_seconds: float
     settle_timeout_seconds: float
     idle_release_seconds: float
-    max_page_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class AgentBrowserBinding:
+    """The Agent Browser a deployment composed: its provider, and the settings it runs under."""
+
+    provider: BrowserProvider
+    settings: AgentBrowserSettings
 
 
 __all__ = [
+    "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",
     "AgentBrowserSettings",
     "BrowserHolder",
+    "BrowserLeases",
     "BrowserProvider",
     "BrowserSandbox",
     "LeasedBrowser",

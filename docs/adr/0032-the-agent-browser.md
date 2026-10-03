@@ -85,9 +85,9 @@ neither the host nor the internet.
 its own containers, in the shape ADR 0024 names for a browser session, and the
 Agent's processes gain no path, socket, or binary: the Landlock allow-list is
 unchanged. `BrowserProvider` is the port that leases a Run's browser endpoint, an
-ordinary adapter boundary with one implementation, as `ExecutionEnvironmentAdapter`
-has one in `TrustExecutionAdapter`. It is not a Connection. A Connection is an
-owner's authorization of an external account over MCP
+ordinary adapter boundary with one implementation, `PooledBrowserProvider`, as
+`ExecutionEnvironmentAdapter` has one in `TrustExecutionAdapter`. It is not a
+Connection. A Connection is an owner's authorization of an external account over MCP
 ([ADR 0012](0012-personal-connections-and-hot-plug.md)): enabled per owner,
 discovered as an untrusted catalogue, answered in text parts only, and refused at a
 private endpoint unless an operator exempts it. The Agent Browser belongs to the
@@ -273,8 +273,9 @@ deployment: it is capacity, not a research allowance.
 pages with `read`; ask for `rendered=true` only when the text shows a JavaScript
 shell; use `browser` only for multi-step interaction.
 
-**Compose is the only implementation.** There is no Kubernetes code, manifest, or
-Kubernetes-specific abstraction. Configuration follows ADR 0006.
+**Compose is the only deployment.** There is no Kubernetes code, manifest, or
+Kubernetes-specific abstraction: `PooledBrowserProvider` leases from the endpoints it
+is given and is tied to Compose in nothing else. Configuration follows ADR 0006.
 `docker-compose.yml` owns the pool containers, the internal network, and the Squid
 container. `answer.agent.browser` holds the non-secret settings — endpoints, the
 egress proxy, timeouts, snapshot depth, and `account_registration: true` — with

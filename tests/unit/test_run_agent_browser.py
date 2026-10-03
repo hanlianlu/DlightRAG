@@ -14,19 +14,13 @@ from dlightrag.engine.answer.agent_browser import (
     RunAgentBrowser,
     browser_failure,
 )
-from tests.support.agent_browser import FakeLease, FakeProvider
+from tests.support.agent_browser import FakeLease, FakeProvider, browser_settings
 
 HOLDER = BrowserHolder("owner", "11111111-1111-1111-1111-111111111111", "worker-1", 3)
 
 
 def settings(*, idle: float = 600.0) -> AgentBrowserSettings:
-    return AgentBrowserSettings(
-        lease_wait_seconds=7.0,
-        navigation_timeout_seconds=30.0,
-        settle_timeout_seconds=5.0,
-        idle_release_seconds=idle,
-        max_page_bytes=1000,
-    )
+    return browser_settings(wait=7.0, idle=idle)
 
 
 async def test_a_run_leases_nothing_until_it_renders_and_then_shares_one_browser() -> None:

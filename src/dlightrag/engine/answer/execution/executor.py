@@ -97,9 +97,8 @@ from dlightrag.engine.ai.telemetry import (
     safe_log_text,
 )
 from dlightrag.engine.answer.agent_browser import (
-    AgentBrowserSettings,
+    AgentBrowserBinding,
     BrowserHolder,
-    BrowserProvider,
     RunAgentBrowser,
 )
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
@@ -433,14 +432,11 @@ class AnswerExecutor:
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         connection_tool_resolver: ResearchConnectionToolResolver | None = None,
         skills_bundle_factory: SkillsBundleFactory | None = None,
-        browser_provider: BrowserProvider | None = None,
-        browser_settings: AgentBrowserSettings | None = None,
+        browser: AgentBrowserBinding | None = None,
         now: Callable[[], datetime.datetime] | None = None,
         on_dependency_unavailable: DependencyStateCallback | None = None,
         on_dependency_recovered: DependencyStateCallback | None = None,
     ) -> None:
-        if (browser_provider is None) != (browser_settings is None):
-            raise ValueError("an Agent Browser needs both its provider and its settings")
         self._store = store
         self._blob_store = blob_store
         self._pool = pool
@@ -467,8 +463,7 @@ class AnswerExecutor:
         self._memory_capability_current = memory_capability_current
         self._connection_tool_resolver = connection_tool_resolver
         self._skills_bundle_factory = skills_bundle_factory
-        self._browser_provider = browser_provider
-        self._browser_settings = browser_settings
+        self._browser = browser
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
@@ -482,8 +477,8 @@ class AnswerExecutor:
             if self._execution_adapter is not None:
                 await self._execution_adapter.aclose()
         finally:
-            if self._browser_provider is not None:
-                await self._browser_provider.aclose()
+            if self._browser is not None:
+                await self._browser.provider.aclose()
 
     def validate_active_prepared_input(self, prepared: Mapping[str, Any]) -> None:
         """Validate active durable Answer input using the executor's model bindings."""
@@ -508,7 +503,7 @@ class AnswerExecutor:
         return research_tool_declarations(
             web_search=web_search,
             resource_read=True,
-            rendered_read=self._browser_provider is not None,
+            rendered_read=self._browser is not None,
             resource_view=True,
             environment=self._execution_adapter is not None,
             artifact_publication=self._execution_adapter is not None,
@@ -2109,21 +2104,17 @@ class AnswerExecutor:
 
         Fast has no tools and gains no hidden rendering (ADR 0020), so it gets none.
         """
-        if (
-            resolved_mode != "research"
-            or self._browser_provider is None
-            or self._browser_settings is None
-        ):
+        if resolved_mode != "research" or self._browser is None:
             return None
         return RunAgentBrowser(
-            self._browser_provider,
+            self._browser.provider,
             BrowserHolder(
                 owner_id=session.owner_id,
                 run_id=session.run_id,
                 worker_id=session.worker_id,
                 fencing_epoch=session.fencing_epoch,
             ),
-            self._browser_settings,
+            self._browser.settings,
         )
 
     async def prepare_orchestrated_run(

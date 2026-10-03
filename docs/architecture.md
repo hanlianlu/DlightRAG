@@ -192,9 +192,10 @@ read(rendered=true) or the Extract chain's browser step
   them with no write of their own, and a finished, deferred, or reclaimed Run, like a
   dead worker, frees its browser with nothing left to release. A recovered Run leases a
   fresh browser on first need.
-- **A port and one adapter.** The engine states `BrowserProvider`, `LeasedBrowser`, and
-  `RenderedPage`; `adapters/agent_browser` implements them for the Compose pool over
-  the Playwright protocol and is the only module that imports Playwright. The registry
+- **A port and one adapter.** The engine states `BrowserProvider`, `LeasedBrowser`,
+  `BrowserLeases` (the shared record of who holds each endpoint), and `RenderedPage`;
+  `adapters/agent_browser` implements the provider as `PooledBrowserProvider`, over the
+  Playwright protocol, and is the only module that imports Playwright. The registry
   receives a `PageRenderer` and never a driver; composition (`_compose`) builds the
   provider only when `answer.agent.browser` names endpoints.
 - **Fails closed, and the Run goes on.** A busy or unreachable pool, a page that fails,

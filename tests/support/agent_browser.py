@@ -24,6 +24,7 @@ from typing import Literal
 
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
+    AgentBrowserSettings,
     BrowserHolder,
     BrowserSandbox,
     LeasedBrowser,
@@ -242,6 +243,21 @@ def _response(status: int, body: bytes, headers: Mapping[str, str]) -> bytes:
     return "\r\n".join(lines).encode("latin-1") + body
 
 
+def browser_settings(
+    *, wait: float = 1.0, navigation: float = 5.0, settle: float = 0.0, idle: float = 600.0
+) -> AgentBrowserSettings:
+    """The Agent Browser settings of a test: a one-member pool, and the waits a test varies."""
+    return AgentBrowserSettings(
+        endpoints=("ws://pool-1/",),
+        egress_proxy="http://egress:3128",
+        connect_timeout_seconds=15.0,
+        lease_wait_seconds=wait,
+        navigation_timeout_seconds=navigation,
+        settle_timeout_seconds=settle,
+        idle_release_seconds=idle,
+    )
+
+
 type Page = str | bytes | RenderedPage | AgentBrowserError
 
 
@@ -294,7 +310,7 @@ class FakeLease:
         self.peak = 0
 
     async def render(
-        self, url: str, *, navigation_timeout: float, settle_timeout: float, max_bytes: int
+        self, url: str, *, navigation_timeout: float, settle_timeout: float
     ) -> RenderedPage:
         self.rendered.append(url)
         self.active += 1
@@ -376,6 +392,7 @@ __all__ = [
     "SandboxRefusal",
     "Served",
     "WebProxy",
+    "browser_settings",
     "run_server",
     "sandbox_refusal",
     "web_proxy",

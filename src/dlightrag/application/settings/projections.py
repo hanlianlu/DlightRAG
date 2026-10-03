@@ -141,16 +141,19 @@ def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntime
 
 
 def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | None:
-    """Snapshot how a Run uses its Agent Browser, or None when none is configured."""
+    """Snapshot the deployment's Agent Browser, or None when none is configured."""
     browser = config.answer.agent.browser
-    if not browser.enabled:
+    # Endpoints require the proxy, so a browser with the one has the other.
+    if not browser.enabled or browser.egress_proxy is None:
         return None
     return AgentBrowserSettings(
+        endpoints=browser.endpoints,
+        egress_proxy=browser.egress_proxy,
+        connect_timeout_seconds=browser.connect_timeout_seconds,
         lease_wait_seconds=browser.lease_wait_seconds,
         navigation_timeout_seconds=browser.navigation_timeout_seconds,
         settle_timeout_seconds=browser.settle_timeout_seconds,
         idle_release_seconds=browser.idle_release_seconds,
-        max_page_bytes=config.answer.generation.max_attachment_bytes,
     )
 
 

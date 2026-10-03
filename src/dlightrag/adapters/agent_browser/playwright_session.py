@@ -48,7 +48,7 @@ class PlaywrightLeasedBrowser:
         return self._sandbox
 
     async def render(
-        self, url: str, *, navigation_timeout: float, settle_timeout: float, max_bytes: int
+        self, url: str, *, navigation_timeout: float, settle_timeout: float
     ) -> RenderedPage:
         # An anonymous context starts empty and ends with the render: no cookie or storage
         # survives it, and it neither keeps downloads nor lets a page register a worker.
@@ -75,10 +75,12 @@ class PlaywrightLeasedBrowser:
             status = statuses[-1] if statuses else None
             if status is not None and status >= 400:
                 raise browser_failure("http_status", status=status)
-            encoded = html.encode("utf-8", errors="replace")
-            if len(encoded) > max_bytes:
-                raise browser_failure("too_large", limit=max_bytes)
-            return RenderedPage(requested_url=url, final_url=page.url, html=encoded, status=status)
+            return RenderedPage(
+                requested_url=url,
+                final_url=page.url,
+                html=html.encode("utf-8", errors="replace"),
+                status=status,
+            )
         except AgentBrowserError:
             raise
         except PlaywrightError as exc:
