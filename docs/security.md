@@ -399,7 +399,9 @@ redirects. The shared egress boundary repeats scheme/host/DNS/SSRF checks at
 every redirect, pins the validated address for each connection, and never permits
 HTTPS to downgrade to HTTP. Agent reads can vary only `User-Agent`, `Accept`, and
 `Accept-Language`; cookies, authorization, arbitrary headers, and browser sessions
-are unavailable. A successful acquisition becomes one immutable run snapshot.
+are unavailable to `read`, whose rendered form uses a temporary anonymous context
+([Agent Browser Boundary](#agent-browser-boundary)). A successful acquisition becomes
+one immutable run snapshot.
 
 MarkItDown runs without plugins/network. OOXML files pass central-directory
 zip-bomb checks before conversion. Full bytes never enter model context—only
@@ -443,13 +445,88 @@ Root checks are not a shell sandbox. Research reaches outside tools only through
 its owner's Personal MCP Connections, pinned per Run and gated per effect, with
 in-flight writes cancelled best-effort and never replayed
 ([contract](personal-mcp-connections.md)). Network policy can deny access but
-cannot grant external account authority. Public Web Search and Extract exist only
-for explicitly configured Exa/Tavily provider chains; provider failures may fail
-over, while successful empty results do not.
+cannot grant external account authority. Public Web Search exists only for
+configured Exa/Tavily provider chains, and Extract for those chains and the
+deployment's Agent Browser, which no owner authorizes and the Agent reaches only
+through `read`; provider failures may fail over, while successful empty results do
+not.
 
 All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
 register sequence. A completed child outcome is persisted so replay cannot
 re-enter it. A staged Fast result replays without another model call.
+
+## Agent Browser Boundary
+
+The Agent Browser ([ADR 0032](adr/0032-the-agent-browser.md)) renders a public page for
+a Research `read` in a Chromium that runs in a pool container, outside the answering
+process. The Agent gains no process, path, socket, or binary from it, and an owner
+authorizes nothing: it is a deployment capability, not a Connection. Fast never
+reaches it. What the browser loads is untrusted, so the boundary is the deployment's
+network, which fails closed, and DlightRAG checks only the URLs it hands over and
+accepts back.
+
+- **URLs.** The first URL passes the direct read's rules before the browser sees it:
+  an HTTP(S) scheme, no embedded credentials or credential query parameters, and a host
+  that resolves only to public unicast addresses. The URL the page ends at is checked for
+  the same form, without a lookup, and a page that ends at one the rules refuse fails as
+  `final_url_refused` with nothing admitted. Everything between, redirects,
+  subresources, a script's requests, and a page's own navigations, is confined by the
+  network below, not by DlightRAG.
+- **Topology.** Each pool member sits alone on an `internal: true` network that has no
+  route out and none to any other member. The egress proxy is on the default network
+  and on every member network, and so are `dlightrag-api`, `dlightrag-mcp`, and
+  `dlightrag-reader`. Members are kept apart because the server runs with `--unsafe`,
+  which lets any client that can connect choose a browser's launch arguments and
+  executable: only DlightRAG's processes may reach a member, and a compromised member
+  must not be able to drive another. Adding a member means its service, its own
+  internal network, that network on the proxy and on those three services, and its
+  endpoint ([Operations](operations.md#agent-browser-pool)).
+- **Egress.** Every browser launch carries the proxy, a Squid container
+  (`agent-browser/egress/squid.conf`) that admits public destinations only: it denies
+  loopback, RFC 1918, link-local (where cloud metadata lives), CGNAT, multicast,
+  reserved, and documentation ranges and their IPv6 equivalents, the same set as
+  `network_admission`, and admits ports 80 and 443 with `CONNECT` only to 443. The
+  launch carries no bypass list, so loopback requests go through it too, and the
+  connection never uses Playwright's `expose_network`, which would route browser
+  traffic back through the application's own network. A missing or wrong proxy setting
+  therefore reaches nothing beyond the member's network. Denials appear as
+  `TCP_DENIED` in the proxy's log.
+- **Sessions.** Every render uses a temporary anonymous context with no cookies,
+  storage, or service workers, and downloads off; the browser is launched for one
+  connection and closed with it, and a pool container serves one Run at a time. The
+  browser holds no credential of the owner.
+- **Chromium's sandbox.** The container runs as the unprivileged `pwuser` under
+  Playwright's recommended seccomp profile, with an init process and memory and process
+  limits. Each launch asks for Chromium's own sandbox, which the server honors only
+  because it runs with `--unsafe`; without that flag Chromium always runs with
+  `--no-sandbox`. Where a container cannot start the sandbox, because user namespaces
+  or the seccomp profile forbid it, the endpoint falls back to running without it
+  rather than failing the Run: one WARNING per endpoint and process, no silent
+  downgrade, and `trace.agent_browser_sandbox` on the Run says `unavailable`
+  ([ADR 0024](adr/0024-the-agent-sees-only-its-workspace.md) degrades Landlock the same
+  way). In either case the container and its network are the isolation boundary.
+- **Evidence.** Rendered text is the browser's assertion. DlightRAG attests the binding
+  between the returned page, the Resource Handle, and the URL; it does not attest that
+  an anonymous GET serves the same page, and a site may serve a browser what it does
+  not serve a client. The acquisition `browser_render` on every row says which tier
+  produced it. Page text is untrusted model context, like any fetched page.
+- **Verification walls.** A CAPTCHA or bot wall surfaces as an HTTP error or as page
+  text. DlightRAG never solves, bypasses, or outsources one.
+
+Residual risks, recorded rather than solved:
+
+- The application services share each member network with it, so a compromised pool
+  container can reach their listeners. With the development default
+  `access.auth_mode: none` those listeners are unauthenticated; a deployment that renders
+  pages for untrusted callers sets access ([Authentication Modes](#authentication-modes)).
+- UDP, WebRTC included, is not proxied. The member networks give it no route out.
+- Squid resolves and checks a destination itself, unlike the direct read, which pins
+  the validated address for its connection. The window between Squid's check and its
+  connection is small but not zero.
+- A pool container serves one Run at a time, not one Run in its lifetime: a renderer
+  compromise that outlives its browser can meet the next Run that leases the container.
+- A stale connection from an expired holder blocks its endpoint until it closes; the
+  connect timeout bounds the wait.
 
 ## Answer Artifact Browser Boundary
 

@@ -16,6 +16,10 @@ Effect Settlement, and replay rules it works within are unchanged:
 calls, and [ADR 0015](0015-prompt-prefix-stability-and-cache-anchored-accounting.md)'s
 evidence frozen into the Tool result that admitted it.
 
+Amended by [ADR 0032](0032-the-agent-browser.md): the Extract text of the hosted
+providers stays a text view and never a second representation, while the chain's
+browser entry appends a rendered representation to the Resource instead.
+
 ## Context
 
 `AgentSessionRuntime` records a call's intent (`ToolEffectPending`) before running it

@@ -101,9 +101,9 @@ Resources, Evidence, and image attachments under DlightRAG's own settlement.
 3. A Rendered Read as the last entry of that chain. It runs only on ADR 0005's
    objective triggers — the direct fetch failed, or it produced no text for textual
    content — never on subjective quality and never on a heuristic.
-   `answer.web_sources.extract_providers` admits the name `"browser"` and orders it
-   like any provider. A derived order places it after `exa` and `tavily` when the
-   Agent Browser is configured, and naming it without a configured Agent Browser is
+   `answer.web_sources.extract_providers` admits the name `"browser"`. A configured
+   Agent Browser always joins the automatic chain, at its end unless the list names it
+   elsewhere, which only positions it; naming it without a configured Agent Browser is
    a configuration error, as naming a provider without its key is.
 4. Interaction through the `browser` tool, for multi-step tasks only.
 
@@ -135,7 +135,8 @@ page is what an anonymous GET returns. That is the trust class of hosted
 extraction, and the acquisition on every row says which tier produced it.
 
 **One browser per Run, one context per Agent Session.** Each pool container runs
-`playwright run-server --port 3000 --host 0.0.0.0 --max-clients 1`. DlightRAG
+`playwright run-server --port 3000 --host 0.0.0.0 --max-clients 1 --unsafe`, because the
+server honors a client's request for Chromium's own sandbox only with `--unsafe`. DlightRAG
 connects with the Python `playwright` package through `chromium.connect("ws://…")`.
 The server launches a browser for that connection and closes it when the connection
 ends, so the browser lives exactly as long as the Run's connection. The parent Agent
@@ -185,8 +186,10 @@ to a navigation: a verification link from the inbox often carries such a paramet
 Everything the browser loads afterwards — redirects, subresources, a script's
 requests, a page's own navigations — is confined by the deployment network:
 
-- the pool containers sit only on an `internal: true` network;
-- every context uses a proxy, a Squid egress container on that internal network and
+- each pool container sits only on an `internal: true` network of its own, because
+  `--unsafe` lets a client that reaches a server choose its browser's launch arguments,
+  so a compromised member must not reach another;
+- every context uses a proxy, a Squid egress container on every member network and
   on the default network;
 - Squid admits public destinations only. It denies loopback, RFC 1918, link-local
   (169.254.0.0/16, where cloud metadata lives), CGNAT, multicast, reserved ranges,
@@ -408,16 +411,19 @@ which point here.
 
 Residual risks, recorded rather than solved:
 
-- The internal network also carries the application's connections to the pool, so a
-  context created without its proxy reaches that network's peers — Squid, the other
-  pool containers, and the application processes that lease them — though nothing
-  beyond. DlightRAG sets the proxy on every context; a page cannot.
-- Chromium runs without its own sandbox: Playwright launches it with `--no-sandbox`
-  unless the client asks for the sandbox, and a server without `--unsafe` drops that
-  request. The container and its network are the isolation boundary. A pool
-  container serves one Run at a time, not one Run in its lifetime, so a renderer
-  compromise that outlives its browser can meet the next Run that leases the
-  container.
+- A member's internal network also carries the application's connections to it, so a
+  context created without its proxy reaches that network's peers — Squid and the
+  application processes that lease the member — though nothing beyond. DlightRAG sets
+  the proxy on every context; a page cannot.
+- Chromium's own sandbox is requested, not guaranteed: Playwright launches it with
+  `--no-sandbox` unless the client asks for the sandbox, the server drops that request
+  without `--unsafe`, and a container whose user namespaces or seccomp profile forbid
+  the sandbox runs without it. DlightRAG always asks, falls back for such an endpoint
+  once and loudly, and records the outcome on the Run's trace
+  (`agent_browser_sandbox`). The container and its network are the isolation boundary
+  either way. A pool container serves one Run at a time, not one Run in its lifetime,
+  so a renderer compromise that outlives its browser can meet the next Run that leases
+  the container.
 - `--max-clients 1` queues a second client instead of refusing it, and
   `chromium.connect` waits without limit by default, so a lease claimed while an
   expired holder's connection lingers waits on that connection. DlightRAG therefore

@@ -333,6 +333,11 @@ chain, while an Extract that yields no usable text counts as a provider failure.
 Result URLs become inert resource handles that only an explicit `read` or
 `view` fetches, under the
 [Resource acquisition](resource-reading.md#registration-and-acquisition) rules.
+A configured Agent Browser is the Extract chain's last step
+([Public Web Sources](configuration.md#public-web-sources)): when the direct fetch
+failed or held no text and no provider supplied any, the page is rendered in the
+Run's browser, and `read(..., rendered=true)` asks for that rendering directly
+([Rendered reads](resource-reading.md#rendered-reads)).
 
 ## Context And Model Budgets
 

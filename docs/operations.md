@@ -46,8 +46,9 @@ delegates to the other.
 
 - Start a writer before readers: the writer creates the schema, and readers
   only validate it. Workers sharing a database must run the same model roles,
-  Agent execution mode, Answer policy, and `answer.agent.connections` policy;
-  each owner enables their own Connections.
+  Agent execution mode, Answer policy, `answer.agent.connections` policy, and
+  `answer.agent.browser` endpoints (the pool's leases are shared); each owner
+  enables their own Connections.
 - Shared mounts, worker capacity, and recovery after a crash or shutdown are in
   [Workers And Scaling](run-runtime.md#workers-and-scaling). Monitor
   `dlightrag_runs`, `dlightrag_run_events`, `dlightrag_blobs`, and
@@ -156,6 +157,76 @@ and resumes its cohort the same way. The Run's ten dependency deferrals bound
 this, because a document that crashes or exhausts the parser service (an
 out-of-memory kill, for example) looks like an outage on every attempt: the
 eleventh fails the Run as `dependency_unavailable`.
+
+## Agent Browser Pool
+
+The Agent Browser ([ADR 0032](adr/0032-the-agent-browser.md)) is a pool of Playwright
+containers plus one Squid proxy. The bundled Compose stack runs two members
+(`agent-browser-1`, `agent-browser-2`) and `agent-browser-egress`, and binds their
+addresses into `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`
+([fields](configuration.md#agent-browser); the boundary is in
+[Security](security.md#agent-browser-boundary)). No service waits for them: a render
+with no browser up fails as `unreachable` and the Run goes on.
+
+```bash
+# From the repository root, so the seccomp profile path in docker-compose.yml resolves.
+docker compose up -d --build agent-browser-1 agent-browser-2 agent-browser-egress
+docker compose ps
+docker compose logs agent-browser-egress
+```
+
+- **Check.** `GET /health` shows `agent_browser` as `configured` with the endpoint
+  count, from configuration alone, so it does not say the pool is up. A member is
+  healthy when `docker compose ps` says so; its check asks the run-server for `/json`.
+  Which Run holds which member is the `dlightrag_agent_browser_leases` table:
+  `SELECT endpoint, run_id, updated_at FROM dlightrag_agent_browser_leases`. A row is
+  free when it names no Run, or when its Run no longer holds its lease (not `running`,
+  another lease owner or fencing epoch, or expired), whatever the row still says. The
+  proxy logs every request to its stdout; a destination it refuses is `TCP_DENIED`.
+- **Size.** A Run holds a member only while it renders and for
+  `idle_release_seconds` after, so the pool's size bounds how many Runs render at the
+  same moment across every process that runs Query workers. When every member is held,
+  a render waits up to `lease_wait_seconds` and then fails as `busy`; the model reads
+  that and works from the direct read. Add members, or lower `idle_release_seconds`,
+  when that is frequent. Each member is capped at `COMPOSE_AGENT_BROWSER_MEM_LIMIT`
+  (default `2g`) and 1024 processes.
+- **Adding a member.** Add its service (`<<: *agent-browser`) on a network of its own,
+  declare that network `internal: true`, add the network to `agent-browser-egress` and
+  to `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`, and add the member's
+  `ws://` URL to the `endpoints` binding. Never put two members on one network:
+  `--unsafe` lets a client that reaches a member choose its browser's launch arguments.
+  Every process must be restarted with the same endpoint URLs, spelled identically,
+  because the lease table is keyed by the URL.
+- **Upgrading.** The Python `playwright` package and the pool image are one version,
+  and the server refuses a client of another major or minor version with HTTP 428.
+  Bump every pin together: `pyproject.toml` (`playwright==X`), `uv.lock`, the
+  `PLAYWRIGHT_VERSION` argument of `agent-browser/browser/Dockerfile`, and the
+  `package.json` and `package-lock.json` beside it, plus the image tag in
+  `docker-compose.yml`. `make release-check` (`scripts/verify_release_contract.py`)
+  fails unless they agree. Rebuild the pool image and restart the pool with the
+  application.
+- **Troubleshooting.** The application logs `Agent Browser connect failed` at ERROR with
+  the endpoint and the error type, never a page URL.
+  - `unreachable`: the member is down, the endpoint is misspelled, the application
+    service is not on the member's network, or the versions differ (HTTP 428).
+  - `busy`: every member's row names a Run that holds its lease. Wait for one to
+    finish rendering, or for the lease of a Run whose worker died to expire (about a
+    minute).
+  - A page that never loads: look for `TCP_DENIED` in the proxy's log. A private
+    destination or a port other than 80 and 443 is refused by design.
+  - `Chromium sandboxing failed`, or the WARNING that an endpoint cannot start
+    Chromium's sandbox: the host restricts unprivileged user namespaces (Ubuntu 24.04
+    sets `kernel.apparmor_restrict_unprivileged_userns=1`) or its container runtime
+    ignores the seccomp profile. The endpoint then runs unsandboxed, once per process,
+    and `trace.agent_browser_sandbox` says `unavailable`; lift the restriction for the
+    sandboxed path.
+  - A member refuses to start: the seccomp path did not resolve because Compose ran
+    outside the repository root.
+- **Development.** `tests/integration/test_agent_browser_pg.py` runs a real
+  `playwright run-server` with Chromium. Install the browser once with
+  `uv run playwright install chromium` (on Linux, `--with-deps`); on a host that
+  restricts unprivileged user namespaces, also lift the restriction CI lifts for the
+  sandboxed path (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 
 ## Product Document Finalization And Failed Ingestion Cleanup
 

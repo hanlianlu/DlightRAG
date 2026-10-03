@@ -290,6 +290,7 @@ control, child, and blob-reference state:
 | `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage |
 | `dlightrag_answer_child_operations` | parent run + child Session + operation sequence | same-Session continuation Operations, idempotency, origin, status, cancellation origin, usage/outcome |
 | `dlightrag_answer_child_guidance` | parent run + request id | correlated `ask_parent` questions, expiry, reply origin, and status `pending` / `replied` / `expired` / `cancelled` |
+| `dlightrag_agent_browser_leases` | `endpoint` | one row per configured Agent Browser endpoint, registered at first use, with the Run (owner, run, lease owner, fencing epoch) that holds it or none; the row is live exactly while that Run's own lease is, so it carries no expiry and the Run's heartbeat renews it ([Agent Browser](architecture.md#agent-browser)) |
 | `dlightrag_agent_controls` | run + control sequence | ordered steer inbox for the parent Run or a targeted child Session/Operation; origin `user` or `parent`; append-before-ack; a worker locks and reads at most 100 pending controls at a time, in sequence order |
 
 Independent critique reuses those Child Session, Operation, control, and

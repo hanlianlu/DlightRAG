@@ -91,6 +91,7 @@ setting, with an error that names the field and never repeats the value:
   `access.web_identity.jwks_url`
 - `interfaces.mcp.resource_server_url` and `observability.langfuse_host`
 - `answer.agent.connections.oauth_callback_url`
+- `answer.agent.browser.endpoints[]` and `answer.agent.browser.egress_proxy`
 
 Put the credential in the service's own secret setting instead (`api_key`,
 `api_token`, `milvus_token`, and so on). A model catalogue entry published at
@@ -868,6 +869,8 @@ Research reaches external tools only through its owner's Personal MCP
 Connections; `answer.agent.connections` holds their non-secret policy, whose
 fields and limits are in
 [Personal MCP Connections](personal-mcp-connections.md#streamable-http-security-and-limits).
+The deployment's [Agent Browser](#agent-browser) is not one of them: `read` uses it to
+render public pages, and no owner authorizes it.
 
 Research discovers Skills from packaged built-ins, an operator-global root, and
 owner roots ([Architecture](architecture.md#agent-execution) gives the
@@ -881,6 +884,58 @@ setup wizard prepares the directory, and manual operators create it before
 `docker compose up`. Owners write their own Skills under `owner_skills_root`
 only through the validated `publish_skill` and `delete_skill` tools, within a
 20-skill / 20 MiB quota per owner. Every worker must see the same skill roots.
+
+## Agent Browser
+
+```yaml
+answer:
+  agent:
+    browser:
+      endpoints: []                   # DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS
+      egress_proxy: null              # DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY
+      lease_wait_seconds: 10          # 0–120
+      connect_timeout_seconds: 15     # above 0, at most 120
+      navigation_timeout_seconds: 30  # above 0, at most 300
+      settle_timeout_seconds: 5       # 0–60
+      idle_release_seconds: 30        # 0–600
+```
+
+The Agent Browser lets Research read a page as a browser renders it, in a pool of
+Playwright containers the deployment runs ([ADR 0032](adr/0032-the-agent-browser.md);
+the pool's topology and boundary are in
+[Security](security.md#agent-browser-boundary)). No endpoint means no Agent
+Browser: `read` declares no `rendered` argument and the Extract chain has no browser
+step.
+
+- `endpoints` lists one Playwright run-server WebSocket URL (`ws://` or `wss://`) per
+  pool container; each serves one Run at a time. They must be unique, hold no query,
+  fragment, or userinfo, and be spelled identically in every process that runs Query
+  workers, because the shared lease table is keyed by the URL.
+- `egress_proxy` is the HTTP proxy every browser launch uses (`http://host:port`, no
+  path). It is the pool's only way out, so `endpoints` require it: startup refuses
+  endpoints without it, naming the field.
+- Both are Compose Service names, so `docker-compose.yml` binds them
+  ([ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md)) and
+  `config.yaml` leaves them unset. The bundled stack binds two members and the Squid
+  proxy for `dlightrag-api`, `dlightrag-mcp`, and `dlightrag-reader`.
+- `lease_wait_seconds` is how long a render waits for a free browser before it
+  reports the pool busy. `connect_timeout_seconds` bounds connecting to one browser,
+  which also bounds how long a connection that an expired holder left behind can
+  block its endpoint.
+- `navigation_timeout_seconds` is how long a page may take to load.
+  `settle_timeout_seconds` is how long a loaded page may take to go quiet before it
+  is read as it stands.
+- `idle_release_seconds`: a Run leases a browser at its first render and gives it back
+  once it has gone this long without one, so a Run that rendered once does not hold a
+  pool member for its whole duration. Its next render leases again, and `0` gives it
+  back after every render. Settlement releases whatever is held either way.
+
+The pool's size is the deployment's limit on Runs rendering at the same moment
+([sizing](operations.md#agent-browser-pool)). `GET /health` reports whether the
+Agent Browser is `configured` and how many endpoints it has, from configuration alone;
+it never reaches the pool ([Interfaces](interfaces.md#health-and-errors)). A Research
+Run that leased a browser records on its trace whether Chromium ran inside its own
+sandbox ([Interfaces](interfaces.md#run-lifecycle-and-answer-endpoints)).
 
 ## Public Web Sources
 
@@ -901,10 +956,20 @@ Set each list explicitly to give Search and Extract independent failover order.
 Every provider named in a list must have a key. The setup wizard can configure
 Exa, Tavily, both with one shared order, or independent Search/Extract orders.
 
+`extract_providers` may also name `browser`, the [Agent Browser](#agent-browser),
+which holds no key. A configured Agent Browser always joins the automatic Extract
+chain after the hosted providers, whether the order is derived or explicit, unless
+the list names `browser` elsewhere, which only positions it (`[browser, exa]` renders
+before it asks Exa). The wizard's explicit lists therefore need no `browser` entry,
+and `[]` turns off the hosted providers while a configured browser still ends the
+chain. Naming `browser` while `answer.agent.browser` has no endpoints is a startup
+error, as naming a provider without its key is.
+
 How Research uses the chains is in [Web Search](retrieval-answer.md#web-search):
 `search_web` takes result count, domains, date range, and
 `fast`/`balanced`/`deep` effort, and `read` uses the Extract chain only when a
-direct anonymous fetch fails or yields no usable text.
+direct anonymous fetch fails or yields no usable text; a browser step renders the
+page ([Rendered reads](resource-reading.md#rendered-reads)).
 
 ## Citations And Highlights
 
