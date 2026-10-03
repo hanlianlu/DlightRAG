@@ -11,20 +11,10 @@ const skillSummary = v.object({
 });
 export type SkillSummary = v.InferOutput<typeof skillSummary>;
 
-let catalogRequest: Promise<readonly SkillSummary[]> | null = null;
-
-export function listSkills(): Promise<readonly SkillSummary[]> {
-  if (catalogRequest === null) {
-    catalogRequest = fetch('/web/api/skills')
-      .then(async (response) => {
-        const body = await parseWire(response, v.object({skills: v.array(v.unknown())}));
-        // One malformed entry must not reject the whole catalog; skip it.
-        return body.skills.filter((item): item is SkillSummary => v.is(skillSummary, item));
-      })
-      .catch((error: unknown) => {
-        catalogRequest = null;
-        throw error;
-      });
-  }
-  return catalogRequest;
+/** The catalog is the server's live view, so every call asks again. */
+export async function listSkills(): Promise<readonly SkillSummary[]> {
+  const response = await fetch('/web/api/skills');
+  const body = await parseWire(response, v.object({skills: v.array(v.unknown())}));
+  // One malformed entry must not reject the whole catalog; skip it.
+  return body.skills.filter((item): item is SkillSummary => v.is(skillSummary, item));
 }

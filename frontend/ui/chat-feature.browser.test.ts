@@ -2180,6 +2180,39 @@ it('Composer completes skill directives with ghost preview, Tab, and shorthand',
   globalThis.fetch = originalFetch;
 });
 
+it('Composer lists a skill published since the slash menu last opened', async () => {
+  const originalFetch = globalThis.fetch;
+  let skills = [{name: 'tdd', description: 'TDD loop', source: 'global'}];
+  globalThis.fetch = async () => new Response(JSON.stringify({skills}), {
+    status: 200,
+    headers: {'Content-Type': 'application/json'},
+  });
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+  const input = composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  const type = async (value: string) => {
+    input.value = value;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    await composer.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await composer.updateComplete;
+  };
+
+  await type('/');
+  expect(composer.querySelectorAll('.skill-menu-item').length).to.equal(1);
+
+  // The user leaves the menu, publishes a skill in the conversation, and opens it again.
+  await type('');
+  skills = [...skills, {name: 'weekly-report', description: 'Weekly reports', source: 'owner'}];
+  await type('/');
+  expect(composer.querySelectorAll('.skill-menu-item').length).to.equal(2);
+
+  composer.remove();
+  globalThis.fetch = originalFetch;
+});
+
 function childControlWire(action: string, outcome: string, extra: Record<string, unknown> = {}) {
   return {
     run_id: 'run-1',
