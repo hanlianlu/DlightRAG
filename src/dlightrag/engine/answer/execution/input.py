@@ -491,7 +491,7 @@ def child_model_guidance(pins: tuple[PinnedModelProfile, ...]) -> str:
         reasoning = (pin.reasoning_settings or {}).get("agentic")
         resolved = resolve_reasoning(profile.reasoning, reasoning)
         lines.append(
-            f"{pin.role}: {intents[pin.role]}; model={pin.fingerprint.model}; images={profile.supports_images}; context_tokens={profile.context_window_tokens}; agentic_reasoning_request={reasoning or 'provider default'}; agentic_reasoning_effective={resolved.effective if resolved else 'provider default'}; reasoning_profile={profile.reasoning.as_dict() if profile.reasoning else 'none'}."
+            f"{pin.role}: {intents[pin.role]}; model={pin.fingerprint.model}; images={profile.supports_images}; context_tokens={profile.context_window_tokens}; agentic_reasoning_request={reasoning or 'provider default'}; agentic_reasoning_effective={resolved.effective if resolved else 'provider default'}."
         )
     lines.append(
         "Reasoning max is a configured request level, not a universal capability guarantee. Image support follows the effective profile, not the vlm label. All selectors use the supported tool-calling wrapper; provider rejection is explicit."
