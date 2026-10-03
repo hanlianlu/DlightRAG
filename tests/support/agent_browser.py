@@ -17,9 +17,10 @@ import os
 import re
 import signal
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
+from typing import Literal
 
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
@@ -157,12 +158,15 @@ async def web_proxy(pages: Mapping[str, Served]) -> AsyncIterator[WebProxy]:
 class SandboxRefusal:
     """A pool container that cannot start Chromium's sandbox, in front of a real run-server.
 
-    It forwards every connection that does not ask for the sandbox and refuses, at the
-    WebSocket upgrade, every one that does. ``asked`` records what each connection asked.
+    It forwards every connection that does not ask for the sandbox. A connection that does
+    is refused at the WebSocket upgrade, or with ``answers=False`` never answered at all, as
+    a container that is frozen or cut off from the network does not answer. ``asked`` records
+    what each connection asked.
     """
 
-    def __init__(self, upstream: str) -> None:
+    def __init__(self, upstream: str, *, answers: bool = True) -> None:
         self._upstream = upstream
+        self._answers = answers
         self.asked: list[bool] = []
         self.endpoint = ""
 
@@ -175,8 +179,11 @@ class SandboxRefusal:
             sandboxed = options.get("chromiumSandbox") is True
             self.asked.append(sandboxed)
             if sandboxed:
-                writer.write(_response(500, b"Chromium sandboxing failed", {}))
-                await writer.drain()
+                if self._answers:
+                    writer.write(_response(500, b"Chromium sandboxing failed", {}))
+                    await writer.drain()
+                else:
+                    await reader.read()  # until the client gives up
                 return
             host, _, port = self._upstream.removeprefix("ws://").rstrip("/").partition(":")
             upstream_reader, upstream_writer = await asyncio.open_connection(host, int(port))
@@ -195,9 +202,9 @@ class SandboxRefusal:
 
 
 @asynccontextmanager
-async def sandbox_refusal(upstream: str) -> AsyncIterator[SandboxRefusal]:
+async def sandbox_refusal(upstream: str, *, answers: bool = True) -> AsyncIterator[SandboxRefusal]:
     """Front the run-server at ``upstream`` with a container that refuses the sandbox."""
-    refusal = SandboxRefusal(upstream)
+    refusal = SandboxRefusal(upstream, answers=answers)
     server = await asyncio.start_server(refusal.serve, "127.0.0.1", 0, limit=_HEAD_LIMIT)
     refusal.endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
     try:
@@ -305,10 +312,39 @@ class FakeLease:
         self.closed += 1
 
 
-class FakeProvider:
-    """A pool that hands out ``FakeLease`` objects in turn, or fails a lease it is told to."""
+class FakeLeases:
+    """The lease store as the pool provider sees it, with operations that can be made to fail.
 
-    def __init__(self, *outcomes: FakeLease | AgentBrowserError) -> None:
+    A store whose database is down raises from every operation it is told to fail. A claim
+    that works takes the first endpoint not excluded, and every release is recorded.
+    """
+
+    def __init__(self, *failing: Literal["register_endpoints", "claim", "release"]) -> None:
+        self._failing = set(failing)
+        self.released: list[str] = []
+
+    def _operation(self, name: str) -> None:
+        if name in self._failing:
+            raise ConnectionError("the database is down")
+
+    async def register_endpoints(self, endpoints: Sequence[str]) -> None:
+        self._operation("register_endpoints")
+
+    async def claim(
+        self, holder: BrowserHolder, endpoints: Sequence[str], exclude: Sequence[str] = ()
+    ) -> str | None:
+        self._operation("claim")
+        return next((endpoint for endpoint in endpoints if endpoint not in exclude), None)
+
+    async def release(self, holder: BrowserHolder, endpoint: str) -> None:
+        self.released.append(endpoint)
+        self._operation("release")
+
+
+class FakeProvider:
+    """A pool that hands out leased browsers in turn, or fails a lease it is told to."""
+
+    def __init__(self, *outcomes: LeasedBrowser | AgentBrowserError) -> None:
         self._outcomes = list(outcomes)
         self.holders: list[BrowserHolder] = []
         self.waits: list[float] = []
@@ -332,6 +368,7 @@ class FakeProvider:
 
 __all__ = [
     "FakeLease",
+    "FakeLeases",
     "FakeProvider",
     "ProxiedRequest",
     "RecordingRenderer",

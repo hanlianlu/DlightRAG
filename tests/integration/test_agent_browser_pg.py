@@ -112,13 +112,13 @@ def settings(
 
 @asynccontextmanager
 async def pool_of(
-    pool: Any, *servers: str, proxy: WebProxy
+    pool: Any, *servers: str, proxy: WebProxy, connect_timeout: float = 20.0
 ) -> AsyncIterator[tuple[ComposeBrowserProvider, PGAgentBrowserLeaseStore]]:
     leases = PGAgentBrowserLeaseStore(pool=pool)
     provider = ComposeBrowserProvider(
         endpoints=servers,
         egress_proxy=proxy.url,
-        connect_timeout_seconds=20.0,
+        connect_timeout_seconds=connect_timeout,
         leases=leases,
     )
     try:
@@ -597,6 +597,35 @@ async def test_an_endpoint_that_cannot_sandbox_runs_unsandboxed_and_is_remembere
         assert len(warnings) == 1
         assert refusal.endpoint in warnings[0].getMessage()
         assert "sandbox" in warnings[0].getMessage()
+
+
+async def test_a_sandboxed_connect_nothing_answers_is_not_taken_for_a_missing_sandbox(
+    pg, caplog
+) -> None:
+    store, pool = pg
+    holder = await live_run(store, "unanswered")
+    async with AsyncExitStack() as stack:
+        server = await stack.enter_async_context(run_server())
+        silent = await stack.enter_async_context(sandbox_refusal(server.endpoint, answers=False))
+        proxy = await stack.enter_async_context(web_proxy(PAGES))
+        provider, _ = await stack.enter_async_context(
+            pool_of(pool, silent.endpoint, proxy=proxy, connect_timeout=1.0)
+        )
+
+        for asked in ([True], [True, True]):
+            with caplog.at_level(logging.WARNING, logger=COMPOSE_LOGGER):
+                with pytest.raises(AgentBrowserError) as unreachable:
+                    await provider.lease(holder, wait_seconds=5)
+
+            # It fails as any connect nobody answers does. The endpoint is not retried without
+            # the sandbox, so it is not remembered as unable to run it, and it is not left claimed.
+            assert unreachable.value.reason == "unreachable"
+            assert silent.asked == asked
+            assert await holder_of(pool, silent.endpoint) is None
+        failure = f"Agent Browser connect failed (TimeoutError): endpoint={silent.endpoint}"
+        assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+            (logging.ERROR, failure)
+        ] * 2
 
 
 async def test_an_endpoint_that_can_sandbox_does_and_asks_nothing_else_of_it(pg, caplog) -> None:

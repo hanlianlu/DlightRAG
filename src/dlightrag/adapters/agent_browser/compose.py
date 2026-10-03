@@ -20,9 +20,11 @@ from functools import partial
 from typing import Protocol
 
 from playwright.async_api import Browser, Playwright, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from dlightrag.adapters.agent_browser.playwright_session import PlaywrightLeasedBrowser
 from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserError,
     BrowserHolder,
     BrowserSandbox,
     LeasedBrowser,
@@ -62,6 +64,12 @@ def launch_options_header(proxy: str, *, sandbox: bool = True) -> str:
     return json.dumps(options, separators=(",", ":"))
 
 
+def _store_failure(exc: Exception) -> AgentBrowserError:
+    """The failure a lease store that cannot be reached becomes: an unreachable pool."""
+    logger.error("Agent Browser lease store failed (%s)", type(exc).__name__)
+    return browser_failure("unreachable")
+
+
 class ComposeBrowserProvider:
     """Leases a Run one browser of the Compose pool."""
 
@@ -87,7 +95,11 @@ class ComposeBrowserProvider:
         self._closed = False
 
     async def lease(self, holder: BrowserHolder, *, wait_seconds: float) -> LeasedBrowser:
-        """Claim an endpoint for ``holder`` and connect to it, waiting up to ``wait_seconds``."""
+        """Claim an endpoint for ``holder`` and connect to it, waiting up to ``wait_seconds``.
+
+        Failing, it raises an ``AgentBrowserError`` and nothing else. A lease store that
+        cannot be reached leaves the pool as unreachable as members that are down do.
+        """
         if self._closed:
             raise browser_failure("not_configured")
         await self._register_endpoints()
@@ -96,12 +108,12 @@ class ComposeBrowserProvider:
         while True:
             if len(excluded) == len(self._endpoints):
                 raise browser_failure("unreachable")
-            endpoint = await self._leases.claim(holder, self._endpoints, excluded)
+            endpoint = await self._claim(holder, excluded)
             if endpoint is not None:
                 try:
                     browser, sandbox = await self._open(endpoint)
                 except Exception as exc:
-                    await self._leases.release(holder, endpoint)
+                    await self._give_back(holder, endpoint)
                     excluded.append(endpoint)
                     logger.error(
                         "Agent Browser connect failed (%s): endpoint=%s",
@@ -137,20 +149,45 @@ class ComposeBrowserProvider:
     async def _register_endpoints(self) -> None:
         async with self._register_lock:
             if not self._registered:
-                await self._leases.register_endpoints(self._endpoints)
+                try:
+                    await self._leases.register_endpoints(self._endpoints)
+                except Exception as exc:
+                    raise _store_failure(exc) from exc
                 self._registered = True
+
+    async def _claim(self, holder: BrowserHolder, excluded: Sequence[str]) -> str | None:
+        try:
+            return await self._leases.claim(holder, self._endpoints, excluded)
+        except Exception as exc:
+            raise _store_failure(exc) from exc
+
+    async def _give_back(self, holder: BrowserHolder, endpoint: str) -> None:
+        """Release an endpoint that was claimed and never got a browser.
+
+        A release that fails is logged and the lease goes on to the next endpoint: the
+        row is free anyway once the Run's own lease expires.
+        """
+        try:
+            await self._leases.release(holder, endpoint)
+        except Exception:
+            logger.warning("Failed to release an Agent Browser lease", exc_info=True)
 
     async def _open(self, endpoint: str) -> tuple[Browser, BrowserSandbox]:
         """Connect with Chromium's sandbox, or without it where the endpoint cannot run it.
 
         A sandboxed connect that fails and an immediate unsandboxed one that succeeds
         say the endpoint cannot start the sandbox, whatever the driver's words were:
-        that is recorded once, and its later leases connect unsandboxed directly.
+        that is recorded once, and its later leases connect unsandboxed directly. A connect
+        that fails with Playwright's TimeoutError says nothing about the sandbox, only that
+        the endpoint did not answer in time, so it fails as any connect does and is never
+        retried without the sandbox.
         """
         if endpoint in self._unsandboxed:
             return await self._connect(endpoint, sandbox=False), "unavailable"
         try:
             return await self._connect(endpoint, sandbox=True), "chromium"
+        except PlaywrightTimeoutError:
+            raise
         except Exception:
             browser = await self._connect(endpoint, sandbox=False)
         self._unsandboxed.add(endpoint)

@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 #: The only part of a navigation failure the model reads: Chromium's network error token.
 _NETWORK_ERROR = re.compile(r"net::ERR_[A-Z0-9_]+")
-#: Disconnecting a browser that does not answer must not hold a Run's settlement open.
+#: Closing a context, or disconnecting a browser, that does not answer must not hold a
+#: render or a Run's settlement open.
 _CLOSE_SECONDS = 10.0
 
 
@@ -84,10 +85,16 @@ class PlaywrightLeasedBrowser:
             raise self._failure(exc, navigation_timeout) from exc
         finally:
             try:
-                await context.close()
+                async with asyncio.timeout(_CLOSE_SECONDS):
+                    await context.close()
             except PlaywrightError:
                 # The context went with its browser, or the browser is gone.
                 pass
+            except TimeoutError:
+                # A browser that does not answer a close is wedged, and the Run must not
+                # lease it again for its next render, whatever this one found.
+                logger.warning("Failed to close an Agent Browser context in time")
+                raise browser_failure("disconnected") from None
 
     async def aclose(self) -> None:
         """Disconnect the browser, then release its lease; failures are logged, not raised."""
