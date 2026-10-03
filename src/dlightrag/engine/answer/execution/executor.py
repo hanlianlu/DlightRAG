@@ -2811,7 +2811,7 @@ def _project_fast_history_before_current_user(
 async def _close_execution_resources(
     stream: AsyncIterator[str] | None,
     registry: ResourceRegistry | None,
-    agent_browser: RunAgentBrowser | None = None,
+    agent_browser: RunAgentBrowser | None,
 ) -> None:
     cancellation: asyncio.CancelledError | None = None
     try:

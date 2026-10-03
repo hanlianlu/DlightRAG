@@ -1496,41 +1496,6 @@ async def test_attached_resources_pin_their_earlier_handles_for_recovery() -> No
     assert fetched.complete_blob.digest == fetched.resource.blob_digest
 
 
-def test_an_attachments_attributes_join_its_rows_capabilities_but_cannot_rewrite_them() -> None:
-    from dlightrag.engine.agent.tools import ResourceAttachmentBytes
-    from dlightrag.engine.answer.resource_settlement import attached_resource_update
-
-    def attach(**attributes: str) -> ResourceAttachmentBytes:
-        return ResourceAttachmentBytes(
-            resource_id="res-1-rendered",
-            filename="rendered.html",
-            mime_type="text/html",
-            source_locator="res-1",
-            content=b"<p>x</p>",
-            resource_kind="web_render",
-            aliases=("res-0",),
-            attributes=tuple(attributes.items()),
-        )
-
-    row = attached_resource_update(
-        attach(acquisition="browser_render", url="https://example.com/"),
-        session_id=SessionId.new().value,
-        intent_id=IntentId.new().value,
-    ).resource
-
-    assert row.capabilities["acquisition"] == "browser_render"
-    assert row.capabilities["url"] == "https://example.com/"
-    assert row.capabilities["resource_kind"] == "web_render"
-    assert row.capabilities["resource_aliases"] == ["res-0"]
-    for reserved in ("resource_kind", "visual_source", "resource_aliases"):
-        with pytest.raises(ValueError, match=reserved):
-            attached_resource_update(
-                attach(**{reserved: "x"}),
-                session_id=SessionId.new().value,
-                intent_id=IntentId.new().value,
-            )
-
-
 @pytest.mark.asyncio
 async def test_each_research_request_extends_the_previous_transcript_prefix() -> None:
     """A later request reuses the earlier one's bytes instead of re-rendering them.

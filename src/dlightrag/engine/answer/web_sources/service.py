@@ -61,16 +61,16 @@ class WebSourceService:
         url: str,
         *,
         effort: WebEffort = "balanced",
-        providers: tuple[str, ...] | None = None,
+        providers: tuple[str, ...],
     ) -> WebExtractResult:
-        """Extract ``url`` with the configured chain, or with only the named ``providers``.
+        """Extract ``url`` with the configured providers that ``providers`` names, in order.
 
         A chain that places the Agent Browser between hosted providers asks each run of
         them separately, so the browser sits where the order puts it.
         """
         failures: list[WebSourceUnavailable] = []
         for provider in self._extract_providers:
-            if providers is not None and provider.name not in providers:
+            if provider.name not in providers:
                 continue
             try:
                 async with public_network_admission():

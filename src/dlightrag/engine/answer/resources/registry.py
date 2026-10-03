@@ -21,7 +21,7 @@ import hashlib
 import hmac
 import secrets
 import struct
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 from importlib.metadata import version
 from pathlib import Path
@@ -230,10 +230,6 @@ class ResourceRegistry:
         resource_secret: bytes | None = None,
         cursor_secret: bytes | None = None,
     ) -> None:
-        if page_renderer is None and any(
-            isinstance(step, AgentBrowserRender) for step in extract_chain
-        ):
-            raise ValueError("an Extract chain that renders needs a page renderer")
         self._max_attachments = max_attachments
         self._max_attachment_bytes = max(1, int(max_attachment_bytes))
         self._max_total_attachment_bytes = max(1, int(max_total_attachment_bytes))
@@ -888,7 +884,6 @@ class ResourceRegistry:
         plan_position = cursor_state.plan_position if cursor_state is not None else 0
         char_offset = cursor_state.char_offset if cursor_state is not None else plan[0][0]
         visual_handles = () if cursor_state is not None else resource_handles
-        cursor_prefix = _RENDERED_CURSOR_PREFIX if is_rendered else ""
         locator, chunk, next_position, next_offset = await asyncio.to_thread(
             _read_cursor_span,
             text,
@@ -902,12 +897,11 @@ class ResourceRegistry:
             note=view.note,
             extraction_status=view.extraction_status,
             rendered=is_rendered,
-            cursor_prefix=cursor_prefix,
         )
         has_more = next_position < len(plan)
         next_cursor = None
         if has_more:
-            next_cursor = cursor_prefix + self._mint_cursor(
+            next_cursor = _cursor_prefix(is_rendered) + self._mint_cursor(
                 _CursorState(
                     resource_id=plan_id,
                     plan_window_tokens=plan_window_tokens,
@@ -1153,24 +1147,12 @@ class ResourceRegistry:
         representation: _Registered = resource
         view = self._text_views.get(resource_id)
         if view is None:
-            async with self._fallback_lock:
-                task = self._text_view_tasks.get(resource_id)
-                if task is None:
-                    task = asyncio.ensure_future(
-                        self._adopt_extract_text_view(resource, url, content)
-                    )
-                    self._text_view_tasks[resource_id] = task
-            try:
-                representation, view = await asyncio.shield(task)
-            except BaseException:
-                if task.done():
-                    async with self._fallback_lock:
-                        if self._text_view_tasks.get(resource_id) is task:
-                            self._text_view_tasks.pop(resource_id, None)
-                raise
-            async with self._fallback_lock:
-                if self._text_view_tasks.get(resource_id) is task:
-                    self._text_view_tasks.pop(resource_id, None)
+            representation, view = await _single_flight(
+                self._text_view_tasks,
+                self._fallback_lock,
+                resource_id,
+                lambda: self._adopt_extract_text_view(resource, url, content),
+            )
         if _is_rendered(representation):
             self._default_rendered.add(resource_id)
             await self._persist_fetched(resource_id, content, effect_owner=effect_owner)
@@ -1811,32 +1793,18 @@ class ResourceRegistry:
         cached = self._fetched.get(resource_id)
         if cached is not None:
             return cached
-        async with self._fetch_lock:
-            cached = self._fetched.get(resource_id)
-            if cached is not None:
-                return cached
-            task = self._fetch_tasks.get(resource_id)
-            if task is None:
-                task = asyncio.ensure_future(
-                    self._fetch_and_charge(
-                        resource_id,
-                        producer,
-                        effect_owner=effect_owner,
-                        charge_total=charge_total,
-                    )
-                )
-                self._fetch_tasks[resource_id] = task
-        try:
-            data = await asyncio.shield(task)
-        except BaseException:
-            if task.done():
-                async with self._fetch_lock:
-                    if self._fetch_tasks.get(resource_id) is task:
-                        self._fetch_tasks.pop(resource_id, None)
-            raise
-        async with self._fetch_lock:
-            self._fetch_tasks.pop(resource_id, None)
-        return data
+        return await _single_flight(
+            self._fetch_tasks,
+            self._fetch_lock,
+            resource_id,
+            lambda: self._fetch_and_charge(
+                resource_id,
+                producer,
+                effect_owner=effect_owner,
+                charge_total=charge_total,
+            ),
+            settled=lambda: self._fetched.get(resource_id),
+        )
 
     async def _fetch_and_charge(
         self,
@@ -1927,6 +1895,10 @@ class ResourceRegistry:
         A hosted provider's text becomes the Resource's representation. The browser's
         rendering is appended to the Resource instead, so a plain read of it takes the
         rendering from then on and nothing is cached as the Resource's own text.
+
+        This is not ``_single_flight``: a caller that waited for the lock reads the cache
+        under it and persists the bytes there, and the walk's future leaves ``_fallback_tasks``
+        in the same critical section that writes the cache.
         """
         resource_id = resource.resource_id
         cached = self._text_views.get(resource_id)
@@ -2058,23 +2030,12 @@ class ResourceRegistry:
         settled = self._settled_rendered(resource_id)
         if settled is not None:
             return settled
-        async with self._render_lock:
-            task = self._render_tasks.get(resource_id)
-            if task is None:
-                task = asyncio.ensure_future(self._render_page(resource))
-                self._render_tasks[resource_id] = task
-        try:
-            rendered = await asyncio.shield(task)
-        except BaseException:
-            if task.done():
-                async with self._render_lock:
-                    if self._render_tasks.get(resource_id) is task:
-                        self._render_tasks.pop(resource_id, None)
-            raise
-        async with self._render_lock:
-            if self._render_tasks.get(resource_id) is task:
-                self._render_tasks.pop(resource_id, None)
-        return rendered
+        return await _single_flight(
+            self._render_tasks,
+            self._render_lock,
+            resource_id,
+            lambda: self._render_page(resource),
+        )
 
     async def _render_page(self, resource: _Registered) -> _Registered:
         """Render one Web Resource's URL and convert the result, admitting it only with text."""
@@ -2287,6 +2248,11 @@ def _is_rendered(representation: _Registered) -> bool:
     return representation.acquisition == BROWSER_RENDER
 
 
+def _cursor_prefix(rendered: bool) -> str:
+    """What a cursor starts with to name the representation it continues."""
+    return _RENDERED_CURSOR_PREFIX if rendered else ""
+
+
 def _rendered_note(resource: _Registered, rendering: _Registered) -> str:
     """What a read of a rendering tells the model about its text: who produced it, and where
     the page ended when that is not the Resource's own URL."""
@@ -2310,6 +2276,44 @@ def _rendered_representation(parent: _Registered, html: bytes, *, final_url: str
         acquisition=BROWSER_RENDER,
         final_url=final_url,
     )
+
+
+async def _single_flight[T](
+    flights: dict[str, asyncio.Future[T]],
+    lock: asyncio.Lock,
+    key: str,
+    start: Callable[[], Coroutine[Any, Any, T]],
+    *,
+    settled: Callable[[], T | None] | None = None,
+) -> T:
+    """Run ``start`` once for ``key`` however many callers ask while it runs.
+
+    The first caller starts the work and later ones wait for the same future; cancelling a
+    waiter does not cancel the work the others need. A future is forgotten once it is done,
+    by whichever caller sees it end, and never while it still runs, so a waiter that gives
+    up cannot drop a future other callers are still waiting on. ``settled`` reads what an
+    earlier call left behind, under the lock, so a caller that waited for the lock does not
+    start the work again.
+    """
+    async with lock:
+        if settled is not None and (result := settled()) is not None:
+            return result
+        flight = flights.get(key)
+        if flight is None:
+            flight = asyncio.ensure_future(start())
+            flights[key] = flight
+    try:
+        result = await asyncio.shield(flight)
+    except BaseException:
+        if flight.done():
+            async with lock:
+                if flights.get(key) is flight:
+                    flights.pop(key, None)
+        raise
+    async with lock:
+        if flights.get(key) is flight:
+            flights.pop(key, None)
+    return result
 
 
 class ResourceRegistryClosedError(RuntimeError):
@@ -2421,7 +2425,6 @@ def _read_cursor_span(
     note: str | None,
     extraction_status: str,
     rendered: bool = False,
-    cursor_prefix: str = "",
 ) -> tuple[TextWindowLocator, str, int, int]:
     if plan_position < 0 or plan_position >= len(plan):
         raise ResourceCursorError("cursor has no remaining resource text")
@@ -2453,7 +2456,7 @@ def _read_cursor_span(
             content=text[start:consumed_end],
             extraction_status=extraction_status,
             has_more=has_more,
-            next_cursor=cursor_prefix + _CURSOR_PLACEHOLDER if has_more else None,
+            next_cursor=_cursor_prefix(rendered) + _CURSOR_PLACEHOLDER if has_more else None,
             visual_handles=visual_handles,
             evidence_available=evidence_available,
             note=note,

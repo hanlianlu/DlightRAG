@@ -1452,7 +1452,7 @@ async def test_stream_close_failure_does_not_skip_registry_close(
 
     registry = MagicMock(aclose=AsyncMock())
 
-    await _close_execution_resources(Stream(), registry)
+    await _close_execution_resources(Stream(), registry, None)
 
     registry.aclose.assert_awaited_once()
     assert "Failed to close Answer stream" in caplog.text

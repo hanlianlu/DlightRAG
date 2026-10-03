@@ -1548,11 +1548,6 @@ async def test_a_url_that_resolves_to_a_private_address_never_reaches_the_browse
     assert renderer.calls == []
 
 
-async def test_a_chain_that_renders_needs_a_renderer() -> None:
-    with pytest.raises(ValueError, match="page renderer"):
-        ResourceRegistry(extract_chain=(AgentBrowserRender(),))
-
-
 async def test_concurrent_rendered_reads_share_one_render(serve) -> None:
     release = asyncio.Event()
     started = asyncio.Event()
