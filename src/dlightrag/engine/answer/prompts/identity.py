@@ -11,10 +11,10 @@ def core_identity(*, environment_clock: bool) -> str:
     turn — which makes every request a new prompt prefix and forfeits a provider's
     prefix cache entirely, measured on this deployment as 0% hits on every turn that
     crossed a minute boundary while the same model elsewhere reused 99.71% — or
-    frozen, which then lies as the Run ages. Both reference harnesses leave it out
-    of the prompt: Pi never states it and lets the model read the environment, and
-    DeepSeek's harness ships its time context as an opt-in plugin whose default
-    compositions leave it disabled.
+    frozen, which then lies as the Run ages. Both reference harnesses keep it out
+    of the system prompt: Pi never states it and lets the model read the
+    environment, and DeepSeek's harness appends a durable user message with the
+    time at most every ten minutes.
 
     ``environment_clock`` selects the wording for the path that uses this text. A
     Research agent answers `date` through Bash and reads the clock only when a

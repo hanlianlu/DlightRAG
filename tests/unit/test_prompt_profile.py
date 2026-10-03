@@ -26,8 +26,8 @@ def test_answer_prompt_is_assembled_from_core_identity_and_guidance() -> None:
 def test_no_system_prompt_states_a_clock() -> None:
     # A system message that moves with wall time makes every request a new prompt
     # prefix and forfeits the provider's cache, so neither path states one there
-    # (Pi states no clock either, and DeepSeek's harness ships its time context
-    # opt-in and disabled by default).
+    # (Pi states no clock either, and DeepSeek's harness appends its time context
+    # as a durable user message, never in the system prompt).
     research = agent_control_prompt(
         profile_memory_write=True, artifact_publication=True, run_notes=True, connection_tools=True
     )
