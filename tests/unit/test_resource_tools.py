@@ -466,6 +466,7 @@ async def test_a_rendered_read_settles_its_rendering_its_view_and_where_it_came_
         resource_id = printed_handle(result)
         assert f"[resource: {resource_id} | rendered | lines 1-" in result.text_content
         assert "Albert Einstein" in result.text_content
+        assert "[Rendered view from the Agent Browser (browser_render)." in result.text_content
         (source,) = result.effects.evidence_sources
         assert dict(source.attributes)["acquisition"] == "browser_render"
         assert source.source_uri == _APP

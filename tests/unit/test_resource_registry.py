@@ -1266,6 +1266,40 @@ async def test_a_fresh_url_renders_once_without_a_direct_fetch_and_is_reused(ser
     assert registry.evidence_source(resource_id, text=True)["acquisition"] == ""
 
 
+async def test_a_rendered_read_says_whose_view_it_is_and_where_the_page_ended(serve) -> None:
+    moved_to = "https://spa.example.com/done"
+    stays = "https://spa.example.com/stays.html"
+    renderer = RecordingRenderer(
+        {
+            _SPA: RenderedPage(_SPA, moved_to, _long_page("rendered").encode(), 200),
+            stays: _QUOTES,
+        }
+    )
+    serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=renderer)
+    moved = registry.register_agent_url(_SPA)
+    stayed = registry.register_agent_url(stays)
+    plain = registry.register_agent_url("https://spa.example.com/plain.html")
+
+    first = await registry.read(moved, rendered=True, max_window_tokens=400)
+    assert first.next_cursor is not None
+    later = await registry.read(moved, cursor=first.next_cursor, max_window_tokens=400)
+    unmoved = await registry.read(stayed, rendered=True, max_window_tokens=2000)
+    direct = await registry.read(plain, max_window_tokens=2000)
+
+    view = "Rendered view from the Agent Browser (browser_render)"
+    # The note opens every page of the rendering, and names where the page ended only when
+    # that is not the Resource's own URL.
+    for page in (first, later):
+        assert page.note is not None and page.note.startswith(
+            f"{view}; the page ended at {moved_to}."
+        )
+    assert unmoved.note is not None and unmoved.note.startswith(f"{view}.")
+    assert "the page ended" not in unmoved.note
+    assert f"[{first.note}]" in format_resource_read(first)
+    assert direct.note is None or "Rendered view" not in direct.note
+
+
 async def test_a_rendering_is_appended_to_the_direct_snapshot_and_each_cursor_names_its_own(
     serve,
 ) -> None:
@@ -1275,9 +1309,10 @@ async def test_a_rendering_is_appended_to_the_direct_snapshot_and_each_cursor_na
     registry = ResourceRegistry(page_renderer=renderer)
     resource_id = registry.register_agent_url("https://data.example.com/report.html")
 
-    direct = await registry.read(resource_id)
-    rendered = await registry.read(resource_id, rendered=True)
-    plain = await registry.read(resource_id)
+    window = 400
+    direct = await registry.read(resource_id, max_window_tokens=window)
+    rendered = await registry.read(resource_id, rendered=True, max_window_tokens=window)
+    plain = await registry.read(resource_id, max_window_tokens=window)
 
     # The snapshot is never replaced: a plain read still returns what the URL served.
     assert not direct.rendered and not plain.rendered
@@ -1287,14 +1322,22 @@ async def test_a_rendering_is_appended_to_the_direct_snapshot_and_each_cursor_na
     assert rendered.next_cursor.startswith("r.") and not direct.next_cursor.startswith("r.")
 
     # A cursor alone selects the representation it continues, flagged or not.
-    continued = await registry.read(resource_id, cursor=rendered.next_cursor)
-    flagged = await registry.read(resource_id, cursor=rendered.next_cursor, rendered=True)
+    continued = await registry.read(
+        resource_id, cursor=rendered.next_cursor, max_window_tokens=window
+    )
+    flagged = await registry.read(
+        resource_id, cursor=rendered.next_cursor, rendered=True, max_window_tokens=window
+    )
     assert continued.rendered and "rendered line" in continued.content
     assert flagged.content == continued.content
-    still_direct = await registry.read(resource_id, cursor=direct.next_cursor)
+    still_direct = await registry.read(
+        resource_id, cursor=direct.next_cursor, max_window_tokens=window
+    )
     assert not still_direct.rendered and "direct line" in still_direct.content
     with pytest.raises(ResourceCursorError, match="continues the direct representation"):
-        await registry.read(resource_id, cursor=direct.next_cursor, rendered=True)
+        await registry.read(
+            resource_id, cursor=direct.next_cursor, rendered=True, max_window_tokens=window
+        )
 
 
 async def test_a_cursor_is_bound_to_its_representation_and_its_resource(serve) -> None:
@@ -1303,7 +1346,7 @@ async def test_a_cursor_is_bound_to_its_representation_and_its_resource(serve) -
     registry = ResourceRegistry(page_renderer=renderer)
     resource_id = registry.register_agent_url(_SPA)
     other = registry.register_agent_url("https://spa.example.com/other.html")
-    first = await registry.read(resource_id, rendered=True)
+    first = await registry.read(resource_id, rendered=True, max_window_tokens=400)
     assert first.next_cursor is not None
 
     # The token without its prefix is not a direct cursor, and it names no other Resource.

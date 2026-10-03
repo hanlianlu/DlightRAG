@@ -1550,6 +1550,8 @@ class ResourceRegistry:
     ) -> tuple[tuple[VisualHandle, ...], str | None]:
         """The visual handles of ``view``, named by the Resource and bound to its representation."""
         notes = [view.note] if view.note else []
+        if _is_rendered(representation):
+            notes.insert(0, _rendered_note(resource, representation))
         if _is_pdf(resource.filename, resource.declared_mime) and not _is_rendered(representation):
             count = self._pdf_counts.get(resource.resource_id)
             if count is not None:
@@ -2283,6 +2285,15 @@ def _unavailable_web_view(browser_failure: AgentBrowserError | None = None) -> _
 
 def _is_rendered(representation: _Registered) -> bool:
     return representation.acquisition == BROWSER_RENDER
+
+
+def _rendered_note(resource: _Registered, rendering: _Registered) -> str:
+    """What a read of a rendering tells the model about its text: who produced it, and where
+    the page ended when that is not the Resource's own URL."""
+    note = f"Rendered view from the Agent Browser ({BROWSER_RENDER})"
+    if rendering.final_url != resource.url:
+        note += f"; the page ended at {rendering.final_url}"
+    return f"{note}."
 
 
 def _rendered_representation(parent: _Registered, html: bytes, *, final_url: str) -> _Registered:
