@@ -29,8 +29,9 @@ def test_research_agent_is_told_the_citation_contract() -> None:
     assert "[n-m]" in prompt
     assert "never attribute a claim to an excerpt that does not contain it" in normalized
     assert 'Do not add a "References", "Sources", or bibliography section' in prompt
-    assert "every Markdown Artifact you create" in normalized
-    assert "citations in the final answer or another Artifact do not cover it" in normalized
+    # A model that cannot create an Artifact is not told about them.
+    assert "Artifact" not in prompt
+    assert "Artifact" not in answer_core()
     assert "as a video they can play in the answer" in normalized
 
 
@@ -62,11 +63,8 @@ def test_profile_memory_guidance_is_product_owned_and_capability_gated() -> None
     disabled = agent_control_prompt()
     enabled = agent_control_prompt(profile_memory_write=True)
 
-    assert "Profile Memory is durable owner context" not in disabled
-    assert "Profile Memory is durable owner context" in enabled
-    assert "never Evidence or a citation source" in enabled
-    assert "described by their tool contracts" in enabled
-    assert "report a change only after the mutation succeeds" in enabled
+    assert "memory change" not in disabled
+    assert "Report a memory change only after its tool confirms it" in enabled
 
 
 def test_artifact_publication_guidance_is_capability_gated() -> None:
@@ -76,17 +74,15 @@ def test_artifact_publication_guidance_is_capability_gated() -> None:
     assert "attach_artifact" not in disabled
     assert "Artifact URI" not in disabled
     assert "attach_artifact" in enabled
-    assert "attachment, not answer text, authorizes publication" in enabled
-    assert "same Citation Contract" in enabled
-    assert "citations are resolved independently" in enabled
-    assert "safe dependency closure is included automatically" in enabled
+    assert "not answer text, authorizes its publication" in " ".join(enabled.split())
+    assert "apply the Citation Contract independently" in " ".join(enabled.split())
     assert "The final Answer is the default deliverable" in enabled
     assert "Do not create an Artifact merely because" in enabled
     assert "too long or structurally rich" in enabled
     assert "separate visual, interactive, or downloadable surface" in enabled
     assert "Do not reproduce substantial portions of the Artifact" in enabled
     assert "explicitly requests both inline and file versions" in enabled
-    assert "does not require duplicated prose" in enabled
+    assert "do not duplicate prose" in " ".join(enabled.split())
     # The publication reminder lives in this one prompt now: there is no per-turn
     # instruction left to restate it.
     assert "root Artifact" not in disabled

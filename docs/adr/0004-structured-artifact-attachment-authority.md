@@ -6,7 +6,7 @@ When a Published Artifact carries the complete deliverable, the Answer provides 
 
 Publication authority is a settled parent-only `attach_artifact` tool call, not model-authored `artifact:` links. Each Root Artifact Attachment binds a normalized Agent Workspace path to its raw-content digest and label. The attachment receipt returns an `artifact:` URI containing the stable resource id. Relative `artifact:` paths remain authorable inside documents before attachment. The Host appends omitted roots in attachment settlement order while leaving dependencies unplaced. If incomplete Markdown would hide those trailing affordances, the Host places them before the original Answer without rewriting its source.
 
-The selection policy belongs primarily to the capability-gated Agent prompt because the Agent must decide whether a separate deliverable is warranted before it writes or attaches a file. The `attach_artifact` Tool Interface repeats a local reminder, but it does not own the policy and the Host does not reject semantically similar outputs: intentional inline/file duplication is a legitimate request.
+The selection policy belongs primarily to the capability-gated Agent prompt because the Agent must decide whether a separate deliverable is warranted before it writes or attaches a file. The `attach_artifact` Tool Interface states only how attaching works and repeats none of the policy, and the Host does not reject semantically similar outputs: intentional inline/file duplication is a legitimate request.
 
 ## Considered Options
 

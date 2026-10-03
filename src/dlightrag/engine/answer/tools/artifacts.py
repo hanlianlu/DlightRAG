@@ -37,13 +37,11 @@ class AttachArtifactArgs(BaseModel):
 def attach_artifact_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="attach_artifact",
-        description="Attach one optional, completed artifacts/ file as a root user deliverable. "
-        "Call only after its final write or edit; linked dependencies are included "
-        "automatically. The path is relative to artifacts/. Attach only a root deliverable "
-        "the user requested as a file or that genuinely benefits from a separate reading "
-        "or download surface, never merely because the tool is available. The returned "
-        "Artifact link controls placement; the Host places an attached root automatically "
-        "if the final Answer omits it.",
+        description="Attach one completed artifacts/ file as a root user deliverable, after its "
+        "final write or edit. Files that an attached Markdown or HTML root links to are "
+        "included automatically, so attach only the root. Place the returned Artifact link "
+        "where it helps in the Answer; the Host adds an attached root at the end if the "
+        "Answer omits it.",
         input_model=AttachArtifactArgs,
         replay_policy="replayable",
         contract_version=1,

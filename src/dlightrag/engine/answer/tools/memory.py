@@ -26,7 +26,7 @@ _INACTIVE = "Profile Memory is not active for this owner."
 class RememberInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    kind: MemoryKindInput = Field(description="preference or fact")
+    kind: MemoryKindInput
     body: str = Field(min_length=1, max_length=500, description="What to remember.")
     supersedes_id: str | None = Field(default=None, description="Active memory id this replaces.")
 
