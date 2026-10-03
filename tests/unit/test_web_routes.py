@@ -36,7 +36,7 @@ from dlightrag.application.corpus_admin import (
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
 from dlightrag.application.settings import access_settings
-from dlightrag.engine.agent.skills import owner_skill_root
+from dlightrag.engine.agent.skills import SkillCatalog, builtin_skills_root, owner_skill_root
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
 from tests.support.application_double import application_double
@@ -73,29 +73,17 @@ _READABLE_EXTENSIONS = (
     "yaml",
     "yml",
 )
-BUILTIN_SKILL_COUNCIL = {
-    "name": "council",
-    "description": (
-        "Use when the user asks for a judgment, recommendation, or go/no-go call on something "
-        "with real stakes (pricing, an acquisition, compliance or legal exposure, contract terms, "
-        "a strategy choice) where the knowledge base may hold evidence on both sides; when "
-        "sources disagree and must be reconciled; or when the user asks for an independent "
-        "review, second opinion, or red-team critique. Runs two or three independent Child "
-        "Sessions plus at most one cross-examination round. Skip lookups, summaries, and simple "
-        "factual questions. User veto, cancellation, and scope constraints win."
-    ),
-    "source": "builtin",
-}
-BUILTIN_SKILL_CREATOR = {
-    "name": "skill-creator",
-    "description": (
-        "Guide the user through creating, improving, or removing personal DlightRAG skills. "
-        "Use when the user wants to make, edit, or delete a skill, asks to turn a task they "
-        "repeat or a procedure just walked through into a skill, or wants one sentence to "
-        "trigger a routine (interview → draft → publish_skill)."
-    ),
-    "source": "builtin",
-}
+
+
+def _builtin_skill(name: str) -> dict[str, str]:
+    """The listing entry the packaged SKILL.md of a built-in Skill declares."""
+    catalog = SkillCatalog.discover(builtin_root=builtin_skills_root())
+    skill = next(item for item in catalog.metadata if item.name == name)
+    return {"name": name, "description": skill.description, "source": "builtin"}
+
+
+BUILTIN_SKILL_COUNCIL = _builtin_skill("council")
+BUILTIN_SKILL_CREATOR = _builtin_skill("skill-creator")
 # Allow-all deployments offer every Corpus Mutation, and the default is never deleted.
 _EVERY_CHANGE = ["ingest", "replace", "delete", "retry", "reset", "delete_workspace"]
 _DEFAULT_CHANGES = ["ingest", "replace", "delete", "retry", "reset"]
