@@ -18,6 +18,7 @@ by an Agent's filesystem tools.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import shutil
 import uuid
@@ -29,6 +30,8 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from dlightrag.engine.agent.context import ContextContribution
 from dlightrag.engine.agent.tools.contracts import (
@@ -38,7 +41,10 @@ from dlightrag.engine.agent.tools.contracts import (
     ToolRuntime,
 )
 
+logger = logging.getLogger(__name__)
+
 _MAX_SKILL_FILE_CHARS = 50_000
+_MAX_DESCRIPTION_CHARS = 1024
 _OWNER_MAX_SKILLS = 20
 _OWNER_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -423,11 +429,19 @@ def _validate_publish_payload(name: str, files: Mapping[str, str]) -> str | None
         normalized[relative] = content
     if "SKILL.md" not in normalized:
         return "files must contain a 'SKILL.md'"
-    frontmatter_name, description = _frontmatter_text(normalized["SKILL.md"], fallback_name="")
+    try:
+        frontmatter_name, description = _frontmatter_text(normalized["SKILL.md"], fallback_name="")
+    except SkillFrontmatterError as exc:
+        return f"SKILL.md {exc}"
     if frontmatter_name != name:
         return f"SKILL.md frontmatter name '{frontmatter_name or ''}' must equal '{name}'"
     if not description:
         return "SKILL.md frontmatter requires a non-empty description"
+    if len(description) > _MAX_DESCRIPTION_CHARS:
+        return (
+            f"SKILL.md description is {len(description)} characters; "
+            f"the limit is {_MAX_DESCRIPTION_CHARS}"
+        )
     return None
 
 
@@ -445,19 +459,36 @@ def _validate_relative_path(relative: str) -> str | None:
     return None
 
 
+class SkillFrontmatterError(ValueError):
+    """A SKILL.md whose frontmatter cannot be read as a name and a text description."""
+
+
 def _frontmatter_text(text: str, *, fallback_name: str) -> tuple[str, str]:
+    """The name and description a SKILL.md frontmatter declares, read as YAML.
+
+    The description comes back as one line: a folded or literal block, which models
+    write for long descriptions, is a single text value, and the catalog lists one
+    Skill per line.
+    """
     head = text[:8192]
     if not head.startswith("---\n"):
         return fallback_name, ""
     header, separator, _body = head[4:].partition("\n---")
     if not separator:
         return fallback_name, ""
-    values: dict[str, str] = {}
-    for line in header.splitlines():
-        key, marker, value = line.partition(":")
-        if marker and key.strip() in {"name", "description"}:
-            values[key.strip()] = value.strip().strip("\"'")
-    return values.get("name", fallback_name), values.get("description", "")
+    try:
+        declared = YAML(typ="safe").load(header) or {}
+    except YAMLError as exc:
+        raise SkillFrontmatterError(
+            "frontmatter is not valid YAML; quote a value that contains ': '"
+        ) from exc
+    if not isinstance(declared, dict):
+        raise SkillFrontmatterError("frontmatter must be a YAML mapping")
+    name = declared.get("name", fallback_name)
+    description = declared.get("description", "")
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise SkillFrontmatterError("frontmatter name and description must be text")
+    return name.strip(), " ".join(description.split())
 
 
 def _publish_owner_skill(owner_root: Path, name: str, files: Mapping[str, str]) -> int:
@@ -569,7 +600,11 @@ def _discover_root(
             continue
         if isinstance(child, Path) and (child.is_symlink() or (child / "SKILL.md").is_symlink()):
             continue
-        name, description = _frontmatter(skill_file, fallback_name=child.name)
+        try:
+            name, description = _frontmatter(skill_file, fallback_name=child.name)
+        except SkillFrontmatterError as exc:
+            logger.warning("Skipping Skill %r: %s", child.name, exc)
+            continue
         if name:
             found.append(
                 SkillMetadata(

@@ -228,6 +228,15 @@ async def test_publish_validates_name_frontmatter_and_paths(tmp_path: Path) -> N
             "../escape.md": "x",
         },
     )
+    # A description the catalog could not show whole is refused with what to change.
+    assert "valid YAML" in await publish(
+        name="review",
+        files=_skill_files(name="review", description="Use when: asked to review", body="b"),
+    )
+    assert "limit is 1024" in await publish(
+        name="review",
+        files=_skill_files(name="review", description="Use when " + "x" * 1100, body="b"),
+    )
     assert not (owner_root / "review").exists()
 
 
@@ -329,3 +338,40 @@ async def test_skill_tools_report_their_subject_live(tmp_path: Path) -> None:
 
     subjects = [update.subject for update in updates if update.subject]
     assert subjects == ["review", "weekly-report", "weekly-report"]
+
+
+@pytest.mark.asyncio
+async def test_a_folded_description_is_listed_whole_on_one_line(tmp_path: Path) -> None:
+    owner_root = tmp_path / "owner"
+    folded = (
+        "---\nname: weekly-report\ndescription: >\n"
+        "  Use when the user asks for a weekly report and\n"
+        "  wants the data checked before it is sent.\n---\n# Weekly report\n"
+    )
+    result = await publish_skill_tool(owner_root).execute(
+        PublishSkillInput.model_validate({"name": "weekly-report", "files": {"SKILL.md": folded}}),
+        tool_runtime(),  # type: ignore[arg-type]
+    )
+    assert not result.is_error
+
+    contribution = SkillCatalog.discover(owner_root=owner_root).contribution()
+
+    assert contribution is not None
+    assert (
+        "- weekly-report: Use when the user asks for a weekly report and wants the data "
+        "checked before it is sent. (owner)"
+    ) in str(contribution.messages[0]["content"])
+
+
+def test_a_malformed_skill_is_left_out_of_the_catalog(tmp_path: Path) -> None:
+    root = tmp_path / "global"
+    _skill(root, "good", name="good", description="Use when asked", body="b")
+    broken = root / "broken"
+    broken.mkdir()
+    (broken / "SKILL.md").write_text(
+        "---\nname: broken\ndescription: Use when: asked\n---\nb", encoding="utf-8"
+    )
+
+    catalog = SkillCatalog.discover(global_root=root)
+
+    assert [skill.name for skill in catalog.metadata] == ["good"]
