@@ -237,7 +237,6 @@ class ToolDeclaration:
     replay_policy: ReplayPolicy = "never"
     contract_version: int = 2
     input_schema_digest: str = field(init=False)
-    guidance: str = ""
     read_only: bool = False
 
     def __post_init__(self) -> None:
@@ -267,7 +266,6 @@ class ToolDeclaration:
             self.input_model,
             replay_policy=self.replay_policy,
             contract_version=self.contract_version,
-            guidance=self.guidance,
             read_only=self.read_only,
             execute=execute,
         )

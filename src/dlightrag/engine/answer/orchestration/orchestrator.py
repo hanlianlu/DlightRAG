@@ -727,7 +727,6 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
                 contributions=() if skills is None else skills.context_contributions(),
-                tool_guidance=_tool_guidance(tools),
                 profile_memory_write=any(tool.name == "remember" for tool in tools),
                 artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
                 # Writing notes needs a workspace, so the habit rides the same
@@ -843,7 +842,6 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
                 contributions=() if skills is None else skills.context_contributions(),
-                tool_guidance=_tool_guidance(tools),
                 # A Child inherits the Run's Connection tools, and their descriptions with them.
                 connection_tools=any(is_connection_tool(tool.name) for tool in tools),
                 instructions=child_instructions(child_session_id),
@@ -1204,10 +1202,6 @@ def _read_committed_spill(
     if continuation:
         body = f"{body}\n[more output; {continuation}]"
     return ToolResult.text(body, protected_text=continuation)
-
-
-def _tool_guidance(tools: list[AgentTool]) -> tuple[str, ...]:
-    return tuple(f"- {tool.guidance}" for tool in tools if tool.guidance)
 
 
 def _fresh_research_trace() -> dict[str, Any]:

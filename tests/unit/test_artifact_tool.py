@@ -32,8 +32,8 @@ async def test_attach_artifact_validates_and_returns_a_structured_receipt(tmp_pa
     )
 
     assert tool.replay_policy == "replayable"
-    assert "genuinely benefits from a separate reading or download surface" in (tool.guidance or "")
-    assert "merely because the tool is available" in (tool.guidance or "")
+    assert "genuinely benefits from a separate reading or download surface" in tool.description
+    assert "merely because the tool is available" in tool.description
     assert result.is_error is False
     assert "[Open analysis](artifact:artifact-431b1900963e6cd2f4a1)" in result.text_content
     assert result.details is not None

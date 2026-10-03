@@ -19,7 +19,6 @@ class AgentToolPlan:
     """One pinned provider definition and execution/replay contract."""
 
     definition_json: str
-    guidance: str
     replay_policy: ReplayPolicy
     contract_version: int
     input_schema_digest: str
@@ -41,7 +40,6 @@ class AgentToolPlan:
     def from_tool(cls, tool: ToolDeclaration) -> AgentToolPlan:
         return cls(
             definition_json=canonical_json(asdict(tool.definition)),
-            guidance=tool.guidance,
             replay_policy=tool.replay_policy,
             contract_version=tool.contract_version,
             input_schema_digest=tool.input_schema_digest,
@@ -55,7 +53,6 @@ class AgentToolPlan:
             raise ValueError("Agent Tool Plan definition must be an object")
         return cls(
             definition_json=canonical_json(dict(definition)),
-            guidance=str(payload.get("guidance") or ""),
             replay_policy=payload["replay_policy"],
             contract_version=int(payload["contract_version"]),
             input_schema_digest=str(payload["input_schema_digest"]),
@@ -76,7 +73,6 @@ class AgentToolPlan:
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "definition": self.definition,
-            "guidance": self.guidance,
             "replay_policy": self.replay_policy,
             "contract_version": self.contract_version,
             "input_schema_digest": self.input_schema_digest,

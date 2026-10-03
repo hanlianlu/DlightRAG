@@ -392,8 +392,9 @@ prefix cache can reuse it: the Session fold only appends, and admitted Evidence
 text is frozen into the Tool result that produced it. What a Run composes
 follows the transcript, which already states the question as the Run's own User
 Entry, in this order: the Session-notes statement, the question's Resource
-manifest and attached images, memory, and tool and Skill guidance, all
-byte-stable for the Run; last comes the lane of admitted evidence images, which
+manifest and attached images, memory, and the Skill catalog, all byte-stable
+for the Run (a Tool's usage text travels in its description, with the Tool
+definitions); last comes the lane of admitted evidence images, which
 re-renders every request because evidence pixels are not durable. Nothing else
 is composed per turn. A replayed Tool call's arguments are serialized with
 sorted keys, the same bytes whether the Session was held in memory or read back

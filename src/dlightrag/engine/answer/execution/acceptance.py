@@ -105,7 +105,6 @@ def research_history_input_measure(
             separators=(",", ":"),
         )
     )
-    tool_guidance = tuple(f"- {tool.guidance}" for tool in tools if tool.guidance)
 
     def measure(
         history: list[dict[str, Any]],
@@ -124,7 +123,6 @@ def research_history_input_measure(
             query_images=query_images,
             resource_manifest=resource_manifest,
             memory_text=memory_text,
-            tool_guidance=tool_guidance,
             profile_memory_write=any(tool.name == "remember" for tool in tools),
             artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
             # The measurement must carry the same habit the run's own request does.

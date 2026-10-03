@@ -1597,8 +1597,8 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
     assert isinstance(final.state, OperationCompleted)
     assert len(requests) == 2
     first, second = requests
-    # This composition has no per-Run tail (no admitted evidence images and no tool
-    # guidance), so the later request is a strict extension of the earlier one: the
+    # This composition has no per-Run tail (no admitted evidence images, memory or
+    # skill context), so the later request is a strict extension of the earlier one: the
     # earlier request is its prefix byte for byte, key order included.
     assert json.dumps(second[: len(first)]) == json.dumps(first)
     # The admitted passage arrived inside the Tool result, not as a re-rendered pack.
@@ -1812,7 +1812,7 @@ async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wir
     arguments, replayed in jsonb's key order instead of the order the earlier Run sent.
     The bodies recorded here are what the provider receives, and the second Run loads
     the Session through jsonb. Everything the earlier Run sent before its own
-    statements (recalled memory, Tool guidance) is the prefix; what is new follows it.
+    statement (recalled memory) is the prefix; what is new follows it.
     """
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.settings import ModelSettings
@@ -1861,7 +1861,6 @@ async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wir
         "Look up one reported figure.",
         _LookupArgs,
         execute=lookup_figure,
-        guidance="Look a figure up before citing it.",
     )
     memory = "Remembered about this owner (context only): reports in EUR."
     repository = _JsonbSessionRepository()
@@ -1889,11 +1888,9 @@ async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wir
     earlier, later = wire.bodies[1], wire.bodies[2]
 
     assert json.dumps(later["tools"]) == json.dumps(earlier["tools"])
-    # The earlier Run's own statements close its last request: memory, Tool guidance.
-    tail = earlier["messages"][-2:]
-    assert tail[0]["content"] == memory
-    assert "Look a figure up before citing it." in json.dumps(tail[1]["content"])
-    cut = len(earlier["messages"]) - len(tail)
+    # The earlier Run's own statement, memory, closes its last request.
+    assert earlier["messages"][-1]["content"] == memory
+    cut = len(earlier["messages"]) - 1
     assert json.dumps(later["messages"][:cut]) == json.dumps(earlier["messages"][:cut])
     assert later["messages"][cut]["role"] == "assistant"
     assert later["messages"][cut]["content"] == "Revenue was 12 EUR."

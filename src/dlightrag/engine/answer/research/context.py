@@ -55,7 +55,6 @@ class ContextAssembler:
         resource_manifest: tuple[ResourceManifestEntry, ...],
         memory_text: str = "",
         contributions: tuple[ContextContribution, ...] = (),
-        tool_guidance: tuple[str, ...] = (),
         profile_memory_write: bool = False,
         artifact_publication: bool = False,
         run_notes: bool = False,
@@ -82,7 +81,6 @@ class ContextAssembler:
         )
         self._memory_text = memory_text
         self._contributions = contributions
-        self._tool_guidance = tool_guidance
         self._profile_memory_write = profile_memory_write
         self._artifact_publication = artifact_publication
         self._run_notes = run_notes
@@ -287,36 +285,16 @@ class ContextAssembler:
                     messages=({"role": "user", "content": visual_blocks},),
                 )
             )
-        if self._tool_guidance:
-            contributions.append(
-                ContextContribution(
-                    source="answer.tools",
-                    authority="reference",
-                    messages=(
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Tool usage guidance:\n"
-                                    + "\n".join(self._tool_guidance),
-                                }
-                            ],
-                        },
-                    ),
-                )
-            )
         contributions.extend(self._contributions)
         # Authority order is the request order. The system prompt and the transcript
         # lead, and the transcript states the question once, in its place, so a later
         # request, of this Run or of the next one, extends an earlier one and a later
         # steer still follows the question. Everything this Run composes comes after
-        # the transcript: the notes it holds and its
-        # question's material, which differ from one Run to the next; memory, tool
-        # guidance and skill context, byte-stable for the Run; and last the visual
-        # lane, which re-renders per request (ADR 0015). Nothing is composed per turn:
-        # the loop-termination guidance lives in the system prompt, and both reference
-        # harnesses send no nudge either.
+        # the transcript: the notes it holds and its question's material, which differ
+        # from one Run to the next; memory and skill context, byte-stable for the Run;
+        # and last the visual lane, which re-renders per request (ADR 0015). Nothing is
+        # composed per turn: the loop-termination guidance lives in the system prompt,
+        # and both reference harnesses send no nudge either.
         return list(ContextProjector().project(contributions).messages)
 
     def _check_input_tokens(self, input_tokens: int) -> None:

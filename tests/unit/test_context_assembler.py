@@ -140,7 +140,6 @@ async def test_the_run_local_visual_lane_trails_the_static_tail() -> None:
         query_images=None,
         resource_manifest=(),
         memory_text="Remembered about this owner (context only): prefers short answers.",
-        tool_guidance=("Read a document before viewing it.",),
     )
 
     messages = await assembler.control_turn(
@@ -163,7 +162,7 @@ async def test_the_run_local_visual_lane_trails_the_static_tail() -> None:
     static_tail = [
         index
         for index, message in enumerate(messages)
-        if any("Read a document before viewing it." in text for text in _texts(message))
+        if any("prefers short answers" in text for text in _texts(message))
     ]
     assert static_tail, "the per-Run static tail must stay in the request"
     assert max(static_tail) < len(messages) - 1
@@ -323,16 +322,16 @@ async def test_a_request_carries_no_per_turn_prose_and_no_clock() -> None:
 
 
 async def test_only_per_run_static_context_follows_the_transcript() -> None:
-    # Memory, tool guidance and skill context are frozen per Run, so they are
-    # byte-stable across turns even though they sit after the transcript; the
-    # run-local visual lane is the one thing that legitimately re-renders.
+    # Memory and skill context are frozen per Run, so they are byte-stable across
+    # turns even though they sit after the transcript; the run-local visual lane is
+    # the one thing that legitimately re-renders.
     assembler = ContextAssembler(
         model_profile=ModelProfile(context_window_tokens=_WINDOW),
         query="What changed?",
         history=PriorTurns(),
         query_images=None,
         resource_manifest=(),
-        tool_guidance=("- read: bounded text",),
+        memory_text="Remembered about this owner (context only): prefers short answers.",
     )
     first = await assembler.control_turn(
         evidence=EvidenceLedger(),
@@ -344,7 +343,7 @@ async def test_only_per_run_static_context_follows_the_transcript() -> None:
     )
 
     assert first[-1] == second[-1]
-    assert "- read: bounded text" in str(second[-1]["content"])
+    assert "prefers short answers" in str(second[-1]["content"])
 
 
 async def test_measurement_matches_the_composed_request() -> None:

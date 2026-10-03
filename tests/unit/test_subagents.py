@@ -811,13 +811,13 @@ def test_child_contracts_keep_the_digests_accepted_plans_pinned() -> None:
     # Accepted Plans pin every declaration byte for byte, including the
     # model-role guidance suffix and the Child's ask_parent contract.
     assert digest(subagent_declarations()) == (
-        "da571a503c8235e4fd822c5ca0ea23f178a20f481de1a666e501484ee29c9a0d"
+        "8e561933d1575be1808de0aaad55dd79abe985daf7b379e4c1e39db4f53ebf10"
     )
     assert digest(
         subagent_declarations(model_guidance="Choose model_role query for most children.")
-    ) == ("07378328dcc513a79ffb63f84e1559c77ec21c41e8395e0ea90082d27337b87c")
+    ) == ("839cb61df3da40722b105ee24fa64d1c60f96d36ec91e1240102edd51af48037")
     assert digest(child_guidance_declarations()) == (
-        "5bcf8ee7afa9277cb546204ac044181564984d3c2bb3225fe7130b36b6aeda26"
+        "496953e5dc7bb851b75500a09fdb85213983f829aee2e046edc59d7c989e1ecb"
     )
 
 

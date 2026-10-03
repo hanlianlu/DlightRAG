@@ -43,7 +43,6 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
         "lookup",
         "Look up one fact.",
         Arguments,
-        guidance="Ask one question.",
         replay_policy="replayable",
         contract_version=7,
     )

@@ -108,9 +108,3 @@ def test_replay_policies_and_contract_versions_match_the_matrix(tmp_path: Path) 
         _, _, replay_policy, contract_version = MATRIX[tool.name]
         assert tool.replay_policy == replay_policy, tool.name
         assert tool.contract_version == contract_version, tool.name
-
-
-def test_every_tool_carries_short_usage_guidance(tmp_path: Path) -> None:
-    for tool in _tools(tmp_path):
-        assert tool.guidance.strip(), tool.name
-        assert len(tool.guidance) <= 400, tool.name
