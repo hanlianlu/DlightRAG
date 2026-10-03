@@ -188,7 +188,6 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
             self.batches.append(list(values))
 
     monkeypatch.setattr(PGChunkVectorStore, "_VECTOR_WRITE_MAX_RECORDS", 1)
-    monkeypatch.setattr(PGChunkVectorStore, "_VECTOR_WRITE_MAX_BYTES", 16_000_000)
 
     db = FakeDB()
     stores = _chunk_vectors(db)
