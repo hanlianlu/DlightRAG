@@ -1975,7 +1975,6 @@ async def _drive_fast_execute(
     from dlightrag.engine.agent.session.fold import PriorTurns
     from dlightrag.engine.answer.execution.executor import OrchestratorRun
     from dlightrag.engine.answer.orchestration import AnswerOrchestrator
-    from dlightrag.engine.answer.resources.models import TextWindowBudget
     from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
     from dlightrag.engine.runtime.progress import StageCommit, StageTerminalCommit
     from tests.support.workspace_store import InMemoryWorkspaceStore
@@ -2013,7 +2012,6 @@ async def _drive_fast_execute(
         ),
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
         search_toolchain=SearchToolchain(),
     )

@@ -74,6 +74,10 @@ class ModelProfile:
             )
 
 
+#: The label the runtime puts in front of a resource page.
+_PAGE_LABEL_TOKENS = 128
+
+
 @dataclass(frozen=True, slots=True)
 class ContextPolicy:
     """Explicit model input, output, and dynamic-context reserves.
@@ -145,6 +149,23 @@ class ContextPolicy:
         floor = min(self.minimum_input_tokens, hard_limit)
         reserve = min(self.dynamic_context_reserve_tokens, max(0, hard_limit - floor))
         return hard_limit - reserve
+
+    def observation_capacity(self, profile: ModelProfile) -> int:
+        """Return how many tokens one Tool result may add to a Research request.
+
+        It is the room the compaction trigger leaves below the hard input limit. The
+        runtime cuts a result at this size, and a resource read sizes its pages by it,
+        so a page the reader returns is a page the runtime keeps whole.
+        """
+        return max(0, self.hard_input_limit(profile) - self.compaction_trigger(profile))
+
+    def read_window_tokens(self, profile: ModelProfile) -> int:
+        """Return the longest page a resource read may return for this model.
+
+        The capacity less the label the runtime puts before a page: a filename of up to
+        128 characters, which a CJK name makes about a hundred tokens.
+        """
+        return max(1, self.observation_capacity(profile) - _PAGE_LABEL_TOKENS)
 
     def history_allowance_cap(
         self,

@@ -37,8 +37,11 @@ Blob.
   was fetched or has a text view is refused.
 - Returns bounded text only. A Resource page starts with
   `[resource: <id> | lines <a>-<b> | extraction_status=<status>]`, holds one
-  text window whose whole envelope fits the model's remaining text allowance,
-  and ends with notes, visual handles, and a `[more; cursor=…]` continuation.
+  text window sized so that the page and the label the runtime puts before it fit
+  the observation capacity (the room the compaction trigger leaves below the input
+  limit, which is also where the runtime cuts a Tool result), and ends with notes,
+  visual handles, and a `[more; cursor=…]` continuation. A Resource longer than one
+  window is therefore always read on by cursor, never cut.
   `focus` starts the page order at the most relevant window; the continuation
   runs to the end, wraps to the start, and stops before the focus window, so
   every character is returned once.

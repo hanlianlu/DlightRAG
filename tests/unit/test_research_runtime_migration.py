@@ -75,7 +75,7 @@ from dlightrag.engine.answer.research.runtime import (
     _build_effect_host_update,
     provider_attempt_detail,
 )
-from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
+from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.answer.resources.registry import (
     FetchedResourceBytes,
     ResourceEffectOwner,
@@ -933,7 +933,6 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         synthesizer=cast(Any, SimpleNamespace()),  # Fast-only collaborator is unused.
         retrieve_knowledge_base=retrieve,
         model_func=model,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
@@ -1148,7 +1147,6 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
         synthesizer=cast(Any, SimpleNamespace()),
         retrieve_knowledge_base=retrieve,
         model_func=model,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resource_reader=read_resource,
@@ -1261,7 +1259,6 @@ async def test_research_reads_run_at_once_yet_cite_and_settle_in_source_order() 
         synthesizer=cast(Any, SimpleNamespace()),
         retrieve_knowledge_base=retrieve,
         model_func=model,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resource_reader=read_resource,
@@ -1381,7 +1378,6 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
         retrieve_knowledge_base=retrieve,
         model_func=model,
         stream_model_func=stream_model,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
@@ -1552,7 +1548,6 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
         retrieve_knowledge_base=retrieve,
         model_func=model,
         stream_model_func=cast(Any, None),
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
@@ -1657,7 +1652,6 @@ async def _drive_research_run(
         model_func=model,
         stream_model_func=cast(Any, None),
         injected_tools=list(injected_tools),
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
@@ -1946,7 +1940,6 @@ async def test_a_compaction_that_covers_the_question_restates_it_after_the_summa
         retrieve_knowledge_base=_one_fact,
         model_func=model,
         stream_model_func=summarize,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",

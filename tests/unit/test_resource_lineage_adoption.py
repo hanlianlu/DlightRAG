@@ -31,7 +31,6 @@ from dlightrag.engine.answer.resources.models import (
     ResourceInput,
     ResourceManifestEntry,
     ResourceNotFoundError,
-    TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
@@ -109,7 +108,7 @@ def tools(registry, *, lineage):
         read_tool(
             None,
             access,
-            resource_reader=make_resource_reader(registry, TextWindowBudget(1000), lineage=lineage),
+            resource_reader=make_resource_reader(registry, 1000, lineage=lineage),
         ),
         view_tool(
             None,

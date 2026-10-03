@@ -28,7 +28,7 @@ from dlightrag.engine.answer.orchestration.orchestrator import (
     _hydrate_attachment_messages,
 )
 from dlightrag.engine.answer.research.runtime import FetchedResourceBuffer, ResearchRuntimeEffects
-from dlightrag.engine.answer.resources.models import ResourceInput, TextWindowBudget
+from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.runtime.records import RunFetchedResource
@@ -76,7 +76,6 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
     data = docx_images(2) if format == "docx" else pdf_bytes(3)
     source = ResourceInput(filename=f"source.{format}", content=data)
     profile = answer_model_profile(supports_images=True)
-    budget = TextWindowBudget(4000)
     repository = MemoryAgentSessionRepository[EffectHostUpdate]()
     session_id = SessionId.new()
     async with ResourceRegistry(resource_secret=b"identity", cursor_secret=b"cursor") as registry:
@@ -114,11 +113,10 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
             synthesizer=cast(Any, SimpleNamespace()),
             retrieve_knowledge_base=retrieve,
             model_func=model,
-            text_window_budget=budget,
             model_profile=profile,
             image_budget=answer_image_policy(max_images=8).new_budget(),
             telemetry=NOOP_TELEMETRY,
-            resource_reader=make_resource_reader(registry, budget),
+            resource_reader=make_resource_reader(registry, 4000),
             resource_viewer=make_resource_viewer(registry),
             resolved_mode="research",
             search_toolchain=SearchToolchain(),

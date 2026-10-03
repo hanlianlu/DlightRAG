@@ -45,7 +45,7 @@ from dlightrag.engine.agent.session.runtime import (
 from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
 from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
 from dlightrag.engine.agent.tools.contracts import SourceOrder
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.providers.base import (
     is_provider_context_overflow,
@@ -179,13 +179,6 @@ def _evidence_render_budget(
         capacity_tokens - estimate_tokens(result.text_content) - _ROW_FRAMING_TOKENS * pending_rows,
     )
     return min(usable, max(0, capacity_tokens))
-
-
-def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
-    """Return the pinned profile's effective Research observation capacity."""
-    hard_limit = CONTEXT_POLICY.hard_input_limit(profile)
-    trigger = CONTEXT_POLICY.compaction_trigger(profile)
-    return max(0, hard_limit - trigger)
 
 
 #: A reusable prefix below this size is cache-breakpoint noise, not a regression.
@@ -840,7 +833,7 @@ class ResearchRuntimeEffects:
         # Everything below reads or writes what the batch shares: the evidence
         # freeze, the trace, the fetched-bytes buffer, and the Session notes.
         await in_source_order()
-        observation_capacity = _research_dynamic_context_reserve(self._prepared.model_profile)
+        observation_capacity = CONTEXT_POLICY.observation_capacity(self._prepared.model_profile)
         evidence = self._prepared.evidence
         if item.intent_id is None:
             raise RuntimeError("executable Tool item lost its IntentId")

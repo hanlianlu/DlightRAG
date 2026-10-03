@@ -74,7 +74,6 @@ from dlightrag.engine.answer.research.runtime import (
 from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
     ResourceInput,
-    TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
@@ -528,7 +527,6 @@ async def test_research_view_to_fast_uses_one_consuming_budget(
         retrieve_knowledge_base=retrieve,
         model_profile=profile,
         image_budget=resolved.image_budget,
-        text_window_budget=TextWindowBudget(4000),
         telemetry=NOOP_TELEMETRY,
         resolved_mode="fast",
         search_toolchain=SearchToolchain(),

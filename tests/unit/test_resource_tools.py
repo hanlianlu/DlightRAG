@@ -2,6 +2,7 @@
 """Public read/view seams: text, pixels, inventories, identity, and budgets."""
 
 import asyncio
+import re
 from dataclasses import replace
 
 import pytest
@@ -14,18 +15,21 @@ from dlightrag.engine.agent.tool_content import (
     encode_tool_content,
     tool_content_attachments,
 )
-from dlightrag.engine.agent.tools import ToolResult
-from dlightrag.engine.agent.tools.files import ViewArgs, view_tool
+from dlightrag.engine.agent.tools import ToolResult, fit_tool_result
+from dlightrag.engine.agent.tools.files import ViewArgs, read_tool, view_tool
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY
+from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.resources.converters import ResourceConversionError
 from dlightrag.engine.answer.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from dlightrag.engine.answer.tools.resources import make_resource_viewer
+from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.answer.web_sources import WebExtractResult
 from dlightrag.engine.public_http import PublicHttpFetch
 from tests.support.dns import public_dns
 from tests.support.resources import call, docx_images, pdf_bytes, png, preparer, tools
 from tests.tool_helpers import tool_runtime
+from tests.unit.conftest import answer_model_profile
 
 
 @pytest.mark.parametrize(
@@ -396,3 +400,44 @@ async def test_a_resumed_run_reads_and_views_a_web_pdf_as_before(monkeypatch):
         a.content_digest for a in tool_content_attachments(pages.parts)
     ]
     assert run.fetches == [_SCAN_URL]
+
+
+async def test_a_text_longer_than_one_result_is_read_to_the_end_in_pages_the_runtime_keeps_whole():
+    profile = answer_model_profile()
+    capacity = CONTEXT_POLICY.observation_capacity(profile)
+    line_count = 5_000
+    text = "".join(
+        f"{index}. Quarterly revenue grew while operating margin held across all segments.\n"
+        for index in range(line_count)
+    )
+    assert estimate_tokens(text) > 2 * capacity
+    async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as registry:
+        resource = registry.register(
+            ResourceInput(filename="long.txt", content=text.encode(), declared_mime="text/plain")
+        )
+        read = read_tool(
+            None,
+            AccessScheduler(),
+            resource_reader=make_resource_reader(
+                registry, CONTEXT_POLICY.read_window_tokens(profile)
+            ),
+        )
+        seen: list[int] = []
+        cursor: str | None = None
+        while True:
+            args = {"resource_id": resource} | ({"cursor": cursor} if cursor else {})
+            page = await call(read, **args)
+            # The runtime cuts a result at the observation capacity; a page it would cut
+            # is text the model is shown without a cursor to continue from.
+            assert fit_tool_result(page, max_tokens=capacity).text_content == page.text_content
+            seen += [
+                int(line.split(".", 1)[0])
+                for line in page.text_content.splitlines()
+                if line.split(".", 1)[0].isdigit() and line.endswith("segments.")
+            ]
+            continuation = re.search(r"cursor=([^\]\s']+)", page.protected_text)
+            if continuation is None:
+                break
+            cursor = continuation.group(1)
+
+    assert seen == list(range(line_count))

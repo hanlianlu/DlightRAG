@@ -13,7 +13,6 @@ import pytest
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
@@ -23,7 +22,6 @@ from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     run_child_session,
 )
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import compose_research_tools
 from dlightrag.engine.answer.tools.subagents import (
@@ -1283,7 +1281,6 @@ def _child_orchestrator(
         model_func=model_func,
         telemetry=NOOP_TELEMETRY,
         model_profile=profile,
-        text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
         subagent_host=SubagentHost() if subagent_host is None else subagent_host,
         resolved_mode="research",
         search_toolchain=SearchToolchain(),

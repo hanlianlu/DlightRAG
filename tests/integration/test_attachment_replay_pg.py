@@ -33,7 +33,7 @@ from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.research.persistence import ResearchRunStore
 from dlightrag.engine.answer.research.runtime import FetchedResourceBuffer, ResearchRuntimeEffects
-from dlightrag.engine.answer.resources.models import ResourceInput, TextWindowBudget
+from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.runtime.coordinator import LeaseLostError
@@ -121,17 +121,15 @@ def orchestrator(model, *, registry=None, max_images=8):
     async def retrieve(*args, **kwargs):
         raise AssertionError("no corpus or provider access")
 
-    budget = TextWindowBudget(4000)
     return AnswerOrchestrator(
         synthesizer=cast(Any, SimpleNamespace()),
         retrieve_knowledge_base=retrieve,
         model_func=model,
         model_profile=answer_model_profile(supports_images=True),
-        text_window_budget=budget,
         image_budget=answer_image_policy(max_images=max_images).new_budget(),
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
-        resource_reader=make_resource_reader(registry, budget) if registry else None,
+        resource_reader=make_resource_reader(registry, 4000) if registry else None,
         resource_viewer=make_resource_viewer(registry) if registry else None,
         search_toolchain=SearchToolchain(),
     )

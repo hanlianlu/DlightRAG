@@ -27,7 +27,6 @@ from dlightrag.engine.answer.research.runtime import (
     _record_prompt_cache,
     _usage_from_snapshot_entries,
 )
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import _resource_rows
 from dlightrag.engine.answer.workspace import RunWorkspace
@@ -50,7 +49,6 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
         retrieve_knowledge_base=retrieve or default_retrieve,
         model_func=model,
         stream_model_func=None,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode=mode,  # type: ignore[arg-type]
