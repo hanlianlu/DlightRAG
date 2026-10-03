@@ -92,11 +92,16 @@ async def _drain(stream: asyncio.StreamReader) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Served:
-    """One canned page of the web a ``web_proxy`` carries."""
+    """One canned page of the web a ``web_proxy`` carries.
+
+    A page with a ``hold`` is answered only once the event is set, so a test can observe
+    the world while the browser waits for it.
+    """
 
     body: str | bytes
     status: int = 200
     headers: Mapping[str, str] = field(default_factory=dict)
+    hold: asyncio.Event | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +138,8 @@ class WebProxy:
             elif page is None:
                 writer.write(_response(404, b"not found", {"content-type": "text/plain"}))
             else:
+                if page.hold is not None:
+                    await page.hold.wait()
                 body = page.body.encode() if isinstance(page.body, str) else page.body
                 headers = {"content-type": "text/html; charset=utf-8", **page.headers}
                 writer.write(_response(page.status, body, headers))
@@ -152,6 +159,10 @@ async def web_proxy(pages: Mapping[str, Served]) -> AsyncIterator[WebProxy]:
     try:
         yield proxy
     finally:
+        # A page still held would keep its connection, and so the server, open.
+        for page in pages.values():
+            if page.hold is not None:
+                page.hold.set()
         server.close()
         await server.wait_closed()
 

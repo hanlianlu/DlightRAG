@@ -28,8 +28,10 @@ from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
+    RenderedPage,
     RunAgentBrowser,
 )
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from tests.integration.run_runtime_pg_harness import isolated_run_runtime, run_envelope
 from tests.support.agent_browser import (
     Served,
@@ -39,6 +41,7 @@ from tests.support.agent_browser import (
     sandbox_refusal,
     web_proxy,
 )
+from tests.support.dns import public_dns
 from tests.support.pg import skip_without_postgres
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -97,6 +100,15 @@ async def eventually(condition: Callable[[], Awaitable[bool]], *, seconds: float
     while not await condition():
         assert time.monotonic() < deadline, "the condition never held"
         await asyncio.sleep(0.05)
+
+
+def requested(proxy: WebProxy, url: str, *, times: int = 1) -> Callable[[], Awaitable[bool]]:
+    """Whether the browser has asked the proxy for ``url`` that often: a render is in flight."""
+
+    async def asked() -> bool:
+        return len(proxy.fetched(url)) >= times
+
+    return asked
 
 
 def settings(
@@ -328,26 +340,48 @@ async def test_a_claim_that_read_an_endpoint_free_does_not_take_it_from_a_claim_
 # -- the pool provider ---------------------------------------------------------------------
 
 
-async def test_a_javascript_only_page_renders_its_script_text_through_the_egress_proxy(pg) -> None:
+async def test_a_javascript_only_page_is_read_as_its_script_renders_it_through_the_egress_proxy(
+    pg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     store, pool = pg
     holder = await live_run(store, "renders")
+    page_url = "http://held.example/"
+    reading_page = asyncio.Event()
     async with AsyncExitStack() as stack:
         server = await stack.enter_async_context(run_server())
-        proxy = await stack.enter_async_context(web_proxy(PAGES))
+        proxy = await stack.enter_async_context(
+            web_proxy({page_url: Served(SHELL, hold=reading_page)})
+        )
         provider, _ = await stack.enter_async_context(pool_of(pool, server.endpoint, proxy=proxy))
         browser = RunAgentBrowser(provider, holder, settings())
+        rendered: list[RenderedPage] = []
 
-        page = await browser.render("http://js.example/")
+        async def render(url: str) -> RenderedPage:
+            rendered.append(await browser.render(url))
+            return rendered[-1]
 
-        assert '<div id="app">quote from script</div>' in page.html.decode()
-        assert (page.requested_url, page.final_url, page.status) == (
-            "http://js.example/",
-            "http://js.example/",
-            200,
-        )
+        async with ResourceRegistry(page_renderer=render) as registry:
+            resource_id = registry.register_agent_url(page_url)
+            reading = asyncio.create_task(
+                registry.read(resource_id, rendered=True, max_window_tokens=2000)
+            )
+            await eventually(requested(proxy, page_url))
+
+            # The browser is waiting on the page, and the lease row names the Run that reads it.
+            assert await holder_of(pool, server.endpoint) == holder.run_id
+            reading_page.set()
+            result = await reading
+
+            assert result.rendered and "quote from script" in result.content
+            evidence = registry.evidence_source(resource_id, text=True, rendered=True)
+            assert (evidence["acquisition"], evidence["source_uri"]) == ("browser_render", page_url)
         # The browser asked the egress proxy for the page, once; nothing reached it directly.
-        (request,) = proxy.fetched("http://js.example/")
+        (request,) = proxy.fetched(page_url)
         assert request.method == "GET"
+        (page,) = rendered
+        assert '<div id="app">quote from script</div>' in page.html.decode()
+        assert (page.requested_url, page.final_url, page.status) == (page_url, page_url, 200)
         # The Run holds its browser while it may render again, and gives it back at settlement.
         assert await holder_of(pool, server.endpoint) == holder.run_id
         await browser.aclose()
@@ -482,24 +516,31 @@ async def test_a_run_gives_its_browser_back_when_idle_and_leases_again_for_its_n
 ) -> None:
     store, pool = pg
     holder = await live_run(store, "idle")
+    page_url = "http://held.example/"
+    reading_page = asyncio.Event()
     async with AsyncExitStack() as stack:
         server = await stack.enter_async_context(run_server())
-        proxy = await stack.enter_async_context(web_proxy(PAGES))
+        proxy = await stack.enter_async_context(
+            web_proxy({page_url: Served(SHELL, hold=reading_page)})
+        )
         provider, _ = await stack.enter_async_context(pool_of(pool, server.endpoint, proxy=proxy))
         browser = RunAgentBrowser(provider, holder, settings(idle=0.6))
-
-        await browser.render("http://js.example/")
-        assert await holder_of(pool, server.endpoint) == holder.run_id
 
         async def free() -> bool:
             return await holder_of(pool, server.endpoint) is None
 
-        await eventually(free)
-        await browser.render("http://js.example/")
-        assert await holder_of(pool, server.endpoint) == holder.run_id
-        assert len(proxy.fetched("http://js.example/")) == 2
+        for renders in (1, 2):
+            reading_page.clear()
+            rendering = asyncio.create_task(browser.render(page_url))
+            await eventually(requested(proxy, page_url, times=renders))
+            # A render in flight holds the browser, and no idle time runs while it does.
+            assert await holder_of(pool, server.endpoint) == holder.run_id
+            reading_page.set()
+            await rendering
+            # Once the render is over and nothing renders for the idle time, the row is free.
+            await eventually(free)
+        assert len(proxy.fetched(page_url)) == 2
         await browser.aclose()
-        assert await holder_of(pool, server.endpoint) is None
 
 
 async def test_renders_that_follow_each_other_never_leave_the_browser_idle(pg) -> None:

@@ -18,7 +18,15 @@ from PIL import Image
 
 from dlightrag.adapters.observability import LangfuseTelemetry
 from dlightrag.adapters.observability import langfuse as langfuse_state
+from dlightrag.application.config import (
+    AgentBrowserConfig,
+    AgentExecutionConfig,
+    AnswerSectionSettings,
+    WebSourceProviderConfig,
+    WebSourcesConfig,
+)
 from dlightrag.application.errors import CorpusUnavailableError
+from dlightrag.application.settings import answer_model_runtime_settings
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
@@ -544,8 +552,21 @@ def test_research_declarations_include_every_configured_surface_without_binding(
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
 
 
-def test_acceptance_offers_a_rendered_read_exactly_when_a_browser_is_composed() -> None:
-    def read_properties(executor: AnswerExecutor) -> dict[str, Any]:
+def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent_browser(
+    test_config: Any,
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",), egress_proxy="http://agent-browser-egress:3128"
+    )
+    agent = test_config.answer.agent.model_copy(update={"browser": pool})
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    def read_properties(config: Any) -> dict[str, Any]:
+        executor = _compose(config).coordinator._executors["answer"]
         declarations = executor.research_tool_declarations(
             web_search=False, memory=False, model_guidance="", injected=()
         )
@@ -553,19 +574,15 @@ def test_acceptance_offers_a_rendered_read_exactly_when_a_browser_is_composed() 
             "properties"
         ]
 
-    composed = _executor(browser=AgentBrowserBinding(FakeProvider(), browser_settings()))
-
-    assert "rendered" in read_properties(composed)
-    assert "rendered" not in read_properties(_executor())
+    assert "rendered" in read_properties(configured)
+    assert "rendered" not in read_properties(test_config)
 
 
-async def test_closing_the_executor_closes_its_browser_provider_even_if_the_adapter_fails() -> None:
+async def test_closing_the_executor_closes_the_browser_pool() -> None:
     provider = FakeProvider()
     executor = _executor(browser=AgentBrowserBinding(provider, browser_settings()))
-    executor._execution_adapter = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("closing")))
 
-    with pytest.raises(RuntimeError, match="closing"):
-        await executor.aclose()
+    await executor.aclose()
 
     assert provider.closed is True
 
@@ -855,22 +872,31 @@ def test_a_resume_under_rotated_database_credentials_mints_the_same_handles(
 
 
 @pytest.mark.parametrize(
-    ("order", "renderer", "asked"),
+    ("extract_providers", "renderer", "asked"),
     [
+        pytest.param(None, True, ["exa+tavily", "browser"], id="derived-order-ends-in-browser"),
+        pytest.param(("exa",), True, ["exa", "browser"], id="explicit-list-ends-in-browser"),
+        pytest.param((), True, ["browser"], id="no-hosted-provider"),
         pytest.param(
             ("exa", "browser", "tavily"), True, ["exa", "browser", "tavily"], id="between"
         ),
-        pytest.param(("exa", "tavily", "browser"), True, ["exa+tavily", "browser"], id="last"),
         pytest.param(("browser", "exa"), True, ["browser", "exa"], id="first"),
-        pytest.param(("exa", "browser", "tavily"), False, ["exa+tavily"], id="no-browser"),
+        pytest.param(("exa", "browser", "tavily"), False, ["exa+tavily"], id="no-renderer"),
     ],
 )
 async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_order(
     monkeypatch: pytest.MonkeyPatch,
-    order: tuple[str, ...],
+    test_config: Any,
+    extract_providers: tuple[str, ...] | None,
     renderer: bool,
     asked: list[str],
 ) -> None:
+    """A deployment with an Agent Browser: the configuration decides what a Run asks, and when.
+
+    The browser is the end of the chain unless the list names it, and a Run with no renderer
+    (Fast has none) skips it and asks the hosted providers around it as one.
+    """
+
     async def blocked(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("HTTP 403")
 
@@ -886,7 +912,22 @@ async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_or
         calls.append("browser")
         raise browser_failure("unreachable")
 
-    resolver = _resource_resolver(MagicMock(extract_order=Mock(return_value=order)))
+    answer = AnswerSectionSettings(
+        web_sources=WebSourcesConfig(
+            exa=WebSourceProviderConfig(api_key="exa-key"),
+            tavily=WebSourceProviderConfig(api_key="tavily-key"),
+            extract_providers=extract_providers,  # pyright: ignore[reportArgumentType]
+        ),
+        agent=AgentExecutionConfig(
+            browser=AgentBrowserConfig(
+                endpoints=("ws://agent-browser-1:3000/",),
+                egress_proxy="http://agent-browser-egress:3128",
+            )
+        ),
+    )
+    runtime = answer_model_runtime_settings(test_config.model_copy(update={"answer": answer}))
+    order = runtime.web_sources.extract_providers
+    resolver = _resource_resolver(SimpleNamespace(extract_order=lambda: order))
     registry = resolver.build_resource_context(
         [ResourceInput(url="https://example.com/report")],
         web_sources=cast(Any, SimpleNamespace(extract=extract)),

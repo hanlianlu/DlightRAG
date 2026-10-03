@@ -11,7 +11,6 @@ from dlightrag.application.config import (
     AgentExecutionConfig,
     AnswerSectionSettings,
     DlightragConfig,
-    WebSourceProviderConfig,
     WebSourcesConfig,
 )
 from dlightrag.engine.answer.execution_settings import (
@@ -183,29 +182,6 @@ _POOL = {
 }
 
 
-def _answer(
-    web_sources: WebSourcesConfig | None = None, *, browser: bool = False
-) -> AnswerSectionSettings:
-    web_sources = web_sources or WebSourcesConfig()
-    if not browser:
-        return AnswerSectionSettings(web_sources=web_sources)
-    agent = AgentExecutionConfig(browser=AgentBrowserConfig(**_POOL))
-    return AnswerSectionSettings(web_sources=web_sources, agent=agent)
-
-
-def _keyed() -> WebSourcesConfig:
-    return WebSourcesConfig(
-        exa=WebSourceProviderConfig(api_key="exa-key"),
-        tavily=WebSourceProviderConfig(api_key="tavily-key"),
-    )
-
-
-def test_the_agent_browser_is_off_until_endpoints_are_configured() -> None:
-    assert AgentExecutionConfig().browser.enabled is False
-    assert AgentBrowserConfig().endpoints == ()
-    assert AgentBrowserConfig(**_POOL).enabled is True
-
-
 def test_the_agent_browser_pool_is_bound_through_the_environment_as_compose_binds_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -258,50 +234,12 @@ def test_a_malformed_pool_address_is_refused_naming_the_setting_and_never_echoin
     assert "secret-host" not in str(caught.value)
 
 
-def test_the_extract_chain_the_browser_joins_is_hosted_providers_first() -> None:
-    assert _answer(_keyed(), browser=True).extract_chain() == ("exa", "tavily", "browser")
-
-
-def test_without_a_browser_the_extract_chain_is_the_hosted_order() -> None:
-    assert _answer(_keyed()).extract_chain() == ("exa", "tavily")
-    assert _answer().extract_chain() == ()
-
-
-def test_a_configured_browser_joins_an_explicit_list_at_its_end() -> None:
-    chain = _answer(
-        WebSourcesConfig(
-            exa=WebSourceProviderConfig(api_key="exa-key"), extract_providers=("exa",)
-        ),
-        browser=True,
-    ).extract_chain()
-
-    assert chain == ("exa", "browser")
-
-
-def test_naming_the_browser_in_an_explicit_list_only_positions_it() -> None:
-    chain = _answer(
-        WebSourcesConfig(
-            exa=WebSourceProviderConfig(api_key="exa-key"),
-            extract_providers=("browser", "exa"),
-        ),
-        browser=True,
-    ).extract_chain()
-
-    assert chain == ("browser", "exa")
-
-
-def test_an_explicit_empty_extract_list_still_leaves_the_browser_its_chain() -> None:
-    assert _answer(WebSourcesConfig(extract_providers=()), browser=True).extract_chain() == (
-        "browser",
-    )
-
-
 def test_naming_the_browser_without_a_configured_pool_is_refused() -> None:
     with pytest.raises(
         ValidationError,
         match="answer.web_sources.extract_providers names 'browser' but answer.agent.browser",
     ):
-        _answer(WebSourcesConfig(extract_providers=("browser",)))
+        AnswerSectionSettings(web_sources=WebSourcesConfig(extract_providers=("browser",)))
 
 
 def test_the_browser_is_an_extract_provider_and_never_a_search_provider() -> None:
