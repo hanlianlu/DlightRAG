@@ -114,7 +114,7 @@ def test_component_view_is_bounded_and_recovery_clears_stale_warning() -> None:
 
     assert health.components["providers"] == {"status": "healthy"}
     assert "Model providers unavailable" not in health.warnings
-    assert len(health.components) == 7
+    assert len(health.components) == 8
 
 
 async def test_transition_discards_an_inflight_pre_transition_verdict() -> None:

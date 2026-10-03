@@ -1375,6 +1375,7 @@ class TestHealthEndpoint:
             "corpus_storage",
             "parser",
             "providers",
+            "agent_workspace",
         }
         assert "postgres" not in body
         probe.assert_not_awaited()

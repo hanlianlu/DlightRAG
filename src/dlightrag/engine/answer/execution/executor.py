@@ -203,7 +203,6 @@ from dlightrag.engine.answer.tools.subagents import (
 from dlightrag.engine.answer.workspace import (
     RunWorkspace,
     WorkspaceIntegrityError,
-    WorkspaceRecoveryFailed,
     bind_run_workspace,
 )
 from dlightrag.engine.dependencies import (
@@ -724,7 +723,8 @@ class AnswerExecutor:
         Fast's own compaction can name it. A disabled execution environment has no
         root, so this returns nothing and there is no memory to materialize. Memory
         degrades rather than failing the Run: an unreadable plane costs this Run the
-        notes, not the answer.
+        notes, not the answer. A workspace volume that does not answer defers the Run
+        as a dependency outage; content recovery refuses fails it.
         """
         from dlightrag.engine.answer.execution_settings import validate_agent_execution
 
@@ -760,10 +760,15 @@ class AnswerExecutor:
                 execution_adapter=self._execution_adapter,
                 notes=(notes if session.workspace_epoch is None else ()),
             )
-        except WorkspaceRecoveryFailed as exc:
-            raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
         except WorkspaceIntegrityError as exc:
-            raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
+            # Reading again reads the same content, so the Run fails. What was refused
+            # stays in the server log; the public error names no path or internal text.
+            logger.warning("Agent Workspace of run %s refused: %s", session.run_id, exc)
+            raise RunExecutionError(
+                "workspace_integrity_error",
+                "This Run's Agent Workspace failed its integrity check, so the Run cannot "
+                "resume. Fork from it or start a new Run.",
+            ) from exc
         if plane is not None:
             # The baseline is the working copy itself, on both paths: a recovered
             # attempt states what its own epoch holds (so its first request names

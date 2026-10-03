@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover - installed with the provider SDKs
 else:
     _HTTP_CLIENTS.append(httpx2)
 
-type DependencyComponent = Literal["corpus_storage", "parser", "providers"]
+type DependencyComponent = Literal["corpus_storage", "parser", "providers", "agent_workspace"]
 
 
 class TransientDependencyError(RuntimeError):
@@ -69,6 +69,7 @@ _COMPONENT_NAMES: dict[DependencyComponent, str] = {
     "corpus_storage": "Corpus storage",
     "parser": "The document parser",
     "providers": "The model provider",
+    "agent_workspace": "The Agent Workspace",
 }
 
 
@@ -310,6 +311,7 @@ def dependency_component_from_checkpoint(
         ("corpus_storage", "corpus_unavailable_attempt"),
         ("parser", "parser_unavailable_attempt"),
         ("providers", "providers_unavailable_attempt"),
+        ("agent_workspace", "agent_workspace_unavailable_attempt"),
     ):
         if key in checkpoint:
             return component  # type: ignore[return-value]

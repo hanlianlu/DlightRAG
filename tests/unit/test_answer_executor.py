@@ -3,7 +3,9 @@
 
 import asyncio
 import datetime
+import errno
 import io
+import shutil
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -961,6 +963,77 @@ async def test_an_answer_run_whose_outages_spent_its_deferrals_stops() -> None:
     assert raised.value.component == "providers"
 
 
+async def test_a_recovery_copy_the_volume_fails_defers_and_the_next_claim_copies_it_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EIO while copying the recorded epoch is the volume's outage, not the Run's.
+
+    The file it names is ``schema.sql``, text that would veto a deferral had it reached
+    classification. Nothing recorded changed, so the next fencing copies the whole tree.
+    """
+    from dlightrag.engine.answer.workspace import bind_run_workspace, epoch_paths, run_root
+    from tests.support.workspace_store import InMemoryWorkspaceStore
+
+    run_id = "01930000-0000-7000-8000-0000000000e1"
+    workspace_root = tmp_path / "ws"
+    workspace_root.mkdir()
+    store = InMemoryWorkspaceStore()
+    first = await bind_run_workspace(
+        workspace_root=workspace_root,
+        owner_id="owner",
+        run_id=run_id,
+        fencing_epoch=1,
+        recorded_epoch=None,
+        store=store,
+    )
+    (first.workspace / "schema.sql").write_text("create table t ();", encoding="utf-8")
+    executor = _executor()
+    executor._execution_environment = "trust"
+    executor._workspace_root_setting = str(workspace_root)
+    executor._working_dir = str(tmp_path / "corpus")
+
+    async def claim(session: RunSession, _run_trace: object) -> Succeeded:
+        await executor._claim_run_workspace(session=session, workspace_store=store, session_id=None)
+        return Succeeded({})
+
+    executor._execute = claim  # type: ignore[method-assign]
+
+    def attempt(fencing_epoch: int, checkpoint: Mapping[str, Any]) -> RunSession:
+        session = MagicMock(
+            owner_id="owner",
+            run_id=run_id,
+            workspace_epoch=store.workspace_epoch,
+            checkpoint=checkpoint,
+            execution=MagicMock(fencing_epoch=fencing_epoch),
+        )
+        session.check_cancelled = AsyncMock()
+        session.reset_output = AsyncMock()
+        return cast(RunSession, session)
+
+    copy = shutil.copy2
+
+    def copy_until_schema(source: Path, destination: Path) -> object:
+        if source.name == "schema.sql":
+            raise OSError(errno.EIO, "Input/output error", str(source))
+        return copy(source, destination)
+
+    monkeypatch.setattr(shutil, "copy2", copy_until_schema)
+    deferred = await executor.execute(attempt(2, {}))
+
+    assert isinstance(deferred, Deferred)
+    assert deferred.checkpoint == {
+        "agent_workspace_unavailable_attempt": 1,
+        "dependency_deferrals": 1,
+    }
+    assert store.workspace_epoch == 1
+
+    monkeypatch.undo()
+    assert await executor.execute(attempt(3, deferred.checkpoint)) == Succeeded({})
+    recovered, _ = epoch_paths(run_root(workspace_root, "owner", run_id), 3)
+    assert (recovered / "schema.sql").read_text(encoding="utf-8") == "create table t ();"
+    assert store.workspace_epoch == 3
+
+
 @pytest.mark.usefixtures("reset_langfuse_client")
 async def test_the_run_trace_carries_question_attribution_and_hands_the_pipeline_its_root() -> None:
     """The pipeline that knows the answer writes the root; the root carries the question."""
@@ -1758,6 +1831,7 @@ async def test_a_recovered_attempt_states_the_notes_its_own_epoch_holds(tmp_path
     session_id = "01930000-0000-7000-8000-0000000000c1"
     run_id = "01930000-0000-7000-8000-0000000000c2"
     workspace_root = tmp_path / "ws"
+    workspace_root.mkdir()
     existing = await bind_run_workspace(
         workspace_root=workspace_root,
         owner_id="owner",

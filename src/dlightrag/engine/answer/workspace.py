@@ -11,12 +11,13 @@ import re
 import shutil
 import stat
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, NoReturn
 
 from dlightrag.engine.agent.environment import (
+    WORKSPACE_MAX_BYTES,
     ExecutionEnvironment,
     ExecutionEnvironmentAdapter,
     ExecutionMode,
@@ -27,6 +28,8 @@ from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY, is_session_note
 from dlightrag.engine.answer.execution_settings import default_local_workspace_root
+from dlightrag.engine.dependencies import TransientDependencyError
+from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import DeletedRun, parse_run_id
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.store import RunExistenceReader
@@ -34,22 +37,29 @@ from dlightrag.engine.runtime.workspace import (
     SESSION_NOTES_MATERIALIZE_FAILED,
     CommittedSpillRecord,
     HandoffCommit,
+    HandoffConflict,
+    HandoffLeaseLost,
     SessionNoteRecord,
     WorkspaceStore,
     note_digest,
 )
 
 
-class WorkspaceRecoveryFailed(RuntimeError):
-    """Source changed during copy or there is not enough headroom. Retryable."""
+class WorkspaceUnavailable(TransientDependencyError):
+    """The Agent Workspace volume did not answer, so the Run defers rather than fails.
+
+    An OSError while observing, copying, or creating an epoch, a source that moved
+    while it was copied, or no room for one maximum epoch copy. None is a verdict on
+    the Run: nothing recorded changes before a handoff commits, so the next claim
+    copies the recorded epoch again from the start.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("agent_workspace", "Agent Workspace is temporarily unavailable")
 
 
 class WorkspaceIntegrityError(RuntimeError):
     """Unsupported entries or a stable source/destination digest mismatch."""
-
-
-class WorkspaceUnavailableError(RuntimeError):
-    """A Run's own Agent Workspace is gone; its working copy cannot be read or written."""
 
 
 logger = logging.getLogger(__name__)
@@ -104,6 +114,10 @@ async def bind_run_workspace(
     observation. Recovery copies the whole epoch and must not materialize again: this
     Run may have written notes of its own since. Materialization is the caller's to
     attempt: memory degrades rather than failing the Run that could not read it.
+
+    Epoch I/O runs off the event loop, and a volume that does not answer raises
+    :class:`WorkspaceUnavailable`: the recorded epoch is never modified before a
+    handoff commits, so the deferred Run's next claim copies it again.
     """
     root = run_root(workspace_root, owner_id, run_id)
     # A caller that binds without an adapter still gets a confined environment: the
@@ -111,19 +125,20 @@ async def bind_run_workspace(
     adapter = execution_adapter or TrustExecutionAdapter(ConfinementPolicy())
     source_epoch = recorded_epoch
     destination = fencing_epoch
+    await _volume(_require_epoch_headroom, workspace_root)
     # This is deliberately claim-local, not a startup sweep: bind's caller already owns
     # this run's current fenced claim before stale epoch-copy trees may be reclaimed.
-    _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
+    await _volume(_cleanup_stale_epoch_copy_temps, root, current_epoch=destination)
     if source_epoch is None:
         # Nothing is recorded for this Run, so no numbered epoch below this attempt
         # is authoritative: an interrupted bind (crash or a lost claim between the
         # copy and the handoff) left one behind, and fencing epochs only grow.
-        _discard_unrecorded_epochs(root, below=destination)
-        workspace, spill = _prepare_epoch_dirs(root, destination)
+        await _volume(_discard_unrecorded_epochs, root, below=destination)
+        workspace, spill = await _volume(_prepare_epoch_dirs, root, destination)
         inventory: tuple[InventoryPathRecord, ...] = ()
         notes_degraded: str | None = None
         if notes:
-            inventory, notes_degraded = materialize_session_notes(notes, workspace)
+            inventory, notes_degraded = await _volume(materialize_session_notes, notes, workspace)
         if store is not None:
             committed = await store.handoff_epoch(
                 expected_epoch=None, destination_epoch=destination, inventory=inventory
@@ -131,9 +146,9 @@ async def bind_run_workspace(
             if not isinstance(committed, HandoffCommit):
                 # A fenced-out worker must not compose a request that claims notes are
                 # in a workspace this Run does not own.
-                _discard_unrecorded_epochs(root, below=destination + 1)
-                raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
-        _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
+                await _volume(_discard_unrecorded_epochs, root, below=destination + 1)
+                _refuse_handoff(committed)
+        await _volume(_cleanup_stale_epoch_copy_temps, root, current_epoch=destination)
         return RunWorkspace(
             epoch=destination,
             workspace=workspace,
@@ -154,15 +169,20 @@ async def bind_run_workspace(
                 inventory=observed,
             )
             if not isinstance(result, HandoffCommit):
-                raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
-        _retire_epoch(root, source_epoch)
-        _discard_unrecorded_epochs(root, below=destination, keep=destination)
+                # A copy no handoff recorded is no epoch: discard it as the fresh path
+                # does, and keep the recorded source for the claim that can record one.
+                await _volume(
+                    _discard_unrecorded_epochs, root, below=destination + 1, keep=source_epoch
+                )
+                _refuse_handoff(result)
+        await _volume(_retire_epoch, root, source_epoch)
+        await _volume(_discard_unrecorded_epochs, root, below=destination, keep=destination)
         # Narrow the race in which the fenced-out worker creates its unique temp tree
         # after the pre-copy cleanup. A later creation remains safe but may survive.
-        _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
+        await _volume(_cleanup_stale_epoch_copy_temps, root, current_epoch=destination)
     workspace, spill = epoch_paths(root, destination)
-    workspace.mkdir(parents=True, exist_ok=True)
-    spill.mkdir(parents=True, exist_ok=True)
+    await _volume(workspace.mkdir, parents=True, exist_ok=True)
+    await _volume(spill.mkdir, parents=True, exist_ok=True)
     return RunWorkspace(
         epoch=destination,
         workspace=workspace,
@@ -181,37 +201,77 @@ async def copy_epoch_verified(
     Workspace Inventory, so a reader after a recovery sees what the Run holds
     rather than an empty table.
     """
+    spills = await _committed_spills(store) if store is not None else ()
+    return await _volume(_copy_epoch, root, source_epoch, destination, spills)
+
+
+def _copy_epoch(
+    root: Path, source_epoch: int, destination: int, spills: Sequence[CommittedSpillRecord]
+) -> tuple[InventoryPathRecord, ...]:
+    """Copy into a unique temp tree, verify it, and move it into place.
+
+    It runs whole in one thread, which removes its temp tree whatever fails: a
+    cancelled bind cannot race its own cleanup, and the source is only ever read.
+    """
     source_ws, source_spill = epoch_paths(root, source_epoch)
     dest_parent = root / "epochs" / str(destination)
     temp_parent = root / "epochs" / f".tmp-{destination}-{uuid.uuid4().hex}"
     try:
-        manifest_a = _workspace_manifest(source_ws) if source_ws.exists() else {}
         temp_ws = temp_parent / "workspace"
         temp_spill = temp_parent / "internal" / "tool-results"
         temp_ws.mkdir(parents=True)
         temp_spill.mkdir(parents=True)
-        if source_ws.exists():
-            _copy_tree_regular_files(source_ws, temp_ws)
-        manifest_b = _workspace_manifest(source_ws) if source_ws.exists() else {}
-        if manifest_a != manifest_b:
-            raise WorkspaceRecoveryFailed("workspace source changed during copy")
-        if _workspace_manifest(temp_ws) != manifest_a:
+        manifest = _workspace_manifest(source_ws)
+        _copy_tree_regular_files(source_ws, temp_ws)
+        if _workspace_manifest(source_ws) != manifest:
+            # A fenced-out writer is still settling into it: copy again later.
+            logger.warning("Agent Workspace %s changed while it was copied", source_ws)
+            raise WorkspaceUnavailable()
+        if _workspace_manifest(temp_ws) != manifest:
             raise WorkspaceIntegrityError("copied workspace does not match the source manifest")
-        if store is not None:
-            await _copy_committed_spills_paged(source_spill, temp_spill, store)
+        for spill in spills:
+            _copy_committed_spill(source_spill, temp_spill, spill)
         if dest_parent.exists():
             shutil.rmtree(dest_parent)
         temp_parent.rename(dest_parent)
-    except WorkspaceRecoveryFailed, WorkspaceIntegrityError:
-        shutil.rmtree(temp_parent, ignore_errors=True)
-        raise
-    except OSError as exc:
-        shutil.rmtree(temp_parent, ignore_errors=True)
-        raise WorkspaceRecoveryFailed(str(exc)) from exc
     except BaseException:
         shutil.rmtree(temp_parent, ignore_errors=True)
         raise
-    return _inventory_observation(manifest_a)
+    return _inventory_observation(manifest)
+
+
+async def _volume[**P, T](operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """Run blocking workspace I/O off the event loop; an OSError there is an outage.
+
+    A copy on a slow shared mount must not stall the loop that renews leases. The
+    OSError names files the Agent chose, and dependency classification reads the text
+    of the whole cause chain, so it is logged here and the outage is raised outside
+    the handler, chained to nothing.
+    """
+    try:
+        return await asyncio.to_thread(operation, *args, **kwargs)
+    except OSError:
+        logger.warning("Agent Workspace volume did not answer", exc_info=True)
+    raise WorkspaceUnavailable()
+
+
+def _require_epoch_headroom(workspace_root: Path) -> None:
+    """Defer a claim the volume cannot hold one maximum epoch copy for right now.
+
+    Free space is the volume's state at this claim, not configuration: other Runs
+    write and retention reclaims, so a shortfall is an outage rather than a refusal.
+    """
+    usage = os.statvfs(workspace_root)
+    if usage.f_bavail * usage.f_frsize < WORKSPACE_MAX_BYTES:
+        logger.warning("Agent Workspace volume %s has no room for an epoch copy", workspace_root)
+        raise WorkspaceUnavailable()
+
+
+def _refuse_handoff(result: HandoffConflict | HandoffLeaseLost) -> NoReturn:
+    """A handoff that did not commit: this worker lost its claim, or the record moved."""
+    if isinstance(result, HandoffLeaseLost):
+        raise LeaseLostError
+    raise WorkspaceIntegrityError("the recorded workspace epoch moved under this claim")
 
 
 def _inventory_observation(
@@ -530,19 +590,34 @@ def _discard_notes_staging(workspace: Path) -> None:
             logger.warning("Failed to discard notes staging %s", entry, exc_info=True)
 
 
+def _workspace_tree(root: Path) -> Iterator[tuple[Path, tuple[Path, ...]]]:
+    """Yield every directory under ``root`` with the regular files directly in it.
+
+    Strict: ``os.walk`` skips a directory it cannot list and ``Path`` predicates read
+    an error as "no", so either lets an unreadable subtree verify as a smaller tree
+    whose source the handoff then retires. Here a failed listing or lstat raises, and
+    an entry is only ever what lstat says it is.
+    """
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        files: list[Path] = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                mode = entry.stat(follow_symlinks=False).st_mode
+                if stat.S_ISDIR(mode):
+                    pending.append(Path(entry.path))
+                elif stat.S_ISREG(mode):
+                    files.append(Path(entry.path))
+                else:
+                    raise WorkspaceIntegrityError("workspace contains a special or linked file")
+        yield directory, tuple(files)
+
+
 def _workspace_manifest(root: Path) -> dict[str, tuple[str, int, str]]:
-    if not root.exists():
-        return {}
     manifest: dict[str, tuple[str, int, str]] = {}
-    for current, dirnames, filenames in os.walk(root):
-        for name in list(dirnames):
-            path = Path(current) / name
-            if path.is_symlink():
-                raise WorkspaceIntegrityError("workspace contains a symbolic link")
-        for name in filenames:
-            path = Path(current) / name
-            if path.is_symlink() or not path.is_file():
-                raise WorkspaceIntegrityError("workspace contains a special or linked file")
+    for _, files in _workspace_tree(root):
+        for path in files:
             rel = str(path.relative_to(root))
             data = path.read_bytes()
             manifest[rel] = ("file", len(data), hashlib.sha256(data).hexdigest())
@@ -550,24 +625,15 @@ def _workspace_manifest(root: Path) -> dict[str, tuple[str, int, str]]:
 
 
 def _copy_tree_regular_files(source: Path, dest: Path) -> None:
-    for current, dirnames, filenames in os.walk(source):
-        rel_dir = Path(current).relative_to(source)
-        target_dir = dest / rel_dir
+    for directory, files in _workspace_tree(source):
+        target_dir = dest / directory.relative_to(source)
         target_dir.mkdir(parents=True, exist_ok=True)
-        for name in dirnames:
-            if (Path(current) / name).is_symlink():
-                raise WorkspaceIntegrityError("workspace contains a symbolic link")
-        for name in filenames:
-            src = Path(current) / name
-            if src.is_symlink() or not src.is_file():
-                raise WorkspaceIntegrityError("workspace contains a special or linked file")
-            shutil.copy2(src, target_dir / name)
+        for path in files:
+            shutil.copy2(path, target_dir / path.name)
 
 
-async def _copy_committed_spills_paged(
-    source_dir: Path, dest_dir: Path, store: WorkspaceStore
-) -> None:
-    dest_dir.mkdir(parents=True, exist_ok=True)
+async def _committed_spills(store: WorkspaceStore) -> tuple[CommittedSpillRecord, ...]:
+    spills: list[CommittedSpillRecord] = []
     cursor: str | None = None
     while True:
         page = await store.load_spills_page(
@@ -575,23 +641,25 @@ async def _copy_committed_spills_paged(
         )
         if len(page) > _SPILL_RECOVERY_PAGE_SIZE:
             raise WorkspaceIntegrityError("committed spill page exceeded the requested limit")
-        if not page:
-            return
         for spill in page:
             if cursor is not None and spill.resource_id <= cursor:
                 raise WorkspaceIntegrityError(
                     "committed spill pages are not strictly ordered by resource_id"
                 )
-            _copy_committed_spill(source_dir, dest_dir, spill)
+            spills.append(spill)
             cursor = spill.resource_id
         if len(page) < _SPILL_RECOVERY_PAGE_SIZE:
-            return
+            return tuple(spills)
 
 
 def _copy_committed_spill(source_dir: Path, dest_dir: Path, spill: CommittedSpillRecord) -> None:
     name = f"{spill.resource_id}.txt"
     src = source_dir / name
-    if not src.is_file():
+    try:
+        mode = src.lstat().st_mode
+    except FileNotFoundError:
+        mode = 0
+    if not stat.S_ISREG(mode):
         raise WorkspaceIntegrityError(f"committed spill {spill.resource_id} is missing")
     data = src.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -920,8 +988,7 @@ __all__ = [
     "resolve_workspace_root",
     "RunWorkspace",
     "WorkspaceIntegrityError",
-    "WorkspaceRecoveryFailed",
-    "WorkspaceUnavailableError",
+    "WorkspaceUnavailable",
     "active_epoch_workspace",
     "agent_workspace_reclaimer",
     "bind_run_workspace",

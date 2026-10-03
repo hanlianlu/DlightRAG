@@ -3,10 +3,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from dlightrag.engine.agent.environment import WORKSPACE_MAX_BYTES, ExecutionMode
+from dlightrag.engine.agent.environment import ExecutionMode
 
 
 def default_local_workspace_root() -> Path:
@@ -37,9 +36,6 @@ def validate_agent_execution(
     resolved = root.resolve()
     if resolved == working or resolved.is_relative_to(working) or working.is_relative_to(resolved):
         raise ValueError("agent.workspace_root must not overlap working_dir")
-    usage = os.statvfs(resolved)
-    if usage.f_bavail * usage.f_frsize < WORKSPACE_MAX_BYTES:
-        raise ValueError("agent.workspace_root does not have headroom for one maximum epoch copy")
     return resolved
 
 

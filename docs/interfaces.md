@@ -895,8 +895,8 @@ that recall did not find relevant. Every section lists oldest first.
 `GET /health` is liveness: it returns in-process state without model, parser,
 corpus, or database I/O. Its bounded `components` map distinguishes `process`,
 `operational_state`, `run_coordinator`, `cancellation_listener`,
-`corpus_storage`, `parser`, and `providers`; details and warnings use fixed
-sanitized text. The four LightRAG storage class names and
+`corpus_storage`, `parser`, `providers`, and `agent_workspace`; details and
+warnings use fixed sanitized text. The four LightRAG storage class names and
 `answer_image_capability` are also reported, as is `agent_shell_confinement`: what an
 Agent's processes can be confined to on this host, one of `disabled` (no Agent
 environment), `unavailable` (no kernel seam), or `landlock:abiN`. Degraded state
@@ -930,7 +930,8 @@ below. Stable answer error kinds are:
   `unsupported_resource_capability`, `ANSWER_RESOURCE_INVALID`, and
   `UNSUPPORTED_ATTACHMENT_TYPE`;
 - `invalid_tool_configuration`, `unsupported_answer_mode`, `routing_failed`,
-  `tool_contract_changed`, `run_abandoned`, and `run_execution_failed`; and
+  `tool_contract_changed`, `run_abandoned`, `workspace_integrity_error`, and
+  `run_execution_failed`; and
 - `ANSWER_STREAM_FAILED`.
 
 Stable top-level Retrieval terminal error kinds are `retrieval_timeout`,
@@ -952,7 +953,8 @@ commands report the retriable message
 application timeout. Top-level Retrieval applies
 `corpus.retrieval.timeout` only during claimed
 execution and reports `retrieval_timeout` terminally. Explicit transient corpus
-or provider interruptions defer Retrieval and Answer with a durable bounded
+or provider interruptions defer Retrieval and Answer, and an Agent Workspace
+volume that does not answer defers Answer, with a durable bounded
 retry checkpoint, release Query compute capacity, and later resume the same
 Run; the eleventh would fail it as `dependency_unavailable` instead. Authentication, unsupported configuration/schema, invalid input,
 deterministic model rejection, context overflow, and unknown exceptions remain

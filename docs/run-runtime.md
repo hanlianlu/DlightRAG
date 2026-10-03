@@ -58,7 +58,8 @@ semantics.
 
 An executor ends each attempt with success, failure, a deferral, a wait for
 repair (Corpus Mutations only), or a terminal it committed itself. A transient
-interruption of corpus storage, the parser, or a model provider defers the Run:
+interruption of corpus storage, the parser, a model provider, or the Agent
+Workspace volume defers the Run:
 it checkpoints, releases its execution slot, and becomes claimable again at
 `next_attempt_at`, with backoff from five seconds (two for Corpus Mutations)
 doubling to 60. A Run has ten deferrals across all dependencies, about six to
@@ -169,6 +170,13 @@ that sets the Run's epoch; a recovered attempt instead copies the recorded epoch
 verified, and records the copied manifest, never materializing again, and
 unrecorded epochs below the current fencing epoch are discarded
 ([ADR 0022](adr/0022-session-owned-memory-and-run-owned-products.md)).
+A volume that does not answer while a Run binds its epoch (an I/O error, a
+source that changes while it is copied, or no room for one maximum epoch copy)
+defers the Run as an `agent_workspace` outage: nothing recorded changes before
+a handoff commits, so the next claim copies the recorded epoch again, and a copy
+no handoff recorded is discarded. Content recovery refuses (a link or special
+file, a copy unlike its stable source, or a committed spill missing or unlike
+its record) fails the Run as `workspace_integrity_error`.
 
 Fast never enters the Agent interpreter. Acceptance appends the user message
 and a Host turn reservation. Before the assistant settles, the Host stages the

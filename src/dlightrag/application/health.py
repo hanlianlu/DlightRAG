@@ -17,6 +17,7 @@ type HealthComponentName = Literal[
     "corpus_storage",
     "parser",
     "providers",
+    "agent_workspace",
 ]
 type HealthComponentStatus = Literal["healthy", "degraded", "starting", "unknown", "stopped"]
 
@@ -28,6 +29,7 @@ _COMPONENT_ORDER: tuple[HealthComponentName, ...] = (
     "corpus_storage",
     "parser",
     "providers",
+    "agent_workspace",
 )
 _COMPONENT_DETAILS: dict[HealthComponentName, str] = {
     "process": "Process is stopping",
@@ -37,6 +39,7 @@ _COMPONENT_DETAILS: dict[HealthComponentName, str] = {
     "corpus_storage": "Corpus storage unavailable",
     "parser": "Document parser unavailable",
     "providers": "Model providers unavailable",
+    "agent_workspace": "Agent Workspace unavailable",
 }
 
 
@@ -97,6 +100,7 @@ class ApplicationHealth:
             "corpus_storage": "unknown",
             "parser": "unknown",
             "providers": "unknown",
+            "agent_workspace": "unknown",
         }
         self._answer_image_capability: dict[str, object] = {
             "status": "unknown",

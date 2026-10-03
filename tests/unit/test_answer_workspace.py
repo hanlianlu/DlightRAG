@@ -16,6 +16,7 @@ from dlightrag.engine.answer.session_notes import SessionNotesPlane
 from dlightrag.engine.answer.workspace import (
     AgentWorkspaceReclaimer,
     WorkspaceIntegrityError,
+    WorkspaceUnavailable,
     agent_workspace_reclaimer,
     bind_run_workspace,
     copy_epoch_verified,
@@ -27,6 +28,7 @@ from dlightrag.engine.answer.workspace import (
     run_root,
     write_spill_file,
 )
+from dlightrag.engine.runtime.coordinator import LeaseLostError
 from dlightrag.engine.runtime.records import DeletedRun
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, SessionNoteRecord
@@ -81,7 +83,8 @@ def _spill(resource_id: str, content: bytes) -> CommittedSpillRecord:
 async def _seed_spills(
     root: Path, store: InMemoryWorkspaceStore, resource_ids: list[str]
 ) -> dict[str, bytes]:
-    _, spill_dir = epoch_paths(root, 1)
+    workspace, spill_dir = epoch_paths(root, 1)
+    workspace.mkdir(parents=True, exist_ok=True)
     spill_dir.mkdir(parents=True, exist_ok=True)
     contents: dict[str, bytes] = {}
     for resource_id in resource_ids:
@@ -328,6 +331,58 @@ async def test_recover_rejects_a_symlink_as_integrity_error(tmp_path: Path) -> N
             recorded_epoch=1,
             store=store,
         )
+
+
+@pytest.mark.asyncio
+async def test_a_recovery_that_cannot_finish_leaves_only_the_recorded_epoch(tmp_path: Path) -> None:
+    """Whatever stops a recovery, the recorded epoch is left whole and alone.
+
+    A directory the volume will not list is an outage, never a smaller tree that
+    verifies; a lease lost at the handoff stops the worker, and the copy no handoff
+    recorded is discarded.
+    """
+    store = InMemoryWorkspaceStore(workspace_epoch=1)
+    first = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-3",
+        fencing_epoch=1,
+        recorded_epoch=1,
+        store=store,
+    )
+    data = first.workspace / "data"
+    data.mkdir()
+    (data / "rows.csv").write_text("1,2", encoding="utf-8")
+    epochs = run_root(tmp_path, "owner", "run-3") / "epochs"
+
+    data.chmod(0)
+    try:
+        with pytest.raises(WorkspaceUnavailable):
+            await bind_run_workspace(
+                workspace_root=tmp_path,
+                owner_id="owner",
+                run_id="run-3",
+                fencing_epoch=2,
+                recorded_epoch=1,
+                store=store,
+            )
+    finally:
+        data.chmod(0o755)
+    assert [entry.name for entry in epochs.iterdir()] == ["1"]
+
+    store.live = False
+    with pytest.raises(LeaseLostError):
+        await bind_run_workspace(
+            workspace_root=tmp_path,
+            owner_id="owner",
+            run_id="run-3",
+            fencing_epoch=3,
+            recorded_epoch=1,
+            store=store,
+        )
+    assert [entry.name for entry in epochs.iterdir()] == ["1"]
+    assert (data / "rows.csv").read_text(encoding="utf-8") == "1,2"
+    assert store.workspace_epoch == 1
 
 
 @pytest.mark.asyncio
