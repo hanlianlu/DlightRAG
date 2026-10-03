@@ -1,7 +1,7 @@
 # DlightRAG
 
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
+[![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-1f6feb)](https://deepwiki.com/hanlianlu/DlightRAG)
 
 DlightRAG is a production multimodal RAG service built on LightRAG. It combines
 knowledge-graph and vector retrieval with metadata filtering, BM25, visual
