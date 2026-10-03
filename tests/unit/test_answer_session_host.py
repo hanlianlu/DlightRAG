@@ -1103,6 +1103,7 @@ async def test_fast_replay_reinstalls_reservation_on_durable_compaction_checkpoi
         effects=cast(Any, object()),
         tools=(),
         fencing_epoch=1,
+        holder="run",
     )
     with pytest.raises(OperationConflictError, match="lane_state"):
         await stale_runtime.accept(
@@ -1705,6 +1706,7 @@ async def test_runtime_accept_rejects_a_fast_reservation_on_the_same_lane() -> N
         effects=cast(Any, object()),
         tools=(),
         fencing_epoch=1,
+        holder="run",
     )
 
     with pytest.raises(OperationConflictError, match="active Host turn"):

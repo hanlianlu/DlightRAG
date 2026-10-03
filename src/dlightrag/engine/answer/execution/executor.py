@@ -4,7 +4,6 @@
 import asyncio
 import datetime
 import hashlib
-import hmac
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -51,10 +50,10 @@ from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
 from dlightrag.engine.agent.session.registers import (
     ContextProjectionRegister,
+    DeleteRegister,
     HostTurnReservation,
     LaneHead,
     LaneState,
-    OperationMetaRegister,
     RegisterRef,
     SetRegister,
 )
@@ -68,6 +67,7 @@ from dlightrag.engine.agent.session.runtime import (
     FollowUpCommand,
     OperationConflictError,
     SessionLeaseLostError,
+    close_operation,
 )
 from dlightrag.engine.agent.session.transactions import (
     RegisterConflict,
@@ -160,6 +160,7 @@ from dlightrag.engine.answer.research.runtime import (
     AnswerRuntimeControls,
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
+    _accepted_operation_keys,
     _answer_runtime_event_sink,
     _bound_child_dispatch_preparer,
     _bound_child_runner,
@@ -169,6 +170,7 @@ from dlightrag.engine.answer.research.runtime import (
     _durable_child_usage,
     _fenced_control_ack,
     _fenced_control_reader,
+    _held_operation,
     _oldest_pending_input,
     _restore_durable_evidence,
     _usage_from_snapshot_entries,
@@ -234,6 +236,7 @@ from dlightrag.engine.runtime.records import (
     PendingPublication,
     RunExecutionOutcome,
     RunFetchedResource,
+    RunRecord,
     Succeeded,
     WaitingForRepair,
 )
@@ -312,6 +315,8 @@ class AnswerExecutionStore(
     ArtifactReader, AnswerRoutingStore, ResearchRunStore, LineageResourceStore, Protocol
 ):
     """Answer execution persistence, including required Research child operations."""
+
+    async def get_run(self, *, owner_id: str, run_id: str) -> RunRecord | None: ...
 
     async def load_child_attachment_occurrences(
         self,
@@ -627,6 +632,66 @@ class AnswerExecutor:
         if not written:
             # The claim moved on: this worker's state is not the Run's settled one.
             run_trace.update(metadata={"fork_point": "unwritten"})
+
+    async def _reclaim_lane(
+        self,
+        session: RunSession,
+        snapshot: AgentSessionSnapshot,
+        lane_id: LaneId,
+    ) -> AgentSessionSnapshot:
+        """Take this Run's Lane back from a holder that is no longer live.
+
+        A Lane is held by the Run that accepted its active Operation or reserved its
+        Fast turn. A live holder keeps it, and acceptance refuses as it always has. A
+        Run that has ended can never release it, so this Run closes what that one
+        left: its Operation through the Runtime's typed close, or its reservation,
+        whose unanswered question stays on the Lane.
+        """
+        try:
+            state = snapshot.tree.lane(lane_id).state.value
+        except KeyError:
+            return snapshot
+        if not isinstance(state, LaneState):
+            raise TypeError("Lane State register has the wrong value type")
+        ref = RegisterRef("host_turn_reservation", lane_id.value)
+        record = next((item for item in snapshot.registers if item.ref == ref), None)
+        reservation = record.value if record is not None else None
+        if reservation is not None and not isinstance(reservation, HostTurnReservation):
+            raise TypeError("Host turn reservation register has the wrong value type")
+        holder = state.holder or (reservation.reservation_id if reservation is not None else None)
+        if holder is None or holder == session.run_id:
+            return snapshot
+        run = await self._store.get_run(owner_id=session.owner_id, run_id=holder)
+        if run is not None and not run.terminal:
+            return snapshot
+        repository = session.execution.session_repository
+        if state.active_operation_id is not None:
+            await close_operation(
+                repository,
+                fencing_epoch=session.execution.fencing_epoch,
+                holder=session.run_id,
+                session_id=snapshot.session_id,
+                operation_id=OperationId(state.active_operation_id),
+            )
+        elif record is not None:
+            outcome = await repository.transact(
+                session_id=snapshot.session_id,
+                fencing_epoch=session.execution.fencing_epoch,
+                transaction=SessionTransaction.from_parts(
+                    register_writes=[DeleteRegister(ref)],
+                    expectations=[RegisterExpectation(ref, record.sequence)],
+                ),
+            )
+            if isinstance(outcome, TransactionLeaseLost):
+                raise LeaseLostError
+            if isinstance(outcome, RegisterConflict):
+                raise RunExecutionError(
+                    "agent_session_conflict",
+                    "The Agent Lane changed before it could be reclaimed.",
+                )
+        refreshed = await repository.refresh(snapshot.session_id, previous=snapshot)
+        validate_snapshot_refresh(snapshot.session_id, previous=snapshot, snapshot=refreshed)
+        return refreshed
 
     async def _resolve_fork_seed(
         self,
@@ -1084,6 +1149,7 @@ class AnswerExecutor:
             fencing_epoch=session.execution.fencing_epoch,
             previous=loaded_snapshot,
         )
+        canonical_snapshot = await self._reclaim_lane(session, canonical_snapshot, agent_lane_id)
         lane_ids = {lane.lane_id for lane in canonical_snapshot.tree.lanes}
         source_lane_id = LaneId(request.source_lane_id) if request.source_lane_id else None
         fork_head: EntryId | None = None
@@ -1487,12 +1553,15 @@ class AnswerExecutor:
                 )
                 control_reader = _fenced_control_reader(store, session)
                 control_ack = _fenced_control_ack(store, session)
-                controls = AnswerRuntimeControls(reader=control_reader, acknowledge=control_ack)
+                controls = AnswerRuntimeControls(
+                    reader=control_reader, acknowledge=control_ack, run_id=session.run_id
+                )
                 agent_runtime = AgentSessionRuntime(
                     repository=repository,
                     effects=effects,
                     tools=prepared_early.tools,
                     fencing_epoch=session.execution.fencing_epoch,
+                    holder=session.run_id,
                     provider_attempt_limit=plan.provider_attempt_limit,
                     event_sink=_answer_runtime_event_sink(session),
                     controls=controls,
@@ -1512,7 +1581,6 @@ class AnswerExecutor:
                     plan=plan,
                 )
                 accepted_purpose = "research"
-                notified_child_operations: set[str] = set()
                 research_operation_id = accepted.operation_id
                 await session.enter_phase("researching")
                 while True:
@@ -1554,6 +1622,16 @@ class AnswerExecutor:
                             "usage": operation_usage,
                         }
                     )
+                    held = _held_operation(snapshot, agent_lane_id, holder=session.run_id)
+                    if held is not None:
+                        # An earlier attempt accepted the Operation that still holds
+                        # the Lane. It is this Run's program counter and its input may
+                        # be gone, so it resumes before any new input is taken.
+                        accepted = replace(accepted, operation_id=held, cursor=snapshot.cursor)
+                        accepted_purpose = "resumed"
+                        research_operation_id = held
+                        continue
+                    accepted_keys = _accepted_operation_keys(snapshot)
                     next_input = _oldest_pending_input(snapshot, agent_lane_id)
                     next_purpose = "follow_up"
                     command_ids: tuple[str, ...] = ()
@@ -1571,12 +1649,10 @@ class AnswerExecutor:
                                 next_input = (command.command_id, command.content)
                     while next_input is None and subagent_host is not None:
                         notifications = await subagent_host.completed_dispatch_notifications(
-                            seen=notified_child_operations
+                            seen=accepted_keys
                         )
                         if notifications:
-                            notification_id, content = notifications[0]
-                            notified_child_operations.add(notification_id)
-                            next_input = (notification_id, content)
+                            next_input = notifications[0]
                             next_purpose = "child_result"
                             break
                         if not await subagent_host.has_running_children():
@@ -1585,12 +1661,10 @@ class AnswerExecutor:
                             # so that durable completion cannot be lost in that
                             # subscribe/park window.
                             notifications = await subagent_host.completed_dispatch_notifications(
-                                seen=notified_child_operations
+                                seen=accepted_keys
                             )
                             if notifications:
-                                notification_id, content = notifications[0]
-                                notified_child_operations.add(notification_id)
-                                next_input = (notification_id, content)
+                                next_input = notifications[0]
                                 next_purpose = "child_result"
                             break
                         # Parent completion parks on child lifecycle activity,
@@ -1600,17 +1674,6 @@ class AnswerExecutor:
                     if next_input is None:
                         break
                     validate_research_pins()
-                    if next_purpose == "child_result":
-                        next_input = (
-                            next_input[0],
-                            _accepted_child_notification_content(
-                                snapshot,
-                                session_id=session_id,
-                                lane_id=agent_lane_id,
-                                notification_id=next_input[0],
-                                content=next_input[1],
-                            ),
-                        )
                     accepted = await agent_runtime.accept(
                         session_id=session_id,
                         lane_id=agent_lane_id,
@@ -2895,47 +2958,6 @@ __all__ = [
     "OrchestratorRun",
     "answer_trace_output",
 ]
-
-
-def _accepted_child_notification_content(
-    snapshot: Any,
-    *,
-    session_id: SessionId,
-    lane_id: LaneId,
-    notification_id: str,
-    content: str,
-) -> Any:
-    """Recover the immutable input of an already accepted host notification.
-
-    Earlier versions described only the newly merged Evidence delta. Recover
-    their exact UserMessage by the accepted digest, never by trusting a newly
-    rendered payload or relaxing Agent Operation idempotency/Plan validation.
-    """
-    operation_id = OperationId.deterministic(idempotency_key=notification_id)
-    for record in snapshot.registers:
-        if not isinstance(record.value, OperationMetaRegister):
-            continue
-        meta = record.value.meta
-        if meta.operation_id != operation_id:
-            continue
-        for entry in snapshot.tree.ancestry(lane_id):
-            if not isinstance(entry, UserMessageEntry):
-                continue
-            digest = hashlib.sha256(
-                canonical_json(
-                    {
-                        "session_id": session_id.value,
-                        "lane_id": lane_id.value,
-                        "idempotency_key": notification_id,
-                        "content": entry.content,
-                        "plan_digest": meta.plan_digest,
-                    }
-                ).encode("utf-8")
-            ).hexdigest()
-            if hmac.compare_digest(digest, meta.acceptance_digest):
-                return entry.content
-        raise RuntimeError("Accepted child notification lost its immutable input")
-    return content
 
 
 def _agent_effort_trace(

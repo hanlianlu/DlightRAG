@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, NoReturn, Protocol
 
 from pydantic import ValidationError
 
@@ -371,7 +371,11 @@ class AgentSessionSnapshotSeed[HostDeltaT]:
 
 
 class AgentSessionRuntime[HostDeltaT]:
-    """Accept, restore, drive, control, and close durable Agent work."""
+    """Accept, restore, drive, control, and close durable Agent work.
+
+    A Runtime acts for one opaque Host ``holder``: every Operation it accepts holds
+    its Lane in that holder's name until the Operation ends.
+    """
 
     def __init__(
         self,
@@ -380,6 +384,7 @@ class AgentSessionRuntime[HostDeltaT]:
         effects: AgentRuntimeEffects[HostDeltaT],
         tools: Sequence[AgentTool],
         fencing_epoch: int,
+        holder: str,
         provider_attempt_limit: int = 2,
         event_sink: EventSink | None = None,
         controls: RuntimeControlPort | None = None,
@@ -387,8 +392,11 @@ class AgentSessionRuntime[HostDeltaT]:
     ) -> None:
         if fencing_epoch < 1:
             raise ValueError("Agent Session Runtime fencing epoch must be positive")
+        if not holder:
+            raise ValueError("Agent Session Runtime holder cannot be empty")
         if provider_attempt_limit < 1:
             raise ValueError("provider attempt limit must be positive")
+        self._holder = holder
         self._repository = repository
         self._effects = effects
         self._tools = {tool.name: tool for tool in tools}
@@ -480,7 +488,9 @@ class AgentSessionRuntime[HostDeltaT]:
             parent = None
             lane_head_sequence = None
             lane_state_sequence = None
-            lane_state = LaneState(lane_id, active_operation_id=operation_id.value)
+            lane_state = LaneState(
+                lane_id, active_operation_id=operation_id.value, holder=self._holder
+            )
         else:
             lane_state_value = lane.state.value
             if not isinstance(lane_state_value, LaneState):
@@ -492,7 +502,9 @@ class AgentSessionRuntime[HostDeltaT]:
             parent = lane.head_entry_id
             lane_head_sequence = lane.head.sequence
             lane_state_sequence = lane.state.sequence
-            lane_state = replace(lane_state_value, active_operation_id=operation_id.value)
+            lane_state = replace(
+                lane_state_value, active_operation_id=operation_id.value, holder=self._holder
+            )
         message = replace(message, parent_entry_id=parent)
         pending_record = _register(snapshot, RegisterRef("pending_input", lane_id.value))
         pending_write: SetRegister | DeleteRegister | None = None
@@ -1728,6 +1740,7 @@ class AgentSessionRuntime[HostDeltaT]:
                 replace(
                     lane,
                     active_operation_id=None,
+                    holder=None,
                     last_operation_id=view.context.operation_id.value,
                 )
             ),
@@ -1972,6 +1985,67 @@ class AgentSessionRuntime[HostDeltaT]:
             logger.warning("Agent Session event sink failed", exc_info=True)
 
 
+class _ClosingEffects:
+    """The effects of a Runtime that only closes Operations.
+
+    Closing settles every open Tool position without dispatching it and ends the
+    Operation cancelled, so a closing Runtime never reaches any of these.
+    """
+
+    async def assemble_request(
+        self, context: RuntimeContext, *, compaction_declined: bool = False
+    ) -> NoReturn:
+        raise AssertionError("closing an Operation assembles no provider request")
+
+    async def call_provider(
+        self,
+        context: RuntimeContext,
+        request: RequestSnapshot,
+        attempt_id: AttemptId,
+        emit_ephemeral: EventSink,
+    ) -> NoReturn:
+        raise AssertionError("closing an Operation calls no provider")
+
+    async def execute_tool(
+        self,
+        context: RuntimeContext,
+        item: ToolBatchItem,
+        arguments: Mapping[str, Any],
+        attempt_id: AttemptId,
+        emit_ephemeral: EventSink,
+        in_source_order: SourceOrder,
+    ) -> NoReturn:
+        raise AssertionError("closing an Operation dispatches no Tool")
+
+    async def compact(self, context: RuntimeContext, attempt: int) -> NoReturn:
+        raise AssertionError("closing an Operation compacts nothing")
+
+
+async def close_operation(
+    repository: AgentSessionRepository[Any],
+    *,
+    fencing_epoch: int,
+    holder: str,
+    session_id: SessionId,
+    operation_id: OperationId,
+) -> OperationView:
+    """Close, for ``holder``, an Operation whose own holder can no longer finish it.
+
+    The Host decides that the Operation's holder is gone; this is the same typed close
+    a requested cancellation takes. Every open Tool position settles as interrupted or
+    of unknown outcome, nothing is dispatched, the Operation ends cancelled, and its
+    Lane is released.
+    """
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=_ClosingEffects(),
+        tools=(),
+        fencing_epoch=fencing_epoch,
+        holder=holder,
+    )
+    return await runtime.close(session_id=session_id, operation_id=operation_id)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -2087,4 +2161,5 @@ __all__ = [
     "SessionLeaseLostError",
     "SteerCommand",
     "ToolEffectResult",
+    "close_operation",
 ]

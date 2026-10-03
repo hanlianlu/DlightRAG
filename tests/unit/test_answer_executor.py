@@ -23,7 +23,11 @@ from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.environment.confinement import ConfinementPolicy
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.registers import ContextProjectionRegister, SetRegister
+from dlightrag.engine.agent.session.registers import (
+    ContextProjectionRegister,
+    HostTurnReservation,
+    SetRegister,
+)
 from dlightrag.engine.agent.session.transactions import (
     RegisterExpectation,
     SessionTransaction,
@@ -154,6 +158,46 @@ async def test_a_fork_whose_point_cannot_be_resolved_refuses_instead_of_using_th
 
     assert raised.value.kind == kind
     assert remedy in raised.value.public_message
+
+
+@pytest.mark.parametrize("holder_live", [True, False])
+async def test_a_fast_turn_releases_its_lane_only_once_its_run_has_ended(holder_live: bool) -> None:
+    """A reservation whose Run ended is released for the next Run; a live one stays."""
+    executor = _executor()
+    executor._store = MagicMock(
+        get_run=AsyncMock(return_value=SimpleNamespace(terminal=not holder_live))
+    )
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+
+    async def no_result() -> None:
+        return None
+
+    host = FastSessionHost(
+        repository=repository,
+        initial_snapshot=await repository.load(session_id),
+        load_settled_result=no_result,
+        fencing_epoch=1,
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-earlier",
+        idempotency_key="earlier-key",
+        content="earlier question",
+    )
+    session = MagicMock(owner_id="owner", run_id="run-next")
+    session.execution.session_repository = repository
+    session.execution.fencing_epoch = 1
+
+    reclaimed = await executor._reclaim_lane(
+        cast(RunSession, session), await repository.load(session_id), LaneId.main()
+    )
+
+    held = any(isinstance(record.value, HostTurnReservation) for record in reclaimed.registers)
+    assert held is holder_live
+    # The question the ended Run never answered stays on the Lane either way.
+    assert [entry.entry_type for entry in reclaimed.tree.ancestry()] == ["user_message"]
 
 
 async def _compact_lane(

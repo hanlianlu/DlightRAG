@@ -28,7 +28,7 @@ from dlightrag.engine.agent.session.operation import (
 )
 from dlightrag.engine.agent.session.projection import ContextProjection
 
-REGISTER_SCHEMA_VERSION = 2
+REGISTER_SCHEMA_VERSION = 3
 
 RegisterKind = Literal[
     "lane_head",
@@ -93,16 +93,24 @@ class LaneHead:
 
 @dataclass(frozen=True, slots=True)
 class LaneState:
-    """The bounded mutable lifecycle of one Lane cursor."""
+    """The bounded mutable lifecycle of one Lane cursor.
+
+    A Lane is held exactly while it owns an active Operation, and ``holder`` is the
+    opaque Host identity that accepted it. The Runtime never interprets the holder;
+    a Host reads it to decide whether whoever holds the Lane can still release it.
+    """
 
     lane_id: LaneId
     archived: bool = False
     active_operation_id: str | None = None
+    holder: str | None = None
     last_operation_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.archived and self.active_operation_id is not None:
             raise ValueError("an archived Lane cannot own an active Operation")
+        if (self.holder is None) != (self.active_operation_id is None):
+            raise ValueError("a Lane names its holder exactly while it owns an active Operation")
 
     @property
     def ref(self) -> RegisterRef:
@@ -114,6 +122,7 @@ class LaneState:
             "lane_id": self.lane_id.value,
             "archived": self.archived,
             "active_operation_id": self.active_operation_id,
+            "holder": self.holder,
             "last_operation_id": self.last_operation_id,
         }
 
@@ -444,6 +453,7 @@ def decode_register(*, kind: str, payload: dict[str, Any]) -> SessionRegister:
                 if payload.get("active_operation_id") is not None
                 else None
             ),
+            holder=str(payload["holder"]) if payload.get("holder") is not None else None,
             last_operation_id=(
                 str(payload["last_operation_id"])
                 if payload.get("last_operation_id") is not None

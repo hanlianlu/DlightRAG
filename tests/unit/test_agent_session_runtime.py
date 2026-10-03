@@ -251,6 +251,7 @@ def _runtime(
         effects=effects,
         tools=tools,
         fencing_epoch=1,
+        holder="run",
         event_sink=collect,
         controls=controls,
     )
@@ -702,6 +703,7 @@ async def test_runtime_event_sink_failure_is_observe_only() -> None:
         effects=effects,
         tools=[tool],
         fencing_epoch=1,
+        holder="run",
         event_sink=broken,
     )
     session_id = SessionId.new()
@@ -935,6 +937,7 @@ async def test_provider_retry_exhaustion_yields_to_owning_durable_run() -> None:
         effects=effects,
         tools=[tool],
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=2,
     )
     session_id = SessionId.new()
@@ -1028,6 +1031,7 @@ async def test_plan_denied_tool_is_synthetic_even_when_runtime_can_resolve_it() 
         effects=effects,
         tools=[allowed, denied],
         fencing_epoch=1,
+        holder="run",
     )
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -1171,6 +1175,7 @@ async def test_seeded_runtime_first_accept_refreshes_lane_fork_from_canonical_bo
         effects=_Effects([]),
         tools=[tool],
         fencing_epoch=1,
+        holder="run",
         initial_snapshot=AgentSessionSnapshotSeed(
             repository=repository,
             session_id=session_id,
@@ -1231,6 +1236,7 @@ async def test_seeded_runtime_observes_two_concurrent_deltas_without_prefix_rede
         effects=_Effects([]),
         tools=[tool],
         fencing_epoch=1,
+        holder="run",
         initial_snapshot=AgentSessionSnapshotSeed(repository, session_id, startup),
     )
     accepted = await runtime.accept(
@@ -1300,6 +1306,7 @@ async def test_seeded_runtime_rejects_non_authoritative_first_refresh(
         effects=_Effects([]),
         tools=[tool],
         fencing_epoch=1,
+        holder="run",
         initial_snapshot=AgentSessionSnapshotSeed(repository, session_id, seed),
     )
 
@@ -1333,6 +1340,7 @@ async def test_runtime_seed_validates_repository_and_session_identity() -> None:
             effects=_Effects([]),
             tools=[tool],
             fencing_epoch=1,
+            holder="run",
             initial_snapshot=AgentSessionSnapshotSeed(repository, session_id, snapshot),
         )
 
@@ -1388,6 +1396,7 @@ async def test_runtime_cache_decodes_thousand_entry_history_once_across_many_reg
         effects=UnavailableHistory([]),
         tools=[tool],
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=attempts,
     )
     accepted = await runtime.accept(
@@ -2314,6 +2323,7 @@ async def test_cancellation_mid_group_closes_every_pending_call_as_unknown() -> 
         effects=effects,
         tools=[lookup, write],
         fencing_epoch=1,
+        holder="run",
         event_sink=observe,
     )
     session_id = SessionId.new()
@@ -2408,6 +2418,7 @@ async def test_a_stale_group_worker_reports_its_lost_lease_and_writes_nothing() 
         effects=stale_effects,
         tools=[lookup],
         fencing_epoch=1,
+        holder="run",
         event_sink=observe,
     )
     session_id = SessionId.new()
@@ -2429,6 +2440,7 @@ async def test_a_stale_group_worker_reports_its_lost_lease_and_writes_nothing() 
         effects=_TimelineEffects([_assistant(text="done")]),
         tools=[lookup],
         fencing_epoch=2,
+        holder="run",
     )
     recovered = await successor.drive(session_id=session_id, operation_id=accepted.operation_id)
     assert isinstance(recovered.state, OperationCompleted)

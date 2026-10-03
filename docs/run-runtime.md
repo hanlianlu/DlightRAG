@@ -123,6 +123,18 @@ persisted, so a recovery right after one asks again.
 Recovery and Fork rebuild from the selected local Context Projection, never from
 a remote response or conversation id.
 
+A Lane is held while it has an active Operation, and its Lane state names the
+holder, the Run that accepted it; a Fast reservation names its Run the same way.
+A Run's Operations hold the Lane one at a time, so the held one is the Run's
+program counter: a recovered attempt drives it to its end before it takes new
+input from pending follow-ups, controls, or Child results, takes no input twice,
+and never succeeds while an Operation it accepted is open. A Run that finds its
+Lane held by another Run that is still nonterminal fails. A holder that has
+ended, whether cancelled while queued, swept, abandoned, out of deferrals, or
+refused as incompatible, can never release the Lane, so the next Run on it
+closes what that holder left: its Operation through the typed close a
+cancellation takes, or its reservation, keeping the unanswered question.
+
 Before each provider call the Runtime commits the exact request snapshot and
 attempt. Assistant settlement records the complete response and its ordered Tool
 Batch Plan; Tool clearance, effect settlement, ToolResult placement, Host

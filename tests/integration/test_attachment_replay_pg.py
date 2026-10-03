@@ -158,6 +158,7 @@ async def drive(session, session_id, host, prepared, *, lane="main", fetched_buf
         ),
         tools=prepared.tools,
         fencing_epoch=session.fencing_epoch,
+        holder="run",
     )
     accepted = await runtime.accept(
         session_id=session_id,

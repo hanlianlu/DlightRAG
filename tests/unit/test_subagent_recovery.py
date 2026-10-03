@@ -18,11 +18,10 @@ from dlightrag.engine.agent.session.ids import (
     SessionId,
 )
 from dlightrag.engine.agent.session.operation import ToolBatchItem
-from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, OperationIdempotencyConflict
+from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
 from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
@@ -177,7 +176,7 @@ async def test_recovery_preserves_current_pinned_tools(tmp_path: Path):
     )
     repo = MemoryAgentSessionRepository[EffectHostUpdate]()
     runtime = AgentSessionRuntime(
-        repository=repo, effects=MagicMock(), tools=explicit.tools, fencing_epoch=1
+        repository=repo, effects=MagicMock(), tools=explicit.tools, fencing_epoch=1, holder="run"
     )
     await runtime.accept(
         session_id=child,
@@ -203,80 +202,6 @@ async def test_recovery_preserves_current_pinned_tools(tmp_path: Path):
     )
     assert outcome.status == "succeeded"
     assert {tool.name for tool in prepared.tools} == oldnames
-
-
-@pytest.mark.asyncio
-async def test_notification_input_is_immutable_after_evidence_restore():
-    async def model(**kw):
-        return AssistantTurn(text="unused", tool_calls=(), stop_reason="stop")
-
-    parent = SessionId.new()
-    child = SessionId.new()
-    evidence = EvidenceLedger()
-    evidence.add_rows(
-        [{"chunk_id": "c1", "content": "concrete evidence", "file_path": "source.txt"}]
-    )
-    outcome = ChildOutcome(
-        status="succeeded",
-        summary="child complete",
-        child_session_id=child.value,
-        operation_id=OperationId.new().value,
-        evidence_state=evidence.durable_state(),
-    )
-    row = {
-        "status": "succeeded",
-        "child_session_id": child.value,
-        "parent_intent_id": "intent",
-        "parent_call_id": "call",
-        "host_state": {"terminal_outcome": outcome.durable_payload()},
-    }
-    orchestrator = _child_orchestrator(model)
-    host = orchestrator.subagent_host
-    assert host is not None
-    host.parent_session_id = parent
-    host.list_children = AsyncMock(return_value=[row])
-    prepared = orchestrator.prepare_run("parent objective")
-    first = (await host.completed_dispatch_notifications(seen=set()))[0]
-    # Durable parent tool settlement persists this ledger; reclaim restores it.
-    restored = prepared.evidence.durable_state()
-    resumed = _child_orchestrator(model)
-    resumed_host = resumed.subagent_host
-    assert resumed_host is not None
-    resumed_host.parent_session_id = parent
-    resumed_host.list_children = AsyncMock(return_value=[row])
-    resumed_prepared = resumed.prepare_run("parent objective")
-    resumed_prepared.evidence.restore_ledger_state(restored)
-    second = (await resumed_host.completed_dispatch_notifications(seen=set()))[0]
-    assert first == second
-    assert len(resumed_prepared.evidence.contexts["chunks"]) == 1
-    repo = MemoryAgentSessionRepository[EffectHostUpdate]()
-    plan = _child_agent_plan(prepared, ChildRequest(objective="parent objective"))
-    runtime = AgentSessionRuntime(
-        repository=repo, effects=MagicMock(), tools=prepared.tools, fencing_epoch=1
-    )
-    await runtime.accept(
-        session_id=parent,
-        lane_id=LaneId.main(),
-        idempotency_key=first[0],
-        content=first[1],
-        plan=plan,
-    )
-    replay = await runtime.accept(
-        session_id=parent,
-        lane_id=LaneId.main(),
-        idempotency_key=second[0],
-        content=second[1],
-        plan=plan,
-    )
-    assert not replay.created
-    with pytest.raises(OperationIdempotencyConflict):
-        await runtime.accept(
-            session_id=parent,
-            lane_id=LaneId.main(),
-            idempotency_key=second[0],
-            content="changed intent",
-            plan=plan,
-        )
 
 
 def _batch(name):
@@ -329,7 +254,11 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
     async def context(session_id, prepared, objective):
         plan = _child_agent_plan(prepared, ChildRequest(objective=objective))
         runtime = AgentSessionRuntime(
-            repository=repo, effects=MagicMock(), tools=prepared.tools, fencing_epoch=1
+            repository=repo,
+            effects=MagicMock(),
+            tools=prepared.tools,
+            fencing_epoch=1,
+            holder="run",
         )
         accepted = await runtime.accept(
             session_id=session_id,

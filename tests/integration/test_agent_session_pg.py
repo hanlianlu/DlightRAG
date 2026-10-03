@@ -324,6 +324,7 @@ async def _drive(adapter, *, session_id: SessionId, fencing_epoch: int):
         effects=Effects(session_id=session_id),
         tools=[_TOOL],
         fencing_epoch=fencing_epoch,
+        holder="run",
     )
     accepted = await runtime.accept(
         session_id=session_id,
@@ -564,7 +565,7 @@ async def test_a_read_only_group_pends_and_recovers_through_postgres(pool) -> No
         turns=[AssistantTurn(text="", tool_calls=calls, stop_reason="tool_use")],
     )
     runtime = AgentSessionRuntime(
-        repository=repository, effects=first, tools=[read_only], fencing_epoch=epoch
+        repository=repository, effects=first, tools=[read_only], fencing_epoch=epoch, holder="run"
     )
     accepted = await runtime.accept(
         session_id=session_id,
@@ -584,7 +585,11 @@ async def test_a_read_only_group_pends_and_recovers_through_postgres(pool) -> No
     )
     recovered.crash = False
     fresh = AgentSessionRuntime(
-        repository=repository, effects=recovered, tools=[read_only], fencing_epoch=epoch
+        repository=repository,
+        effects=recovered,
+        tools=[read_only],
+        fencing_epoch=epoch,
+        holder="run",
     )
     pending = (await fresh.restore(session_id=session_id, operation_id=accepted.operation_id)).state
     assert isinstance(pending, ToolEffectPending)

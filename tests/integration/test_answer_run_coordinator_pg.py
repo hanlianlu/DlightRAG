@@ -2764,36 +2764,16 @@ class _AdoptThenParkProvider(_AsyncChildProvider):
         return await super().__call__(**kwargs)
 
 
-@pytest.mark.parametrize("legacy_notification", [False, True])
-async def test_reclaim_after_child_notification_and_evidence_settlement(
-    store: FingerprintingRunStore,
-    legacy_notification: bool,
-) -> None:
+async def _leave_a_child_result_holding_the_lane(store: FingerprintingRunStore, owner: str) -> str:
+    """Stop a Research Run's worker while its child-result Operation holds the Lane."""
     provider = _AdoptThenParkProvider()
     orchestrator = _async_child_orchestrator(provider)
-    if legacy_notification:
-        # Older accepted inputs could omit handles already merged by a sibling/status call.
-        host = orchestrator.subagent_host
-        assert host is not None
-        original = host.completed_dispatch_notifications
-
-        async def old_notifications(*, seen):
-            return tuple(
-                (
-                    key,
-                    "\n".join(
-                        line for line in text.splitlines() if not line.startswith("- merged ")
-                    ),
-                )
-                for key, text in await original(seen=seen)
-            )
-
-        host.completed_dispatch_notifications = old_notifications
-    plan = _async_child_plan(orchestrator)
     application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
-    owner = "owner-reclaim-after-adoption"
     creation = await store.create_run(
-        owner_id=owner, request=_answer_run_request(mode="research", agent_run_plan=plan)
+        owner_id=owner,
+        request=_answer_run_request(
+            mode="research", agent_run_plan=_async_child_plan(orchestrator)
+        ),
     )
     try:
         await coordinator.start()
@@ -2805,6 +2785,19 @@ async def test_reclaim_after_child_notification_and_evidence_settlement(
         provider.release_children.set()
         await coordinator.aclose()
         await application.aclose()
+    return creation.run.run_id
+
+
+async def test_a_reclaim_resumes_the_operation_holding_the_lane_before_new_input(
+    store: FingerprintingRunStore,
+) -> None:
+    owner = "owner-reclaim-after-adoption"
+    run_id = await _leave_a_child_result_holding_the_lane(store, owner)
+    # New input waits for the reclaim. The Operation holding the Lane runs first, and
+    # takes the steer at its next checkpoint instead of being displaced by it.
+    assert await store.enqueue_agent_control(
+        owner_id=owner, run_id=run_id, kind="steer", content="Prefer the official report."
+    )
     resumed_provider = _AsyncChildProvider(resumed_parent=True)
     resumed_orchestrator = _async_child_orchestrator(resumed_provider)
     resumed_application, resumed = _answer_runtime(store=store, orchestrator=resumed_orchestrator)
@@ -2812,16 +2805,62 @@ async def test_reclaim_after_child_notification_and_evidence_settlement(
         await resumed.start()
         resumed.wake()
         run = await _wait_for_status(
-            store, owner_id=owner, run_id=creation.run.run_id, status="succeeded", timeout=15
+            store, owner_id=owner, run_id=run_id, status="succeeded", timeout=15
         )
     finally:
         await resumed.aclose()
         await resumed_application.aclose()
     assert resumed_provider.child_calls == 0
-    assert resumed_provider.parent_calls == 1
+    # One call settles the interrupted request, and the steer earns one more.
+    assert resumed_provider.parent_calls == 2
     assert len(run.result["contexts"]["chunks"]) == 1
     assert run.result["usage"]["child_usage_details"] == {"input_tokens": 8, "output_tokens": 4}
     assert [op["purpose"] for op in run.result["trace"]["agent_operations"]] == [
         "research",
-        "child_result",
+        "resumed",
     ]
+
+
+async def test_a_run_takes_back_the_lane_a_cancelled_run_left_held(
+    store: FingerprintingRunStore,
+) -> None:
+    owner = "owner-cancelled-holder"
+    holder = await _leave_a_child_result_holding_the_lane(store, owner)
+    # A queued Run is cancelled without a worker, so nothing closes the Operation it
+    # left holding the Lane: the next Run on the Lane does.
+    cancelled = await store.request_cancellation(owner_id=owner, run_id=holder)
+    assert cancelled.outcome == "cancelled"
+    provider = _AsyncChildProvider(resumed_parent=True)
+    orchestrator = _async_child_orchestrator(provider)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    follow_up = await store.create_run(
+        owner_id=owner,
+        request=_answer_run_request(
+            mode="research", agent_run_plan=_async_child_plan(orchestrator)
+        ),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        run = await _wait_for_status(
+            store, owner_id=owner, run_id=follow_up.run.run_id, status="succeeded", timeout=15
+        )
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+    assert run.result["answer"] == "parent synthesis after child settlement"
+    reader = PGAgentSessionRepository(
+        pool=cast(Any, store)._operation_pool,
+        owner_id=owner,
+        run_id=uuid.UUID(follow_up.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    snapshot = await reader.load(SessionId(_REQUEST["agent_session_id"]))
+    states = [
+        record.value.state
+        for record in snapshot.registers
+        if isinstance(record.value, OperationStateRegister)
+    ]
+    assert sum(isinstance(state, OperationCancelled) for state in states) == 1

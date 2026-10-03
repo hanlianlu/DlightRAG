@@ -19,8 +19,16 @@ from dlightrag.engine.agent.session.operation import (
     ToolBatchItem,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.registers import PendingInput, RequestSnapshot
-from dlightrag.engine.agent.session.repository import AgentSessionRepository
+from dlightrag.engine.agent.session.registers import (
+    LaneState,
+    OperationMetaRegister,
+    PendingInput,
+    RequestSnapshot,
+)
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionRepository,
+    AgentSessionSnapshot,
+)
 from dlightrag.engine.agent.session.runtime import (
     AgentOperationCancelled,
     AgentSessionEvent,
@@ -539,18 +547,24 @@ def _build_effect_host_update(
 
 
 class AnswerRuntimeControls:
-    """Translate ordered Answer control rows into typed Runtime controls."""
+    """Translate ordered Answer control rows into typed Runtime controls.
+
+    Control sequences count from one in every Run, so a command identity, which can
+    become an Operation key in a Session other Runs share, names its Run.
+    """
 
     def __init__(
         self,
         *,
         reader: Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]],
         acknowledge: Callable[[tuple[int, ...]], Awaitable[bool]],
+        run_id: str,
         check_cancelled: Callable[[], Awaitable[None]] | None = None,
         expose_origin: bool = False,
     ) -> None:
         self._reader = reader
         self._acknowledge = acknowledge
+        self._run_id = run_id
         self._check_cancelled = check_cancelled
         self._expose_origin = expose_origin
         self._sequences: dict[str, int] = {}
@@ -566,7 +580,7 @@ class AnswerRuntimeControls:
             content = str(row.get("content") or "")
             if self._expose_origin:
                 content = f"{str(row.get('origin') or 'unknown').capitalize()} steer: {content}"
-            command_id = f"answer-control:{sequence}"
+            command_id = f"answer-control:{self._run_id}:{sequence}"
             self._sequences[command_id] = sequence
             if kind == "follow_up":
                 commands.append(
@@ -1046,6 +1060,27 @@ def _oldest_pending_input(snapshot: Any, lane_id: LaneId) -> tuple[str, Any] | N
     return None
 
 
+def _held_operation(
+    snapshot: AgentSessionSnapshot, lane_id: LaneId, *, holder: str
+) -> OperationId | None:
+    """Return the active Operation ``holder`` accepted on this Lane, if it has one."""
+    state = snapshot.tree.lane(lane_id).state.value
+    if not isinstance(state, LaneState):
+        raise TypeError("Lane State register has the wrong value type")
+    if state.holder != holder or state.active_operation_id is None:
+        return None
+    return OperationId(state.active_operation_id)
+
+
+def _accepted_operation_keys(snapshot: AgentSessionSnapshot) -> set[str]:
+    """Return the key of every Operation the Session has accepted, so none is taken twice."""
+    return {
+        record.value.meta.idempotency_key
+        for record in snapshot.registers
+        if isinstance(record.value, OperationMetaRegister)
+    }
+
+
 def _child_agent_plan(prepared: Any, request: ChildRequest) -> AgentRunPlan:
     return AgentRunPlan.from_tools(
         prepared.tools,
@@ -1333,6 +1368,7 @@ async def run_child_session(
         controls = AnswerRuntimeControls(
             reader=read_child_controls,
             acknowledge=acknowledge_child_controls,
+            run_id=session.run_id,
             check_cancelled=check_child_cancelled,
             expose_origin=True,
         )
@@ -1341,6 +1377,7 @@ async def run_child_session(
         effects=effects,
         tools=prepared.tools,
         fencing_epoch=child_epoch,
+        holder=session.run_id,
         provider_attempt_limit=plan.provider_attempt_limit,
         event_sink=_answer_runtime_event_sink(session),
         controls=controls,

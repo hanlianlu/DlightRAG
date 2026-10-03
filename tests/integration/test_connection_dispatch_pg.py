@@ -396,6 +396,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
             effects=Effects([_assistant(ToolCall("c", tool.name, {"path": "x"}))]),
             tools=[tool],
             fencing_epoch=claim.fencing_epoch,
+            holder="run",
         )
         session_id = SessionId(runtime.execution_scope)
         accepted = await first.accept(
@@ -437,6 +438,7 @@ async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_
             effects=effects,
             tools=[restored],
             fencing_epoch=fresh_claim.fencing_epoch,
+            holder="run",
         )
         final = await asyncio.wait_for(
             second.drive(session_id=session_id, operation_id=accepted.operation_id), 2
@@ -715,6 +717,7 @@ async def test_research_runtime_continues_other_tools_and_reports_unavailable_pa
             effects=Effects(),
             tools=list(tools.values()),
             fencing_epoch=claim.fencing_epoch,
+            holder="run",
         )
         session_id = SessionId(runtime.execution_scope)
         accepted = await agent.accept(

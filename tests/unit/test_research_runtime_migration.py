@@ -583,8 +583,9 @@ async def test_a_steer_after_a_streamed_completion_replaces_the_draft_it_continu
         ),
         tools=(),
         fencing_epoch=1,
+        holder="run",
         event_sink=_answer_runtime_event_sink(cast(Any, session)),
-        controls=AnswerRuntimeControls(reader=read_controls, acknowledge=acknowledge),
+        controls=AnswerRuntimeControls(reader=read_controls, acknowledge=acknowledge, run_id="run"),
     )
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -964,6 +965,7 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         effects=effects,
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=plan.provider_attempt_limit,
     )
     accepted = await runtime.accept(
@@ -1178,6 +1180,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
         ),
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
     )
     accepted = await runtime.accept(
         session_id=session_id,
@@ -1290,6 +1293,7 @@ async def test_research_reads_run_at_once_yet_cite_and_settle_in_source_order() 
         ),
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
     )
     accepted = await runtime.accept(
         session_id=session_id,
@@ -1411,6 +1415,7 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
         ),
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=plan.provider_attempt_limit,
     )
     accepted = await runtime.accept(
@@ -1577,6 +1582,7 @@ async def test_each_research_request_extends_the_previous_transcript_prefix() ->
         ),
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=plan.provider_attempt_limit,
     )
     accepted = await runtime.accept(
@@ -1682,6 +1688,7 @@ async def _drive_research_run(
         ),
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=plan.provider_attempt_limit,
     )
     accepted = await runtime.accept(
@@ -1970,6 +1977,7 @@ async def test_a_compaction_that_covers_the_question_restates_it_after_the_summa
         ),
         tools=prepared.tools,
         fencing_epoch=1,
+        holder="run",
         provider_attempt_limit=plan.provider_attempt_limit,
     )
     accepted = await runtime.accept(

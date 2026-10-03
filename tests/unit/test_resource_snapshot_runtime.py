@@ -144,6 +144,7 @@ async def test_host_settlement_restores_conversion_and_derivative_without_repars
             ),
             tools=prepared.tools,
             fencing_epoch=1,
+            holder="run",
         )
         accepted = await runtime.accept(
             session_id=session_id,

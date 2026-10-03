@@ -341,9 +341,11 @@ class SubagentHost:
         *,
         seen: set[str],
     ) -> tuple[tuple[str, str], ...]:
-        """Return complete durable dispatch outcomes not driven in this execution.
+        """Return complete durable dispatch outcomes whose notification is not in ``seen``.
 
-        Notification identity includes each Child Operation identity, so later
+        ``seen`` holds the keys of the Operations the parent Session has accepted, so
+        no recovered attempt takes the same notification twice. Notification identity
+        includes each Child Operation identity, so later
         Operations in the same Child Session surface without deduplicating the
         Session forever.
         """
