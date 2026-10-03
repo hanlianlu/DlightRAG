@@ -1160,48 +1160,38 @@ async def test_failed_child_is_recorded_failed() -> None:
     assert finish.call_args.kwargs["status"] == "failed"
 
 
-async def test_a_child_that_names_impossible_tools_says_which() -> None:
-    """The parent model named the Tools, so the failure has to name them back."""
-    from dlightrag.engine.answer.errors import ChildToolNarrowingError
-
-    finish = AsyncMock()
-
-    async def run_child(
-        _child_id: SessionId,
-        _request: ChildRequest,
-        _call_id: str,
-        _snapshot: ChildContextSnapshot,
-    ) -> ChildOutcome:
-        raise ChildToolNarrowingError(("no_such_tool",), reason="this Run offers no such Tool")
-
+async def test_a_child_that_cannot_be_prepared_leaves_none_of_its_siblings_persisted() -> None:
+    persist = AsyncMock()
     parent_id = SessionId.new()
+
+    def prepare(
+        child_id: SessionId, request: ChildRequest, snapshot: ChildContextSnapshot
+    ) -> dict[str, Any]:
+        if request.objective == "second":
+            raise ValueError("this child cannot be prepared")
+        return _durable_dispatch(child_id, request, snapshot)
+
     host = SubagentHost(
         parent_session_id=parent_id,
         run_id=str(SessionId.new().value),
         owner_id="owner",
-        persist=AsyncMock(),
-        finish_child=finish,
-        prepare_dispatch=_durable_dispatch,
-        run_child=run_child,
+        persist=persist,
+        prepare_dispatch=prepare,
+        run_child=AsyncMock(),
         context_snapshot=_context_snapshot(parent_id),
     )
-    spawn, _status, wait = subagent_tools(host=host)[:3]
-    spawned = await spawn.execute(
-        _spawn_input("x"),
-        tool_runtime(call_id="call-narrow", tool_name="spawn_agent"),
-    )
-    assert spawned.details is not None
-    child_id = spawned.details["children"][0]["child_session_id"]
-    await host.tasks[child_id]
-    result = await wait.execute(
-        ChildControlInput(child_session_id=child_id), tool_runtime(tool_name="wait_subagent")
-    )
+    spawn = subagent_tools(host=host)[0]
 
-    assert result.details is not None
-    assert result.details["children"][0]["status"] == "failed"
-    assert "no_such_tool" in result.text_content
-    assert finish.call_args is not None
-    assert "no_such_tool" in finish.call_args.kwargs["summary"]
+    with pytest.raises(ValueError, match="cannot be prepared"):
+        await spawn.execute(
+            SpawnAgentInput(
+                children=(ChildRequest(objective="first"), ChildRequest(objective="second"))
+            ),
+            tool_runtime(call_id="call-two", tool_name="spawn_agent"),
+        )
+
+    persist.assert_not_awaited()
+    assert host.tasks == {}
 
 
 @dataclass

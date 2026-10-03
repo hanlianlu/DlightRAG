@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer Host coordination around the deep AgentSessionRuntime."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,36 +58,30 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
     )
 
 
-def test_requested_skill_contribution_precedes_skill_metadata(tmp_path: Path) -> None:
+async def test_an_explicit_skill_request_goes_to_the_parent_and_not_to_its_children(
+    tmp_path: Path,
+) -> None:
     global_root = tmp_path / "global"
     (global_root / "review").mkdir(parents=True)
     (global_root / "review" / "SKILL.md").write_text(
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",
     )
+    orchestrator = _research_owner_with_subagents(tmp_path)
+    orchestrator._skills = SkillsBundle(global_root=global_root, requested_skill="review")
 
-    bundle = SkillsBundle(global_root=global_root, requested_skill="review")
-    contributions = bundle.context_contributions()
+    async def request_text(run) -> str:
+        messages = await run.context.control_turn(evidence=run.evidence, working=run.working)
+        return json.dumps(messages)
 
-    assert [item.source for item in contributions] == ["agent.skills.requested", "agent.skills"]
-    assert contributions[0].authority == "user"
-    assert contributions[1].authority == "reference"
-    assert "load_skill(name='review')" in str(contributions[0].messages[0]["content"])
+    parent = await request_text(orchestrator.prepare_run("question"))
+    child = await request_text(_prepared_child(orchestrator))
 
-
-def test_context_contributions_without_requested_skill_keep_metadata_only(tmp_path: Path) -> None:
-    global_root = tmp_path / "global"
-    (global_root / "review").mkdir(parents=True)
-    (global_root / "review" / "SKILL.md").write_text(
-        "---\nname: review\ndescription: Review plans.\n---\nbody",
-        encoding="utf-8",
-    )
-
-    bundle = SkillsBundle(global_root=global_root)
-    contributions = bundle.context_contributions()
-
-    assert [item.source for item in contributions] == ["agent.skills"]
-    assert contributions[0].authority == "reference"
+    assert "load_skill(name='review')" in parent
+    assert "review: Review plans." in parent
+    # A Child holds load_skill and sees the catalog, but the user's request was not made to it.
+    assert "load_skill(name='review')" not in child
+    assert "review: Review plans." in child
 
 
 def test_skills_bundle_tool_membership_differs_between_parent_and_child(tmp_path: Path) -> None:
@@ -430,11 +425,11 @@ def _research_owner_with_subagents(tmp_path: Path):
     return orchestrator
 
 
-def _child_tools(orchestrator, **request_kwargs):
+def _prepared_child(orchestrator, **request_kwargs):
     from dlightrag.engine.agent.session.ids import EntryId, SessionId
     from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
 
-    child = orchestrator.prepare_child_session(
+    return orchestrator.prepare_child_session(
         ChildRequest(objective="investigate", **request_kwargs),
         context_snapshot=ChildContextSnapshot.from_values(
             parent_session_id=SessionId.new(),
@@ -443,7 +438,10 @@ def _child_tools(orchestrator, **request_kwargs):
             messages=[],
         ),
     )
-    return {tool.name for tool in child.tools}
+
+
+def _child_tools(orchestrator, **request_kwargs):
+    return {tool.name for tool in _prepared_child(orchestrator, **request_kwargs).tools}
 
 
 def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Path) -> None:
@@ -470,32 +468,18 @@ def test_a_childs_default_is_its_parents_capability_minus_authority(tmp_path: Pa
         assert authority not in child_names
 
 
-def test_an_explicit_tool_list_refuses_a_name_the_run_cannot_offer(tmp_path: Path) -> None:
-    """`tools` is caller input, so a refusal names what was wrong (ADR 0025)."""
-    from dlightrag.engine.answer.errors import ChildToolNarrowingError
-
-    orchestrator = _research_owner_with_subagents(tmp_path)
-
-    with pytest.raises(ChildToolNarrowingError) as unknown:
-        _child_tools(orchestrator, tools=["bash", "no_such_tool"])
-    assert unknown.value.names == ("no_such_tool",)
-    assert "no_such_tool" in str(unknown.value)
-
-
 def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Path) -> None:
-    """`tools` narrows; a name the Run withholds is refused rather than granted."""
+    """`tools` only narrows: a name the Run does not offer or a Child may never hold is left out."""
     from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
 
     orchestrator = _research_owner_with_subagents(tmp_path)
+
     narrowed = _child_tools(orchestrator, tools=["bash", "search_knowledge_base"])
-
     assert narrowed == {"bash", "search_knowledge_base", "ask_parent"}
-    assert narrowed & CHILD_FORBIDDEN_TOOLS == set()
-    # Asking for one of them says so, instead of failing as an unknown tool name.
-    from dlightrag.engine.answer.errors import ChildToolNarrowingError
 
-    with pytest.raises(ChildToolNarrowingError, match="never holds: remember"):
-        _child_tools(orchestrator, tools=["bash", "remember"])
+    tolerant = _child_tools(orchestrator, tools=["bash", "no_such_tool", "remember", "spawn_agent"])
+    assert tolerant == {"bash", "ask_parent"}
+    assert tolerant & CHILD_FORBIDDEN_TOOLS == set()
 
 
 def test_child_admission_record_is_shared_and_idempotent_across_retry() -> None:

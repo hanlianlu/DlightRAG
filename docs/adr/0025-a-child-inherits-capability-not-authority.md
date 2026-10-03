@@ -96,6 +96,16 @@ express one rule, and the test asserts the composition rather than the table: a
 name may be added to the table for a tool composition already withholds, and the
 two must agree.
 
+The list never fails a spawn. The child holds the tools its Run composed, minus the
+table, restricted to the names listed; a name the Run does not offer (no web
+provider, no execution environment) or one the table withholds is left out rather
+than refused. A refusal cost more than it protected: the table already withholds
+what must not be held, a bad name failed the whole `spawn_agent` call, siblings
+named correctly included, and a recipe that listed tools by name failed in every
+deployment that did not offer one of them. Every child of a call is prepared
+before the first is persisted, so a child that cannot be prepared leaves no
+sibling behind.
+
 **Parallel children share one tree, so scratch is per child.** The child objective
 prefix tells a child to keep intermediate and scratch files under
 `tmp/children/<its own child session id>/`, which is the one convention that keeps
@@ -161,7 +171,7 @@ Landing order, one sequence:
    branches.
 3. Tests: the forbidden set and the default set are disjoint and together cover
    the parent's composition, so a new tool is classified by that test rather than
-   by inspection; an explicit `tools` list cannot restore a forbidden name; a
+   by inspection; an explicit `tools` list cannot restore a forbidden name and cannot fail the spawn; a
    child runs a command and writes a file with the default set, and a note it
    writes reaches the Session's note plane; the artifact and skill-publication
    tools are absent for a child.

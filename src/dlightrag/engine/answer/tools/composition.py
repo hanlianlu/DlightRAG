@@ -41,7 +41,6 @@ from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegist
 from dlightrag.engine.answer.citations.utils import ATTACHMENT_WORKSPACE, WEB_SEARCH_WORKSPACE
 from dlightrag.engine.answer.continuation_handles import SESSION_NOTE_DIRECTORY
 from dlightrag.engine.answer.errors import (
-    ChildToolNarrowingError,
     InvalidToolConfigurationError,
 )
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -164,20 +163,14 @@ def research_tool_declarations(
     declarations.extend(skills)
     try:
         registry = ToolRegistry(declarations)
-        if tool_names is not None:
-            offered = {
-                tool.name
-                for tool in registry.resolve(None, exclude=CHILD_FORBIDDEN_TOOLS if child else ())
-            }
-            withheld = sorted(set(tool_names) & CHILD_FORBIDDEN_TOOLS) if child else []
-            if withheld:
-                raise ChildToolNarrowingError(tuple(withheld), reason="a Child Session never holds")
-            unknown = sorted(set(tool_names) - offered)
-            if unknown:
-                raise ChildToolNarrowingError(tuple(unknown), reason="this Run offers no such Tool")
         selected_names = tool_names
-        if child and selected_names is not None and "ask_parent" in registry:
-            selected_names = tuple(dict.fromkeys((*selected_names, "ask_parent")))
+        if selected_names is not None:
+            # A caller's list narrows what the Run composed; it never fails the spawn. A
+            # name this Run does not offer is not there to keep, and one a Child may
+            # never hold is dropped by the table below.
+            selected_names = tuple(name for name in selected_names if name in registry)
+            if child and "ask_parent" in registry:
+                selected_names = tuple(dict.fromkeys((*selected_names, "ask_parent")))
         return registry.resolve(selected_names, exclude=CHILD_FORBIDDEN_TOOLS if child else ())
     except DuplicateToolError as exc:
         raise InvalidToolConfigurationError(exc.names) from exc

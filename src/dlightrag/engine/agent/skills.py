@@ -225,8 +225,13 @@ class SkillsBundle:
             disabled_builtin_skills=self._disabled_builtin_skills,
         )
 
-    def context_contributions(self) -> tuple[ContextContribution, ...]:
-        requested = _requested_skill_contribution(self._requested_skill)
+    def context_contributions(self, *, child: bool) -> tuple[ContextContribution, ...]:
+        """What a Run says about Skills: the user's explicit request, then the catalog.
+
+        An explicit request is the user speaking to the Run's own agent. A Child gets the
+        catalog, since it holds ``load_skill``, and its objective, but not that request.
+        """
+        requested = None if child else _requested_skill_contribution(self._requested_skill)
         catalog = self.catalog()
         skill = None if catalog is None else catalog.contribution()
         return tuple(item for item in (requested, skill) if item is not None)

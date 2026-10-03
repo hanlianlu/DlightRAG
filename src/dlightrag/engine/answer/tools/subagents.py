@@ -23,7 +23,6 @@ from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
 from dlightrag.engine.agent.tool_content import tool_content_message_fields
 from dlightrag.engine.agent.tools import AgentTool, ToolDeclaration, ToolResult, ToolRuntime
 from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
-from dlightrag.engine.answer.errors import ChildToolNarrowingError
 from dlightrag.engine.answer.evidence import EvidenceDelta
 from dlightrag.engine.answer.research.persistence import (
     CancelChild,
@@ -795,12 +794,17 @@ async def _spawn(
         for position in range(len(args.children))
     )
 
-    # Every reconstructible envelope commits before any handle becomes visible.
-    for child_id, request in zip(child_ids, args.children, strict=True):
-        if host.persist is not None:
-            if host.prepare_dispatch is None:
-                raise RuntimeError("spawn_agent has no durable dispatch envelope builder")
-            envelope = host.prepare_dispatch(child_id, request, context_snapshot)
+    # Every reconstructible envelope commits before any handle becomes visible, and
+    # every envelope is built before the first commits: a child that cannot be prepared
+    # must not leave its siblings persisted as running with nothing to start them.
+    if host.persist is not None:
+        if host.prepare_dispatch is None:
+            raise RuntimeError("spawn_agent has no durable dispatch envelope builder")
+        envelopes = [
+            host.prepare_dispatch(child_id, request, context_snapshot)
+            for child_id, request in zip(child_ids, args.children, strict=True)
+        ]
+        for child_id, request, envelope in zip(child_ids, args.children, envelopes, strict=True):
             await host.persist(
                 owner_id=host.owner_id,
                 run_id=host.run_id,
@@ -885,15 +889,6 @@ async def _run_one(
         if host._detaching:
             raise
         return await _finish_cancelled_child(host, child_id.value)
-    except ChildToolNarrowingError as exc:
-        # Caller input: the parent model named these Tools, so the parent is told which
-        # ones its Run does not offer instead of receiving a generic child failure.
-        logger.warning("Child Session %s named impossible Tools: %s", child_id.value, exc)
-        outcome = ChildOutcome(
-            status="failed",
-            summary=f"Child session was not started: {exc}.",
-            child_session_id=child_id.value,
-        )
     except Exception as exc:
         # Lease/fencing failures must trigger parent reclaim, never false failure.
         from dlightrag.engine.runtime.coordinator import LeaseLostError
