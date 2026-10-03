@@ -99,7 +99,11 @@ from dlightrag.engine.answer.research.persistence import (
     SteerChild,
     WaitChildGuidance,
 )
-from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
+from dlightrag.engine.answer.resources.models import (
+    RenderedReadTargetError,
+    ResourceManifestEntry,
+    TextWindowBudget,
+)
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
@@ -203,6 +207,7 @@ class AnswerOrchestrator:
         telemetry: Telemetry,
         search_toolchain: SearchToolchain,
         resource_reader: ResourceReader | None = None,
+        rendered_read: bool = False,
         resource_viewer: ResourceViewer | None = None,
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
@@ -230,6 +235,7 @@ class AnswerOrchestrator:
         self._telemetry = telemetry
         self._search_toolchain = search_toolchain
         self._resource_reader = resource_reader
+        self._rendered_read = rendered_read
         self._resource_viewer = resource_viewer
         self._workspace: RunWorkspace | None = None
         #: The Run's durable spill rows, read when a summary must name the handles
@@ -939,6 +945,7 @@ class AnswerOrchestrator:
             injected_tools=self._injected_tools,
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader_for_run(),
+            rendered_read=self._rendered_read,
             resource_viewer=self._resource_viewer,
             environment=None if self._workspace is None else self._workspace.environment,
             scheduler=self._access,
@@ -997,6 +1004,8 @@ class AnswerOrchestrator:
             workspace = self._workspace
             resource_id = request.resource_id or ""
             if workspace is not None and resource_id.startswith("spill_"):
+                if request.rendered:
+                    return ToolResult.text(str(RenderedReadTargetError(resource_id)), is_error=True)
                 return _read_committed_spill(workspace.spill_dir, resource_id, request.cursor)
             if base_reader is None:
                 return ToolResult.text("resource read is not available", is_error=True)

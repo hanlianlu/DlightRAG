@@ -17,7 +17,7 @@ import datetime
 import io
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -55,12 +55,19 @@ from dlightrag.engine.agent.session.transactions import (
     SessionTransaction,
     TransactionCommit,
 )
+from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelInvocationFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserSettings,
+    BrowserHolder,
+    BrowserProvider,
+)
 from dlightrag.engine.answer.citations.streaming import AnswerStream
 from dlightrag.engine.answer.execution import (
     AnswerExecutor,
@@ -81,6 +88,7 @@ from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
+from dlightrag.engine.answer.tools.resources import make_resource_reader
 from dlightrag.engine.answer.tools.subagents import SubagentHost
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import (
@@ -93,6 +101,8 @@ from dlightrag.engine.runtime.records import (
     run_request_fingerprint,
 )
 from tests.conftest import FingerprintingRunStore
+from tests.support.agent_browser import FakeLease, FakeProvider
+from tests.support.dns import public_dns
 from tests.support.pg import (
     PG_CONN_KWARGS,
     drop_database,
@@ -2208,6 +2218,137 @@ async def test_the_terminal_commit_stores_a_converted_products_view_from_the_run
     assert "Revenue grew eleven percent." in view["text"]
 
 
+async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at_settlement(
+    store: FingerprintingRunStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The browser is leased for the Run's own claim, settles with its renderings, and is closed."""
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    url = "https://spa.example.com/quotes.html"
+    lease = FakeLease(sandbox="unavailable")
+    provider = FakeProvider(lease)
+    seen: list[Any] = []
+    before_the_read: list[Any] = []
+    run_lease: dict[str, Any] = {}
+
+    async def model(**kwargs: Any) -> AssistantTurn:
+        seen.append(kwargs["messages"])
+        if len(seen) > 1:
+            return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+        before_the_read.append(provider.leased)
+        async with cast(Any, store)._operation_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT lease_owner, fencing_epoch FROM dlightrag_runs WHERE run_id = $1",
+                uuid.UUID(run_id),
+            )
+        run_lease.update(row)
+        return AssistantTurn(
+            text="",
+            tool_calls=(ToolCall("read-1", "read", {"url": url, "rendered": True}),),
+            stop_reason="tool_use",
+        )
+
+    budget = TextWindowBudget(tokens=850_000)
+    registries: list[ResourceRegistry] = []
+
+    def prepare_registry(prepared: dict[str, Any]) -> ResourceRegistry:
+        registries.append(
+            ResourceRegistry(
+                resource_secret=b"k" * 32,
+                page_renderer=prepared["page_renderer"],
+                fetched_bytes_sink=prepared["fetched_bytes_sink"],
+            )
+        )
+        return registries[0]
+
+    async def read(request: ResourceReadRequest, runtime: ToolRuntime) -> ToolResult:
+        # The reader serves the registry the executor prepared, which exists only once the
+        # Run is claimed.
+        return await make_resource_reader(registries[0], budget)(request, runtime)
+
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_func=model,
+        model_profile=ModelProfile(context_window_tokens=1_000_000),
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=budget,
+        resolved_mode="research",
+        resource_reader=read,
+        rendered_read=True,
+        search_toolchain=SearchToolchain(),
+    )
+    plan = AgentRunPlan.from_tools(
+        orchestrator.prepare_run("Read the page").tools,
+        model_role="query",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    application, coordinator = _answer_runtime(
+        store, orchestrator=orchestrator, registry=prepare_registry, browser_provider=provider
+    )
+    request = _answer_run_request(mode="research", agent_run_plan=plan)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=run_request_fingerprint(request),
+    )
+    run_id = creation.run.run_id
+    await coordinator.start()
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=run_id)
+    assert run is not None and run.result is not None
+    # Nothing is leased until the Run first needs a page rendered.
+    assert before_the_read == [0]
+    assert "| rendered |" in str(seen[-1]) and url in str(seen[-1])
+    (holder,) = provider.holders
+    assert holder == BrowserHolder(
+        owner_id=_OWNER,
+        run_id=run_id,
+        worker_id=run_lease["lease_owner"],
+        fencing_epoch=run_lease["fencing_epoch"],
+    )
+    assert (lease.rendered, lease.closed) == ([url], 1)
+    assert run.result["trace"]["agent_browser_sandbox"] == "unavailable"
+    async with cast(Any, store)._operation_pool.acquire() as conn:
+        kinds = [
+            json.loads(row["capabilities"])["resource_kind"]
+            for row in await conn.fetch(
+                "SELECT capabilities FROM dlightrag_answer_resources WHERE run_id = $1"
+                " ORDER BY resource_id",
+                uuid.UUID(run_id),
+            )
+        ]
+    assert sorted(kinds) == ["conversion_snapshot", "web_render"]
+
+
+async def test_a_fast_run_has_no_browser_to_lease(store: FingerprintingRunStore) -> None:
+    provider = FakeProvider()
+    prepared: list[dict[str, Any]] = []
+    application, coordinator = _answer_runtime(store, browser_provider=provider, prepared=prepared)
+    creation = await store.create_run(
+        owner_id=_OWNER, request=_answer_run_request(), idempotency_fingerprint=_REQUEST_FINGERPRINT
+    )
+    await coordinator.start()
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert run is not None and run.result is not None
+    assert [call["page_renderer"] for call in prepared] == [None]
+    assert provider.leased == 0
+    assert "agent_browser_sandbox" not in run.result["trace"]
+
+
 async def test_publication_correction_is_one_linked_agent_operation(
     store: FingerprintingRunStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -2609,10 +2750,16 @@ def _answer_runtime(
     *,
     orchestrator: AnswerOrchestrator | None = None,
     history_sink: list[PriorTurns] | None = None,
-    registry: ResourceRegistry | None = None,
+    registry: ResourceRegistry | Callable[[dict[str, Any]], ResourceRegistry] | None = None,
     lineage_adoption: bool = True,
+    browser_provider: BrowserProvider | None = None,
+    prepared: list[dict[str, Any]] | None = None,
 ) -> tuple[Application, RunCoordinator]:
-    """Compose the final executor and coordinator over the throwaway database."""
+    """Compose the final executor and coordinator over the throwaway database.
+
+    A ``registry`` factory is given what the executor prepares the Run with, as the
+    resolver is, and ``prepared`` collects each such call.
+    """
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         runtime=RuntimeConfig(
             query=LaneRuntimeConfig(
@@ -2659,10 +2806,24 @@ def _answer_runtime(
         execution_environment=config.answer.agent.execution_environment,
         shell_confinement=ConfinementPolicy(),
         search_toolchain=SearchToolchain(),
+        browser_provider=browser_provider,
+        browser_settings=(
+            AgentBrowserSettings(
+                lease_wait_seconds=1.0,
+                navigation_timeout_seconds=5.0,
+                settle_timeout_seconds=1.0,
+                idle_release_seconds=30.0,
+                max_page_bytes=1_000_000,
+            )
+            if browser_provider is not None
+            else None
+        ),
     )
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:
         projected: PriorTurns = kwargs.get("projected_history") or PriorTurns()
+        if prepared is not None:
+            prepared.append(kwargs)
         return OrchestratorRun(
             orchestrator=orchestrator,
             image_descriptions=[],
@@ -2671,7 +2832,7 @@ def _answer_runtime(
             fast_history_targets=(),
             current_image_count=0,
             workspaces=["default"],
-            registry=registry,
+            registry=registry(kwargs) if callable(registry) else registry,
         )
 
     executor.prepare_orchestrated_run = _prepare  # type: ignore[method-assign]

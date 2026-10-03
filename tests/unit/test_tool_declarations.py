@@ -81,6 +81,7 @@ async def test_binding_preserves_the_plan_and_adds_real_execution() -> None:
         (True, True, True, True, True, ("read", "search_web")),
     ],
 )
+@pytest.mark.parametrize("rendered", [False, True])
 def test_research_acceptance_and_execution_use_identical_declarations(
     tmp_path: Path,
     paths: bool,
@@ -89,6 +90,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     skills: bool,
     child: bool,
     narrow: tuple[str, ...] | None,
+    rendered: bool,
 ) -> None:
     factory = SkillsBundleFactory(global_root=tmp_path / "global", owner_root=tmp_path / "owners")
     model_guidance = "Configured model roles."
@@ -96,6 +98,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
     declared = research_tool_declarations(
         web_search=web,
         resource_read=True,
+        rendered_read=rendered,
         resource_view=True,
         environment=paths,
         artifact_publication=paths,
@@ -117,6 +120,7 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         search_web=AsyncMock() if web else None,
         register_web_source=None,
         resource_reader=AsyncMock(),
+        rendered_read=rendered,
         resource_viewer=AsyncMock(),
         environment=LocalExecutionEnvironment(tmp_path) if paths else None,
         artifacts_root=tmp_path / "artifacts" if paths else None,
@@ -137,6 +141,26 @@ def test_research_acceptance_and_execution_use_identical_declarations(
         assert "attach_artifact" not in {tool.name for tool in declared}
         assert "remember" not in {tool.name for tool in declared}
         assert "ask_parent" in {tool.name for tool in declared}
+
+
+def test_the_rendered_read_is_part_of_the_plan_a_run_is_pinned_to() -> None:
+    """Acceptance pins the tools, so a Run accepted with a browser executes with one."""
+    plain = research_tool_declarations(resource_read=True)
+    rendered = research_tool_declarations(resource_read=True, rendered_read=True)
+    plans = [
+        AgentRunPlan.from_tools(tools, model_role="query", context_policy_revision="test-policy")
+        for tools in (plain, rendered)
+    ]
+
+    assert plans[0].digest != plans[1].digest
+    read = {tool.name: tool for tool in rendered}["read"]
+    assert "rendered" in read.definition.parameters["properties"]
+    assert "rendered=true" in read.description
+    # A Host with no Agent Browser, like a Fast Run, is offered nothing to ask for.
+    assert (
+        "rendered"
+        not in {tool.name: tool for tool in plain}["read"].definition.parameters["properties"]
+    )
 
 
 @pytest.mark.parametrize("child", [False, True])

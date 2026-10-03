@@ -3,11 +3,14 @@
 
 The registry owns every resource for one Answer Run. Inline bytes stay in memory;
 public HTTP(S) locators are fetched lazily and the first successful acquisition
-becomes a fixed durable snapshot. Full bytes never enter model context — only
-bounded text windows do. Continuation cursors are opaque, run-scoped tokens bound
-to a Resource Handle and focus so they expose no path, offset, or provider
-locator. ``aclose`` deterministically cancels pending fetches and joins the
-conversions still running.
+becomes a fixed durable snapshot. A Web Resource may also hold one rendered
+representation, the page as the Agent Browser serialized it after its scripts ran,
+which is appended to the Resource and never replaces its snapshot (ADR 0032). Full
+bytes never enter model context — only bounded text windows do. Continuation cursors
+are opaque, run-scoped tokens bound to a Resource Handle, the representation they
+page, and focus so they expose no path, offset, or provider locator. ``aclose``
+deterministically cancels pending fetches and renders and joins the conversions still
+running.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tools import ResourceAttachmentBytes
 from dlightrag.engine.ai.media import verify_web_image_bytes
 from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.answer.agent_browser import AgentBrowserError, RenderedPage, browser_failure
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     ExtractedVisual,
@@ -41,6 +45,7 @@ from dlightrag.engine.answer.resources.lexical import bm25_rank, mixed_script_te
 from dlightrag.engine.answer.resources.models import (
     EXTRACTION_TEXT,
     PREPARED_RESOURCE_HANDLE_PREFIX,
+    RenderedReadTargetError,
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceInput,
@@ -81,10 +86,40 @@ _CURSOR_SIGNATURE_BYTES = 8
 _CURSOR_PLACEHOLDER = "x" * 34
 _EXTRACT_ACQUISITIONS = frozenset({"exa_extract", "tavily_extract"})
 
+#: A Web Resource's rendered representation is named after it, and is never a handle
+#: the model is shown: results and notes print the Resource's own.
+RENDERED_REPRESENTATION_SUFFIX = "-rendered"
+BROWSER_RENDER = "browser_render"
+_RENDERED_FILENAME = "rendered.html"
+#: The serialized DOM is UTF-8 whatever its own ``<meta charset>`` says.
+_RENDERED_MIME = "text/html; charset=utf-8"
+#: A cursor names the representation it pages, so one Resource's two cannot be confused.
+_RENDERED_CURSOR_PREFIX = "r."
+_VISUAL_CURSOR_KIND = "visual"
+_RENDERED_VISUAL_CURSOR_KIND = "rvisual"
+
 # A run-scoped, provider-neutral fallback that returns already-usable text for
 # a public URL, or ``None`` when it cannot. Exa owns its adapter; the registry
 # never imports any web-search provider.
 UrlTextFallback = Callable[[str], Awaitable[WebExtractResult]]
+# Renders one public URL in the Run's Agent Browser; the registry never imports a browser.
+PageRenderer = Callable[[str], Awaitable[RenderedPage]]
+
+
+@dataclass(frozen=True, slots=True)
+class HostedExtract:
+    """Ask hosted extraction providers for the URL's text."""
+
+    extract: UrlTextFallback
+
+
+@dataclass(frozen=True, slots=True)
+class AgentBrowserRender:
+    """Render the URL in the Run's Agent Browser."""
+
+
+# One step of the automatic Extract chain, tried in order (ADR 0005, ADR 0032).
+type ExtractStep = HostedExtract | AgentBrowserRender
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +177,8 @@ class _Registered:
     presentation: PublicHttpPresentation = PublicHttpPresentation()
     degradation: str | None = None
     stored_view_only: bool = False
+    #: Where a rendered representation's page ended; provenance, never an identity.
+    final_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -162,6 +199,15 @@ class _ConvertedResource:
     extraction_status: str = EXTRACTION_TEXT
 
 
+@dataclass(frozen=True, slots=True)
+class _ChainOutcome:
+    """What walking the Extract chain produced: text, a rendering, or why neither."""
+
+    extracted: WebExtractResult | None = None
+    rendered: _Registered | None = None
+    browser_failure: AgentBrowserError | None = None
+
+
 class _RedirectAlias(Exception):
     def __init__(self, resource_id: str) -> None:
         self.resource_id = resource_id
@@ -178,16 +224,22 @@ class ResourceRegistry:
         max_attachment_bytes: int = _DEFAULT_MAX_ATTACHMENT_BYTES,
         max_total_attachment_bytes: int = _DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES,
         url_timeout: float = 120.0,
-        url_text_fallback: UrlTextFallback | None = None,
+        extract_chain: tuple[ExtractStep, ...] = (),
+        page_renderer: PageRenderer | None = None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
         resource_secret: bytes | None = None,
         cursor_secret: bytes | None = None,
     ) -> None:
+        if page_renderer is None and any(
+            isinstance(step, AgentBrowserRender) for step in extract_chain
+        ):
+            raise ValueError("an Extract chain that renders needs a page renderer")
         self._max_attachments = max_attachments
         self._max_attachment_bytes = max(1, int(max_attachment_bytes))
         self._max_total_attachment_bytes = max(1, int(max_total_attachment_bytes))
         self._url_timeout = url_timeout
-        self._url_text_fallback = url_text_fallback
+        self._extract_chain = extract_chain
+        self._page_renderer = page_renderer
         self._fetched_bytes_sink = fetched_bytes_sink
         self._secret = resource_secret or secrets.token_bytes(32)
         self._cursor_secret = cursor_secret or secrets.token_bytes(32)
@@ -229,10 +281,20 @@ class ResourceRegistry:
         self._fetch_tasks: dict[str, asyncio.Future[bytes]] = {}
         self._text_views: dict[str, _ConvertedResource] = {}
         self._fallback_lock = asyncio.Lock()
-        self._fallback_tasks: dict[str, asyncio.Future[_ConvertedResource]] = {}
-        self._text_view_tasks: dict[str, asyncio.Future[_ConvertedResource]] = {}
+        self._fallback_tasks: dict[str, asyncio.Future[tuple[_Registered, _ConvertedResource]]] = {}
+        self._text_view_tasks: dict[
+            str, asyncio.Future[tuple[_Registered, _ConvertedResource]]
+        ] = {}
         # Adoptions of earlier Runs' Resources run one at a time; see ``adopt``.
         self._adoption_lock = asyncio.Lock()
+        # A Web Resource's rendered representation, by the Resource's id. It is never in
+        # ``_resources``, the manifest, or a handle the model is shown, and it is not
+        # charged to the attachment total. One page renders at most once at a time.
+        self._rendered: dict[str, _Registered] = {}
+        self._render_lock = asyncio.Lock()
+        self._render_tasks: dict[str, asyncio.Future[_Registered]] = {}
+        # Resources whose plain read is the rendered text: their own bytes hold none.
+        self._default_rendered: set[str] = set()
 
     async def __aenter__(self) -> ResourceRegistry:
         return self
@@ -647,11 +709,15 @@ class ResourceRegistry:
             for item in self._resources.values()
         )
 
-    def evidence_source(self, resource_id: str, *, text: bool = False) -> dict[str, str]:
+    def evidence_source(
+        self, resource_id: str, *, text: bool = False, rendered: bool = False
+    ) -> dict[str, str]:
         """Return stable private provenance for evidence derived from a resource.
 
         ``text`` asks for the provenance of the text a read returns, which the
-        Extract chain supplies when the Resource's own bytes hold none.
+        Extract chain supplies when the Resource's own bytes hold none. ``rendered``
+        says that text is the Agent Browser's rendering; everything else about the
+        evidence stays the Resource's own.
         """
         resource = self._require(resource_id)
         source_uri = resource.url if resource.source == "web" and resource.url else resource_id
@@ -659,6 +725,8 @@ class ResourceRegistry:
         snapshot = self._snapshots.get(resource.resource_id)
         if text and snapshot is not None and snapshot.converter in _EXTRACT_ACQUISITIONS:
             acquisition = snapshot.converter
+        if rendered:
+            acquisition = BROWSER_RENDER
         return {
             "source_type": "web_search" if resource.source == "web" else "web_attachment",
             "resource_kind": "web" if resource.url else "attachment",
@@ -685,21 +753,51 @@ class ResourceRegistry:
         max_window_tokens: int,
         focus: str | None = None,
         cursor: str | None = None,
+        rendered: bool = False,
         effect_owner: ResourceEffectOwner | None = None,
     ) -> ResourceReadResult:
-        """Return one page whose complete model-visible envelope fits the budget."""
+        """Return one page whose complete model-visible envelope fits the budget.
+
+        ``rendered`` reads a Web Resource as the Agent Browser renders it, rendering the
+        page when the Run holds no rendering of it yet. A cursor names the representation
+        it continues, so alone it selects that one. Without either, the read is the
+        Resource's own text, or its rendering where the Resource holds none of its own.
+        """
         if max_window_tokens < 1:
             raise ResourceAdmissionError("resource read has no residual model capacity")
         resource = self._require(resource_id)
         resource_id = resource.resource_id
+        continues_rendered = cursor is not None and cursor.startswith(
+            (_RENDERED_CURSOR_PREFIX, f"{_RENDERED_VISUAL_CURSOR_KIND}.")
+        )
+        if rendered:
+            if cursor is not None and not continues_rendered:
+                raise ResourceCursorError(
+                    "this cursor continues the direct representation; "
+                    "call read without rendered=true"
+                )
+            if resource.url is None:
+                raise RenderedReadTargetError(resource_id)
+        rendered_id = f"{resource_id}{RENDERED_REPRESENTATION_SUFFIX}"
         effective_focus = focus
         cursor_state: _CursorState | None = None
-        if cursor is not None and cursor.startswith("visual."):
+        if cursor is not None and cursor.startswith(
+            (f"{_VISUAL_CURSOR_KIND}.", f"{_RENDERED_VISUAL_CURSOR_KIND}.")
+        ):
             if focus is not None:
                 raise ResourceCursorError("visual inventory cursor does not accept focus")
-            start = self.resolve_visual_cursor(cursor, resource_id, "visual")
-            view = await self._read_text_view(resource, effect_owner=effect_owner)
-            handles, note = self._discovery(resource, view, max_window_tokens, start=start)
+            start = self.resolve_visual_cursor(
+                cursor,
+                rendered_id if continues_rendered else resource_id,
+                _RENDERED_VISUAL_CURSOR_KIND if continues_rendered else _VISUAL_CURSOR_KIND,
+            )
+            representation, view = await self._view_of(
+                resource, rendered=continues_rendered, effect_owner=effect_owner
+            )
+            self._require_continued(cursor, representation, continues_rendered)
+            handles, note = self._discovery(
+                resource, representation, view, max_window_tokens, start=start
+            )
             result = ResourceReadResult(
                 resource_id,
                 None,
@@ -710,6 +808,7 @@ class ResourceRegistry:
                 handles,
                 False,
                 note,
+                continues_rendered,
             )
             if estimate_tokens(format_resource_read(result)) > max_window_tokens:
                 raise ResourceAdmissionError(
@@ -717,17 +816,27 @@ class ResourceRegistry:
                 )
             return result
         if cursor is not None:
-            cursor_state = self._resolve_cursor(cursor, resource_id=resource_id)
+            cursor_state = self._resolve_cursor(
+                cursor.removeprefix(_RENDERED_CURSOR_PREFIX) if continues_rendered else cursor,
+                resource_id=rendered_id if continues_rendered else resource_id,
+            )
             if focus is not None:
                 raise ResourceCursorError("cursor is not valid for this resource read")
             effective_focus = None
 
-        view = await self._read_text_view(resource, effect_owner=effect_owner)
+        representation, view = await self._view_of(
+            resource, rendered=rendered or continues_rendered, effect_owner=effect_owner
+        )
+        self._require_continued(cursor, representation, continues_rendered)
+        # A redirect may have bound this read to the Resource another URL already held.
         resource_id = self._canonical_resource_id(resource_id)
+        is_rendered = _is_rendered(representation)
+        plan_id = representation.resource_id
         text = view.text
         resource = self._require(resource_id)
         if (
-            _is_pdf(resource.filename, resource.declared_mime)
+            not is_rendered
+            and _is_pdf(resource.filename, resource.declared_mime)
             and resource_id not in self._pdf_counts
         ):
             content = await self._materialize_bytes(resource, effect_owner=effect_owner)
@@ -735,7 +844,9 @@ class ResourceRegistry:
                 self._pdf_counts[resource_id] = await asyncio.to_thread(pdf_page_count, content)
             except ResourceViewError:
                 self._pdf_counts[resource_id] = None
-        resource_handles, discovery = self._discovery(resource, view, max_window_tokens)
+        resource_handles, discovery = self._discovery(
+            resource, representation, view, max_window_tokens
+        )
         view = replace(view, note=discovery)
         if not text:
             result = ResourceReadResult(
@@ -748,6 +859,7 @@ class ResourceRegistry:
                 visual_handles=resource_handles,
                 evidence_available=view.evidence_available,
                 note=view.note,
+                rendered=is_rendered,
             )
             if estimate_tokens(format_resource_read(result)) > max_window_tokens:
                 raise ResourceAdmissionError(
@@ -760,13 +872,13 @@ class ResourceRegistry:
             # may therefore produce different text and must replace any plan made
             # for the earlier bounded failure summary.
             self._cursor_plans = {
-                key: plan for key, plan in self._cursor_plans.items() if key[0] != resource_id
+                key: plan for key, plan in self._cursor_plans.items() if key[0] != plan_id
             }
         plan_window_tokens = (
             cursor_state.plan_window_tokens if cursor_state is not None else max_window_tokens
         )
         plan = await self._cursor_plan(
-            resource_id,
+            plan_id,
             text,
             effective_focus,
             plan_window_tokens=plan_window_tokens,
@@ -776,6 +888,7 @@ class ResourceRegistry:
         plan_position = cursor_state.plan_position if cursor_state is not None else 0
         char_offset = cursor_state.char_offset if cursor_state is not None else plan[0][0]
         visual_handles = () if cursor_state is not None else resource_handles
+        cursor_prefix = _RENDERED_CURSOR_PREFIX if is_rendered else ""
         locator, chunk, next_position, next_offset = await asyncio.to_thread(
             _read_cursor_span,
             text,
@@ -788,13 +901,15 @@ class ResourceRegistry:
             evidence_available=view.evidence_available,
             note=view.note,
             extraction_status=view.extraction_status,
+            rendered=is_rendered,
+            cursor_prefix=cursor_prefix,
         )
         has_more = next_position < len(plan)
         next_cursor = None
         if has_more:
-            next_cursor = self._mint_cursor(
+            next_cursor = cursor_prefix + self._mint_cursor(
                 _CursorState(
-                    resource_id=resource_id,
+                    resource_id=plan_id,
                     plan_window_tokens=plan_window_tokens,
                     plan_position=next_position,
                     char_offset=next_offset,
@@ -811,14 +926,51 @@ class ResourceRegistry:
             visual_handles=visual_handles,
             evidence_available=view.evidence_available,
             note=view.note,
+            rendered=is_rendered,
         )
+
+    async def _view_of(
+        self,
+        resource: _Registered,
+        *,
+        rendered: bool,
+        effect_owner: ResourceEffectOwner | None,
+    ) -> tuple[_Registered, _ConvertedResource]:
+        """The representation a read pages, with its text view.
+
+        ``rendered`` names the Agent Browser's rendering: a read that asked for it renders
+        the page when the Run holds none, and one continuing it needs the Run to hold it.
+        """
+        if not rendered:
+            return await self._read_text_view(resource, effect_owner=effect_owner)
+        if resource.url is None:
+            raise RenderedReadTargetError(resource.resource_id)
+        representation = await self._render(resource)
+        return representation, await self._rendered_view(representation)
+
+    @staticmethod
+    def _require_continued(
+        cursor: str | None, representation: _Registered, continues_rendered: bool
+    ) -> None:
+        """A cursor continues the representation it names, or the read refuses it."""
+        if cursor is not None and _is_rendered(representation) != continues_rendered:
+            raise ResourceCursorError(
+                "this cursor continues the "
+                + ("rendered" if continues_rendered else "direct")
+                + " representation, which this read does not return"
+            )
 
     async def _read_text_view(
         self,
         resource: _Registered,
         *,
         effect_owner: ResourceEffectOwner | None,
-    ) -> _ConvertedResource:
+    ) -> tuple[_Registered, _ConvertedResource]:
+        """The representation a plain read pages, with its text view.
+
+        It is the Resource's own text. A Resource whose own bytes hold none reads as the
+        Agent Browser rendered it, when it did (ADR 0032).
+        """
         if resource.resource_id in self._refused:
             # A cancelled read can finish native conversion after its own Tool
             # intent has stopped. Rebind the already-fetched source to the next
@@ -835,9 +987,9 @@ class ResourceRegistry:
             return await self._read_link_text_view(resource, effect_owner=effect_owner)
         cached = self._text_views.get(resource.resource_id)
         if cached is not None:
-            return cached
+            return resource, cached
         content = await self._materialize_bytes(resource, effect_owner=effect_owner)
-        return await self._text_view_from_content(resource, content)
+        return resource, await self._text_view_from_content(resource, content)
 
     async def _text_view_from_content(
         self,
@@ -876,7 +1028,7 @@ class ResourceRegistry:
         resource: _Registered,
         *,
         effect_owner: ResourceEffectOwner | None,
-    ) -> _ConvertedResource:
+    ) -> tuple[_Registered, _ConvertedResource]:
         """Read one fixed URL snapshot, taking text from the Extract chain when it has none."""
         url = resource.url
         if url is None:  # pragma: no cover - only link resources are routed here
@@ -890,7 +1042,10 @@ class ResourceRegistry:
                     content,
                     effect_owner=effect_owner,
                 )
-            return cached
+            return resource, cached
+        rendered = self._rendered_for_plain_read(resource)
+        if rendered is not None:
+            return rendered, await self._rendered_view(rendered)
         # Settled bytes never re-enter the network path, and read as fetched ones do.
         content = self._restored_bytes(resource.resource_id)
         if content is None:
@@ -946,7 +1101,7 @@ class ResourceRegistry:
                 content,
                 effect_owner=effect_owner,
             )
-            return view
+            return resource, view
         try:
             await self._persist_fetched(
                 resource.resource_id,
@@ -958,7 +1113,23 @@ class ResourceRegistry:
             self._converted.pop(resource.resource_id, None)
             self._fetched.pop(resource.resource_id, None)
             raise
-        return view
+        return resource, view
+
+    def _rendered_for_plain_read(self, resource: _Registered) -> _Registered | None:
+        """The rendering a plain read takes instead of fetching, when the Resource's own text is no use.
+
+        The decision rests on what the Run holds, which is what recovery restores: a Resource
+        with no bytes of its own, or one whose bytes were found to hold no text, reads as its
+        rendering, without a fetch and without walking the chain again.
+        """
+        rendered = self._settled_rendered(resource.resource_id)
+        if rendered is None:
+            return None
+        resource_id = resource.resource_id
+        holds_bytes = resource_id in self._fetched or resource_id in self._fetch_tasks
+        if resource_id in self._default_rendered or not holds_bytes:
+            return rendered
+        return None
 
     async def _extract_text_view(
         self,
@@ -967,17 +1138,19 @@ class ResourceRegistry:
         content: bytes,
         *,
         effect_owner: ResourceEffectOwner | None,
-    ) -> _ConvertedResource:
+    ) -> tuple[_Registered, _ConvertedResource]:
         """Read bound bytes that hold no text through the Extract chain, keeping them.
 
         The bytes stay the Resource's one representation, so a view and a read of it
         agree whichever comes first (ADR 0029). The Extract text becomes their text
         view: a conversion snapshot of exactly these bytes, which settles with the
-        read and is restored with them. Concurrent reads share one Extract. When it
-        yields nothing, bytes no call has admitted are forgotten, so a later read may
-        fetch them again as after a failed fetch.
+        read and is restored with them. When the chain's browser rendered the page
+        instead, the rendering is the text and the bytes settle beside it. Concurrent
+        reads share one walk. When it yields nothing, bytes no call has admitted are
+        forgotten, so a later read may fetch them again as after a failed fetch.
         """
         resource_id = resource.resource_id
+        representation: _Registered = resource
         view = self._text_views.get(resource_id)
         if view is None:
             async with self._fallback_lock:
@@ -988,7 +1161,7 @@ class ResourceRegistry:
                     )
                     self._text_view_tasks[resource_id] = task
             try:
-                view = await asyncio.shield(task)
+                representation, view = await asyncio.shield(task)
             except BaseException:
                 if task.done():
                     async with self._fallback_lock:
@@ -998,25 +1171,32 @@ class ResourceRegistry:
             async with self._fallback_lock:
                 if self._text_view_tasks.get(resource_id) is task:
                     self._text_view_tasks.pop(resource_id, None)
+        if _is_rendered(representation):
+            self._default_rendered.add(resource_id)
+            await self._persist_fetched(resource_id, content, effect_owner=effect_owner)
+            return representation, view
         if not view.evidence_available:
             unadmitted = resource_id not in self._admitted_fetched
             if unadmitted and resource_id not in self._durable_fetched:
                 if self._fetched.get(resource_id) is content:
                     del self._fetched[resource_id]
                 self._converted.pop(resource_id, None)
-            return view
+            return resource, view
         await self._persist_fetched(resource_id, content, effect_owner=effect_owner)
-        return view
+        return resource, view
 
     async def _adopt_extract_text_view(
         self,
         resource: _Registered,
         url: str,
         content: bytes,
-    ) -> _ConvertedResource:
-        extracted = await self._extract(url)
+    ) -> tuple[_Registered, _ConvertedResource]:
+        outcome = await self._walk_chain(resource, url)
+        if outcome.rendered is not None:
+            return outcome.rendered, await self._rendered_view(outcome.rendered)
+        extracted = outcome.extracted
         if extracted is None:
-            return _unavailable_web_view()
+            return resource, _unavailable_web_view(outcome.browser_failure)
         self.adopt_conversion_snapshot(
             ConversionSnapshot(
                 resource_id=resource.resource_id,
@@ -1029,7 +1209,7 @@ class ResourceRegistry:
                 note=_extract_note(extracted),
             )
         )
-        return self._converted[resource.resource_id]
+        return resource, self._converted[resource.resource_id]
 
     async def _ensure_converted(
         self,
@@ -1170,7 +1350,7 @@ class ResourceRegistry:
         )
 
     def adopt_conversion_snapshot(self, snapshot: ConversionSnapshot) -> None:
-        resource = self._require(snapshot.resource_id)
+        resource = self._representation(snapshot.resource_id)
         content = resource.content or self._fetched.get(resource.resource_id)
         if content is not None and hashlib.sha256(content).hexdigest() != snapshot.input_digest:
             raise ResourceStateMismatchError("conversion snapshot input digest mismatch")
@@ -1234,6 +1414,106 @@ class ResourceRegistry:
         snapshot = self._snapshots.get(self._canonical_resource_id(resource_id))
         return snapshot.effects() if snapshot is not None else ()
 
+    def holds_rendered(self, representation_id: str) -> bool:
+        """Whether ``representation_id`` names a rendered representation this Run holds."""
+        parent = representation_id.removesuffix(RENDERED_REPRESENTATION_SUFFIX)
+        rendered = self._rendered.get(parent)
+        return rendered is not None and rendered.resource_id == representation_id
+
+    def rendered_effects(self, resource_id: str) -> tuple[ResourceAttachmentBytes, ...]:
+        """What settles a Web Resource's rendering: its bytes, then its conversion view.
+
+        The rendering is its own Resource row, named for the Resource it renders and
+        located by it, so recovery restores it without rendering again. A Resource with
+        no rendering settles nothing.
+        """
+        parent = self._canonical_resource_id(resource_id)
+        rendered = self._settled_rendered(parent)
+        resource = self._resources.get(parent)
+        if rendered is None or resource is None or rendered.content is None:
+            return ()
+        return (
+            ResourceAttachmentBytes(
+                resource_id=rendered.resource_id,
+                filename=_RENDERED_FILENAME,
+                mime_type=_RENDERED_MIME,
+                source_locator=parent,
+                content=rendered.content,
+                resource_kind="web_render",
+                attributes=(
+                    ("acquisition", BROWSER_RENDER),
+                    ("admission_origin", rendered.admission_origin),
+                    ("url", resource.url or ""),
+                    ("final_url", rendered.final_url or ""),
+                ),
+            ),
+            *self.conversion_effects(rendered.resource_id),
+        )
+
+    def restore_rendered(
+        self,
+        parent_id: str,
+        *,
+        url: str,
+        admission_origin: Literal["caller", "search", "agent"],
+        final_url: str,
+        content: bytes,
+    ) -> None:
+        """Hydrate one settled rendering under the Web Resource it renders.
+
+        A Resource only ever rendered has no row of its own to restore, so a search or
+        agent Resource is registered again from its URL: the handle is minted from the
+        Run's identity and the URL, and must be the handle the rendering was recorded
+        under. A caller Resource comes from the accepted request, so one that is missing
+        is a catalog that does not describe the Run.
+        """
+        self._ensure_open()
+        if self._resources.get(self._canonical_resource_id(parent_id)) is None:
+            if admission_origin == "caller":
+                raise ResourceStateMismatchError(
+                    "a durable rendering names a caller link the request does not describe"
+                )
+            validate_agent_public_url(url)
+            minted = self._register(ResourceInput(url=url), admission_origin=admission_origin)
+            if minted != parent_id:
+                raise ResourceStateMismatchError(
+                    "a durable rendering does not match the Resource its URL registers"
+                )
+        parent = self._require(parent_id)
+        if parent.url is None:
+            raise ResourceStateMismatchError("a durable rendering names a Resource with no URL")
+        validate_agent_public_url(final_url)
+        held = self._rendered.get(parent.resource_id)
+        if held is not None:
+            if held.content != content:
+                raise ResourceStateMismatchError("one Web resource cannot hold two renderings")
+            return
+        self._rendered[parent.resource_id] = _rendered_representation(
+            parent, content, final_url=normalize_public_http_url_identity(final_url)
+        )
+
+    def canonical_resource_id(self, resource_id: str) -> str:
+        """The handle a Resource goes by in results, whichever of its handles was named."""
+        return self._canonical_resource_id(resource_id)
+
+    def held_visual_asset(
+        self, resource_id: str, handle_id: str
+    ) -> tuple[ExtractedVisual, bool] | None:
+        """An embedded image this Run already holds for the Resource, and whether it came from
+        the rendering, or None; nothing is fetched or converted to find it."""
+        resource = self._resources.get(self._canonical_resource_id(resource_id))
+        if resource is None:
+            return None
+        asset = self._visual_assets.get((resource.resource_id, handle_id))
+        if asset is not None:
+            return asset, False
+        rendered = self._settled_rendered(resource.resource_id)
+        if rendered is not None:
+            asset = self._visual_assets.get((rendered.resource_id, handle_id))
+            if asset is not None:
+                return asset, True
+        return None
+
     def visual_cursor(self, resource_id: str, start: int, kind: str) -> str:
         payload = struct.pack(">I", start)
         return (
@@ -1260,17 +1540,24 @@ class ResourceRegistry:
             raise ResourceCursorError("invalid visual continuation cursor") from exc
 
     def _discovery(
-        self, resource: _Registered, view: _ConvertedResource, budget: int, *, start: int = 0
+        self,
+        resource: _Registered,
+        representation: _Registered,
+        view: _ConvertedResource,
+        budget: int,
+        *,
+        start: int = 0,
     ) -> tuple[tuple[VisualHandle, ...], str | None]:
+        """The visual handles of ``view``, named by the Resource and bound to its representation."""
         notes = [view.note] if view.note else []
-        if _is_pdf(resource.filename, resource.declared_mime):
+        if _is_pdf(resource.filename, resource.declared_mime) and not _is_rendered(representation):
             count = self._pdf_counts.get(resource.resource_id)
             if count is not None:
                 notes.append(f"Physical PDF page count: {count}.")
             notes.append(
                 f"Extracted text view; physical pages are not mapped to text lines. Use view(resource_id={resource.resource_id!r}) for a bounded page overview, or locator='1' for page detail."
             )
-        elif is_convertible(resource.filename, resource.declared_mime):
+        elif is_convertible(representation.filename, representation.declared_mime):
             notes.append(
                 f"Extracted text view; coverage is unverified. Use view(resource_id={resource.resource_id!r}, locator=<handle>) for an embedded image, not a whole-page screenshot."
             )
@@ -1286,7 +1573,13 @@ class ResourceRegistry:
         if end < len(view.handles):
             if not selected:
                 raise ResourceAdmissionError("visual inventory has no residual model capacity")
-            cursor = self.visual_cursor(resource.resource_id, end, "visual")
+            cursor = self.visual_cursor(
+                representation.resource_id,
+                end,
+                _RENDERED_VISUAL_CURSOR_KIND
+                if _is_rendered(representation)
+                else _VISUAL_CURSOR_KIND,
+            )
             notes.append(
                 f"Visuals {start + 1}-{end} of {len(view.handles)}; more: read(resource_id={resource.resource_id!r}, cursor={cursor!r})."
             )
@@ -1327,6 +1620,9 @@ class ResourceRegistry:
         effect_owner: ResourceEffectOwner | None = None,
     ) -> ExtractedVisual:
         """Return an embedded visual asset by handle, converting on demand."""
+        held = self.held_visual_asset(resource_id, handle_id)
+        if held is not None:
+            return held[0]
         resource = self._require(resource_id)
         if is_convertible(resource.filename, resource.declared_mime):
             await self._ensure_converted(resource, effect_owner=effect_owner)
@@ -1347,6 +1643,7 @@ class ResourceRegistry:
             *self._fetch_tasks.values(),
             *self._fallback_tasks.values(),
             *self._text_view_tasks.values(),
+            *self._render_tasks.values(),
         ]
         for task in tasks:
             task.cancel()
@@ -1369,6 +1666,9 @@ class ResourceRegistry:
         self._fetch_tasks.clear()
         self._fallback_tasks.clear()
         self._text_view_tasks.clear()
+        self._render_tasks.clear()
+        self._rendered.clear()
+        self._default_rendered.clear()
 
     def _canonical_resource_id(self, resource_id: str) -> str:
         seen: set[str] = set()
@@ -1386,6 +1686,20 @@ class ResourceRegistry:
             return self._resources[canonical]
         except KeyError as exc:
             raise ResourceNotFoundError(f"unknown resource id: {resource_id}") from exc
+
+    def _representation(self, representation_id: str) -> _Registered:
+        """The Resource, or the rendered representation, that ``representation_id`` names."""
+        parent = representation_id.removesuffix(RENDERED_REPRESENTATION_SUFFIX)
+        rendered = self._rendered.get(parent)
+        if rendered is not None and rendered.resource_id == representation_id:
+            return rendered
+        return self._require(representation_id)
+
+    def _settled_rendered(self, resource_id: str) -> _Registered | None:
+        """The Resource's rendering once it has settled; one still being made is not yet."""
+        if resource_id in self._render_tasks:
+            return None
+        return self._rendered.get(resource_id)
 
     async def _materialize_bytes(
         self,
@@ -1605,8 +1919,13 @@ class ResourceRegistry:
         url: str,
         *,
         effect_owner: ResourceEffectOwner | None,
-    ) -> _ConvertedResource:
-        """Share one Extract attempt; cache only a successfully admitted snapshot."""
+    ) -> tuple[_Registered, _ConvertedResource]:
+        """Share one walk of the Extract chain; cache only a successfully admitted snapshot.
+
+        A hosted provider's text becomes the Resource's representation. The browser's
+        rendering is appended to the Resource instead, so a plain read of it takes the
+        rendering from then on and nothing is cached as the Resource's own text.
+        """
         resource_id = resource.resource_id
         cached = self._text_views.get(resource_id)
         if cached is not None:
@@ -1617,7 +1936,7 @@ class ResourceRegistry:
                     content,
                     effect_owner=effect_owner,
                 )
-            return cached
+            return resource, cached
         async with self._fallback_lock:
             cached = self._text_views.get(resource_id)
             if cached is not None:
@@ -1628,13 +1947,13 @@ class ResourceRegistry:
                         content,
                         effect_owner=effect_owner,
                     )
-                return cached
+                return resource, cached
             task = self._fallback_tasks.get(resource_id)
             if task is None:
                 task = asyncio.ensure_future(self._run_fallback(resource, url))
                 self._fallback_tasks[resource_id] = task
         try:
-            view = await asyncio.shield(task)
+            representation, view = await asyncio.shield(task)
         except BaseException:
             if task.done():
                 async with self._fallback_lock:
@@ -1644,7 +1963,10 @@ class ResourceRegistry:
         async with self._fallback_lock:
             self._fallback_tasks.pop(resource_id, None)
             if not view.evidence_available:
-                return view
+                return representation, view
+            if _is_rendered(representation):
+                self._default_rendered.add(resource_id)
+                return representation, view
             cache_id = self._canonical_resource_id(resource_id)
             self._text_views.setdefault(cache_id, view)
             admitted = self._text_views[cache_id]
@@ -1655,43 +1977,65 @@ class ResourceRegistry:
                 content,
                 effect_owner=effect_owner,
             )
-        return admitted
+        return resource, admitted
 
     async def _run_fallback(
         self,
         resource: _Registered,
         url: str,
-    ) -> _ConvertedResource:
-        """Bind Extract text to a Resource whose fetch failed, as its representation."""
-        extracted = await self._extract(url)
+    ) -> tuple[_Registered, _ConvertedResource]:
+        """Bind the chain's text to a Resource whose fetch failed, as its representation."""
+        outcome = await self._walk_chain(resource, url)
+        if outcome.rendered is not None:
+            return outcome.rendered, await self._rendered_view(outcome.rendered)
+        extracted = outcome.extracted
         if extracted is None:
-            return _unavailable_web_view()
+            return resource, _unavailable_web_view(outcome.browser_failure)
         canonical = self._bind_final_url(resource, extracted.url)
         existing_content = self._fetched.get(canonical.resource_id)
         if existing_content is not None:
             # Bytes bound first win, here or behind a redirect: the text yields to them.
-            return await self._text_view_from_content(canonical, existing_content)
-        resource = canonical
-        resource.acquisition = extracted.acquisition
-        resource.declared_mime = "text/markdown; charset=utf-8"
-        resource.degradation = _extract_note(extracted)
-        self._fetched[resource.resource_id] = extracted.text.encode("utf-8")
-        return _ConvertedResource(
+            return resource, await self._text_view_from_content(canonical, existing_content)
+        canonical.acquisition = extracted.acquisition
+        canonical.declared_mime = "text/markdown; charset=utf-8"
+        canonical.degradation = _extract_note(extracted)
+        self._fetched[canonical.resource_id] = extracted.text.encode("utf-8")
+        return resource, _ConvertedResource(
             text=extracted.text,
             handles=(),
-            note=resource.degradation,
+            note=canonical.degradation,
         )
 
-    async def _extract(self, url: str) -> WebExtractResult | None:
-        """Text of one public URL from the Extract chain, or None when it has none."""
-        if self._url_text_fallback is None:
-            return None
+    async def _walk_chain(self, resource: _Registered, url: str) -> _ChainOutcome:
+        """Try the Extract chain's steps in order for one URL; the first usable result wins.
+
+        A rendering the Run already holds is the result, and no step runs. A browser that
+        fails is recorded and the walk goes on: an automatic render never raises.
+        """
+        rendered = self._settled_rendered(resource.resource_id)
+        if rendered is not None:
+            return _ChainOutcome(rendered=rendered)
+        failure: AgentBrowserError | None = None
+        for step in self._extract_chain:
+            if isinstance(step, HostedExtract):
+                extracted = await self._extract(step.extract, url)
+                if extracted is not None:
+                    return _ChainOutcome(extracted=extracted)
+                continue
+            try:
+                return _ChainOutcome(rendered=await self._render(resource))
+            except AgentBrowserError as exc:
+                failure = exc
+        return _ChainOutcome(browser_failure=failure)
+
+    async def _extract(self, extract: UrlTextFallback, url: str) -> WebExtractResult | None:
+        """Text of one public URL from one hosted step, or None when it has none."""
         # Extraction providers must never receive a private or credential-bearing
         # locator, even when a caller attachment used private transport metadata.
         validate_agent_public_url(url)
         await avalidate_public_http_url(url)
         try:
-            extracted = await self._url_text_fallback(url)
+            extracted = await extract(url)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1701,6 +2045,99 @@ class ResourceRegistry:
         if len(extracted.text.encode("utf-8")) > self._max_attachment_bytes:
             return None
         return extracted
+
+    async def _render(self, resource: _Registered) -> _Registered:
+        """The Resource's rendering, made now unless the Run holds one; concurrent callers share it.
+
+        A render that fails pins nothing, so a later call may try again.
+        """
+        self._ensure_open()
+        resource_id = resource.resource_id
+        settled = self._settled_rendered(resource_id)
+        if settled is not None:
+            return settled
+        async with self._render_lock:
+            task = self._render_tasks.get(resource_id)
+            if task is None:
+                task = asyncio.ensure_future(self._render_page(resource))
+                self._render_tasks[resource_id] = task
+        try:
+            rendered = await asyncio.shield(task)
+        except BaseException:
+            if task.done():
+                async with self._render_lock:
+                    if self._render_tasks.get(resource_id) is task:
+                        self._render_tasks.pop(resource_id, None)
+            raise
+        async with self._render_lock:
+            if self._render_tasks.get(resource_id) is task:
+                self._render_tasks.pop(resource_id, None)
+        return rendered
+
+    async def _render_page(self, resource: _Registered) -> _Registered:
+        """Render one Web Resource's URL and convert the result, admitting it only with text."""
+        url = resource.url
+        if url is None:  # pragma: no cover - only Web Resources are routed here
+            raise RenderedReadTargetError(resource.resource_id)
+        if self._page_renderer is None:
+            raise browser_failure("not_configured")
+        # The browser is handed only a URL the direct read would accept; everything else
+        # it loads is confined by the deployment's network, not by this check.
+        validate_agent_public_url(url)
+        await avalidate_public_http_url(url)
+        page = await self._page_renderer(url)
+        try:
+            validate_agent_public_url(page.final_url)
+        except ValueError:
+            raise browser_failure("final_url_refused") from None
+        if len(page.html) > self._max_attachment_bytes:
+            raise browser_failure("too_large", limit=self._max_attachment_bytes)
+        rendered = _rendered_representation(
+            resource, page.html, final_url=normalize_public_http_url_identity(page.final_url)
+        )
+        # Registered first, because adopting its conversion names it by its own id.
+        self._rendered[resource.resource_id] = rendered
+        try:
+            view = await self._text_view_from_content(rendered, page.html)
+        except ResourceAdmissionError, UnsafeArchiveError, ConversionLimitError, MemoryError:
+            # Refused for safety: the rendering stays, with its refusal, to settle with the read.
+            raise
+        except BaseException:
+            self._drop_rendered(resource.resource_id)
+            raise
+        if not view.text.strip():
+            self._drop_rendered(resource.resource_id)
+            raise browser_failure("no_text")
+        return rendered
+
+    async def _rendered_view(self, rendered: _Registered) -> _ConvertedResource:
+        """The text view of a rendering the Run holds, converting it on first use."""
+        cached = self._text_views.get(rendered.resource_id)
+        if cached is not None:
+            return cached
+        if rendered.resource_id in self._refused:
+            raise ResourceAdmissionError("resource refused by safety/resource limits")
+        if rendered.content is None:  # pragma: no cover - a rendering always holds its bytes
+            raise ResourceNotFoundError(f"resource {rendered.resource_id} has no content")
+        return await self._text_view_from_content(rendered, rendered.content)
+
+    def _drop_rendered(self, resource_id: str) -> None:
+        """Forget a rendering and everything the Run made of it, as if it never rendered."""
+        rendered = self._rendered.pop(resource_id, None)
+        if rendered is None:
+            return
+        representation_id = rendered.resource_id
+        self._text_views.pop(representation_id, None)
+        self._converted.pop(representation_id, None)
+        self._snapshots.pop(representation_id, None)
+        self._refused.pop(representation_id, None)
+        self._pdf_counts.pop(representation_id, None)
+        self._conversion_tasks.pop(representation_id, None)
+        for key in [key for key in self._visual_assets if key[0] == representation_id]:
+            del self._visual_assets[key]
+        self._cursor_plans = {
+            key: plan for key, plan in self._cursor_plans.items() if key[0] != representation_id
+        }
 
     def _mint_resource_id(self, dedup_key: tuple[str, bytes]) -> str:
         kind, payload = dedup_key
@@ -1827,7 +2264,10 @@ def _extract_note(extracted: WebExtractResult) -> str | None:
     return " ".join(notes) or None
 
 
-def _unavailable_web_view() -> _ConvertedResource:
+def _unavailable_web_view(browser_failure: AgentBrowserError | None = None) -> _ConvertedResource:
+    note = "Web acquisition degraded: no citable evidence was admitted."
+    if browser_failure is not None:
+        note += f" Agent Browser: {browser_failure.public_message}"
     return _ConvertedResource(
         text=(
             "This public URL produced no citable text: direct HTTP failed or "
@@ -1836,8 +2276,28 @@ def _unavailable_web_view() -> _ConvertedResource:
         ),
         handles=(),
         evidence_available=False,
-        note="Web acquisition degraded: no citable evidence was admitted.",
+        note=note,
         extraction_status="unavailable",
+    )
+
+
+def _is_rendered(representation: _Registered) -> bool:
+    return representation.acquisition == BROWSER_RENDER
+
+
+def _rendered_representation(parent: _Registered, html: bytes, *, final_url: str) -> _Registered:
+    """The rendering of ``parent``: the page's serialized DOM, with the parent's admission."""
+    return _Registered(
+        resource_id=f"{parent.resource_id}{RENDERED_REPRESENTATION_SUFFIX}",
+        filename=_RENDERED_FILENAME,
+        declared_mime=_RENDERED_MIME,
+        source="bytes",
+        content=html,
+        url=None,
+        byte_size=len(html),
+        admission_origin=parent.admission_origin,
+        acquisition=BROWSER_RENDER,
+        final_url=final_url,
     )
 
 
@@ -1949,6 +2409,8 @@ def _read_cursor_span(
     evidence_available: bool,
     note: str | None,
     extraction_status: str,
+    rendered: bool = False,
+    cursor_prefix: str = "",
 ) -> tuple[TextWindowLocator, str, int, int]:
     if plan_position < 0 or plan_position >= len(plan):
         raise ResourceCursorError("cursor has no remaining resource text")
@@ -1980,10 +2442,11 @@ def _read_cursor_span(
             content=text[start:consumed_end],
             extraction_status=extraction_status,
             has_more=has_more,
-            next_cursor=_CURSOR_PLACEHOLDER if has_more else None,
+            next_cursor=cursor_prefix + _CURSOR_PLACEHOLDER if has_more else None,
             visual_handles=visual_handles,
             evidence_available=evidence_available,
             note=note,
+            rendered=rendered,
         )
         used = estimate_tokens(format_resource_read(result))
         if used <= max_window_tokens:
@@ -2046,8 +2509,14 @@ def _focus_order(windows: list[str], focus: str | None) -> list[int]:
 
 
 __all__ = [
+    "BROWSER_RENDER",
+    "RENDERED_REPRESENTATION_SUFFIX",
+    "AgentBrowserRender",
+    "ExtractStep",
     "FetchedBytesSink",
     "FetchedResourceBytes",
+    "HostedExtract",
+    "PageRenderer",
     "VisualTarget",
     "ResourceEffectOwner",
     "ResourceRegistry",

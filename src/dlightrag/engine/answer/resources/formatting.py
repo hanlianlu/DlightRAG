@@ -9,9 +9,11 @@ from dlightrag.engine.answer.resources.models import (
 
 
 def format_resource_read(result: ResourceReadResult) -> str:
+    rendered = " | rendered" if result.rendered else ""
     locator = f" | {_describe_text_locator(result.locator)}" if result.locator is not None else ""
     parts = [
-        f"[resource: {result.resource_id}{locator} | extraction_status={result.extraction_status}]",
+        f"[resource: {result.resource_id}{rendered}{locator} "
+        f"| extraction_status={result.extraction_status}]",
         result.content,
     ]
     if result.extraction_status == "no_extracted_text":

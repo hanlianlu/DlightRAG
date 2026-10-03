@@ -39,6 +39,11 @@ from dlightrag.engine.ai.reasoning import best_effort_reasoning_profile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserSettings,
+    RenderedPage,
+    browser_failure,
+)
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilities,
     RequestModelContext,
@@ -88,6 +93,8 @@ from dlightrag.engine.runtime.records import (
     artifact_digest,
 )
 from tests.in_memory_session_repository import MemoryAgentSessionRepository
+from tests.support.agent_browser import FakeProvider
+from tests.support.dns import public_dns
 from tests.unit.conftest import RecordingLangfuse, answer_image_policy
 
 
@@ -369,33 +376,36 @@ def _fingerprint(role: str) -> ModelInvocationFingerprint:
     return ModelInvocationFingerprint("openai", f"test-{role}", None, "chat_completion")
 
 
-def _executor() -> AnswerExecutor:
+def _executor(**overrides: Any) -> AnswerExecutor:
     executor = AnswerExecutor(
-        store=MagicMock(),
-        blob_store=MagicMock(),
-        pool=MagicMock(),
-        warm=Mock(),
-        retrieve=AsyncMock(),
-        planning=MagicMock(),
-        models=MagicMock(),
-        capabilities=MagicMock(),
-        resources=MagicMock(),
-        settings=AnswerExecutorSettings(
-            default_top_k=10,
-            default_chunk_top_k=20,
-            semantic_highlights=SemanticHighlightSettings(
-                enabled=True,
-                timeout=10.0,
-                max_concurrency=8,
-                batch_size=8,
-                max_input_chars=4096,
-                cache_size=500,
+        **{
+            "store": MagicMock(),
+            "blob_store": MagicMock(),
+            "pool": MagicMock(),
+            "warm": Mock(),
+            "retrieve": AsyncMock(),
+            "planning": MagicMock(),
+            "models": MagicMock(),
+            "capabilities": MagicMock(),
+            "resources": MagicMock(),
+            "settings": AnswerExecutorSettings(
+                default_top_k=10,
+                default_chunk_top_k=20,
+                semantic_highlights=SemanticHighlightSettings(
+                    enabled=True,
+                    timeout=10.0,
+                    max_concurrency=8,
+                    batch_size=8,
+                    max_input_chars=4096,
+                    cache_size=500,
+                ),
             ),
-        ),
-        telemetry=NOOP_TELEMETRY,
-        model_invocation_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
-        shell_confinement=ConfinementPolicy(),
-        search_toolchain=SearchToolchain(),
+            "telemetry": NOOP_TELEMETRY,
+            "model_invocation_fingerprint_for_role": _fingerprint,
+            "shell_confinement": ConfinementPolicy(),
+            "search_toolchain": SearchToolchain(),
+            **overrides,
+        }
     )
 
     # These unit doubles replace execution; dedicated model-contract tests exercise preflight.
@@ -532,6 +542,48 @@ def test_research_declarations_include_every_configured_surface_without_binding(
         web_search=False, memory=False, model_guidance="", injected=()
     )
     assert not {"remember", "forget", "recall_memory"} & {tool.name for tool in without_memory}
+
+
+_BROWSER_SETTINGS = AgentBrowserSettings(
+    lease_wait_seconds=1.0,
+    navigation_timeout_seconds=5.0,
+    settle_timeout_seconds=1.0,
+    idle_release_seconds=1.0,
+    max_page_bytes=1000,
+)
+
+
+def test_acceptance_offers_a_rendered_read_exactly_when_a_browser_is_composed() -> None:
+    def read_properties(executor: AnswerExecutor) -> dict[str, Any]:
+        declarations = executor.research_tool_declarations(
+            web_search=False, memory=False, model_guidance="", injected=()
+        )
+        return {tool.name: tool for tool in declarations}["read"].definition.parameters[
+            "properties"
+        ]
+
+    composed = _executor(browser_provider=FakeProvider(), browser_settings=_BROWSER_SETTINGS)
+
+    assert "rendered" in read_properties(composed)
+    assert "rendered" not in read_properties(_executor())
+
+
+def test_an_executor_takes_a_browser_provider_and_its_settings_together() -> None:
+    with pytest.raises(ValueError, match="provider and its settings"):
+        _executor(browser_provider=FakeProvider())
+    with pytest.raises(ValueError, match="provider and its settings"):
+        _executor(browser_settings=_BROWSER_SETTINGS)
+
+
+async def test_closing_the_executor_closes_its_browser_provider_even_if_the_adapter_fails() -> None:
+    provider = FakeProvider()
+    executor = _executor(browser_provider=provider, browser_settings=_BROWSER_SETTINGS)
+    executor._execution_adapter = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("closing")))
+
+    with pytest.raises(RuntimeError, match="closing"):
+        await executor.aclose()
+
+    assert provider.closed is True
 
 
 def test_pinned_child_lifecycle_requires_current_contract() -> None:
@@ -731,7 +783,7 @@ def test_execution_rejects_changed_context_or_model_pins() -> None:
         mismatched.validate_pinned_model_profiles(request)
 
 
-def _resource_resolver() -> AnswerResourceResolver:
+def _resource_resolver(models: Any = None) -> AnswerResourceResolver:
     capabilities = MagicMock()
     capabilities.refresh_answer = AsyncMock(
         return_value=AnswerCapabilities(
@@ -755,7 +807,7 @@ def _resource_resolver() -> AnswerResourceResolver:
             image_max_bytes=5_000_000,
             image_max_pixels=4_000_000,
         ),
-        models=MagicMock(),
+        models=models or MagicMock(),
         capabilities=capabilities,
     )
 
@@ -816,6 +868,51 @@ def test_a_resume_under_rotated_database_credentials_mints_the_same_handles(
     ]
 
     assert handles[0] == handles[1]
+
+
+@pytest.mark.parametrize(
+    ("order", "renderer", "asked"),
+    [
+        pytest.param(
+            ("exa", "browser", "tavily"), True, ["exa", "browser", "tavily"], id="between"
+        ),
+        pytest.param(("exa", "tavily", "browser"), True, ["exa+tavily", "browser"], id="last"),
+        pytest.param(("browser", "exa"), True, ["browser", "exa"], id="first"),
+        pytest.param(("exa", "browser", "tavily"), False, ["exa+tavily"], id="no-browser"),
+    ],
+)
+async def test_a_run_tries_hosted_providers_and_its_browser_in_the_configured_order(
+    monkeypatch: pytest.MonkeyPatch,
+    order: tuple[str, ...],
+    renderer: bool,
+    asked: list[str],
+) -> None:
+    async def blocked(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("HTTP 403")
+
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", blocked)
+    calls: list[str] = []
+
+    async def extract(url: str, *, providers: tuple[str, ...]) -> Any:
+        calls.append("+".join(providers))
+        raise RuntimeError("no text")
+
+    async def render(url: str) -> RenderedPage:
+        calls.append("browser")
+        raise browser_failure("unreachable")
+
+    resolver = _resource_resolver(MagicMock(extract_order=Mock(return_value=order)))
+    registry = resolver.build_resource_context(
+        [ResourceInput(url="https://example.com/report")],
+        web_sources=cast(Any, SimpleNamespace(extract=extract)),
+        page_renderer=render if renderer else None,
+        resource_identity=new_resource_identity(),
+    )
+
+    await registry.read(registry.manifest()[0].resource_id, max_window_tokens=2000)
+
+    assert calls == asked
 
 
 def _png_bytes(color: str = "white") -> bytes:

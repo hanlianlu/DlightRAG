@@ -2233,7 +2233,8 @@ SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator,
 FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
   AND capabilities->>'resource_kind' IN (
-      'web', 'tool_attachment', 'conversion_snapshot', 'conversion_asset', 'lineage_adoption'
+      'web', 'web_render', 'tool_attachment', 'conversion_snapshot', 'conversion_asset',
+      'lineage_adoption'
   )
   AND ordinal IS NOT NULL AND source_locator IS NOT NULL
 ORDER BY ordinal, resource_id

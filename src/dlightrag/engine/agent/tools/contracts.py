@@ -92,6 +92,8 @@ class ResourceAttachmentBytes:
     source: VisualSource | None = None
     """Another durable handle these bytes are already known by, when one exists."""
     aliases: tuple[str, ...] = ()
+    attributes: tuple[tuple[str, str], ...] = ()
+    """Facts the Resource's row records beside its kind, such as how the bytes were acquired."""
 
 
 @dataclass(frozen=True, slots=True)

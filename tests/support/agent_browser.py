@@ -235,20 +235,27 @@ def _response(status: int, body: bytes, headers: Mapping[str, str]) -> bytes:
     return "\r\n".join(lines).encode("latin-1") + body
 
 
+type Page = str | bytes | RenderedPage | AgentBrowserError
+
+
 class RecordingRenderer:
     """The Agent Browser as a Run's Resource Registry sees it: pages by URL, every render kept.
 
     A page is HTML text, a ready ``RenderedPage``, or an ``AgentBrowserError`` the render
-    raises. A URL it holds no page for fails as the browser would on an unknown host.
+    raises. A list of them answers a URL's renders in turn, the last one for every render
+    after. A URL it holds no page for is a mistake in the test.
     """
 
-    def __init__(self, pages: Mapping[str, str | bytes | RenderedPage | AgentBrowserError]) -> None:
-        self._pages = dict(pages)
+    def __init__(self, pages: Mapping[str, Page | list[Page]]) -> None:
+        self._pages = {
+            url: list(page) if isinstance(page, list) else [page] for url, page in pages.items()
+        }
         self.calls: list[str] = []
 
     async def __call__(self, url: str) -> RenderedPage:
         self.calls.append(url)
-        page = self._pages[url]
+        queue = self._pages[url]
+        page = queue.pop(0) if len(queue) > 1 else queue[0]
         if isinstance(page, AgentBrowserError):
             raise page
         if isinstance(page, RenderedPage):

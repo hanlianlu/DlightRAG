@@ -192,6 +192,26 @@ class ReadArgs(BaseModel):
         return self
 
 
+class RenderedReadArgs(ReadArgs):
+    """``read`` for a Host with an Agent Browser: a page can also be read as it renders."""
+
+    rendered: bool = Field(
+        default=False,
+        description=(
+            "Read the page as the Agent Browser renders it, after its scripts run. "
+            "url or a Web resource_id only."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _rendered_targets(self) -> RenderedReadArgs:
+        if self.rendered and self.path is not None:
+            raise ValueError("read rendered=true is available only for url or resource_id")
+        if self.rendered and self.http is not None:
+            raise ValueError("read http options apply to direct acquisition, not rendered=true")
+        return self
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceReadRequest:
     resource_id: str | None
@@ -201,6 +221,7 @@ class ResourceReadRequest:
     user_agent: str | None = None
     accept: str | None = None
     accept_language: str | None = None
+    rendered: bool = False
 
 
 type ResourceReader = Callable[[ResourceReadRequest, ToolRuntime], Awaitable[ToolResult]]
@@ -327,8 +348,18 @@ async def preview_or_spill(
     return rendered, receipt
 
 
-def read_declaration(*, public_url: bool) -> ToolDeclaration:
+#: What a model needs to know to ask for a Rendered Read, and when not to (ADR 0032).
+_RENDERED_READ_GUIDANCE = (
+    "With rendered=true, a url or Web resource_id is read as the Agent Browser renders it, "
+    "after its scripts run; use it only when a read returned a JavaScript shell (a loading "
+    "or enable-JavaScript notice instead of the content). Its cursor continues the rendered text."
+)
+
+
+def read_declaration(*, public_url: bool, rendered: bool = False) -> ToolDeclaration:
+    """``rendered`` offers the Agent Browser's rendering, and only where a URL can be read."""
     url_enabled = public_url
+    rendered = public_url and rendered
     description = (
         "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
         "anonymous public HTTP(S) url. A url read returns the page's full content in "
@@ -342,10 +373,15 @@ def read_declaration(*, public_url: bool) -> ToolDeclaration:
         "run. Files page by offset and directories and resources by opaque cursor. Follow "
         "the printed continuation."
     )
+    if rendered:
+        description = f"{description} {_RENDERED_READ_GUIDANCE}"
+    input_model: type[BaseModel] = (
+        RenderedReadArgs if rendered else ReadArgs if url_enabled else ReadWithoutUrlArgs
+    )
     return ToolDeclaration(
         name="read",
         description=description,
-        input_model=ReadArgs if url_enabled else ReadWithoutUrlArgs,
+        input_model=input_model,
         replay_policy="replayable",
         read_only=True,
         contract_version=4 if url_enabled else 3,
@@ -358,6 +394,7 @@ def read_tool(
     *,
     resource_reader: ResourceReader | None = None,
     spill: SpillWriter | None = None,
+    rendered: bool = False,
 ) -> AgentTool:
     """Build ``read`` with whichever branches the host actually has."""
 
@@ -384,6 +421,7 @@ def read_tool(
                         user_agent=options.user_agent,
                         accept=options.accept,
                         accept_language=options.accept_language,
+                        rendered=isinstance(args, RenderedReadArgs) and args.rendered,
                     ),
                     runtime,
                 )
@@ -449,7 +487,7 @@ def read_tool(
                 ),
             )
 
-    return read_declaration(public_url=resource_reader is not None).bind(execute)
+    return read_declaration(public_url=resource_reader is not None, rendered=rendered).bind(execute)
 
 
 class ViewArgs(BaseModel):
@@ -1595,6 +1633,7 @@ __all__ = [
     "LsArgs",
     "PreparedImageAttachment",
     "ReadArgs",
+    "RenderedReadArgs",
     "ResourceReadRequest",
     "OutputStageFactory",
     "ResourceReader",

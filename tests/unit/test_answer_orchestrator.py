@@ -37,7 +37,7 @@ from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
-def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
+def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None, **options):
 
     profile = answer_model_profile()
 
@@ -54,6 +54,7 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
         telemetry=NOOP_TELEMETRY,
         resolved_mode=mode,  # type: ignore[arg-type]
         search_toolchain=SearchToolchain(),
+        **options,
     )
 
 
@@ -304,6 +305,34 @@ async def test_e2_a_continuation_carries_the_note_the_parent_compacted(
     assert second.index(statement) > second.index(
         {"role": "assistant", "content": "a further turn"}
     )
+
+
+def test_a_child_can_read_rendered_exactly_when_its_run_has_a_browser() -> None:
+    from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
+
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    def read_properties(*, rendered_read: bool) -> dict[str, Any]:
+        orchestrator = _orchestrator(
+            mode="research",
+            model=model,
+            resource_reader=AsyncMock(),
+            rendered_read=rendered_read,
+        )
+        child = orchestrator.prepare_child_session(
+            ChildRequest(objective="investigate"),
+            context_snapshot=ChildContextSnapshot.from_values(
+                parent_session_id=SessionId.new(),
+                parent_entry_id=EntryId.new(),
+                depth=0,
+                messages=[],
+            ),
+        )
+        return {tool.name: tool for tool in child.tools}["read"].definition.parameters["properties"]
+
+    assert "rendered" in read_properties(rendered_read=True)
+    assert "rendered" not in read_properties(rendered_read=False)
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
@@ -722,6 +751,32 @@ async def test_reading_a_spill_admits_no_evidence_and_mints_no_citation(tmp_path
     assert result.effects.evidence_sources == ()
     # Exactly the predicate the ledger-backed wrapper admits rows on.
     assert _resource_rows("read", result) == []
+
+
+@pytest.mark.asyncio
+async def test_a_spill_handle_is_not_a_web_resource_to_read_rendered(tmp_path: Path) -> None:
+    spill_dir = tmp_path / "spills"
+    spill_dir.mkdir()
+    (spill_dir / "spill_read_ab12.txt").write_text("line one\n", encoding="utf-8")
+    orchestrator = _orchestrator(mode="research")
+    orchestrator.bind_workspace(
+        RunWorkspace(epoch=1, workspace=tmp_path, spill_dir=spill_dir, environment=MagicMock()),
+        _RecordingWorkspaceStore(),
+    )
+
+    reader = orchestrator._resource_reader_for_run()
+    assert reader is not None
+    result = await reader(
+        ResourceReadRequest(
+            resource_id="spill_read_ab12", url=None, focus=None, cursor=None, rendered=True
+        ),
+        MagicMock(),
+    )
+
+    assert result.is_error is True
+    assert result.text_content == (
+        "rendered=true reads a URL or a Web Resource; spill_read_ab12 is not a Web Resource"
+    )
 
 
 def _spill_record(resource_id: str) -> CommittedSpillRecord:

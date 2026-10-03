@@ -144,6 +144,10 @@ class AnswerModelRuntime:
             image_policy=self._vlm_image_policy(profile),
         )
 
+    def extract_order(self) -> tuple[str, ...]:
+        """The Extract chain's names in order, including ``browser`` where configured."""
+        return self._settings.web_sources.extract_providers
+
     def web_sources(self) -> WebSourceService | None:
         self._ensure_open()
         settings = self._settings.web_sources

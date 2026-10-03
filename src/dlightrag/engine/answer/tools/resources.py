@@ -24,6 +24,7 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.agent.tools.files import ImagePreparer, ResourceReadRequest, ViewArgs
+from dlightrag.engine.answer.agent_browser import AgentBrowserError
 from dlightrag.engine.answer.resources.converters import (
     ConversionLimitError,
     UnsafeArchiveError,
@@ -40,6 +41,7 @@ from dlightrag.engine.answer.resources.lineage import (
     adopt_lineage_resource,
 )
 from dlightrag.engine.answer.resources.models import (
+    RenderedReadTargetError,
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceNotConvertedError,
@@ -196,23 +198,35 @@ def make_resource_reader(
                 max_window_tokens=text_window_budget.tokens,
                 focus=request.focus,
                 cursor=request.cursor,
+                rendered=request.rendered,
                 effect_owner=_effect_owner(runtime),
             )
         except UnsafeArchiveError, ConversionLimitError, ResourceAdmissionError, MemoryError:
             return ToolResult.text(
                 "extraction_status=safety_refused; no evidence admitted. Do not retry another parser or renderer around the restriction.",
                 is_error=True,
-                effects=ToolEffects(attached_resources=registry.conversion_effects(resource_id)),
+                effects=ToolEffects(
+                    attached_resources=(
+                        *registry.conversion_effects(resource_id),
+                        *registry.rendered_effects(resource_id),
+                    )
+                ),
             )
         effects = (
             _evidence_effects(
-                result.resource_id, registry.evidence_source(result.resource_id, text=True)
+                result.resource_id,
+                registry.evidence_source(result.resource_id, text=True, rendered=result.rendered),
             )
             if result.evidence_available
             else ToolEffects()
         )
+        # A rendering settles with the read that returned it, so recovery restores it.
         effects = replace(
-            effects, attached_resources=registry.conversion_effects(result.resource_id)
+            effects,
+            attached_resources=(
+                *registry.conversion_effects(result.resource_id),
+                *(registry.rendered_effects(result.resource_id) if result.rendered else ()),
+            ),
         )
         return ToolResult.text(
             format_resource_read(result),
@@ -239,6 +253,11 @@ def make_resource_reader(
             return ToolResult.text(
                 _unconverted_refusal(exc.filename, exc.media_type), is_error=True
             )
+        except RenderedReadTargetError as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        except AgentBrowserError as exc:
+            # A render the browser could not give leaves nothing admitted.
+            return ToolResult.text(exc.public_message, is_error=True)
 
     return read
 
@@ -263,9 +282,21 @@ def make_resource_viewer(
         elif registry.loads_on_read(resource_id):
             await runtime.in_source_order()
         owner = _effect_owner(runtime)
-        target = await registry.visual_target(resource_id, effect_owner=owner)
-        resource_id = target.resource_id
-        provenance = registry.evidence_source(resource_id)
+        held = (
+            registry.held_visual_asset(resource_id, args.locator)
+            if args.locator is not None and args.locator.startswith("vis-")
+            else None
+        )
+        if held is None:
+            target = await registry.visual_target(resource_id, effect_owner=owner)
+            resource_id = target.resource_id
+            held_rendering = False
+        else:
+            # The Run already holds this image, possibly from a rendering it never fetched.
+            target = None
+            resource_id = registry.canonical_resource_id(resource_id)
+            held_rendering = held[1]
+        provenance = registry.evidence_source(resource_id, rendered=held_rendering)
         # Each label names the document too: a later turn, or a Fast follow-up that
         # sees the image without this call, has no manifest that maps the id to it.
         name = provenance["title"]
@@ -310,11 +341,24 @@ def make_resource_viewer(
             )
             return True
 
-        if target.kind == "image":
+        if held is not None:
+            asset = held[0]
+            await attach(
+                asset.data,
+                VisualSource(
+                    resource_id,
+                    "embedded_image",
+                    handle_id=asset.handle_id,
+                    anchor=asset.anchor,
+                    origin_part=asset.origin_part,
+                ),
+                f"{name}, {asset.handle_id}" + (f" @ {asset.anchor}" if asset.anchor else ""),
+            )
+        elif target is not None and target.kind == "image":
             if args.locator is not None or args.cursor is not None:
                 raise ResourceViewError("source image does not accept locator or cursor")
             await attach(target.content, VisualSource(resource_id, "image"), name)
-        elif target.kind == "pdf":
+        elif target is not None and target.kind == "pdf":
             count = await asyncio.to_thread(pdf_page_count, target.content)
             if args.locator is not None:
                 if not args.locator.isascii() or not args.locator.isdigit():
@@ -357,7 +401,8 @@ def make_resource_viewer(
                     ),
                 )
         elif (
-            target.kind == "document"
+            target is not None
+            and target.kind == "document"
             and args.locator is not None
             and args.locator.startswith("vis-")
         ):
@@ -389,7 +434,12 @@ def make_resource_viewer(
             parts=tuple(parts),
             protected_text=continuation,
             effects=replace(
-                evidence, attached_resources=(*registry.conversion_effects(resource_id), *attached)
+                evidence,
+                attached_resources=(
+                    *registry.conversion_effects(resource_id),
+                    *(registry.rendered_effects(resource_id) if held_rendering else ()),
+                    *attached,
+                ),
             ),
         )
 

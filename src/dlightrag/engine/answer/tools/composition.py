@@ -120,6 +120,7 @@ def research_tool_declarations(
     *,
     web_search: bool = False,
     resource_read: bool = False,
+    rendered_read: bool = False,
     resource_view: bool = False,
     environment: bool = False,
     artifact_publication: bool = False,
@@ -136,7 +137,10 @@ def research_tool_declarations(
         declarations.append(web_search_declaration())
     if resource_read:
         declarations.append(
-            _reading(read_declaration(public_url=True), earlier_artifacts=artifact_publication)
+            _reading(
+                read_declaration(public_url=True, rendered=rendered_read),
+                earlier_artifacts=artifact_publication,
+            )
         )
     if resource_view or environment:
         declarations.append(view_declaration())
@@ -192,6 +196,7 @@ def compose_research_tools(
     injected_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
     resource_reader: Any | None = None,
+    rendered_read: bool = False,
     resource_viewer: ResourceViewer | None = None,
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
@@ -219,6 +224,7 @@ def compose_research_tools(
     declarations = research_tool_declarations(
         web_search=search_web is not None,
         resource_read=resource_reader is not None,
+        rendered_read=rendered_read,
         resource_view=resource_viewer is not None,
         environment=environment is not None,
         artifact_publication=artifacts_root is not None,
@@ -246,6 +252,7 @@ def compose_research_tools(
                     access,
                     resource_reader=resource_reader,
                     spill=spill,
+                    rendered=rendered_read,
                 ),
                 earlier_artifacts=resource_reader is not None and artifacts_root is not None,
             ),

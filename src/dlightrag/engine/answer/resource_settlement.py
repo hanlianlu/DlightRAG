@@ -19,6 +19,9 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueFetchedResourceWrite,
 )
 
+#: What a row's capabilities say about its bytes; an attribute may add to them, not set them.
+_ROW_CAPABILITIES = frozenset({"resource_kind", "visual_source", "resource_aliases"})
+
 
 def attached_resource_update(
     attached: ResourceAttachmentBytes, *, session_id: str, intent_id: str | None
@@ -26,8 +29,12 @@ def attached_resource_update(
     """Describe one attached Resource as its row and complete Blob.
 
     ``intent_id`` names the Tool effect that attached it; publication, which is no
-    Tool effect, records its views with none.
+    Tool effect, records its views with none. Its ``attributes`` join the row's
+    capabilities, and may not rewrite what the row itself says about the bytes.
     """
+    collisions = sorted({name for name, _value in attached.attributes} & _ROW_CAPABILITIES)
+    if collisions:
+        raise ValueError(f"attachment attributes cannot set {', '.join(collisions)}")
     plan = plan_blob(attached.content)
     return FetchedResourceSettlementUpdate(
         resource=OpaqueFetchedResourceWrite(
@@ -36,6 +43,7 @@ def attached_resource_update(
             safe_name=attached.filename,
             media_type=attached.mime_type,
             capabilities={
+                **dict(attached.attributes),
                 "resource_kind": attached.resource_kind,
                 "visual_source": asdict(attached.source) if attached.source is not None else None,
                 **({"resource_aliases": list(attached.aliases)} if attached.aliases else {}),

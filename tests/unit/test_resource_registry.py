@@ -12,7 +12,14 @@ from typing import Any
 import pytest
 
 from dlightrag.engine.agent.session.ids import IntentId
+from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserError,
+    RenderedPage,
+    browser_failure,
+)
+from dlightrag.engine.answer.resources.formatting import format_resource_read
 from dlightrag.engine.answer.resources.models import (
+    RenderedReadTargetError,
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceDecodeError,
@@ -20,6 +27,8 @@ from dlightrag.engine.answer.resources.models import (
     ResourceNotFoundError,
 )
 from dlightrag.engine.answer.resources.registry import (
+    AgentBrowserRender,
+    HostedExtract,
     ResourceEffectOwner,
 )
 from dlightrag.engine.answer.resources.registry import (
@@ -27,7 +36,12 @@ from dlightrag.engine.answer.resources.registry import (
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.web_sources import WebExtractResult, WebSourceUnavailable
-from dlightrag.engine.public_http import PublicHttpFetch, PublicHttpPresentation
+from dlightrag.engine.public_http import (
+    PublicHttpFetch,
+    PublicHttpPolicyError,
+    PublicHttpPresentation,
+)
+from tests.support.agent_browser import RecordingRenderer
 from tests.support.dns import public_dns
 
 
@@ -41,6 +55,7 @@ class ResourceRegistry(_ResourceRegistry):
         max_window_tokens: int = 100,
         focus: str | None = None,
         cursor: str | None = None,
+        rendered: bool = False,
         effect_owner: ResourceEffectOwner | None = None,
     ):
         return await super().read(
@@ -48,6 +63,7 @@ class ResourceRegistry(_ResourceRegistry):
             max_window_tokens=max_window_tokens,
             focus=focus,
             cursor=cursor,
+            rendered=rendered,
             effect_owner=effect_owner,
         )
 
@@ -782,7 +798,7 @@ async def test_a_fetch_in_flight_keeps_the_presentation_it_started_with(serve) -
 async def test_direct_success_skips_url_text_fallback(serve) -> None:
     fallback = _CountingFallback("EXTRACTED TEXT")
     serve(_Fetch(b"good body"))
-    registry = ResourceRegistry(url_text_fallback=fallback)
+    registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -796,7 +812,7 @@ async def test_direct_success_skips_url_text_fallback(serve) -> None:
 async def test_direct_decode_failure_uses_one_extract_fallback(serve) -> None:
     fallback = _CountingFallback("recovered text\nsecond line", provider="tavily")
     serve(_Fetch(b"\x00\x01\x02\x03binary\x00\x00"))
-    registry = ResourceRegistry(url_text_fallback=fallback)
+    registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -819,7 +835,9 @@ async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(se
     fallback = _CountingFallback("provider replacement")
     content = b"\x00\x01\x02\x03binary\x00\x00"
     serve(_Fetch(content))
-    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(fallback),), fetched_bytes_sink=persist
+    )
     resource_id = registry.register_agent_url("https://data.example.com/report.bin")
 
     with pytest.raises(ResourceDecodeError):
@@ -839,7 +857,9 @@ async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(serve) 
 
     fallback = _CountingFallback("shared provider text")
     serve(_Fetch(b""))
-    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(fallback),), fetched_bytes_sink=persist
+    )
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
     first = ResourceEffectOwner("session-a", IntentId.new())
     second = ResourceEffectOwner("session-b", IntentId.new())
@@ -893,7 +913,9 @@ async def test_a_read_that_decodes_late_keeps_the_snapshot_another_read_admitted
 
     fallback = _Extract("shared provider text")
     serve(_Fetch(b""))
-    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(fallback),), fetched_bytes_sink=persist
+    )
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
     first = ResourceEffectOwner("session-a", IntentId.new())
     second = ResourceEffectOwner("session-b", IntentId.new())
@@ -943,7 +965,9 @@ async def test_a_failed_fetch_leaves_the_extract_snapshot_another_read_admitted(
 
     serve(fetch)
     fallback = _Extract("extracted page text")
-    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(fallback),), fetched_bytes_sink=persist
+    )
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
     first, second, third = (ResourceEffectOwner(name, IntentId.new()) for name in "abc")
 
@@ -971,7 +995,9 @@ async def test_an_extract_text_view_settles_beside_the_bytes_it_reads(serve) -> 
 
     fallback = _CountingFallback("  provider body text\n")
     serve(_Fetch(b""))
-    registry = ResourceRegistry(url_text_fallback=fallback, fetched_bytes_sink=persist)
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(fallback),), fetched_bytes_sink=persist
+    )
     resource_id = registry.register_agent_url("https://data.example.com/report.html")
 
     result = await registry.read(resource_id)
@@ -1004,7 +1030,7 @@ async def test_an_extract_text_view_settles_beside_the_bytes_it_reads(serve) -> 
 async def test_direct_empty_triggers_extract_fallback(serve) -> None:
     fallback = _CountingFallback("provider body text")
     serve(_Fetch(b""))
-    registry = ResourceRegistry(url_text_fallback=fallback)
+    registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -1024,7 +1050,7 @@ async def test_invalid_private_url_never_calls_extract_provider(
     )
     fallback = _CountingFallback("should never appear")
     # The real transport refuses the private address before any connection.
-    registry = ResourceRegistry(url_text_fallback=fallback)
+    registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     with pytest.raises(ValueError):
@@ -1035,7 +1061,7 @@ async def test_invalid_private_url_never_calls_extract_provider(
 async def test_exhausted_extract_returns_no_evidence_and_does_not_pin_failure(serve) -> None:
     fallback = _CountingFallback(None)
     fetch = serve(_Fetch(b"\x00\x01\x02\x03binary\x00\x00"))
-    registry = ResourceRegistry(url_text_fallback=fallback)
+    registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     result = await registry.read(resource_id)
@@ -1053,7 +1079,7 @@ async def test_fallback_text_windows_are_cursor_paginated(serve) -> None:
     big = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
     fallback = _CountingFallback(big)
     serve(_Fetch(b""))
-    registry = ResourceRegistry(url_text_fallback=fallback)
+    registry = ResourceRegistry(extract_chain=(HostedExtract(fallback),))
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
 
     current = await registry.read(resource_id)
@@ -1197,3 +1223,446 @@ async def test_text_decode_windowing_and_focus_ranking_run_off_the_event_loop(
     assert len(worker_threads) >= 3
     assert loop_thread not in worker_threads
     await registry.aclose()
+
+
+# -- Rendered Reads (ADR 0032) --------------------------------------------------------------
+
+_SPA = "https://spa.example.com/app.html"
+_SHELL = b"<html><body><div id='app'></div><script>render()</script></body></html>"
+_QUOTES = (
+    "<html><body><h1>Quotes</h1>"
+    "<p>A day without sunshine is like, you know, night. Albert Einstein</p>"
+    "<p>It is our choices that show what we truly are. J.K. Rowling</p></body></html>"
+)
+
+
+def _long_page(label: str, lines: int = 400) -> str:
+    return (
+        "<html><body>"
+        + "".join(f"<p>{label} line {n} " + "x" * 30 + "</p>" for n in range(lines))
+        + "</body></html>"
+    )
+
+
+async def test_a_fresh_url_renders_once_without_a_direct_fetch_and_is_reused(serve) -> None:
+    fetch = serve(_Fetch(b"never fetched"))
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    first = await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+    again = await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+    plain = await registry.read(resource_id, max_window_tokens=2000)
+
+    assert "Albert Einstein" in first.content and "J.K. Rowling" in first.content
+    assert (first.rendered, again.rendered, plain.rendered) == (True, True, True)
+    assert again.content == first.content == plain.content
+    assert (renderer.calls, fetch.calls) == ([_SPA], 0)
+    # Results print the Resource's own handle, and the header says it is the rendering.
+    assert first.resource_id == resource_id
+    assert format_resource_read(first).startswith(f"[resource: {resource_id} | rendered | lines ")
+    source = registry.evidence_source(resource_id, text=True, rendered=True)
+    assert (source["acquisition"], source["source_uri"]) == ("browser_render", _SPA)
+    assert registry.evidence_source(resource_id, text=True)["acquisition"] == ""
+
+
+async def test_a_rendering_is_appended_to_the_direct_snapshot_and_each_cursor_names_its_own(
+    serve,
+) -> None:
+    direct_text = "\n".join(f"direct line {n} " + "x" * 30 for n in range(400))
+    serve(_Fetch(direct_text.encode()))
+    renderer = RecordingRenderer({"https://data.example.com/report.html": _long_page("rendered")})
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url("https://data.example.com/report.html")
+
+    direct = await registry.read(resource_id)
+    rendered = await registry.read(resource_id, rendered=True)
+    plain = await registry.read(resource_id)
+
+    # The snapshot is never replaced: a plain read still returns what the URL served.
+    assert not direct.rendered and not plain.rendered
+    assert plain.content == direct.content and "direct line" in plain.content
+    assert rendered.rendered and "rendered line" in rendered.content
+    assert direct.next_cursor is not None and rendered.next_cursor is not None
+    assert rendered.next_cursor.startswith("r.") and not direct.next_cursor.startswith("r.")
+
+    # A cursor alone selects the representation it continues, flagged or not.
+    continued = await registry.read(resource_id, cursor=rendered.next_cursor)
+    flagged = await registry.read(resource_id, cursor=rendered.next_cursor, rendered=True)
+    assert continued.rendered and "rendered line" in continued.content
+    assert flagged.content == continued.content
+    still_direct = await registry.read(resource_id, cursor=direct.next_cursor)
+    assert not still_direct.rendered and "direct line" in still_direct.content
+    with pytest.raises(ResourceCursorError, match="continues the direct representation"):
+        await registry.read(resource_id, cursor=direct.next_cursor, rendered=True)
+
+
+async def test_a_cursor_is_bound_to_its_representation_and_its_resource(serve) -> None:
+    serve(_Fetch(b"direct"))
+    renderer = RecordingRenderer({_SPA: _long_page("page")})
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+    other = registry.register_agent_url("https://spa.example.com/other.html")
+    first = await registry.read(resource_id, rendered=True)
+    assert first.next_cursor is not None
+
+    # The token without its prefix is not a direct cursor, and it names no other Resource.
+    with pytest.raises(ResourceCursorError):
+        await registry.read(resource_id, cursor=first.next_cursor.removeprefix("r."))
+    with pytest.raises(ResourceCursorError):
+        await registry.read(other, cursor=first.next_cursor)
+
+
+async def test_the_automatic_chain_asks_hosted_providers_before_the_browser(serve) -> None:
+    hosted = _CountingFallback(None)
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    fetch = serve(_Fetch(fail=RuntimeError))
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(hosted), AgentBrowserRender()), page_renderer=renderer
+    )
+    resource_id = registry.register_agent_url(_SPA)
+
+    result = await registry.read(resource_id, max_window_tokens=2000)
+
+    assert (hosted.calls, renderer.calls, fetch.calls) == (1, [_SPA], 1)
+    assert result.rendered and "Albert Einstein" in result.content
+    # The page is read as it was rendered: nothing is bound to the Resource as a snapshot.
+    assert registry.evidence_source(resource_id)["acquisition"] == ""
+
+
+async def test_the_browser_runs_only_when_nothing_before_it_in_the_chain_gave_text(serve) -> None:
+    hosted = _CountingFallback("hosted text")
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    serve(_Fetch(fail=RuntimeError))
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(hosted), AgentBrowserRender()), page_renderer=renderer
+    )
+    resource_id = registry.register_agent_url(_SPA)
+
+    result = await registry.read(resource_id)
+
+    assert (result.content, result.rendered, renderer.calls) == ("hosted text", False, [])
+
+
+async def test_a_chain_that_names_the_browser_first_renders_before_asking_hosted_providers(
+    serve,
+) -> None:
+    hosted = _CountingFallback("hosted text")
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    serve(_Fetch(fail=RuntimeError))
+    registry = ResourceRegistry(
+        extract_chain=(AgentBrowserRender(), HostedExtract(hosted)), page_renderer=renderer
+    )
+    resource_id = registry.register_agent_url(_SPA)
+
+    result = await registry.read(resource_id, max_window_tokens=2000)
+
+    assert result.rendered and (renderer.calls, hosted.calls) == ([_SPA], 0)
+
+
+async def test_an_empty_javascript_shell_keeps_its_bytes_and_reads_as_its_rendering(serve) -> None:
+    admitted = []
+
+    async def persist(fetched, _owner) -> None:
+        admitted.append(fetched)
+
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    hosted = _CountingFallback(None)
+    fetch = serve(_Fetch(_SHELL))
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(hosted), AgentBrowserRender()),
+        page_renderer=renderer,
+        fetched_bytes_sink=persist,
+    )
+    resource_id = registry.register_agent_url(_SPA)
+
+    first = await registry.read(resource_id, max_window_tokens=2000)
+    again = await registry.read(resource_id, max_window_tokens=2000)
+
+    assert first.rendered and again.rendered and "Albert Einstein" in again.content
+    # The shell is the Resource's snapshot, and it settles beside the rendering.
+    assert [(f.content, f.acquisition) for f in admitted] == [(_SHELL, "direct_http")]
+    effects = registry.rendered_effects(resource_id)
+    assert [effect.resource_kind for effect in effects] == ["web_render", "conversion_snapshot"]
+    assert effects[0].resource_id == f"{resource_id}-rendered"
+    assert effects[0].source_locator == resource_id
+    # The walk is made once; the shell is not fetched, converted, or sent to a provider again.
+    assert (fetch.calls, hosted.calls, renderer.calls) == (1, 1, [_SPA])
+
+
+async def test_after_an_explicit_render_a_plain_read_fetches_nothing_and_asks_no_provider(
+    serve,
+) -> None:
+    hosted = _CountingFallback("never asked")
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    fetch = serve(_Fetch(b"never fetched"))
+    registry = ResourceRegistry(
+        extract_chain=(HostedExtract(hosted), AgentBrowserRender()), page_renderer=renderer
+    )
+    resource_id = registry.register_agent_url(_SPA)
+    await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+
+    plain = await registry.read(resource_id, max_window_tokens=2000)
+
+    assert plain.rendered and "Albert Einstein" in plain.content
+    assert (fetch.calls, hosted.calls, renderer.calls) == (0, 0, [_SPA])
+
+
+async def test_a_busy_browser_and_an_empty_page_are_not_pinned(serve) -> None:
+    empty = "<html><body><script>nothing()</script></body></html>"
+    renderer = RecordingRenderer(
+        {_SPA: [browser_failure("busy"), empty, _QUOTES], "https://spa.example.com/b.html": empty}
+    )
+    serve(_Fetch(fail=RuntimeError))
+    registry = ResourceRegistry(extract_chain=(AgentBrowserRender(),), page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    with pytest.raises(AgentBrowserError) as busy:
+        await registry.read(resource_id, rendered=True)
+    with pytest.raises(AgentBrowserError) as no_text:
+        await registry.read(resource_id, rendered=True)
+    # Nothing of the empty rendering is left behind.
+    assert (busy.value.reason, no_text.value.reason) == ("busy", "no_text")
+    assert registry.rendered_effects(resource_id) == ()
+    assert not registry.holds_rendered(f"{resource_id}-rendered")
+
+    result = await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+    assert result.rendered and "Albert Einstein" in result.content
+    assert len(renderer.calls) == 3
+
+
+async def test_an_automatic_render_that_fails_never_raises_and_says_why(serve) -> None:
+    renderer = RecordingRenderer({_SPA: browser_failure("busy")})
+    serve(_Fetch(fail=RuntimeError))
+    registry = ResourceRegistry(extract_chain=(AgentBrowserRender(),), page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    result = await registry.read(resource_id, max_window_tokens=400)
+
+    assert result.extraction_status == "unavailable" and not result.evidence_available
+    assert result.note is not None and "Agent Browser: Every Agent Browser is in use" in result.note
+    # A failed attempt pins nothing: the next read tries the browser again.
+    await registry.read(resource_id, max_window_tokens=400)
+    assert renderer.calls == [_SPA, _SPA]
+
+
+async def test_a_page_that_ends_at_a_url_the_deployment_refuses_admits_nothing(serve) -> None:
+    ended = RenderedPage(_SPA, "https://spa.example.com/done?token=secret", _QUOTES.encode(), 200)
+    renderer = RecordingRenderer({_SPA: ended})
+    serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    with pytest.raises(AgentBrowserError) as refused:
+        await registry.read(resource_id, rendered=True)
+
+    assert refused.value.reason == "final_url_refused"
+    assert "secret" not in refused.value.public_message
+    assert registry.rendered_effects(resource_id) == ()
+
+
+async def test_a_rendering_over_the_attachment_limit_is_refused(serve) -> None:
+    renderer = RecordingRenderer({_SPA: _long_page("page")})
+    serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=renderer, max_attachment_bytes=1000)
+    resource_id = registry.register_agent_url(_SPA)
+
+    with pytest.raises(AgentBrowserError) as large:
+        await registry.read(resource_id, rendered=True)
+
+    assert large.value.reason == "too_large"
+    assert "1000 bytes" in large.value.public_message
+
+
+async def test_only_a_url_or_a_web_resource_can_be_read_rendered(serve) -> None:
+    renderer = RecordingRenderer({})
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register(ResourceInput(filename="a.txt", content=b"caller bytes"))
+
+    with pytest.raises(RenderedReadTargetError, match=f"{resource_id} is not a Web Resource"):
+        await registry.read(resource_id, rendered=True)
+
+    assert renderer.calls == []
+    assert (await registry.read(resource_id)).content == "caller bytes"
+
+
+async def test_a_url_that_resolves_to_a_private_address_never_reaches_the_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo",
+        lambda host, port, *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))
+        ],
+    )
+    renderer = RecordingRenderer({_SPA: _QUOTES})
+    registry = ResourceRegistry(extract_chain=(AgentBrowserRender(),), page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    with pytest.raises(PublicHttpPolicyError):
+        await registry.read(resource_id, rendered=True)
+
+    assert renderer.calls == []
+
+
+async def test_a_chain_that_renders_needs_a_renderer() -> None:
+    with pytest.raises(ValueError, match="page renderer"):
+        ResourceRegistry(extract_chain=(AgentBrowserRender(),))
+
+
+async def test_concurrent_rendered_reads_share_one_render(serve) -> None:
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    class _Slow(RecordingRenderer):
+        async def __call__(self, url: str) -> RenderedPage:
+            started.set()
+            await release.wait()
+            return await super().__call__(url)
+
+    renderer = _Slow({_SPA: _QUOTES})
+    serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    reads = [
+        asyncio.create_task(registry.read(resource_id, rendered=True, max_window_tokens=2000))
+        for _ in range(3)
+    ]
+    await started.wait()
+    release.set()
+    results = await asyncio.gather(*reads)
+
+    assert len({result.content for result in results}) == 1
+    assert renderer.calls == [_SPA]
+
+
+async def test_closing_the_registry_cancels_a_render_in_flight(serve) -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def render(url: str) -> RenderedPage:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+    serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=render)
+    resource_id = registry.register_agent_url(_SPA)
+    reading = asyncio.create_task(registry.read(resource_id, rendered=True))
+    await started.wait()
+
+    await registry.aclose()
+
+    assert cancelled.is_set()
+    with pytest.raises(asyncio.CancelledError):
+        await reading
+
+
+async def test_a_resumed_run_reads_a_rendering_it_restored_without_rendering_again(serve) -> None:
+    first_renderer = RecordingRenderer({_SPA: _QUOTES})
+    serve(_Fetch(b"never fetched"))
+    secret = b"rendered-run"
+    async with ResourceRegistry(
+        page_renderer=first_renderer, resource_secret=secret, cursor_secret=secret
+    ) as registry:
+        resource_id = registry.register_agent_url(_SPA)
+        before = await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+        effects = registry.rendered_effects(resource_id)
+
+    (rendering, snapshot, *assets) = effects
+    stored = {effect.resource_id: effect.content for effect in effects}
+    forbidden = RecordingRenderer({})
+    async with ResourceRegistry(
+        page_renderer=forbidden, resource_secret=secret, cursor_secret=secret
+    ) as resumed:
+        # Nothing registered the URL in this process: only the settled rows exist.
+        resumed.restore_rendered(
+            rendering.source_locator,
+            url=_SPA,
+            admission_origin="agent",
+            final_url=_SPA,
+            content=rendering.content,
+        )
+        assert resumed.holds_rendered(rendering.resource_id)
+        resumed.adopt_conversion_snapshot(ConversionSnapshot.restore(snapshot.content, stored))
+
+        after = await resumed.read(resource_id, max_window_tokens=2000)
+        explicit = await resumed.read(resource_id, rendered=True, max_window_tokens=2000)
+
+    assert after.rendered and after.content == explicit.content == before.content
+    assert forbidden.calls == [] and not assets
+
+
+async def test_a_restored_rendering_of_a_caller_link_the_request_does_not_hold_is_a_mismatch() -> (
+    None
+):
+    registry = ResourceRegistry(resource_secret=b"run")
+
+    with pytest.raises(Exception, match="caller link"):
+        registry.restore_rendered(
+            "res-0123456789abcdef01234567",
+            url=_SPA,
+            admission_origin="caller",
+            final_url=_SPA,
+            content=b"<p>x</p>",
+        )
+    with pytest.raises(Exception, match="does not match"):
+        registry.restore_rendered(
+            "res-0123456789abcdef01234567",
+            url=_SPA,
+            admission_origin="agent",
+            final_url=_SPA,
+            content=b"<p>x</p>",
+        )
+
+
+async def test_a_rendering_keeps_its_utf8_whatever_its_own_meta_charset_says(serve) -> None:
+    page = '<html><head><meta charset="iso-8859-1"></head><body><p>café ☕</p></body></html>'
+    renderer = RecordingRenderer({_SPA: page})
+    serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    result = await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+
+    assert "café ☕" in result.content
+
+
+async def test_a_direct_page_is_read_in_the_charset_its_server_declared(serve) -> None:
+    body = '<html><head><meta charset="iso-8859-1"></head><body><p>café</p></body></html>'.encode()
+
+    async def fetch(url: str, **_kwargs: object) -> PublicHttpFetch:
+        return PublicHttpFetch(body, url, "text/html; charset=utf-8", 200)
+
+    serve(fetch)
+    registry = ResourceRegistry()
+    resource_id = registry.register_agent_url("https://data.example.com/page.html")
+
+    assert "café" in (await registry.read(resource_id, max_window_tokens=2000)).content
+
+
+async def test_a_rendered_image_is_served_from_the_run_without_fetching(serve) -> None:
+    import base64
+
+    from tests.support.resources import png
+
+    image = base64.b64encode(png()).decode()
+    page = f"<html><body><p>Chart below</p><img alt='chart' src='data:image/png;base64,{image}'></body></html>"
+    renderer = RecordingRenderer({_SPA: page})
+    fetch = serve(_Fetch(b"direct"))
+    registry = ResourceRegistry(page_renderer=renderer)
+    resource_id = registry.register_agent_url(_SPA)
+
+    result = await registry.read(resource_id, rendered=True, max_window_tokens=2000)
+
+    (handle,) = result.visual_handles
+    held = registry.held_visual_asset(resource_id, handle.handle_id)
+    assert held is not None and held[1] is True and held[0].data == png()
+    assert (await registry.visual_asset(resource_id, handle.handle_id)).data == png()
+    assert registry.held_visual_asset(resource_id, "vis-unknown") is None
+    assert fetch.calls == 0

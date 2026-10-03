@@ -96,7 +96,12 @@ from dlightrag.engine.ai.telemetry import (
     bounded_telemetry_text,
     safe_log_text,
 )
-from dlightrag.engine.answer.agent_browser import AgentBrowserSettings, BrowserProvider
+from dlightrag.engine.answer.agent_browser import (
+    AgentBrowserSettings,
+    BrowserHolder,
+    BrowserProvider,
+    RunAgentBrowser,
+)
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.engine.answer.citations.finalization import finalize_answer
@@ -185,7 +190,9 @@ from dlightrag.engine.answer.resources.models import (
     TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import (
+    BROWSER_RENDER,
     FetchedBytesSink,
+    PageRenderer,
 )
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.results import store_answer_result
@@ -502,6 +509,7 @@ class AnswerExecutor:
         return research_tool_declarations(
             web_search=web_search,
             resource_read=True,
+            rendered_read=self._browser_provider is not None,
             resource_view=True,
             environment=self._execution_adapter is not None,
             artifact_publication=self._execution_adapter is not None,
@@ -1263,29 +1271,36 @@ class AnswerExecutor:
                 ),
             )
 
-        run = await self.prepare_orchestrated_run(
-            query=request.query,
-            agent_effort=request.effort,
-            worst_case_memory=_worst_case_recall_block(session.prepared_input),
-            workspaces=list(request.workspaces),
-            retrieval=request.retrieval,
-            filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
-            resources=await self._answer_run_resources(request, owner_id=session.owner_id),
-            fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
-            resolved_mode=resolved_mode,
-            resource_identity=request.resource_identity,
-            pinned_image_descriptions=request.image_descriptions,
-            projected_history=projected_history,
-            model_profiles=model_profiles,
-            pinned_models=request.pinned_models,
-            connection_tools=connection_tools,
-            lineage_loader=self._lineage_loader(session, agent_session_id),
-            skills=(
-                self._skills_bundle_factory(session.owner_id, request.requested_skill)
-                if self._skills_bundle_factory is not None
-                else None
-            ),
-        )
+        agent_browser = self._run_agent_browser(session, resolved_mode)
+        try:
+            run = await self.prepare_orchestrated_run(
+                query=request.query,
+                agent_effort=request.effort,
+                worst_case_memory=_worst_case_recall_block(session.prepared_input),
+                workspaces=list(request.workspaces),
+                retrieval=request.retrieval,
+                filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
+                resources=await self._answer_run_resources(request, owner_id=session.owner_id),
+                fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
+                resolved_mode=resolved_mode,
+                resource_identity=request.resource_identity,
+                pinned_image_descriptions=request.image_descriptions,
+                projected_history=projected_history,
+                model_profiles=model_profiles,
+                pinned_models=request.pinned_models,
+                connection_tools=connection_tools,
+                lineage_loader=self._lineage_loader(session, agent_session_id),
+                skills=(
+                    self._skills_bundle_factory(session.owner_id, request.requested_skill)
+                    if self._skills_bundle_factory is not None
+                    else None
+                ),
+                page_renderer=agent_browser.render if agent_browser is not None else None,
+            )
+        except BaseException:
+            if agent_browser is not None:
+                await agent_browser.aclose()
+            raise
         attachment_snapshots: dict[str, bytes] = {}
         if run.registry is not None:
             attachment_snapshots = await self._restore_registry_fetches(
@@ -1957,6 +1972,8 @@ class AnswerExecutor:
                     else getattr(stream, "trace", None) or {}
                 )
                 trace["agent_shell_confinement"] = confinement_state(self._execution_environment)
+                if agent_browser is not None and agent_browser.sandbox is not None:
+                    trace["agent_browser_sandbox"] = agent_browser.sandbox
                 trace["agent_effort"] = _agent_effort_trace(
                     request.effort,
                     resolved_mode,
@@ -2082,7 +2099,31 @@ class AnswerExecutor:
                     await subagent_host.stop(cancel=cancel_children_on_exit)
                 except Exception:
                     logger.exception("Failed to settle local Child Session tasks")
-            await _close_execution_resources(stream, run.registry)
+            await _close_execution_resources(stream, run.registry, agent_browser)
+
+    def _run_agent_browser(
+        self, session: RunSession, resolved_mode: ResolvedMode
+    ) -> RunAgentBrowser | None:
+        """The browser this Research Run leases from the pool on first need, if there is one.
+
+        Fast has no tools and gains no hidden rendering (ADR 0020), so it gets none.
+        """
+        if (
+            resolved_mode != "research"
+            or self._browser_provider is None
+            or self._browser_settings is None
+        ):
+            return None
+        return RunAgentBrowser(
+            self._browser_provider,
+            BrowserHolder(
+                owner_id=session.owner_id,
+                run_id=session.run_id,
+                worker_id=session.worker_id,
+                fencing_epoch=session.fencing_epoch,
+            ),
+            self._browser_settings,
+        )
 
     async def prepare_orchestrated_run(
         self,
@@ -2107,6 +2148,7 @@ class AnswerExecutor:
         agent_effort: ReasoningLevel | None = None,
         connection_tools: tuple[AgentTool, ...] = (),
         lineage_loader: LineageResourceLoader | None = None,
+        page_renderer: PageRenderer | None = None,
     ) -> OrchestratorRun:
         pinned_model_selectors(pinned_models)
         child_pins = {pin.role: pin for pin in pinned_models}
@@ -2124,6 +2166,7 @@ class AnswerExecutor:
             fetched_bytes_sink=fetched_bytes_sink,
             resolved_mode=resolved_mode,
             resource_identity=resource_identity,
+            page_renderer=page_renderer,
         )
         try:
             models = resolved.models
@@ -2234,6 +2277,7 @@ class AnswerExecutor:
                     if resolved.registry is not None
                     else None
                 ),
+                rendered_read=page_renderer is not None,
                 child_model_resolver=resolve_child_model,
                 child_model_identities={
                     pin.role: {
@@ -2324,6 +2368,7 @@ class AnswerExecutor:
     ) -> dict[str, bytes]:
         attachment_snapshots: dict[str, bytes] = {}
         conversions: list[tuple[str, bytes]] = []
+        renderings: list[tuple[RunFetchedResource, bytes]] = []
         for resource in await self._store.list_fetched_resources(
             owner_id=owner_id,
             run_id=run_id,
@@ -2349,6 +2394,11 @@ class AnswerExecutor:
                 conversions.append((resource.source_locator.decode(), content))
                 continue
             if kind in {"tool_attachment", "conversion_asset"}:
+                continue
+            if kind == "web_render":
+                # A rendering is restored beside the Web Resource it renders, which a row
+                # of the same ordinal may come after.
+                renderings.append((resource, content))
                 continue
             raw_aliases = _resource_aliases(capabilities)
             if kind == LINEAGE_ADOPTION_KIND:
@@ -2393,15 +2443,40 @@ class AnswerExecutor:
                     "run_execution_failed",
                     "A durable Web resource catalog entry is invalid.",
                 ) from exc
+        for rendering, content in renderings:
+            capabilities = rendering.capabilities
+            origin = str(capabilities.get("admission_origin") or "")
+            if origin not in {"caller", "search", "agent"} or (
+                capabilities.get("acquisition") != BROWSER_RENDER
+            ):
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable rendered representation is invalid.",
+                )
+            try:
+                registry.restore_rendered(
+                    rendering.source_locator.decode("utf-8"),
+                    url=str(capabilities.get("url") or ""),
+                    admission_origin=origin,  # type: ignore[arg-type]
+                    final_url=str(capabilities.get("final_url") or ""),
+                    content=content,
+                )
+            except (UnicodeError, ValueError, ResourceRegistryError) as exc:
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable rendered representation is invalid.",
+                ) from exc
         for parent_id, encoded in conversions:
             snapshot = ConversionSnapshot.restore(encoded, attachment_snapshots)
             if snapshot.resource_id != parent_id:
                 raise ValueError("conversion snapshot parent mismatch")
-            # Recovery must verify durable source bytes, including lazy inputs.
-            # Registry adoption separately guards any already-materialized source.
-            original = await registry.materialize(parent_id)
-            if hashlib.sha256(original).hexdigest() != snapshot.input_digest:
-                raise ValueError("conversion snapshot input digest mismatch")
+            # A rendering is held already, with the bytes this view must match. Any other
+            # recovery verifies durable source bytes, including lazy inputs; registry
+            # adoption separately guards any already-materialized source.
+            if not registry.holds_rendered(parent_id):
+                original = await registry.materialize(parent_id)
+                if hashlib.sha256(original).hexdigest() != snapshot.input_digest:
+                    raise ValueError("conversion snapshot input digest mismatch")
             registry.adopt_conversion_snapshot(snapshot)
         return attachment_snapshots
 
@@ -2744,6 +2819,7 @@ def _project_fast_history_before_current_user(
 async def _close_execution_resources(
     stream: AsyncIterator[str] | None,
     registry: ResourceRegistry | None,
+    agent_browser: RunAgentBrowser | None = None,
 ) -> None:
     cancellation: asyncio.CancelledError | None = None
     try:
@@ -2759,6 +2835,15 @@ async def _close_execution_resources(
             cancellation = defer_cancellation(cancellation, exc)
         except Exception:
             logger.warning("Failed to close Answer resource registry", exc_info=True)
+    # The registry's pending renders end first, then the browser they used is given back,
+    # before the coordinator's terminal write.
+    if agent_browser is not None:
+        try:
+            await agent_browser.aclose()
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except Exception:
+            logger.warning("Failed to close the Run's Agent Browser", exc_info=True)
     if cancellation is not None:
         raise cancellation
 

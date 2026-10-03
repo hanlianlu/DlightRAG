@@ -62,7 +62,7 @@ def preparer(max_images: int = 8):
 
 
 def tools(
-    registry: Any, *, max_images: int = 8, environment: Any = None
+    registry: Any, *, max_images: int = 8, environment: Any = None, rendered: bool = False
 ) -> tuple[AgentTool, AgentTool]:
     access = AccessScheduler()
     return (
@@ -70,6 +70,7 @@ def tools(
             environment,
             access,
             resource_reader=make_resource_reader(registry, TextWindowBudget(1000)),
+            rendered=rendered,
         ),
         view_tool(
             environment,

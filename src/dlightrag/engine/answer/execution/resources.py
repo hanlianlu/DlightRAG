@@ -11,6 +11,7 @@ import hmac
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any
 
 from dlightrag.engine.answer.capabilities import (
@@ -39,7 +40,13 @@ from dlightrag.engine.answer.resources.models import (
     ResourceManifestEntry,
     ResourceRegistryError,
 )
-from dlightrag.engine.answer.resources.registry import FetchedBytesSink
+from dlightrag.engine.answer.resources.registry import (
+    AgentBrowserRender,
+    ExtractStep,
+    FetchedBytesSink,
+    HostedExtract,
+    PageRenderer,
+)
 from dlightrag.engine.answer.web_sources import WebSourceService
 from dlightrag.engine.public_http import fetch_public_http
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
@@ -173,11 +180,13 @@ class AnswerResourceResolver:
         fetched_bytes_sink: FetchedBytesSink | None = None,
         resolved_mode: ResolvedMode,
         resource_identity: str | None = None,
+        page_renderer: PageRenderer | None = None,
     ) -> ResolvedAnswerResources:
         """Resolve resource capabilities and image transport.
 
         ``resource_identity`` is the Run's recorded salt; every handle and cursor
-        the registry mints comes from it.
+        the registry mints comes from it. ``page_renderer`` is the Run's Agent Browser,
+        which only a Research Run that has one is given.
         """
         declared_image_count = sum(
             1
@@ -214,6 +223,7 @@ class AnswerResourceResolver:
             web_sources=web_sources,
             fetched_bytes_sink=fetched_bytes_sink,
             resource_identity=resource_identity,
+            page_renderer=page_renderer,
         )
         try:
             current_image_resource_ids = (
@@ -354,6 +364,7 @@ class AnswerResourceResolver:
         web_sources: WebSourceService | None = None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
         resource_identity: str | None = None,
+        page_renderer: PageRenderer | None = None,
     ) -> ResourceRegistry:
         """Register the admitted resources for read and view.
 
@@ -367,7 +378,8 @@ class AnswerResourceResolver:
             max_attachments=self._settings.max_attachments,
             max_attachment_bytes=self._settings.max_attachment_bytes,
             max_total_attachment_bytes=self._settings.max_total_attachment_bytes,
-            url_text_fallback=(web_sources.extract if web_sources is not None else None),
+            extract_chain=self._extract_chain(web_sources, page_renderer),
+            page_renderer=page_renderer,
             fetched_bytes_sink=fetched_bytes_sink,
             resource_secret=_run_secret(resource_identity, b"answer-resource-identity"),
             cursor_secret=_run_secret(resource_identity, b"answer-resource-cursor"),
@@ -379,6 +391,32 @@ class AnswerResourceResolver:
             raise AnswerResourceAdmissionError() from exc
 
         return registry
+
+    def _extract_chain(
+        self, web_sources: WebSourceService | None, page_renderer: PageRenderer | None
+    ) -> tuple[ExtractStep, ...]:
+        """The configured Extract order as steps this Run can take.
+
+        Consecutive hosted names are one step, so the browser sits where the order puts
+        it. It takes a step only when the Run has a browser: Fast has none, and neither
+        does a process without a configured pool.
+        """
+        steps: list[ExtractStep] = []
+        hosted: list[str] = []
+
+        def flush() -> None:
+            if hosted and web_sources is not None:
+                steps.append(HostedExtract(partial(web_sources.extract, providers=tuple(hosted))))
+            hosted.clear()
+
+        for name in self._models.extract_order():
+            if name != "browser":
+                hosted.append(name)
+            elif page_renderer is not None:
+                flush()
+                steps.append(AgentBrowserRender())
+        flush()
+        return tuple(steps)
 
     @staticmethod
     async def budget_agent_images(

@@ -30,6 +30,15 @@ class ResourceCursorError(ResourceRegistryError):
     """Raised when a continuation cursor is unknown or bound to another read."""
 
 
+class RenderedReadTargetError(ResourceRegistryError):
+    """Raised when ``rendered=true`` names a target that is not a Web Resource."""
+
+    def __init__(self, resource_id: str) -> None:
+        super().__init__(
+            f"rendered=true reads a URL or a Web Resource; {resource_id} is not a Web Resource"
+        )
+
+
 class ResourceDecodeError(ResourceRegistryError):
     """Raised when resource bytes are not decodable, mismatched text."""
 
@@ -131,6 +140,8 @@ class ResourceReadResult:
     visual_handles: tuple[VisualHandle, ...] = field(default_factory=tuple)
     evidence_available: bool = True
     note: str | None = None
+    rendered: bool = False
+    """Whether the text is the Web Resource's rendered representation, not its snapshot."""
 
 
 #: The handle families this system mints. A durable handle is whatever its minter
@@ -166,6 +177,7 @@ __all__ = [
     "ResourceManifestEntry",
     "ResourceNotConvertedError",
     "ResourceNotFoundError",
+    "RenderedReadTargetError",
     "ResourceReadResult",
     "ResourceRegistryError",
     "TextWindowLocator",
