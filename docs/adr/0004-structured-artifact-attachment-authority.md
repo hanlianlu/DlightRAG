@@ -29,4 +29,4 @@ Each document carries an `artifact_bindings` map from its parser-normalized targ
 
 Only structured roots and their `artifact:` dependency closure can publish files. HTML dependency discovery uses actual `href` and `src` attributes; comments and script/style source examples are inert. Existing self-contained HTML and media validation still apply. Resolution metadata does not change source bytes or their content digest. Bindings are additional result metadata and require no database schema migration.
 
-Prompt tests preserve the default-Answer, selective-Artifact, and non-duplication guidance. Tool tests preserve the local optionality reminder. Semantic similarity remains an observational quality signal rather than a hard runtime invariant.
+Prompt tests preserve the default-Answer, selective-Artifact, and non-duplication guidance. Tool tests preserve the Interface's statement of how attaching works, without the selection policy. Semantic similarity remains an observational quality signal rather than a hard runtime invariant.

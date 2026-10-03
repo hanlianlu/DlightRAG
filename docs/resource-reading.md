@@ -41,7 +41,9 @@ Blob.
   the observation capacity (the room the compaction trigger leaves below the input
   limit, which is also where the runtime cuts a Tool result), and ends with notes,
   visual handles, and a `[more; cursor=…]` continuation. A Resource longer than one
-  window is therefore always read on by cursor, never cut.
+  window is therefore always read on by cursor, never cut. The window is sized for the
+  Run's own model: a Child on a role whose configured context window is much smaller
+  has the page cut at its own capacity, with no cursor for the cut part.
   `focus` starts the page order at the most relevant window; the continuation
   runs to the end, wraps to the start, and stops before the focus window, so
   every character is returned once.
