@@ -1682,6 +1682,8 @@ class AnswerExecutor:
                     )
                     accepted_purpose = next_purpose
                     research_operation_id = accepted.operation_id
+                    if subagent_host is not None and next_purpose == "child_result":
+                        subagent_host.note_notification_accepted(next_input[0])
                     if command_ids and controls is not None:
                         if not await controls.acknowledge(command_ids):
                             raise LeaseLostError

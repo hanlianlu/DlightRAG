@@ -318,8 +318,12 @@ class SubagentHost:
     _semaphore: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
     _detaching: bool = field(default=False, init=False, repr=False)
     _cancel_requested: set[str] = field(default_factory=set, init=False, repr=False)
-    # Settled results the parent has been handed through status, wait or cancel.
+    # Settled results the parent has been handed through status, wait, cancel or an
+    # accepted notification, and the results each notification not yet taken carries.
     _read_results: set[str] = field(default_factory=set, init=False, repr=False)
+    _notified_results: dict[str, tuple[str, ...]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _parent_wake: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
 
     @property
@@ -330,6 +334,10 @@ class SubagentHost:
         """Record a settled result the parent now has, so it is not sent to it again."""
         if outcome.status != "running":
             self._read_results.add(_result_key(outcome))
+
+    def note_notification_accepted(self, notification_id: str) -> None:
+        """Record the results a notification carried once the parent has taken it."""
+        self._read_results.update(self._notified_results.pop(notification_id, ()))
 
     def semaphore(self) -> asyncio.Semaphore:
         if self._semaphore is None:
@@ -406,6 +414,7 @@ class SubagentHost:
             unread = tuple(o for o in outcomes if _result_key(o) not in self._read_results)
             if notification_id in seen or not unread:
                 continue
+            self._notified_results[notification_id] = tuple(_result_key(o) for o in unread)
             notifications.append((notification_id, _many_result(unread).text_content))
         return tuple(notifications)
 
@@ -592,7 +601,7 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         return _result_with_guidance(
             host,
             current,
-            await _pending_guidance_for_child(host, args.child_session_id),
+            await _pending_guidance(host, args.child_session_id),
             parent_call_id=parent_call_id,
         )
 
@@ -604,16 +613,18 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             return _result_with_guidance(
                 host,
                 current,
-                await _pending_guidance_for_child(host, args.child_session_id),
+                await _pending_guidance(host, args.child_session_id),
                 parent_call_id=parent_call_id,
             )
         await host.restore_pending()
-        pending = await _pending_guidance_for_child(host, args.child_session_id)
+        pending = await _pending_guidance(host, args.child_session_id)
         if not pending:
             task = host.tasks.get(args.child_session_id)
             if task is not None and not task.done():
                 await host.wait_for_activity(child_id=args.child_session_id)
-            pending = await _pending_guidance_for_child(host, args.child_session_id)
+                # The wake may be a sibling's question, which nothing else shows the
+                # parent while it waits here.
+                pending = await _pending_guidance(host)
         current, parent_call_id = await _roster_status(host, args.child_session_id)
         return _result_with_guidance(host, current, pending, parent_call_id=parent_call_id)
 
@@ -1210,10 +1221,11 @@ def child_session_id(
     )
 
 
-async def _pending_guidance_for_child(
+async def _pending_guidance(
     host: SubagentHost,
-    child_id: str,
+    child_id: str | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
+    """The questions the parent owes an answer, of one child or of every child."""
     if host.list_guidance is None or host.parent_session_id is None:
         return ()
     questions = await host.list_guidance(
@@ -1224,7 +1236,8 @@ async def _pending_guidance_for_child(
     return tuple(
         question
         for question in questions or ()
-        if isinstance(question, Mapping) and str(question.get("child_session_id") or "") == child_id
+        if isinstance(question, Mapping)
+        and (child_id is None or str(question.get("child_session_id") or "") == child_id)
     )
 
 

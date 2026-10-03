@@ -331,7 +331,8 @@ async def test_has_running_children_ignores_sparse_precreate_rows() -> None:
     assert await mixed_host.has_running_children() is True
 
 
-async def test_wait_subagent_wakes_on_pending_question_without_settling() -> None:
+@pytest.mark.parametrize("asker", ["the waited child", "a sibling"])
+async def test_wait_subagent_wakes_on_pending_question_without_settling(asker: str) -> None:
     parent_id = SessionId.new()
     request_id = SessionId.new().value
     parked = asyncio.Event()
@@ -351,7 +352,7 @@ async def test_wait_subagent_wakes_on_pending_question_without_settling() -> Non
         )
 
     async def list_guidance(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
-        child_id = known_child.get("id")
+        child_id = known_child.get("id") if asker == "the waited child" else "a-sibling-session"
         if not asked.is_set() or child_id is None:
             return ()
         return (
@@ -558,6 +559,58 @@ async def test_a_result_the_parent_has_read_is_not_sent_to_it_again() -> None:
         ChildControlInput(child_session_id="child-b"), tool_runtime(tool_name="subagent_status")
     )
     assert await pending() == ""
+
+
+async def test_a_notified_result_is_not_sent_again_when_a_sibling_continues() -> None:
+    parent_intent_id = IntentId.new().value
+    operations = {"child-a": "a-1", "child-b": "b-1", "child-c": "c-1"}
+
+    def row(name: str) -> dict[str, Any]:
+        return {
+            "child_session_id": name,
+            "parent_call_id": "call",
+            "parent_intent_id": parent_intent_id,
+            "status": "succeeded",
+            "host_state": {
+                "terminal_outcome": ChildOutcome(
+                    status="succeeded",
+                    summary=f"{name} found it",
+                    child_session_id=name,
+                    operation_id=operations[name],
+                ).durable_payload()
+            },
+        }
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(row(name) for name in operations)
+
+    async def load_child(*, child_session_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return row(child_session_id)
+
+    host = SubagentHost(
+        parent_session_id=SessionId.new(),
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        list_children=list_children,
+        load_child=load_child,
+    )
+    status = subagent_tools(host=host)[1]
+    seen: set[str] = set()
+
+    ((notification_id, content),) = await host.completed_dispatch_notifications(seen=seen)
+    assert all(f"{name} found it" in content for name in operations)
+    # A notification the parent has not taken is still owed to it.
+    assert await host.completed_dispatch_notifications(seen=set()) == ((notification_id, content),)
+
+    # The parent takes it, continues one child and reads that child's new result.
+    seen.add(notification_id)
+    host.note_notification_accepted(notification_id)
+    operations["child-a"] = "a-2"
+    await status.execute(
+        ChildControlInput(child_session_id="child-a"), tool_runtime(tool_name="subagent_status")
+    )
+
+    assert await host.completed_dispatch_notifications(seen=seen) == ()
 
 
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:

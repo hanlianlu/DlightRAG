@@ -242,9 +242,11 @@ for one child — one without a shell, say — and can never restore what the
 Run withholds or remove `ask_parent`; a listed name the Run does not offer is left
 out, not an error. Children cannot spawn grandchildren.
 Same-Session continuation creates a new Operation on the existing Child Session.
-A settled result the parent has read through `subagent_status`, `wait_subagent`
-or `cancel_subagent` is not sent to it again when it ends its turn; unread results
-are. The built-in `council` Skill is a parent recipe for independent first-pass
+`wait_subagent` returns early, with its child still running, when a sibling settles
+or a child asks a question, and then reports every question awaiting an answer. A
+settled result the parent has read through `subagent_status`, `wait_subagent` or
+`cancel_subagent`, or been sent in a notification it accepted, is not sent to it
+again when it ends its turn; unread results are. The built-in `council` Skill is a parent recipe for independent first-pass
 investigations and at most one curated cross-examination; it adds no tools, asks
 for no narrowing of its children, which hold the default set, and is not a
 permission gate. A user's explicit `/skill:` request is made to the Run's own
