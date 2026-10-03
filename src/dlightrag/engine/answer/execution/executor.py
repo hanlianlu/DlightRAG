@@ -1595,10 +1595,6 @@ class AnswerExecutor:
                     if next_input is None:
                         break
                     validate_research_pins()
-                    if prepared_early.streamed_terminal_text is not None:
-                        await session.reset_output()
-                        prepared_early.streamed_terminal_text = None
-                        await session.enter_phase("researching")
                     if next_purpose == "child_result":
                         next_input = (
                             next_input[0],
@@ -1747,6 +1743,7 @@ class AnswerExecutor:
                     if not already_streamed:
                         await session.enter_phase("generating")
                         await session.emit_token(answer_text)
+                        prepared.streamed_terminal_text = answer_text
                 else:
                     contexts, stream = await run.orchestrator.answer_stream(
                         request.query,
@@ -1788,9 +1785,6 @@ class AnswerExecutor:
                     and research_plan is not None
                     and prepared_early is not None
                 ):
-                    await session.reset_output()
-                    prepared_early.streamed_terminal_text = None
-                    await session.enter_phase("researching")
                     correction = await agent_runtime.accept(
                         session_id=agent_session_id,
                         lane_id=agent_lane_id,
@@ -1839,6 +1833,7 @@ class AnswerExecutor:
                     if not already_streamed:
                         await session.enter_phase("generating")
                         await session.emit_token(answer_text)
+                        prepared_early.streamed_terminal_text = answer_text
                     emitted_answer_text = answer_text
                     await session.flush_tokens()
                     finalized = finalize_answer(answer_text, contexts)

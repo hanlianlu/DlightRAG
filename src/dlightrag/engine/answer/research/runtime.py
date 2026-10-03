@@ -643,6 +643,12 @@ class ResearchRuntimeEffects:
     ) -> AssistantTurn:
         await self._check_cancelled()
         self._check_pins()
+        if self._prepared.streamed_terminal_text is not None:
+            # The Session went on past a completion it streamed, after a steer, a
+            # follow-up, a Child result or a correction: that draft is not the answer.
+            await self._session.reset_output()
+            self._prepared.streamed_terminal_text = None
+            await self._session.enter_phase("researching")
         await emit_ephemeral(
             AgentSessionEvent(
                 kind="model_start",

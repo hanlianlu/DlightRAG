@@ -36,6 +36,7 @@ from dlightrag.engine.agent.session.ids import (
 )
 from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.registers import RequestSnapshot
 from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.runtime import (
     AgentOperationCancelled,
@@ -67,6 +68,7 @@ from dlightrag.engine.answer.orchestration.orchestrator import (
 )
 from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.runtime import (
+    AnswerRuntimeControls,
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
     _answer_runtime_event_sink,
@@ -460,7 +462,7 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
     prepared = SimpleNamespace(
         tools=(),
         model_profile=answer_model_profile(),
-        streamed_terminal_text="older",
+        streamed_terminal_text=None,
         model_func=None,
         agent_turn_count=0,
         trace={
@@ -505,6 +507,104 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
     assert session.phases == ["generating", "researching"]
     assert session.resets == 1
     assert prepared.streamed_terminal_text is None
+
+
+@pytest.mark.asyncio
+async def test_a_steer_after_a_streamed_completion_replaces_the_draft_it_continues_past() -> None:
+    class _EventLog(_Session):
+        def __init__(self) -> None:
+            self.events: list[tuple[str, str]] = []
+
+        async def emit_token(self, token: str) -> None:
+            self.events.append(("token", token))
+
+        async def enter_phase(self, phase: str) -> None:
+            self.events.append(("progress", phase))
+
+        async def reset_output(self) -> None:
+            self.events.append(("reset", ""))
+
+    class _Orchestrator:
+        def __init__(self) -> None:
+            self.answers = iter(("Answer A.", "Answer B."))
+            self.answered: list[str] = []
+
+        async def assemble_runtime_request(self, _prepared: object, context: Any, **_: Any):
+            return RequestSnapshot.from_values(
+                operation_id=context.operation_id,
+                turn_number=getattr(context.state, "turn_count", 0) + 1,
+                plan_digest=context.meta.plan_digest,
+                model_role="query",
+                messages=[{"role": "user", "content": "question"}],
+                tools=[],
+                tool_choice="auto",
+                max_tokens=256,
+            )
+
+        async def call_runtime_provider(self, _request: object, **kwargs: Any) -> AssistantTurn:
+            text = next(self.answers)
+            await kwargs["emit_text"](text[:4])
+            await kwargs["emit_text"](text[4:])
+            self.answered.append(text)
+            return AssistantTurn(text=text, tool_calls=(), stop_reason="stop")
+
+    session = _EventLog()
+    orchestrator = _Orchestrator()
+    prepared = SimpleNamespace(
+        tools=(),
+        model_profile=answer_model_profile(),
+        streamed_terminal_text=None,
+        model_func=None,
+        agent_turn_count=0,
+        trace={},
+    )
+    steers = [{"control_sequence": 1, "kind": "steer", "content": "Focus on X."}]
+
+    async def read_controls() -> tuple[dict[str, Any], ...]:
+        # The user pressed Steer while Answer A streamed; the runtime reads it at A's
+        # completion and goes on in the same Operation.
+        return (steers.pop(),) if steers and orchestrator.answered else ()
+
+    async def acknowledge(_sequences: tuple[int, ...]) -> bool:
+        return True
+
+    repository = MemoryAgentSessionRepository[Any]()
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=ResearchRuntimeEffects(
+            telemetry=NOOP_TELEMETRY,
+            orchestrator=cast(Any, orchestrator),
+            prepared=prepared,
+            session=cast(Any, session),
+            session_id=SessionId.new(),
+            fetched_buffer=FetchedResourceBuffer(),
+            persist_child_intent=None,
+            publish_provider_text=True,
+        ),
+        tools=(),
+        fencing_epoch=1,
+        event_sink=_answer_runtime_event_sink(cast(Any, session)),
+        controls=AnswerRuntimeControls(reader=read_controls, acknowledge=acknowledge),
+    )
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="answer-run:run",
+        content="question",
+        plan=AgentRunPlan.from_tools([], model_role="query", context_policy_revision="ctx"),
+    )
+
+    operation = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(operation.state, OperationCompleted)
+    assert orchestrator.answered == ["Answer A.", "Answer B."]
+    # What a client shows is every token since the last reset.
+    draft = ""
+    for kind, text in session.events:
+        draft = "" if kind == "reset" else draft + text if kind == "token" else draft
+    assert draft == "Answer B."
+    assert prepared.streamed_terminal_text == "Answer B."
 
 
 @pytest.mark.asyncio

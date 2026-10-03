@@ -273,10 +273,10 @@ same-version restart recovery. Incompatible endpoint or reasoning drift is
 rejected before child provider effects.
 
 Tool errors return to the model for correction; they do not terminate research.
-A no-tool assistant turn completes the current Operation. The Run continues
-while a steer, follow-up, control command, or Child result is pending or a Child
-Session is still running; otherwise it ends, and that last turn's text is the
-answer. The parent Research Session authorizes a root file under the
+A no-tool assistant turn completes the current Operation, unless a steer is
+already waiting, which the same Operation then answers. The Run continues while a
+follow-up, control command, or Child result is pending or a Child Session is
+still running; otherwise it ends, and that last turn's text is the answer. The parent Research Session authorizes a root file under the
 Workspace's `artifacts/` directory for publication only through
 `attach_artifact`; Fast and Child Sessions do not receive that product tool. A
 successful attachment binds the root's normalized relative path, label, media
@@ -315,8 +315,9 @@ The parent Research Session streams native tool-turn text deltas optimistically
 when the provider supports them. They are transient presentation: the Host
 resets them when the same turn contains tool calls or commits text that differs
 from what streamed, a provider attempt fails or is cancelled after emitting
-text, the Run defers on a dependency, a follow-up, control command, or Child
-result continues the Session, interrupted generation is recovered, or
+text, the Run defers on a dependency, the next provider turn begins after a
+completed one (a steer, follow-up, control command, Child result, or Artifact
+correction continued the Session), interrupted generation is recovered, or
 citation/Artifact finalization changes the terminal text. Persisted Request
 Snapshots, Assistant Turns, tool settlements, and the canonical result remain
 the recovery authorities.
