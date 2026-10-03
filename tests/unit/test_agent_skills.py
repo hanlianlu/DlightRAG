@@ -363,6 +363,34 @@ async def test_a_folded_description_is_listed_whole_on_one_line(tmp_path: Path) 
     ) in str(contribution.messages[0]["content"])
 
 
+@pytest.mark.asyncio
+async def test_a_description_that_yaml_would_cut_short_is_refused_at_publish(
+    tmp_path: Path,
+) -> None:
+    owner_root = tmp_path / "owner"
+
+    async def publish(description: str) -> ToolResult:
+        content = f"---\nname: triage\ndescription: {description}\n---\n# Triage\n"
+        return await publish_skill_tool(owner_root).execute(
+            PublishSkillInput.model_validate({"name": "triage", "files": {"SKILL.md": content}}),
+            tool_runtime(),  # type: ignore[arg-type]
+        )
+
+    cut = await publish("Use when the user names an issue like #123")
+    assert cut.is_error and "starts a YAML comment" in cut.text_content
+    assert not (owner_root / "triage").exists()
+
+    # Quoting keeps the whole value, and a comment on a line of its own is a comment.
+    assert not (await publish('"Use when the user names an issue like #123"')).is_error
+    content = "---\nname: triage\ndescription: Use when asked\n# why\n---\nb"
+    assert not (
+        await publish_skill_tool(owner_root).execute(
+            PublishSkillInput.model_validate({"name": "triage", "files": {"SKILL.md": content}}),
+            tool_runtime(),  # type: ignore[arg-type]
+        )
+    ).is_error
+
+
 def test_a_malformed_skill_is_left_out_of_the_catalog(tmp_path: Path) -> None:
     root = tmp_path / "global"
     _skill(root, "good", name="good", description="Use when asked", body="b")
@@ -370,6 +398,21 @@ def test_a_malformed_skill_is_left_out_of_the_catalog(tmp_path: Path) -> None:
     broken.mkdir()
     (broken / "SKILL.md").write_text(
         "---\nname: broken\ndescription: Use when: asked\n---\nb", encoding="utf-8"
+    )
+
+    catalog = SkillCatalog.discover(global_root=root)
+
+    assert [skill.name for skill in catalog.metadata] == ["good"]
+
+
+def test_a_frontmatter_the_yaml_reader_rejects_costs_only_its_own_skill(tmp_path: Path) -> None:
+    root = tmp_path / "global"
+    _skill(root, "good", name="good", description="Use when asked", body="b")
+    broken = root / "typo"
+    broken.mkdir()
+    (broken / "SKILL.md").write_text(
+        "---\nname: typo\ndescription: Use when asked\nupdated: 2025-02-30\n---\nb",
+        encoding="utf-8",
     )
 
     catalog = SkillCatalog.discover(global_root=root)

@@ -31,6 +31,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
 from dlightrag.engine.agent.context import ContextContribution
@@ -466,12 +467,19 @@ class SkillFrontmatterError(ValueError):
     """A SKILL.md whose frontmatter cannot be read as a name and a text description."""
 
 
+def _ends_in_comment(declared: CommentedMap, key: str) -> bool:
+    """Whether the line a value starts on ends in a YAML comment, which cuts a plain value."""
+    token = declared.ca.items.get(key, (None, None, None))[2]
+    return token is not None and token.start_mark.line == declared.lc.value(key)[0]
+
+
 def _frontmatter_text(text: str, *, fallback_name: str) -> tuple[str, str]:
     """The name and description a SKILL.md frontmatter declares, read as YAML.
 
     The description comes back as one line: a folded or literal block, which models
     write for long descriptions, is a single text value, and the catalog lists one
-    Skill per line.
+    Skill per line. A plain value that YAML would cut at ``" #"`` is refused rather
+    than listed short.
     """
     head = text[:8192]
     if not head.startswith("---\n"):
@@ -480,13 +488,18 @@ def _frontmatter_text(text: str, *, fallback_name: str) -> tuple[str, str]:
     if not separator:
         return fallback_name, ""
     try:
-        declared = YAML(typ="safe").load(header) or {}
-    except YAMLError as exc:
+        declared = YAML(typ="rt").load(header)
+    except (YAMLError, ValueError) as exc:
         raise SkillFrontmatterError(
-            "frontmatter is not valid YAML; quote a value that contains ': '"
+            "frontmatter is not valid YAML; quote a value that contains ': ' or ' #'"
         ) from exc
-    if not isinstance(declared, dict):
+    if declared is None:
+        declared = CommentedMap()
+    if not isinstance(declared, CommentedMap):
         raise SkillFrontmatterError("frontmatter must be a YAML mapping")
+    for key in ("name", "description"):
+        if _ends_in_comment(declared, key):
+            raise SkillFrontmatterError(f"a ' #' starts a YAML comment; quote the {key}")
     name = declared.get("name", fallback_name)
     description = declared.get("description", "")
     if not isinstance(name, str) or not isinstance(description, str):
