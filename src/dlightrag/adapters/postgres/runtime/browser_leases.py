@@ -55,6 +55,11 @@ ON CONFLICT (endpoint) DO NOTHING
 # holder that already has one of these endpoints gets it back; otherwise the
 # least recently used free endpoint is taken, skipping rows a concurrent claim holds. An
 # endpoint is free when it has no holder or its holder's Run no longer holds that lease.
+# Freedom is a correlated NOT EXISTS, not a join: under READ COMMITTED a row that a
+# concurrent claim just took is rechecked after it is locked, and a join would recheck
+# it against the Run row it had when the endpoint was free (none), so a stale verdict
+# of "free" would survive and two Runs would hold one endpoint. The subquery runs again
+# for the locked row's new holder.
 _CLAIM = """
 WITH claimer AS (
     SELECT 1 FROM dlightrag_runs
@@ -69,13 +74,13 @@ held AS (
 ),
 candidate AS (
     SELECT l.endpoint FROM dlightrag_agent_browser_leases l
-    LEFT JOIN dlightrag_runs r ON r.owner_id = l.owner_id AND r.run_id = l.run_id
     WHERE l.endpoint = ANY($5::text[]) AND NOT (l.endpoint = ANY($6::text[]))
       AND EXISTS (SELECT 1 FROM claimer) AND NOT EXISTS (SELECT 1 FROM held)
-      AND (l.run_id IS NULL OR r.run_id IS NULL OR r.status <> 'running'
-           OR r.lease_owner IS DISTINCT FROM l.lease_owner
-           OR r.fencing_epoch IS DISTINCT FROM l.fencing_epoch
-           OR r.lease_expires_at <= NOW())
+      AND (l.run_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM dlightrag_runs r
+            WHERE r.owner_id = l.owner_id AND r.run_id = l.run_id
+              AND r.status = 'running' AND r.lease_owner = l.lease_owner
+              AND r.fencing_epoch = l.fencing_epoch AND r.lease_expires_at > NOW()))
     ORDER BY l.updated_at, l.endpoint
     LIMIT 1
     FOR UPDATE OF l SKIP LOCKED

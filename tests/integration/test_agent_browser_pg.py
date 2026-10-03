@@ -254,6 +254,82 @@ async def test_of_two_concurrent_claims_of_the_only_endpoint_exactly_one_wins(pg
     assert await holder_of(pool, "ws://pool-1/") == winner.run_id
 
 
+class _OneConnection:
+    """A pool of the single connection a test set up, so a store can be given a session to hold."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[Any]:
+        yield self._connection
+
+
+async def test_a_claim_that_read_an_endpoint_free_does_not_take_it_from_a_claim_that_won_it(
+    pg,
+) -> None:
+    """Two claims of one free endpoint cannot both succeed, however they interleave.
+
+    The held-up claim reads the endpoint free and is stopped before it locks the row; the
+    other claim takes the endpoint and commits meanwhile. A statement that judged freedom
+    by a join made before the lock would keep its stale verdict after the lock and take the
+    endpoint from the Run that won it. The stop is a row policy for one role, whose function
+    waits on an advisory lock this test holds, so the interleaving is the test's to choose.
+    """
+    store, pool = pg
+    leases = PGAgentBrowserLeaseStore(pool=pool)
+    await leases.register_endpoints(ONLY)
+    held_up = await live_run(store, "held-up")
+    winner = await live_run(store, "winner")
+    role = f"held_up_{uuid.uuid4().hex[:8]}"
+    claiming: asyncio.Task[str | None] | None = None
+    async with pool.acquire() as door, pool.acquire() as held_connection:
+        try:
+            await door.execute(
+                f"""
+                CREATE ROLE {role} NOLOGIN;
+                GRANT SELECT ON dlightrag_runs TO {role};
+                GRANT SELECT, UPDATE ON dlightrag_agent_browser_leases TO {role};
+                CREATE FUNCTION wait_at_the_door() RETURNS boolean LANGUAGE plpgsql AS $$
+                BEGIN
+                    PERFORM pg_advisory_lock_shared(7);
+                    PERFORM pg_advisory_unlock_shared(7);
+                    RETURN true;
+                END $$;
+                ALTER TABLE dlightrag_agent_browser_leases ENABLE ROW LEVEL SECURITY;
+                CREATE POLICY held_up ON dlightrag_agent_browser_leases
+                    FOR ALL TO {role} USING (wait_at_the_door()) WITH CHECK (true)
+                """
+            )
+            await held_connection.execute(f"SET ROLE {role}")
+            await door.execute("SELECT pg_advisory_lock(7)")
+
+            async def stopped_at_the_door() -> bool:
+                return bool(
+                    await door.fetchval(
+                        "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+                        " AND database = (SELECT oid FROM pg_database"
+                        " WHERE datname = current_database())"
+                    )
+                )
+
+            claiming = asyncio.create_task(
+                PGAgentBrowserLeaseStore(pool=_OneConnection(held_connection)).claim(held_up, ONLY)
+            )
+            await eventually(stopped_at_the_door)
+            assert await leases.claim(winner, ONLY) == "ws://pool-1/"
+            await door.execute("SELECT pg_advisory_unlock(7)")
+
+            assert await asyncio.wait_for(claiming, 10) is None
+            assert await holder_of(pool, "ws://pool-1/") == winner.run_id
+        finally:
+            await door.execute("SELECT pg_advisory_unlock_all()")
+            if claiming is not None:
+                await asyncio.gather(claiming, return_exceptions=True)
+            await held_connection.execute("RESET ROLE")
+            await door.execute(f"DROP OWNED BY {role}; DROP ROLE IF EXISTS {role}")
+
+
 # -- the Compose provider ------------------------------------------------------------------
 
 
