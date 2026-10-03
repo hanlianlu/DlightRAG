@@ -58,7 +58,7 @@ models:
   rerank:
     enabled: true
     strategy: voyage_reranker
-    model: rerank-2.5-lite
+    model: rerank-3-lite
     input_modality: auto
 
 deployment:

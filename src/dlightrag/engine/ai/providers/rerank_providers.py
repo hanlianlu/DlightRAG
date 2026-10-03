@@ -36,7 +36,7 @@ class VoyageRerankProvider(RerankProvider):
     """Voyage reranker: text documents, ``top_k`` with truncation."""
 
     default_base_url = "https://api.voyageai.com/v1/rerank"
-    default_model = "rerank-2.5"
+    default_model = "rerank-3-lite"
 
     def build_payload(
         self, *, model: str, query: str, documents: list[PreparedDocument], top_n: int

@@ -1493,7 +1493,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
         "    base_url: https://api.voyageai.com/v1\n"
         "  rerank:\n    enabled: true\n    strategy: voyage_reranker\n"
-        "    model: rerank-2.5-lite\n"
+        "    model: rerank-3-lite\n"
         "answer:\n  generation:\n    max_attachments: 6\n"
         "    max_attachment_bytes: 104857600\n"
         "    max_total_attachment_bytes: 134217728\n"
@@ -1521,7 +1521,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     assert s["rerank"] == {
         "strategy": "voyage_reranker",
         "enabled": True,
-        "model": "rerank-2.5-lite",
+        "model": "rerank-3-lite",
         "base_url": None,
     }
     assert s["parser"] == {"name": "MinerU", "detail": "local"}

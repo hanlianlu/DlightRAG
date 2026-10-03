@@ -164,7 +164,7 @@ EMBED_DIMS: dict[str, int] = {
 # Rerank menu label -> (strategy, needs its own API key, default model).
 RERANK_CHOICES: dict[str, tuple[str, bool, str]] = {
     "Reuse my LLM": ("chat_llm_reranker", False, ""),
-    "Voyage": ("voyage_reranker", True, "rerank-2.5-lite"),
+    "Voyage": ("voyage_reranker", True, "rerank-3-lite"),
     "Jina": ("jina_reranker", True, ""),
     "Cohere": ("cohere_reranker", True, ""),
     "Azure Cohere": ("azure_cohere", True, ""),

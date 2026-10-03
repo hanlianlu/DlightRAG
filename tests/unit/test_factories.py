@@ -289,7 +289,7 @@ def test_root_maps_rerank_settings_to_immutable_ai_value() -> None:
         models={
             "rerank": RerankSettings(
                 strategy="voyage_reranker",
-                model="rerank-2.5",
+                model="rerank-3-lite",
                 api_key="rerank-key",
                 input_modality="multimodal",
                 score_threshold=0.42,

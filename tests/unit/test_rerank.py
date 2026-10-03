@@ -69,7 +69,7 @@ async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None
     model = rerank.create_rerank_model(
         RerankSettings(
             strategy="voyage_reranker",
-            model="rerank-2.5",
+            model="rerank-3-lite",
             api_key="key",
         ),
         scheduler=ModelScheduler(max_concurrency=1),
@@ -98,7 +98,7 @@ async def test_rerank_requests_share_scheduler_limit() -> None:
     response.raise_for_status = MagicMock()
     response.json.return_value = {"results": []}
     model = RerankModel(
-        RerankSettings(strategy="voyage_reranker", model="rerank-2.5", api_key="key"),
+        RerankSettings(strategy="voyage_reranker", model="rerank-3-lite", api_key="key"),
         provider,
         scheduler=scheduler,
         telemetry=NOOP_TELEMETRY,
@@ -149,7 +149,7 @@ async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled(
     model = RerankModel(
         RerankSettings(
             strategy="voyage_reranker",
-            model="rerank-2.5",
+            model="rerank-3-lite",
             api_key="key",
         ),
         VoyageRerankProvider(),
@@ -1171,13 +1171,13 @@ class TestRerankProviders:
         provider = VoyageRerankProvider()
         assert provider.accepts_images is False
         payload = provider.build_payload(
-            model="rerank-2.5",
+            model="rerank-3-lite",
             query="q",
             documents=[("first", "data:image/png;base64,ABC"), ("second", None)],
             top_n=1,
         )
         assert payload == {
-            "model": "rerank-2.5",
+            "model": "rerank-3-lite",
             "query": "q",
             "documents": ["first", "second"],
             "top_k": 1,
@@ -1308,7 +1308,7 @@ class TestRunHttpRerankIntegration:
         model = RerankModel(
             RerankSettings(
                 strategy="voyage_reranker",
-                model="rerank-2.5",
+                model="rerank-3-lite",
                 api_key="voyage-key",
             ),
             VoyageRerankProvider(),
@@ -1333,7 +1333,7 @@ class TestRunHttpRerankIntegration:
         assert client.headers is not None
         assert client.headers["Authorization"] == "Bearer voyage-key"
         assert client.payload == {
-            "model": "rerank-2.5",
+            "model": "rerank-3-lite",
             "query": "query",
             "documents": ["first", "second"],
             "top_k": 1,
