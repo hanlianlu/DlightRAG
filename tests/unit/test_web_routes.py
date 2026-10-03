@@ -76,11 +76,13 @@ _READABLE_EXTENSIONS = (
 BUILTIN_SKILL_COUNCIL = {
     "name": "council",
     "description": (
-        "Council recipe for independent Child Session investigations and one curated "
-        "cross-examination. Load when independent scrutiny would materially improve a "
-        "contested, high-stakes, or multi-source answer, or when the user asks for "
-        "independent critique. Skip ordinary factual or trivial questions. User veto, "
-        "cancellation, and scope constraints win."
+        "Use when the user asks for a judgment, recommendation, or go/no-go call on something "
+        "with real stakes (pricing, an acquisition, compliance or legal exposure, contract terms, "
+        "a strategy choice) where the knowledge base may hold evidence on both sides; when "
+        "sources disagree and must be reconciled; or when the user asks for an independent "
+        "review, second opinion, or red-team critique. Runs two or three independent Child "
+        "Sessions plus at most one cross-examination round. Skip lookups, summaries, and simple "
+        "factual questions. User veto, cancellation, and scope constraints win."
     ),
     "source": "builtin",
 }
