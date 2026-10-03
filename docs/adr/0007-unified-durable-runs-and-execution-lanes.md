@@ -4,7 +4,7 @@
 
 Accepted, implemented, and validated for the documented local control-plane evidence. Slice 1 established common
 Runtime and Answer, Slice 2 added top-level Retrieval, Slice 5 moved Corpus
-Mutation onto the same RunRuntime, and the [captured local campaign](../run-runtime-and-scaling-target.md#captured-local-load-evidence)
+Mutation onto the same RunRuntime, and the [captured local campaign](../run-runtime.md#load-evidence)
 confirms the local worker bounds, the Corpus Mutation admission limit, and
 failure behavior. The Query admission limit remains a configured default, not a
 reached load-test boundary.
@@ -34,7 +34,7 @@ the same Query Lane while keeping Answer's internal Retrieval Stage direct.
 Slice 5 moved Corpus Mutation execution onto its dedicated lane in the same
 Runtime; Slice 6 validated the local worker bounds and the Corpus Mutation
 admission limit with controlled one-process fake-executor evidence, [recorded with
-its limits](../run-runtime-and-scaling-target.md#captured-local-load-evidence); the
+its limits](../run-runtime.md#load-evidence); the
 Query admission limit was not reached. No parallel Answer, inline
 top-level Retrieval, or Ingest Job lifecycle
 is retained as a compatibility path. The implementation keeps the combined Application

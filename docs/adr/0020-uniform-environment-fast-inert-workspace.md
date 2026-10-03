@@ -127,7 +127,7 @@ so trees left under the default home path by an earlier trust deployment are not
 swept unless the operator names that path.
 
 Live documents revised with the implementation: `docs/architecture.md` (the Fast
-overview line), `docs/durable-answer-runs.md` (reclamation follows the root, and the
+overview line), `docs/run-runtime.md` (reclamation follows the root, and the
 disabled contract), `docs/retrieval-answer.md` (the
 Fast section), `docs/configuration.md` (the disabled contract), and
 `docs/domain-language.md` where Fast Answer and Run Note are already recorded.

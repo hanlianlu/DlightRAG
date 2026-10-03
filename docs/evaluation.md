@@ -1,15 +1,15 @@
 # Evaluation
 
 This page is for teams measuring answer quality with RAGAS. It owns the
-evaluation workflow, dataset format, metrics, outputs, and CI integration.
+evaluation workflow, dataset format, metrics, outputs, and release use.
 Runtime retrieval behavior lives in [retrieval-answer.md](retrieval-answer.md);
 REST answer contracts live in [interfaces.md](interfaces.md).
 
 DlightRAG reuses LightRAG's built-in [RAGAS](https://docs.ragas.io/) evaluation
 framework. The adapter in `scripts/ragas_eval.py` inherits from LightRAG's
-`RAGEvaluator` and translates DlightRAG's answer response format so the rest of
-the evaluation pipeline — metrics, concurrency, progress bars, CSV/JSON export
-— works unchanged.
+`RAGEvaluator` and replaces only how an answer is obtained, so the rest of the
+evaluation pipeline — metrics, concurrency, progress bars, CSV/JSON export —
+works unchanged.
 
 ## Quick Start
 
@@ -42,7 +42,8 @@ RAGAS computes four scores per test case (each 0–1):
 | **ContextRecall** | How much of the ground-truth information was retrieved? |
 | **ContextPrecision** | Is the retrieved context clean, or full of noise? |
 
-The **RAGAS Score** is the unweighted average of the four metrics.
+The **RAGAS Score** is the unweighted average of the four metrics, ignoring any
+that are NaN.
 
 ## Test Dataset Format
 
@@ -75,14 +76,18 @@ built-in default.
 
 ## How the Adapter Works
 
-LightRAG's `RAGEvaluator` calls `POST /query` on a LightRAG API server.
-DlightRAG uses `POST /answer` with a different request and response shape.
-
-`DlightRAGAdapterEvaluator` inherits the entire evaluator and overrides **one
-method** — `generate_rag_response()`. It translates:
+LightRAG's `RAGEvaluator` reads each answer from a LightRAG server's
+`POST /query` response. A DlightRAG answer is a durable Answer Run instead, so
+`DlightRAGAdapterEvaluator` overrides **one method**,
+`generate_rag_response()`. It submits
+`{"query": <question>, "top_k": $EVAL_QUERY_TOP_K}` to `POST /answer`, which
+accepts the Run and returns its `run_id`, then follows
+`GET /runs/{run_id}/events` to the Run's `done` event, reading
+`GET /runs/{run_id}` instead when the stream ends early or has expired. It
+translates the succeeded Run's result:
 
 ```
-DlightRAG /answer response              →  LightRAG RAGEvaluator format
+Answer Run result                       →  LightRAG RAGEvaluator format
 ─────────────────────────────────────       ─────────────────────────────
 {                                           {
   "answer": "...",                            "answer": "...",
@@ -95,11 +100,11 @@ DlightRAG /answer response              →  LightRAG RAGEvaluator format
 }
 ```
 
-Presentation and provenance fields such as ordered `parts`, `evidence_images`,
-`references`, `sources`, typed `artifacts`, `artifact_outcome`, and `trace`
-remain part of the DlightRAG `/answer` contract, but the adapter deliberately
-ignores them. RAGAS evaluates the final answer text against textual chunk
-contexts, not presentation metadata.
+Chunks without text are dropped, and a failed or cancelled Run fails its test
+case. The result's presentation and provenance fields, such as `parts`,
+`evidence_images`, `references`, `sources`, `artifacts`, `artifact_outcome`, and
+`trace`, are ignored: RAGAS scores the answer text against textual chunk
+contexts.
 
 Everything else — the RAGAS `evaluate()` call, the two-stage concurrency
 pipeline (RAG semaphore → RAGAS semaphore), tqdm progress bars, CSV/JSON
@@ -110,24 +115,25 @@ from LightRAG.
 
 ### Zero-config default
 
-When ``EVAL_LLM_BINDING_API_KEY`` is **not** set and DlightRAG's query role uses
-the OpenAI-compatible provider, the adapter auto-resolves eval credentials from
+When `EVAL_LLM_BINDING_API_KEY` is **not** set and DlightRAG's query role uses
+the `openai` provider, the adapter auto-resolves eval credentials from
 DlightRAG's own config:
 
 | Eval setting | Auto-resolved from |
 |---|---|
-| ``EVAL_LLM_BINDING_API_KEY`` | OpenAI-compatible ``config.models.chat.roles.query.api_key`` → ``config.models.chat.default.api_key`` |
-| ``EVAL_LLM_MODEL`` | OpenAI-compatible ``config.models.chat.roles.query.model`` → ``config.models.chat.default.model`` |
-| ``EVAL_LLM_BINDING_HOST`` | OpenAI-compatible ``config.models.chat.roles.query.base_url`` → ``config.models.chat.default.base_url`` |
-| ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
-| ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
-| ``DLIGHTRAG_API_URL`` | ``config.interfaces.api.host``:``config.interfaces.api.port`` |
-| ``DLIGHTRAG_API_TOKEN`` | ``config.access.api_token`` (simple); explicit external bearer token for jwt |
+| `EVAL_LLM_BINDING_API_KEY` | `models.chat.roles.query.api_key` → `models.chat.default.api_key` |
+| `EVAL_LLM_MODEL` | `models.chat.roles.query.model` → `models.chat.default.model` |
+| `EVAL_LLM_BINDING_HOST` | `models.chat.roles.query.base_url` → `models.chat.default.base_url` |
+| `EVAL_EMBEDDING_BINDING_API_KEY` | `EVAL_LLM_BINDING_API_KEY` → DlightRAG embedding key (`openai` or `openai_compatible` provider) |
+| `EVAL_EMBEDDING_BINDING_HOST` | `EVAL_LLM_BINDING_HOST` → DlightRAG embedding `base_url` (`openai` or `openai_compatible` provider) |
+| `DLIGHTRAG_API_URL` | `http://<interfaces.api.host>:<interfaces.api.port>` |
+| `DLIGHTRAG_API_TOKEN` | `access.api_token` under `simple` auth |
 
 JWT deployments must provide an externally issued bearer token via
-``DLIGHTRAG_API_TOKEN``. Native-SDK-only LLM providers (Anthropic, Gemini) need
-explicit ``EVAL_LLM_BINDING_API_KEY`` and ``EVAL_LLM_MODEL`` values because
-LightRAG's RAGAS evaluator uses an OpenAI-compatible client.
+`DLIGHTRAG_API_TOKEN`. A query role on the `anthropic` or `gemini` provider
+resolves no eval LLM, because LightRAG's RAGAS evaluator uses an
+OpenAI-compatible client: set `EVAL_LLM_BINDING_API_KEY` (or `OPENAI_API_KEY`)
+and `EVAL_LLM_MODEL`, which otherwise defaults to `gpt-4o-mini`.
 
 ### Explicit overrides
 
@@ -175,13 +181,11 @@ scores.
 
 ## Manual release evaluation
 
-RAGAS evaluation is release evidence owned by the release operator. It is
-intentionally separate from pull-request CI: it needs an operator-selected
-dataset, a running DlightRAG environment, and evaluator model credentials.
-Operators run `scripts/ragas_eval.py` with the commands above and review the
-result artifacts before release. Do not turn example or synthetic outputs into
-a PR quality gate; RAGAS scores depend on the selected corpus and evaluator
-models and are not deterministic fixtures.
+RAGAS evaluation runs outside pull-request CI: it needs an operator-selected
+dataset, a running DlightRAG, and evaluator model credentials, and its scores
+depend on the corpus and evaluator models rather than being deterministic. The
+release operator runs `scripts/ragas_eval.py` as above and reviews the results
+before a release.
 
 ## Troubleshooting
 
@@ -197,7 +201,6 @@ are ingested (`GET /files`) and that `top_k` is reasonable.
 : Check that the eval LLM API key is set (`EVAL_LLM_BINDING_API_KEY` or
 `OPENAI_API_KEY`). NaN scores often mean the eval LLM call failed silently.
 
-**"ImportError: ragas not installed"**
-: Run `uv sync --group eval`. Ragas is an eval-only dependency,
-intentionally separate from DlightRAG's runtime and locked through
-LightRAG's official `evaluation` extra.
+**"ImportError: RAGAS dependencies not installed"**
+: Run `uv sync --group eval`. Ragas is an eval-only dependency, separate from
+DlightRAG's runtime and locked through LightRAG's `evaluation` extra.

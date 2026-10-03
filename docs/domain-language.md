@@ -80,8 +80,9 @@ answering agent. Omitted means the deployment's configured level for that role, 
 a subagent keeps the level configured for its own role. The Web control offers only
 the levels the answering profile can express; a chosen level below that model's
 ladder is clamped by reasoning resolution rather than refused, and a model that
-names no non-off level refuses the choice at admission. The accepted Run's stored
-`effort` is the choice and the run trace's `agent_effort` states the level that ran.
+names no non-off level ignores it. A chosen effort never fails a Run: the accepted
+Run's stored `effort` is the choice, and the run trace's `agent_effort` states the
+level that ran or why the choice was ignored.
 _Avoid_: reasoning level (the deployment setting), Web Search effort (`fast | balanced | deep`), Answer Mode
 
 **Valid Mode Set**:
@@ -226,11 +227,11 @@ The selected per-Run clock bounding terminal Run rows and event logs. Answer use
 _Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
 
 **Conversation History Page**:
-One signed turn-number keyset page from Web history. It bounds one read, not retention or exact model recovery.
+One sealed turn-number keyset page from Web history. It bounds one read, not retention or exact model recovery.
 _Avoid_: snapshot, max_turns, trim window, retention window
 
 **File Panel Page**:
-One workspace-bound signed keyset page of finalized Product Documents whose
+One workspace-bound sealed keyset page of finalized Product Documents whose
 LightRAG status is processed, in durable server order. It bounds
 presentation/read work, not inventory or retention; failed-file administration
 is a separate repair view.

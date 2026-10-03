@@ -125,10 +125,12 @@ access:
     edge: cloudflare        # cloudflare | azure | aws
 ```
 
-The edge only decides where the Web finds the token; it is verified exactly as a
-REST bearer is. `web_identity.issuer`, `.audience`, and `.jwks_url` default to
-the API's and are set only when the edge's tokens differ, such as an Azure ID
-token whose audience is the App Registration client ID.
+The edge only decides where the Web finds the token. The Web verifies it like a
+REST bearer, but only against an issuer's published keys, never a static key.
+`web_identity.issuer` and `.audience` default to the API's, and `.jwks_url` to
+the API's key set while the Web keeps the API's issuer. Set them only when the
+edge's tokens differ, such as an Azure ID token whose audience is the App
+Registration client ID.
 
 | Edge | Verified credential | Its issuer and audience |
 |---|---|---|
@@ -218,7 +220,7 @@ bounded number of Corpus Mutations concurrently; both are
 [configuration](configuration.md#runruntime-lanes-and-retention), and
 deployment configuration owns process count and total active capacity. The
 controlled admission-limit, authorization, sanitation, and 10k-client evidence
-is recorded with the [RunRuntime targets](run-runtime-and-scaling-target.md#captured-local-load-evidence).
+is recorded with the [RunRuntime targets](run-runtime.md#load-evidence).
 Monitor PostgreSQL/blob growth and rate-limit acceptance before either admission
 limit.
 `none` and `simple` collapse callers into one deployment owner and require an
@@ -240,10 +242,9 @@ terminates TLS must be trusted for `X-Forwarded-Proto` (uvicorn's
 `FORWARDED_ALLOW_IPS`): otherwise the API sees `http`, the Web's exact
 same-origin checks refuse every browser write, and the OAuth callback is
 addressed over `http`. Compose trusts loopback and private networks, where a
-proxy on the same host connects from. All tokens must remain verifiable
-under the one configured JWT policy. If browser and REST audiences differ, list
-both under `jwt_audience`; native MCP OAuth still requires the exact public MCP
-resource URL as audience.
+proxy on the same host connects from. Bearer tokens verify under the `jwt_*`
+settings; an edge token whose audience differs sets `web_identity.audience`.
+Native MCP OAuth still requires the exact public MCP resource URL as audience.
 
 ## Authorization Model
 
@@ -438,13 +439,13 @@ Execution modes:
   user's network authority, which is the deployment's to enforce with a network
   policy rather than a path list.
 
-Root checks are not a shell sandbox. Outbound MCP tools now belong to owner-scoped
-Connections, with immutable Run pins and a pending-effect/Run/Child lease gate.
-Revoke-first blocks new dispatch; already in-flight writes can only be best-effort
-cancelled, never rolled back or automatically retried. Static bearer/no-auth and SDK-authorized OAuth calls are available. Expired OAuth tokens refresh under an expiring Grant lease and fenced secret-version CAS before a complete effect re-gate; rejected effects never refresh-and-replay. Network policy
-can deny access but cannot grant external account authority. Public Web Search and Extract
-exist only for explicitly configured Exa/Tavily provider chains; provider failures
-may fail over, while successful empty results do not.
+Root checks are not a shell sandbox. Research reaches outside tools only through
+its owner's Personal MCP Connections, pinned per Run and gated per effect, with
+in-flight writes cancelled best-effort and never replayed
+([contract](personal-mcp-connections.md)). Network policy can deny access but
+cannot grant external account authority. Public Web Search and Extract exist only
+for explicitly configured Exa/Tavily provider chains; provider failures may fail
+over, while successful empty results do not.
 
 All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
 register sequence. A completed child outcome is persisted so replay cannot
@@ -513,8 +514,12 @@ Public MCP requires non-loopback bind, authentication, and explicit
 `access.cors_allow_origins`. Host/Origin DNS-rebinding protection remains active
 even with bearer auth.
 
-### Personal Connection authorization callback
+### Personal Connection Authorization
 
-Settings OAuth uses SDK 2.2.0 PKCE/state, resource/issuer validation and TokenStorage. New consent/replacement creates a separate Grant; no old token is sent to a candidate audience. Callback deposit requires the authenticated owner and SDK state, a live initiating lease, and single-use PostgreSQL inbox CAS. Codes/client state/tokens are encrypted with the deployment keyring; pending PKCE remains process-local. Expired or dead-worker flows cannot be resumed by another worker.
-
-Web middleware removes callback query data before downstream application/access logging; callback responses are no-store/no-referrer and redirect only to fixed Settings navigation without codes/state. Operators must also suppress/redact callback query strings in upstream proxies and external tracing, which are outside this application. OAuth metadata/token and same-origin redirect requests are network-admitted and IP-pinned with original Host/SNI; cookies and unrelated headers are stripped. SDK diagnostics are suppressed within these sessions, and remote catalogue echoes of known credentials are redacted. Foreground effects never negotiate OAuth or resend after rejection. Refresh preflight sends only SDK-generated requests to the persisted token origin and admitted same-origin redirects. It never sends the original MCP request or enters background consent. Grant/epoch/secret-version CAS discards stale refresh results. Writer maintenance re-encrypts live Grants and collects expired inboxes/unpinned generations; retained Run pins preserve local definitions, not live credentials. Removing live ciphertext does not erase backups.
+Personal MCP Connections authorize with OAuth PKCE and state, deposit each callback
+once into an encrypted inbox, and keep credentials sealed under the deployment key
+ring; the [contract](personal-mcp-connections.md) has the details. A callback URL
+carries the code and state in its query: the Web strips them before its own
+logging, and operators must redact them in upstream proxies and external tracing,
+which are outside this application. Removing live ciphertext does not erase
+backups.

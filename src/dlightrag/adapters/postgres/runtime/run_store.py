@@ -127,7 +127,7 @@ _BATCH_LIMIT = 200
 _EVENT_PAGE_LIMIT = 500
 DEFAULT_QUERY_MAX_NONTERMINAL_RUNS = 30_000
 # Validated by the deterministic bounded-control-plane campaign; see
-# docs/run-runtime-and-scaling-target.md#captured-local-load-evidence.
+# docs/run-runtime.md#load-evidence.
 DEFAULT_CORPUS_MUTATION_MAX_NONTERMINAL_RUNS = 1_000
 
 # Every index the runs scope owns, declared once. The baseline creates each one; a

@@ -5,52 +5,7 @@ This document owns maintenance and recovery runbooks. PostgreSQL tuning lives in
 [Configuration](configuration.md). These commands are not normal query traffic.
 
 Deployments follow the
-[configuration ownership and container contract](configuration.md#container-and-kubernetes-contract):
-mount one non-secret `config.yaml`, inject credentials from a Secret, and keep
-only topology bindings in Compose or Kubernetes manifests. The rationale is
-recorded in [ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
-
-## pg_textsearch 1.4 Upgrade
-
-The PostgreSQL image pins the extension binary, while PostgreSQL records the SQL
-extension version inside each database. Rebuilding the image does not update an
-existing data volume, and `postgres/init.sql` runs only for a new volume. Upgrade
-both sides in this order:
-
-```bash
-# Build first to minimize downtime.
-docker compose build --pull postgres
-
-# Quiesce application traffic and take a logical backup.
-docker compose stop dlightrag-api dlightrag-mcp
-mkdir -p ~/.dlightrag/backups
-backup="$HOME/.dlightrag/backups/dlightrag-before-pg_textsearch-1.4-$(date +%Y%m%d-%H%M%S).dump"
-docker compose exec -T postgres sh -ec \
-  'pg_dump --format=custom --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
-  > "$backup"
-
-# Load the new preloaded library, then update the extension catalog.
-docker compose up -d --wait --force-recreate postgres
-docker compose exec -T postgres sh -ec \
-  'psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
-   --command="ALTER EXTENSION pg_textsearch UPDATE TO '\''1.4.0'\''"'
-
-# Both values must report 1.4.0; filtered top-K seeding should be on / 3.
-docker compose exec -T postgres sh -ec \
-  'psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
-   --command="SELECT extversion FROM pg_extension WHERE extname = '\''pg_textsearch'\''" \
-   --command="SHOW pg_textsearch.library_version" \
-   --command="SHOW pg_textsearch.filtered_seed" \
-   --command="SHOW pg_textsearch.filtered_seed_margin"'
-
-docker compose up -d dlightrag-api dlightrag-mcp
-```
-
-The upstream 1.3.1→1.4.0 path preserves existing BM25 indexes and does not
-require `REINDEX`. A later maintenance-window `REINDEX` is optional to reclaim
-pages freed by the old binary. Use
-[Workspace BM25 Rebuild](#workspace-bm25-rebuild) instead when changing
-DlightRAG language profiles, `bm25_k1`, or `bm25_b`.
+[configuration ownership and container contract](configuration.md#container-and-kubernetes-contract).
 
 ## Full Development Reset
 
@@ -79,93 +34,68 @@ prompt, never target validation. Native mode refuses non-loopback hosts unless
 reset leaves API/MCP/readers/writers stopped; start one writer separately so it
 creates baseline schema.
 
+Rebuilding the PostgreSQL image does not change an existing data volume:
+`postgres/init.sql` creates the extensions only in a new one. After a rebuild
+changes a pinned extension version, run the Docker reset.
+
 This differs from `scripts/reset_workspace.py`, which resets authorized Corpus
-Workspaces in a running deployment. Neither delegates to the other.
+Workspaces through Reset Runs of an application it starts itself. Neither
+delegates to the other.
 
 ## RunRuntime And Durable Query And Corpus Mutation Runs
 
-- The current RunRuntime has no legacy Ingest Job or Answer-only compatibility reader.
-  External drain/cutover execution remains operator/infrastructure responsibility.
-- Roll one compatible writer first so it migrates, then readers. Workers sharing
-  a database must use compatible model roles, execution mode, MCP allowlists,
-  and Answer policy.
-- Mount one shared POSIX `deployment.working_dir` for corpus artifacts. With
-  trusted Research, mount one shared RWX
-  `answer.agent.workspace_root` on every worker (Compose:
-  `/home/app/.dlightrag/agent_workspaces`).
-- Graceful shutdown fenced-requeues unfinished work; crash recovery waits for
-  lease expiry. Four no-progress reclaims fail as `run_abandoned`.
-- Monitor `dlightrag_runs`, `dlightrag_run_events`, `dlightrag_blobs`, and
-  `dlightrag_blob_chunks`. Every process runs Query workers, and every writer
-  process runs Corpus Mutation workers. Deployment configuration owns process
-  count and total active capacity. New acceptance is rejected when the lane's
-  deployment-wide nonterminal admission limit is reached. The worker and
-  admission defaults are in
-  [Configuration](configuration.md#runruntime-lanes-and-retention); what the
-  local campaign exercised of them is under [Captured local load evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence).
-- Route traffic with `GET /ready`; it probes only writable Operational State.
-  Use `GET /health` for I/O-free liveness and the bounded corpus/parser/provider
-  degradation view. A corpus or provider outage does not remove readiness:
-  accepted eligible Runs defer durably while their lane's admission limit has room.
-  Neither does it stop startup: a default workspace that cannot be built
-  because corpus storage, the model provider (its image embedding probe), or
-  the parser is briefly unavailable starts the process degraded, with that
-  component degraded in `GET /health`; any other failure still refuses to start.
+- Start a writer before readers: the writer creates the schema, and readers
+  only validate it. Workers sharing a database must run the same model roles,
+  Agent execution mode, Answer policy, and `answer.agent.connections` policy;
+  each owner enables their own Connections.
+- Shared mounts, worker capacity, and recovery after a crash or shutdown are in
+  [Workers And Scaling](run-runtime.md#workers-and-scaling). Monitor
+  `dlightrag_runs`, `dlightrag_run_events`, `dlightrag_blobs`, and
+  `dlightrag_blob_chunks` alongside the
+  [admission limits](run-runtime.md#admission-limits).
+- Route traffic with `GET /ready`, and use `GET /health` for liveness and the
+  degradation view ([Interfaces](interfaces.md#health-and-errors)). A corpus or
+  provider outage does not remove readiness: acceptance continues up to the
+  lane's admission limit, and accepted Runs defer durably. Nor does it stop
+  startup: a default workspace that cannot be built because corpus storage, the
+  model provider (its image embedding probe), or the parser is briefly
+  unavailable starts the process with that component degraded in
+  `GET /health`; any other failure refuses to start.
 - A process whose Run cancellation listener is not ready within 30 seconds of
   startup (PostgreSQL LISTEN or the first cancel-pending rescan keeps failing)
   reports not ready, with `cancellation_listener` degraded, and keeps waiting:
   once the listener is ready it starts claiming Runs and becomes ready without a
   restart. It never claims a Run before then.
 
-Run the repository-owned failure matrix, fake-model PG18 convergence gate, and
-opt-in fake-only load campaign with `make validate-runtime`. `runtime-faults`
-fails on any Python or frontend recovery regression in the matrix; `runtime-pg18`
-requires the supported PostgreSQL 18 image/extensions; `load-runtime` prints
-`RUN_RUNTIME_LOAD PASS` only when every correctness/survival gate passes and
-writes bounded local evidence to `.test-results/load-runtime/`. A reported
-latency percentile is measurement, not a production SLO. The command uses local
-PostgreSQL and LightRAG with fakes, but no paid provider or external parser.
+`make validate-runtime` runs the RunRuntime failure matrix (`runtime-faults`,
+which needs a reachable PostgreSQL), the PostgreSQL 18 convergence gate
+(`runtime-pg18`), and the [load campaign](run-runtime.md#load-evidence), all with
+fake models and no external parser.
 
-Retention sweeps run hourly in bounded batches without cron. Each terminal Run
-receives `purge_after` from its accepted retention selection: Answer uses
-`runtime.run_retention_days` (default 365 days), while top-level Retrieval and
-Corpus Mutation use seven days. Nonterminal Runs are never retention-pruned. A pruned Run's Agent Workspace is
-removed with its row, and an hourly orphan sweep deletes roots whose Run row is
-already gone. On a `writer`, the same sweep removes the Corpus Mutation Run
-stages under `<working_dir>/corpus/<workspace>/.runs` that no Run will read
-again: a stage whose Run has ended, and one with no Run a day after its request
-began. Event logs may expire
-before a retained Run, after which SSE returns 410 and status still serves the
-result. Exact lifecycle rules are in
-[RunRuntime and durable query execution](durable-answer-runs.md).
+Retention needs no cron; what it removes and when is in
+[RunRuntime](run-runtime.md#retention).
 
 `dlightrag-workspace-audit` reports an Agent Workspace root without deleting
-anything: it counts Run roots, names the ones whose Run row is gone, and says so.
-The runtime's hourly orphan sweep is what removes them, and it follows a configured
-root rather than the execution mode, so this command reaches the same trees — pass
-`--root` to audit a path an earlier configuration left behind, and `--sample` to
-bound the report. A deployment whose execution is `disabled` and which names no root
-owns no workspace path and has nothing to audit.
+anything: it counts Run roots and names those whose Run row is gone, which the
+runtime's hourly orphan sweep removes. Pass `--root` to audit a path an earlier
+configuration left behind, and `--sample` to bound the report. A deployment
+whose execution is `disabled` and which names no root has nothing to audit.
 
 ## Release Distribution
 
-DlightRAG ships as a repository, not as a PyPI project: a deployment clones this
-repository and runs Compose or a native process, so an uploaded wheel reaches no
-user. The `dlightrag` and `dlightrag-memory` PyPI projects are archived and
-reject uploads; there is no publish workflow, no `pypi` environment, and no
-trusted publisher binding. `v*` tags mark releases on GitHub and trigger no
-workflow. Lockstep versions across `pyproject.toml`,
-`packages/memory/pyproject.toml`, `frontend/package.json`, and the Memory runtime
-are still enforced by `make release-check`, which `make ci` runs. Nothing
-installs DlightRAG from a package index: use the clone directly, or add it as an
-editable path dependency. `make workspace-wheels` remains a local packaging
-check (isolated install smoke test); it distributes nothing.
+DlightRAG ships as a repository, not as a package: a deployment clones this
+repository and runs Compose or a native process, or adds the clone as an
+editable path dependency. No workflow publishes DlightRAG to a package index,
+and `v*` tags only mark releases on GitHub. `make release-check`, which
+`make ci` runs, enforces lockstep versions across `pyproject.toml`,
+`packages/memory/pyproject.toml`, `frontend/package.json`, and the Memory
+runtime. `make workspace-wheels` is a local packaging check that installs the
+built wheels in isolation; it distributes nothing.
 
 ## Parser Services
 
-Keep exactly one `corpus.sidecars.mineru` or `.docling` block. The checked-in
-Docker configuration reaches host MinerU through
-`http://host.docker.internal:8210`.
+The parser block is configured under
+[Parser Sidecars](configuration.md#parser-sidecars). Host MinerU:
 
 ```bash
 make mineru-install
@@ -191,9 +121,9 @@ Optional Compose Docling CPU:
 docker compose --profile docling up -d
 ```
 
-Point its block at `http://docling:5001` with `code_formula_preset: null`. It
-publishes only `127.0.0.1:5001`; do not run it beside a host Docling service on
-the same port. Independently managed Docling endpoints are also supported.
+Point the [`docling` block](configuration.md#docling) at it. It publishes only
+`127.0.0.1:5001`; do not run it beside a host Docling service on the same port.
+Independently managed Docling endpoints are also supported.
 
 LightRAG's MinerU or Docling client makes every parser request, whichever parser
 a document is routed to. When the parser's host name does not resolve (Compose
@@ -229,34 +159,24 @@ eleventh fails the Run as `dependency_unavailable`.
 
 ## Product Document Finalization And Failed Ingestion Cleanup
 
-A LightRAG `processed` status alone does not publish a Product Document.
-DlightRAG's processed file panel, retrieval evidence, metadata surfaces,
-downloads, and image routes require the finalization marker to be exactly true.
-An ingest finalizes each document as soon as LightRAG has settled it, while the
-rest of its batch is still in the pipeline, so a batch of large documents shows
-up in the file panel one by one rather than all at the end. A replacement that
-retires another document's identity is finalized once the pipeline call has
-ended instead, since undoing its failure deletes through LightRAG, which refuses
-while its pipeline is busy. If the Run stops
-part-way (a restart, for example), what it already published stays published,
-and when it resumes it finalizes each document LightRAG processed meanwhile
-without parsing it again.
-A failure in metadata/source finalization, BM25 labeling, required retained
-source/sidecar work, or enabled visual fusion leaves the marker false while the
-native LightRAG status remains `processed`. DlightRAG never rewrites that status
-to represent product-finalization failure. Re-ingest the same retained source
-to replay only the idempotent same-ID finalizers; do not manually set the marker. Documents written directly through LightRAG have no completion proof
-and remain excluded.
+A LightRAG `processed` status alone does not publish a Product Document: only a
+true finalization marker makes it visible
+([visibility](retrieval-answer.md#product-document-visibility-and-metadata-in-filtering)),
+and how each mutation sets that marker is in
+[Corpus Mutations](run-runtime.md#corpus-mutations). A failure in
+metadata/source finalization, BM25 labeling, required retained source/sidecar
+work, or enabled visual fusion leaves the marker false while LightRAG's status
+stays `processed`. Re-ingest the same retained source to replay only the
+idempotent same-ID finalizers; never set the marker by hand. Documents written
+directly through LightRAG have no completion proof and stay excluded.
 
 A retry, or an ingest that resumes after LightRAG processed a document
 DlightRAG had not finished, fails such a document at once when it cannot be
 replayed: its source file is gone (`the source file is no longer available`),
 or its stored source metadata is incomplete or invalid (`source metadata
-incomplete`, `source metadata invalid`). Waiting cannot change either, so the
-Run settles rather than waiting for a repair or deferring, and the document
-stays hidden. Restore its source and retry it, or delete it. An upload or a
-local source keeps its copy in `<working_dir>/corpus/<workspace>/__local_sources__`,
-under its file name.
+incomplete`, `source metadata invalid`). The document stays hidden; restore its
+source and retry it, or delete it. An upload or a local source keeps its copy in
+`<working_dir>/corpus/<workspace>/__local_sources__`, under its file name.
 
 Failed documents are terminal and are not automatically retried. First inspect
 the workspace:
@@ -285,32 +205,25 @@ curl -X POST http://127.0.0.1:8100/runs/corpus/delete \
   -d '{"workspace":"personel","filenames":["failed.pdf"]}'
 ```
 
-Deletion writes the false visibility marker before invoking LightRAG, then
-cascades the failed status, full document, metadata, chunks/vectors/KG when
-present, source file, and `.parsed`/`.mineru_raw`/`.docling_raw` directories.
-An ambiguous deletion can therefore reduce recall but cannot leave the document
-directly visible.
-The terminal Corpus Mutation Run remains as operational history for at least
-seven days.
+Deletion hides the document before LightRAG deletes it
+([Delete](run-runtime.md#delete)), then removes its status, full document,
+metadata, chunks, vectors, and graph entries where present, its source file,
+and its `.parsed`/`.mineru_raw`/`.docling_raw` directories.
 
 ### Repairing An Ambiguous Mutation
 
 If Run status reports `phase=waiting_for_repair`, do not submit a replacement
-mutation and do not manually rewrite the Run row. Inspect `repair_reason` and
-`repair_remedy`, repair or verify authoritative LightRAG public state, then
-resume the same Run:
+mutation and do not rewrite the Run row. Inspect `repair_reason` and
+`repair_remedy`, repair or verify LightRAG's authoritative state, then resume
+the same Run as a caller that holds the Run's action permission:
 
 ```bash
 curl -X POST http://127.0.0.1:8100/runs/$RUN_ID/resume
 ```
 
-The caller must still hold the action permission implied by that Run. Resume
-keeps the same Run ID and `track_id` and returns the Run to its Workspace FIFO.
-If repair is inappropriate and a full corpus reset is required, accept one reset
-naming `supersedes_run_id`; reset terminally supersedes a waiting mutation while
-preserving Workspace identity and history. A Workspace Delete, itself a full
-reset, may name the waiting mutation the same way; without it, the delete waits
-behind that mutation in the Workspace FIFO.
+If repair is inappropriate, accept a Corpus Reset or Workspace Delete that names
+the waiting Run as `supersedes_run_id`. What resuming and superseding do is in
+[RunRuntime](run-runtime.md#cancellation-repair-and-supersession).
 
 ## Workspace BM25 Rebuild
 
@@ -325,13 +238,14 @@ Run it after enabling BM25 on an existing corpus or changing BM25 profiles,
 # Stop every API, MCP, ingest, and reader process using the workspace.
 uv run dlightrag-rebuild-bm25 --yes
 
-# Installed package:
-dlightrag-rebuild-bm25 --env-file /absolute/path/to/.env --yes
+# With an explicit environment file:
+uv run dlightrag-rebuild-bm25 --env-file /absolute/path/to/.env --yes
 ```
 
 The configured role must be `writer` and BM25 must be enabled. Restart services
 only after completion. `--batch-size N` bounds language-label transactions.
-Vector rebuild targets `chunks` and `all` already run this maintenance.
+With BM25 enabled, a successful `chunks` or `all` vector rebuild runs this
+maintenance too.
 
 `dlightrag-rebuild-bm25` and `dlightrag-rebuild-vdb` address
 `deployment.workspace` by the canonical id the service stores that workspace
@@ -346,9 +260,9 @@ opens any storage for it.
 using the configured workspace, embedding model, BM25 labels, and visual
 alignment. It does not ingest/parse files or create document status.
 
-Use it for LightRAG upgrade guidance, missing/stale rows, failed `check`, or an
-intentional embedding change whose vector schema already supports the dimension.
-Use failed-file retry—not this command—for ingestion failures.
+Use it for missing or stale vector rows, a failed `check`, or an intentional
+embedding change whose vector schema already supports the dimension. Use
+failed-file retry—not this command—for ingestion failures.
 
 | Target | Writes | Behavior |
 |---|---:|---|
@@ -360,15 +274,15 @@ Use failed-file retry—not this command—for ingestion failures.
 `graph`, `chunks`, and `all` require `--yes`. Stop every writer to the same
 LightRAG storage before them.
 
-### Native Or Installed
+### Native
 
 ```bash
 uv run dlightrag-rebuild-vdb --target check
 uv run dlightrag-rebuild-vdb --target all --yes
 
-# Installed package:
-dlightrag-rebuild-vdb --env-file /absolute/path/to/.env --target check
-dlightrag-rebuild-vdb --env-file /absolute/path/to/.env --target all --yes
+# With an explicit environment file:
+uv run dlightrag-rebuild-vdb --env-file /absolute/path/to/.env --target check
+uv run dlightrag-rebuild-vdb --env-file /absolute/path/to/.env --target all --yes
 ```
 
 | Flag | Meaning |
@@ -391,8 +305,9 @@ docker compose up -d dlightrag-api dlightrag-mcp
 
 After `chunks`/`all`, DlightRAG refreshes BM25 language labels and replaces
 canonical drawing vectors with fused VLM-description+image vectors when direct
-multimodal embedding is active. Skip alignment only for diagnosis or intentional
-text-only deployments.
+multimodal embedding is active. Skip alignment only for diagnosis, an
+intentional text-only deployment, or `MilvusVectorDBStorage`, where `chunks` and
+`all` require `--no-restore-sidecar-alignment`.
 
 With alignment on, `chunks`/`all` settle whether direct multimodal embedding is
 active before writing any vector, running the same image/fusion probe as the
@@ -405,9 +320,40 @@ or restoration interrupted by the provider) also exits nonzero, possibly
 leaving drawing vectors text-only; rerun the same target, which rewrites the
 chunk vectors and restores alignment again.
 
-Before destructive production rebuilds: back up PostgreSQL, use the service's
-same `.env`/`config.yaml`/workspace/model, and do not change dimensions without
-a migrated/recreated vector schema. Inspect any nonzero exit before restart.
+Before destructive production rebuilds, back up PostgreSQL and use the service's
+own `.env`, `config.yaml`, workspace, and model. Inspect any nonzero exit before
+restart.
+
+## Connection Key Ring Rotation
+
+Personal Connection credentials are sealed under
+`<deployment.working_dir>/connection-keyring.json`, which the first writer
+creates ([format](personal-mcp-connections.md#secret-handling-and-key-ring)).
+
+1. Add a fresh 32-byte base64url key under a new ID, keeping the old IDs:
+
+   ```bash
+   python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("="))'
+   ```
+
+2. Point `active` at the new ID and restart **all** workers, so none still
+   encrypts with the old key. Writer maintenance then re-encrypts live Grants
+   ([Operational lifecycle](personal-mcp-connections.md#operational-lifecycle)).
+3. Wait until the old key's Grant and OAuth inbox counts reach zero. Inbox flows
+   expire within `oauth_timeout` (at most 600 seconds) and are then collected.
+   On the deployment database, count envelopes; never select or export them:
+
+   ```sql
+   SELECT key_id, count(*) FROM dlightrag_connection_grants
+   WHERE encrypted_envelope IS NOT NULL GROUP BY key_id;
+   SELECT envelope::jsonb->>'key_id' AS key_id, count(*)
+   FROM dlightrag_connection_oauth_flows f
+   CROSS JOIN LATERAL (VALUES (f.encrypted_result), (f.encrypted_credentials)) v(envelope)
+   WHERE envelope IS NOT NULL GROUP BY 1;
+   ```
+
+4. Remove the old key from the ring. A Grant it still sealed would need
+   authorization again, and backups stay readable to any retained copy of it.
 
 ## Local Langfuse Observability
 
@@ -431,7 +377,7 @@ password from `../langfuse-local/.env`. Traces appear after a model call.
 | `make langfuse-status` | Show containers |
 | `make langfuse-logs` | Follow Web/worker logs |
 | `make langfuse-health` | Check host endpoint |
-| `make langfuse-reset CONFIRM=1` | Delete all local traces |
+| `make langfuse-reset CONFIRM=1` | Delete all local Langfuse data: traces, users, project keys, and model prices |
 
 ### Connection And Keys
 
@@ -486,7 +432,9 @@ UI password is lost, read `LANGFUSE_INIT_USER_PASSWORD` from the local env. If
 the env file was deleted, `make langfuse-bootstrap` recovers the API key pair
 from DlightRAG's `.env`, but cannot change the established UI password.
 
-Last-resort reset (deletes only Langfuse traces):
+Last-resort reset, which deletes all local Langfuse data but none of
+DlightRAG's; `make langfuse-up` seeds the user and project keys again from the
+env files:
 
 ```bash
 make langfuse-bootstrap

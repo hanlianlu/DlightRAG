@@ -11,19 +11,16 @@ Generation, Run Connection Binding, and Connection Activation Epoch.
 
 - Settings owns the path **Settings → Connections → MCP**. Each owner creates,
   authorizes, enables, disables, and deletes only their own Connections.
-- Every authentication mode has them. A JWT owner is one issuer and subject,
-  including Web identities verified at a trusted edge; `none` and `simple` admit
-  every caller as the one deployment owner, so whoever holds the `simple` token
-  uses that owner's Connections.
+- Every authentication mode has them. A JWT owner is one issuer and subject;
+  `none` and `simple` admit every caller as the one deployment owner, so whoever
+  holds the `simple` token uses that owner's Connections.
 - Every enabled Connection with a published catalogue joins each
-  Research-capable Answer Run its owner accepts, whether the Answer arrives
-  through Web, REST, inbound MCP, or the in-process Application. Fast has no MCP
-  tools. The composer has no tool control, and a conversation has no Connection
-  selector.
-- Transport is MCP Streamable HTTP only. Stdio and deployment-declared servers
-  are not accepted; `answer.agent.outbound_mcp` is a configuration error.
-- Authentication is none, a write-only personal static bearer, or OAuth through
-  the `mcp` SDK locked at 2.2.0.
+  Research-capable Answer Run its owner accepts, through Web, REST, inbound MCP,
+  or the in-process Application. Fast has no MCP tools, the composer has no tool
+  control, and a conversation has no Connection selector.
+- Transport is MCP Streamable HTTP only; stdio and deployment-declared servers
+  are not accepted. Authentication is none, a write-only personal static bearer,
+  or OAuth through the `mcp` SDK locked at 2.2.0.
 - The Connection is the authorization unit. Enabling it authorizes every current
   and future tool the server publishes; there is no per-tool checkbox,
   allowlist, drift approval, or per-call confirmation. The enable warning states
@@ -33,137 +30,43 @@ Generation, Run Connection Binding, and Connection Activation Epoch.
 - DlightRAG isolates Connection records, credentials, Runs, Conversations, and
   files by owner. It does not claim that an external MCP server enforces the
   same user boundary.
-- A Connection fault does not fail the Research Run: the call returns a failed
-  tool result, other tools stay usable, and the Answer names the part it could
-  not complete. A possibly dispatched call is never retried automatically.
+- A Connection fault fails the call, not the Research Run, and a possibly
+  dispatched call is never retried automatically
+  ([Fault behavior](#fault-behavior)).
 
 ## Scope and non-goals
 
-There is no marketplace or registry lookup, no public Connection-management REST
-API, no inbound-MCP management tool, no arbitrary request header, and no MCP
-resources, prompts, or apps: only `initialize`, `tools/list`, and `tools/call`
-are used. There is no universal plugin manager, second `RunRuntime`, or durable
-invocation-permit ledger; the Agent Session effect runtime remains the only
-effect authority. Connections stay separate from models, Skills, Profile Memory,
-and Web resources. The mechanics of immutable publication, atomic Run pin,
-effect-time revoke, and retention stay private to
-`dlightrag.application.connections`.
+Only `initialize`, `tools/list`, and `tools/call` are used: there are no MCP
+resources, prompts, or apps, no arbitrary request header, no marketplace or
+registry lookup, no public Connection-management REST API, and no inbound-MCP
+management tool. Connections own Grants, catalogues, generations, and bindings.
+The Agent Session runtime keeps Effect Intent and Effect Settlement and remains
+the only effect authority, so there is no plugin manager, second `RunRuntime`,
+or invocation-permit ledger. Product policy can deny authority but never grant
+it. Connections stay separate from models, Skills, Profile Memory, and Web
+resources.
 
 ## Starter presets
 
-`PRESETS` in `application/connections/presets.py` is a short, static,
-hand-reviewed list that the owner read projects as `presets`: Notion (`oauth`),
-Hugging Face (`none`), and Wolfram (`none`). Each is a first-party public HTTPS
-endpoint, and none asks for a pasted secret. Choosing a preset fills the create
-form's label and endpoint; after the create command succeeds, Settings opens the
-new Connection on the preset's authentication tab. A preset creates, enables,
-authorizes, and stores nothing, and the create command still validates the
-endpoint; `tests/unit/test_connection_presets.py` holds every preset to that
-same validation.
-
-## Where it lives
-
-Paths are under `src/dlightrag/` unless they start with `frontend/`.
-
-| Module | Responsibility |
-|---|---|
-| `application/connections/service.py` | `Connections`: Settings commands, catalogue validation, refresh scheduling, Research binding and restore, dispatch, OAuth flows, maintenance |
-| `application/connections/models.py`, `policy.py`, `presets.py`, `client_metadata.py` | Commands, redacted views, and the store, MCP, and OAuth ports; `ConnectionPolicy`; presets; the Client ID Metadata Document |
-| `application/connections/naming.py` | `name_catalogue`: the local tool names publication gives |
-| `application/connections/credentials.py` | `CredentialCipher`: key-ring validation and AES-256-GCM envelopes; access-token checks |
-| `adapters/postgres/connections.py` | `PGConnectionsStore`: schema, owner-scoped state, claims and leases, revision CAS, NOTIFY, dispatch gate, GC. `PGConnectionPinWriter`: validation and pin insertion inside an accepting transaction |
-| `adapters/mcp/personal_http.py`, `adapters/mcp/oauth.py` | `PersonalMcpClient`: bounded Streamable HTTP over an admitted transport. `PersonalOAuthClient`: SDK authorization and refresh preflight |
-| `engine/network_admission.py` | DNS and IP admission shared with public Web reads |
-| `engine/answer/execution/connection_binding.py` | Secret-free `RunConnectionBinding`, `ResearchToolClaim`, `ResearchConnectionToolResolver`, `StaleConnectionBindingError`; `CONNECTION_TOOL_PREFIX`, which only Connection tool names start with |
-| `engine/answer/prompts/agent.py` | The provenance sentence a Research system prompt gains when its Run or Child Session holds a Connection tool |
-| `engine/agent/tools/contracts.py` | `ToolRuntime.fencing_epoch`, which lets the gate fence parent and Child Session calls without owner, credential, or MCP facts in Agent Core |
-| `application/answer_runs/service.py`, `adapters/postgres/runtime/run_store.py`, `application/web_conversations/`, `adapters/postgres/web/web_conversations.py` | Binding at Answer acceptance; pins written by `accept_run` or by `accept_run_in` inside the Web turn transaction |
-| `engine/answer/execution/executor.py`, `engine/answer/tools/composition.py` | Restoring pinned tools for resolved Research, checking the accepted `AgentRunPlan`, and preview-or-spill of tool output |
-| `_compose.py`, `application/application.py`, `application/config/` | Composition (with the deployment key ring), lifecycle order, and the `answer.agent.connections` settings |
-| `adapters/http/browser/routes/connections.py`, `adapters/http/browser/auth.py` | Web routes; callback query capture and the public metadata path in the Web middleware |
-| `adapters/http/browser/routes/chat.py`, `answer_events.py` | Tool Activity labels on Run event streams |
-| `frontend/api/connections.ts`, `frontend/ui/settings-connections.ts` | Browser wire validation and the Settings feature |
-
-Engine owns the neutral binding contracts and imports neither Application nor
-MCP. Application imports Engine contracts, and the PostgreSQL and MCP adapters
-implement Application-owned ports. `_compose.py` injects
-`Connections.bind_research` into Answer acceptance and
-`Connections.restore_research` into the executor. `uv run lint-imports` enforces
-these directions
-([ADR 0001](adr/0001-application-engine-adapters-architecture.md),
-[ADR 0011](adr/0011-owner-specific-operational-state-adapters.md)). Connections
-owns Grants, catalogues, generations, and bindings; the Agent Session runtime
-keeps Effect Intent and Effect Settlement; the MCP adapter owns process-local
-SDK sessions; product policy can deny authority but never grant it.
-
-```python
-class Connections:
-    # Settings; an ineligible auth mode raises ConnectionsError (status 403)
-    async def read(self, *, owner_id, auth_mode) -> ConnectionsView
-    async def change(self, *, owner_id, auth_mode, expected_revision,
-                     command) -> ConnectionsView
-    async def replace_bearer(self, *, owner_id, auth_mode, connection_id,
-                             bearer, expected_revision=None,
-                             endpoint=None) -> ConnectionsView
-    async def begin_authorization(self, *, owner_id, auth_mode, connection_id,
-                                  expected_revision,
-                                  endpoint=None) -> AuthorizationStart
-    async def authorization_callback(self, *, owner_id, auth_mode, state,
-                                     code=None, issuer=None,
-                                     error=None) -> None
-    def published_client_metadata(self) -> dict | None
-    # Answer
-    async def bind_research(self, *, owner_id,
-                            auth_mode) -> BoundResearchConnections
-    async def restore_research(self, *, bindings,
-                               claim) -> tuple[AgentTool, ...]
-    async def pinned_tool_labels(self, *, owner_id, auth_mode,
-                                 run_id) -> Mapping[str, str]
-    # Lifecycle
-    async def start(self, *, validate_only=False) -> None
-    async def maintain(self) -> dict[str, int]
-    async def stop_refresh(self) -> None
-    async def aclose(self) -> None
-```
-
-Management results never contain a token, authorization code, client secret,
-envelope, or catalogue. `BoundResearchConnections` holds schema-only tool
-declarations and secret-free bindings. `ResearchToolClaim` carries the trusted
-owner, Run, worker, Run fencing epoch, and cancellation check of the executing
-Run; no request or model argument supplies an owner.
+Settings offers a short, static, hand-reviewed list of presets: Notion
+(`oauth`), Hugging Face (`none`), and Wolfram (`none`). Each is a first-party
+public HTTPS endpoint, and none asks for a pasted secret. A preset fills the
+create form's label and endpoint, and after the create command succeeds,
+Settings opens the new Connection on the preset's authentication tab. A preset
+creates, enables, authorizes, and stores nothing; the create command still
+validates the endpoint.
 
 ## Durable state
 
-Every foreign key and owner lookup includes `owner_id`.
-
-- `dlightrag_connection_heads(owner_id, connection_id, revision, label, enabled,
-  activation_epoch, head_generation, consent_version, tombstoned_at,
-  refresh_due_at, refresh_owner, refresh_epoch, refresh_expires_at,
-  observed_status, last_attempt_at, refresh_failures, last_error_kind)`: the
-  mutable head, with a deferrable foreign key to its current generation.
-- `dlightrag_connection_generations(owner_id, connection_id, generation,
-  endpoint_json, endpoint_digest, grant_id, catalogue_json, catalogue_digest,
-  created_at)`: immutable. `endpoint_json` holds only the validated URL,
-  `grant_id` is null for an unauthenticated generation, and `catalogue_json` is
-  null until discovery succeeds.
-- `dlightrag_connection_grants(owner_id, connection_id, grant_id, kind,
-  audience_digest, consented_scopes, status, secret_version, encrypted_envelope,
-  key_id, refresh_owner, refresh_epoch, refresh_expires_at, updated_at)`: `kind`
-  is `bearer` or `oauth`, `audience_digest` is the SHA-256 of the endpoint the
-  Grant was issued for, and `status` is `active` or `retired`.
-- `dlightrag_answer_connection_pins(owner_id, run_id, connection_id, generation,
-  activation_epoch, catalogue_digest)`: composite foreign keys to the Run
-  (`ON DELETE CASCADE`) and to the pinned generation.
-- `dlightrag_connection_oauth_flows(flow_id, owner_id, connection_id,
-  flow_owner, flow_lease_expires_at, endpoint, head_revision, state_hash,
-  encrypted_result, encrypted_credentials, expires_at, deposited_at,
-  consumed_at, finished_at, outcome)`: a short-lived callback inbox, not a
-  workflow runtime. `head_revision` is the authorized head's revision when the
-  flow began, and `outcome` is `succeeded`, `changed`, or null.
-
-Policy quotas bound each generation's catalogue JSON. The normalized pin table,
-not the bindings in a Run's accepted input, is what keeps GC from deleting a
-pinned generation.
+Five tables hold the state, and every foreign key and owner lookup includes
+`owner_id`. A mutable `dlightrag_connection_heads` row points at its current
+row in `dlightrag_connection_generations`, whose rows are immutable: each fixes
+an endpoint, a Grant (null when unauthenticated), and a catalogue (null until
+discovery succeeds), with their digests. `dlightrag_connection_grants` holds
+the envelopes, `dlightrag_answer_connection_pins` ties each Run to the
+generations it pinned, and `dlightrag_connection_oauth_flows` is a short-lived
+callback inbox, not a workflow runtime. The pin table, not a Run's accepted
+input, keeps GC from deleting a pinned generation.
 
 ## Secret handling and key ring
 
@@ -190,156 +93,135 @@ authorization-server metadata that refresh needs, and the in-flight callback
 result and credentials of an OAuth flow.
 
 - New encryption uses `active`; decryption uses whichever listed key an envelope
-  names. Every worker reads the same ring.
+  names. Every worker must read the same ring.
 - Without a ring, storing or using a credential fails closed with 503.
 - A grant no key opens (its ring was lost, or a retired key removed early) needs
   authorization: the Connection shows `needs-auth`, and a new bearer or OAuth
-  consent replaces the grant. Nothing falls back to plaintext.
+  consent replaces the grant without reading it. Nothing falls back to
+  plaintext.
 - No key reaches PostgreSQL, settings dumps, the UI, logs, or Run input.
 - Retiring a Grant erases its ciphertext from the live store. That does not
   erase backups a retained key can still decrypt; backup and key retention stay
   operator responsibilities.
 
-Rotation adds a key, switches `active`, restarts the workers, lets writer
-maintenance re-encrypt live Grants, and removes the old key only after its
-counts reach zero; see
-[credential rotation](configuration.md#personal-connection-credential-rotation).
+To rotate keys, follow the
+[key ring rotation runbook](operations.md#connection-key-ring-rotation).
 
 ## Publication and discovery
 
 - **Create** stores a disabled draft without network I/O: generation 0 with the
-  endpoint, no catalogue, and observed status `disabled`. An owner may hold
-  `max_connections` Connections that are not deleted.
+  endpoint, no catalogue, and status `disabled`. An owner may hold
+  `max_connections` Connections that are not deleted, and a Connection without a
+  published catalogue cannot be enabled.
 - **Discovery** runs outside any database transaction, for a probe, a background
   refresh, an endpoint edit of an unauthenticated Connection, a bearer save, and
-  an OAuth authorization. Its result is published in one short transaction under
-  the owner's advisory lock and revision CAS.
-- Discovery opens one SDK session, calls `initialize`, and pages `tools/list` up
-  to `max_pages`. Each cursor must be non-empty, at most 2048 characters, and
-  unseen. Each tool needs a unique name matching `[A-Za-z0-9_.-]{1,128}`, a
-  description within `max_description_bytes`, and an `object` input schema that
-  is valid JSON Schema (Draft 2020-12) within `max_schema_bytes`; the list must
-  fit `max_tools` and `max_catalogue_bytes`. Echoes of the Connection's own
-  credential are redacted first. Any violation rejects the whole candidate.
-- Publication gives each tool its local name (see
-  [Tool names and descriptions](#tool-names-and-descriptions)). The server's
-  `initialize` instructions are discarded.
+  an OAuth authorization; its result is published in one short transaction under
+  the owner's advisory lock and revision CAS. It opens one SDK session, calls
+  `initialize`, and pages `tools/list` up to `max_pages`. Each cursor must be
+  non-empty, at most 2048 characters, and unseen. Each tool needs a unique name
+  matching `[A-Za-z0-9_.-]{1,128}`, a description within
+  `max_description_bytes`, and an `object` input schema that is valid JSON
+  Schema (Draft 2020-12) within `max_schema_bytes`; the list must fit
+  `max_tools` and `max_catalogue_bytes`. Echoes of the Connection's own
+  credential are redacted first, and any violation rejects the whole candidate.
+  The server's `initialize` instructions are discarded.
 - **Refresh.** Each worker runs `discovery_concurrency` refresh loops. A loop
   claims one enabled, due head that is not deleted, not revoked, and not under a
-  live claim, using `FOR UPDATE SKIP LOCKED`; a pending OAuth authorization
-  holds its head's claim too (see [OAuth](#oauth-and-credential-lifecycle)).
-  The claim increments `refresh_epoch`, takes a lease of
-  `2 × discovery_timeout + 5` seconds, sets status `refreshing`, and commits
-  before any network I/O. Publication requires the same claim owner and
-  epoch, the head revision seen at claim time, the same generation Grant, and
-  that Grant's secret version and refresh epoch, so a late worker cannot
-  overwrite a newer edit, disable, or credential change.
-- A successful refresh publishes a new generation, even when the catalogue is
-  unchanged, sets `ready`, and schedules the next refresh `refresh_seconds`
-  later. A failed refresh publishes no generation and keeps the last-good one.
-  Either outcome increments the head revision. A failed refresh records
-  `needs-auth` for an authentication failure and `degraded` otherwise, then
-  backs off `min(refresh_seconds, 2^n)` seconds times a random factor from 0.8
-  to 1.0, where `n` counts consecutive failures up to 10. If a new catalogue
-  would push an enabled Connection past `max_enabled_tools`, the refresh records
-  a `quota` error instead of publishing.
-- `NOTIFY dlightrag_connections_changed` wakes refresh loops and in-flight
-  watchers, and so does every resynchronization of the notification hub. A loop
-  that finds nothing to claim reads when the earliest enabled head it could
-  claim falls due and sleeps until then, until a wake, or for 30 seconds,
-  whichever comes first; a loop whose store fails retries after a second. A
-  head under a live claim is left out of that time, because its holder's
-  publication wakes the loops, so only a claim released or lapsed without a
-  publication, or a notification missed while the hub was down, waits for the
-  30-second bound.
-- New tools and schema or description changes reach future Runs through
-  publication, with no restart and no per-tool consent. Existing pins never
-  change.
+  live refresh or authorization claim, using `FOR UPDATE SKIP LOCKED`. The claim
+  increments `refresh_epoch`, takes a lease of `2 × discovery_timeout + 5`
+  seconds, sets status `refreshing`, and commits before any network I/O.
+  Publication requires the same claim owner and epoch, the head revision seen at
+  claim time, the same generation Grant, and that Grant's secret version and
+  refresh epoch, so a late worker cannot overwrite a newer edit, disable, or
+  credential change.
+- A successful refresh publishes a new generation, even for an unchanged
+  catalogue, sets `ready`, and schedules the next refresh `refresh_seconds`
+  later. A failed refresh keeps the last-good generation, records `needs-auth`
+  for an authentication failure and `degraded` otherwise, and backs off
+  `min(refresh_seconds, 2^n)` seconds times a random factor from 0.8 to 1.0,
+  where `n` counts consecutive failures up to 10. A catalogue that would push an
+  enabled Connection past `max_enabled_tools` fails with a `quota` error. Either
+  outcome increments the head revision.
+- `NOTIFY dlightrag_connections_changed` and every resynchronization of the
+  notification hub wake refresh loops and in-flight watchers. A loop with
+  nothing to claim sleeps until the earliest claimable head falls due or a wake
+  arrives, at most 30 seconds; that bound covers a claim that ends without a
+  publication and a change made while the hub was down. A loop whose store fails
+  retries after a second.
+- Publication gives each tool its [local name](#tool-names-and-descriptions).
+  New and changed tool definitions reach future Runs with the next publication;
+  existing pins never change.
 
 ## Tool names and descriptions
 
-`name_catalogue` in `application/connections/naming.py` names a published tool
-`mcp__<connection>__<tool>`, so the model reads which Connection a tool comes
-from and what its server calls it: `notion-search` under the label `Notion` is
-`mcp__Notion__notion_search`, and `hf_doc_search` under `Hugging Face` is
-`mcp__Hugging_Face__hf_doc_search`.
+Publication names a tool `mcp__<connection>__<tool>`, so the model reads which
+Connection a tool comes from and what its server calls it: `notion-search` under
+the label `Notion` is `mcp__Notion__notion_search`, and `hf_doc_search` under
+`Hugging Face` is `mcp__Hugging_Face__hf_doc_search`.
 
-- `<connection>` is the owner's label, with accents folded and each run of
-  characters other than ASCII letters and digits turned into one `_`, cut to 24
-  characters. `<tool>` is the server's name with `.` and `-` turned into `_`.
+- `<connection>` is the owner's label with accents folded, each run of
+  characters other than ASCII letters and digits turned into one `_`, and cut to
+  24 characters. `<tool>` is the server's name with `.` and `-` turned into `_`.
   A name therefore holds only letters, digits, and `_`, starts with a letter,
-  and fits 64 characters: the subset the OpenAI-compatible, Response,
-  Anthropic, and Gemini adapters all accept.
+  and fits 64 characters: the subset every supported provider accepts.
 - A six-hex-digit hash appears only where readable text would collide or not
-  fit. `<tool>` keeps what fits and gains a hash of the server name when the
-  name would pass 64 characters, or when sanitizing merges it into another
-  tool's name; a server name that sanitizing leaves alone keeps its text.
-  `<connection>` gains a hash of the Connection id when the label keeps no
-  letter or digit, or when another live Connection of the owner already holds
-  it, and is the Connection id itself if that is taken too. A
-  catalogue whose names still collide, which only crafted names can cause, is
-  rejected whole.
-- Names are unique across a Run's whole tool set. No built-in tool name starts
+  fit. `<tool>` keeps what fits and gains a hash of the server name when it
+  would pass 64 characters or when sanitizing merges it into another tool's
+  name; a name that sanitizing leaves alone keeps its text. `<connection>` gains
+  a hash of the Connection id when the label keeps no letter or digit or another
+  live Connection of the owner holds it, and is the Connection id itself if that
+  is taken too. A catalogue whose names still collide, which only crafted names
+  can cause, is rejected whole.
+- Names are unique across a Run's whole tool set: no built-in tool name starts
   with `mcp__`, and publication names a catalogue inside its owner-locked
-  transaction, apart from the Connection parts the owner's other live
-  Connections hold, so no two Connections one acceptance can bind share a part.
-  A Connection holds the part of its latest catalogue with tools, so a head left
-  without one, as a bearer save leaves it until its probe publishes, keeps its
-  part while that catalogue is retained.
-- A name depends only on the label, the catalogue, and the parts other
-  Connections hold, so refreshing an unchanged catalogue republishes the same
-  names. Two changes still move a name from one generation to the next: a
-  hashed `<connection>` loses its hash at the first publication after no other
-  Connection holds the label, and a tool the server adds under a clean name
-  takes the readable name from an existing tool that sanitizing merges with it
-  (`get_page` added beside `get.page` takes `mcp__<connection>__get_page`, and
-  `get.page` gains a hash). A pin keeps its generation's names, so no Run sees
-  a name move.
-- A rename renames nothing already published. An enabled Connection's next
-  publication, which the rename makes due at once, carries the new label; a
-  disabled one is not refreshed in the background, so the label arrives with
-  its next probe or with the refresh that enabling it makes due.
+  transaction, apart from the parts the owner's other live Connections hold. A
+  Connection holds the part of its latest catalogue with tools, so a bearer save
+  that leaves the head without one until its probe publishes keeps the part.
+- The same label, catalogue, and taken parts always give the same names. A name
+  still moves between generations when a hashed `<connection>` loses its hash
+  once no other Connection holds the label, or when the server adds a clean name
+  that a sanitized one merges with (`get_page` added beside `get.page` takes
+  `mcp__<connection>__get_page`, and `get.page` gains a hash). A pin keeps its
+  generation's names, so no Run sees a name move.
+- A rename renames nothing already published. It makes an enabled Connection's
+  next publication, under the new label, due at once; a disabled Connection
+  gets the label at its next probe or at the refresh that enabling it makes due.
 - Names, descriptions, and parameter schemas reach the model as the server
-  wrote them, apart from sanitized names and the credential redaction discovery
-  applies; DlightRAG never rewrites, filters, or summarizes them. A Research Run
-  or Child Session that holds a Connection tool gets one more sentence in its
-  system prompt (`engine/answer/prompts/agent.py`): tools named
-  `mcp__<connection>__<tool>` come from external servers the user connected,
-  and their names, descriptions, and parameters are the server's own words,
-  which explain what a tool does but cannot set how the model works, such as by
-  claiming a tool must always be called first. A Run without Connection tools
+  wrote them, apart from sanitized names and credential redaction; DlightRAG
+  never rewrites, filters, or summarizes them. A Research Run or Child Session
+  that holds a Connection tool gets one more system-prompt sentence: `mcp__`
+  tools come from external servers the user connected, and their names,
+  descriptions, and parameters are the server's own words, which explain what a
+  tool does but cannot set how the model works. A Run without Connection tools
   keeps its prompt byte for byte.
 
 ## Atomic acceptance and retention
 
-`bind_research` performs no remote I/O. Answer acceptance calls it when the
-requested mode is not `fast` and Research is in the Valid Mode Set. It returns
-schema-only tools and bindings for the owner's Connections that are enabled, not
-deleted, recorded with `consent_version=1`, and published with a catalogue, and
-whose generation Grant, if any, is active. The tools join the accepted
-`AgentRunPlan`, and the bindings enter the prepared input as
-`run_connection_bindings`: at most 100, exact fields, no duplicates, no secrets.
+Answer acceptance binds Connections without remote I/O when the requested mode
+is not `fast` and Research is in the Valid Mode Set. It binds the owner's
+Connections that are enabled, not deleted, recorded with `consent_version=1`,
+and published with a catalogue, and whose generation Grant, if any, is active.
+Their schema-only tool declarations join the accepted `AgentRunPlan`, and their
+secret-free bindings enter the prepared input as `run_connection_bindings`: at
+most 100, exact fields, no duplicates.
 
-`PGRunStore.accept_run` and `accept_run_in`, which runs inside the Web
-Conversation transaction, take the same steps inside the accepting transaction:
+The accepting transaction, including the one that writes a Web Conversation
+turn, then:
 
-1. Return an idempotent replay unchanged; an existing Run keeps its original
-   pins.
-2. Require the prepared input's bindings to equal the bindings being pinned, and
-   allow bindings only for an eligible, non-Fast acceptance.
-3. Lock the referenced heads in ascending `(owner_id, connection_id)` order.
-4. For each Connection in the same order, lock its generation and then its
-   Grant.
-5. Verify owner, enabled state, consent version, current head generation,
-   activation epoch, catalogue digest, and active Grant.
-6. Insert the Run, its routing, the Web Conversation and turn rows where
-   applicable, and every pin before commit.
+1. returns an idempotent replay unchanged, with its original pins;
+2. requires the prepared input's bindings to equal the bindings being pinned,
+   and allows bindings only for a non-Fast acceptance;
+3. locks the referenced heads in ascending `(owner_id, connection_id)` order,
+   then, in the same order, each generation and its Grant;
+4. verifies owner, enabled state, consent version, current head generation,
+   activation epoch, catalogue digest, and active Grant;
+5. inserts the Run, its routing, any Web Conversation and turn rows, and every
+   pin before commit.
 
-A stale binding raises `StaleConnectionBindingError`, and no Run is created.
-Acceptance returns an idempotent replay if one appeared meanwhile and otherwise
-rebinds once without network I/O. A second stale result fails with
-`AnswerConnectionsChangedError`, a conflict that asks the caller to submit
-again.
+A stale binding creates no Run. Acceptance then returns an idempotent replay if
+one appeared meanwhile and otherwise rebinds once without network I/O; a second
+stale result fails with `AnswerConnectionsChangedError`, a conflict that asks
+the caller to submit again.
 
 How later changes reach Runs:
 
@@ -360,81 +242,75 @@ How later changes reach Runs:
 
 Retention:
 
-- Pins live as long as their Run row; deleting the Run cascades them.
+- Pins live as long as their Run row, so generation metadata follows Run
+  retention. Acceptance pins only the current head generation, which GC never
+  deletes, and the pin's foreign key arbitrates any race, so a dangling pin
+  cannot commit.
 - Writer maintenance collects bounded batches of expired OAuth flows; of
   non-head generations without pins on heads that hold no live refresh claim,
   Grant refresh lease, or OAuth flow row; of deleted heads, with their last
   generation and Grants, once no pin remains; and of retired Grants no
   generation references.
-- Acceptance pins only the current head generation, which GC never deletes, and
-  the pin's foreign key arbitrates any race, so a dangling pin cannot commit.
-  Generation metadata follows Run retention, while retired ciphertext is erased
-  at once.
 
 ## Restore, dispatch, revoke, and cancellation
 
-For a Run that resolves to Research with bindings, the executor builds a
-`ResearchToolClaim` from its trusted `RunSession` and calls the injected
-resolver. `restore_research` loads the pinned generations, requires the stored
+For a Run that resolves to Research with bindings, the executor restores the
+pinned tools under a claim built from its trusted Run session (owner, Run,
+worker, fencing epoch, and cancellation check); no request or model argument
+supplies an owner. Restore loads the pinned generations, requires the stored
 pins to equal the Run's bindings with matching catalogue digests, and never
 substitutes the current head. The restored tools must reproduce the accepted
 `AgentRunPlan` before any provider or tool effect. A Run that resolves to Fast
-restores nothing. A pin freezes local names, schemas, descriptions, and routing;
-it cannot freeze remote code, data, availability, or side effects.
+restores nothing.
 
 Connection tools are declared `replay_policy="never"`, and their arguments must
-validate against the pinned schema. They are never read-only, whatever a server's
-`readOnlyHint` says, so each call runs alone and no other call runs beside it
+validate against the pinned schema. They are never read-only, whatever a
+server's `readOnlyHint` says, so each call runs alone
 ([ADR 0029](adr/0029-read-only-calls-run-at-once-and-settle-in-source-order.md)).
 The Agent Session runtime commits `ToolEffectPending` before calling the tool;
-recovery of an uncertain pending effect settles `outcome_unknown` and never calls
-MCP again.
+recovery of an uncertain pending effect settles `outcome_unknown` and never
+calls MCP again.
 
 A call proceeds in this order:
 
-1. Arguments larger than `max_call_argument_bytes` fail with "No call was sent".
+1. Arguments larger than `max_call_argument_bytes` are refused.
 2. Within `call_timeout` and one of the worker's `call_concurrency` slots, the
    call checks cancellation and runs the gate: one short transaction that is
    never rerun, even when its commit acknowledgement is lost.
 3. The gate locks the head, generation, Grant, parent Run, and, for a Child
    Session, the child lease row, in that order. It verifies that:
-   - the tool belongs to a generation pinned for this owner and Run, and the
-     runtime tool name matches;
-   - the head is enabled, not deleted, recorded with `consent_version=1`, and at
-     the pinned activation epoch, and the generation's catalogue digest matches;
-   - any Grant is active, of kind `bearer` or `oauth`, holds an envelope, and
-     has an audience digest equal to the generation's endpoint digest, and the
-     stored endpoint matches that digest;
-   - the parent Run is `running` under a live lease held by this worker at the
-     claim's fencing epoch, with no cancellation request; a parent call carries
-     that fencing epoch, a Child Session call needs its own live, uncancelled
-     child lease at the `ToolRuntime` fencing epoch, and the Agent Session lease
-     matches;
-   - exactly one committed `ToolEffectPending` exists for this
-     `(execution_scope, intent_id)`, and its tool name, call id, `never` replay
-     policy, sequential (not read-only) contract, contract version, schema digest,
-     argument digest, and stored arguments match the call.
+   - the tool belongs to a generation pinned for this owner and Run, under the
+     runtime tool name;
+   - the head is enabled, not deleted, consented (`consent_version=1`), and at
+     the pinned activation epoch, with the pinned catalogue digest;
+   - any Grant is active, `bearer` or `oauth`, holds an envelope, and was issued
+     for the generation's endpoint, whose stored URL matches its digest;
+   - the parent Run is `running` and uncancelled under this worker's live lease
+     at the claim's fencing epoch, which a parent call carries; a Child Session
+     call needs its own live, uncancelled child lease at its `ToolRuntime`
+     fencing epoch; and the Agent Session lease matches;
+   - exactly one committed `ToolEffectPending` exists for
+     `(execution_scope, intent_id)`, matching the call's tool name, call id,
+     `never` replay policy, sequential contract, contract version, schema
+     digest, argument digest, and stored arguments.
 4. The endpoint is checked against network policy again. For a Connection with a
    Grant, the credential is decrypted, an expired OAuth access token goes
-   through the refresh preflight, and the whole gate then runs a second time,
-   whether or not a refresh happened.
+   through the [refresh preflight](#token-refresh), and the whole gate runs a
+   second time.
 5. The worker checks cancellation, refuses a second call for the same owner,
    Run, execution scope, and intent, and calls the tool on a fresh SDK session.
 
-Revoke, disable, and delete lock the same head and Grant rows as the gate:
-
-- If revoke commits first, the gate rejects and the MCP adapter receives zero
-  calls.
-- If the gate commits first, the call is in flight, even if its request leaves
-  the process after the revoke.
+Revoke, disable, and delete lock the same head and Grant rows as the gate. If
+revoke commits first, the gate rejects and no request is sent. If the gate
+commits first, the call is in flight, even if its request leaves the process
+after the revoke.
 
 No database transaction spans network I/O. While a call runs, a watcher checks
 every 0.25 seconds, or on NOTIFY, that the head is still enabled at the same
 activation epoch with consent, that the Grant is still active, and that the Run
-and Child fences still hold. It ignores routine secret-version changes from a
-same-Grant refresh or re-encryption. Losing any of these, a timeout,
-cancellation, or shutdown cancels the local task; the result is a failed call
-whose outcome may be unknown, with no rollback and no automatic retry.
+and Child fences still hold; a same-Grant token refresh or re-encryption is not
+a change. Losing any of these, a timeout, cancellation, or shutdown cancels the
+local task, with no rollback and no automatic retry.
 
 There is no shared connection, session, DNS, or credential cache. Every
 discovery and call opens a new SDK session on a new transport without
@@ -442,66 +318,62 @@ keep-alive, and admits its target per request.
 
 ## OAuth and credential lifecycle
 
-Authorization uses the SDK's `OAuthClientProvider`, `TokenStorage`, PKCE and
-state, resource validation, redirect and callback hooks, token exchange, and
-refresh. DlightRAG supplies only the product integration:
+The locked SDK's `OAuthClientProvider` runs PKCE and state, resource
+validation, client registration, token exchange, and refresh, so authorization
+works only with providers that interoperate with it. DlightRAG supplies the
+product integration:
 
 1. Settings calls `POST .../oauth` for one owned Connection at the current
    revision. The callback is `/web/oauth/connections/mcp/callback` on the
    origin that request reached, which the Web's same-origin guard ties to the
-   browser's own: the provider sends that browser, with its session, back
-   there. `oauth_callback_url` overrides it, for a proxy that rewrites paths or
-   a provider that registers one fixed URI. Either must be HTTPS except on
-   loopback, with no query or fragment; it is never an endpoint DlightRAG
-   calls, so the outbound network policy does not apply. The request fails
-   before contacting any provider unless that holds and the key ring can
-   encrypt.
+   browser's own, so the provider sends that browser, with its session, back
+   there. `oauth_callback_url` overrides it, for example for a provider that
+   registers one fixed URI; the override keeps that path, uses HTTPS except on
+   loopback, and has no query or fragment. DlightRAG never calls the callback,
+   so the outbound network policy does not apply to it. The request fails
+   before contacting any provider unless the callback is valid and the key ring
+   can encrypt.
 2. A flow row records the initiating worker as `flow_owner`, the endpoint, the
    Connection head's revision, and a lifetime of `oauth_timeout`. The initiator
    renews a 10-second lease every 2 seconds. Starting again supersedes the
    Connection's pending flow.
 3. The SDK discovers the protected resource and authorization server, registers
    or identifies the client, and calls the redirect hook. The hook accepts one
-   redirect per flow; a later step-up needs a new flow. It validates the
+   redirect per flow, so a later step-up needs a new flow. It validates the
    authorization URL (no userinfo or fragment, HTTPS when required, exactly one
    `state`, an admitted host), records the SHA-256 of `state`, takes the
    requested `scope` as the consented scopes, and hands the URL to Settings. The
    request waits at most `discovery_timeout` for it.
 4. `GET /web/oauth/connections/mcp/callback` requires the authenticated owner.
-   Web middleware moves the query string into request state before any logging.
-   The handler finds a live flow by owner and state hash, encrypts
-   `{state, code, iss, error}` once, deposits it, and redirects to
+   Web middleware moves the query string into request state before any logging;
+   upstream proxies and external tracing record it unless the deployment
+   redacts it there. The handler finds a live flow by owner and state hash,
+   encrypts `{state, code, iss, error}` once, deposits it, and redirects to
    `/web/?settings=connections`, adding `&authorization=restart` on failure. The
    callback may reach any worker; NOTIFY wakes only the flow owner, whose SDK
    callback hook consumes the deposit exactly once.
 5. After the token exchange, the SDK finishes discovery with the new token.
    DlightRAG then publishes the Grant, holding the encrypted tokens, client
    information, expiry, and authorization-server and protected-resource
-   metadata, together with a generation for the new catalogue in one
-   transaction that requires the head to still be at the flow's revision, and
-   marks the flow `succeeded`.
+   metadata, together with a generation for the new catalogue, and marks the
+   flow `succeeded`.
 
 The SDK's pending PKCE verifier and state live only in the initiating process.
 If that worker dies or its lease lapses, no other worker resumes the exchange;
 the flow fails, and Settings asks the user to authorize again. A token whose
 scope exceeds the consented scopes is rejected, so broader scope always takes a
 new Settings authorization and a new Grant. Each worker runs at most four
-authorizations, and PostgreSQL allows an owner at most four live flows and 128
-unexpired flows; beyond these, the request fails with 429.
+authorizations, and an owner holds at most four live flows and 128 unexpired
+ones; beyond these, the request fails with 429.
 
-Beginning an authorization is a Settings command at the owner revision, but
-completing it is a CAS on the authorized Connection's own head: the flow records
-the head's revision when it begins and publishes only if the head is still
-there. Any command on that Connection in between (an edit, enable, disable,
-delete, revoke, probe, or bearer save) moves the head, and the owner's later
-word stands: the flow publishes nothing and ends as `changed`, which Settings
-reports as a Connection that changed during authorization and must be
-authorized again. Changes to the owner's other Connections leave the head
-alone. So does the Connection's own background refresh: beginning the flow
-takes the head's refresh claim for the flow's lifetime, so a refresh already
-running loses its claim and cannot publish, and none starts until the flow
-finishes and hands the claim back. A flow whose initiator dies keeps it until
-`oauth_timeout` runs out.
+Publication in step 5 is a CAS on the authorized Connection's own head, not on
+the owner revision. Any command on that Connection after the flow began (an
+edit, enable, disable, delete, revoke, probe, or bearer save) moves the head,
+and the owner's later word stands: the flow publishes nothing and ends as
+`changed`. Commands on the owner's other Connections leave the head alone, and
+so does background refresh, because the flow takes the head's refresh claim
+from any running refresh and holds it until the flow finishes or, if its
+initiator dies, until `oauth_timeout` runs out.
 
 ### Client registration
 
@@ -522,12 +394,11 @@ and `token_endpoint_auth_method="none"`, with
 `Cache-Control: public, max-age=300`. It is public by protocol, because an
 authorization server fetches it without a credential; it carries only facts an
 authorization redirect already reveals and reads no owner, cookie, or Connection
-state. Its `client_id` is derived from the configured callback: the same HTTPS
-origin, the fixed path `/web/oauth/connections/mcp/client-metadata`, and no
-userinfo, query, or fragment, and it equals the document URL exactly. A callback
-that is not HTTPS publishes no document (the path returns 404), and its
-Connections register dynamically. Pre-registered client credentials are not
-supported.
+state. Its `client_id` is the callback's HTTPS origin with the fixed path
+`/web/oauth/connections/mcp/client-metadata` and no userinfo, query, or
+fragment, and it equals the document URL exactly. A callback that is not HTTPS
+publishes no document (the path returns 404), and its Connections register
+dynamically. Pre-registered client credentials are not supported.
 
 ### Token refresh
 
@@ -543,23 +414,15 @@ refresh finds it expired:
 - The SDK builds the refresh from the stored metadata. DlightRAG sends only POST
   requests to the stored token endpoint's origin, at most six, and closes the
   SDK's auth generator when it yields the original MCP request, which is never
-  sent. A missing refresh token or token endpoint, a rejected refresh, a scope
-  beyond the consented scopes, or any other failure of the token request,
-  including its own connect or idle timeout, an admission refusal, a network
-  error, or a server error, becomes an authentication failure (`needs-auth`).
-  Apart from the call's own `call_timeout`, a Run cancellation or lease loss,
-  and a leased envelope that cannot be read, only a refresh preflight that
-  exceeds `discovery_timeout` as a whole, or a gate refusal, is recorded as
-  `degraded` instead. With the default `idle_timeout` below `discovery_timeout`,
-  a hung token endpoint therefore records `needs-auth` unless the call already
-  spent most of its `call_timeout` waiting for a slot. Refresh never enters discovery, registration, or
-  consent.
+  sent. Any failure of the token request is an authentication failure
+  (`needs-auth`): a missing refresh token or token endpoint, a rejection, a
+  scope beyond the consented scopes, a timeout, an admission refusal, or a
+  network or server error. `discovery_timeout` bounds the whole preflight, and
+  refresh never enters discovery, registration, or consent.
 - Saving the new token is a CAS on Grant id, active status, lease owner, live
   lease, refresh epoch, and expected secret version; losing the CAS discards the
-  token. Re-encryption skips live refresh leases at selection and again at its
-  own CAS, so it never overwrites a rotated refresh token.
-- After a refresh, a call runs the complete gate again and sends one request
-  with the new token. No 401 or 403 after an effect triggers refresh-and-replay.
+  token.
+- A 401 or 403 after an effect never triggers refresh-and-replay.
 
 A provider that omits `expires_in` yields a token without a known expiry, which
 is never refreshed automatically; a later authentication rejection marks the
@@ -576,8 +439,8 @@ Connection `needs-auth`.
   when the host is `localhost`, `*.localhost`, or `*.local`, or when any
   resolved address is not public unicast: loopback, private, link-local (which
   covers cloud metadata addresses), multicast, reserved, or unspecified. A host
-  matching an `allow_private_hosts` pattern is exempt. That policy grants
-  network reach only, never remote-account authority.
+  matching an `allow_private_hosts` pattern is exempt; that grants network reach
+  only, never remote-account authority.
 - The request goes to the first admitted address with the original `Host` header
   and TLS SNI. Transport retries, HTTP/2, keep-alive, compression, and proxy
   settings from the environment are off; a compressed response is rejected, and
@@ -596,20 +459,18 @@ Connection `needs-auth`.
   method. In a tool call the transport also refuses the SDK's GET stream, sends
   each JSON-RPC request id once, and sends at most one `tools/call`, so neither
   a redirect nor a stream resumption can resend an effect.
-- A result may hold at most `max_result_parts` parts. Only text parts are
-  accepted; image, audio, and resource parts fail the call. Structured content
-  is appended as JSON and the bearer value is redacted; a result whose text is
-  larger than `max_result_bytes` fails the call instead of being truncated. A
-  remote error result becomes a failed call without its remote text. Accepted
-  text goes through the preview-or-spill step shared by injected tools: text
-  over the shared tool-result byte or line limit is previewed and spilled to a
-  readable Resource. With Agent execution `disabled` there is no Agent Workspace
-  to spill to, so such a call reports its full output as unavailable.
+- A result may hold at most `max_result_parts` parts, all text; image, audio,
+  and resource parts fail the call. Structured content is appended as JSON, the
+  bearer value is redacted, and text larger than `max_result_bytes` fails the
+  call. A remote error result becomes a failed call without its remote text.
+  Accepted text follows the preview-or-spill rule shared by injected tools; with
+  Agent execution `disabled` there is no Agent Workspace to spill to, so an
+  over-limit result reports its full output as unavailable.
 - SDK and HTTP-library log records are suppressed inside these sessions. Logs
   and Run events carry redacted categories, never remote text or secrets.
 
-`answer.agent.connections` holds the non-secret policy. Operators tune it within
-these hard limits. Exceeding a size or count limit fails the request, call, or
+`answer.agent.connections` holds the non-secret policy, tunable within these
+hard limits. Exceeding a size or count limit fails the request, call, or
 discovery candidate; nothing is truncated.
 
 | Field | Default | Range | Bounds |
@@ -654,21 +515,18 @@ Management is a Web projection only:
 | `GET /web/oauth/connections/mcp/callback` | State-bound callback deposit; not a management interface |
 | `GET /web/oauth/connections/mcp/client-metadata` | Public Client ID Metadata Document |
 
-- Every command carries `expected_revision`; a stale revision returns 409. The
-  revision is a digest of each head's `(connection_id, revision)`. Every command
-  that writes a Connection, including a probe and a completed OAuth
-  authorization, and every published background refresh, successful or failed,
-  changes it; refresh claims and call observations do not. While a refresh keeps
-  failing, its backoff starts at a few seconds, so a command can get 409 between
-  the 5-second polls; Settings then asks for a reload. An endpoint edit and a
-  bearer save that includes the endpoint discover before they publish and carry
-  the revision they started with through the network work, so a refresh
-  published within their `discovery_timeout` fails them too. An OAuth
-  authorization instead completes against its own Connection's head (see
-  [OAuth](#oauth-and-credential-lifecycle)). Mutations need the Web session plus
-  the CSRF double-submit header and same-origin checks, in `none` mode as well.
-  Validation errors return a generic 422 that echoes no input, and another
-  owner's `connection_id` returns 404.
+- Every command carries `expected_revision`, a digest of each head's
+  `(connection_id, revision)`; a stale revision returns 409. Every command that
+  writes a Connection, including a probe and a completed OAuth authorization,
+  and every published background refresh, successful or failed, changes it;
+  refresh claims and call observations do not. An endpoint edit and a bearer
+  save that includes the endpoint carry the revision they started with through
+  discovery, so a refresh published meanwhile fails them too; an OAuth
+  authorization instead completes against its own Connection's head. Settings
+  polls every 5 seconds and asks for a reload after a failed command.
+- Mutations need the Web session plus the CSRF double-submit header and
+  same-origin checks, in `none` mode as well. Validation errors return a generic
+  422 that echoes no input, and another owner's `connection_id` returns 404.
 - `POST .../oauth` and the callback's 303 redirect send
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. The callback
   relies on the authenticated owner and SDK state instead of CSRF, because a
@@ -680,69 +538,56 @@ Each Connection in the projection carries `connection_id`, `label`, `endpoint`,
 (`disabled`, `refreshing`, `ready`, `degraded`, `needs-auth`, or `revoked`),
 `authorization_status` of its latest OAuth flow (`pending`, `succeeded`,
 `failed`, `changed`, or null), `activation_epoch`, and `generation`. `enabled`
-is authoritative, and `status` is the last observation. The projection carries
-no tool names, schemas, catalogue age, or raw error kinds, and Settings renders
-neither the epoch nor the generation: Settings answers whether a server is
-reachable and authorized, and the Agent is the only consumer of what the server
-offers.
+is authoritative, and `status` is the last observation. No management result
+carries a token, authorization code, client secret, envelope, catalogue, tool
+name, schema, or raw error kind: Settings answers whether a server is reachable
+and authorized, and the Agent is the only consumer of what the server offers.
 
 In Settings:
 
-- The MCP group is collapsed by default and reads `N of M enabled`. The view
-  polls every 5 seconds.
 - Turning a Connection on shows the whole-Connection warning once per Settings
   session, and not at all when the owner already has an enabled Connection;
   every enable carries `consent_version=1`. A Connection whose status is neither
   `ready` nor `refreshing` is probed first, and a probe that does not end
-  `ready` leaves it off. A new catalogue never asks again.
+  `ready` leaves it off.
 - The bearer field is write-only and saves with the current endpoint. OAuth
   shows a link to continue at the provider, and authorization must finish in the
-  same session. A failed or expired authorization and one whose Connection
-  changed meanwhile each get their own note, and both ask to authorize again.
-  Only an unauthenticated Connection edits its endpoint in place.
+  same session. A failed or expired authorization, and one whose Connection
+  changed meanwhile, each get a note asking to authorize again. Only an
+  unauthenticated Connection edits its endpoint in place.
 - Delete asks for confirmation and removes the endpoint, label, and credential.
   Settings offers no revoke action, because delete already retires the Grant and
-  erases its ciphertext; the `revoke` route remains for a surface that must keep
-  the configuration while destroying only the credential.
-- There is no composer affordance, per-conversation selection, or per-tool
-  checkbox.
+  erases its ciphertext; the `revoke` route serves a surface that keeps the
+  configuration while destroying only the credential.
 
-The live Tool Activity is the one place outside Settings that names a remote
-tool. When the browser subscribes to a Run's events,
-`Connections.pinned_tool_labels` resolves each pinned tool to
+Tool Activity is the one place outside Settings that names a remote tool: when
+the browser subscribes to a Run's events, each pinned tool's events gain
 `Connection label · remote tool name`, collapsed to one line of at most 96
-characters, and the browser edge adds it to that tool's events. The label is
-display only: it authorizes nothing, exposes no schema, endpoint, credential, or
-Connection id, and is never stored, because the durable event keeps
-transport-neutral identity. It survives a later disable or delete, since the
-head row stays until its pins are gone. A Connection tool reports no Tool
-Subject; like a Child Session or Memory Operation tool, its label is the whole
-row.
+characters. The label is display only and exposes no schema, endpoint,
+credential, or Connection id. It is never stored, because the durable event
+keeps transport-neutral identity, and it survives a later disable or delete
+because the head row stays until its pins are gone.
 
 ## Fault behavior
 
-- An oversized argument sends nothing, records no status, and returns a failed
-  result saying that no call was sent. So does a denial by the first gate, and a
-  `call_timeout` that expires while the call waits for a `call_concurrency` slot
-  or inside the first gate.
-- A second call, in the same process, for an intent the restored tool has
-  already run returns a failed result saying that the outcome may be unknown,
-  before any gate, and records nothing.
-- Any failure after the first gate returns a failed result saying that the
+- Before the first gate commits, an oversized argument, a gate denial, or an
+  expired `call_timeout` sends nothing, records no status, and returns a failed
+  result saying that no call was sent. A repeated call, in the same process, for
+  an intent the restored tool already ran returns a failed result saying that
+  the outcome may be unknown, before any gate, and records nothing.
+- After the first gate, any failure returns a failed result saying that the
   outcome may be unknown: the endpoint recheck, credential decryption, a token
-  refresh, a denial by the second gate, the call itself, a timeout, or a
-  cancellation of the call by the in-flight watcher or by shutdown. If the Run's
-  own cancellation or lease check fires first, the Run stops without receiving a
-  result.
+  refresh, the second gate, the call itself, a timeout, or cancellation by the
+  in-flight watcher or shutdown. If the Run's own cancellation or lease check
+  fires first, the Run stops without receiving a result.
 - Every exit after the first gate tries to record an observation: `ready` after
-  a successful call, `needs-auth` after an authentication failure (HTTP 401 or
-  403, or any failed token request, including one that times out, is refused
-  admission, or meets a network or server error), and `degraded` after anything
-  else. That includes transport and protocol faults, an oversized or unsupported
-  result, a remote tool error, a missing remote tool, a refresh preflight that
-  exceeds `discovery_timeout` as a whole or that the gate refuses, and Run
-  cancellation, lease loss, or shutdown. Recording is best effort: it gets two
-  seconds, and a failure to record only logs a warning.
+  a successful call; `needs-auth` after an authentication failure, which is HTTP
+  401 or 403, a credential no key opens, or a failed token request; and
+  `degraded` after anything else. That includes transport and protocol faults,
+  an oversized or unsupported result, a remote tool error or missing tool, a
+  missing key ring, a refresh preflight that exceeds `discovery_timeout` or that
+  the gate refuses, and Run cancellation, lease loss, or shutdown. Recording is
+  best effort: it gets two seconds, and a failure to record only logs a warning.
 - An observation is recorded only while the call's generation is still the head
   generation, the head is still enabled at the same activation epoch, and the
   Grant is still active at the same secret version. A call stopped by revoke,
@@ -750,97 +595,26 @@ row.
 - A failed call leaves pinned definitions in place, and other Connection and
   built-in tools stay callable. The failed result names the local tool, says
   whether no call was sent or the outcome may be unknown, forbids automatic
-  retry, and tells the final Answer to identify the unfinished part.
-- A failed catalogue refresh publishes no generation and keeps the last-good
-  one. A Connection without a published catalogue cannot be enabled.
+  retry, and tells the final Answer to identify the unfinished part. A remote
+  rejection of an older pinned schema is such a failure; the Run never
+  rediscovers or switches generation.
 - Store failures and pin or digest inconsistencies are internal errors and can
   fail the Run; an ordinary remote fault does not.
-- A remote rejection of an older pinned schema is reported as a failed call; the
-  Run never rediscovers or switches generation.
-
-## Known limits
-
-- A pinned definition cannot freeze remote implementation or data.
-- A local Credential Grant does not prove external tenant or user isolation; it
-  may deliberately authorize a shared external workspace.
-- Between gate commit and socket I/O there is a window in which the call counts
-  as in flight.
-- Closing a request or MCP session does not roll back a remote side effect.
-- OAuth works only where the provider interoperates with the locked SDK flow.
-  Nothing invents a token lifetime, forces a refresh on 401, or replays an
-  effect to compensate for missing expiry metadata.
-- Automatic refresh leaves a bounded, nonzero catalogue staleness, and a running
-  Run stays on its accepted generation.
 
 ## Operational lifecycle
 
-- Writer startup applies the Connections migrations (`personal_connections`,
-  `answer_connection_pins`, `connection_oauth_inbox`,
-  `connection_oauth_head_revision`). The last one replaces an older OAuth inbox,
-  whose flows cannot outlive their initiating process anyway, instead of
-  migrating it. Readers verify the tables, columns, keys, and indexes without
-  creating or altering anything. An incompatible schema is a startup error,
-  never a reset.
 - Readers and writers both run refresh loops and owner commands; only writers
-  run maintenance. Maintenance runs at startup and then at most 60 seconds apart
-  (`min(60, refresh_seconds)`). Each pass re-encrypts up to 100 Grants that are
-  not under the active key, deletes up to 100 expired OAuth flows, and collects
-  up to 100 generations or deleted heads. `Application.connections.maintain()`
-  runs one pass on demand and returns only `reencrypted` and `collected` counts.
-  There is no separate CLI or scheduler.
-- Re-encryption is a CAS on secret version and envelope and skips live refresh
-  leases, so a zero re-encryption count during a live lease does not prove that
-  no old-key ciphertext remains. The rotation guide verifies counts before
-  removing a key.
-- Re-encryption runs before collection in each pass. If a live Grant names a key
-  that is no longer in the ring, every background pass fails at that Grant and
-  only logs a warning, and an on-demand `maintain()` raises. GC then stops for
-  every owner until the key is back in the ring or that Grant is retired by
-  delete, revoke, or a new credential.
-- The Web middleware keeps callback query strings out of the application's own
-  logs. Upstream proxies and external tracing sit outside the application and
-  record those query strings unless the deployment redacts them there.
-- Shutdown stops refresh, maintenance, notifications, and pending authorizations
-  before the Run coordinator drains, then cancels outstanding MCP calls. A
-  possibly sent effect is never replayed.
-
-## Verification
-
-Tests use in-process fakes for every model, MCP server, and OAuth provider; a
-dead refresher is modeled by durable lease expiry, not by killing a process.
-
-- `tests/unit/test_connections_config.py`: key-ring loading through the settings
-  pipeline and YAML rejection.
-- `tests/unit/test_connection_presets.py`,
-  `tests/unit/test_connection_client_metadata.py`: presets and the published
-  metadata document.
-- `tests/unit/test_connection_binding.py`: the binding wire shape, the single
-  acceptance retry, and the pin writer's refusal of pins for a Fast Run before it
-  locks any head.
-- `tests/unit/test_connections_transport.py`: address pinning, redirect and
-  header rules, pagination, result limits, and effect-replay blocking.
-- `tests/unit/test_connection_oauth.py`,
-  `tests/unit/test_connection_tool_labels.py`: SDK OAuth against in-process
-  servers, and Tool Activity labels.
-- `tests/unit/test_connection_refresh_loop.py`: an idle refresh loop sleeps
-  until the next refresh falls due, at most 30 seconds.
-- `tests/unit/test_connection_naming.py`: sanitizing, the 64-character limit,
-  hashes only on collision or overflow, parts apart across Connections,
-  stability, and a rename. `tests/unit/test_answer_prompt_consistency.py`,
-  `test_injected_tool_results.py`, and `test_context_assembler.py`: the
-  provenance sentence only where a Run, a Child, or the acceptance measure of a
-  Run's first request holds a Connection tool, and the prompt byte for byte
-  without one.
-- `tests/integration/test_connections_pg.py`, `test_connection_binding_pg.py`,
-  `test_connection_dispatch_pg.py`, `test_connection_authorization_pg.py`,
-  `test_connection_lifecycle_pg.py`, `test_connections_web_pg.py`: the owner
-  lifecycle, atomic pins across Application, REST, MCP, and Web, names apart
-  across like-labelled Connections, kept by a pin through a rename and by a
-  Connection through a bearer save, the gate and revoke races, cross-worker
-  OAuth and its completion against a changed or unchanged head, refresh leases,
-  re-encryption, GC, reader startup, and Web authentication and CSRF against
-  PostgreSQL.
-- `frontend/api/connections.test.ts`,
-  `frontend/ui/settings-connections.browser.test.ts`: the browser wire and
-  Settings behavior.
-- `uv run lint-imports`: the dependency directions above.
+  run maintenance, at startup and then at most 60 seconds apart
+  (`min(60, refresh_seconds)`). Each pass re-encrypts up to 100 live Grants
+  under a retired key the ring still holds, deletes up to 100 expired OAuth
+  flows, and collects up to 100 generations or deleted heads. A Grant no key
+  opens is skipped and never stops collection.
+- Re-encryption is a CAS on secret version and envelope that skips a Grant under
+  a live refresh lease, at selection and again at the CAS, so it never
+  overwrites a rotated refresh token, and a zero count during a lease does not
+  prove that no old-key ciphertext remains.
+  `Application.connections.maintain()` runs one pass on demand and returns only
+  the `reencrypted` and `collected` counts.
+- Shutdown stops refresh, maintenance, notifications, and pending
+  authorizations before the Run coordinator drains, then cancels outstanding MCP
+  calls.

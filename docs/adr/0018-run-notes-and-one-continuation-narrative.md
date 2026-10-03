@@ -281,5 +281,5 @@ Artifacts are for), the notes field displacing Evidence handles or the reverse, 
 notes degenerating into a per-turn log.
 
 Live documents revised with the implementation: `docs/retrieval-answer.md` (the
-context and budget section), `docs/durable-answer-runs.md` (Agent Session
+context and budget section), `docs/run-runtime.md` (Agent Session
 recovery), and `docs/domain-language.md` where the terms are already recorded.

@@ -3,7 +3,7 @@
 This document owns public REST, MCP, Web, and in-process request/response
 contracts. Configuration belongs in [Configuration](configuration.md), runtime
 behavior in [Retrieval and Answer](retrieval-answer.md), durable lifecycle rules
-in [RunRuntime and durable query execution](durable-answer-runs.md), and authorization in
+in [RunRuntime and durable query execution](run-runtime.md), and authorization in
 [Security](security.md).
 
 ## Choosing An Interface
@@ -48,6 +48,8 @@ finally:
 | `artifact_bindings` | Validated parsed destination → resource id bindings for this document. Available and unavailable resources share this resolution path. Each Artifact descriptor carries its own document's bindings. |
 | `usage` | Root, child, and inclusive provider usage when available. |
 | `evidence` | Counts of admitted chunks, entities, relationships, and cited sources. |
+| `parent_run_id`, `continuation_kind` | Follow-up/fork lineage. A continuation injects no history: it derives it from its Session branch point. |
+
 A Resource handle a later turn may name includes a Published Artifact of the same Agent
 Session (`artifact-<hash of its path>`), because publication registers it as a Resource
 ([ADR 0023](adr/0023-a-published-product-is-a-resource.md)); the handle is what the
@@ -70,27 +72,17 @@ The plain-text CLI prints the complete Markdown once, then a separately labelled
 Resources catalogue with each resource identity listed once. It does not attempt
 an interactive inline layout or concatenate placement metadata into the prose.
 
-| `parent_run_id`, `continuation_kind` | Follow-up/fork lineage. A continuation injects no history: it derives it from its Session branch point. |
 
 Answer **attachments** are files or HTTP(S) references used only by one answer.
 They never become workspace documents or appear in `/retrieve`. The separate
 `query_images` input belongs only to `/retrieve` and performs knowledge-base
 visual search.
 
-An uploaded file is admitted only when an Answer Run can read it, by one rule
-the Engine owns (`engine/answer/resources/admission.py`). Its type admits it
-first: an image; a document a converter turns into text (`csv`, `docx`, `htm`,
-`html`, `pdf`, `pptx`, `xlsx`, or the media type of one); one of the listed text
-types (`conf`, `css`, `ini`, `js`, `json`, `log`, `md`, `properties`, `py`,
-`rtf`, `scss`, `sh`, `sql`, `tex`, `ts`, `txt`, `xml`, `yaml`, `yml`); or a
-`text/*` media type. Any other upload is decided by its bytes, as a Run reads
-them: bytes that verify as an image or decode as text are admitted, so a source
-or data file a client sends as `application/octet-stream` (`main.go`, `Makefile`,
-`data.tsv`) is, and a packaged format that does neither (`odt`, `epub`, `zip`) is
-not. REST and the Web apply this rule at acceptance and refuse any other upload
-with HTTP 422 and `error_kind: UNSUPPORTED_ATTACHMENT_TYPE`, naming its type;
-nothing is stored. A link is not an upload: what it serves is known only once it
-is fetched, so a link is admitted whatever its address names and is read under
+An upload is admitted only when an Answer Run can read it
+([admission rule](resource-reading.md#registration-and-acquisition)). REST and
+the Web refuse any other upload at acceptance with HTTP 422 and
+`error_kind: UNSUPPORTED_ATTACHMENT_TYPE`, naming its type; nothing is stored. A
+link is not an upload: it is admitted whatever its address names and read under
 the public Web acquisition contract. MCP accepts links only.
 
 ## Ingestion
@@ -261,11 +253,9 @@ They use the common `queued`, `running`, `succeeded`, `failed`, and `cancelled`
 states and the common `GET|DELETE /runs/{run_id}` plus
 `GET /runs/{run_id}/events` observation routes. Cancellation closes at the
 durable upstream handoff. A multi-document mutation with any failed document is
-`failed`, not partially successful. Acceptance is atomically bounded by the
-Corpus Mutation deployment-wide nonterminal admission limit; reaching it returns
-HTTP 503 before inserting a Run. Accepted work remains durable, and each writer
-process executes a bounded number of Corpus Mutations concurrently. Both bounds
-are [configuration](configuration.md#runruntime-lanes-and-retention).
+`failed`, not partially successful. Acceptance is bounded by the Corpus Mutation
+[admission limit](run-runtime.md#admission-limits): reaching it returns HTTP 503
+before a Run is inserted, and accepted work is durable.
 
 The terminal result carries the action, stable `track_id`, bounded per-document
 outcomes, `document_count`, and `details_truncated`. An ingest's result names
@@ -273,8 +263,9 @@ each document that failed by `identifier`, its file name, with the `reason` it
 failed. An ambiguous destructive
 outcome remains `running` with `phase=waiting_for_repair` and exposes bounded
 `repair_reason` and `repair_remedy` guidance. An authorized operator repairs the
-upstream state and explicitly uses `POST /runs/{run_id}/resume`; Corpus Reset is
-the only destructive supersession path.
+upstream state and explicitly uses `POST /runs/{run_id}/resume`, or supersedes
+the waiting Run with a Corpus Reset or Workspace Delete naming it as
+`supersedes_run_id`.
 
 ```json
 {
@@ -576,24 +567,11 @@ Registered public tool names are:
 Run's stored result, the same rule as the REST and Web artifact routes; input
 uploads and fetched resources are not artifacts.
 
-**Integration change in v2.0.16:** the 17 management and child-supervision MCP
-tools below were removed from both discovery and invocation. Integrations using
-them should use the corresponding authenticated REST contracts, or perform the
-operation in Web. Refresh the client's MCP tool discovery after upgrading.
-
-| Removed MCP tools | Existing REST interface |
-|---|---|
-| `list_memories`, `remember_memory`, `forget_memory`, `undo_memory_change`, `get_memory_settings`, `set_memory_enabled`, `clear_memory` | `/memory`, `/memory/{memory_id}`, `/memory/changes/{change_id}/undo`, `/memory/settings`, `/memory/clear` |
-| `get_model_catalogue`, `upsert_model_catalogue_entry`, `remove_model_catalogue_entry` | `GET`, `PUT`, `DELETE /models/catalogue` |
-| `get_workspace_storage_status` | `GET /workspaces/{workspace}/storage` |
-| `reset_corpus`, `resume_corpus_run` | `POST /runs/corpus/reset`, `POST /runs/{run_id}/resume` |
-| `list_answer_children`, `get_answer_child`, `control_answer_child`, `reply_answer_child` | `GET /answer/{run_id}/children`, `GET /answer/{run_id}/children/{child_session_id}`, `POST /answer/{run_id}/children/{child_session_id}/control`, `POST /answer/{run_id}/child-guidance/{request_id}/reply` |
-
-REST request bodies and responses follow their documented contracts above and
-below; MCP argument objects are not REST compatibility payloads. Owner identity,
-resource permissions, and required idempotency keys still apply. There is no
-optional management tool profile or compatibility dispatcher. The standalone
-Memory package's separately bound MCP server retains its own four-tool contract.
+Management operations are REST-only: Profile Memory, the model catalogue,
+storage status, corpus reset and resume, and child supervision. MCP argument
+objects are not REST payloads; owner identity, resource permissions, and required
+idempotency keys still apply. The standalone Memory package's separately bound
+MCP server keeps its own four-tool contract.
 
 ### Web
 
@@ -671,7 +649,7 @@ up to 100. Attachments are owner-scoped, content-addressed run blobs and are
 re-registered lazily for continuations. Count, per-file, and total-byte limits are
 validated before acceptance; read failures after acceptance produce a terminal
 error rather than silent omission. Lifecycle details are centralized in
-[RunRuntime and durable query execution](durable-answer-runs.md).
+[RunRuntime and durable query execution](run-runtime.md).
 
 ## Contexts
 
@@ -967,16 +945,11 @@ settled; resumed, it retries only the documents that did not become ready (see
 
 Internal exception text and schema detail are not public.
 
-Accepted Retrieval and Answer Runs queue under worker saturation until the Query
-Lane reaches its deployment-wide nonterminal admission limit, which rejects later
-admission with HTTP 503. Corpus Mutation admission uses its independent limit and
-the same pre-insert 503 behavior. Both limits are
-[configuration](configuration.md#runruntime-lanes-and-retention). REST,
-MCP, and same-origin browser commands report the retriable message
-`Deployment-wide nonterminal admission limit reached`. The controlled failure
-and admission-limit evidence is recorded with the
-[RunRuntime targets](run-runtime-and-scaling-target.md#captured-local-load-evidence). Queue residence
-has no application timeout. Top-level Retrieval applies
+A lane at its [admission limit](run-runtime.md#admission-limits) rejects a new
+Run with HTTP 503 before inserting it; REST, MCP, and same-origin browser
+commands report the retriable message
+`Deployment-wide nonterminal admission limit reached`. Queue residence has no
+application timeout. Top-level Retrieval applies
 `corpus.retrieval.timeout` only during claimed
 execution and reports `retrieval_timeout` terminally. Explicit transient corpus
 or provider interruptions defer Retrieval and Answer with a durable bounded

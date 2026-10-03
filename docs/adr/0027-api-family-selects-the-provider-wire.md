@@ -8,9 +8,8 @@ Responses implementation.
 
 ## Status
 
-Accepted and implemented. See the [qualification record](../response-api-qualification.md)
-for verification and remaining limits, and [Configuration](../configuration.md#api-family)
-for current role selection. [ADR 0030](0030-gemini-uses-the-stateless-interactions-api.md)
+Accepted and implemented. [Configuration](../configuration.md#api-family) covers
+role selection, verification, and remaining limits. [ADR 0030](0030-gemini-uses-the-stateless-interactions-api.md)
 adds the `interactions` API Family, which only `provider: gemini` uses and always does.
 
 This decision extends the [API Family](../domain-language.md#configuration-and-deployment)

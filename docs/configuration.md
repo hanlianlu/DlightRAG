@@ -1,22 +1,24 @@
 # Configuration
 
-This document owns configuration precedence, public settings, defaults, and
-examples. Runtime design belongs in [Architecture](architecture.md), public
-payloads in [Interfaces](interfaces.md), security policy in
-[Security](security.md), and executable procedures in [Operations](operations.md).
+This document owns configuration precedence and the settings reference: fields,
+defaults, and examples. Runtime design belongs in [Architecture](architecture.md),
+public payloads in [Interfaces](interfaces.md), security policy in
+[Security](security.md), and procedures in [Operations](operations.md).
 
-Root [`config.yaml`](../config.yaml) is the canonical home for non-secret
-application behavior. Advanced fields remain available through explicit YAML
-additions; nested `DLIGHTRAG_*` variables are an override mechanism, not a
-second catalogue of normal application settings.
+Root [`config.yaml`](../config.yaml) holds the checked-in non-secret settings.
+Advanced fields are available through explicit YAML additions; nested
+`DLIGHTRAG_*` variables are an override mechanism, not a second catalogue of
+application settings.
 
 ```text
 constructor args > environment variables > .env > config.yaml > code defaults
 ```
 
-`config.yaml` uses YAML 1.2 semantics from the current YAML 1.2.2 specification.
-Only `true` and `false` are implicit booleans; plain `on`, `off`, `yes`, and `no`
-remain strings. An explicit YAML 1.1 document directive is rejected.
+The process reads `config.yaml` and `.env` from its current working directory.
+`config.yaml` is YAML 1.2: only `true` and `false` (also `True`, `TRUE`,
+`False`, and `FALSE`) are implicit booleans, so plain `on`, `off`, `yes`, and
+`no` stay strings. Duplicate keys and a `%YAML` directive naming another version
+are rejected.
 
 Precedence determines the effective value; it does not assign ownership. Within
 one deployment, configure a setting in one place rather than relying on a
@@ -29,9 +31,12 @@ DLIGHTRAG_STORAGE__POSTGRES__HOST=postgres
 ```
 
 DlightRAG has nine top-level sections: `deployment`, `storage`, `models`,
-`corpus`, `answer`, `runtime`, `access`, `interfaces`, and `observability`. Removed legacy
-flat names are rejected rather than aliased. The ownership decision is recorded
-in [ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
+`corpus`, `answer`, `runtime`, `access`, `interfaces`, and `observability`.
+Unknown keys are rejected, whether they come from YAML or from `DLIGHTRAG_*`
+variables; the only `DLIGHTRAG_*` names that are not settings are the client
+variables `DLIGHTRAG_API_URL`, `DLIGHTRAG_API_TOKEN`, and
+`DLIGHTRAG_CLIENT_TIMEOUT`. The ownership decision is recorded in
+[ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
 
 ## Configuration Ownership
 
@@ -39,20 +44,34 @@ Use the first matching rule:
 
 | Concern | Canonical owner | Examples |
 |---|---|---|
-| Non-secret product behavior and integration choices | `config.yaml` | model selection, parser provider and endpoint, workspace identity, retrieval breadth, Answer policy, auth mode, access rules, observability behavior |
 | Credentials | `.env` locally; an orchestrator Secret in production | provider API keys, PostgreSQL password, JWT verification key |
+| Deployment access | `.env` beside the checked-in `config.yaml` | auth mode, issuer, audience, access rules |
+| Non-secret product behavior and integration choices | `config.yaml` | model selection, parser provider and endpoint, workspace identity, retrieval breadth, Answer policy, observability behavior |
 | Facts created by deployment topology | Compose or another deployment manifest | Service DNS, container listener/transport binding, volumes, probes, resource limits, PostgreSQL server tuning |
 | Stable low-level mechanics | Code defaults until measurement requires an explicit override | retry/backoff, cache bounds, parser polling, vector thresholds |
 
-Environment overrides are appropriate for Secrets, topology bindings, and
+The checked-in `config.yaml` holds the development default
+`access.auth_mode: none`. A deployment that runs that file sets its own access in
+`.env` (see `.env.example`), so its issuer, audience, and people stay out of the
+repository; a deployment that mounts its own `config.yaml` may keep access there.
+
+Environment overrides suit Secrets, deployment access, topology bindings, and
 short-lived operational exceptions. Do not copy ordinary model, retrieval, or
 Answer policy from `config.yaml` into Compose or Kubernetes manifests.
 
 For filesystem settings, prefer mounting storage at the configured or default
-application path. Override the application path only when the deployment cannot
-align its mount. For infrastructure endpoints such as PostgreSQL Service DNS,
-the deployment manifest may own the typed setting; do not also place that value
-in its mounted `config.yaml`.
+application path, and override the application path only when the deployment
+cannot align its mount. For infrastructure endpoints such as PostgreSQL Service
+DNS, the deployment manifest may own the typed setting; do not also place that
+value in its mounted `config.yaml`.
+
+Leave these at code defaults unless measurement proves otherwise:
+
+- storage backend literals
+- retry/backoff, HNSW, image-compression, and parser polling internals
+- per-stage ingestion workers and queue sizes
+- BM25 index signatures, RRF constants, and exact-vector thresholds
+- thumbnail, highlight-cache, and URL-signing internals
 
 ### Service URLs carry no credentials
 
@@ -77,32 +96,14 @@ Put the credential in the service's own secret setting instead (`api_key`,
 `api_token`, `milvus_token`, and so on). A model catalogue entry published at
 runtime is refused the same way.
 
-## What Belongs In `config.yaml`
-
-Keep model/provider settings, parser sidecars, workspace identity,
-high-level concurrency, retrieval breadth, Answer policy, auth mode, access
-rules, and non-secret observability settings in YAML. Keep credentials out of
-YAML, and keep container topology out of it. A deployment that runs the
-checked-in file sets its own access in `.env` instead, so its issuer, audience,
-and people stay out of the repository.
-
-Usually leave these at code defaults unless measurement proves otherwise:
-
-- storage backend literals and raw LightRAG parser rules
-- retry/backoff, queue, HNSW, image-compression, and parser polling internals
-- per-stage ingestion workers that already match LightRAG defaults
-- BM25 index signatures, RRF constants, and exact-vector thresholds
-- thumbnail, highlight-cache, and URL-signing internals
-
 ## Container And Kubernetes Contract
 
-The process reads `config.yaml` from its current working directory. The bundled
-image uses `/app`, so Compose grants the canonical file through its top-level
-`configs` resource at `/app/config.yaml`; this keeps configuration distinct from
-data volumes. A Kubernetes ConfigMap should mount the same file at the same
-path. Compose/Kubernetes mount the file but do not interpret its fields or
-derive volume topology from them. Inject only credentials from Secrets and the
-minimal topology bindings required by that workload. In particular:
+The bundled image runs from `/app`, so Compose grants the canonical file through
+its top-level `configs` resource at `/app/config.yaml`; this keeps configuration
+distinct from data volumes. A Kubernetes ConfigMap should mount the same file at
+the same path. Compose and Kubernetes mount the file but do not interpret its
+fields or derive volume topology from them. Inject only credentials, deployment
+access, and the minimal topology bindings each workload needs:
 
 - mount corpus storage at `/app/dlightrag_storage`, matching the checked-in
   `deployment.working_dir: ./dlightrag_storage`;
@@ -112,23 +113,19 @@ minimal topology bindings required by that workload. In particular:
   `DLIGHTRAG_STORAGE__POSTGRES__HOST` unless the mounted YAML owns it;
 - bind container listeners and select the MCP network transport in the workload
   manifest because these choices vary by process role;
-- keep a development-only insecure-listener waiver beside the manifest's
-  loopback-only host publication; production deployments configure an auth mode
-  (in their YAML, or `.env` beside the checked-in file) instead of inheriting
-  that waiver;
+- keep the development-only insecure-listener waiver
+  (`DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH`) beside the manifest's
+  loopback-only port publication; a deployment that publishes beyond loopback
+  sets its access instead and drops the waiver;
 - keep ports, Services, volumes, probes, resource requests/limits, and database
   server tuning entirely outside DlightRAG application configuration.
 
-This contract lets an operator understand product behavior from one typed YAML
-file while reviewing credentials and infrastructure through their native
-orchestrator surfaces.
-
 ## Parser Sidecars
 
-Configure exactly one `mineru` or `docling` block. DlightRAG derives the
-LightRAG wildcard parser rule. With neither block, the code default is local
-MinerU at `http://127.0.0.1:8210`; if both exist, MinerU wins only for backward
-compatibility. Parser changes affect new parses, not existing indexed data.
+Configure one `mineru` or `docling` block; configuring both fails. With neither,
+the code default is local MinerU at `http://127.0.0.1:8210`. DlightRAG derives
+LightRAG's parser rule from the configured block. A parser change affects new
+parses, not existing indexed data.
 
 ### MinerU (default)
 
@@ -156,14 +153,9 @@ corpus:
 | `poll_interval_seconds` | `5` | Parser polling interval |
 | `max_polls` | `1440` | Two-hour default polling window |
 
-`pipeline` avoids VLM transcription artifacts but handles complex layouts less
-well. `MINERU_HYBRID_EFFORT=high` improves dense multi-panel figure detection at
-roughly five times the parse time. DlightRAG leaves MinerU image analysis off;
-its own VLM sidecar describes extracted figures instead.
-
-The installer supports MinerU 3.4.5 through the reviewed 3.x API range. Manage
-it with `make mineru-install` and `make mineru-service-*`; see
-[Parser Services](operations.md#parser-services).
+DlightRAG leaves MinerU image analysis off; its own VLM sidecar describes
+extracted figures instead. `make mineru-install` installs MinerU 3.4.5 or newer;
+[Parser Services](operations.md#parser-services) covers running it.
 
 ### Docling
 
@@ -180,19 +172,19 @@ corpus:
 | Field | Default | Notes |
 |---|---|---|
 | `endpoint` | `http://127.0.0.1:5001` | External docling-serve endpoint |
-| `do_formula_enrichment` | `true` | Turning it off drops PDF formula text |
+| `do_formula_enrichment` | `true` | Transcribe detected formulas |
 | `force_ocr` | `true` | Set `false` for reliable born-digital PDF text layers |
-| `code_formula_preset` | `granite_docling` | MPS preset; use YAML `null` on CUDA/XPU/CPU |
+| `code_formula_preset` | `granite_docling` | Formula model; YAML `null` selects docling-serve's built-in model, which cannot run on Apple Silicon (MPS) |
 | `poll_interval_seconds` | `5` | Parser polling interval |
 | `max_polls` | `1440` | Two-hour default polling window |
 
-DlightRAG always requests PDF heading hierarchy; this requires docling-serve
-1.30.0+ and docling-jobkit 3.3.0+. The Docling service owns its OCR engine and
-languages. The optional Compose CPU profile uses `http://docling:5001` with
-`code_formula_preset: null`.
+DlightRAG always requests PDF heading hierarchy, which docling-serve 1.30.0+
+(docling-jobkit 3.3.0+) honors; older services ignore it. The Docling service
+owns its OCR engine and languages. The optional Compose CPU profile uses
+`http://docling:5001` with `code_formula_preset: null`.
 
 Both parser services need an HTTP keep-alive longer than the five-second poll
-interval. DlightRAG's MinerU launcher and stock docling-serve use 60 seconds.
+interval; DlightRAG's MinerU launcher sets 60 seconds.
 
 ### Figure VLM
 
@@ -212,8 +204,13 @@ corpus:
 | `corpus.sidecars.vlm.enabled` | `true` | Analyze parser-extracted figures |
 | `corpus.sidecars.vlm.max_image_bytes` | `5242880` | Maximum source image bytes |
 | `corpus.sidecars.vlm.min_image_pixel` | `80` | Minimum image side accepted |
-| `corpus.sidecars.vlm.surrounding_leading_max_tokens` | `256` | Leading text supplied to figure analysis; `null` disables the cap |
-| `corpus.sidecars.vlm.surrounding_trailing_max_tokens` | `256` | Trailing text cap; `null` disables it |
+| `corpus.sidecars.vlm.surrounding_leading_max_tokens` | `256` | Leading text supplied to figure analysis; `null` defers to LightRAG's own limit |
+| `corpus.sidecars.vlm.surrounding_trailing_max_tokens` | `256` | Trailing text limit; `null` defers to LightRAG's own limit |
+
+### Chunking And Extraction
+
+| Field | Default | Meaning |
+|---|---|---|
 | `corpus.parser.chunk_options` | `{}` | Advanced LightRAG parser/chunk keyword arguments |
 | `corpus.extraction.use_json` | `true` | Request structured extraction |
 | `corpus.extraction.language` | `English` | Generated entity/relation and keyword language |
@@ -251,13 +248,13 @@ supported by their corresponding adapters.
 | `provider` | `voyage` | Protocol adapter |
 | `model` | `voyage-multimodal-3.5` | Exact model or deployment identifier |
 | `api_key` | unset | Put secrets in `.env` |
-| `base_url` | provider default | Protocol root or accepted complete endpoint |
+| `base_url` | provider default | Protocol root or accepted complete endpoint; required for `openai_compatible` and `azure_cohere` |
 | `dim` | `1024` | Vector/schema dimension; every response is validated |
-| `max_token_size` | `8192` | LightRAG embedding-content truncation budget |
+| `max_token_size` | `8192` | LightRAG's embedding token limit; a longer chunk is split before embedding |
 | `input_modality` | `auto` | `auto`, `text`, or `multimodal` |
 | `startup_probe` | `true` | Verify configured visual paths |
 | `timeout` | `120` | Request timeout in seconds |
-| `max_concurrency` | `16` | Process-wide scheduler admission |
+| `max_concurrency` | `16` | Concurrent embedding calls per workspace runtime |
 | `batch_size` | `64` | LightRAG embedding batch size |
 
 `auto` enables native fused document vectors and image-query retrieval for
@@ -266,22 +263,31 @@ them and makes probe failure fatal. Fused output replaces the canonical chunk
 vector; it never creates a second visual document vector.
 
 Only a definitive probe outcome settles a workspace runtime's mode. A failure
-the shared dependency classification treats as transient (a connection error,
-a timeout, or a retryable status such as 429 or 503) settles nothing, and the
-workspace stays unavailable rather than falling back to text-only, so a
-provider blip never makes a runtime embed documents text-only beside the
-corpus's fused vectors. While it is unavailable, requests that need the
-workspace are refused as temporarily unavailable (HTTP 503, `The model provider
-is temporarily unavailable`) and Runs that need it are deferred as a model
-provider outage; for the default workspace, `GET /health` reports `providers`
-degraded until the workspace is built. The runtime is not rebuilt on every
-request: the first failure opens a 15-second backoff window that doubles with
-each consecutive failure up to 5 minutes, and the first request after the
-window rebuilds the runtime and probes again. Corpus storage that is briefly
-out while a workspace is built is reported the same way, as corpus storage. Every other failure is definitive, including 5xx
-statuses outside that retryable set (for example 501, 505, or 507): the probe
-settles the runtime, leaving both image paths off under `auto` and failing the
-runtime's construction under `multimodal`.
+the shared dependency classification treats as transient (a connection error, a
+timeout, or a retryable status such as 429 or 503) settles nothing: the
+workspace stays unavailable rather than embedding documents text-only beside the
+corpus's fused vectors. While it is unavailable, requests that need it are
+refused with HTTP 503 (`The model provider is temporarily unavailable`), Runs
+that need it defer as a model provider outage, and for the default workspace
+`GET /health` reports `providers` degraded. The first failure opens a 15-second
+backoff that doubles with each consecutive failure up to 5 minutes; the first
+request after it rebuilds the runtime and probes again. Corpus storage that is
+briefly out while a workspace is built is reported the same way, as corpus
+storage. Every other failure is definitive, including 5xx statuses outside the
+retryable set (for example 501, 505, or 507): it leaves both image paths off
+under `auto` and fails the runtime under `multimodal`.
+
+Embedding batches split automatically at the provider's input-count and
+inline-image byte limits while preserving order. Each embedding request is
+retried at most twice, and only for a failure the durable Run classification
+also treats as transient: a refused, reset, dropped, or timed-out connection, or
+HTTP 408, 425, 429, 500, 502, 503, 504, 520-524 (an edge proxy reporting its
+origin failed), or 529 (overloaded). HTTP 409 reports a conflict that resending
+cannot resolve and is not retried; neither is a TLS certificate that fails
+verification or a TLS protocol mismatch, such as an https URL for a plain-HTTP
+service. A host name that does not resolve is retried, since a restarting
+service stops resolving until it is back. `Retry-After` wins over exponential
+backoff with jitter.
 
 ```yaml
 models:
@@ -295,7 +301,8 @@ models:
 ```
 
 For a host-side local endpoint used from Compose, replace `127.0.0.1` with
-`host.docker.internal`. See [Offline Vector Storage Rebuild](operations.md#offline-vector-storage-rebuild)
+`host.docker.internal`. See
+[Offline Vector Storage Rebuild](operations.md#offline-vector-storage-rebuild)
 before changing an existing workspace's vector space.
 
 ## Chat Models
@@ -309,9 +316,9 @@ before changing an existing workspace's vector space.
 | `gemini` | Google GenAI SDK, Interactions API ([Gemini](#gemini)) | Gemini |
 
 Select OpenAI-compatible vendors with `base_url`; unknown provider names are
-rejected. Model IDs are endpoint-specific: DeepSeek-V4.1-Flash uses
-`deepseek-flash` on `api.deepseek.com`, while OpenRouter uses the distinct
-`deepseek/deepseek-v4.1-flash` slug.
+rejected. Model IDs are endpoint-specific: DeepSeek's flash model is
+`deepseek-flash` on `api.deepseek.com` and `deepseek/deepseek-v4.1-flash` on
+OpenRouter.
 
 ### Role Configuration
 
@@ -349,76 +356,77 @@ default and each `extract`, `keyword`, `query`, or `vlm` override:
 | `model_kwargs` | `{}` | Provider-specific ordinary options |
 | `agentic_model_kwargs` | `{}` | Shallow Research overlay |
 
-A `models.chat.default` that leaves fields out, as when only its API key comes from
-the environment, takes them from the shipped default endpoint (`provider: openai`,
-`google/gemini-3.8-flash` on OpenRouter, `temperature: 1.0`). When the default's
-`provider` is not `openai` it describes another endpoint, Anthropic's or Gemini's,
-and inherits none of that endpoint's `base_url`, `model` or `temperature`.
-
-`models.max_concurrency` defaults to `16` and limits process-wide AI-provider
-requests.
+A `models.chat.default` that leaves fields out, as when only its API key comes
+from the environment, takes them from the code's default endpoint
+(`provider: openai`, `google/gemini-3.8-flash` on OpenRouter,
+`temperature: 1.0`). When the default's `provider` is not `openai` it describes
+another endpoint, Anthropic's or Gemini's, and inherits none of that endpoint's
+`base_url`, `model`, or `temperature`.
 
 ### API Family
 
-For `openai` and `anthropic`, omitting `api_family` means **`chat_completion`**; a
-`gemini` model's family is always `interactions` ([Gemini](#gemini)). The shipped
-`config.yaml` explicitly selects **`response` for default and Query**; Extract,
-Keyword and VLM retain complete Chat overrides, and reranking remains Voyage. The
-relevant endpoint/transport settings are below; other model options are omitted:
+For `openai` and `anthropic`, omitting `api_family` selects **`chat_completion`**;
+a `gemini` model's family is always `interactions` ([Gemini](#gemini)). The
+shipped `config.yaml` selects **`response`** for the default model and the Query
+role; Extract, Keyword, and VLM use Chat Completions, and reranking uses Voyage.
+Its endpoint and transport settings, other model options omitted:
 
 ```yaml
 models:
   chat:
     default:
       provider: openai
+      api_family: response
       model: z-ai/glm-5.3-flash
       base_url: https://openrouter.ai/api/v1
-      api_family: response
-      structured_output: auto
     roles:
       query:
         provider: openai
+        api_family: response
         model: deepseek-flash
         base_url: https://api.deepseek.com
-        api_family: response
         structured_output: json_object
 ```
 
-Supply credentials through the corresponding
-`DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY` and
-`DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY` secrets. The SDK appends `/responses`:
-Direct DeepSeek uses `https://api.deepseek.com/responses`, and OpenRouter uses
-`https://openrouter.ai/api/v1/responses`. A custom compatible root uses the same
-projection; an unsupported capability fails explicitly, not by removing a Tool,
-image, or requested reasoning level. Existing typed `reasoning` settings own the
-family-specific translation; do not duplicate them in raw kwargs.
+Supply credentials through `DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY` and
+`DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY`. The SDK appends `/responses` to
+`base_url`, so direct DeepSeek is called at `https://api.deepseek.com/responses`
+and OpenRouter at `https://openrouter.ai/api/v1/responses`; a custom compatible
+root works the same way. An unsupported capability fails explicitly rather than
+dropping a Tool, an image, or a requested reasoning level, and typed `reasoning`
+owns the family-specific translation.
 
-API Family selects the wire, not a new provider or capacity profile. There is no
-`openai_responses` provider, endpoint probing, or automatic family fallback.
-Response supports the same five entrypoints, structured output, streaming, local
-function Tools and user/Tool-result images. `tool_choice=auto` lets the model
-answer without a call; requested Tools are still authorized and executed locally.
+API Family selects the wire, not a provider or capacity profile; nothing probes
+an endpoint or falls back to the other family. Response supports the same five
+entrypoints, structured output, streaming, local function Tools, and user and
+Tool-result images. `tool_choice=auto` lets the model answer without a call;
+requested Tools are authorized and executed locally.
 
-Every Response request sends full local context, `store=false`, `background=false`
-and `truncation=disabled`. Raw `model_kwargs` cannot override input, tools, stream,
-storage, truncation or remote-state ownership. Remote conversation continuation,
-background jobs, hosted tools and provider-side compaction are excluded. See
-[Agent Session Recovery](durable-answer-runs.md#agent-session-recovery) for replay.
+Every Response request sends the full local context with `store=false`,
+`background=false`, and `truncation=disabled`, so no remote conversation,
+background job, hosted tool, or provider-side compaction takes part
+([Agent Session Recovery](run-runtime.md#agent-session-recovery) covers replay).
+A request whose raw `model_kwargs` set a field the product owns fails: the input
+or messages, model, instructions, tools or tool choice, streaming, storage,
+truncation, output format or token limit, reasoning, temperature, metadata,
+`include`, prompt templates or caching, or remote state.
 
 `store=false` minimizes remote response state; **it does not establish Zero Data
 Retention**. Provider logs, context caches, agreements, and OpenRouter routing
-policies remain deployment facts. There is no `zdr` setting in this feature.
+policies are deployment facts.
 
-Official OpenAI (`base_url: https://api.openai.com/v1` plus an official API key)
-is **experimental and mock-contract tested, not live-qualified**. Endpoint/model
-verification and quality limits are in the [qualification record](response-api-qualification.md);
-[ADR 0027](adr/0027-api-family-selects-the-provider-wire.md) records the decision.
-Further role changes are explicit, not automatic.
+Live verification of Response covers only direct DeepSeek `deepseek-flash` and
+OpenRouter `z-ai/glm-5.3-flash`. Official OpenAI
+(`base_url: https://api.openai.com/v1`) is **experimental**: offline contract
+tests cover it, but it is not live-qualified. Closing a stream does not prove the
+provider stopped computing or billing.
+[ADR 0027](adr/0027-api-family-selects-the-provider-wire.md) records the
+decision.
 
 ### Gemini
 
-`provider: gemini` calls Gemini through Google's Interactions API, statelessly. Its
-API Family is always `interactions`, and no other value is accepted:
+`provider: gemini` calls Gemini through Google's Interactions API, statelessly.
+Its API Family is always `interactions`, and no other value is accepted:
 
 ```yaml
 models:
@@ -430,19 +438,19 @@ models:
         reasoning: high
 ```
 
-Every request carries the full local context with `store=false`, so the API stores
-no interaction to resume or retrieve; DlightRAG never sends
+Every request carries the full local context with `store=false`, so the API
+stores no interaction to resume or retrieve; DlightRAG never sends
 `previous_interaction_id`, a background run, a webhook, an environment, or an
 agent. As with Response, `store=false` is not Zero Data Retention.
 
-The Interactions API takes no sampling parameters: google-genai's `GenerationConfig`
-has no `temperature` or `top_p`. A `temperature` on a Gemini model or a Gemini chat
-reranker therefore fails configuration, so leave it unset; a Gemini default does
-not inherit the shipped endpoint's (see [Role Configuration](#role-configuration)).
+The Interactions API's `GenerationConfig` has no `temperature` or `top_p`, so a
+`temperature` on a Gemini model or a Gemini chat reranker fails configuration;
+a Gemini default does not inherit the code default's
+([Role Configuration](#role-configuration)).
 
 Typed `reasoning` maps through the catalogue's `gemini` format to
-`generation_config.thinking_level`: each level names `minimal`, `low`, `medium`, or
-`high` (`gemini-3.8-flash` takes `low`, `medium` and `high`), an unsupported level
+`generation_config.thinking_level`, one of `minimal`, `low`, `medium`, or `high`
+(`gemini-3.8-flash` takes `low`, `medium`, and `high`). An unsupported level
 clamps to the nearest supported one, and `off` cannot be honored because Gemini
 cannot turn thinking off. A configured level also asks for
 `thinking_summaries: auto`, whose text becomes the turn's reasoning. Thoughts and
@@ -450,17 +458,16 @@ their signatures are stored with the Assistant Entry and sent back verbatim, in
 place, to the same model; another model sees only the canonical text and calls.
 
 `model_kwargs` accept `safety_settings`, in the Interactions shape
-(`{type: dangerous_content, threshold: block_only_high}`), and `service_tier`;
-Google's Interactions guide still lists custom safety settings among the
-`generateContent` features it does not support yet, so the API decides what it
-makes of them. Raw `thinking_level` and `thinking_summaries` are accepted only where
-no typed level owns them, and any other key fails the request before it is sent.
+(`{type: dangerous_content, threshold: block_only_high}`), and `service_tier`.
+Raw `thinking_level` and `thinking_summaries` are accepted only where no typed
+level owns them, and any other key fails the request before it is sent.
 Structured output is a JSON `response_format` (`type: text`,
 `mime_type: application/json`, and the schema), and a Tool result's images ride
-inside its own `function_result`. Reported output tokens include thinking, as
-Google bills them, and an overload Gemini reports inside a response or its stream
-is retried and deferred like an HTTP 503.
-[ADR 0030](adr/0030-gemini-uses-the-stateless-interactions-api.md) records the decision.
+inside its own `function_result`. Reported output tokens include thinking, and
+an overload Gemini reports inside a response or its stream is retried and
+deferred like an HTTP 503.
+[ADR 0030](adr/0030-gemini-uses-the-stateless-interactions-api.md) records the
+decision.
 
 ### Model Catalogue And Reasoning
 
@@ -511,21 +518,14 @@ configured manually. Startup catalogue changes require restart. Runtime overlay
 operations and revision rules are in
 [Interfaces](interfaces.md#model-catalogue-and-profile-memory).
 
-`agentic_reasoning` inherits `reasoning`. When typed reasoning is configured,
-raw provider reasoning keys in `model_kwargs` are rejected to keep one owner for
-translation, and a role that owns reasoning through `agentic_model_kwargs` ignores a
-caller-chosen agent effort for the same reason: there is no typed level left to apply.
-`agentic_model_kwargs` is a shallow overlay for Research calls.
-
-`agentic_reasoning` on the answering role is the deployment **default**, not a
-ceiling or a whitelist. One Answer request may name its own effort
-(`low`/`high`/`max`) for that Run's answering agent, and the Web composer offers the
-levels the answering profile can express — the three where it can express all of
-them — marking the configured level as `Default` when it is one of them. A subagent
-always runs the level configured for its own role; a level below that model's ladder
-is clamped by the engine to the nearest supported one, and a choice that cannot apply
-is ignored and recorded rather than failed — the control simply does not offer what the
-deployment cannot apply. [ADR 0014](adr/0014-caller-chosen-agent-effort.md) owns the decision.
+`agentic_reasoning` inherits `reasoning`, and `agentic_model_kwargs` is a
+shallow overlay for Research calls. When typed reasoning is configured, raw
+provider reasoning keys in `model_kwargs` are rejected, so translation has one
+owner. A role that sets reasoning through raw keys in `model_kwargs` or
+`agentic_model_kwargs` instead ignores a caller-chosen agent effort, since it has
+no typed level to replace. `agentic_reasoning` on the answering role is the
+deployment's default, not a ceiling: one Answer request may choose its own
+[`effort`](interfaces.md#request-fields).
 
 ### Structured Output
 
@@ -537,14 +537,14 @@ three chat protocols (`openai`, `anthropic`, `gemini`) serve one, so `auto` and
 
 A compatible endpoint that rejects the `json_schema` transport type is learned
 once per process: the request retries with `json_object`, and later requests to
-that same provider/model/endpoint/API-Family invocation skip the rejected attempt instead
-of paying the same 400 again, for both complete and streaming calls. Only an
-explicit "type unavailable" rejection is remembered; a schema-validation
+the same provider, model, endpoint, and API Family skip the rejected attempt
+instead of paying the same 400 again, for both complete and streaming calls. Only
+an explicit "type unavailable" rejection is remembered; a schema-validation
 complaint retries once without becoming a permanent verdict. Restarting the
-process probes the endpoint again. Chat writes the contract under `response_format`;
-Response writes it under `text.format`; Gemini writes it as a JSON text
-`response_format`. Changing API Family does not inherit the other family's
-rejection verdict.
+process probes the endpoint again. Chat writes the contract under
+`response_format`; Response writes it under `text.format`; Gemini writes it as a
+JSON text `response_format`. Changing API Family does not inherit the other
+family's rejection verdict.
 
 ```yaml
 models:
@@ -579,14 +579,15 @@ Accepted strategy literals are:
 | `model`, `api_key`, `base_url` | unset | Rerank endpoint |
 | `input_modality` | `auto` | `auto`, `text`, or `multimodal` |
 | `score_threshold` | unset | Hard nonnegative post-rerank cutoff |
-| `max_concurrency` | `8` | Rerank request admission |
-| `batch_size` | `8` | Candidate batch/list size |
+| `max_concurrency` | `8` | Concurrent `chat_llm_reranker` scoring requests |
+| `batch_size` | `8` | Candidates per `chat_llm_reranker` request |
 | `temperature` | unset | Chat reranker temperature |
 | `model_kwargs` | `{}` | Provider-specific options |
 
-Each HTTP strategy validates its required `api_key` and/or `base_url`; invalid
-configuration fails startup rather than changing strategy. Text-only strategies
-reject explicit multimodal mode.
+An HTTP strategy sends one request per rerank, bounded only by
+`models.max_concurrency`. Each HTTP strategy validates its required `api_key`
+and/or `base_url`; invalid configuration fails startup rather than changing
+strategy. Text-only strategies reject explicit multimodal mode.
 
 ## Remote Sources
 
@@ -612,35 +613,28 @@ file or provide a separate queryless `download_uri`. Non-retained custom
 `download_uri_for_key`; invalid contracts fail before parsing.
 
 URL ingest rejects private hosts unless allowlisted, HTTPS-to-HTTP redirects,
-and oversized downloads. `blob_connection_string` is the Azure credential;
-`azure_sas_expiry` and `s3_presign_expiry` bound projected URLs; `s3_region`
-overrides SDK discovery. Prefer
+and downloads over `url_max_bytes`. `blob_connection_string` is the Azure
+credential; `azure_sas_expiry` and `s3_presign_expiry` bound projected URLs;
+`s3_region` overrides SDK discovery. Prefer
 `DLIGHTRAG_CORPUS__SOURCES__BLOB_CONNECTION_STRING` for the secret. S3 uses the
 standard AWS credential chain. Deleting DlightRAG data never deletes provider
 objects. See [Sources](interfaces.md#sources).
 
 Built-in S3 ingestion stores the accepted region (request override, then this
-configuration, then explicit SDK discovery) with each non-retained document.
-Failed-document retry and source-download signing reuse that routing even if
-the deployment default changes. Historical rows and custom SDK sources that
-did not declare routing use the current deployment default; their original
-region cannot be reconstructed. The additive metadata migration leaves those
-rows unset. Credentials, signed-URL expiry, URL size limits and private-host
-policy always come from the current deployment. Retained sources are replayed
-from their workspace-contained local bytes. An explicitly supplied mirror
-`download_uri` has its own routing and does not inherit the original S3 region.
-
-Routing is internal metadata, separate from user fields and never a credential
-snapshot. Historical rows use SQL NULL; newly ingested sources without fixed routing use an empty
-object, which also clears stale routing when the locator changes. A metadata-only
-update for the same locator preserves an existing region unless a new routing
-choice is explicitly supplied.
+configuration, then explicit SDK discovery) with each non-retained document, as
+internal metadata separate from user fields and never a credential snapshot.
+Failed-document retry and source-download signing reuse that region even if the
+deployment default changes; a custom SDK source that declares no routing uses
+the current default. A metadata-only update for the same locator keeps the
+stored region unless a new routing choice is supplied. Credentials, signed-URL
+expiry, URL size limits, and private-host policy always come from the current
+deployment. Retained sources are replayed from their workspace-contained local
+bytes, and an explicitly supplied mirror `download_uri` has its own routing.
 
 ## PostgreSQL And Process Role
 
 DlightRAG requires PostgreSQL 18 for KV, graph, document status, BM25, metadata,
-and Operational State. LightRAG's deployment-static storage names normally stay
-at these exact defaults:
+and Operational State. LightRAG's storage names stay at these defaults:
 
 ```yaml
 storage:
@@ -655,14 +649,13 @@ storage:
     lightrag_pool_max_size: 16
 ```
 
-The domain and LightRAG pools are separate; multiply their sum by process count
-and stay below PostgreSQL `max_connections`. `kv_storage`, `graph_storage`, and
-`doc_status_storage` are fixed to the values above. The only supported vector
-alternative is LightRAG's `MilvusVectorDBStorage`; `PGGraphStorage`, AGE, Qdrant,
-and other combinations are rejected rather than substituted.
+`kv_storage`, `graph_storage`, and `doc_status_storage` accept only the values
+above. The only vector alternative is LightRAG's `MilvusVectorDBStorage`; every
+other storage class is rejected rather than substituted. Connection budgets and
+pool sizing are in [PostgreSQL](postgresql.md#tuning-boundaries).
 
 For a writer deployment using Milvus or a Milvus-compatible Zilliz endpoint,
-install the deterministic client extra (`dlightrag[milvus]`) and select:
+install the client extra (`dlightrag[milvus]`) and select:
 
 ```yaml
 storage:
@@ -677,13 +670,13 @@ DlightRAG values overwrite inherited `MILVUS_URI`, `MILVUS_TOKEN`, and
 `MILVUS_DB_NAME`; an unset optional binding leaves the corresponding upstream
 environment behavior untouched. DlightRAG never connects to Milvus for health
 checks and never creates, copies, or drops Milvus infrastructure itself. Zilliz
-uses `MilvusVectorDBStorage`, not a separate storage class. Reader processes
-must use `PGVectorStorage`: LightRAG 1.5.7 has no public nonmutating reader attach
-for an external vector adapter.
+uses `MilvusVectorDBStorage`, not a separate storage class. A reader requires
+`PGVectorStorage`, because LightRAG offers no non-mutating reader attach for an
+external vector adapter.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `deployment.service_role` | `writer` | `writer` or `reader` |
+| `deployment.service_role` | `writer` | `writer` or `reader`; see [Service roles](postgresql.md#service-roles-and-shared-artifacts) |
 | `deployment.workspace` | `default` | Default workspace's display name. Its canonical id strips surrounding whitespace, replaces each character that is not an ASCII letter, digit, or `_` with `_`, lowercases the result, and prefixes a leading digit with `_`; the id must be 1-64 characters, or startup fails |
 | `deployment.working_dir` | `./dlightrag_storage` | Corpus/input/artifact root; resolved absolute. Operators place local sources in `inputs/<workspace>`, which DlightRAG only reads; `corpus/` is DlightRAG's own |
 | `storage.lightrag.vector_storage` | `PGVectorStorage` | `PGVectorStorage` or explicit `MilvusVectorDBStorage` |
@@ -702,39 +695,20 @@ for an external vector adapter.
 | `command_timeout`, `acquire_timeout` | `60`, `30` | SQL command/acquire seconds |
 | `session_settings` | `{}` | asyncpg session parameters |
 | `statement_cache_size` | driver default | Prepared-statement cache size |
-| `connection_retries` | `10` | Startup connection attempts |
-| `connection_retry_backoff` / `_max` | `3` / `30` | Retry delay/cap seconds |
-| `pool_close_timeout` | `5` | Shutdown close wait seconds |
+| `connection_retries` | `10` | Attempts for each replay-safe domain-pool operation; also LightRAG's `POSTGRES_CONNECTION_RETRIES` |
+| `connection_retry_backoff` / `_max` | `3` / `30` | Retry delay/cap seconds, for both pools |
+| `pool_close_timeout` | `5` | Seconds LightRAG waits to close its pool before reconnecting after a transient error |
 
-- `writer` provisions schema, ingests, and serves every API.
-- `reader` serves retrieval and durable answers but rejects corpus mutations.
-  It validates pre-migrated schema and performs no LightRAG DDL.
-
-Both roles use the same primary endpoint. Run writer migrations before readers.
-Multi-host deployments need one shared POSIX `deployment.working_dir` mounted at
-the same absolute path. Production sizing, SSL, indexes, and role details are in
-[PostgreSQL](postgresql.md).
-
-## RunRuntime, Ingestion Concurrency, And Limits
+## Concurrency And Ingestion Limits
 
 | Field | Default | Scope |
 |---|---|---|
 | `models.max_concurrency` | `16` | All provider requests in one process |
-| `runtime.query.worker_concurrency` | `16` | Query-lane runs per process |
-| `runtime.query.max_nonterminal_runs` | `30000` | Query-lane deployment-wide nonterminal admission limit |
-| `runtime.corpus_mutation.worker_concurrency` | `2` | Corpus Mutation Run workers per writer process |
-| `runtime.corpus_mutation.max_nonterminal_runs` | `1000` | Corpus Mutation deployment-wide nonterminal admission limit |
-| `corpus.ingestion.pipeline.max_concurrency` | `16` | One workspace's LightRAG pipeline |
-| `models.embedding.max_concurrency` | `16` | Embedding calls |
-| `models.embedding.batch_size` | `64` | LightRAG embedding batch size |
+| `corpus.ingestion.pipeline.max_concurrency` | `16` | LLM requests one workspace's LightRAG pipeline makes at once, per role |
 | `corpus.ingestion.chunk_token_size` | `2000` | LightRAG chunk size |
-| `corpus.ingestion.image_margin` | `0.03` | White page margin composited around an image source before the external parser lays it out. A full-bleed image gives docling's layout model no page context, so 8 of 20 real artwork photographs produced a zero-block document (document FAILED) at `0`; 3% was the smallest margin that fixed every sample. One value covers both docling and MinerU; `0` disables the normalization. It applies to every image source (upload, local, URL, S3, Azure Blob), and only to the copy the parser reads: the document keeps, downloads and is recognized by the bytes it was given |
+| `corpus.ingestion.image_margin` | `0.03` | White margin per side, as a fraction of each dimension (at most `0.5`), composited around an image source's parser copy so a full-bleed image keeps page context; the document keeps the bytes it was given, and `0` disables it |
 | `corpus.ingestion.replace_default` | `false` | Default replacement policy |
-| `corpus.ingestion.retain_remote_source_files` | `false` | Default remote-byte retention |
 | `corpus.ingestion.max_upload_bytes` | `104857600` | One ingest file |
-| `corpus.ingestion.url_max_bytes` | `104857600` | One URL download |
-| `corpus.ingestion.url_private_host_allowlist` | `[]` | Explicit private URL hosts |
-| `interfaces.max_upload_size_mb` | `512` | General multipart receive cap |
 
 Advanced stage defaults:
 
@@ -751,19 +725,6 @@ corpus:
       queue_size_analyze: 100
       queue_size_insert: 4
 ```
-
-Embedding batches split automatically at provider input-count, token, and
-inline-image limits while preserving order. Each embedding request is retried at
-most twice, and only for a failure the durable Run classification also treats
-as transient: a refused, reset, dropped, or timed-out connection, or HTTP 408,
-425, 429, 500, 502, 503, 504, 520-524 (an edge proxy reporting its origin
-failed), or 529 (overloaded). HTTP 409 is not retried: it reports a conflict
-with the target's state, and a Run would otherwise defer on a conflict that
-resending cannot resolve. A TLS certificate that fails verification or a TLS
-protocol mismatch, such as an https URL for a plain-HTTP service, is
-configuration and is not retried either. A host name that does not resolve is
-retried: a stopped or restarting service stops resolving until it is back.
-`Retry-After` wins over exponential backoff with jitter.
 
 ## Retrieval
 
@@ -795,46 +756,30 @@ Advanced fields:
 | `max_relation_tokens` | `8000` | KG relation context ceiling |
 | `max_total_tokens` | `40000` | Total LightRAG context ceiling |
 | `kg_chunk_pick_method` | `VECTOR` | `VECTOR` or `WEIGHT` |
-| `kg_entity_types` | `[]` | Empty uses LightRAG's general taxonomy |
+| `kg_entity_types` | `[]` | Empty uses LightRAG's general taxonomy; for stronger domain control set `corpus.extraction.entity_type_prompt_file` |
 
 Enabling BM25 for existing data or changing profiles requires
-[Workspace BM25 Rebuild](operations.md#workspace-bm25-rebuild). Algorithm and budget semantics live in
-[Retrieval and Answer](retrieval-answer.md).
+[Workspace BM25 Rebuild](operations.md#workspace-bm25-rebuild). Algorithm and
+budget semantics live in [Retrieval and Answer](retrieval-answer.md).
 
-Workspace partition promotion is disabled until a benchmark supplies either
-`corpus.promotion.doc_threshold` or `chunk_threshold`. Advanced worker defaults
-are `lease_seconds: 1800`, `retry_backoff_seconds: 600`, and
-`claim_poll_seconds: 5.0`. Visual routes use
+Workspace partition promotion is off unless `corpus.promotion.doc_threshold` or
+`chunk_threshold` is set. Advanced worker defaults are `lease_seconds: 1800`,
+`retry_backoff_seconds: 600`, and `claim_poll_seconds: 5.0`. Visual routes use
 `corpus.visual_assets.thumb_max_px: 300` and `thumb_cache_size: 256`.
 
 ## RunRuntime Lanes And Retention
 
-```yaml
-runtime:
-  query:
-    worker_concurrency: 16
-    max_nonterminal_runs: 30000
-  corpus_mutation:
-    worker_concurrency: 2
-    max_nonterminal_runs: 1000
-  run_retention_days: 365
-```
+| Field | Default | Meaning |
+|---|---|---|
+| `runtime.query.worker_concurrency` | `16` | Query Lane Runs one process executes at once |
+| `runtime.query.max_nonterminal_runs` | `30000` | Query Lane admission limit across the deployment |
+| `runtime.corpus_mutation.worker_concurrency` | `2` | Corpus Mutation Runs one writer process executes at once |
+| `runtime.corpus_mutation.max_nonterminal_runs` | `1000` | Corpus Mutation Lane admission limit across the deployment |
+| `runtime.run_retention_days` | `365` | Days a terminal Answer Run is kept; superseded Profile Memory history is kept as long |
 
-One RunRuntime schedules top-level Retrieval and Answer Runs on the Query Lane
-and all ingest, replace, exact delete, retry, reset, and Workspace Delete Runs
-on the Corpus Mutation Lane. Each lane has a per-process worker bound and a deployment-wide
-nonterminal admission limit. Deployment configuration owns process count and
-therefore total active Run capacity. Other documents link here for these
-defaults instead of restating them. What a local campaign exercised of them,
-and what it did not, is recorded once as [captured local load
-evidence](run-runtime-and-scaling-target.md#captured-local-load-evidence).
-
-`run_retention_days` is the per-Run retention selection for terminal Answer
-Runs, their event logs, linked Web turns, and unreferenced Run blobs; the default
-is 365 days. Top-level Retrieval and Corpus Mutation Runs each use a fixed
-seven-day selection. Nonterminal Runs are not retention-pruned, and Conversation
-rows do not extend model history. Full lifecycle rules are in
-[RunRuntime and durable query execution](durable-answer-runs.md).
+Every value is at least 1. What each lane carries and how its limit admits Runs
+are in [RunRuntime](run-runtime.md#lanes); what retention removes, and
+the fixed retention of other Runs, is in [RunRuntime](run-runtime.md#retention).
 
 ## Answer Generation And Attachments
 
@@ -855,21 +800,13 @@ answer:
     image_min_quality: 79
 ```
 
-Attachments are run-scoped Resources. Full bytes do not enter model context;
-text is decoded/converted by `read` and image pixels are attached by `view` on demand.
-Which uploads are admitted is not configuration: the Engine decides what a Run
-reads, by type and otherwise by the bytes, and every transport admits uploads by
-that one rule ([Interfaces](interfaces.md)). `query_images`
-is a separate retrieve-only path limited to three current images. The final
-answer image count is clamped to the query model's discovered capability.
-
-`lineage_adoption` lets a Run adopt a Resource that an earlier Run on the same
-Agent Session registered, when the model names its handle. Newly adopted bytes
-take an attachment slot, and the adopting Run never converts them: a convertible
-document reads text only through the conversion view stored with it, and other
-formats are decoded from the adopted bytes. Publication stores that view for a
-convertible Published Artifact only while `lineage_adoption` is on. See
-[Resource Reading](resource-reading.md#earlier-runs).
+Attachments are run-scoped Resources whose full bytes never enter model context;
+which uploads a Run admits is decided by type and content, not configuration
+([Resource Reading](resource-reading.md#registration-and-acquisition)).
+`query_images`, a separate retrieve-only path, takes at most three current
+images. The final answer image count is clamped to the query model's discovered
+capability. `lineage_adoption` lets a Run adopt a Resource an earlier Run on the
+same Agent Session registered ([Earlier Runs](resource-reading.md#earlier-runs)).
 
 ## Research Agent
 
@@ -877,19 +814,23 @@ convertible Published Artifact only while `lineage_adoption` is on. See
 answer:
   agent:
     execution_environment: trust   # disabled | trust
-    workspace_root: null
+    workspace_root: null           # absolute path; null → ~/.dlightrag/agent_workspaces
     child_guidance_timeout_seconds: 300  # default ask_parent expiry; 1–86400
     session_notes:                 # durable Agent memory per Agent Session
       max_count: 64                # 1–1024 notes
-      max_bytes: 262144            # 1024–16 MiB total; a larger note is refused by name
+      max_bytes: 262144            # 1024–16 MiB total
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
     owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
     disabled_builtin_skills: []    # packaged Skill names only
+    fd_path: fd                    # PATH name or absolute path; fd 10.5.0+
+    ripgrep_path: rg               # PATH name or absolute path; ripgrep 15.2.0+
+    search_tool_cache_root: null   # absolute path; null → ~/.dlightrag/tools
+    search_tool_auto_install: false  # fetch verified fd/ripgrep at runtime
     publication:
       max_artifacts: 20
       max_file_bytes: 31457280
       max_total_bytes: 104857600
-      workspace_max_bytes: 1073741824
+      workspace_max_bytes: 1073741824  # at most 5 GiB
       preview_image_max_pixels: 16000000
       preview_image_max_edge: 4096
       original_image_max_pixels: 64000000
@@ -899,64 +840,42 @@ answer:
     active_html_preview_enabled: true
 ```
 
-Session notes are the Agent's durable memory: one authoritative set per Agent
-Session, materialized into every Run's own working copy and promoted back at Tool
-settlement (ADR 0022). `max_count` and `max_bytes` bound that set for the whole
-Session, independently of `publication.workspace_max_bytes`, which bounds one Run's
-workspace. A note the plane cannot hold is refused for that note alone — never
-truncated and never evicted — and the writing Run records
-`session_notes_degraded` with the reason while its answer proceeds.
+`session_notes` bounds the notes one Agent Session keeps, independently of
+`publication.workspace_max_bytes`, which bounds one Run's workspace; a note that
+does not fit is refused, never truncated or evicted
+([Session Notes](retrieval-answer.md#session-notes)).
 
-`trust` runs rooted tools as the service user, and confines every Agent process to
-its Agent Workspace: the corpus tree, the deployment's configuration, the project
-tree, and other Runs' workspaces stay outside the process view, while Bash keeps the
-service user's network authority for the deployment to enforce. `disabled` means no workspace root for any mode:
-no path tools, no artifacts, and no Session notes. Reclamation still runs
-when a root is configured, so a deployment that turns execution off continues to
-delete the trees earlier enabled runs left behind. `attach_artifact` is available
-only to the parent Research Session; Fast and Child Sessions cannot authorize
-publication.
-`trust` confines every Agent process to its Agent Workspace. Isolation stronger than
-the host kernel belongs to the environment the application is deployed in, so there is
-no third mode and selecting `sandbox` fails configuration rather than downgrading.
+`trust` runs rooted tools as the service user. On a Linux kernel with Landlock
+it confines every Agent process to its Agent Workspace; elsewhere processes run
+unconfined, which `GET /health` and the Run trace report. What the boundary
+admits is in [Security](security.md#answer-resources-and-execution). `disabled`
+means no workspace root for any mode: no path tools, no artifacts, and no
+Session notes. Reclamation follows a configured root rather than the mode, so a
+deployment that turns execution off still deletes trees earlier Runs left.
 
 An explicit workspace root must be absolute, must not overlap
 `deployment.working_dir`, and must be the same shared RWX path on every worker.
 Published artifacts fail whole when over budget; they are not truncated.
-Interactive HTML is separately opt-in and isolated by the Web artifact boundary.
-See [Security](security.md#answer-artifact-browser-boundary).
+Interactive HTML is separately opt-in and isolated by the Web artifact boundary
+([Security](security.md#answer-artifact-browser-boundary)).
 
-Outbound Research tools now come only from the owner's **Settings → Connections → MCP** catalogues. Deployment `outbound_mcp` declarations and stdio are rejected. Enabled Connections automatically bind future Research Runs; Fast has no external tools. Calls use bounded Streamable HTTP with static bearer, no authentication, or an unexpired SDK-authorized OAuth access token and are never automatically replayed after a possibly dispatched effect. Settings OAuth authorization and expired-token refresh use the locked SDK. Refresh is a leased, fenced token-only preflight before the final effect gate, never an effect replay; rejected refresh or expanded scopes requires Settings authorization. Retention and writer keyring maintenance are implemented; see the [contract](personal-mcp-connections.md). Only non-secret network/quota policy belongs under `answer.agent.connections`.
+Research reaches external tools only through its owner's Personal MCP
+Connections; `answer.agent.connections` holds their non-secret policy, whose
+fields and limits are in
+[Personal MCP Connections](personal-mcp-connections.md#streamable-http-security-and-limits).
 
-Research discovers Skill metadata from three tiers and loads content on demand:
-packaged built-ins, operator-global skills, then owner skills. A same-named
-higher tier shadows lower tiers. The standard
-[`skill-creator`](../src/dlightrag/engine/agent/builtin_skills/skill-creator/SKILL.md)
-and
-[`council`](../src/dlightrag/engine/agent/builtin_skills/council/SKILL.md)
-Skills are available immediately from the installed package; DlightRAG neither
-copies nor extracts them into a runtime root. `council` is a model-invoked
-recipe: the parent may load it when independent scrutiny would materially help.
-Explicit user selection is optional convenience, not a permission gate, and
-loading it cannot widen child tools.
-
-Built-ins are read-only application resources. Administrators can hide named
-built-ins with `answer.agent.disabled_builtin_skills`; this filter does not hide
-a same-named global or owner override.
-
-The global root is `answer.agent.skills_root`, defaulting to
-`~/.dlightrag/skills`; it is operator-provisioned and read-only for the answer
-agent. The bundled Compose stack keeps `skills_root: null`, mounts the
-operator's `${COMPOSE_GLOBAL_SKILLS_DIR:-$HOME/.dlightrag/skills}` at that default
-container path, and refuses to create a missing host source as root. The setup
-wizard prepares the directory; manual operators must create it before
-`docker compose up`.
-
-The per-owner root is `answer.agent.owner_skills_root`, defaulting to
-`~/.dlightrag/owner_skills`; users write their own skills only through the
-validated `publish_skill`/`delete_skill` tools, bounded by a 20-skill / 20MiB
-owner quota. Deleting an owner override reveals a same-named global or built-in
-Skill on the next run. Each worker must see the same shared filesystem paths.
+Research discovers Skills from packaged built-ins, an operator-global root, and
+owner roots ([Architecture](architecture.md#agent-execution) gives the
+precedence). `disabled_builtin_skills` hides named built-ins, not a same-named
+global or owner Skill. The global root, `skills_root`, is operator-provisioned
+and read-only for the answer agent. The bundled Compose stack keeps
+`skills_root: null` and mounts the operator's
+`${COMPOSE_GLOBAL_SKILLS_DIR:-$HOME/.dlightrag/skills}` read-only at that
+default container path, refusing to create a missing host source as root; the
+setup wizard prepares the directory, and manual operators create it before
+`docker compose up`. Owners write their own Skills under `owner_skills_root`
+only through the validated `publish_skill` and `delete_skill` tools, within a
+20-skill / 20 MiB quota per owner. Every worker must see the same skill roots.
 
 ## Public Web Sources
 
@@ -977,13 +896,10 @@ Set each list explicitly to give Search and Extract independent failover order.
 Every provider named in a list must have a key. The setup wizard can configure
 Exa, Tavily, both with one shared order, or independent Search/Extract orders.
 
-Research exposes provider-neutral `search_web` controls for result count,
-domains, date range, and `fast`/`balanced`/`deep` effort. Its `read` tool can
-also admit one anonymous public HTTP(S) URL with only `User-Agent`, `Accept`, and
-`Accept-Language` presentation options. DlightRAG validates every redirect and
-resolved address against the shared SSRF policy, pins validated DNS targets,
-fetches direct HTTP first, and uses the Extract chain only when direct retrieval
-fails or produces no usable text. It supplies no cookies or browser automation.
+How Research uses the chains is in [Web Search](retrieval-answer.md#web-search):
+`search_web` takes result count, domains, date range, and
+`fast`/`balanced`/`deep` effort, and `read` uses the Extract chain only when a
+direct anonymous fetch fails or yields no usable text.
 
 ## Citations And Highlights
 
@@ -1008,7 +924,7 @@ citation shapes are in [Interfaces](interfaces.md#citations).
 ## Access And Interfaces
 
 Code defaults bind listeners to loopback with no auth; MCP defaults to `stdio`.
-The checked-in Compose config explicitly selects `streamable-http` on port 8101.
+The checked-in Compose stack selects `streamable-http` on port 8101.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -1018,7 +934,7 @@ The checked-in Compose config explicitly selects `streamable-http` on port 8101.
 | `interfaces.mcp.allowed_hosts` | local hosts | Host-header allowlist |
 | `interfaces.mcp.allowed_origins` | local origins | Origin allowlist |
 | `interfaces.mcp.resource_server_url` | unset | Public RFC 9728 resource URL |
-| `interfaces.max_upload_size_mb` | `512` | General multipart receive cap |
+| `interfaces.max_upload_size_mb` | `512` | One multi-file corpus upload request |
 | `access.auth_mode` | `none` | `none`, `simple`, or `jwt` |
 | `access.api_token` | unset | The deployment owner's bearer token for `simple` |
 | `access.allow_insecure_no_auth` | `false` | Permit non-loopback no-auth bind |
@@ -1027,28 +943,29 @@ The checked-in Compose config explicitly selects `streamable-http` on port 8101.
 | `access.jwt_jwks_url` | from discovery | Key set of an issuer without OpenID discovery |
 | `access.jwt_algorithm` | the key's | Pins one algorithm; a static key is `HS256` |
 | `access.cors_allow_origins` | `[]` | Cross-origin browser clients; the Web is same-origin |
-| `access.web_identity` | disabled | Edge; its issuer, audience, and keys default to the API's |
+| `access.web_identity` | disabled | Edge identity; its issuer and audience default to the API's, and its keys always come from published keys |
 | `access.control.rules` | `[]` | Claim/workspace/action mappings; any rule puts every action under rules |
 
 Do not expose listeners without auth and ingress protection. Security semantics
 are in [Security](security.md); payload contracts are in
 [Interfaces](interfaces.md).
 
-CLI and evaluation clients use `DLIGHTRAG_API_URL`, optional
-`DLIGHTRAG_API_TOKEN`, and `DLIGHTRAG_CLIENT_TIMEOUT` (default 120 seconds).
+The CLI reads `DLIGHTRAG_API_URL` (default `http://localhost:8100`), optional
+`DLIGHTRAG_API_TOKEN`, and `DLIGHTRAG_CLIENT_TIMEOUT` (default 120 seconds); the
+evaluation script reads the first two ([Evaluation](evaluation.md)).
 
 ## Observability
 
-Tracing activates only when both Langfuse keys are set in `.env`.
+Tracing activates only when both Langfuse keys are set; keep them in `.env`.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `log_level` | `info` | Application logging level |
-| `langfuse_public_key`, `langfuse_secret_key` | unset | Both required; keep in `.env` |
+| `langfuse_public_key`, `langfuse_secret_key` | unset | Both required |
 | `langfuse_host` | `https://cloud.langfuse.com` | Trace destination |
 | `langfuse_trace_sensitive_data` | `true` | Suppress raw content — observation inputs, outputs, and error text — when false |
-| `langfuse_export_external_spans` | `false` | Export third-party OTEL spans |
-| `langfuse_environment` | unset | Deployment label (`local`, `staging`, `production`); keeps deployments in separate buckets |
+| `langfuse_export_external_spans` | `false` | Export third-party OTel spans |
+| `langfuse_environment` | unset | Deployment label such as `local`, `staging`, or `production`, so deployments' traces stay apart: lowercase letters, digits, `_`, and `-`, at most 40 characters, starting with a letter or digit but not with `langfuse` |
 | `langfuse_release` | running package version | Release label |
 | `langfuse_sample_rate` | `1.0` | Export fraction |
 | `langfuse_timeout` | SDK default | Export timeout |
@@ -1060,79 +977,23 @@ names, observation types, attribution, and redaction follow the
 [observability contract](observability.md). Run the bundled stack with the
 [Langfuse runbook](operations.md#local-langfuse-observability).
 
-## Advanced LightRAG Fields
+## Vector Index Fields
 
-These fields are supported but normally left at code defaults:
+These LightRAG storage fields are supported but normally left at code defaults:
 
 ```yaml
-corpus:
-  ingestion:
-    chunk_token_size: 2000
-  retrieval:
-    kg_chunk_pick_method: VECTOR
-    max_entity_tokens: 6000
-    max_relation_tokens: 8000
-    max_total_tokens: 40000
-    kg_entity_types: []
 storage:
   lightrag:
-    vector_index_type: HNSW_HALFVEC
+    vector_index_type: HNSW_HALFVEC   # HNSW, HNSW_HALFVEC, IVFFLAT, or VCHORDRQ
     hnsw_m: 32
     hnsw_ef_construction: 256
     hnsw_ef_search: 256
-    # Bounded scalar adapter options. Milvus accepts only LightRAG's documented
-    # index/metric/HNSW/SQ/IVF keys; credentials do not belong here.
     vector_db_kwargs: {}
 ```
 
-`vector_db_kwargs` accepts at most 16 scalar entries and 4096 encoded bytes.
-Secrets and endpoint URIs are rejected from this mapping. Milvus visual-fusion
-vector overwrite and PostgreSQL hot-workspace promotion are unsupported, and
-those combinations fail deterministically.
-
-An empty `kg_entity_types` uses LightRAG's general taxonomy. For stronger domain
-control, set `corpus.extraction.entity_type_prompt_file` to a file under
-`prompts/entity_type/`.
-
-Personal OAuth needs no setting: the callback is `/web/oauth/connections/mcp/callback` on the address the browser reached DlightRAG at, which the Web's same-origin guard checks against the browser's own origin on every write. Set the non-secret `answer.agent.connections.oauth_callback_url` only to override it, for a proxy that rewrites paths or a provider that requires one pre-registered URI. HTTPS is required except on loopback, so a deployment reached over plain HTTP at another host cannot authorize. `oauth_timeout` defaults to 300 seconds (30–600). Credentials are sealed under the deployment key ring the first writer creates. Settings starts provider consent explicitly; authenticated endpoint edits use a fresh bearer or OAuth candidate, keeping the enabled old head and Grant until successful candidate discovery and revision CAS.
-
-Authorization requires SDK-compatible authorization-code/PKCE discovery and registration. An expired access token is refreshed by a Grant-leased, fenced token-only preflight before the effect gate; a rejected refresh or expanded scopes leave the Connection `needs-auth` for Settings authorization, and there is no background redirect or effect replay. The initiating worker must remain alive; a callback on another worker deposits an encrypted, once-only inbox result, but cannot resume a dead initiator. Restart authorization in Settings after failure/expiry.
-
-
-### Personal Connection credential rotation
-
-The key ring is `connection-keyring.json` in `deployment.working_dir`; the first
-writer to start creates it, and nothing configures it. Without it, credential
-storage and use fail closed. A grant no key opens needs authorization: its owner
-saves a new bearer or authorizes again.
-
-1. Generate a fresh 32-byte CSPRNG key locally and add it to the ring under a new
-   ID, retaining the old key IDs.
-2. Switch `active` to the new ID and restart **all** workers, so no old-active
-   worker can re-encrypt back to the old key. Writer maintenance runs bounded
-   batches at most 60 seconds apart. Trusted writer hosts can also
-   `await app.connections.maintain()` for one batch; the result is counts, not secrets.
-3. Wait for old-key Grant counts to reach zero and for short-lived authorization
-   inboxes to finish/expire (at most `oauth_timeout`, up to 600 seconds, plus cleanup).
-   On the intended deployment database, an authorized operator can verify **counts
-   only**; do not select or export encrypted envelopes:
-
-   ```sql
-   SELECT key_id, count(*) FROM dlightrag_connection_grants
-   WHERE encrypted_envelope IS NOT NULL GROUP BY key_id;
-   SELECT envelope::jsonb->>'key_id' AS key_id, count(*)
-   FROM dlightrag_connection_oauth_flows f
-   CROSS JOIN LATERAL (VALUES (f.encrypted_result), (f.encrypted_credentials)) v(envelope)
-   WHERE envelope IS NOT NULL GROUP BY 1;
-   ```
-
-4. Only after both counts show no old-key ciphertext may old IDs be removed from the
-   ring. Keep backup/key retention coordinated separately: deleting live
-   ciphertext or removing a live key does **not** promise backup cryptographic erasure.
-
-Reader startup verifies current migrations but does not run writer maintenance.
-Old `answer.agent.outbound_mcp`/stdio declarations are configuration errors: remove
-those declarations and authorize owner Connections in Settings. No compatibility
-adapter, migration of old Answer inputs, automatic data deletion or reset is provided.
-Incompatible retained Answer inputs fail that Run before model/tool effects; a user
-may start a new current-contract Run without deleting existing history.
+`vector_db_kwargs` holds at most 16 scalar adapter options in 4096 encoded
+bytes; secrets and endpoint URIs are rejected. Milvus accepts only LightRAG's
+documented index, metric, HNSW, SQ, and IVF keys and
+`cosine_better_than_threshold`. With Milvus, visual-fusion vector overwrite and
+workspace partition promotion are unsupported, and those combinations fail
+deterministically.

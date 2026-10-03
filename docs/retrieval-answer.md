@@ -3,12 +3,14 @@
 This document owns how queries become contexts, answers, sources, and citations.
 Payloads live in [Interfaces](interfaces.md), fields in
 [Configuration](configuration.md), runtime ownership in
-[Architecture](architecture.md), and recovery in
-[RunRuntime and durable query execution](durable-answer-runs.md).
+[Architecture](architecture.md), and Run lifecycle and recovery in
+[RunRuntime](run-runtime.md).
 
 DlightRAG always uses LightRAG `mix` as its graph/vector base. It adds metadata
 filtering, optional direct image retrieval, PostgreSQL BM25, RRF fusion,
 provenance hydration, reranking, answer packing, and citation validation.
+[Architecture](architecture.md#ingestion) owns how ingestion builds the chunks,
+graph, fused visual vectors, and BM25 rows that retrieval reads.
 
 - Top-level `/retrieve` is a durable, owner-scoped Run. It is
   knowledge-base-only and may take `query_images`.
@@ -22,28 +24,8 @@ provenance hydration, reranking, answer packing, and citation validation.
 Every accepted Retrieval pins normalized query/options, authorized search scope,
 the required `extract` and optional `vlm` model profiles, capability facts, and
 policy revisions. Every accepted Answer additionally pins bounded history and
-Resources. The Web conversation
-layer wraps the Answer pipeline; it does not define another path.
-
-## Ingestion Shape
-
-```text
-source
-  -> LightRAG parser/routing
-  -> LightRAG chunks, entities, relationships, vectors, and document status
-  -> optional fused visual-vector alignment
-  -> DlightRAG metadata and BM25 maintenance
-```
-
-The configured MinerU or Docling block produces one internal wildcard parser
-rule. Unsupported suffixes use LightRAG's native/legacy route. Parser outputs
-remain aligned to the LightRAG document record.
-
-A successful drawing has one canonical chunk. LightRAG supplies its VLM text;
-when native multimodal embedding is active, DlightRAG replaces the same chunk's
-vector with one fused text+image vector. It does not add a second visual-only
-chunk. Text-only or safely downgraded `auto` mode retains LightRAG's text vector;
-explicit multimodal probe failure aborts startup.
+Resources. The Web conversation layer wraps the Answer pipeline; it does not
+define another path.
 
 ## Query Pipeline
 
@@ -56,23 +38,22 @@ Retrieval Stage
   -> use accepted authorized concrete workspaces and warm them
   -> plan lexical terms and optional metadata filters once
   -> per workspace:
-       LightRAG mix
-       optional direct image-vector retrieval
-       PostgreSQL BM25
-       RRF fusion + dedup + candidate limit
-       provenance/image hydration
-       final rerank
+       LightRAG mix, PostgreSQL BM25, optional direct image-vector search
+         (each leg capped before fusion)
+       RRF fusion + dedup
+       provenance hydration
+       final rerank, capped at chunk_top_k
   -> federated round-robin merge
   -> reference canonicalization
   -> optional answer packing/generation
 ```
 
 `RetrievalPlanner` sees the query, schema, bounded prior turns when appropriate,
-and current-image hints. It never sees answer attachment bytes/text/manifests.
-Explicit BM25 terms and metadata filters remain authoritative. A Research KB
-tool's chosen semantic query is preserved while the planner derives only its
-supporting lexical/filter/image context. The planner makes one model request
-whose provider SDK owns retries: a transient failure is retried up to the
+and current-image descriptions. It never sees answer attachment
+bytes/text/manifests. Explicit BM25 terms and metadata filters remain
+authoritative. A Research KB tool's chosen semantic query is preserved while the
+planner derives only its supporting lexical and filter context. Only the
+provider SDK retries the planner's model request: a transient failure up to the
 `extract` model's `max_retries`, an authentication, request, or context-window
 rejection never. A request that still fails plans without the model
 (`fallback_provider_error`), searching the query as given.
@@ -90,24 +71,28 @@ spend a keyword-extraction model call only to report LightRAG's no-result status
 storage fails still fails; multi-workspace retrieval lists it in
 `failed_workspaces` beside the workspaces that answered.
 
-Top-level Retrieval uses `planning` and `searching` durable phases. Corpus
-unavailability returns a deferred Runtime outcome with bounded exponential
-backoff, releasing Query execution capacity until `next_attempt_at`, at most
-ten times per Run before it fails as `dependency_unavailable`. The
-configured retrieval timeout bounds claimed planning/search execution and is a
-terminal `retrieval_timeout`; queue residence is not part of that timeout.
-Unexpected execution failures settle as sanitized `retrieval_failed` errors.
+Top-level Retrieval records a `planning` phase while it describes query images
+and a `searching` phase for retrieval planning and search. A transient
+corpus-storage or model-provider failure defers the Run under the
+[RunRuntime](run-runtime.md#lifecycle) backoff and deferral cap. The configured
+retrieval timeout bounds claimed planning and search, not queue residence, and
+expiry fails the Run as `retrieval_timeout`. Unexpected execution failures
+settle as sanitized `retrieval_failed` errors.
 
 ### BM25
 
 BM25 queries the same `LIGHTRAG_DOC_CHUNKS` rows. Ingestion labels each chunk's
-language. Startup maintains partial pg_textsearch indexes for configured
-languages plus a full-table `simple` fallback. Supported query languages select
-their profile; unknown/ambiguous languages use `simple`.
+language. Partial pg_textsearch indexes cover the configured languages, plus a
+full-table `simple` fallback. Supported query languages select their profile;
+unknown/ambiguous languages use `simple`.
 
-Changing profile signatures, `k1`, or `b` for an existing workspace requires an
-offline BM25 rebuild. Disabling BM25 removes only this PostgreSQL lane;
-Resource lexical search remains run-scoped and in memory.
+At startup the writer recreates any BM25 index whose text configuration,
+`bm25_k1`, `bm25_b`, or language bucket differs from the configuration,
+and a reader refuses to start until it does. Existing chunks take a changed
+language set only through the offline
+[BM25 rebuild](operations.md#workspace-bm25-rebuild), which relabels them.
+Disabling BM25 removes only this PostgreSQL lane; Resource lexical search
+remains run-scoped and in memory.
 
 ## Product Document Visibility And Metadata In-Filtering
 
@@ -129,59 +114,72 @@ substring. The caller/planner supplies one `filename` value rather than guessing
 which operator will match unseen data.
 
 - Explicit caller filters are strict; zero candidates means zero results.
-- Inferred filters carry confidence/evidence for observability. If they resolve
-  to no candidates or retrieve no chunks, DlightRAG retries unfiltered.
+- An inferred filter applies only when the planner states `high` confidence; its
+  confidence and evidence reach only the planner log. If it resolves to no
+  candidates or retrieves no chunks, DlightRAG retries unfiltered.
 - Non-empty inferred candidates constrain semantic and BM25 legs.
 
 Every chunk-producing leg enforces visibility, with any user filter as an
 additional scope:
 
-- `FilteredVectorStorage` returns immediately for empty filtered candidates,
-  uses exact scoring for small filtered sets, HNSW iterative scan for larger
-  sets, and a bounded visibility-only path without a user filter.
+- `FilteredVectorStorage` enforces it on every query. It returns immediately
+  for empty filtered candidates, uses exact scoring for small filtered sets,
+  HNSW iterative scan for larger sets, and a bounded visibility-only path
+  without a user filter.
 - Graph entity/relation legs resolve source chunks by ID, so
-  `FilteredChunkStore` visibility-checks that bounded lookup too.
-- The wrappers use a context variable only for the optional user filter;
-  visibility itself is not optional. Ingest and delete use their mutation
-  collaborators rather than treating product reads as an internal identity API.
+  `FilteredChunkStore` visibility-checks that bounded lookup inside a retrieval
+  scope; LightRAG's own ingest, rollback, and delete reads pass through
+  unchanged.
 
 The filter controls quotable chunk evidence. It does not rewrite LightRAG's
 corpus-level entity/relationship summaries, which may merge descriptions from
 multiple documents and have no separable per-document share. Trace
-`metadata_kg_chunks_dropped` counts graph-referenced chunks rejected by scope.
-Bounded fallback paths may also report `visibility_strategy`,
-`visibility_dropped`, and `visibility_shortfall`; these are not snapshot
-isolation claims.
+`metadata_kg_chunks_dropped` counts graph-referenced chunk IDs that returned no
+row: unpublished, outside the user filter, or missing. Each workspace trace also
+reports `visibility_strategy` (`pushdown`, `bounded_pushdown`, or `postfilter`,
+from the last leg that ran), `visibility_shortfall` when a vector leg returns
+fewer rows than requested, and `visibility_dropped`, which only the post-filter
+path counts; these are not snapshot isolation claims.
 
 ## Multimodal Retrieval
 
-`query_images` adds two transient paths:
+Query images, from `/retrieve`'s `query_images` or an Answer's current-turn
+images, add two transient paths:
 
 ```text
 query image
-  |-- VLM description -> LightRAG text/KG + BM25
-  `-- native image embedding -> fused visual chunks (when active)
+  |-- VLM description -> planner context (BM25 terms, inferred filters)
+  `-- native image embedding -> direct visual search (when active)
 ```
 
-Document visuals use fused VLM-description+image vectors; query images use
-image-only query vectors. Provider adapters apply official query/document task
-semantics and split batches at provider input/token/image limits without
-reordering. RRF and dedup resolve overlap between semantic and visual hits.
+A description changes the LightRAG query only where the planner may rewrite it,
+which is a Fast Answer with history; top-level `/retrieve` and Research keep the
+query as given, and a planner fallback ignores descriptions. The image-only
+query vector searches the whole chunk vector store, where text vectors and
+fused VLM-description+image document vectors share one space, under the same
+visibility and filter scope. Provider adapters apply official query/document
+task semantics and split requests in order at the provider's input-count and
+per-request image-byte limits. RRF and dedup resolve overlap between semantic
+and visual hits.
 
-With text modality, direct image embedding is skipped but VLM descriptions may
-still drive text retrieval. `auto` can make that safe downgrade after probe
-failure; explicit multimodal mode fails startup.
+A definitive probe failure downgrades `auto` to text, which skips direct image
+embedding while descriptions still reach the planner, and aborts startup in
+explicit `multimodal` mode. A transient probe failure changes neither mode;
+startup continues degraded.
 
 ## Fusion And Reranking
 
 DlightRAG disables LightRAG's query reranker. It reranks the fused set after
 provenance hydration so LightRAG, BM25, and direct-image candidates compete in
-one list with page/image data attached.
+one list. Every fused candidate carries its page provenance; image bytes are
+attached before rerank only when the reranker reads images, and a text
+reranker's survivors receive theirs afterwards.
 
 Ranker classes are:
 
-- chat-model listwise reranking, optionally with images when the selected model
-  passed its vision probe;
+- chat-model listwise reranking, which sends chunk images unless
+  `rerank.input_modality` is `text` or the scoring model is known to lack image
+  input;
 - multimodal or text HTTP `/rerank` adapters;
 - Voyage, Cohere, and Azure Cohere text rerankers.
 
@@ -197,9 +195,9 @@ text where available; unbounded data URIs are never sent.
 
 The planner runs once, selected workspaces execute concurrently, and each runs
 the complete filtering/fusion/rerank pipeline. The federation layer tags chunks
-with `_workspace`, canonicalizes references, round-robin interleaves the
-per-workspace lists, and applies the configured output budget plus its
-per-workspace fairness floor.
+with `_workspace`, round-robin interleaves the per-workspace lists, drops
+repeated workspace/chunk pairs, applies the configured output budget plus its
+per-workspace fairness floor, and then canonicalizes references.
 
 By default, round-robin preserves representation without pretending scores from
 different workspace/model calls are calibrated. If `federated_rerank` is true
@@ -210,16 +208,17 @@ trace rather than failing Retrieval.
 
 ## Answer Orchestration
 
-`AnswerExecutor` owns the workflow; `AnswerOrchestrator` prepares typed Host
-context, tools, and effects.
+An Answer resolves to Fast or Research. Both produce the same canonical result,
+whose fields [Interfaces](interfaces.md#common-answer-terms) defines.
 
 ### Fast
 
-Fast performs planning, KB retrieval, and one lightweight generation call. It
-uses shared Context Contribution, Evidence, citation, model-call, usage, Agent
-Session infrastructure, the Workspace plane (inert: it receives and carries Run
-Notes, and Fast composes no tools that could write or read them), and Profile
-Memory recall, but creates no Agent Operation, tools, skills, or publication.
+Fast performs planning, KB retrieval, and one tool-free generation call on the
+`query` model. It uses shared Context Contribution, Evidence, citation,
+model-call, usage, Agent Session infrastructure, Profile Memory recall, and,
+when execution is enabled, an inert Workspace that carries the
+[Session notes](#session-notes). It creates no Agent Operation, tools, skills,
+or publication.
 
 ### Research
 
@@ -229,20 +228,22 @@ run-local registry may include:
 - knowledge-base, resource, and optional provider-neutral public Web tools;
 - rooted file/Bash tools when execution is enabled;
 - Profile Memory tools for the parent (children recall only);
-- progressive `load_skill`;
-- allowlisted outbound MCP tools; and
+- progressive `load_skill`, plus `publish_skill`/`delete_skill` for the parent;
+- the tools of every enabled
+  [Personal MCP Connection](personal-mcp-connections.md) its owner holds; and
 - bounded asynchronous Child Sessions with explicit snapshots and Evidence
   return.
 
 `spawn_agent` admits up to eight children per call and returns durable handles
-immediately. A child runs with its parent's tools except the ones that spend the Run's
-authority: the roster controls, `remember`/`forget`, and the publication tools.
-The parent's `tools` list narrows that set for one child — a read-only
-investigator, say — and can never restore what the Run withholds.
-Children cannot spawn grandchildren. Same-Session continuation creates a new
-Operation on the existing Child Session. The built-in `council` Skill is a
-parent recipe for independent first-pass investigations and at most one curated
-cross-examination; it adds no tools and is not a permission gate.
+immediately. A child runs with its parent's tools except the ones that spend the
+Run's authority: the roster controls, `remember`/`forget`, and the publication
+tools. It holds `ask_parent` instead. The parent's `tools` list narrows that set
+for one child — a read-only investigator, say — and can never restore what the
+Run withholds or remove `ask_parent`. Children cannot spawn grandchildren.
+Same-Session continuation creates a new Operation on the existing Child Session.
+The built-in `council` Skill is a parent recipe for independent first-pass
+investigations and at most one curated cross-examination; it adds no tools and
+is not a permission gate.
 
 Child `model_role` selects a configured model, not a task category or permission.
 The objective remains arbitrary free text; omitting the selector chooses `query`.
@@ -265,16 +266,18 @@ comes from the effective profile, never the selector name. Incompatible image
 inputs and unsupported provider tool calling fail explicitly, without switching
 models or silently dropping images.
 
-Acceptance pins all five identities, profiles and effective reasoning settings.
-Each Child Session pins its selected identity/profile and tools through
-continuation and same-version restart recovery. Incompatible endpoint or reasoning
-drift is rejected before child provider effects. Development upgrades do not adapt
-old two-selector/four-pin records: incompatible Runs fail explicitly and the user
-starts a new Run; no automatic reset, cancellation or deletion is performed.
+Acceptance pins, for all five selectors, the invocation fingerprint, the model
+profile, and the ordinary and agentic reasoning request levels. Each Child
+Session pins its selected identity/profile and tools through continuation and
+same-version restart recovery. Incompatible endpoint or reasoning drift is
+rejected before child provider effects.
 
 Tool errors return to the model for correction; they do not terminate research.
-A no-tool assistant turn ends the run, and that text is the answer. The parent
-Research Session authorizes a root Workspace file for publication only through
+A no-tool assistant turn completes the current Operation. The Run continues
+while a steer, follow-up, control command, or Child result is pending or a Child
+Session is still running; otherwise it ends, and that last turn's text is the
+answer. The parent Research Session authorizes a root file under the
+Workspace's `artifacts/` directory for publication only through
 `attach_artifact`; Fast and Child Sessions do not receive that product tool. A
 successful attachment binds the root's normalized relative path, label, media
 capability, byte size, and raw-content digest in the same settlement as the tool
@@ -294,46 +297,62 @@ on each surface, not duplicated prose.
 At the terminal boundary, the Host verifies every attachment against current
 bytes and publishes each valid root plus the safe transitive dependency closure
 reachable through Markdown/HTML `artifact:` links. Those links are placement
-syntax, not publication authority: an unattached answer link fails validation,
-and an attached root omitted by the answer receives a trailing link in attachment
-settlement order. Dependencies are published but are not auto-placed. Failed or
-stale attachments receive the single bounded correction pass. There is no
-reserved filename, privileged Artifact role, or hidden finalizer call.
+syntax, not publication authority: an answer link fails validation unless its
+target is an attached root or a validated dependency of one, and an attached
+root omitted by the answer receives a trailing link in attachment settlement
+order (placed before the answer when its ending would swallow a trailing link).
+Dependencies are published but are not auto-placed. Failed or stale attachments
+receive the single bounded correction pass. There is no reserved filename,
+privileged Artifact role, or hidden finalizer call.
 
 Markdown references use the same grammar for validation, result projection, and
-browser placement. Publication preserves source text and settles a document-local
-`artifact_bindings` map instead of rewriting Markdown with regular expressions.
-Unresolvable links enter correction and, if unresolved, display an unavailable
-resource in their original position. HTML dependencies use an HTML parser.
+browser placement. Publication leaves `artifact:` targets as written and settles
+a document-local `artifact_bindings` map. Unresolvable links enter correction
+and, if unresolved, display an unavailable resource in their original position.
+HTML dependencies use an HTML parser.
 
-Native tool-turn text deltas are streamed optimistically when the provider
-supports them. They are transient presentation: the Host resets them when the
-same turn contains tool calls, a provider attempt fails or is cancelled after
-emitting text, a follow-up/correction continues the Session, interrupted
-generation is recovered, or citation/Artifact finalization changes the terminal
-text. Persisted Request Snapshots, Assistant Turns, tool settlements, and the
-canonical result remain the recovery authorities.
+The parent Research Session streams native tool-turn text deltas optimistically
+when the provider supports them. They are transient presentation: the Host
+resets them when the same turn contains tool calls or commits text that differs
+from what streamed, a provider attempt fails or is cancelled after emitting
+text, the Run defers on a dependency, a follow-up, control command, or Child
+result continues the Session, interrupted generation is recovered, or
+citation/Artifact finalization changes the terminal text. Persisted Request
+Snapshots, Assistant Turns, tool settlements, and the canonical result remain
+the recovery authorities.
 
-Both modes produce the same canonical result: complete Markdown and typed resource
-placements in `parts`, document-local `artifact_bindings`, cited `sources`,
-`references`, `evidence_images`, Artifacts/outcome, usage, and Evidence counts.
+### Web Search
+
+When Exa or Tavily is configured, Research can search Web passages as peer
+evidence through one provider-neutral tool, `search_web`. Search and Extract use
+independently ordered failover chains. Failover occurs only for provider
+failures, never to seek a subjectively better result; malformed individual
+results are dropped and reported. An empty Search result stops the Search
+chain, while an Extract that yields no usable text counts as a provider failure.
+Result URLs become inert resource handles that only an explicit `read` or
+`view` fetches, under the
+[Resource acquisition](resource-reading.md#registration-and-acquisition) rules.
 
 ## Context And Model Budgets
 
 Each call uses an immutable model profile pinned by normalized provider, model,
-and endpoint. It supplies context, input, output, image, and reasoning facts.
-Uncatalogued endpoints first receive the best-effort fallback profile; acceptance
-fails only if the resolved profile still cannot provide usable capacity.
+and endpoint. It supplies context, input, output, image, and reasoning facts. An
+uncatalogued endpoint resolves to a generous fixed fallback profile with
+best-effort reasoning controls; when the real endpoint is smaller, the
+provider's own rejection reports it.
 [API Family](configuration.md#api-family) selects the wire without changing this
 capacity profile or the Context Policy. Replay and history boundaries are owned
-by [Agent Session Recovery](durable-answer-runs.md#agent-session-recovery).
+by [Agent Session Recovery](run-runtime.md#agent-session-recovery).
 
-The Context Policy independently reserves output, dynamic context, safety,
-retained tail, episodic continuation, and minimum input. Each Tool result is fitted
-to one absolute, model-aware observation capacity that also holds the Evidence text
-frozen into it; the proactive compaction trigger is what bounds the request as a
-whole. Provider output is limited by both model output capacity and remaining
-physical context.
+The Context Policy independently reserves output, dynamic context, retained
+tail, episodic continuation, and minimum input. It carries no estimator-safety
+margin: a provider rejection followed by compaction and a retry of the same turn
+covers that boundary. Each Tool result, including the Evidence text frozen into
+it, is fitted to one absolute, model-aware observation capacity; the proactive
+compaction trigger is what bounds the request as a whole. Provider output is
+limited by both model output capacity and remaining physical context. Full
+attachment bytes never enter model context: only bounded text windows, capped
+observations, and budgeted images do.
 
 Acceptance fits the caller's history to every model call the Run can still reach,
 each measured as it will be sent and against the model that serves it: Fast's
@@ -344,125 +363,143 @@ valid, the routing call on the `keyword` model. An explicit Fast request that
 cannot keep its reserve is refused; `auto` resolves without Fast instead, and a
 routing call that cannot fit resolves `auto` to Research, which needs no routing
 (a Research request that cannot fit either is refused as too long). A Fast Run
-measures its
-durable Session history against the same Fast calls before it compacts. Both
-sides build these calls in `engine/answer/execution/acceptance.py`, so they
-cannot disagree about which calls exist or how each is measured.
+measures its durable Session history against the same Fast calls before it
+compacts. Acceptance and the Fast Run build these calls from one definition, so
+they agree on which calls exist and how each is measured.
+
+### Conversation History
 
 Fast and routing continue the conversation, not the tool work in it: an earlier
 Research turn's tool calls, tool results and provider state stay out of their
-history. The images that turn's tools viewed are what its answer saw, so Fast keeps
-them as attachments of the question the turn answered, and a follow-up sees them.
-Routing and retrieval planning read the history's words alone.
-
-A Research request is the previous request plus new material, so a provider prefix
-cache can reuse it: the Session fold only appends, admitted Evidence text is frozen
-into the Tool result that produced it, and nothing is composed per turn. What a Run
-composes — its question's Resource manifest and attached images, the Session-notes
-statement, memory, and guidance — follows the transcript, which already states the
-question as the Run's own User Entry, and a replayed Tool call's arguments are
-serialized with sorted keys, the same bytes whether the Session was held in memory or
-read back from PostgreSQL. The first request of a follow-up Run is therefore the
-previous Run's last one plus new material too. No system
-message states the current time — a prefix that moves with wall time forfeits the
-whole cache — so a Research agent reads the clock from its environment and a Fast
-answer's own request states it
-([ADR 0014](adr/0015-prompt-prefix-stability-and-cache-anchored-accounting.md)).
-The compaction trigger is measured from the character estimator corrected against
-the prompt size the provider itself billed for the previous request, and each
-turn's billed prompt and cache hits are aggregated in the Run trace. Response
-`input_tokens` and `input_tokens_details.cached_tokens` feed these same accounting
-owners; selecting Response does not introduce a second estimator or permission
-to silently truncate the provider request.
-
-A compaction the projection cannot advance is declined rather than failed. Once a
-retained tail is a whole oversized exchange, the uncovered prefix holds no complete
-exchange for a summary to state, and no smaller tail changes that, so the run
-assembles its request against the projection it already has; a request that genuinely
-cannot fit still fails on the hard input limit, by name. The decline is recorded on
-the operation state for that turn, which is what keeps an over-trigger turn from
-asking for the same impossible compaction again instead of reaching the provider.
-
-A committed compaction keeps the run's re-readable identities beside its typed
-summary: the Evidence ledger supplies its citation handles, and the run's committed
-spill rows supply the newest spilled Tool outputs, whose bytes and rows survive the
-covered prefix while their receipts do not. Spills claim a reserved share of the
-summary's handle list and Evidence fills the remainder, so neither class can crowd
-the other out; the spill read is bounded and ordered newest-first by the producing
-effect intent. A spill handle states the `read(resource_id=…)` call it authorizes,
-and reading one back admits no Evidence and mints no citation handle — a spilled
-output is continuation memory, never a source.
+history. The images that turn's tools viewed are what its answer saw, so Fast
+keeps them as attachments of the latest user message before them (the question,
+or the steer the turn was answering), and a follow-up sees them. Routing and
+retrieval planning read the history's words alone.
 
 A Follow-Up continues on the Lane it came from, at its tip. A Fork does not: it
-opens a new Lane at the state its parent Run settled at, so a branch from an earlier
-turn sees that turn's summary and retained tail rather than everything the
-conversation has since become, and it starts from that state's projection rather
-than the one the source Lane is on now. Either kind derives its history from its
-Session branch point and injects none: every accepted Run records an Agent Session,
-so the fold at that branch point is the context.
+opens a new Lane at the state its parent Run settled at, so a branch from an
+earlier turn sees that turn's summary and retained tail rather than everything
+the conversation has since become, and it starts from that state's projection
+rather than the source Lane's current one. Either kind derives its history
+from its Session branch point and injects none: every accepted Run records an
+Agent Session, so the fold at that branch point is the context.
 
-A published Artifact joins the same re-readable family: publication registers it as a
-Resource of its Agent Session ([ADR 0023](adr/0023-a-published-product-is-a-resource.md)),
-the Tool hands the model the deterministic handle (`read(resource_id='artifact-…')`)
-when it attaches, and the summary keeps naming it after the receipt is compacted away.
-A later turn of that conversation therefore reads the version it published, edits it in
-its own working copy, and publishes a new version — each version keeping its authoring
-Run, digest, and Evidence — while another conversation cannot reach those bytes at all.
+### Prefix Cache
 
-Either kind also binds the Session's notes, and neither copies a parent Run's. Memory
-belongs to the Agent Session: its notes are laid down into the continuation's own
+A Research request is the previous request plus new material, so a provider
+prefix cache can reuse it: the Session fold only appends, and admitted Evidence
+text is frozen into the Tool result that produced it. What a Run composes
+follows the transcript, which already states the question as the Run's own User
+Entry, in this order: the Session-notes statement, the question's Resource
+manifest and attached images, memory, and tool and Skill guidance, all
+byte-stable for the Run; last comes the lane of admitted evidence images, which
+re-renders every request because evidence pixels are not durable. Nothing else
+is composed per turn. A replayed Tool call's arguments are serialized with
+sorted keys, the same bytes whether the Session was held in memory or read back
+from PostgreSQL. The first request of a follow-up Run is therefore the previous
+Run's last one plus new material too. No system message states the current time
+— a prefix that moves with wall time forfeits the whole cache — so a Research
+agent reads the clock from its environment and a Fast answer's own request
+states it
+([ADR 0015](adr/0015-prompt-prefix-stability-and-cache-anchored-accounting.md)).
+
+Research's compaction trigger is measured from the character estimator,
+corrected by the prompt size the provider billed for the last request that
+carried no pixels; a Fast Run's history check uses the estimator alone. Each
+Research turn's billed prompt and cache hits are aggregated in the Run trace
+(`prompt_cache`). Response `input_tokens` and
+`input_tokens_details.cached_tokens` feed these same accounting owners; selecting
+Response does not introduce a second estimator or permission to silently
+truncate the provider request.
+
+### Compaction
+
+A compaction the projection cannot advance is declined rather than failed. Once
+a retained tail is a whole oversized exchange, the uncovered prefix holds no
+complete exchange for a summary to state, and no smaller tail changes that, so
+the run assembles its request against the projection it already has; a request
+that genuinely cannot fit still fails on the hard input limit, by name. The
+decline is recorded on the operation state for that turn, which is what keeps an
+over-trigger turn from asking for the same impossible compaction again instead
+of reaching the provider.
+
+A committed compaction keeps the run's re-readable identities beside its typed
+summary: the Evidence ledger supplies its citation handles, and the run's
+committed spill rows supply the newest spilled Tool outputs, whose bytes and rows
+survive the covered prefix while their receipts do not. Spills and published
+Artifacts each claim a reserved share of the summary's handle list and Evidence
+fills the remainder, so no class can crowd another out; the spill read is
+bounded and ordered newest-first by the producing effect intent. A spill handle
+states the `read(resource_id=…)` call it authorizes, and reading one back admits
+no Evidence and mints no citation handle — a spilled output is continuation
+memory, never a source.
+
+A published Artifact joins the same re-readable family: publication registers it
+as a Resource of its Agent Session
+([ADR 0023](adr/0023-a-published-product-is-a-resource.md)), and the summary
+keeps naming its `read(resource_id='artifact-…')` handle after the receipt that
+taught it is compacted away. A later turn of that conversation therefore reads
+the version it published, edits it in its own working copy, and publishes a new
+version — each version keeping its authoring Run, digest, and Evidence — while
+another conversation cannot reach those bytes at all
+([adoption](resource-reading.md#earlier-runs)).
+
+### Session Notes
+
+Memory belongs to the Agent Session. When the execution environment is enabled,
+every Run, Fast included, binds the Session's notes, and a Follow-Up or Fork
+never copies its parent Run's. The notes are laid down into the Run's own
 Workspace Epoch and recorded in its Inventory before the first request, so a
-conversation, its forks, and every later turn of the Session read the same set. A
-tool-capable request also states the notes the Run started with, once, as static text
-after the transcript, where the next Run's different sizes cannot move the prefix it
-reuses; a
-Fast first request does not, because it has no tool that
-could read a note — the files are there for the turn after it. A Session whose plane
-cannot be read, a note the plane refuses for budget, and a promotion that fails are
-degradations recorded on the Run's trace: a Run always proceeds, because a Run that
-cannot read its Session's memory still has its transcript, its Evidence, and its
+conversation, its forks, and every later turn of the Session read the same set.
+Every request of a Run or Child Session that holds the `write` tool carries one
+static list of the notes the Run started with ([Prefix Cache](#prefix-cache));
+Fast never states it, because it has no tool that could read a note — the files
+are there for the turn after it. A Session whose plane cannot be read, a note
+the plane refuses for budget, and a promotion that fails are degradations
+recorded on the Run's trace: a Run always proceeds, because a Run that cannot
+read its Session's memory still has its transcript, its Evidence, and its
 Products. A recovered attempt states what its own epoch holds rather than
 re-materializing, because it may have written a note of its own before it was
-interrupted. Nothing is asked of an older Run: a Run whose tree retention reclaimed
-leaves the Session's memory untouched.
+interrupted. [Run retention](run-runtime.md#retention) never touches the
+Session's memory.
 
-The summary also names the Session's notes this Run holds: the files under `notes/` in
-its Agent Workspace, bounded to a small list and named by the `read(path=…)` call that
-reads each one again. They come from the Run's own Workspace Inventory — the framework's
-observation of the working copy, carried forward across a verified Workspace Epoch
-handoff — so the summary names what this Run can actually open, and reading one back is
-an ordinary workspace read that admits no Evidence either.
-
-Full attachment bytes never enter model context. Only bounded text windows,
-capped observations, and budgeted images do.
+The compaction summary also names the Session's notes this Run holds: the files
+under `notes/` in its Agent Workspace, bounded to a small list and named by the
+`read(path=…)` call that reads each one again. They come from the Run's own
+Workspace Inventory — the framework's observation of the working copy, carried
+forward across a verified Workspace Epoch handoff — so the summary names what
+this Run can actually open, and reading one back is an ordinary workspace read
+that admits no Evidence either.
 
 ## Answer Input And Packing
 
-The answer model receives structured messages, not raw `contexts` JSON:
+Fast's generation call receives structured messages, not raw `contexts` JSON:
 
 ```text
 system policy
-bounded prior text history (when supplied)
+episodic summary (when present)
+bounded prior history, with the images earlier tools viewed (when supplied)
 current user message:
   User-attached images
   Knowledge graph evidence, naming its documents as [N] (when retrieved)
   Knowledge-base evidence, each excerpt labeled [N-M]
   Current time
-  Question (last)
+  Question
+standing Profile Memory recall (when present)
 ```
 
-Each citation marker is defined once on the evidence it labels. Fast renders its
-evidence through the same Evidence ledger as Research: documents are numbered by
-first appearance, and the answer's citations resolve against the ledger's rows,
-so a marker always names the excerpt the model read under it. Retrieved document
-images are preceded by their text label and sent only when they fit.
+Each citation marker labels one excerpt; a sent image and its chunk's text share
+that excerpt's `[N-M]` label. Fast renders its evidence through the same
+Evidence ledger as Research: documents are numbered by first appearance, and the
+answer's citations resolve against the ledger's rows, so a marker always names
+the excerpt the model read under it. Retrieved document images are preceded by
+their text label and sent only when they fit.
 
-`top_k` controls KG breadth. `chunk_top_k` controls retrieved text/visual
-candidates. Answer retrieval over-fetches candidates, then packs them to the
-query model's remaining input capacity and image budget.
+`top_k` controls KG breadth. `chunk_top_k` caps the reranked text/visual chunks
+retrieval returns, and packing fits that list to the query model's remaining
+input capacity and image budget; a removed chunk is not replaced.
 
-- Pure visual chunks whose image cannot fit are removed and later candidates
-  backfill them.
+- Pure visual chunks whose image cannot fit are removed.
 - Mixed text+image chunks keep text when the image is skipped.
 - Final exact serialization removes whole chunks from the reranked tail and
   rebuilds prompt/citation indexes until it fits; it never truncates a chunk,
@@ -470,15 +507,14 @@ query model's remaining input capacity and image budget.
 - Returned contexts/sources use the final admitted chunks. Use `/retrieve` for
   the broader pre-answer set.
 
-Images already within JPEG/PNG/WebP limits pass through unchanged. Recompression
-honors configured quality and geometry floors; images that still do not fit are
-skipped rather than degraded further. Tool and replay images share the aggregate
-answer image budget; exhausted visual capacity fails explicitly rather than
-starting a fresh per-tool allowance. `view` invokes no separate model.
+A JPEG, PNG, or WebP image already within the byte and edge limits, with no EXIF
+orientation to apply, passes through unchanged; any other image is re-encoded as
+JPEG. Recompression honors configured quality and geometry floors; images that
+still do not fit are skipped rather than degraded further.
 
-DlightRAG uses LightRAG `aquery_data()` as the context/reference seed rather than
-`aquery_llm()`, because final evidence may include BM25, direct visual, federated,
-and reranked results.
+DlightRAG uses LightRAG `aquery_data()` as the context/reference seed rather
+than `aquery_llm()`, because final evidence may include BM25, direct visual,
+federated, and reranked results.
 
 ## Citation And Presentation Finalization
 
@@ -500,137 +536,26 @@ including line endings and table escapes. A `References` heading never authorize
 deleting prose. Prompts ask the Model to omit duplicate bibliographies; source
 authority continues to come only from validated inline citations.
 
-The parser's private source adapter carries contiguous offset runs through
-markdown-it normalization and container extraction. Table recognition remains
-upstream's; a row/column adapter mirrors only escaped-pipe removal and asserts
-that its source-mapped cell equals the emitted cell. Syntax matrix tests cover
-these dependency seams when upgrading markdown-it; no source-position guessing
-or full-document reserialization is used.
+Finalization also derives `evidence_images`, and each reader projection derives
+the ordered Markdown/Artifact/image `parts` from the stored Markdown. Image
+placements and `evidence_images` come only from server-derived evidence and
+Artifact identities, never from a model-written URL. Every published Markdown
+Artifact is citation-finalized against the same admitted context and stores its
+cited sources under that Artifact's resource identity. Artifact presentations
+therefore resolve their own citation indexes without borrowing sources from the
+chat Answer or another Artifact. Streaming may expose tokens immediately, but
+the final `done` result contains normalized text and authoritative metadata.
 
-Finalization also derives `evidence_images` and ordered Markdown/Artifact/image
-`parts`; transports never trust model-generated Markdown image URLs. Every
-published Markdown Artifact is citation-finalized against the same admitted
-context and stores its cited sources under that Artifact's resource identity.
-Artifact presentations therefore resolve their own citation indexes without
-borrowing sources from the chat Answer or another Artifact. Streaming may expose
-tokens immediately, but the final `done` result contains normalized text and
-authoritative metadata.
-
-Semantic highlights run only after citation validation. They enrich cited source
-chunks with phrases from the finalized answer. Web requests them by default;
-REST, MCP, and Application callers opt in. `/retrieve` never emits them. Timeout
-or failure leaves original sources unchanged.
+Semantic highlights run only after citation validation. They mark up to three
+verbatim phrases in each cited chunk that support the finalized answer's citing
+sentence. Web always requests them; REST, MCP, and Application callers opt in,
+and `answer.citations.highlights.enabled` gates every caller. `/retrieve` never
+emits them. Timeout or failure leaves original sources unchanged.
 
 ## Answer Attachments And Resources
 
-Attachments are run-scoped Resources, never workspace data. `ResourceRegistry`
-owns inline bytes or lazy public HTTP(S) references for one answer. Research may
-also admit a public URL through `read(url=...)` or `view(url=...)`; only `User-Agent`, `Accept`, and
-`Accept-Language` are configurable. The shared public-HTTP boundary validates
-scheme, credentials, every redirect, resolved addresses, HTTPS downgrade, byte
-limits, and pixel limits. Validated DNS targets are pinned for the connection.
-Settled fetched bytes and their canonical locators replay from owner-scoped blob
-storage after recovery rather than making a second network request.
-
-`read` is deterministic:
-
-- UTF-8 decodes directly;
-- DOCX uses `firecrawl-anydoc==0.2.4` for text plus independent typed image assets, with local OCR rejection and no image/no-image engine selector;
-- PDF text uses AnyDoc with typed incomplete/OCR terminals; physical PDF viewing remains independent;
-- XLSX uses AnyDoc text plus independent openpyxl embedded images with Sheet!Cell anchors, without formula recalculation or external-link fetching;
-- HTML, CSV and PPTX retain direct offline MarkItDown routes for the per-format reasons below;
-- OOXML archives pass zip-bomb preflight;
-- each acquired URL is one fixed snapshot for the run; and
-- opaque signed cursors continue bounded text without exposing offsets or
-  provider locators. A focused first window starts near the best match, then
-  continuation rotates through the entire document without skipping content.
-
-`read` identifies extracted text as coverage-unverified, or explicitly reports no
-extracted text/conversion failure. Nonempty text does not prove completeness, and
-no extracted text does not prove a blank document. PDFs expose physical page count
-when available without inventing a text-line/page mapping. Long embedded-image
-inventories paginate independently through signed `read` cursors.
-
-`view` returns typed, source-located pixel tool-result attachments to the actual
-calling Agent/Child Session model, using that consuming model’s image capability
-and aggregate budget. Child pixels are not automatically forwarded to the parent. It accepts one registered resource, admitted public URL, or rooted workspace
-image path. PDF without a locator returns at most eight low-resolution physical
-pages (fewer if the aggregate budget is exhausted), exact actual coverage and a
-signed continuation. Select `locator="2"` for physical page detail. Office handles
-refer to exact embedded occurrences, not whole-page/slide screenshots. Identical
-image bytes at distinct occurrences retain separate source identities. Text-only
-answering models no longer receive an inspect-based fallback.
-
-DOCX image handles come from typed Document occurrences, not invented Markdown
-placement. Exact admitted package bytes and media are verified; repeated images
-retain distinct handles even when Blob bytes deduplicate. Package-part provenance
-is labeled separately from unknown physical location. A source-reference audit
-reports known incomplete extraction for external, unavailable or unmapped visuals
-(including source images omitted by the structured parser); it never fetches them
-or chooses another engine. Unsupported or mismatched pixels fail verification.
-
-An ordinary AnyDoc parsing/import failure may use MarkItDown once, only after
-native work ends and within the same remaining conversion budget. Fallback assets
-also require source membership and honest coverage. Empty output is not a rescue
-trigger. Known omissions/OCR, resource/admission refusal, OOM, configuration or
-programming failure, and exhausted/cancelled work do not launch fallback. Native
-threads cannot be killed by cancelling an await: cancelled callers return while
-the Registry retains and joins outstanding work, and no late output is adopted.
-The 120-second shared conversion deadline bounds new work/adoption, not native
-execution time or process memory.
-
-Text, assets, status, converter/version, fallback reason, known OCR pages and
-input/output digests settle as one adopted Resource view. Same-Run reads, cursors
-and recovery reuse it without reparsing. Selected-lineage follow-up/fork retention
-and pinned Child Session hydration preserve original occurrence identity and
-charge the actual consuming model, and they register no earlier resource
-handle. A handle the model names can still be adopted under
-[ADR 0013](adr/0013-lineage-adoption-of-earlier-run-resources.md). The adopting
-Run never converts newly adopted bytes: a convertible document reads text only
-through its stored conversion view, and other formats are decoded from the
-adopted bytes.
-
-Each route has known limits:
-
-- PDF text uses AnyDoc, and physical-page viewing uses PDFium independently of
-  it. A scanned PDF returns `known_incomplete` with the pages AnyDoc reports as
-  needing OCR. A PDF that AnyDoc cannot represent returns `known_incomplete`
-  without page metadata, even when it carries text, as the tested
-  text-plus-raster page does. The fallback does not rescue such a result,
-  because its partial text would still omit the raster content; the
-  physical-page overview of `view` locates the relevant page instead.
-- XLSX text uses AnyDoc display values: authored formula caches are read, an
-  uncached formula cell stays empty, and nothing is recalculated. Images come
-  from openpyxl with `Sheet!Cell` anchors, one handle per occurrence. The
-  generated fixtures cover percent, date, currency, custom, and merged cells;
-  other display formats and drawing types are unverified.
-- PPTX uses MarkItDown. AnyDoc 0.2.4 drops a slide whose part is missing from
-  the package without an error, and there is no OPC completeness check or typed
-  image binding for PPTX that would detect the loss.
-- CSV uses MarkItDown, and neither engine is complete: AnyDoc 0.2.4 mis-decodes
-  Shift-JIS without an error, while MarkItDown decodes it but truncates
-  over-wide rows and keeps BOMs and raw cell newlines in its Markdown table.
-  There is no host decoding and normalization step for CSV.
-- HTML uses MarkItDown; AnyDoc 0.2.4 does not accept HTML.
-
-These are current routes, not permanent format bans, and neither PDFium
-rendering nor corpus ingestion depends on them.
-[The resource-reading contract](resource-reading.md#conversion-routes) names the
-scripts that rerun the route comparisons and what their small samples do not
-establish.
-
-When Exa or Tavily is configured, Research can search Web passages as peer
-evidence through one provider-neutral tool. Search and Extract use independently
-ordered failover chains. Failover occurs only for provider failures, never to
-seek a subjectively better result; malformed individual results are dropped and
-reported, and an empty successful result stops the chain. Result URLs become
-inert resource handles and are fetched only by explicit `read` under normal
-guards. Direct anonymous HTTP is attempted first; the configured Extract chain
-is a bounded internal fallback, not a model-visible tool. DlightRAG supplies no
-cookies, authenticated browser session, or Playwright; callers must attach
-protected bytes/screenshots.
-
-Web uploads are content-addressed blobs owned by durable runs. Follow-up
-re-registers historical attachments lazily, newest first within limits. There
-is no parsed attachment table or vector cache. Deleting conversations/runs and
-retention cleanup release only blobs with no surviving reference.
+Attachments, caller links, Web Search results, and URLs the Agent chooses become
+Resources of one Answer Run, which Research reads as bounded text and views as
+pixels; they never become corpus data.
+[Answer Resource Reading and Viewing](resource-reading.md) owns that contract,
+and their blobs follow [Run retention](run-runtime.md#retention).

@@ -15,7 +15,7 @@ A Product Document is not only a LightRAG document. It also has DlightRAG-owned 
 
 Corpus Mutation actions use stable `track_id` identities, durable checkpoints, and idempotent phases across every relevant projection. `ingest`, `replace`, `delete`, `retry`, and `reset` succeed only after the public LightRAG contract reports completion and required DlightRAG projections and requested physical file effects have completed. DlightRAG inspects and trusts upstream public outcomes; it never claims to prove arbitrary LightRAG storage internals, snapshots or restores them, or directly rewrites LightRAG document status.
 
-Original source bytes, thumbnails, and parser sidecars remain in LightRAG/RAGAnything's `input_dir` file layout on a deployment-provided shared POSIX volume. DlightRAG does not introduce an artifact-store abstraction for these files. Source locators and digests are narrow product projections, not ownership of a second file lifecycle.
+Original source bytes, thumbnails, and parser sidecars remain in the corpus file layout under `deployment.working_dir` on a deployment-provided shared POSIX volume. DlightRAG does not introduce an artifact-store abstraction for these files. Source locators and digests are narrow product projections, not ownership of a second file lifecycle.
 
 A document becomes visible on DlightRAG's direct document surfaces only when
 `_dlightrag_finalization_complete` is exactly true. Missing, NULL, and false

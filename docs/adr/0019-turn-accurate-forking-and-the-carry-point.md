@@ -240,6 +240,6 @@ change as the behaviour, since three surfaces stating three things is how this
 happened.
 
 Live documents revised with the implementation: `docs/interfaces.md` (the fork
-endpoint and continuation fields), `docs/durable-answer-runs.md` (Agent Session
+endpoint and continuation fields), `docs/run-runtime.md` (Agent Session
 recovery and run retention), `docs/retrieval-answer.md` where continuation context
 is described, and `docs/domain-language.md` where the terms are already recorded.

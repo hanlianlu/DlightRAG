@@ -11,7 +11,7 @@ Answer attachments, fetched Web resources, spills, and Published Artifact conten
 
 ## Decision
 
-A storage-neutral `RunBlobStore` persists and streams only the Run Blob Plane: Answer attachments, fetched Web resources, spills, and Published Artifact bytes. It never stores deployed corpus originals, thumbnails, or parser sidecars, which remain in LightRAG/RAGAnything's file layout. The Run store persists structured authority and blob references rather than byte content.
+A storage-neutral `RunBlobStore` persists and streams only the Run Blob Plane: Answer attachments, fetched Web resources, spills, and Published Artifact bytes. It never stores deployed corpus originals, thumbnails, or parser sidecars, which remain in the corpus file layout under `deployment.working_dir`. The Run store persists structured authority and blob references rather than byte content.
 
 The first implementation keeps PostgreSQL chunked `BYTEA` as the only Adapter and adds no object-storage infrastructure. A future object-store Adapter must durably stage complete content before an Operational State transaction references it, verify digest and size, and clean unreferenced staging without treating the Blob Store as an authorization authority.
 

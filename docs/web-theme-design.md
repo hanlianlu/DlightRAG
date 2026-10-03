@@ -1,14 +1,9 @@
 # Web Theme Design
 
-**Status:** Implemented — Mineral themes, Soft geometry, and owned Split Layouts
-**Date:** 2026-07-23
-**Updated:** 2026-08-31
-
-## Purpose
-
-The DlightRAG Web UI provides a polished `System / Light / Dark` appearance preference. It keeps the dark theme's identity, adds the warm-neutral **Mineral Light** palette, and makes the correct theme visible on the first painted frame. Its current appearance also includes role-based Soft geometry and token-bridged split panels.
-
-This design does not add custom palettes, account-level preferences, or server-side preference storage. Internationalization is a separate product concern with its own plan; it is not a theme-design constraint.
+The Web UI offers a `System / Light / Dark` appearance preference: the dark theme
+and the warm-neutral **Mineral Light** palette, correct on the first painted
+frame, with role-based Soft geometry and token-bridged split panels. There are no
+custom palettes, account-level preferences, or server-side preference storage.
 
 ## Product Decisions
 
@@ -19,7 +14,6 @@ This design does not add custom palettes, account-level preferences, or server-s
 - The control is an icon button to the right of `Files` in the topbar.
 - The trigger shows a Lucide `Moon` in the effective dark mode and `Sun` in the effective light mode.
 - The menu uses Lucide `Monitor`, `Sun`, and `Moon` icons for `System`, `Light`, and `Dark`.
-- The existing dark appearance remains visually stable except for correcting code-highlight contrast.
 
 ## Architecture Constraints
 
@@ -42,7 +36,7 @@ The root element carries both the stored preference and the effective color mode
 
 The preference is stored in local storage under `dlightrag-theme`. Theme persistence is a browser-only presentation concern; no API endpoint, cookie, database column, or server request state is required.
 
-Vite emits `frontend/theme-init.ts` as a dedicated hashed classic script. The static `<head>` loads it before any stylesheet or application module. It validates the saved preference, resolves `System` with `matchMedia('(prefers-color-scheme: dark)')`, and updates both root attributes. The HTML defaults to `system + dark`, so any bootstrap failure preserves today's safe dark appearance.
+Vite emits `frontend/theme-init.ts` as a dedicated hashed classic script. The static `<head>` loads it before any stylesheet or application module. It validates the saved preference, resolves `System` with `matchMedia('(prefers-color-scheme: dark)')`, and updates both root attributes. The HTML defaults to `system + dark`, so any bootstrap failure keeps the safe dark appearance.
 
 The document also declares native `color-scheme` support. The effective mode controls form controls, scrollbars, and browser-owned UI consistently with the page.
 
@@ -147,7 +141,7 @@ input, and separator ARIA; the app adapter owns open state, breakpoints,
 clamping, and persistence. Inspector and Artifact Canvas persist separate
 preferred pixel widths; clamping for the conversation sidebar and minimum chat
 width never overwrites those preferences. A single token-backed hairline has an
-invisible 12px hit area, so the previous double-border seam is not possible.
+invisible 12px hit area.
 
 Opening an Artifact citation is Shell-mediated. On desktop, Side remains Side,
 Wide remains Wide, and Fullscreen reduces only to Wide while Sources opens. On

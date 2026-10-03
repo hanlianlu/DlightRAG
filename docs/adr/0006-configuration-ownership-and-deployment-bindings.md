@@ -1,6 +1,6 @@
 # Configuration ownership and deployment bindings
 
-DlightRAG gives every effective setting one deployment-time owner. Non-secret product behavior and integration choices belong in `config.yaml`; credentials belong in `.env` for local operation or a secret store in an orchestrator; container topology belongs in Docker Compose or the equivalent deployment manifest. Nested `DLIGHTRAG_*` overrides remain available for secrets, service discovery, process-role bindings, and exceptional operator overrides, but deployment descriptors must not restate application defaults or policy already present in YAML.
+DlightRAG gives every effective setting one deployment-time owner. Non-secret product behavior and integration choices belong in `config.yaml`; credentials belong in `.env` for local operation or a secret store in an orchestrator; container topology belongs in Docker Compose or the equivalent deployment manifest. Nested `DLIGHTRAG_*` overrides remain available for secrets, service discovery, process-role bindings, and exceptional operator overrides, but deployment descriptors must not restate application defaults or policy already present in YAML. A deployment that runs the checked-in `config.yaml` keeps its own access policy (auth mode, issuer, audience, Access Rules) in `.env`, so its identity provider and people stay out of the repository.
 
 ## Status
 

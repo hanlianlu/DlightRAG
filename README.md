@@ -14,13 +14,24 @@ LightRAG storage defaults are exactly `PGKVStorage`, `PGVectorStorage`,
 `PGTableGraphStorage`, and `PGDocStatusStorage`. Writer deployments may
 explicitly replace only the vector leg with `MilvusVectorDBStorage` (including
 Milvus-compatible Zilliz endpoints) by installing `dlightrag[milvus]`; reader
-processes currently remain PostgreSQL-vector-only.
+processes use the PostgreSQL vector leg.
 
 ## Architecture
 
-<p align="center">
-  <img src="docs/architecture.svg" alt="DlightRAG system context shown as one black box between browser users, REST and MCP clients, trusted embedding applications, an optional Web identity boundary, external AI, parser, corpus source and Research systems, PostgreSQL, and a shared corpus artifact root" width="1180" />
-</p>
+```mermaid
+flowchart LR
+  browser(["Browser"]) --> edge["Authenticating edge (optional)"] --> api
+  clients(["REST and MCP clients"]) --> api & mcp
+  subgraph dlightrag["DlightRAG"]
+    api["dlightrag-api: REST and Web"]
+    mcp["dlightrag-mcp: MCP"]
+    reader["dlightrag-reader: read-only replica (optional)"]
+  end
+  idp["Identity provider"] -. "published keys" .-> dlightrag
+  dlightrag --> pg[("PostgreSQL 18<br/>corpus, Runs, Memory, Connections")]
+  dlightrag --> files[("Working directory<br/>corpus files, inputs, key ring")]
+  dlightrag --> outside["Model providers, parser, corpus sources,<br/>Web search, owners' MCP servers"]
+```
 
 LightRAG supplies graph and vector retrieval. DlightRAG owns product policy,
 multimodal alignment, durable ingestion and answers, security, storage adapters,
@@ -35,7 +46,7 @@ See [Architecture](docs/architecture.md) for module and storage ownership.
 | Local Docker | Compose PG18 | Self-hosted MinerU by default | Loopback, `auth_mode: none` |
 | Native API | Compose or external PG18 | Any reachable MinerU or Docling | Local or explicit auth |
 | Shared service | Managed or self-hosted PG18 | Independently operated parser | `jwt`; `simple` is one owner |
-| Enterprise | Managed PG18 | Independently operated parser | JWKS plus claim access control |
+| Enterprise | Managed PG18 | Independently operated parser | `jwt` with Access Rules and workspace creators |
 
 The parser runs outside the DlightRAG app container. The checked-in Docker
 configuration uses self-hosted MinerU at
@@ -125,20 +136,13 @@ its own corpus files under `./dlightrag_storage/corpus/<workspace>`.
 ### Read-only replica
 
 A `reader` serves every read surface against the same database and refuses
-corpus writes at acceptance:
+corpus writes with HTTP 503 at acceptance
+([Service roles](docs/postgresql.md#service-roles-and-shared-artifacts)):
 
 ```bash
 docker compose --profile reader up -d dlightrag-reader
+curl -s localhost:8102/health   # service_role: reader
 ```
-
-`docker compose --profile reader stop dlightrag-reader` stops it. `curl -s
-localhost:8102/health` answers `service_role: reader`, and an upload in Web Files
-answers `503 This deployment is a read-only replica of the knowledge
-base: it accepts no corpus writes. Send the upload to a writer.` Retry, Delete,
-Corpus Reset, Workspace Delete, workspace creation, and metadata updates answer
-the same way, each naming its own request; model-catalogue changes are refused
-with the same 503. Add a read-only corpus mount to serve source downloads. See
-[Service roles](docs/postgresql.md#service-roles-and-shared-artifacts).
 
 ## Use DlightRAG
 
@@ -198,7 +202,7 @@ Runs, steer or continue research, and read its Artifacts. Its 18 tools cover
 these tasks; personal Memory management, service administration, and direct
 child-agent supervision are available through Web and REST. All interfaces
 reuse the same Application services and authorization rules. See
-[Interfaces](docs/interfaces.md#mcp-server) for the tool list and integration changes.
+[Interfaces](docs/interfaces.md#mcp-server) for the tool list.
 
 ### Python
 
@@ -230,18 +234,19 @@ durable Answers, then call
 | Workspace | Isolation unit for indexed data, metadata, files, and queries | [Domain language](docs/domain-language.md) |
 | Ingestion | One durable contract for local files, uploads, object storage, URLs, and SDK sources | [Interfaces](docs/interfaces.md#ingestion) |
 | Retrieval | One durable Query-lane Run returning LightRAG mix plus metadata, BM25, visual fusion, and rerank evidence | [Retrieval and Answer](docs/retrieval-answer.md) |
-| Run | Common durable lifecycle for Retrieval, Answer, and Corpus Mutation across REST, MCP, Web, Python, and evaluation | [RunRuntime](docs/durable-answer-runs.md) |
+| Run | Common durable lifecycle for Retrieval, Answer, and Corpus Mutation across REST, MCP, Web, Python, and evaluation | [Run runtime](docs/run-runtime.md) |
 | Answer Run | A Query-lane Run that resolves Fast or Research and generates an Answer | [Retrieval and Answer](docs/retrieval-answer.md#answer-orchestration) |
-| Resource | Answer attachment or public link, read as bounded text or viewed as images on demand; later Runs in the same Session can adopt it | [Retrieval and Answer](docs/retrieval-answer.md#answer-attachments-and-resources) |
+| Resource | Answer attachment or public link, read as bounded text or viewed as images on demand; later Runs in the same Session can adopt it | [Resource reading](docs/resource-reading.md) |
 | Published Artifact | Owner-visible Research output authorized by a settled root attachment and validated at publication | [Domain language](docs/domain-language.md) |
 | Source | Durable provenance and download contract for an ingested document | [Interfaces](docs/interfaces.md#sources) |
 
 ## Security
 
-Loopback development can use `access.auth_mode: none`. Shared deployments should
-use a bearer token or externally issued JWT; JWKS and claim-based workspace/action
-rules are supported. DlightRAG does not issue tokens or replace an ingress WAF,
-rate limiter, TLS terminator, or identity provider. See
+Loopback development can use `access.auth_mode: none`. A deployment for one
+owner uses `simple`, a bearer token; one shared by several people uses `jwt`,
+where an issuer and an audience verify each person's token and Access Rules and
+workspace creators decide what they may do. DlightRAG does not issue tokens or
+replace an ingress WAF, rate limiter, TLS terminator, or identity provider. See
 [Security](docs/security.md).
 
 ## Development
@@ -268,11 +273,9 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [Configuration](docs/configuration.md) | Configuration precedence, fields, defaults, examples |
 | [Interfaces](docs/interfaces.md) | Python, REST, MCP, and Web contracts |
 | [Retrieval and Answer](docs/retrieval-answer.md) | Retrieval, fusion, rerank, packing, citations, highlights |
-| [RunRuntime and Durable Execution](docs/durable-answer-runs.md) | Common Query and Corpus Mutation state machine, leases, events, recovery, retention |
-| [RunRuntime and Scaling Target](docs/run-runtime-and-scaling-target.md) | Accepted workload model, lane bounds, lifecycle guarantees, captured 10k control-plane evidence, and ownership boundary |
+| [Run Runtime](docs/run-runtime.md) | Run lifecycle, lanes, admission limits, repair, retention, scaling |
 | [Personal MCP Connections](docs/personal-mcp-connections.md) | Owner-managed MCP Connections, authorization, and their binding into Research Runs |
 | [Answer Resource Reading](docs/resource-reading.md) | `read`/`view` contracts for Answer attachments and Resources, conversion routes |
-| [Response API Qualification](docs/response-api-qualification.md) | Qualification evidence and limits for the Response API family |
 | [Security](docs/security.md) | Authentication, authorization, ingress and content boundaries |
 | [PostgreSQL](docs/postgresql.md) | PostgreSQL requirements, schema ownership, tuning |
 | [Operations](docs/operations.md) | Executable runbooks and recovery workflows |
@@ -280,8 +283,8 @@ maintenance runbooks. RAGAS evaluation is documented in
 | [Evaluation](docs/evaluation.md) | RAGAS workflow |
 | [Web Theme Design](docs/web-theme-design.md) | Web appearance and interaction decisions |
 
-ADRs under `docs/adr/` and the [frontend stack assessment](docs/frontend-stack-choice.md)
-are design history, not required reading for operating DlightRAG.
+ADRs under `docs/adr/` record design decisions; they are not required reading for
+operating DlightRAG.
 
 ## License
 

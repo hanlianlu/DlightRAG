@@ -60,7 +60,6 @@ models:
     strategy: voyage_reranker
     model: rerank-2.5-lite
     input_modality: auto
-    max_concurrency: 16
 
 deployment:
   # Relative to the process working directory. In the bundled image this
@@ -95,7 +94,7 @@ runtime:
   query:
     worker_concurrency: 16
     max_nonterminal_runs: 30000
-  # Validated bounded defaults; see docs/run-runtime-and-scaling-target.md.
+  # Validated bounded defaults; see docs/run-runtime.md.
   corpus_mutation:
     worker_concurrency: 2
     max_nonterminal_runs: 1000
@@ -117,8 +116,9 @@ answer:
       max_count: 64
       max_bytes: 262144
     # Personal Settings Connections (Streamable HTTP only). Policy only narrows
-    # owner grants; keys belong exclusively in the existing secret source. Timeouts
-    # and size ceilings keep their documented defaults (personal-mcp-connections.md).
+    # owner grants; credentials are sealed under the key ring the first writer
+    # creates in the working directory. Timeouts and size ceilings keep their
+    # documented defaults (personal-mcp-connections.md).
     connections:
       require_https: true
       allow_private_hosts: []

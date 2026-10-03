@@ -168,7 +168,7 @@ the plane is reset rather than migrated.
 The vocabulary moves with the ownership: the durable unit is a **Session Note**,
 and *Run Note* retires to mean the working copy a Run holds under `notes/`. Live
 documents to revise with the implementation: `docs/domain-language.md`,
-`docs/retrieval-answer.md`, `docs/durable-answer-runs.md`, and
+`docs/retrieval-answer.md`, `docs/run-runtime.md`, and
 `docs/interfaces.md` where the carry and the browser route are described.
 
 Landing order, one sequence:

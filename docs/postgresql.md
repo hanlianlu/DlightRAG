@@ -2,8 +2,8 @@
 
 This page is for operators deploying or tuning DlightRAG's database layer. It
 owns PostgreSQL version requirements, extensions, pool sizing, HNSW tuning,
-schema migrations, and deployment notes. Runtime ownership lives in
-[architecture.md](architecture.md); config fields live in
+schema ownership and migrations, and the service roles. Runtime ownership lives
+in [architecture.md](architecture.md); config fields live in
 [configuration.md](configuration.md); rebuild procedures live in
 [operations.md](operations.md).
 
@@ -13,25 +13,28 @@ DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 - `pg_textsearch` for BM25
 - `pg_jieba` for Chinese BM25: the corpus `public.jiebacfg` profile and
   Profile Memory
+- `pg_trgm` for the filename-substring index on document metadata
 
-No fuzzy-search or separate Chinese-parser extension is required. Metadata
-filtering compares `LOWER(TRIM(...))` on both sides, over the built-in columns
-and over any key of the `custom_metadata` JSONB column.
+Metadata filtering compares `LOWER(TRIM(...))` on both sides, over the built-in
+columns and over any key of the `custom_metadata` JSONB column.
 
 ## Required Version
 
-Startup checks require PostgreSQL 18 or newer and `lightrag-hku>=1.5.7`.
-DlightRAG carries no patches against LightRAG's PostgreSQL layer. Workspaces
-should not mix embedding models or dimensions after indexing; changing
-`models.embedding.dim` requires clearing/rebuilding vectors.
+Startup requires PostgreSQL 18 or newer and checks the LightRAG API surface that
+DlightRAG uses; the dependency floor is `lightrag-hku>=1.5.7`. DlightRAG carries
+no patches against LightRAG's PostgreSQL layer. Workspaces should not mix
+embedding models or dimensions after indexing; changing `models.embedding.dim`
+requires clearing/rebuilding vectors.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
-local `postgres/` image definition, pins `pg_textsearch` to v1.4.0, and preloads
-`pg_textsearch,pg_jieba`.
+local `postgres/` image definition, pins `pg_textsearch` to v1.4.0 and
+`pg_jieba` to v2.0.1, and preloads `pg_textsearch,pg_jieba`. Its
+`postgres/init.sql` creates the four extensions when a data volume is first
+initialized.
 
 Default vector storage is `HALFVEC(dim)` with HNSW. Plain `HNSW` over
-`VECTOR(dim)` remains available as an explicit fallback for deployments that
-prefer full-precision storage and have rebuilt indexes accordingly.
+`VECTOR(dim)` is available as an explicit fallback for deployments that prefer
+full-precision storage and have rebuilt indexes accordingly.
 
 ## External and Managed Endpoints
 
@@ -44,27 +47,28 @@ one owner for the non-secret connection fields: place stable values under
 values from its deployment manifest. Do not duplicate them in both. See
 [Configuration](configuration.md#configuration-ownership) and `.env.example`.
 
-Three capabilities are gated independently, so missing one does not force the
-others down:
+Each requirement is gated on its own, so missing one does not force the others
+down:
 
 | Requirement | If unavailable |
 | --- | --- |
 | PostgreSQL 18 | Hard stop, no fallback |
+| `pg_trgm` | Hard stop: every corpus needs it |
 | pgvector ≥ 0.7 | `storage.lightrag.vector_index_type: HNSW` |
 | `pg_textsearch` | `corpus.retrieval.bm25_enabled: false` (vector-only) |
 | `pg_jieba` | `corpus.retrieval.bm25_profiles` without a jieba profile |
 
-`pg_textsearch` refuses to install unless the server preloads it, which managed
-providers rarely expose — that, not the extension catalog, usually decides
-whether BM25 is available. `pg_jieba` installs and tokenizes without preloading.
-Neither is a trusted extension, so only a superuser can create them. Profile
-Memory never needs either to start: it creates both where the server allows and
-logs a warning for what it lacks. Without `pg_jieba` its Chinese BM25 index runs
-under `simple`; without `pg_textsearch` a fact is recalled only
-when restated exactly or, with an embedding model that has a calibrated
-relevance floor, by similarity. An extension installed later takes effect as
-each process restarts, the writer first; running processes keep recalling with
-the index they found.
+`pg_textsearch` installs only on a server that preloads it, which managed
+providers rarely allow, so preloading usually decides whether BM25 is available.
+Neither `pg_textsearch` nor `pg_jieba` is a trusted extension, so only a
+superuser can create them. Profile Memory never needs either to start: it
+creates `pg_textsearch` and then `pg_jieba` where the server allows, skips
+`pg_jieba` without `pg_textsearch`, and logs a warning for what it lacks.
+Without `pg_jieba` its Chinese BM25 index runs under `simple`; without
+`pg_textsearch` a fact is recalled only when restated exactly or, with an
+embedding model that has a calibrated relevance floor, by similarity. An
+extension installed later takes effect as each process restarts, the writer
+first; running processes keep recalling with the index they found.
 
 ## Tuning Boundaries
 
@@ -78,10 +82,9 @@ DlightRAG splits PostgreSQL tuning into two layers:
   `COMPOSE_POSTGRES_SHARED_BUFFERS`, `COMPOSE_POSTGRES_WORK_MEM`,
   `COMPOSE_POSTGRES_MAINTENANCE_WORK_MEM`, `COMPOSE_POSTGRES_EFFECTIVE_CACHE_SIZE`,
   `COMPOSE_POSTGRES_MAX_CONNECTIONS`, and `COMPOSE_POSTGRES_SHM_SIZE`, set in the
-  shell or the `.env` beside `docker-compose.yml`. Compose-only inputs stay out
-  of the application-reserved `DLIGHTRAG_*` namespace, where the application
-  rejects any name that is neither a configuration field nor a documented
-  client or test variable.
+  shell or the `.env` beside `docker-compose.yml`. These Compose-only inputs use
+  `COMPOSE_*` names because the application rejects unknown `DLIGHTRAG_*` names
+  ([Configuration](configuration.md)).
 - **Docker shared memory** is separate from PostgreSQL memory GUCs. The
   checked-in compose stack sets `shm_size: 8gb` so HNSW index builds and
   rebuilds have enough `/dev/shm` headroom. This should be kept in proportion
@@ -112,46 +115,45 @@ storage:
     pool_close_timeout: 5.0
 ```
 
-SSL belongs with the endpoint in `.env`
-(`DLIGHTRAG_STORAGE__POSTGRES__SSL_MODE`, `__SSL_ROOT_CERT`, `__SSL_CERT`,
-`__SSL_KEY`, `__SSL_CRL`). It is bridged to LightRAG's `POSTGRES_SSL_*`
-environment contract once, when the root PostgreSQL corpus adapter is
-constructed; that adapter owns the whole LightRAG environment bridge
-(PostgreSQL, Milvus, parser sidecars, parser rules, input directory). The
-session settings both pools use are rendered in one place, the PostgreSQL
-adapter core (`adapters/postgres/core/_session_settings.py`): the domain pool
-applies them directly and the bridge hands them to LightRAG. Every connection
-DlightRAG opens itself (the domain-store pool, the notification listener, the
-maintenance and readiness adapters, and the workspace write gate) takes its
-endpoint, credentials, and TLS context from one adapter-core helper,
-`pg_connection_kwargs()` in `adapters/postgres/core/_connection.py`, which the
-bridge also reads its endpoint from, so managed PostgreSQL deployments do not
-need a second SSL configuration surface. Configuration only holds the validated
-settings: constructing it builds no TLS context and does not mutate LightRAG's
-process environment.
+TLS settings live with the endpoint under `storage.postgres` (`ssl_mode`,
+`ssl_root_cert`, `ssl_cert`, `ssl_key`, `ssl_crl`), typically through
+`DLIGHTRAG_STORAGE__POSTGRES__SSL_*` in `.env`. Every connection DlightRAG opens
+itself takes its endpoint, credentials, and TLS context from one adapter-core
+helper, and DlightRAG bridges the same values to LightRAG's `POSTGRES_SSL_*`
+environment whenever it builds a PostgreSQL corpus backend, so managed
+PostgreSQL deployments need no second SSL configuration. Configuration only
+holds the validated settings: constructing it builds no TLS context and does not
+mutate LightRAG's process environment.
 
 Connection budgets are split deliberately:
 
 - `storage.postgres.lightrag_pool_max_size` controls LightRAG's PostgreSQL
   backend pool and is bridged to `POSTGRES_MAX_CONNECTIONS`.
-- `storage.postgres.pool_min_size` / `storage.postgres.pool_max_size` control DlightRAG-owned
-  domain stores such as metadata, workspaces, Web conversations, and BM25.
+- `storage.postgres.pool_min_size` / `storage.postgres.pool_max_size` control
+  DlightRAG's domain pool, `pg_pool`
+  ([PG Pool Architecture](#pg-pool-architecture)).
+- Workspace writes hold dedicated write-gate connections, at most
+  `pool_max_size` per process, outside both pools.
 - Docker Compose defaults `max_connections` to `80` for the local profile.
   Production deployments should size the server limit from the number of
-  DlightRAG processes and their two pool caps.
+  DlightRAG processes and their connection budgets.
 
-At startup, DlightRAG logs a connection sanity line using the connected
-server's real `max_connections`. If common process-count env vars such as
-`WEB_CONCURRENCY`, `UVICORN_WORKERS`, or `GUNICORN_WORKERS` are set, it
-multiplies the per-process pool budget by that count and warns when the
-estimated pool budget consumes the server after a small admin headroom.
+For one DlightRAG process, reserve
+`lightrag_pool_max_size + 2 × pool_max_size` connections (both pools and the
+write gate), plus the one the notification hub holds. Multiply that by the
+process count before comparing it with PostgreSQL `max_connections`, leaving
+room for migrations, admin sessions, health checks, and managed-service
+maintenance. At startup, DlightRAG logs the pools-and-gate part of this budget
+against the connected server's real `max_connections`; when `WEB_CONCURRENCY`,
+`UVICORN_WORKERS`, or `GUNICORN_WORKERS` is set, it multiplies by that count
+and warns when the estimate leaves less than a small admin headroom.
 
 Concurrency knobs affect different bottlenecks:
 
 | Setting | Controls | First bottleneck |
 |---|---|---|
 | `storage.postgres.lightrag_pool_max_size` | LightRAG PostgreSQL connections | PostgreSQL `max_connections` |
-| `storage.postgres.pool_max_size` | DlightRAG metadata/BM25/Run connections | PostgreSQL `max_connections` |
+| `storage.postgres.pool_max_size` | DlightRAG domain-pool and write-gate connections | PostgreSQL `max_connections` |
 | `corpus.ingestion.pipeline.max_parallel_insert` | staged insert/vector/KG write workers | PostgreSQL writes and vector indexes |
 | `corpus.ingestion.pipeline.max_parallel_parse_native` | native parser workers | CPU and file I/O |
 | `corpus.ingestion.pipeline.max_parallel_parse_mineru` | External parser workers for the MinerU-compatible route | Parser service, CPU/GPU, OCR latency |
@@ -162,12 +164,6 @@ Concurrency knobs affect different bottlenecks:
 | `runtime.query.max_nonterminal_runs` | Atomic deployment-wide Query-lane nonterminal admission limit | durable backlog growth |
 | `corpus.ingestion.pipeline.max_concurrency` | LightRAG pipeline LLM request concurrency | LLM endpoint limits |
 | `models.embedding.max_concurrency` | embedding request concurrency | embedding endpoint and vector writes |
-
-For a single DlightRAG process, reserve roughly
-`storage.postgres.lightrag_pool_max_size + storage.postgres.pool_max_size` PostgreSQL
-connections, plus the one the notification hub holds. Multiply that by API worker
-count before comparing it with PostgreSQL `max_connections`, leaving room for
-migrations, admin sessions, health checks, and managed-service maintenance.
 
 ## Filtered BM25 Top-K
 
@@ -184,20 +180,17 @@ metadata scope before returning those 20 candidates. Publication is an
 independent predicate: `_dlightrag_finalization_complete IS TRUE`. Without a
 user filter, BM25 ranks a bounded over-fetch window and uses a correlated
 metadata `EXISTS`; it never materializes the set of all visible document IDs.
-pg_textsearch v1.4.0 uses
-planner selectivity to seed the internal scan limit for this query shape,
-avoiding repeated score-and-filter passes for selective filters. Compose makes
-the upstream defaults explicit:
+pg_textsearch seeds its internal scan limit for this query shape from planner
+selectivity, avoiding repeated score-and-filter passes for selective filters.
+Compose sets the two server settings explicitly:
 
 ```text
 pg_textsearch.filtered_seed=on
 pg_textsearch.filtered_seed_margin=3.0
 ```
 
-The approximate initial internal budget is
-`ceil(margin * chunk_top_k / estimated_filter_selectivity)`; the SQL filter and
-`LIMIT` still determine the exact result. The optimization therefore changes
-work performed, not result correctness. Override the two server settings with
+The SQL filter and `LIMIT` still determine the exact result, so these settings
+change work performed, not result correctness. Override them with
 `COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED` and
 `COMPOSE_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN` only after comparing
 representative `EXPLAIN (ANALYZE, BUFFERS)` plans and latency. External
@@ -237,65 +230,62 @@ so any pg_jieba build serves Chinese BM25 correctly:
 DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
 ledger for domain schema changes. This applies to DlightRAG tables such as
 `dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
-remain managed by LightRAG. One explicitly derived exception is the
-DlightRAG-owned partial index
-`idx_dlightrag_file_panel_processed_updated_id` on the LightRAG-owned
-`LIGHTRAG_DOC_STATUS` table. It covers the bounded Files presentation order
-`(workspace, updated_at DESC NULLS FIRST, id ASC) WHERE status = 'processed'`.
-A writer creates it only after LightRAG has established that table; readers
-issue no DDL. The metadata migration normalizes legacy NULL publication markers
-to false (never true), makes the marker non-null with a false default, installs
-a partial visible-document index, and recomputes planner field statistics from
-true rows only. Its trigger handles false-to-true, true-to-false, ordinary
-updates, and deletes exactly. Reader startup requires the new migration,
-constraint, and index. During a rolling upgrade, start an upgraded writer before
-readers serve file pages that rely on these objects.
+remain managed by LightRAG. A writer changes some of them only after LightRAG
+has created them; readers issue no DDL:
+
+- `LIGHTRAG_DOC_STATUS` gets the partial indexes
+  `idx_dlightrag_file_panel_processed_updated_id` and
+  `idx_dlightrag_file_panel_failed_updated_id`, which cover the bounded Files
+  order `(workspace, updated_at DESC NULLS FIRST, id ASC)` for processed and
+  failed documents;
+- with BM25 enabled, `LIGHTRAG_DOC_CHUNKS` gets the `dlightrag_bm25_language`
+  column and its indexes; and
+- `LIGHTRAG_DOC_CHUNKS`, and with `PGVectorStorage` LightRAG's chunk-vector
+  table, become workspace-partitioned parents.
+
+`dlightrag_doc_metadata` holds the publication marker
+`_dlightrag_finalization_complete`, non-null and false by default, with a
+partial index over visible documents. A trigger keeps
+`dlightrag_metadata_field_stats`, the planner's field statistics, counted over
+visible rows only through every insert, update, marker change, and delete.
 
 DlightRAG ensures the current idempotent DDL baseline on writer startup and
 records its versions in the ledger; readers validate the same versions without
-issuing DDL. Because the project is pre-release, a ledger version not declared
-by the running revision is incompatible: both roles fail startup and require a
-full development-data reset rather than attempting an old-data migration. A
-recorded version never re-runs, so a database created before its baseline grew
-an object never gains it; writers therefore read their declared objects back
-after migrating, as readers do, and refuse such a database the same way.
-Run `uv run scripts/reset_development.py --mode docker` (or `--mode native`)
-to perform that reset; it also recreates the required PostgreSQL extensions
-and verifies the empty database. See
+issuing DDL. A ledger version the running revision does not declare is
+incompatible: both roles refuse to start, and the remedy is a full development
+reset rather than a migration of old data. A ledger version alone does not prove
+a schema, since it survives an object dropped afterwards, so each scope also
+declares the objects its revision needs (columns, keys, foreign keys, checks,
+indexes, and guard triggers). Readers read each one back from the catalog, and
+writers do the same after migrating, refusing a database that lacks one. A
+database that holds the `dlightrag_answer_runs` table is refused the same way.
+Run `uv run scripts/reset_development.py --mode docker` (or `--mode native`) to
+perform that reset; it also recreates the required PostgreSQL extensions and
+verifies the empty database. See
 [operations.md](operations.md#full-development-reset).
-
-A ledger version alone does not prove a schema, since it survives an object
-dropped afterwards, so each scope also declares the objects its revision needs
-(columns, keys, foreign keys, checks, indexes, and guard triggers) and readers
-read each one back from the catalog. The Run scope declares each index once:
-its baseline and the migration that introduced it both create the index from
-that declaration, and readers verify it by the same name. The Run baseline is
-the complete current schema; each later Run migration only brings a database
-created before it up to date. Integration tests require a freshly migrated Run
-catalog to contain exactly what is declared, no more and no less, and require
-every later Run migration to leave a fresh baseline unchanged down to each
-definition. A database that still holds `dlightrag_answer_runs` (created by
-releases 2.0.0 through 2.0.5 and never started by a later release) is not
-migrated: writers and readers both refuse to start on it and name the full
-development reset above as the remedy.
 
 ## Durable Run State
 
-Every top-level Retrieval and Answer is one durable Run. DlightRAG-owned tables
-under the `runs` migration scope separate common lifecycle from Answer-owned
-routing, Session, control, child, and blob-reference state:
+Every top-level Retrieval, Answer, and Corpus Mutation is one durable Run
+([RunRuntime](run-runtime.md)). DlightRAG-owned tables under the `runs`
+migration scope separate common lifecycle from Answer-owned routing, Session,
+control, child, and blob-reference state:
 
 | Table | Key | Holds |
 | --- | --- | --- |
 | `dlightrag_runs` | `(owner_id, run_id)` plus globally unique `run_id` | kind, lane, submitter/access scope, submission key, status, retry/checkpoint, retention, cancellation, fenced lease, Prepared Input, Corpus Mutation handoff/repair state, result or terminal error |
 | `dlightrag_run_events` | `(owner_id, run_id, event_sequence)` | gap-free executor-owned events, including Answer `progress` / `token` / `reset` / tool / terminal events |
+| `dlightrag_corpus_mutation_windows` | `(run_id, window_number)` | each ingest window's document and chunk counts, recorded once so workspace totals and promotion count it once |
 | `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
+| `dlightrag_blob_chunks` | `(owner_id, digest, chunk_index)` | the blob's bytes, in ordered chunks |
 | `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered request attachments and Published Artifact bytes |
 | `dlightrag_answer_artifact_attachments` | `(owner_id, run_id, relative_path)` | settled Root Artifact Attachment authority: label, raw digest/size, presentation, Effect provenance, and settlement order |
 | `dlightrag_answer_run_routing` | `(owner_id, run_id)` | requested/valid/resolved mode and canonical Agent Session/Lane mapping |
+| `dlightrag_answer_run_stages` | `(owner_id, run_id, stage_intent_id)` | settled Fast `planner`, `retrieval`, and `final_generation` stage state that recovery reuses |
 | `dlightrag_agent_sessions` | `(owner_id, session_id)` | Session commit sequence, Entry sequence, current run owner and fencing epoch |
 | `dlightrag_agent_session_entries` | `(owner_id, session_id, sequence)` | immutable parent-linked User/Assistant/ToolResult/Control/Compaction Entries |
-| `dlightrag_agent_session_registers` | `(owner_id, session_id, kind, key)` | exact-CAS Lane heads/state, total OperationState, Plan metadata, request/tool snapshots, bounded inputs and Fast reservation |
+| `dlightrag_agent_session_registers` | `(owner_id, session_id, register_kind, register_key)` | exact-CAS Lane heads/state, total OperationState, Plan metadata, request/tool snapshots, bounded inputs and Fast reservation |
+| `dlightrag_answer_session_notes` | `(owner_id, session_id, relative_path)` | the Agent Session's notes, attributed to the Run that wrote each |
 | `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, workspace inventory, spills, and blobs; a Tool settlement stores the Session's Evidence ledger only when it changed, and recovery reads the latest snapshot; a workspace rescan writes its inventory in two statements that delete removed paths and rewrite only changed rows |
 | `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage |
 | `dlightrag_answer_child_operations` | parent run + child Session + operation sequence | same-Session continuation Operations, idempotency, origin, status, cancellation origin, usage/outcome |
@@ -303,41 +293,30 @@ routing, Session, control, child, and blob-reference state:
 | `dlightrag_agent_controls` | run + control sequence | ordered steer inbox for the parent Run or a targeted child Session/Operation; origin `user` or `parent`; append-before-ack; a worker locks and reads at most 100 pending controls at a time, in sequence order |
 
 Independent critique reuses those Child Session, Operation, control, and
-guidance rows. There is no council, supervisor, or budget table.
+guidance rows.
 
-`run_id` is a UUIDv7. A partial unique index makes one idempotency key unique per
-owner, and a second one allows exactly one terminal event per run. The
-run-artifact join carries `ON DELETE CASCADE` to the run and `ON DELETE RESTRICT`
-to the blob, so linking a digest takes the key-share lock that serializes
-against cleanup. Deleting a run removes its events and references, never shared
-bytes; a blob is deleted only once no reference for that owner survives.
-The Query and Corpus Mutation claim paths share the bounded
-`idx_dlightrag_runs_claim` index; Workspace mutation eligibility also uses
-`idx_dlightrag_runs_mutation_fifo`, and event reconnect uses the event primary
-key. `EXPLAIN (ANALYZE, BUFFERS)` evidence at representative bounded backlogs
-is recorded with the [RunRuntime targets](run-runtime-and-scaling-target.md#captured-local-load-evidence)
-and regenerated by `make load-runtime`. A
-compact sequential scan chosen for a 1,000-row admission count is not by itself an index
-regression; the structural integration test separately proves the ordered
-indexes remain usable.
+`run_id` is a UUIDv7. The unique index `idx_dlightrag_runs_submission` makes a
+submission key unique per Run kind and submitter, and a partial unique index
+allows exactly one terminal event per run. The run-artifact join carries
+`ON DELETE CASCADE` to the run and `ON DELETE RESTRICT` to the blob, so linking
+a digest takes the key-share lock that serializes against cleanup. Deleting a
+run removes its events and references, never shared bytes; a blob is deleted
+only once no reference for that owner survives. The Query and Corpus Mutation
+claim paths share the bounded `idx_dlightrag_runs_claim` index; Workspace
+mutation eligibility also uses `idx_dlightrag_runs_mutation_fifo`, and event
+reconnect uses the event primary key. The claim-plan `EXPLAIN` output is part of
+the [load evidence](run-runtime.md#load-evidence).
 
 Web conversation turns link to a run with `(principal_id, answer_run_id)` and
 `ON DELETE CASCADE`. The turn carries conversation order and the run link only:
 request content, answer text, sources, and uploaded bytes all live in the run, so
-nothing about one answer is stored twice. The baseline schema creates only this
-run-link representation; no duplicated-answer or Web-owned attachment tables
-exist.
+nothing about one answer is stored twice.
 
-### Retention Implementation
-
-Every run-owning process sweeps hourly in bounded `SKIP LOCKED` batches, so no
-leader or cron job is required. Row locks, cascades, Session reference checks,
-and the run-artifact/blob foreign key serialize pruning against new references.
-Conversation deletion follows the same Run-first lock order. Answer uses the
-configured retention floor; top-level Retrieval and Corpus Mutation select seven days. Lifecycle
-and HTTP 410 semantics are defined in
-[RunRuntime and durable query execution](durable-answer-runs.md); the
-field/default is in [Configuration](configuration.md).
+Retention prunes these rows in bounded `SKIP LOCKED` batches; row locks,
+cascades, Session reference checks, and the run-artifact/blob foreign key
+serialize pruning against new references, and conversation deletion follows the
+same Run-first lock order. What retention selects, and when, is in
+[RunRuntime](run-runtime.md#retention).
 
 ## Graph Storage
 
@@ -350,24 +329,25 @@ tables, no extension.
 | `lightrag_graph_edges` | `(workspace, namespace, src_id, tgt_id)` |
 
 Node and edge attributes live in a `properties JSONB` column, and traversal is
-plain recursive SQL over an index on `(workspace, namespace, tgt_id)`. Edges are
-undirected: LightRAG canonicalizes each pair in Python before writing, never
-with SQL `LEAST`/`GREATEST`, so endpoint ordering cannot drift with the
-database collation.
+LightRAG's frontier-capped iterative breadth-first search over an index on
+`(workspace, namespace, tgt_id)`. Edges are undirected: LightRAG canonicalizes
+each pair in Python before writing, never with SQL `LEAST`/`GREATEST`, so
+endpoint ordering cannot drift with the database collation.
 
 Ordinary tables require no compiled graph extension,
 `shared_preload_libraries` entry, or per-workspace schema DDL.
 
-The tables are created by `initialize()` under an advisory lock, so any process
-may be first. Workspace isolation is a column, not a schema, so resetting a
-workspace is a `DELETE`, and orphaned workspaces leave no schemas behind.
+A writer creates the tables in `initialize()` under an advisory lock, so any
+writer may be first; readers verify them without DDL. Workspace isolation is a
+column, not a schema, so resetting a workspace is a `DELETE`, and orphaned
+workspaces leave no schemas behind.
 
 ## PG Pool Architecture
 
-DlightRAG uses one configured PostgreSQL endpoint per service process, selected
-by `deployment.service_role`. Both roles target the **same primary endpoint**: a writer
-applies DlightRAG schema migrations and mutates the corpus, and a reader still
-writes DlightRAG operational state (see
+Every DlightRAG process connects to the one endpoint `storage.postgres` names.
+Both service roles target the **same primary endpoint**: a writer applies
+DlightRAG schema migrations and mutates the corpus, and a reader still writes
+DlightRAG operational state (see
 [Service roles and shared artifacts](#service-roles-and-shared-artifacts)).
 LightRAG's staged pipeline already supports ingest and query in the same writer
 process; local query-while-ingest behavior should be tuned through
@@ -378,11 +358,12 @@ DlightRAG uses two asyncpg pools:
 | Pool | Owner | Purpose |
 |---|---|---|
 | LightRAG ClientManager pool | LightRAG | KV, vector, graph, doc status |
-| `pg_pool` singleton | DlightRAG | Metadata index, BM25, workspace metadata |
+| `pg_pool` singleton | DlightRAG | Metadata index, BM25, workspace metadata, Runs, Web conversations, Connections, the model catalogue, and Profile Memory |
 
 The dedicated DlightRAG pool avoids contention between LightRAG internals and
-metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
-and session-level PostgreSQL tuning.
+DlightRAG's own reads and writes. Both pools use the same endpoint, SSL
+settings, and session-level PostgreSQL tuning; a reader's LightRAG pool also
+runs with `default_transaction_read_only=on`.
 
 Cross-process wake-ups use LISTEN/NOTIFY through one notification hub per
 process. The hub holds one connection of its own, outside `pg_pool` but with its
@@ -442,6 +423,6 @@ same primary endpoint. Read-replica routing would need a separate corpus endpoin
 and is outside this design.
 
 A domain session forced read-only fails `/ready` for both roles because both
-write operational state. Migration order, probes, shared mounts, homogeneous
-worker requirements, and rollout commands are in
+write operational state. Startup order, probes, and homogeneous worker
+requirements are in
 [Operations](operations.md#runruntime-and-durable-query-and-corpus-mutation-runs).

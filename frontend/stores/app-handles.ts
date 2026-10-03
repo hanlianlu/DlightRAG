@@ -1,8 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Explicit store bag the Shell constructs once and passes to Features.
+/** The bag of the app's shared stores.
 
- *  createAppHandles() is the only constructor of the app's shared stores;
- *  no store module holds an instance. Primitives never receive this bag.
+ *  createAppHandles() is the only constructor of the shared stores, and
+ *  productionHandles() holds the page's one bag; no store module holds an
+ *  instance of its own. Primitives never receive this bag.
  */
 
 import {AnswerEventCursorStore} from './answer-event-cursor-store.ts';
