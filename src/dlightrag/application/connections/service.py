@@ -946,6 +946,7 @@ def _catalogue_declaration(tool: CatalogueTool) -> ToolDeclaration:
 
         @classmethod
         def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            # Published, not generated: a schema generator passed in does not apply.
             return deepcopy(schema)
 
     return ToolDeclaration(

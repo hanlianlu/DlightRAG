@@ -263,7 +263,12 @@ def test_skill_declarations_need_no_owner_or_catalogue(tmp_path: Path, monkeypat
 async def test_connection_acceptance_returns_only_the_stored_declaration() -> None:
     from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 
-    schema = {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+    schema = {
+        "type": "object",
+        "title": "Remote lookup arguments",
+        "properties": {"query": {"type": "string", "title": "What to look up"}},
+        "required": ["query"],
+    }
     catalogue = CatalogueTool("lookup", "Remote lookup.", schema, local_name="mcp__Remote__lookup")
     binding = RunConnectionBinding("owner", "a" * 32, 1, 1, "b" * 64)
     store = AsyncMock()

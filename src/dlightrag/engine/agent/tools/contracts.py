@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from pydantic import BaseModel
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode
 
 from dlightrag.engine.agent.session.effects import (
     ReplayPolicy,
@@ -212,6 +213,32 @@ class ToolRuntime:
 type ToolExecute = Callable[[BaseModel, ToolRuntime], Awaitable["ToolResult"]]
 
 
+def _without_titles(node: Any) -> Any:
+    """Drop every ``title`` annotation. A field named ``title`` maps to an object, not a string."""
+    if isinstance(node, dict):
+        return {
+            key: _without_titles(value)
+            for key, value in node.items()
+            if not (key == "title" and isinstance(value, str))
+        }
+    if isinstance(node, list):
+        return [_without_titles(item) for item in node]
+    return node
+
+
+class _ToolSchema(GenerateJsonSchema):
+    """The schema a model is shown for a Tool's arguments.
+
+    Pydantic titles every field and model after its own name, which tells a model
+    nothing its field names and descriptions do not. A Connection Tool's schema is
+    published, not generated, so this generator never reaches it and the remote
+    server's own titles stay.
+    """
+
+    def generate(self, schema: Any, mode: JsonSchemaMode = "validation") -> dict[str, Any]:
+        return _without_titles(super().generate(schema, mode))
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDeclaration:
     """Pure tool declaration with a Pydantic argument contract.
@@ -221,7 +248,8 @@ class ToolDeclaration:
     exactly. Replay is fail-closed: tools opt in only when identical persisted
     arguments are safe to execute again. The digest is the SHA-256 of the
     canonicalized input schema, so presentation fields and declaration order never
-    change it.
+    change it. The ``definition`` a model is shown is generated once, with the digest,
+    from that same schema.
 
     ``read_only`` is fail-closed the same way. A read-only call changes nothing
     outside its own Run's record of what it read, so adjacent read-only calls of one
@@ -238,24 +266,19 @@ class ToolDeclaration:
     contract_version: int = 2
     input_schema_digest: str = field(init=False)
     read_only: bool = False
+    definition: ToolDefinition = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.replay_policy not in {"replayable", "never"}:
             raise ValueError("AgentTool replay policy must be replayable or never")
         if self.contract_version < 1:
             raise ValueError("AgentTool contract_version must be positive")
+        schema = self.input_model.model_json_schema(schema_generator=_ToolSchema)
+        object.__setattr__(self, "input_schema_digest", schema_digest(schema))
         object.__setattr__(
             self,
-            "input_schema_digest",
-            schema_digest(self.input_model.model_json_schema()),
-        )
-
-    @property
-    def definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name=self.name,
-            description=self.description,
-            parameters=self.input_model.model_json_schema(),
+            "definition",
+            ToolDefinition(name=self.name, description=self.description, parameters=schema),
         )
 
     def bind(self, execute: ToolExecute) -> AgentTool:

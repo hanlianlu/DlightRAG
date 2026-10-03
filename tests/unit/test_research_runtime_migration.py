@@ -1888,6 +1888,8 @@ async def test_a_follow_up_run_extends_the_previous_runs_last_request_on_the_wir
     earlier, later = wire.bodies[1], wire.bodies[2]
 
     assert json.dumps(later["tools"]) == json.dumps(earlier["tools"])
+    # Pydantic's generated field titles restate the field names, so the model is not sent them.
+    assert '"title"' not in json.dumps(earlier["tools"])
     # The earlier Run's own statement, memory, closes its last request.
     assert earlier["messages"][-1]["content"] == memory
     cut = len(earlier["messages"]) - 1
