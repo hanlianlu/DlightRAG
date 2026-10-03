@@ -49,6 +49,8 @@ postgres/
 # Dev/test files
 tests/
 docs/
+# The Agent Browser pool images build from their own contexts.
+agent-browser/
 .test-results/
 .import_linter_cache/
 # Local parser output from personal documents

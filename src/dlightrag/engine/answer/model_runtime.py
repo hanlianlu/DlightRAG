@@ -25,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class WebSourceRuntimeSettings:
-    """Immutable credentials and independently ordered provider chains."""
+    """Immutable credentials and independently ordered provider chains.
+
+    The Extract chain may name ``browser``, the Agent Browser, which is bound per Run
+    rather than built here.
+    """
 
     exa_api_key: str | None = field(default=None, repr=False)
     tavily_api_key: str | None = field(default=None, repr=False)
@@ -143,7 +147,8 @@ class AnswerModelRuntime:
     def web_sources(self) -> WebSourceService | None:
         self._ensure_open()
         settings = self._settings.web_sources
-        if not settings.search_providers and not settings.extract_providers:
+        hosted = tuple(name for name in settings.extract_providers if name != "browser")
+        if not settings.search_providers and not hosted:
             return None
         if self._web_sources is None:
             providers: dict[str, ExaWebSource | TavilyWebSource] = {}
@@ -153,7 +158,7 @@ class AnswerModelRuntime:
                 providers["tavily"] = TavilyWebSource(settings.tavily_api_key)
             self._web_sources = WebSourceService(
                 search_providers=tuple(providers[name] for name in settings.search_providers),
-                extract_providers=tuple(providers[name] for name in settings.extract_providers),
+                extract_providers=tuple(providers[name] for name in hosted),
             )
         return self._web_sources
 

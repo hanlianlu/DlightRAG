@@ -204,6 +204,7 @@ def test_run_schema_changes_are_append_only() -> None:
         "answer_session_notes",
         "published_artifact_resources",
         "artifact_attachment_video_presentation",
+        "agent_browser_leases",
     )
     assert tuple(migration.version for migration in RUN_MIGRATIONS) == expected_versions
 

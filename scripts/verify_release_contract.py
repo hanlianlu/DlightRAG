@@ -16,6 +16,46 @@ def _project(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))["project"]
 
 
+def _verify_playwright_pins(root: Path, dependencies: list[str]) -> None:
+    """The Agent Browser client and its pool image run one Playwright version (ADR 0032).
+
+    The pool's server refuses a client whose major or minor version differs, and the
+    pin fixes the patch too, so every place that names the version must agree.
+    """
+    pinned = [dependency for dependency in dependencies if dependency.startswith("playwright==")]
+    if len(pinned) != 1:
+        raise ValueError("root distribution must pin playwright== exactly once")
+    version = pinned[0].removeprefix("playwright==")
+
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    locked = {package["name"]: package["version"] for package in lock["package"]}.get("playwright")
+    if locked != version:
+        raise ValueError(f"uv.lock resolves playwright {locked}, not {version}")
+
+    pool = root / "agent-browser/browser"
+    declared = re.search(
+        r"^ARG PLAYWRIGHT_VERSION=(\S+)$", (pool / "Dockerfile").read_text(encoding="utf-8"), re.M
+    )
+    if declared is None or declared.group(1) != version:
+        raise ValueError(f"the pool Dockerfile does not pin Playwright {version}")
+    manifest = json.loads((pool / "package.json").read_text(encoding="utf-8"))
+    if manifest.get("dependencies", {}).get("playwright") != version:
+        raise ValueError(f"the pool package.json does not pin Playwright {version}")
+    package_lock = json.loads((pool / "package-lock.json").read_text(encoding="utf-8"))["packages"]
+    if (
+        package_lock[""].get("dependencies", {}).get("playwright") != version
+        or package_lock.get("node_modules/playwright", {}).get("version") != version
+    ):
+        raise ValueError(f"the pool package-lock.json does not lock Playwright {version}")
+    image = re.search(
+        r"^\s*image: dlightrag-agent-browser:(\S+)$",
+        (root / "docker-compose.yml").read_text(encoding="utf-8"),
+        re.M,
+    )
+    if image is None or image.group(1) != version:
+        raise ValueError(f"the Compose pool image is not tagged {version}")
+
+
 def verify_repository(root: Path = ROOT) -> None:
     manifests = (root / "pyproject.toml", root / "packages/memory/pyproject.toml")
     projects = [_project(path) for path in manifests]
@@ -26,6 +66,8 @@ def verify_repository(root: Path = ROOT) -> None:
     dependency = f"dlightrag-memory=={version}"
     if dependency not in projects[0].get("dependencies", []):
         raise ValueError(f"root distribution must depend on {dependency}")
+
+    _verify_playwright_pins(root, projects[0].get("dependencies", []))
 
     frontend = json.loads((root / "frontend/package.json").read_text(encoding="utf-8"))
     frontend_lock = json.loads((root / "frontend/package-lock.json").read_text(encoding="utf-8"))

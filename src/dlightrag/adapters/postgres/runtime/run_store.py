@@ -59,6 +59,10 @@ from dlightrag.adapters.postgres.runtime._terminal import (
     TerminalStatus,
     finish_fenced_run,
 )
+from dlightrag.adapters.postgres.runtime.browser_leases import (
+    AGENT_BROWSER_LEASES_DDL,
+    AGENT_BROWSER_LEASES_SCHEMA_TABLE,
+)
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_blob_content
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
@@ -953,6 +957,7 @@ RUN_MIGRATIONS = (
             _CREATE_COMMITTED_SPILLS,
             _CREATE_SESSION_NOTES,
             *MEMORY_SETTINGS_DDL,
+            *AGENT_BROWSER_LEASES_DDL,
         ),
     ),
     Migration(
@@ -1127,6 +1132,11 @@ RUN_MIGRATIONS = (
             "CHECK (presentation IN "
             "('image', 'video', 'markdown', 'html', 'pdf', 'text', 'download'))",
         ),
+    ),
+    Migration(
+        "agent_browser_leases",
+        "Lease Agent Browser endpoints to Runs",
+        AGENT_BROWSER_LEASES_DDL,
     ),
 )
 
@@ -1639,6 +1649,7 @@ _RUN_TABLES = (
         ),
     ),
     MEMORY_SETTINGS_SCHEMA_TABLE,
+    AGENT_BROWSER_LEASES_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(

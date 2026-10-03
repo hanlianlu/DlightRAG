@@ -1387,6 +1387,30 @@ class TestHealthEndpoint:
         assert body["search_toolchain"]["fd"]["version"] == "10.5.0"
         assert body["search_toolchain"]["rg"]["sha256"] == "b" * 64
 
+    async def test_health_reports_whether_an_agent_browser_is_configured_without_probing_it(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.adapters.postgres.core._pool import pg_pool
+
+        probe = AsyncMock(return_value="off")
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.application = mock_application
+
+        assert (await client.get("/health")).json()["agent_browser"] == {
+            "state": "disabled",
+            "endpoints": 0,
+        }
+
+        mock_application.health.set_agent_browser(endpoints=2)
+        body = (await client.get("/health")).json()
+        # The count is all it says: a pool member's address stays inside the deployment.
+        assert body["agent_browser"] == {"state": "configured", "endpoints": 2}
+        probe.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # TestHealthEndpointEnhanced

@@ -333,6 +333,110 @@ class SessionNotesConfig(BaseModel):
     )
 
 
+class AgentBrowserConfig(BaseModel):
+    """The Agent Browser pool (ADR 0032): Research renders pages in a browser it leases.
+
+    No endpoint means no Agent Browser. The endpoints and the proxy are Compose Service
+    names, so ``docker-compose.yml`` binds them (ADR 0006) and ``config.yaml`` leaves
+    them unset.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    endpoints: tuple[ServiceUrl, ...] = Field(
+        default=(),
+        description=(
+            "One Playwright run-server WebSocket URL per pool container; each serves one "
+            "Run at a time. Empty disables the Agent Browser."
+        ),
+    )
+    egress_proxy: ServiceUrl | None = Field(
+        default=None,
+        description=(
+            "The HTTP proxy every browser launch uses. It is the pool's only way out, so "
+            "endpoints require it."
+        ),
+    )
+    lease_wait_seconds: float = Field(
+        default=10.0,
+        ge=0,
+        le=120,
+        description="How long a render waits for a free browser before it reports the pool busy.",
+    )
+    connect_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=120,
+        description="How long connecting to one browser may take.",
+    )
+    navigation_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=300,
+        description="How long a page may take to load.",
+    )
+    settle_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0,
+        le=60,
+        description="How long a loaded page may take to go quiet; a page that never does is read.",
+    )
+    idle_release_seconds: float = Field(
+        default=30.0,
+        ge=0,
+        le=600,
+        description=(
+            "A Run gives its browser back once it has gone this long without rendering; its "
+            "next render leases one again. 0 releases after every render."
+        ),
+    )
+
+    @field_validator("endpoints")
+    @classmethod
+    def _websocket_endpoints(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        identities = []
+        for endpoint in value:
+            try:
+                parts = urlsplit(endpoint)
+                port = parts.port
+            except ValueError:
+                raise ValueError("endpoints must be valid URLs") from None
+            if parts.scheme not in {"ws", "wss"} or not parts.hostname:
+                raise ValueError("endpoints must be ws:// or wss:// URLs with a host")
+            if parts.query or parts.fragment:
+                raise ValueError("endpoints must not carry a query or a fragment")
+            identities.append((parts.scheme, parts.hostname.lower(), port, parts.path or "/"))
+        if len(set(identities)) != len(identities):
+            raise ValueError("endpoints must be unique")
+        return value
+
+    @field_validator("egress_proxy")
+    @classmethod
+    def _http_proxy(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            parts = urlsplit(value)
+            _ = parts.port
+        except ValueError:
+            raise ValueError("egress_proxy must be a valid URL") from None
+        if parts.scheme != "http" or not parts.hostname:
+            raise ValueError("egress_proxy must be an http:// URL with a host")
+        if parts.path not in {"", "/"} or parts.query or parts.fragment:
+            raise ValueError("egress_proxy must name a host and port only")
+        return value
+
+    @model_validator(mode="after")
+    def _endpoints_have_a_proxy(self) -> Self:
+        if self.endpoints and self.egress_proxy is None:
+            raise ValueError("answer.agent.browser.endpoints require egress_proxy")
+        return self
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.endpoints)
+
+
 class AgentExecutionConfig(BaseModel):
     """Optional Agent execution: no environment, or one confined to its workspace."""
 
@@ -431,6 +535,7 @@ class AgentExecutionConfig(BaseModel):
     )
     publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)
     connections: ConnectionPolicy = Field(default_factory=ConnectionPolicy)
+    browser: AgentBrowserConfig = Field(default_factory=AgentBrowserConfig)
 
 
 class WebConversationsConfig(BaseModel):
@@ -465,20 +570,20 @@ class WebSourcesConfig(BaseModel):
 
     ``None`` derives an order from configured keys (Exa, then Tavily). An
     explicit empty tuple disables that operation while retaining credentials.
+    The Extract chain may also name ``browser``, the Agent Browser (ADR 0032), which
+    is a configured deployment capability rather than a keyed provider.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     search_providers: tuple[Literal["exa", "tavily"], ...] | None = None
-    extract_providers: tuple[Literal["exa", "tavily"], ...] | None = None
+    extract_providers: tuple[Literal["exa", "tavily", "browser"], ...] | None = None
     exa: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
     tavily: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
 
     @field_validator("search_providers", "extract_providers")
     @classmethod
-    def _unique_provider_order(
-        cls, value: tuple[Literal["exa", "tavily"], ...] | None
-    ) -> tuple[Literal["exa", "tavily"], ...] | None:
+    def _unique_provider_order(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
         if value is None:
             return None
         if len(set(value)) != len(value):
@@ -499,7 +604,7 @@ class WebSourcesConfig(BaseModel):
             else self.configured_providers()
         )
 
-    def extract_order(self) -> tuple[Literal["exa", "tavily"], ...]:
+    def extract_order(self) -> tuple[Literal["exa", "tavily", "browser"], ...]:
         return (
             self.extract_providers
             if self.extract_providers is not None
@@ -513,7 +618,9 @@ class WebSourcesConfig(BaseModel):
             ("search", self.search_order()),
             ("extract", self.extract_order()),
         ):
-            missing = [name for name in order if not keys[name]]
+            # The Agent Browser holds no key; whether it is configured is the Answer
+            # section's to check, since the pool is configured beside it.
+            missing = [name for name in order if name != "browser" and not keys[name]]
             if missing:
                 raise ValueError(f"Web {operation} provider(s) lack api_key: {', '.join(missing)}")
         return self
@@ -797,6 +904,26 @@ class AnswerSectionSettings(FrozenSettings):
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
     web_sources: WebSourcesConfig = Field(default_factory=WebSourcesConfig)
+
+    @model_validator(mode="after")
+    def _a_named_browser_is_configured(self) -> Self:
+        if "browser" in self.web_sources.extract_order() and not self.agent.browser.enabled:
+            raise ValueError(
+                "answer.web_sources.extract_providers names 'browser' but "
+                "answer.agent.browser has no endpoints"
+            )
+        return self
+
+    def extract_chain(self) -> tuple[str, ...]:
+        """The Extract chain a Run walks, in order: hosted providers, then the browser.
+
+        A configured Agent Browser always joins the automatic chain, at its end unless the
+        list names it elsewhere, so a deployment that adds the browser changes no list.
+        """
+        order: tuple[str, ...] = self.web_sources.extract_order()
+        if self.agent.browser.enabled and "browser" not in order:
+            return (*order, "browser")
+        return order
 
 
 type JwtAlgorithm = Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"]

@@ -96,6 +96,7 @@ from dlightrag.engine.ai.telemetry import (
     bounded_telemetry_text,
     safe_log_text,
 )
+from dlightrag.engine.answer.agent_browser import AgentBrowserSettings, BrowserProvider
 from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.engine.answer.citations.finalization import finalize_answer
@@ -426,10 +427,14 @@ class AnswerExecutor:
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         connection_tool_resolver: ResearchConnectionToolResolver | None = None,
         skills_bundle_factory: SkillsBundleFactory | None = None,
+        browser_provider: BrowserProvider | None = None,
+        browser_settings: AgentBrowserSettings | None = None,
         now: Callable[[], datetime.datetime] | None = None,
         on_dependency_unavailable: DependencyStateCallback | None = None,
         on_dependency_recovered: DependencyStateCallback | None = None,
     ) -> None:
+        if (browser_provider is None) != (browser_settings is None):
+            raise ValueError("an Agent Browser needs both its provider and its settings")
         self._store = store
         self._blob_store = blob_store
         self._pool = pool
@@ -456,6 +461,8 @@ class AnswerExecutor:
         self._memory_capability_current = memory_capability_current
         self._connection_tool_resolver = connection_tool_resolver
         self._skills_bundle_factory = skills_bundle_factory
+        self._browser_provider = browser_provider
+        self._browser_settings = browser_settings
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
         self._on_dependency_recovered = on_dependency_recovered
@@ -465,8 +472,12 @@ class AnswerExecutor:
 
     async def aclose(self) -> None:
         """Finish adapter-owned process cleanup after the coordinator stops claims."""
-        if self._execution_adapter is not None:
-            await self._execution_adapter.aclose()
+        try:
+            if self._execution_adapter is not None:
+                await self._execution_adapter.aclose()
+        finally:
+            if self._browser_provider is not None:
+                await self._browser_provider.aclose()
 
     def validate_active_prepared_input(self, prepared: Mapping[str, Any]) -> None:
         """Validate active durable Answer input using the executor's model bindings."""

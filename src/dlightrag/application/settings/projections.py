@@ -16,6 +16,7 @@ from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import resolve_reasoning
 from dlightrag.engine.ai.settings import ChatModelSelector, ModelSettings
+from dlightrag.engine.answer.agent_browser import AgentBrowserSettings
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
@@ -133,9 +134,23 @@ def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntime
             exa_api_key=web.exa.api_key,
             tavily_api_key=web.tavily.api_key,
             search_providers=web.search_order(),
-            extract_providers=web.extract_order(),
+            extract_providers=config.answer.extract_chain(),
         ),
         query_image_limit=MAX_QUERY_IMAGES,
+    )
+
+
+def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | None:
+    """Snapshot how a Run uses its Agent Browser, or None when none is configured."""
+    browser = config.answer.agent.browser
+    if not browser.enabled:
+        return None
+    return AgentBrowserSettings(
+        lease_wait_seconds=browser.lease_wait_seconds,
+        navigation_timeout_seconds=browser.navigation_timeout_seconds,
+        settle_timeout_seconds=browser.settle_timeout_seconds,
+        idle_release_seconds=browser.idle_release_seconds,
+        max_page_bytes=config.answer.generation.max_attachment_bytes,
     )
 
 
