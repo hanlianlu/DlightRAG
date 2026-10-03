@@ -1,10 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL filtered vector search for LightRAG chunks."""
 
+import asyncio
+import datetime
 import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -43,19 +46,27 @@ def _metadata_doc_subquery(
     return subquery, params
 
 
-class PGFilteredVectorSearch:
-    """Strict document-scoped pgvector search and supporting index DDL."""
+class PGChunkVectorStore:
+    """DlightRAG's operations on LightRAG's pgvector chunk table.
+
+    Document-scoped search pushed down beside the metadata, its supporting index,
+    and fused visual vectors written over the text vectors LightRAG inserted.
+    """
+
+    _VECTOR_WRITE_MAX_BYTES: ClassVar[int] = 16 * 1024 * 1024
+    _VECTOR_WRITE_MAX_RECORDS: ClassVar[int] = 200
 
     def __init__(self, original: Any, *, exact_threshold: int = EXACT_FILTER_THRESHOLD) -> None:
         required = ("table_name", "workspace", "db", "cosine_better_than_threshold")
         missing = [name for name in required if not hasattr(original, name)]
         if missing:
             raise RuntimeError(
-                "Filtered vector search requires PostgreSQL vector capabilities: "
+                "The chunk vector store requires PostgreSQL vector capabilities: "
                 + ", ".join(missing)
             )
         self._original = original
         self._exact_threshold = exact_threshold
+        self._vector_write_lock = asyncio.Lock()
 
     async def search(
         self,
@@ -285,6 +296,33 @@ class PGFilteredVectorSearch:
                 exc_info=True,
             )
 
+    async def overwrite(
+        self,
+        vectors: dict[str, list[float]],
+        *,
+        embedding_dim: int,
+    ) -> None:
+        if not vectors:
+            return
+        chunks_vdb = self._original
+        values = self._build_vector_update_values(vectors, embedding_dim=embedding_dim)
+        chunks_table = pg_qualified_identifier(chunks_vdb.table_name)
+        sql = (
+            f"UPDATE {chunks_table} "  # noqa: S608 - validated identifier.
+            "SET content_vector=$3, update_time=$4 "
+            "WHERE workspace=$1 AND id=$2"
+        )
+
+        async def execute(connection: Any) -> None:
+            for batch in self._chunk_vector_values(values):
+                await connection.executemany(sql, batch)
+
+        async with self._vector_write_lock:
+            await chunks_vdb.db._run_with_retry(
+                execute,
+                timing_label=f"{chunks_vdb.workspace} chunk_vector_overwrite",
+            )
+
     async def _run(self, operation: Callable[[Any], Awaitable[Any]]) -> Any:
         return await self._original.db._run_with_retry(operation)
 
@@ -303,5 +341,69 @@ class PGFilteredVectorSearch:
             chunks.append(chunk)
         return chunks
 
+    def _build_vector_update_values(
+        self,
+        vectors: dict[str, list[float]],
+        *,
+        embedding_dim: int,
+    ) -> list[tuple[Any, ...]]:
+        current_time = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        workspace = self._original.workspace
+        values = []
+        for chunk_id, vector in vectors.items():
+            if len(vector) != embedding_dim:
+                raise ValueError(f"{chunk_id} vector dimension {len(vector)} != {embedding_dim}")
+            values.append((workspace, chunk_id, vector, current_time))
+        return values
 
-__all__ = ["EXACT_FILTER_THRESHOLD", "PGFilteredVectorSearch"]
+    @classmethod
+    def _chunk_vector_values(cls, values: list[tuple[Any, ...]]) -> list[list[tuple[Any, ...]]]:
+        if not values:
+            return []
+        payload_limit = cls._VECTOR_WRITE_MAX_BYTES or float("inf")
+        records_limit = cls._VECTOR_WRITE_MAX_RECORDS or float("inf")
+        batches: list[list[tuple[Any, ...]]] = []
+        current: list[tuple[Any, ...]] = []
+        current_bytes = 2
+        for value in values:
+            value_bytes = cls._estimate_vector_record_bytes(value)
+            separator = 1 if current else 0
+            next_bytes = current_bytes + separator + value_bytes
+            if current and (len(current) >= records_limit or next_bytes > payload_limit):
+                batches.append(current)
+                current = []
+                current_bytes = 2
+                next_bytes = current_bytes + value_bytes
+            current.append(value)
+            current_bytes = next_bytes
+        if current:
+            batches.append(current)
+        return batches
+
+    @staticmethod
+    def _estimate_vector_record_bytes(record: tuple[Any, ...]) -> int:
+        total = 0
+        for value in record:
+            if isinstance(value, str):
+                total += len(value.encode("utf-8"))
+            elif isinstance(value, bytes | bytearray):
+                total += len(value)
+            elif value is None:
+                continue
+            elif isinstance(value, list) and all(isinstance(item, int | float) for item in value):
+                total += len(value) * 8
+            elif isinstance(value, dict | list):
+                total += len(
+                    json.dumps(
+                        value,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    ).encode("utf-8")
+                )
+            else:
+                total += 16
+        return total
+
+
+__all__ = ["EXACT_FILTER_THRESHOLD", "PGChunkVectorStore"]

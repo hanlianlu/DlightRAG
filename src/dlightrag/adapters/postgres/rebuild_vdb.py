@@ -17,7 +17,10 @@ from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
 from dlightrag.adapters.observability import LangfuseTelemetry
-from dlightrag.adapters.postgres.corpus.corpus import verify_lightrag_storage_configuration
+from dlightrag.adapters.postgres.corpus.corpus import (
+    chunk_vector_store,
+    verify_lightrag_storage_configuration,
+)
 from dlightrag.adapters.postgres.corpus.lightrag_environment import apply_lightrag_environment
 from dlightrag.adapters.postgres.rebuild_bm25 import canonical_workspace_config, run_rebuild_bm25
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
@@ -33,7 +36,7 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
 from dlightrag.engine.rag.corpus.ingestion.engine import UnifiedIngestionEngine
 from dlightrag.engine.rag.corpus.ingestion.paths import workspace_input_root
 from dlightrag.engine.rag.lightrag.models import build_lightrag_embedding
-from dlightrag.engine.rag.lightrag.stores import LightRAGStores
+from dlightrag.engine.rag.lightrag.stores import UNFUSED_VECTOR_STORAGE, LightRAGStores
 from dlightrag.engine.rag.workspace.settings import RagSettings
 
 logger = logging.getLogger(__name__)
@@ -314,15 +317,6 @@ async def run_rebuild(
         raise SystemExit("--yes is required for rebuild targets; stop DlightRAG first")
 
     resolved_config = canonical_workspace_config(config or get_config())
-    if (
-        restore_sidecar_alignment
-        and target in {"chunks", "all"}
-        and resolved_config.storage.lightrag.vector_storage != "PGVectorStorage"
-    ):
-        raise ValueError(
-            "sidecar fused-vector restoration requires PGVectorStorage; "
-            "use --no-restore-sidecar-alignment for MilvusVectorDBStorage"
-        )
     resolved_embedding = resolved_config.models.embedding
     model_scheduler = ModelScheduler(max_concurrency=resolved_config.models.max_concurrency)
     multimodal_embedder = create_embedding_model(
@@ -350,6 +344,7 @@ async def run_rebuild(
         # first write: once the chunk vectors are rewritten text-only, only a
         # completed restoration puts the fused visual vectors back.
         restore_fused_vectors = False
+        chunk_vectors = None
         if restore_sidecar_alignment and target in {"chunks", "all"}:
             try:
                 restore_fused_vectors = await resolve_direct_image_embedding_enabled(
@@ -367,6 +362,10 @@ async def run_rebuild(
                 return 1
             if restore_fused_vectors:
                 _verify_restoration_surface(_lightrag_surface(tool))
+                chunk_vectors = chunk_vector_store(_lightrag_surface(tool), resolved_config)
+                if chunk_vectors is None:
+                    print(f"Nothing was rebuilt: {UNFUSED_VECTOR_STORAGE}", file=sys.stderr)
+                    return 1
 
         all_stats: list[dict[str, Any]] = []
         if target in {"graph", "all"}:
@@ -403,6 +402,7 @@ async def run_rebuild(
                     stores=LightRAGStores(
                         lightrag_surface,
                         chunk_store=PGCorpusChunkStore(lightrag_surface),
+                        chunk_vectors=chunk_vectors,
                     ),
                     multimodal_embedder=multimodal_embedder,
                     telemetry=LangfuseTelemetry(),

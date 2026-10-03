@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 from dlightrag.engine.rag.lightrag.stores import LightRAGStores
 
 
@@ -20,7 +21,7 @@ class FakeLightRAG:
 
 
 def _stores(fake: FakeLightRAG) -> LightRAGStores:
-    return LightRAGStores(fake, chunk_store=AsyncMock())
+    return LightRAGStores(fake, chunk_store=AsyncMock(), chunk_vectors=None)
 
 
 def test_lightrag_stores_validates_required_surfaces() -> None:
@@ -124,11 +125,22 @@ async def test_chunk_document_scope_index_is_owned_independently_of_bm25() -> No
     ]
 
 
+def _chunk_vectors(db: object) -> PGChunkVectorStore:
+    return PGChunkVectorStore(
+        SimpleNamespace(
+            table_name="LIGHTRAG_VDB_CHUNKS",
+            db=db,
+            workspace="ws",
+            cosine_better_than_threshold=0.2,
+        )
+    )
+
+
 async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
-    stores = PGCorpusChunkStore(FakeLightRAG())
+    stores = _chunk_vectors(db=None)
 
     with pytest.raises(ValueError, match="vector dimension"):
-        await stores.overwrite_chunk_vectors(
+        await stores.overwrite(
             {"chunk-1": [0.1, 0.2]},
             embedding_dim=3,
         )
@@ -146,12 +158,10 @@ async def test_overwrite_chunk_vectors_writes_each_vector_for_its_chunk() -> Non
         async def executemany(self, sql, values) -> None:  # noqa: ANN001
             self.executed.append((sql, values))
 
-    fake = FakeLightRAG()
     db = FakeDB()
-    fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_DOC_CHUNKS", db=db, workspace="ws")
-    stores = PGCorpusChunkStore(fake)
+    stores = _chunk_vectors(db)
 
-    await stores.overwrite_chunk_vectors(
+    await stores.overwrite(
         {"doc-1-mm-drawing-000": [0.1, 0.2, 0.3]},
         embedding_dim=3,
     )
@@ -177,15 +187,12 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
         async def executemany(self, sql, values) -> None:  # noqa: ANN001
             self.batches.append(list(values))
 
-    monkeypatch.setattr(PGCorpusChunkStore, "_VECTOR_WRITE_MAX_RECORDS", 1)
-    monkeypatch.setattr(PGCorpusChunkStore, "_VECTOR_WRITE_MAX_BYTES", 16_000_000)
+    monkeypatch.setattr(PGChunkVectorStore, "_VECTOR_WRITE_MAX_RECORDS", 1)
+    monkeypatch.setattr(PGChunkVectorStore, "_VECTOR_WRITE_MAX_BYTES", 16_000_000)
 
-    fake = FakeLightRAG()
     db = FakeDB()
-    fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_VDB", db=db, workspace="ws")
-
-    stores = PGCorpusChunkStore(fake)
-    await stores.overwrite_chunk_vectors(
+    stores = _chunk_vectors(db)
+    await stores.overwrite(
         {
             "img-1": [0.1, 0.2, 0.3],
             "img-2": [0.4, 0.5, 0.6],

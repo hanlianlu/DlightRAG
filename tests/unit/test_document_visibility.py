@@ -138,7 +138,7 @@ async def test_non_pushdown_vector_visibility_is_bounded_and_may_lose_recall() -
         original=original,
         embedding_func=AsyncMock(),
         visibility_lookup=lookup,
-        filtered_search=None,
+        chunk_vectors=None,
     )
 
     async with metadata_filter_scope(None) as stats:
@@ -187,7 +187,7 @@ async def test_non_pushdown_vector_applies_scope_to_one_bounded_metadata_lookup(
         original=original,
         embedding_func=AsyncMock(),
         visibility_lookup=lookup,
-        filtered_search=None,
+        chunk_vectors=None,
     )
 
     async with metadata_filter_scope(scope):
@@ -215,7 +215,7 @@ async def test_non_pushdown_vector_empty_scope_skips_backend_and_lookup() -> Non
         original=original,
         embedding_func=AsyncMock(),
         visibility_lookup=lookup,
-        filtered_search=None,
+        chunk_vectors=None,
     )
 
     async with metadata_filter_scope(_scope(doc_exists=False)):

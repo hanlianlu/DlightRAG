@@ -670,9 +670,14 @@ DlightRAG values overwrite inherited `MILVUS_URI`, `MILVUS_TOKEN`, and
 `MILVUS_DB_NAME`; an unset optional binding leaves the corresponding upstream
 environment behavior untouched. DlightRAG never connects to Milvus for health
 checks and never creates, copies, or drops Milvus infrastructure itself. Zilliz
-uses `MilvusVectorDBStorage`, not a separate storage class. A reader requires
-`PGVectorStorage`, because LightRAG offers no non-mutating reader attach for an
-external vector adapter.
+uses `MilvusVectorDBStorage`, not a separate storage class.
+
+DlightRAG's own chunk-vector operations exist for `PGVectorStorage` only, so on
+Milvus a metadata scope filters vector results after retrieval rather than
+inside the search, and a workspace whose embedding settles on fused visual
+vectors refuses to start (set `models.embedding.input_modality: text`). Readers
+and workspace promotion require `PGVectorStorage`; LightRAG offers no
+non-mutating reader attach for an external vector adapter.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -994,6 +999,4 @@ storage:
 `vector_db_kwargs` holds at most 16 scalar adapter options in 4096 encoded
 bytes; secrets and endpoint URIs are rejected. Milvus accepts only LightRAG's
 documented index, metric, HNSW, SQ, and IVF keys and
-`cosine_better_than_threshold`. With Milvus, visual-fusion vector overwrite and
-workspace partition promotion are unsupported, and those combinations fail
-deterministically.
+`cosine_better_than_threshold`.

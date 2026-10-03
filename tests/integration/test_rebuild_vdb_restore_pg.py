@@ -3,7 +3,7 @@
 
 Restoration was only ever exercised against stubs, which hid that its surface check could
 never pass on the storage-only surface the rebuild builds. This suite runs the real restore,
-through ``_lightrag_surface`` and ``PGCorpusChunkStore``, on a dedicated scratch database.
+through ``_lightrag_surface``, ``PGCorpusChunkStore`` and ``PGChunkVectorStore``, on a dedicated scratch database.
 """
 
 import hashlib
@@ -214,6 +214,7 @@ async def test_rebuild_restores_a_fused_drawing_vector_in_postgres(
 
     from dlightrag.adapters.postgres import rebuild_vdb
     from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
     from dlightrag.engine.ai.telemetry import NoopTelemetry
     from dlightrag.engine.rag.lightrag.stores import LightRAGStores
 
@@ -294,7 +295,11 @@ async def test_rebuild_restores_a_fused_drawing_vector_in_postgres(
         workspace_id=_WORKSPACE,
         settings=writer.settings,
         lightrag=surface,
-        stores=LightRAGStores(surface, chunk_store=PGCorpusChunkStore(surface)),
+        stores=LightRAGStores(
+            surface,
+            chunk_store=PGCorpusChunkStore(surface),
+            chunk_vectors=PGChunkVectorStore(surface.chunks_vdb),
+        ),
         multimodal_embedder=embedder,
         telemetry=NoopTelemetry(),
     )

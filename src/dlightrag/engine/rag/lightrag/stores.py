@@ -26,7 +26,12 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
-from dlightrag.engine.rag.retrieval.ports import CorpusChunkStore
+from dlightrag.engine.rag.retrieval.ports import ChunkVectorStore, CorpusChunkStore
+
+UNFUSED_VECTOR_STORAGE = (
+    "The configured vector storage holds no fused visual vectors: set "
+    "models.embedding.input_modality to text, or use PGVectorStorage"
+)
 
 
 class LightRAGStores:
@@ -37,13 +42,20 @@ class LightRAGStores:
     full_docs: Any
     doc_status: Any
 
-    def __init__(self, lightrag: Any, *, chunk_store: CorpusChunkStore) -> None:
+    def __init__(
+        self,
+        lightrag: Any,
+        *,
+        chunk_store: CorpusChunkStore,
+        chunk_vectors: ChunkVectorStore | None,
+    ) -> None:
         self.raw = lightrag
         self.chunks_vdb = lightrag.chunks_vdb
         self.text_chunks = lightrag.text_chunks
         self.full_docs = lightrag.full_docs
         self.doc_status = lightrag.doc_status
         self._chunk_store = chunk_store
+        self._chunk_vectors = chunk_vectors
 
     async def get_doc_status(self, doc_id: str) -> dict[str, Any] | None:
         return await self.doc_status.get_by_id(doc_id)
@@ -138,7 +150,9 @@ class LightRAGStores:
         *,
         embedding_dim: int,
     ) -> None:
-        await self._chunk_store.overwrite_chunk_vectors(vectors, embedding_dim=embedding_dim)
+        if self._chunk_vectors is None:
+            raise RuntimeError(UNFUSED_VECTOR_STORAGE)
+        await self._chunk_vectors.overwrite(vectors, embedding_dim=embedding_dim)
 
     async def resolve_scope(self, filters: MetadataFilter) -> MetadataScope:
         """Resolve filter facts plus the bounded matching-chunk probe."""

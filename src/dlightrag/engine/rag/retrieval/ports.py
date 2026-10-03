@@ -63,19 +63,20 @@ class ScopedChunkReader(Protocol):
 
 
 class CorpusChunkStore(MetadataScopeStore, Protocol):
-    async def overwrite_chunk_vectors(
-        self,
-        vectors: dict[str, list[float]],
-        *,
-        embedding_dim: int,
-    ) -> None: ...
-
     async def fetch_chunk_contents(self, chunk_ids: list[str]) -> list[dict[str, Any]]: ...
 
     async def update_chunk_bm25_languages(self, labels: dict[str, str]) -> None: ...
 
 
-class FilteredVectorSearch(Protocol):
+class ChunkVectorStore(Protocol):
+    """DlightRAG's own operations on LightRAG's chunk vectors.
+
+    A vector storage DlightRAG supports in full provides them all: search scoped
+    by document metadata where the vectors live, and fused visual vectors written
+    over the text vectors LightRAG inserted. A workspace on a vector storage
+    without them keeps LightRAG's own vector operations only.
+    """
+
     async def search(
         self,
         embedding: list[float],
@@ -86,12 +87,14 @@ class FilteredVectorSearch(Protocol):
 
     async def ensure_document_scope_index(self) -> None: ...
 
+    async def overwrite(self, vectors: dict[str, list[float]], *, embedding_dim: int) -> None: ...
+
 
 __all__ = [
     "BM25Search",
     "BM25ProfileSearch",
     "CorpusChunkStore",
-    "FilteredVectorSearch",
+    "ChunkVectorStore",
     "MetadataScopeStore",
     "RetrievalBackend",
     "ScopedChunkReader",

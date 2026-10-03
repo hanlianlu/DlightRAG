@@ -546,7 +546,7 @@ def _runtime_binder() -> SimpleNamespace:
             return_value=SimpleNamespace(
                 metadata_index=object(),
                 chunks=object(),
-                filtered_vectors=object(),
+                chunk_vectors=object(),
                 bm25=object(),
                 bm25_languages=(),
                 scoped_chunk_reader=object(),
@@ -1633,12 +1633,21 @@ class TestWorkspaceRagLightRAGMainPath:
         assert type(service._lightrag.text_chunks).__name__ == "FilteredChunkStore"
         resume_pipeline.assert_awaited_once_with()
 
-    async def test_backend_attach_failure_aborts_initialization(
-        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("case", ["reader_attach_drift", "fused_vectors_without_a_store"])
+    async def test_initialization_stops_on_storage_the_runtime_cannot_use(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch, case: str
     ) -> None:
-        mutate_config(test_config, "deployment.service_role", "reader")
         service = _service(test_config)
-        cast(Any, service.backend.runtime.attach).side_effect = RuntimeError("reader attach drift")
+        attach = cast(Any, service.backend.runtime.attach)
+        if case == "reader_attach_drift":
+            mutate_config(test_config, "deployment.service_role", "reader")
+            attach.side_effect = RuntimeError("reader attach drift")
+            refusal: tuple[type[Exception], str] = (RuntimeError, "reader attach drift")
+        else:
+            # The probe settled on fused visual vectors, but the attached vector
+            # storage has no operations to write them with.
+            attach.return_value.chunk_vectors = None
+            refusal = (ValueError, "holds no fused visual vectors")
 
         monkeypatch.setattr(
             "dlightrag.engine.rag.workspace.workspace_rag.LightRagChatModels",
@@ -1658,7 +1667,7 @@ class TestWorkspaceRagLightRAGMainPath:
         )
         monkeypatch.setattr(
             "dlightrag.engine.rag.workspace.workspace_rag.resolve_direct_image_embedding_enabled",
-            AsyncMock(return_value=False),
+            AsyncMock(return_value=case == "fused_vectors_without_a_store"),
         )
         monkeypatch.setattr(
             "dlightrag.engine.rag.workspace.workspace_rag.build_document_embedder",
@@ -1684,7 +1693,7 @@ class TestWorkspaceRagLightRAGMainPath:
                 "dlightrag.engine.rag.retrieval.retriever.UnifiedRetriever", return_value=object()
             ),
         ):
-            with pytest.raises(RuntimeError, match="reader attach drift"):
+            with pytest.raises(refusal[0], match=refusal[1]):
                 await service._do_initialize_unified()
 
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.engine.rag.retrieval import MetadataScope
-from dlightrag.engine.rag.retrieval.ports import FilteredVectorSearch, ScopedChunkReader
+from dlightrag.engine.rag.retrieval.ports import ChunkVectorStore, ScopedChunkReader
 from dlightrag.engine.rag.retrieval.visibility import (
     VisibleDocumentLookup,
     bounded_visibility_candidate_limit,
@@ -92,12 +92,12 @@ class FilteredVectorStorage:
         embedding_func: Callable[..., Any],
         *,
         visibility_lookup: VisibleDocumentLookup,
-        filtered_search: FilteredVectorSearch | None,
+        chunk_vectors: ChunkVectorStore | None,
     ) -> None:
         self._original = original
         self._embedding_func = embedding_func
         self._visibility_lookup = visibility_lookup
-        self._filtered_search = filtered_search
+        self._chunk_vectors = chunk_vectors
 
     async def query(
         self, query: str | Any, top_k: int, query_embedding: list[float] | None = None
@@ -107,7 +107,7 @@ class FilteredVectorStorage:
         if scope is not None and not scope:
             return []
 
-        if self._filtered_search is not None:
+        if self._chunk_vectors is not None:
             if query_embedding is None:
                 if isinstance(query, str):
                     embeddings = await self._embedding_func([query], context="query")
@@ -117,7 +117,7 @@ class FilteredVectorStorage:
                     query_embedding = query
             if query_embedding is None:
                 raise RuntimeError("Filtered vector search requires a query embedding")
-            rows = await self._filtered_search.search(
+            rows = await self._chunk_vectors.search(
                 query_embedding,
                 scope=scope,
                 top_k=top_k,
@@ -151,8 +151,8 @@ class FilteredVectorStorage:
         return rows
 
     async def ensure_doc_scope_index(self) -> None:
-        if self._filtered_search is not None:
-            await self._filtered_search.ensure_document_scope_index()
+        if self._chunk_vectors is not None:
+            await self._chunk_vectors.ensure_document_scope_index()
 
     def __getattr__(self, name: str) -> Any:
         """Proxy all other attributes to original (table_name, workspace, etc.)."""

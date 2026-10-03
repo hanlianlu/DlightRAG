@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
     metadata_match_conditions,
 )
@@ -175,12 +175,12 @@ def _vector_storage() -> Any:
 
 def test_filtered_vector_search_requires_postgres_capabilities() -> None:
     with pytest.raises(RuntimeError, match="cosine_better_than_threshold"):
-        PGFilteredVectorSearch(type("IncompleteVectorStorage", (), {})())
+        PGChunkVectorStore(type("IncompleteVectorStorage", (), {})())
 
 
 async def test_scoped_vector_search_skips_an_empty_scope_entirely() -> None:
     storage = _vector_storage()
-    search = PGFilteredVectorSearch(storage)
+    search = PGChunkVectorStore(storage)
 
     scope = MetadataScope(
         filters=MetadataFilter(filename="missing.pdf"),
@@ -224,7 +224,7 @@ async def test_retrieval_path_never_binds_a_document_id_array() -> None:
     assert all(not isinstance(param, list) for param in probe_params)
 
     storage = _vector_storage()
-    await PGFilteredVectorSearch(storage).search(
+    await PGChunkVectorStore(storage).search(
         [0.1],
         scope=_scope(candidate_count=1),
         top_k=1,

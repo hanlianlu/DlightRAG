@@ -28,7 +28,7 @@ from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     required_postgres_extensions,
 )
 from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
-from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 from dlightrag.adapters.postgres.corpus.doc_status_lookup import PGDocStatusLookup
 from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
 from dlightrag.adapters.postgres.corpus.lightrag_contract import PGLightRAGContractGuard
@@ -578,17 +578,9 @@ class PGCorpusRuntimeBinder:
             # of whether the optional BM25 retrieval leg is enabled.
             await chunks.ensure_document_scope_index()
             await foundation.verify_tables(specs=lightrag_retrieval_table_specs(lightrag))
-        filtered_vectors = (
-            PGFilteredVectorSearch(
-                lightrag.chunks_vdb,
-                exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
-            )
-            if lightrag.chunks_vdb is not None
-            and config.storage.lightrag.vector_storage == "PGVectorStorage"
-            else None
-        )
-        if filtered_vectors is not None and not config.is_reader:
-            await filtered_vectors.ensure_document_scope_index()
+        chunk_vectors = chunk_vector_store(lightrag, config)
+        if chunk_vectors is not None and not config.is_reader:
+            await chunk_vectors.ensure_document_scope_index()
 
         profiles = (
             profiles_from_config(config.corpus.retrieval.bm25_profiles)
@@ -606,12 +598,26 @@ class PGCorpusRuntimeBinder:
         return WorkspaceCorpusStores(
             metadata_index=metadata_index,
             chunks=chunks,
-            filtered_vectors=filtered_vectors,
+            chunk_vectors=chunk_vectors,
             bm25=bm25,
             bm25_languages=profile_languages(profiles),
             scoped_chunk_reader=chunks,
             doc_status_lookup=PGDocStatusLookup(workspace=config.deployment.workspace),
         )
+
+
+def chunk_vector_store(lightrag: Any, config: DlightragConfig) -> PGChunkVectorStore | None:
+    """The chunk vector operations DlightRAG runs beside LightRAG's, if its storage has them.
+
+    PGVectorStorage has them all. MilvusVectorDBStorage has none: metadata scopes
+    filter its results afterwards, and it holds no fused visual vectors.
+    """
+    if lightrag.chunks_vdb is None or config.storage.lightrag.vector_storage != "PGVectorStorage":
+        return None
+    return PGChunkVectorStore(
+        lightrag.chunks_vdb,
+        exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
+    )
 
 
 def build_pg_corpus_backend(config: DlightragConfig) -> WorkspaceCorpusBackend:

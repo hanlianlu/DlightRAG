@@ -458,6 +458,13 @@ class WorkspaceRag:
             "LightRAG storages %s",
             "attached (read-only)" if settings.read_only else "initialized",
         )
+        if self._direct_image_embedding_enabled and corpus_stores.chunk_vectors is None:
+            from dlightrag.engine.rag.lightrag.stores import UNFUSED_VECTOR_STORAGE
+
+            # The probe settled on fused visual vectors that only a storage with
+            # DlightRAG's vector operations can hold: refuse now, before ingestion
+            # writes a document the runtime cannot complete.
+            raise ValueError(UNFUSED_VECTOR_STORAGE)
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
@@ -467,7 +474,7 @@ class WorkspaceRag:
                 original=lightrag.chunks_vdb,
                 embedding_func=embedding_func,
                 visibility_lookup=corpus_stores.metadata_index,
-                filtered_search=corpus_stores.filtered_vectors,
+                chunk_vectors=corpus_stores.chunk_vectors,
             )
             lightrag.chunks_vdb = filtered_vdb  # type: ignore[assignment]
 
@@ -489,6 +496,7 @@ class WorkspaceRag:
         self._lightrag_stores = LightRAGStores(
             lightrag,
             chunk_store=corpus_stores.chunks,
+            chunk_vectors=corpus_stores.chunk_vectors,
         )
 
         self._visual_asset_resolver = VisualAssetResolver(

@@ -11,8 +11,8 @@ from dlightrag.engine.rag.corpus.contracts import DocStatusLookup
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
 from dlightrag.engine.rag.retrieval.ports import (
     BM25Search,
+    ChunkVectorStore,
     CorpusChunkStore,
-    FilteredVectorSearch,
     ScopedChunkReader,
 )
 from dlightrag.engine.rag.workspace.settings import RagSettings
@@ -121,7 +121,7 @@ class WorkspaceCorpusStores:
 
     metadata_index: MetadataIndexProtocol
     chunks: CorpusChunkStore
-    filtered_vectors: FilteredVectorSearch | None
+    chunk_vectors: ChunkVectorStore | None
     bm25: BM25Search | None
     doc_status_lookup: DocStatusLookup
     bm25_languages: tuple[str, ...] = ()

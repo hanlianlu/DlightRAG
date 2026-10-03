@@ -974,9 +974,9 @@ async def test_exact_vector_leg_fills_top_k_through_the_metadata_semi_join(
     writer_corpus: WriterCorpus,
     decoyed: None,
 ) -> None:
-    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 
-    search = PGFilteredVectorSearch(writer_corpus.lightrag.chunks_vdb, exact_threshold=_THRESHOLD)
+    search = PGChunkVectorStore(writer_corpus.lightrag.chunks_vdb, exact_threshold=_THRESHOLD)
     rows = await search.search(_DECOY_VECTOR, scope=_scope(candidate_count=1), top_k=3)
 
     # The decoys are the nearest chunks of all, yet only the in-scope document's
@@ -989,9 +989,9 @@ async def test_hnsw_leg_fills_top_k_and_keeps_the_limit_outside_the_filter(
     writer_corpus: WriterCorpus,
     decoyed: None,
 ) -> None:
-    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 
-    search = PGFilteredVectorSearch(writer_corpus.lightrag.chunks_vdb, exact_threshold=_THRESHOLD)
+    search = PGChunkVectorStore(writer_corpus.lightrag.chunks_vdb, exact_threshold=_THRESHOLD)
     rows = await search.search(
         _DECOY_VECTOR,
         scope=_scope(candidate_count=_THRESHOLD + 1, candidate_count_exact=False),
@@ -1007,7 +1007,7 @@ async def test_forced_generic_hnsw_plan_rides_the_index_through_the_semi_join(
     seeded: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 
     # Record the statement the HNSW strategy itself sends, then plan exactly that.
     storage = writer_corpus.lightrag.chunks_vdb
@@ -1020,7 +1020,7 @@ async def test_forced_generic_hnsw_plan_rides_the_index_through_the_semi_join(
         )
 
     monkeypatch.setattr(storage.db, "_run_with_retry", recorded)
-    await PGFilteredVectorSearch(storage, exact_threshold=_THRESHOLD).search(
+    await PGChunkVectorStore(storage, exact_threshold=_THRESHOLD).search(
         [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
         scope=_scope(candidate_count=_THRESHOLD + 1, candidate_count_exact=False),
         top_k=3,
@@ -1125,7 +1125,7 @@ async def test_unscoped_product_reads_hide_incomplete_and_metadata_less_rows(
 ) -> None:
     """Every direct PostgreSQL read surface applies the same visibility rule."""
     from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
-    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
@@ -1190,7 +1190,7 @@ async def test_unscoped_product_reads_hide_incomplete_and_metadata_less_rows(
     )
     assert metadata_page.document_ids == ("doc-out",)
 
-    vectors = await PGFilteredVectorSearch(writer_corpus.lightrag.chunks_vdb).search(
+    vectors = await PGChunkVectorStore(writer_corpus.lightrag.chunks_vdb).search(
         [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
         scope=None,
         top_k=20,
@@ -1411,7 +1411,7 @@ async def test_overwriting_chunk_vectors_updates_only_existing_rows(
     writer_corpus: WriterCorpus,
     seeded: None,
 ) -> None:
-    from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+    from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 
     table = writer_corpus.vector_table
     other_workspace = "ms_vectors_away"
@@ -1427,7 +1427,7 @@ async def test_overwriting_chunk_vectors_updates_only_existing_rows(
         )
         replacement = [0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.1, 0.2]
 
-        await PGCorpusChunkStore(writer_corpus.lightrag).overwrite_chunk_vectors(
+        await PGChunkVectorStore(writer_corpus.lightrag.chunks_vdb).overwrite(
             {"c-in-0": replacement, "c-never-stored": replacement},
             embedding_dim=8,
         )

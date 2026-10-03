@@ -325,7 +325,7 @@ async def test_runtime_binder_composes_workspace_stores(
     attach_read_only = AsyncMock()
     monkeypatch.setattr(corpus_module, "PGMetadataIndex", metadata_constructor)
     monkeypatch.setattr(corpus_module, "PGCorpusChunkStore", chunk_constructor)
-    monkeypatch.setattr(corpus_module, "PGFilteredVectorSearch", vector_constructor)
+    monkeypatch.setattr(corpus_module, "PGChunkVectorStore", vector_constructor)
     monkeypatch.setattr(corpus_module, "PGFilePanelStore", file_panel_constructor)
     monkeypatch.setattr(corpus_module, "PGPartitionFoundation", foundation_constructor)
     monkeypatch.setattr(corpus_module, "profiles_from_config", MagicMock(return_value=profiles))
@@ -386,7 +386,7 @@ async def test_runtime_binder_composes_workspace_stores(
     )
     assert stores.metadata_index is metadata
     assert stores.chunks is chunks
-    assert stores.filtered_vectors is vectors
+    assert stores.chunk_vectors is vectors
     assert stores.bm25 is bm25
     assert stores.bm25_languages == (("en",) if bm25_enabled else ())
     assert stores.scoped_chunk_reader is chunks

@@ -4,7 +4,7 @@
 from collections.abc import Sequence
 from unittest.mock import AsyncMock
 
-from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.corpus.corpus_vectors import PGChunkVectorStore
 from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import (
     FilteredChunkStore,
@@ -90,13 +90,13 @@ async def test_filtered_query_uses_query_embedding_context() -> None:
         },
     )()
     embedding_func = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    filtered_search = AsyncMock()
-    filtered_search.search.return_value = []
+    chunk_vectors = AsyncMock()
+    chunk_vectors.search.return_value = []
     wrapper = FilteredVectorStorage(
         original=storage,
         embedding_func=embedding_func,
         visibility_lookup=AsyncMock(),
-        filtered_search=filtered_search,
+        chunk_vectors=chunk_vectors,
     )
 
     async with metadata_filter_scope(_scope(candidate_count=3)):
@@ -107,7 +107,7 @@ async def test_filtered_query_uses_query_embedding_context() -> None:
 
 async def test_large_candidate_pg_search_places_distance_filter_outside_cte() -> None:
     storage = _FakePGVectorStorage()
-    search = PGFilteredVectorSearch(storage, exact_threshold=1)
+    search = PGChunkVectorStore(storage, exact_threshold=1)
 
     await search.search(
         [0.1, 0.2, 0.3],

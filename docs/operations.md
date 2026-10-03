@@ -305,9 +305,8 @@ docker compose up -d dlightrag-api dlightrag-mcp
 
 After `chunks`/`all`, DlightRAG refreshes BM25 language labels and replaces
 canonical drawing vectors with fused VLM-description+image vectors when direct
-multimodal embedding is active. Skip alignment only for diagnosis, an
-intentional text-only deployment, or `MilvusVectorDBStorage`, where `chunks` and
-`all` require `--no-restore-sidecar-alignment`.
+multimodal embedding is active. Skip alignment only for diagnosis or an
+intentional text-only deployment.
 
 With alignment on, `chunks`/`all` settle whether direct multimodal embedding is
 active before writing any vector, running the same image/fusion probe as the
