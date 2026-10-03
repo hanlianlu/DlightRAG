@@ -506,7 +506,9 @@ async def test_control_turn_projects_artifact_publication_as_one_capability() ->
     # The publication contract lives in the capability-gated system prompt now; there
     # is no per-turn instruction left to restate it.
     assert "attach_artifact" in str(messages[0]["content"])
-    assert "attachment, not answer text, authorizes publication" in str(messages[0]["content"])
+    assert "not answer text, authorizes its publication" in " ".join(
+        str(messages[0]["content"]).split()
+    )
 
 
 async def test_control_turn_carries_non_citable_memory() -> None:

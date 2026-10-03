@@ -18,6 +18,7 @@ by an Agent's filesystem tools.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import shutil
 import uuid
@@ -29,6 +30,9 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.error import YAMLError
 
 from dlightrag.engine.agent.context import ContextContribution
 from dlightrag.engine.agent.tools.contracts import (
@@ -38,7 +42,10 @@ from dlightrag.engine.agent.tools.contracts import (
     ToolRuntime,
 )
 
+logger = logging.getLogger(__name__)
+
 _MAX_SKILL_FILE_CHARS = 50_000
+_MAX_DESCRIPTION_CHARS = 1024
 _OWNER_MAX_SKILLS = 20
 _OWNER_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -219,8 +226,13 @@ class SkillsBundle:
             disabled_builtin_skills=self._disabled_builtin_skills,
         )
 
-    def context_contributions(self) -> tuple[ContextContribution, ...]:
-        requested = _requested_skill_contribution(self._requested_skill)
+    def context_contributions(self, *, child: bool) -> tuple[ContextContribution, ...]:
+        """What a Run says about Skills: the user's explicit request, then the catalog.
+
+        An explicit request is the user speaking to the Run's own agent. A Child gets the
+        catalog, since it holds ``load_skill``, and its objective, but not that request.
+        """
+        requested = None if child else _requested_skill_contribution(self._requested_skill)
         catalog = self.catalog()
         skill = None if catalog is None else catalog.contribution()
         return tuple(item for item in (requested, skill) if item is not None)
@@ -335,13 +347,11 @@ def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
 def publish_skill_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="publish_skill",
-        description="Publish one durable Agent Skill for the current user. Validates the skill "
-        "(frontmatter name/description, kebab-case name, per-file 50K char cap, "
-        "20 skills / 20MiB owner quota) and installs it atomically. Publishing an "
-        "existing name updates it. Never touches global or built-in skills. It is the "
-        "only channel for making a skill durable: drafts in the run workspace or "
-        "conversation do not survive the run. Follow the skill-creator skill for the "
-        "drafting workflow before publishing.",
+        description="Publish one durable Agent Skill for the current user, validated and "
+        "installed atomically. Never touches global or built-in skills. It is the only "
+        "channel for making a skill durable: drafts in the run workspace or conversation "
+        "do not survive the run. Follow the skill-creator skill for the drafting workflow "
+        "before publishing.",
         input_model=PublishSkillInput,
         replay_policy="never",
     )
@@ -423,11 +433,19 @@ def _validate_publish_payload(name: str, files: Mapping[str, str]) -> str | None
         normalized[relative] = content
     if "SKILL.md" not in normalized:
         return "files must contain a 'SKILL.md'"
-    frontmatter_name, description = _frontmatter_text(normalized["SKILL.md"], fallback_name="")
+    try:
+        frontmatter_name, description = _frontmatter_text(normalized["SKILL.md"], fallback_name="")
+    except SkillFrontmatterError as exc:
+        return f"SKILL.md {exc}"
     if frontmatter_name != name:
         return f"SKILL.md frontmatter name '{frontmatter_name or ''}' must equal '{name}'"
     if not description:
         return "SKILL.md frontmatter requires a non-empty description"
+    if len(description) > _MAX_DESCRIPTION_CHARS:
+        return (
+            f"SKILL.md description is {len(description)} characters; "
+            f"the limit is {_MAX_DESCRIPTION_CHARS}"
+        )
     return None
 
 
@@ -445,19 +463,48 @@ def _validate_relative_path(relative: str) -> str | None:
     return None
 
 
+class SkillFrontmatterError(ValueError):
+    """A SKILL.md whose frontmatter cannot be read as a name and a text description."""
+
+
+def _ends_in_comment(declared: CommentedMap, key: str) -> bool:
+    """Whether the line a value starts on ends in a YAML comment, which cuts a plain value."""
+    token = declared.ca.items.get(key, (None, None, None))[2]
+    return token is not None and token.start_mark.line == declared.lc.value(key)[0]
+
+
 def _frontmatter_text(text: str, *, fallback_name: str) -> tuple[str, str]:
+    """The name and description a SKILL.md frontmatter declares, read as YAML.
+
+    The description comes back as one line: a folded or literal block, which models
+    write for long descriptions, is a single text value, and the catalog lists one
+    Skill per line. A plain value that YAML would cut at ``" #"`` is refused rather
+    than listed short.
+    """
     head = text[:8192]
     if not head.startswith("---\n"):
         return fallback_name, ""
     header, separator, _body = head[4:].partition("\n---")
     if not separator:
         return fallback_name, ""
-    values: dict[str, str] = {}
-    for line in header.splitlines():
-        key, marker, value = line.partition(":")
-        if marker and key.strip() in {"name", "description"}:
-            values[key.strip()] = value.strip().strip("\"'")
-    return values.get("name", fallback_name), values.get("description", "")
+    try:
+        declared = YAML(typ="rt").load(header)
+    except (YAMLError, ValueError) as exc:
+        raise SkillFrontmatterError(
+            "frontmatter is not valid YAML; quote a value that contains ': ' or ' #'"
+        ) from exc
+    if declared is None:
+        declared = CommentedMap()
+    if not isinstance(declared, CommentedMap):
+        raise SkillFrontmatterError("frontmatter must be a YAML mapping")
+    for key in ("name", "description"):
+        if _ends_in_comment(declared, key):
+            raise SkillFrontmatterError(f"a ' #' starts a YAML comment; quote the {key}")
+    name = declared.get("name", fallback_name)
+    description = declared.get("description", "")
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise SkillFrontmatterError("frontmatter name and description must be text")
+    return name.strip(), " ".join(description.split())
 
 
 def _publish_owner_skill(owner_root: Path, name: str, files: Mapping[str, str]) -> int:
@@ -569,7 +616,11 @@ def _discover_root(
             continue
         if isinstance(child, Path) and (child.is_symlink() or (child / "SKILL.md").is_symlink()):
             continue
-        name, description = _frontmatter(skill_file, fallback_name=child.name)
+        try:
+            name, description = _frontmatter(skill_file, fallback_name=child.name)
+        except SkillFrontmatterError as exc:
+            logger.warning("Skipping Skill %r: %s", child.name, exc)
+            continue
         if name:
             found.append(
                 SkillMetadata(

@@ -13,8 +13,6 @@ import pytest
 from dlightrag.engine.agent.environment import SearchToolchain
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
-from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
@@ -24,7 +22,6 @@ from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     run_child_session,
 )
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import compose_research_tools
 from dlightrag.engine.answer.tools.subagents import (
@@ -35,7 +32,6 @@ from dlightrag.engine.answer.tools.subagents import (
     ChildRequest,
     SpawnAgentInput,
     SubagentHost,
-    child_guidance_declarations,
     child_guidance_tools,
     child_session_id,
     subagent_declarations,
@@ -335,7 +331,8 @@ async def test_has_running_children_ignores_sparse_precreate_rows() -> None:
     assert await mixed_host.has_running_children() is True
 
 
-async def test_wait_subagent_wakes_on_pending_question_without_settling() -> None:
+@pytest.mark.parametrize("asker", ["the waited child", "a sibling"])
+async def test_wait_subagent_wakes_on_pending_question_without_settling(asker: str) -> None:
     parent_id = SessionId.new()
     request_id = SessionId.new().value
     parked = asyncio.Event()
@@ -355,7 +352,7 @@ async def test_wait_subagent_wakes_on_pending_question_without_settling() -> Non
         )
 
     async def list_guidance(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
-        child_id = known_child.get("id")
+        child_id = known_child.get("id") if asker == "the waited child" else "a-sibling-session"
         if not asked.is_set() or child_id is None:
             return ()
         return (
@@ -508,6 +505,112 @@ async def test_notification_identity_tracks_child_operation_not_only_session() -
     assert first and not replay and continued
     assert first[0][0] != continued[0][0]
     assert len(ledger.contexts["chunks"]) == 1
+
+
+async def test_a_result_the_parent_has_read_is_not_sent_to_it_again() -> None:
+    parent_id = SessionId.new()
+    parent_intent_id = IntentId.new().value
+    rows = {
+        name: {
+            "child_session_id": name,
+            "parent_call_id": "call",
+            "parent_intent_id": parent_intent_id,
+            "status": "succeeded",
+            "host_state": {
+                "terminal_outcome": ChildOutcome(
+                    status="succeeded", summary=f"{name} found it", child_session_id=name
+                ).durable_payload()
+            },
+        }
+        for name in ("child-a", "child-b")
+    }
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(rows.values())
+
+    async def load_child(*, child_session_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return rows[child_session_id]
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        list_children=list_children,
+        load_child=load_child,
+    )
+    status = subagent_tools(host=host)[1]
+
+    async def pending() -> str:
+        notifications = await host.completed_dispatch_notifications(seen=set())
+        return " ".join(content for _key, content in notifications)
+
+    # Both settled and unread: the parent that ends its turn is sent both.
+    before = await pending()
+    assert "child-a found it" in before and "child-b found it" in before
+
+    # Reading one result does not send it again; the unread one still arrives.
+    await status.execute(
+        ChildControlInput(child_session_id="child-a"), tool_runtime(tool_name="subagent_status")
+    )
+    after_one = await pending()
+    assert "child-a found it" not in after_one and "child-b found it" in after_one
+
+    await status.execute(
+        ChildControlInput(child_session_id="child-b"), tool_runtime(tool_name="subagent_status")
+    )
+    assert await pending() == ""
+
+
+async def test_a_notified_result_is_not_sent_again_when_a_sibling_continues() -> None:
+    parent_intent_id = IntentId.new().value
+    operations = {"child-a": "a-1", "child-b": "b-1", "child-c": "c-1"}
+
+    def row(name: str) -> dict[str, Any]:
+        return {
+            "child_session_id": name,
+            "parent_call_id": "call",
+            "parent_intent_id": parent_intent_id,
+            "status": "succeeded",
+            "host_state": {
+                "terminal_outcome": ChildOutcome(
+                    status="succeeded",
+                    summary=f"{name} found it",
+                    child_session_id=name,
+                    operation_id=operations[name],
+                ).durable_payload()
+            },
+        }
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return tuple(row(name) for name in operations)
+
+    async def load_child(*, child_session_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return row(child_session_id)
+
+    host = SubagentHost(
+        parent_session_id=SessionId.new(),
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        list_children=list_children,
+        load_child=load_child,
+    )
+    status = subagent_tools(host=host)[1]
+    seen: set[str] = set()
+
+    ((notification_id, content),) = await host.completed_dispatch_notifications(seen=seen)
+    assert all(f"{name} found it" in content for name in operations)
+    # A notification the parent has not taken is still owed to it.
+    assert await host.completed_dispatch_notifications(seen=set()) == ((notification_id, content),)
+
+    # The parent takes it, continues one child and reads that child's new result.
+    seen.add(notification_id)
+    host.note_notification_accepted(notification_id)
+    operations["child-a"] = "a-2"
+    await status.execute(
+        ChildControlInput(child_session_id="child-a"), tool_runtime(tool_name="subagent_status")
+    )
+
+    assert await host.completed_dispatch_notifications(seen=seen) == ()
 
 
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:
@@ -787,12 +890,7 @@ async def test_process_detach_does_not_terminalize_child_as_cancelled() -> None:
     finish.assert_not_awaited()
 
 
-def test_child_contracts_keep_the_digests_accepted_plans_pinned() -> None:
-    def digest(declarations: Any) -> str:
-        return AgentRunPlan.from_tools(
-            declarations, model_role="query", context_policy_revision="pin"
-        ).digest
-
+def test_child_contracts_keep_what_recovery_compares() -> None:
     tools = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
 
     assert set(tools) == {
@@ -804,21 +902,25 @@ def test_child_contracts_keep_the_digests_accepted_plans_pinned() -> None:
         "continue_subagent",
         "reply_subagent",
     }
+    # A recovery compares replay policy, read-only, contract version and schema digest,
+    # not a tool's wording.
     assert all(tool.contract_version == 5 for tool in tools.values())
     assert tools["spawn_agent"].input_schema_digest == (
         "ea2283b72d9dce2e740dcc58abbb136c041256381956de11f00cd6aff1b65ccd"
     )
-    # Accepted Plans pin every declaration byte for byte, including the
-    # model-role guidance suffix and the Child's ask_parent contract.
-    assert digest(subagent_declarations()) == (
-        "b04f6cf3a90911f3175e04cbe124089f9203ecfb025b29550a172d205c517815"
-    )
-    assert digest(
-        subagent_declarations(model_guidance="Choose model_role query for most children.")
-    ) == ("f6f43b829bfe223ec64151f7046142220d71f7ccb59d0675c9039e06e29bf051")
-    assert digest(child_guidance_declarations()) == (
-        "a6498bd97d45703179404191b8d8611d26d085797fb73dde905341b05a418425"
-    )
+
+
+def test_spawn_agent_names_the_authority_a_child_never_holds() -> None:
+    from dlightrag.engine.answer.tools.composition import CHILD_FORBIDDEN_TOOLS
+
+    declarations = subagent_declarations()
+    description = declarations[0].description
+    controls = {declaration.name for declaration in declarations}
+
+    # The table is the rule; the description says it in words, and the two must agree.
+    assert CHILD_FORBIDDEN_TOOLS - controls
+    for name in CHILD_FORBIDDEN_TOOLS - controls:
+        assert name in description
 
 
 async def test_spawn_checks_parent_cancellation_before_starting_children() -> None:
@@ -1160,48 +1262,38 @@ async def test_failed_child_is_recorded_failed() -> None:
     assert finish.call_args.kwargs["status"] == "failed"
 
 
-async def test_a_child_that_names_impossible_tools_says_which() -> None:
-    """The parent model named the Tools, so the failure has to name them back."""
-    from dlightrag.engine.answer.errors import ChildToolNarrowingError
-
-    finish = AsyncMock()
-
-    async def run_child(
-        _child_id: SessionId,
-        _request: ChildRequest,
-        _call_id: str,
-        _snapshot: ChildContextSnapshot,
-    ) -> ChildOutcome:
-        raise ChildToolNarrowingError(("no_such_tool",), reason="this Run offers no such Tool")
-
+async def test_a_child_that_cannot_be_prepared_leaves_none_of_its_siblings_persisted() -> None:
+    persist = AsyncMock()
     parent_id = SessionId.new()
+
+    def prepare(
+        child_id: SessionId, request: ChildRequest, snapshot: ChildContextSnapshot
+    ) -> dict[str, Any]:
+        if request.objective == "second":
+            raise ValueError("this child cannot be prepared")
+        return _durable_dispatch(child_id, request, snapshot)
+
     host = SubagentHost(
         parent_session_id=parent_id,
         run_id=str(SessionId.new().value),
         owner_id="owner",
-        persist=AsyncMock(),
-        finish_child=finish,
-        prepare_dispatch=_durable_dispatch,
-        run_child=run_child,
+        persist=persist,
+        prepare_dispatch=prepare,
+        run_child=AsyncMock(),
         context_snapshot=_context_snapshot(parent_id),
     )
-    spawn, _status, wait = subagent_tools(host=host)[:3]
-    spawned = await spawn.execute(
-        _spawn_input("x"),
-        tool_runtime(call_id="call-narrow", tool_name="spawn_agent"),
-    )
-    assert spawned.details is not None
-    child_id = spawned.details["children"][0]["child_session_id"]
-    await host.tasks[child_id]
-    result = await wait.execute(
-        ChildControlInput(child_session_id=child_id), tool_runtime(tool_name="wait_subagent")
-    )
+    spawn = subagent_tools(host=host)[0]
 
-    assert result.details is not None
-    assert result.details["children"][0]["status"] == "failed"
-    assert "no_such_tool" in result.text_content
-    assert finish.call_args is not None
-    assert "no_such_tool" in finish.call_args.kwargs["summary"]
+    with pytest.raises(ValueError, match="cannot be prepared"):
+        await spawn.execute(
+            SpawnAgentInput(
+                children=(ChildRequest(objective="first"), ChildRequest(objective="second"))
+            ),
+            tool_runtime(call_id="call-two", tool_name="spawn_agent"),
+        )
+
+    persist.assert_not_awaited()
+    assert host.tasks == {}
 
 
 @dataclass
@@ -1242,7 +1334,6 @@ def _child_orchestrator(
         model_func=model_func,
         telemetry=NOOP_TELEMETRY,
         model_profile=profile,
-        text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
         subagent_host=SubagentHost() if subagent_host is None else subagent_host,
         resolved_mode="research",
         search_toolchain=SearchToolchain(),

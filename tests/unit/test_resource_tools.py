@@ -2,6 +2,7 @@
 """Public read/view seams: text, pixels, inventories, identity, and budgets."""
 
 import asyncio
+import re
 from dataclasses import replace
 
 import pytest
@@ -14,20 +15,23 @@ from dlightrag.engine.agent.tool_content import (
     encode_tool_content,
     tool_content_attachments,
 )
-from dlightrag.engine.agent.tools import ToolEffects, ToolResult
+from dlightrag.engine.agent.tools import ToolEffects, ToolResult, fit_tool_result
 from dlightrag.engine.agent.tools.files import (
     RenderedReadArgs,
     ViewArgs,
     read_declaration,
+    read_tool,
     view_tool,
 )
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY
+from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.agent_browser import browser_failure
 from dlightrag.engine.answer.resource_settlement import attached_resource_update
 from dlightrag.engine.answer.resources.converters import ResourceConversionError
 from dlightrag.engine.answer.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.engine.answer.resources.registry import HostedExtract, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
-from dlightrag.engine.answer.tools.resources import make_resource_viewer
+from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.answer.web_sources import WebExtractResult
 from dlightrag.engine.public_http import PublicHttpFetch
 from tests.support.agent_browser import RecordingRenderer
@@ -42,6 +46,7 @@ from tests.support.resources import (
     tools,
 )
 from tests.tool_helpers import tool_runtime
+from tests.unit.conftest import answer_model_profile
 
 
 @pytest.mark.parametrize(
@@ -544,3 +549,44 @@ async def test_viewing_an_image_of_a_rendering_fetches_nothing(monkeypatch) -> N
         # What the view settles includes the rendering it came from, so recovery has it.
         assert "web_render" in {row.resource_kind for row in pixels.effects.attached_resources}
         assert fetches == []
+
+
+async def test_a_text_longer_than_one_result_is_read_to_the_end_in_pages_the_runtime_keeps_whole():
+    profile = answer_model_profile()
+    capacity = CONTEXT_POLICY.observation_capacity(profile)
+    line_count = 5_000
+    text = "".join(
+        f"{index}. Quarterly revenue grew while operating margin held across all segments.\n"
+        for index in range(line_count)
+    )
+    assert estimate_tokens(text) > 2 * capacity
+    async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as registry:
+        resource = registry.register(
+            ResourceInput(filename="long.txt", content=text.encode(), declared_mime="text/plain")
+        )
+        read = read_tool(
+            None,
+            AccessScheduler(),
+            resource_reader=make_resource_reader(
+                registry, CONTEXT_POLICY.read_window_tokens(profile)
+            ),
+        )
+        seen: list[int] = []
+        cursor: str | None = None
+        while True:
+            args = {"resource_id": resource} | ({"cursor": cursor} if cursor else {})
+            page = await call(read, **args)
+            # The runtime cuts a result at the observation capacity; a page it would cut
+            # is text the model is shown without a cursor to continue from.
+            assert fit_tool_result(page, max_tokens=capacity).text_content == page.text_content
+            seen += [
+                int(line.split(".", 1)[0])
+                for line in page.text_content.splitlines()
+                if line.split(".", 1)[0].isdigit() and line.endswith("segments.")
+            ]
+            continuation = re.search(r"cursor=([^\]\s']+)", page.protected_text)
+            if continuation is None:
+                break
+            cursor = continuation.group(1)
+
+    assert seen == list(range(line_count))

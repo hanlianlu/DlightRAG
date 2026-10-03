@@ -43,29 +43,6 @@ def test_council_skill_is_packaged_builtin_with_autonomous_metadata() -> None:
     assert "# Council" not in rendered
 
 
-def test_council_skill_body_is_a_bounded_read_only_recipe() -> None:
-    text = _catalog().read("council")
-    lowered = text.lower()
-
-    assert text.startswith("---\nname: council\n")
-    assert "# Council" in text
-    assert "spawn_agent" in text
-    assert "continue_subagent" in text
-    assert "read-only" in lowered
-    # A child with no `tools` now inherits the parent's whole capability, so the recipe
-    # has to *ask* for the read-only set instead of omitting the field (ADR 0025).
-    assert "pass an explicit `tools` list" in lowered
-    assert "runs with the parent's whole capability" in lowered
-    assert "`view`" in text and "`inspect`" not in text
-    assert "user veto" in lowered
-    assert "dissent" in lowered
-    assert "loading it grants no tools" in lowered
-    assert "at most one focused cross-examination" in lowered
-    assert "council entity" in lowered
-    assert "supervisor" not in lowered
-    assert "budget" not in lowered
-
-
 def test_council_catalog_presence_does_not_widen_child_tools() -> None:
     empty = SkillsBundle()
     bundled = SkillsBundle(builtin_root=builtin_skills_root())

@@ -44,16 +44,13 @@ improves use. When an Artifact carries the complete deliverable, keep the final 
 to a concise orientation, key takeaways, and its link. Do not reproduce substantial \
 portions of the Artifact unless the user explicitly requests both inline and file versions.
 
-User-facing workspace files belong under `artifacts/`. After the final modification of \
-each root deliverable, call `attach_artifact`; attachment, not answer text, authorizes \
-publication. Use the returned stable Artifact URI to place it where useful in the final \
-Answer; an `artifacts/...` workspace path is not a user-openable link. The Host adds an \
-omitted attached root at the end automatically. Do not attach \
-files referenced by an attached Markdown or HTML root: its safe dependency closure is \
-included automatically. In each Markdown Artifact, apply the same Citation Contract to \
-evidence-backed factual claims; citations are resolved independently for that Artifact. \
-This evidentiary independence does not require duplicated prose. Keep active HTML \
-self-contained. Do not invent resource ids.\
+User-facing workspace files belong under `artifacts/`; attaching a root deliverable \
+with `attach_artifact`, not answer text, authorizes its publication, and an \
+`artifacts/...` workspace path is not a user-openable link. In each Markdown Artifact, \
+apply the Citation Contract independently of the final Answer and of every other \
+Artifact: put the citations inline beside the evidence-backed factual claims they \
+support, add none when it has no such claims, and do not duplicate prose to do so. Keep \
+active HTML self-contained. Do not invent resource ids.\
 """
 
 # What `notes/` and `tmp/` carry is stated on the workspace tools; this is the habit.
@@ -66,10 +63,7 @@ reads it again. Write conclusions, not a running log.\
 """
 
 _PROFILE_MEMORY_GUIDANCE = """\
-Profile Memory is durable owner context, never Evidence or a citation source. \
-Use memory tools only for stable preferences and facts described by their tool \
-contracts. Recall an existing memory before replacing or deleting it, and \
-report a change only after the mutation succeeds.\
+Report a memory change only after its tool confirms it.\
 """
 
 # Fast answers from excerpts it was handed; Research looks for its own evidence, so a

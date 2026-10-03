@@ -187,7 +187,6 @@ from dlightrag.engine.answer.resources.converters import MAX_CONVERSION_SECONDS,
 from dlightrag.engine.answer.resources.lineage import LINEAGE_ADOPTION_KIND, LineageResourceLoader
 from dlightrag.engine.answer.resources.models import (
     ResourceRegistryError,
-    TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import (
     BROWSER_RENDER,
@@ -1709,6 +1708,8 @@ class AnswerExecutor:
                     )
                     accepted_purpose = next_purpose
                     research_operation_id = accepted.operation_id
+                    if subagent_host is not None and next_purpose == "child_result":
+                        subagent_host.note_notification_accepted(next_input[0])
                     if command_ids and controls is not None:
                         if not await controls.acknowledge(command_ids):
                             raise LeaseLostError
@@ -2158,7 +2159,6 @@ class AnswerExecutor:
         if not workspaces:
             raise ValueError("an Answer run requires at least one workspace")
         self._warm(workspaces)
-        text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(query_profile))
         resolved = await self._resources.resolve(
             resources,
             models=models,
@@ -2245,7 +2245,6 @@ class AnswerExecutor:
                     else None
                 ),
                 image_budget=resolved.image_budget,
-                text_window_budget=text_window_budget,
                 model_profile=query_profile,
                 context_policy=CONTEXT_POLICY,
                 publication_limits=self._settings.publication,
@@ -2272,7 +2271,9 @@ class AnswerExecutor:
                 ),
                 resource_reader=(
                     make_resource_reader(
-                        resolved.registry, text_window_budget, lineage=lineage_loader
+                        resolved.registry,
+                        CONTEXT_POLICY.read_window_tokens(query_profile),
+                        lineage=lineage_loader,
                     )
                     if resolved.registry is not None
                     else None

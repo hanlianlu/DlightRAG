@@ -17,7 +17,6 @@ from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.agent.tools.files import PreparedImageAttachment, read_tool, view_tool
 from dlightrag.engine.ai.media import decode_image_base64
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
@@ -69,7 +68,7 @@ def tools(
         read_tool(
             environment,
             access,
-            resource_reader=make_resource_reader(registry, TextWindowBudget(1000)),
+            resource_reader=make_resource_reader(registry, 1000),
             rendered=rendered,
         ),
         view_tool(

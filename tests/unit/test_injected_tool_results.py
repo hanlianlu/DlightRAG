@@ -19,7 +19,6 @@ from dlightrag.engine.agent.tools import (
 )
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.workspace import RunWorkspace
 from tests.unit.conftest import answer_model_profile
 
@@ -38,7 +37,6 @@ def prepared_run(
         model_func=AsyncMock(),
         injected_tools=[injected],
         model_profile=profile,
-        text_window_budget=TextWindowBudget(profile.context_window_tokens),
         telemetry=NOOP_TELEMETRY,
         resolved_mode="research",
         search_toolchain=SearchToolchain(),

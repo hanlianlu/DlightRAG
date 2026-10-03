@@ -84,7 +84,6 @@ from dlightrag.engine.answer.execution.input import (
 from dlightrag.engine.answer.fast import FastRunBoundaries
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.publication import ArtifactIssue, PublicationLimits, PublicationPlan
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
@@ -518,7 +517,6 @@ def _async_child_orchestrator(
         model_func=provider,
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
         subagent_host=SubagentHost(),
         search_toolchain=SearchToolchain(),
@@ -1232,7 +1230,6 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
         retrieve_knowledge_base=_retrieve_visual,
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
         search_toolchain=SearchToolchain(),
     )
@@ -1349,7 +1346,6 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
         retrieve_knowledge_base=_retrieve_visual,
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
         search_toolchain=SearchToolchain(),
     )
@@ -1411,7 +1407,6 @@ async def test_a_continuation_of_a_failed_fast_turn_still_sees_its_question(
         retrieve_knowledge_base=_retrieve_visual,
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
         search_toolchain=SearchToolchain(),
     )
@@ -2046,7 +2041,6 @@ async def test_workspace_link_correction_attaches_and_publishes_the_report(
         model_func=model,
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
         injected_tools=[
             attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
@@ -2156,7 +2150,6 @@ async def test_the_terminal_commit_stores_a_converted_products_view_from_the_run
         model_func=model,
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
         injected_tools=[
             attach_artifact_tool(root, scheduler=AccessScheduler(), limits=PublicationLimits())
@@ -2248,7 +2241,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
             stop_reason="tool_use",
         )
 
-    budget = TextWindowBudget(tokens=850_000)
+    window_tokens = 850_000
     registries: list[ResourceRegistry] = []
 
     def prepare_registry(prepared: dict[str, Any]) -> ResourceRegistry:
@@ -2264,7 +2257,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
     async def read(request: ResourceReadRequest, runtime: ToolRuntime) -> ToolResult:
         # The reader serves the registry the executor prepared, which exists only once the
         # Run is claimed.
-        return await make_resource_reader(registries[0], budget)(request, runtime)
+        return await make_resource_reader(registries[0], window_tokens)(request, runtime)
 
     orchestrator = AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
@@ -2272,7 +2265,6 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
         model_func=model,
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=budget,
         resolved_mode="research",
         resource_reader=read,
         rendered_read=True,
@@ -2420,7 +2412,6 @@ async def test_publication_correction_is_one_linked_agent_operation(
         model_func=model,
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
         search_toolchain=SearchToolchain(),
     )
@@ -2712,7 +2703,6 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
         model_func=model,
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="research",
         search_toolchain=SearchToolchain(),
     )
@@ -2779,7 +2769,6 @@ def _answer_runtime(
         retrieve_knowledge_base=_retrieve_visual,
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
-        text_window_budget=TextWindowBudget(tokens=850_000),
         resolved_mode="fast",
         search_toolchain=SearchToolchain(),
     )

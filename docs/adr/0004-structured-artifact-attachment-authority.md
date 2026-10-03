@@ -6,7 +6,7 @@ When a Published Artifact carries the complete deliverable, the Answer provides 
 
 Publication authority is a settled parent-only `attach_artifact` tool call, not model-authored `artifact:` links. Each Root Artifact Attachment binds a normalized Agent Workspace path to its raw-content digest and label. The attachment receipt returns an `artifact:` URI containing the stable resource id. Relative `artifact:` paths remain authorable inside documents before attachment. The Host appends omitted roots in attachment settlement order while leaving dependencies unplaced. If incomplete Markdown would hide those trailing affordances, the Host places them before the original Answer without rewriting its source.
 
-The selection policy belongs primarily to the capability-gated Agent prompt because the Agent must decide whether a separate deliverable is warranted before it writes or attaches a file. The `attach_artifact` Tool Interface repeats a local reminder, but it does not own the policy and the Host does not reject semantically similar outputs: intentional inline/file duplication is a legitimate request.
+The selection policy belongs primarily to the capability-gated Agent prompt because the Agent must decide whether a separate deliverable is warranted before it writes or attaches a file. The `attach_artifact` Tool Interface states only how attaching works and repeats none of the policy, and the Host does not reject semantically similar outputs: intentional inline/file duplication is a legitimate request.
 
 ## Considered Options
 
@@ -29,4 +29,4 @@ Each document carries an `artifact_bindings` map from its parser-normalized targ
 
 Only structured roots and their `artifact:` dependency closure can publish files. HTML dependency discovery uses actual `href` and `src` attributes; comments and script/style source examples are inert. Existing self-contained HTML and media validation still apply. Resolution metadata does not change source bytes or their content digest. Bindings are additional result metadata and require no database schema migration.
 
-Prompt tests preserve the default-Answer, selective-Artifact, and non-duplication guidance. Tool tests preserve the local optionality reminder. Semantic similarity remains an observational quality signal rather than a hard runtime invariant.
+Prompt tests preserve the default-Answer, selective-Artifact, and non-duplication guidance. Tool tests preserve the Interface's statement of how attaching works, without the selection policy. Semantic similarity remains an observational quality signal rather than a hard runtime invariant.

@@ -115,22 +115,6 @@ class UnsupportedAttachmentTypeError(AnswerInputError):
         self.attachment_type = attachment_type
 
 
-class ChildToolNarrowingError(RuntimeError):
-    """A Child's explicit ``tools`` narrowing names something its Run cannot offer.
-
-    The names come from a caller's ``spawn_agent`` arguments, so the refusal has to
-    name them for the model that asked: the parent is the only party that can correct
-    the request, and a generic child failure tells it nothing. A name withheld by
-    authority (ADR 0025) and a name this Run never composed are both refusals, and
-    the reason keeps them distinguishable.
-    """
-
-    def __init__(self, names: tuple[str, ...], *, reason: str) -> None:
-        super().__init__(f"{reason}: {', '.join(names)}")
-        self.names = names
-        self.reason = reason
-
-
 class InvalidToolConfigurationError(RuntimeError):
     """A run composed two peer tools that share one model-visible name.
 
@@ -191,7 +175,6 @@ __all__ = [
     "AnswerImageError",
     "AnswerInputOverflowError",
     "AnswerResourceAdmissionError",
-    "ChildToolNarrowingError",
     "CurrentImagePayloadError",
     "InvalidToolConfigurationError",
     "UnsupportedAnswerModeError",

@@ -41,8 +41,13 @@ Rendered Read, and Blob.
   is refused with a `path` or `http` options, and it is not declared otherwise.
 - Returns bounded text only. A Resource page starts with
   `[resource: <id> | lines <a>-<b> | extraction_status=<status>]`, holds one
-  text window whose whole envelope fits the model's remaining text allowance,
-  and ends with notes, visual handles, and a `[more; cursor=…]` continuation.
+  text window sized so that the page and the label the runtime puts before it fit
+  the observation capacity (the room the compaction trigger leaves below the input
+  limit, which is also where the runtime cuts a Tool result), and ends with notes,
+  visual handles, and a `[more; cursor=…]` continuation. A Resource longer than one
+  window is therefore always read on by cursor, never cut. The window is sized for the
+  Run's own model: a Child on a role whose configured context window is much smaller
+  has the page cut at its own capacity, with no cursor for the cut part.
   `focus` starts the page order at the most relevant window; the continuation
   runs to the end, wraps to the start, and stops before the focus window, so
   every character is returned once.

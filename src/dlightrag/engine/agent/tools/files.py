@@ -150,10 +150,7 @@ class ReadArgs(BaseModel):
     )
     resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
     url: str | None = Field(default=None, description="Anonymous public HTTP(S) URL to read.")
-    http: HttpReadOptions | None = Field(
-        default=None,
-        description="Optional representation headers for the first direct URL acquisition.",
-    )
+    http: HttpReadOptions | None = None
     offset: int | None = Field(
         default=None, ge=1, description="1-based line offset in a workspace path."
     )
@@ -252,11 +249,7 @@ class EditArgs(BaseModel):
 class GrepArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    pattern: str = Field(
-        min_length=1,
-        max_length=65_536,
-        description="Regex (or literal with literal=true).",
-    )
+    pattern: str = Field(min_length=1, max_length=65_536)
     path: str = Field(
         default=".",
         max_length=_PATH_MAX_CHARS,
@@ -277,7 +270,7 @@ class GrepArgs(BaseModel):
         default=100,
         ge=1,
         le=100_000,
-        description="Maximum matching lines to return.",
+        description="Maximum matching lines to return; context lines do not count.",
     )
 
 
@@ -363,11 +356,9 @@ def read_declaration(*, public_url: bool, rendered: bool = False) -> ToolDeclara
     description = (
         "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id registered in this run, or an "
         "anonymous public HTTP(S) url. A url read returns the page's full content in "
-        "bounded windows. URL reads accept only optional http.user_agent, "
-        "http.accept, and http.accept_language representation preferences; continue "
-        "with the returned resource_id and cursor. File pages carry an offset; "
-        "directory and resource pages carry opaque cursors. Follow the printed "
-        "continuation instead of re-reading the whole target."
+        "bounded windows. File pages carry an offset; directory and resource pages carry "
+        "opaque cursors. Follow the printed continuation (for a url, its resource_id and "
+        "cursor) instead of re-reading the whole target."
         if url_enabled
         else "Read one workspace path or Host-provided durable resource_id registered in this "
         "run. Files page by offset and directories and resources by opaque cursor. Follow "
@@ -493,7 +484,12 @@ def read_tool(
 class ViewArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    path: str | None = Field(default=None, min_length=1, max_length=_PATH_MAX_CHARS)
+    path: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=_PATH_MAX_CHARS,
+        description="Workspace path of a standalone image.",
+    )
     resource_id: str | None = Field(default=None, min_length=1, max_length=256)
     url: str | None = Field(default=None, min_length=1, max_length=8192)
     http: HttpReadOptions | None = None
@@ -527,10 +523,9 @@ def view_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="view",
         description="View pixels from exactly one resource registered in this run, anonymous "
-        "public URL, or workspace image path. PDF without locator returns a bounded overview; "
-        "select a physical page for detail. No separate model is called. Use a PDF overview "
-        "to find physical pages, not to transcribe small text. Follow the printed "
-        "continuation. Paths support standalone images only.",
+        "public URL, or workspace image path. A PDF without a locator returns a bounded "
+        "overview; use it to find physical pages, not to transcribe small text. No separate "
+        "model is called.",
         input_model=ViewArgs,
         replay_policy="replayable",
         read_only=True,
@@ -632,9 +627,8 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
 def edit_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="edit",
-        description="Replace exact text in a workspace file. Every old_text must match exactly "
-        "once in the current file; all edits apply atomically or none do. Read the file "
-        "first when a match fails.",
+        description="Replace exact text in a workspace file. All edits apply atomically or "
+        "none do; read the file first when a match fails.",
         input_model=EditArgs,
         replay_policy="never",
         contract_version=3,
@@ -724,9 +718,8 @@ def edit_tool(
 def grep_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="grep",
-        description="Search workspace files with ripgrep. The pattern is a regex unless "
-        "literal=true; limit caps matching lines, not context lines; hidden files are "
-        "searched while ignore rules apply.",
+        description="Search workspace files with ripgrep; hidden files are searched while "
+        "ignore rules apply.",
         input_model=GrepArgs,
         replay_policy="replayable",
         read_only=True,

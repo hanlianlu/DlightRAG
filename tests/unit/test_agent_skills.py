@@ -228,6 +228,15 @@ async def test_publish_validates_name_frontmatter_and_paths(tmp_path: Path) -> N
             "../escape.md": "x",
         },
     )
+    # A description the catalog could not show whole is refused with what to change.
+    assert "valid YAML" in await publish(
+        name="review",
+        files=_skill_files(name="review", description="Use when: asked to review", body="b"),
+    )
+    assert "limit is 1024" in await publish(
+        name="review",
+        files=_skill_files(name="review", description="Use when " + "x" * 1100, body="b"),
+    )
     assert not (owner_root / "review").exists()
 
 
@@ -329,3 +338,83 @@ async def test_skill_tools_report_their_subject_live(tmp_path: Path) -> None:
 
     subjects = [update.subject for update in updates if update.subject]
     assert subjects == ["review", "weekly-report", "weekly-report"]
+
+
+@pytest.mark.asyncio
+async def test_a_folded_description_is_listed_whole_on_one_line(tmp_path: Path) -> None:
+    owner_root = tmp_path / "owner"
+    folded = (
+        "---\nname: weekly-report\ndescription: >\n"
+        "  Use when the user asks for a weekly report and\n"
+        "  wants the data checked before it is sent.\n---\n# Weekly report\n"
+    )
+    result = await publish_skill_tool(owner_root).execute(
+        PublishSkillInput.model_validate({"name": "weekly-report", "files": {"SKILL.md": folded}}),
+        tool_runtime(),  # type: ignore[arg-type]
+    )
+    assert not result.is_error
+
+    contribution = SkillCatalog.discover(owner_root=owner_root).contribution()
+
+    assert contribution is not None
+    assert (
+        "- weekly-report: Use when the user asks for a weekly report and wants the data "
+        "checked before it is sent. (owner)"
+    ) in str(contribution.messages[0]["content"])
+
+
+@pytest.mark.asyncio
+async def test_a_description_that_yaml_would_cut_short_is_refused_at_publish(
+    tmp_path: Path,
+) -> None:
+    owner_root = tmp_path / "owner"
+
+    async def publish(description: str) -> ToolResult:
+        content = f"---\nname: triage\ndescription: {description}\n---\n# Triage\n"
+        return await publish_skill_tool(owner_root).execute(
+            PublishSkillInput.model_validate({"name": "triage", "files": {"SKILL.md": content}}),
+            tool_runtime(),  # type: ignore[arg-type]
+        )
+
+    cut = await publish("Use when the user names an issue like #123")
+    assert cut.is_error and "starts a YAML comment" in cut.text_content
+    assert not (owner_root / "triage").exists()
+
+    # Quoting keeps the whole value, and a comment on a line of its own is a comment.
+    assert not (await publish('"Use when the user names an issue like #123"')).is_error
+    content = "---\nname: triage\ndescription: Use when asked\n# why\n---\nb"
+    assert not (
+        await publish_skill_tool(owner_root).execute(
+            PublishSkillInput.model_validate({"name": "triage", "files": {"SKILL.md": content}}),
+            tool_runtime(),  # type: ignore[arg-type]
+        )
+    ).is_error
+
+
+def test_a_malformed_skill_is_left_out_of_the_catalog(tmp_path: Path) -> None:
+    root = tmp_path / "global"
+    _skill(root, "good", name="good", description="Use when asked", body="b")
+    broken = root / "broken"
+    broken.mkdir()
+    (broken / "SKILL.md").write_text(
+        "---\nname: broken\ndescription: Use when: asked\n---\nb", encoding="utf-8"
+    )
+
+    catalog = SkillCatalog.discover(global_root=root)
+
+    assert [skill.name for skill in catalog.metadata] == ["good"]
+
+
+def test_a_frontmatter_the_yaml_reader_rejects_costs_only_its_own_skill(tmp_path: Path) -> None:
+    root = tmp_path / "global"
+    _skill(root, "good", name="good", description="Use when asked", body="b")
+    broken = root / "typo"
+    broken.mkdir()
+    (broken / "SKILL.md").write_text(
+        "---\nname: typo\ndescription: Use when asked\nupdated: 2025-02-30\n---\nb",
+        encoding="utf-8",
+    )
+
+    catalog = SkillCatalog.discover(global_root=root)
+
+    assert [skill.name for skill in catalog.metadata] == ["good"]

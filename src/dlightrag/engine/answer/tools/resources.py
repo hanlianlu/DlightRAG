@@ -47,7 +47,6 @@ from dlightrag.engine.answer.resources.models import (
     ResourceNotConvertedError,
     ResourceNotFoundError,
     ResourceRegistryError,
-    TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.visual import (
@@ -175,7 +174,7 @@ async def _adopt_earlier_then_retry(
 
 def make_resource_reader(
     registry: ResourceRegistry,
-    text_window_budget: TextWindowBudget,
+    max_window_tokens: int,
     *,
     lineage: LineageResourceLoader | None = None,
 ):
@@ -195,7 +194,7 @@ def make_resource_reader(
         try:
             result = await registry.read(
                 resource_id,
-                max_window_tokens=text_window_budget.tokens,
+                max_window_tokens=max_window_tokens,
                 focus=request.focus,
                 cursor=request.cursor,
                 rendered=request.rendered,

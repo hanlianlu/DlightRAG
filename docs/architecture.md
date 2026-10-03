@@ -112,8 +112,8 @@ checks them against the accepted Agent Run Plan. Child Sessions are admitted
 asynchronously, default to the parent's tools minus the Run's authority, and
 cannot spawn grandchildren. Independent critique is the built-in
 [`council`](../src/dlightrag/engine/agent/builtin_skills/council/SKILL.md) Skill,
-a recipe over Child Sessions rather than a runtime; loading a Skill grants no
-authority.
+a recipe over Child Sessions rather than a runtime; its children hold that default
+set, and loading a Skill grants no authority.
 
 The last Research assistant turn with no tool call is the answer. Citation,
 source, media, usage, and Artifact finalization is deterministic for both paths;

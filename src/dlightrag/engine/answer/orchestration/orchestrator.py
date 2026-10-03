@@ -102,7 +102,6 @@ from dlightrag.engine.answer.research.persistence import (
 from dlightrag.engine.answer.resources.models import (
     RenderedReadTargetError,
     ResourceManifestEntry,
-    TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
 from dlightrag.engine.answer.session_notes import SESSION_NOTES_DEGRADED_KEY
@@ -200,7 +199,6 @@ class AnswerOrchestrator:
         resource_manifest: tuple[ResourceManifestEntry, ...] = (),
         register_web_source: Callable[[str], str | None] | None = None,
         image_budget: AnswerImageBudget | None = None,
-        text_window_budget: TextWindowBudget,
         model_profile: ModelProfile,
         context_policy: ContextPolicy = CONTEXT_POLICY,
         publication_limits: PublicationLimits | None = None,
@@ -228,7 +226,6 @@ class AnswerOrchestrator:
         self._image_budget = image_budget
         self._attachment_snapshots: dict[str, bytes] = {}
         self._child_attachment_admissions: dict[str, ChildAttachmentAdmissions] = {}
-        self._text_window_budget = text_window_budget
         self._model_profile = model_profile
         self._context_policy = context_policy
         self._publication_limits = publication_limits or PublicationLimits()
@@ -732,7 +729,7 @@ class AnswerOrchestrator:
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
-                contributions=() if skills is None else skills.context_contributions(),
+                contributions=() if skills is None else skills.context_contributions(child=False),
                 profile_memory_write=any(tool.name == "remember" for tool in tools),
                 artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
                 # Writing notes needs a workspace, so the habit rides the same
@@ -847,7 +844,7 @@ class AnswerOrchestrator:
                 query_images=None,
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
-                contributions=() if skills is None else skills.context_contributions(),
+                contributions=() if skills is None else skills.context_contributions(child=True),
                 # A Child inherits the Run's Connection tools, and their descriptions with them.
                 connection_tools=any(is_connection_tool(tool.name) for tool in tools),
                 instructions=child_instructions(child_session_id),

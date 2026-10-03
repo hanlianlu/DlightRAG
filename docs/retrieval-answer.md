@@ -238,12 +238,19 @@ run-local registry may include:
 immediately. A child runs with its parent's tools except the ones that spend the
 Run's authority: the roster controls, `remember`/`forget`, and the publication
 tools. It holds `ask_parent` instead. The parent's `tools` list narrows that set
-for one child — a read-only investigator, say — and can never restore what the
-Run withholds or remove `ask_parent`. Children cannot spawn grandchildren.
+for one child — one without a shell, say — and can never restore what the
+Run withholds or remove `ask_parent`; a listed name the Run does not offer is left
+out, not an error. Children cannot spawn grandchildren.
 Same-Session continuation creates a new Operation on the existing Child Session.
-The built-in `council` Skill is a parent recipe for independent first-pass
-investigations and at most one curated cross-examination; it adds no tools and
-is not a permission gate.
+`wait_subagent` returns early, with its child still running, when a sibling settles
+or a child asks a question, and then reports every question awaiting an answer. A
+settled result the parent has read through `subagent_status`, `wait_subagent` or
+`cancel_subagent`, or been sent in a notification it accepted, is not sent to it
+again when it ends its turn; unread results are. The built-in `council` Skill is a parent recipe for independent first-pass
+investigations and at most one curated cross-examination; it adds no tools, asks
+for no narrowing of its children, which hold the default set, and is not a
+permission gate. A user's explicit `/skill:` request is made to the Run's own
+agent, so a child gets the Skill catalog but not that request.
 
 Child `model_role` selects a configured model, not a task category or permission.
 The objective remains arbitrary free text; omitting the selector chooses `query`.

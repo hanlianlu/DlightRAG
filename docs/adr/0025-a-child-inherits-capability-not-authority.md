@@ -15,6 +15,17 @@ and complements [ADR 0024](0024-the-agent-sees-only-its-workspace.md): a child's
 processes are confined by the same policy as its parent's, because the working
 copy they run in is the same one.
 
+Amended 2026-10-03: the built-in `council` Skill no longer asks for a narrower child.
+Its children are ordinary children and hold the default set, with no read-only
+restriction and no list of tool names. A read-only first pass had been the recipe's
+intent, and a nine-name `tools` list had stood in for the old read-only default
+after this decision flipped it. It bought nothing the rule above does not already
+give, since the line is authority, not side effects, and it failed any Run that did
+not offer one of the nine tools, whole `spawn_agent` call included. `tools` itself
+stays, as a way to narrow one child, and never fails a spawn. A user's explicit
+`/skill:` request goes to the Run's own agent and is no longer sent to its
+children, which keep the Skill catalog because they hold `load_skill`.
+
 The objective prefix is no longer a prefix: [ADR 0015](0015-prompt-prefix-stability-and-cache-anchored-accounting.md)
 moved the child's instructions, the scratch convention among them, into its system
 prompt, so the objective is stated once, by the child's own User Entry, and a steer
@@ -96,6 +107,16 @@ express one rule, and the test asserts the composition rather than the table: a
 name may be added to the table for a tool composition already withholds, and the
 two must agree.
 
+The list never fails a spawn. The child holds the tools its Run composed, minus the
+table, restricted to the names listed; a name the Run does not offer (no web
+provider, no execution environment) or one the table withholds is left out rather
+than refused. A refusal cost more than it protected: the table already withholds
+what must not be held, a bad name failed the whole `spawn_agent` call, siblings
+named correctly included, and a recipe that listed tools by name failed in every
+deployment that did not offer one of them. Every child of a call is prepared
+before the first is persisted, so a child that cannot be prepared leaves no
+sibling behind.
+
 **Parallel children share one tree, so scratch is per child.** The child objective
 prefix tells a child to keep intermediate and scratch files under
 `tmp/children/<its own child session id>/`, which is the one convention that keeps
@@ -135,6 +156,14 @@ narrative rule already assumes the plan is the record).
 - **Leave the default read-only and treat `tools` as the normal path.** Rejected
   as the *default*, not as a mechanism: per-spawn improvisation makes the common
   case verbose and the rare case no safer, since the danger was never the tool.
+- **Keep the council recipe read-only with a list of tool names, or give `spawn_agent` an
+  `exclude` list for the same purpose.** Rejected (2026-10-03): the list encoded a
+  restriction the rule above says protects nothing (a child's `bash` is confined like
+  its parent's), failed in every Run that did not offer one of its names, and left out
+  every Connection tool and every tool added later. An `exclude` parameter would be a
+  second way to state what the withheld table already states, would cost a schema,
+  digest and contract change, and would have no first user once the recipe stopped
+  restricting children.
 - **Keep a grantable-but-withheld middle state for the workspace tools.** Rejected
   by the rule above: it leaves the default wrong for every child that needs to
   compute something, and it makes "what can a child do" a per-spawn answer that
@@ -161,7 +190,7 @@ Landing order, one sequence:
    branches.
 3. Tests: the forbidden set and the default set are disjoint and together cover
    the parent's composition, so a new tool is classified by that test rather than
-   by inspection; an explicit `tools` list cannot restore a forbidden name; a
+   by inspection; an explicit `tools` list cannot restore a forbidden name and cannot fail the spawn; a
    child runs a command and writes a file with the default set, and a note it
    writes reaches the Session's note plane; the artifact and skill-publication
    tools are absent for a child.
@@ -176,4 +205,5 @@ are last-writer-wins, and the convention is guidance rather than enforcement; a
 child's `bash` consumes the Run's workspace quota and its output can spill like
 any other command; and a child's capability set is now a broader default, so a
 parent that wants a strictly read-only investigator must ask for it — which is
-the one case where `tools` narrows, and the description now says so.
+the one case where `tools` narrows, and the description now says so. The `council`
+Skill does not ask for it.

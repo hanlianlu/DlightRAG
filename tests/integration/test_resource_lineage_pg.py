@@ -26,7 +26,6 @@ from dlightrag.engine.answer.resources.lineage import (
     LineageAdoptionConflict,
     adopt_lineage_resource,
 )
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
@@ -180,7 +179,7 @@ def _tools(registry: ResourceRegistry, lineage: RetainedResourceLoader):
         read_tool(
             None,
             access,
-            resource_reader=make_resource_reader(registry, TextWindowBudget(1000), lineage=lineage),
+            resource_reader=make_resource_reader(registry, 1000, lineage=lineage),
         ),
         view_tool(
             None,

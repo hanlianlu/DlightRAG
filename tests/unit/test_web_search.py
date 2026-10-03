@@ -300,6 +300,22 @@ async def test_exa_extract_and_malformed_partial_results(serve) -> None:
     assert result.dropped_results == 3
 
 
+async def test_exa_extract_asks_for_the_whole_page(serve) -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": [{**_PAGE, "text": "Extracted body."}]})
+
+    serve("exa", handler)
+
+    await ExaWebSource("k").extract("https://example.org/start", effort="balanced")
+
+    # Read windows a page by the reader's own limits; a provider-side cap would cut it
+    # silently, with no cursor to continue from.
+    assert requests[0]["text"] is True
+
+
 async def test_exa_missing_results_is_provider_failure_not_empty_success(serve) -> None:
     serve("exa", _responds({"unexpected": []}))
     provider = ExaWebSource("k")
