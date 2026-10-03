@@ -839,7 +839,13 @@ class AnswerOrchestrator:
                 query_images=None,
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
-                contributions=() if skills is None else skills.context_contributions(child=True),
+                # The catalog is guidance for load_skill, so a Child narrowed away from
+                # it is not shown Skills it cannot load.
+                contributions=(
+                    skills.context_contributions(child=True)
+                    if skills is not None and any(tool.name == "load_skill" for tool in tools)
+                    else ()
+                ),
                 # A Child inherits the Run's Connection tools, and their descriptions with them.
                 connection_tools=any(is_connection_tool(tool.name) for tool in tools),
                 instructions=child_instructions(child_session_id),

@@ -480,6 +480,32 @@ def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Pa
     assert tolerant & CHILD_FORBIDDEN_TOOLS == set()
 
 
+async def test_a_child_narrowed_away_from_load_skill_is_not_shown_the_catalog(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    (global_root / "review").mkdir(parents=True)
+    (global_root / "review" / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review plans.\n---\nbody", encoding="utf-8"
+    )
+    orchestrator = _research_owner_with_subagents(tmp_path)
+    orchestrator._skills = SkillsBundle(global_root=global_root)
+
+    async def request_text(run) -> str:
+        messages = await run.context.control_turn(evidence=run.evidence, working=run.working)
+        return json.dumps(messages)
+
+    default = await request_text(_prepared_child(orchestrator))
+    narrowed = await request_text(_prepared_child(orchestrator, tools=["search_knowledge_base"]))
+    keeps_loader = await request_text(
+        _prepared_child(orchestrator, tools=["search_knowledge_base", "load_skill"])
+    )
+
+    assert "review: Review plans." in default
+    assert "review: Review plans." not in narrowed
+    assert "review: Review plans." in keeps_loader
+
+
 def test_child_admission_record_is_shared_and_idempotent_across_retry() -> None:
     import hashlib
 
