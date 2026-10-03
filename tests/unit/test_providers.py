@@ -182,6 +182,45 @@ class TestAnthropicProvider:
         assert result.stop_reason == "length"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("stop_reason", ["max_tokens", "model_context_window_exceeded"])
+    async def test_a_tool_stream_cut_off_before_its_input_is_length_not_an_empty_call(
+        self, stop_reason
+    ):
+        p = get_provider("anthropic", api_key="test-key")
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(usage=SimpleNamespace(input_tokens=5)),
+            )
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(type="tool_use", id="call-1", name="ls", input={}),
+            )
+            yield SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason=stop_reason),
+                usage=SimpleNamespace(output_tokens=7),
+            )
+
+        async def emit_text(text: str) -> None:
+            del text
+
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+            sdk.return_value.messages.create = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "q"}],
+                "claude-sonnet-4-20250514",
+                tools=[],
+                emit_text=emit_text,
+            )
+
+        assert turn.stop_reason == "length"
+        assert [call.id for call in turn.tool_calls] == ["call-1"]
+
+    @pytest.mark.asyncio
     async def test_complete_defaults_max_tokens(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
@@ -711,6 +750,30 @@ class TestOpenAICompatibleProvider:
 
         assert result == "partial"
         assert result.stop_reason == "length"
+
+    @pytest.mark.asyncio
+    async def test_a_tool_turn_the_output_limit_cut_off_is_length_with_its_calls(self):
+        p = get_provider("openai", api_key="test-key")
+        function = SimpleNamespace(name="write", arguments='{"path":"a.md","content":"Hel')
+        message = SimpleNamespace(
+            content=None,
+            tool_calls=[SimpleNamespace(id="call-1", type="function", function=function)],
+            model_extra=None,
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=message, finish_reason="length")],
+            usage=None,
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=response)
+            turn = await p.complete_tool_turn(
+                [{"role": "user", "content": "q"}],
+                "mimo-v2.6-flash",
+                tools=[],
+            )
+
+        assert turn.stop_reason == "length"
+        assert [call.id for call in turn.tool_calls] == ["call-1"]
 
     @pytest.mark.parametrize(
         ("response_format", "expected_text"),

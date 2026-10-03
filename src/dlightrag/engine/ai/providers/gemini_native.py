@@ -337,11 +337,12 @@ def _assistant_turn(outcome: _Outcome) -> AssistantTurn:
         raise _failure(f"Gemini interaction ended {outcome.status!r}", outcome.errors)
     text, reasoning, calls = _turn_parts(outcome.steps)
     if outcome.status == "incomplete":
-        # Out of output tokens: the text so far stands, and an unfinished call never runs.
+        # Out of output tokens: the text so far stands, and the runtime runs none of
+        # the calls it carries.
         return AssistantTurn(
             text=text,
             reasoning=reasoning,
-            tool_calls=(),
+            tool_calls=tuple(calls),
             stop_reason="length",
             usage_details=outcome.usage,
         )

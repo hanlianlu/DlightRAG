@@ -443,10 +443,11 @@ def _assistant_turn(response: Any) -> AssistantTurn:
         raise ResponseStatusError("Responses request was refused")
     usage = getattr(response, "usage", None)
     if status == "incomplete":
+        # Out of output tokens: the runtime runs none of the calls it carries.
         return AssistantTurn(
             text=text,
             reasoning=reasoning,
-            tool_calls=(),
+            tool_calls=calls,
             stop_reason="length",
             usage_details=usage_to_dict(usage),
             cost_details=_cost_details(usage),

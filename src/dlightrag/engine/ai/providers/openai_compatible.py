@@ -553,8 +553,9 @@ def _openai_tool_call_parts(call_id: str, name: str, encoded: str) -> ToolCall:
 
 
 def _openai_stop_reason(reason: Any, *, has_tool_calls: bool) -> ToolStopReason:
-    if has_tool_calls or reason in {"tool_calls", "function_call"}:
-        return "tool_use"
+    # The output cap ends a turn whatever it holds; the runtime runs none of its calls.
     if reason == "length":
         return "length"
+    if has_tool_calls or reason in {"tool_calls", "function_call"}:
+        return "tool_use"
     return "stop"

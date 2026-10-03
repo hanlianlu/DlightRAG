@@ -1130,7 +1130,7 @@ async def test_response_replays_phases_and_final_ciphertext_from_a_non_tool_turn
 
 @pytest.mark.parametrize("streamed", [False, True])
 @pytest.mark.parametrize("terminal", ["refusal", "failed", "content_filter", "max_output_tokens"])
-async def test_response_sdk_terminal_never_exposes_an_unfinished_tool_call(
+async def test_a_response_that_does_not_complete_yields_no_runnable_call(
     streamed: bool, terminal: str
 ) -> None:
     response = _openai_response_json()
@@ -1197,8 +1197,9 @@ async def test_response_sdk_terminal_never_exposes_an_unfinished_tool_call(
     try:
         if terminal == "max_output_tokens":
             turn = await invoke()
+            # The output cap ended the turn: its call reaches the runtime, which runs none.
             assert turn.stop_reason == "length"
-            assert turn.tool_calls == ()
+            assert [call.id for call in turn.tool_calls] == ["call-partial"]
             assert turn.provider_state is None
         else:
             with pytest.raises(ResponseStatusError):

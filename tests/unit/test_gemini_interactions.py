@@ -826,7 +826,7 @@ async def test_only_safety_settings_and_service_tier_pass_through() -> None:
     assert refused.requests == []
 
 
-async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_runs_no_call() -> None:
+async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_reports_its_call() -> None:
     cut = _interaction(
         _THOUGHT,
         _text("The table shows"),
@@ -842,13 +842,13 @@ async def test_a_turn_cut_off_by_its_token_cap_keeps_its_text_and_runs_no_call()
     assert turn == AssistantTurn(
         text="The table shows",
         reasoning="Page 2 holds the table.",
-        tool_calls=(),
+        tool_calls=(ToolCall(id="call-1", name="view", arguments={}),),
         stop_reason="length",
         usage_details=_COUNTERS,
     )
 
 
-async def test_a_stream_cut_off_mid_call_keeps_its_text_and_runs_no_call() -> None:
+async def test_a_stream_cut_off_mid_call_keeps_its_text_and_reports_the_call() -> None:
     gemini = _Gemini(
         _sse(
             _start(
@@ -867,7 +867,8 @@ async def test_a_stream_cut_off_mid_call_keeps_its_text_and_runs_no_call() -> No
         await model.aclose()
 
     assert emitted == ["Let me look."]
-    assert (turn.text, turn.tool_calls, turn.stop_reason) == ("Let me look.", (), "length")
+    assert (turn.text, turn.stop_reason) == ("Let me look.", "length")
+    assert [(call.id, call.arguments) for call in turn.tool_calls] == [("call-1", {})]
     assert turn.provider_state is None
 
 

@@ -611,8 +611,10 @@ class AnthropicProvider(CompletionProvider):
 
 
 def _anthropic_stop_reason(reason: Any, *, has_tool_calls: bool) -> ToolStopReason:
+    # Running out of output tokens or of context ends a turn whatever it holds; the
+    # runtime runs none of its calls.
+    if reason in {"max_tokens", "model_context_window_exceeded"}:
+        return "length"
     if has_tool_calls or reason == "tool_use":
         return "tool_use"
-    if reason == "max_tokens":
-        return "length"
     return "stop"
