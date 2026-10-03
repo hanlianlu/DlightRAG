@@ -67,7 +67,7 @@ class ExaWebSource:
             _EXTRACT_ENDPOINT,
             {
                 "urls": [url],
-                "text": {"maxCharacters": 10_000},
+                "text": True,
                 "livecrawl": "always" if effort == "deep" else "fallback",
             },
             operation="extract",
