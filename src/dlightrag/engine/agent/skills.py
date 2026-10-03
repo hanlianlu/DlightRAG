@@ -346,13 +346,11 @@ def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
 def publish_skill_declaration() -> ToolDeclaration:
     return ToolDeclaration(
         name="publish_skill",
-        description="Publish one durable Agent Skill for the current user. Validates the skill "
-        "(frontmatter name/description, kebab-case name, per-file 50K char cap, "
-        "20 skills / 20MiB owner quota) and installs it atomically. Publishing an "
-        "existing name updates it. Never touches global or built-in skills. It is the "
-        "only channel for making a skill durable: drafts in the run workspace or "
-        "conversation do not survive the run. Follow the skill-creator skill for the "
-        "drafting workflow before publishing.",
+        description="Publish one durable Agent Skill for the current user, validated and "
+        "installed atomically. Never touches global or built-in skills. It is the only "
+        "channel for making a skill durable: drafts in the run workspace or conversation "
+        "do not survive the run. Follow the skill-creator skill for the drafting workflow "
+        "before publishing.",
         input_model=PublishSkillInput,
         replay_policy="never",
     )

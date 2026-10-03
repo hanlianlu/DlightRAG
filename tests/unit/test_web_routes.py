@@ -90,8 +90,9 @@ BUILTIN_SKILL_CREATOR = {
     "name": "skill-creator",
     "description": (
         "Guide the user through creating, improving, or removing personal DlightRAG skills. "
-        "Use when the user wants to make, edit, or delete a skill "
-        "(interview → draft → publish_skill)."
+        "Use when the user wants to make, edit, or delete a skill, asks to turn a task they "
+        "repeat or a procedure just walked through into a skill, or wants one sentence to "
+        "trigger a routine (interview → draft → publish_skill)."
     ),
     "source": "builtin",
 }

@@ -7,7 +7,7 @@ description: Use when the user asks for a judgment, recommendation, or go/no-go 
 
 A recipe, not a runtime: it grants no tools or permissions. You run it with ordinary children.
 
-1. Tell the user in a sentence why independent scrutiny helps, then call `spawn_agent` with two or three children whose objectives are different and concrete, for example the strongest case for, the strongest case against, and a check of the key evidence. Pass `tools` for each child: every tool you have except `bash`, `write`, `edit` and `attach_artifact`, so they investigate and change nothing. Keep working on your own meanwhile.
+1. Tell the user in a sentence why independent scrutiny helps, then call `spawn_agent` with two or three children whose objectives are different and concrete, for example the strongest case for, the strongest case against, and a check of the key evidence. Keep working on your own meanwhile.
 2. Read the children with `wait_subagent`. One failed child does not stop the others; decide whether to replace it.
 3. If a material dispute remains that child evidence could settle, send one focused challenge with `continue_subagent` to the same children. Skip this when nothing material is disputed.
 4. Write the answer from what the children found: your recommendation, which claims you accepted or rejected and why, and the dissent that remains. Cancel children you no longer need.
