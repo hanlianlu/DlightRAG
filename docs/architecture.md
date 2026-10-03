@@ -9,47 +9,14 @@ contracts, [Security](security.md) for trust boundaries, and
 
 ## Runtime Ownership
 
-```mermaid
-flowchart TB
-  subgraph inbound["Inbound adapters"]
-    http["HTTP: REST and Web"]
-    mcpserver["MCP server"]
-  end
-  subgraph application["Application"]
-    access["Access"]
-    usecases["Answer Runs · Retrieval · Corpus Admin · Runs<br/>Connections · Profile Memory · Web Conversations"]
-  end
-  subgraph engine["Engine"]
-    answer["Answer: Fast and Research"]
-    runtime["Run runtime"]
-    rag["RAG: LightRAG workspaces"]
-    agent["Agent"]
-    ai["AI: model providers"]
-  end
-  memory["dlightrag-memory"]
-  subgraph outbound["Outbound adapters"]
-    postgres["PostgreSQL stores and NOTIFY"]
-    personal["Owners' MCP and OAuth clients"]
-    observability["Observability"]
-  end
-  compose["Composition root"]
-  inbound --> application
-  application --> engine
-  application --> memory
-  answer --> runtime & rag & agent & memory
-  rag --> ai
-  agent --> ai
-  outbound -. implements ports .-> application
-  outbound -. implements ports .-> engine
-  compose -. wires .-> inbound & application & engine & outbound
-```
+![DlightRAG code layers](diagrams/architecture.svg)
 
-Solid arrows are imports the [import contracts](#code-layering) allow; dashed
-arrows are ports an adapter implements and the wiring the composition root does.
-Inbound HTTP and MCP adapters call Application use cases; a trusted embedding
-caller enters the public `create_application` facade directly. Outbound
-adapters implement narrow ports owned by Application or Engine, so a call
-through a port never imports its concrete adapter.
+Arrows are imports the [import contracts](#code-layering) allow, and the
+composition root wires every layer. Inbound HTTP and MCP adapters call
+Application use cases; a trusted embedding caller enters the public
+`create_application` facade directly. Outbound adapters implement narrow ports
+owned by Application or Engine, so a call through a port never imports its
+concrete adapter.
 
 `create_application` enters the private composition root, which constructs one
 `Application`, injects concrete adapters and operation executors, and leaves the

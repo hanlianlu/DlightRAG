@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 692" width="980" height="692" role="img" aria-labelledby="title desc">
+  <title id="title">DlightRAG code layers</title>
+  <desc id="desc">Inbound HTTP and MCP adapters call Application, which holds Access and the use cases. Application calls Engine, where Answer drives the Run runtime, the Agent, and RAG, and the Agent and RAG reach models through AI. Application and Answer use the separately distributed dlightrag-memory package. Outbound adapters implement the ports Application and Engine own, and the composition root wires every layer.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; text-anchor: middle; }
+    .title { font-size: 13px; font-weight: 600; fill: #1c1917; }
+    .name { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 600; fill: #1c1917; }
+    .sub { font-size: 11.5px; font-weight: 400; fill: #57534e; }
+    .tag { font-size: 11px; fill: #78716c; text-anchor: start; }
+    .layer { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #78716c; text-anchor: start; }
+    .layer.core { fill: #7e6c37; }
+    .band { fill: #fafaf9; stroke: #e7e5e4; }
+    .band.core { fill: #fdfbf6; stroke: #d9c894; }
+    .node { fill: #ffffff; stroke: #c8c2bc; }
+    .node.core { fill: #fbf7ec; stroke: #b39b52; }
+    .node.package { fill: #f5f5f4; stroke: #a8a29e; stroke-dasharray: 4 3; }
+    .root { fill: #f5f5f4; stroke: #d6d3d1; }
+    .wire { fill: none; stroke: #8a837d; stroke-width: 1.5; }
+    .dashed { stroke-dasharray: 4 3; }
+    .head { fill: #8a837d; }
+    @media (prefers-color-scheme: dark) {
+      .title, .name { fill: #e7e5e4; }
+      .sub { fill: #a8a29e; }
+      .tag, .layer { fill: #8a837d; }
+      .layer.core { fill: #d2b661; }
+      .band { fill: #141210; stroke: #2e2a27; }
+      .band.core { fill: #17140e; stroke: #5c4f2b; }
+      .node { fill: #1c1917; stroke: #57534e; }
+      .node.core { fill: #2a2415; stroke: #b39b52; }
+      .node.package { fill: #231f1d; stroke: #78716c; }
+      .root { fill: #1c1917; stroke: #44403c; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path class="head" d="M0,1 L9,5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <!-- Composition root: wires every layer -->
+  <rect class="root" x="24" y="24" width="32" height="644" rx="8"/>
+  <text class="layer" x="0" y="0" text-anchor="middle" transform="translate(44 346) rotate(-90)">COMPOSITION ROOT</text>
+
+  <!-- Inbound adapters -->
+  <rect class="band" x="72" y="24" width="684" height="96" rx="12"/>
+  <text class="layer" x="88" y="46">INBOUND ADAPTERS</text>
+  <rect class="node" x="234" y="58" width="168" height="48" rx="8"/>
+  <text class="title" x="318" y="79">HTTP</text>
+  <text class="sub" x="318" y="96">REST · Web</text>
+  <rect class="node" x="426" y="58" width="168" height="48" rx="8"/>
+  <text class="title" x="510" y="87">MCP server</text>
+
+  <path class="wire" d="M414,120 V146" marker-end="url(#arrow)"/>
+
+  <!-- Application -->
+  <rect class="band core" x="72" y="148" width="684" height="124" rx="12"/>
+  <text class="layer core" x="88" y="170">APPLICATION</text>
+  <rect class="node core" x="88" y="182" width="108" height="74" rx="8"/>
+  <text class="title" x="142" y="215">Access</text>
+  <text class="sub" x="142" y="232">identity · rules</text>
+  <rect class="node core" x="212" y="182" width="123" height="32" rx="8"/>
+  <text class="title" x="273.5" y="203">Answer Runs</text>
+  <rect class="node core" x="347" y="182" width="123" height="32" rx="8"/>
+  <text class="title" x="408.5" y="203">Retrieval</text>
+  <rect class="node core" x="482" y="182" width="123" height="32" rx="8"/>
+  <text class="title" x="543.5" y="203">Corpus Admin</text>
+  <rect class="node core" x="617" y="182" width="123" height="32" rx="8"/>
+  <text class="title" x="678.5" y="203">Runs</text>
+  <rect class="node core" x="212" y="224" width="123" height="32" rx="8"/>
+  <text class="title" x="273.5" y="245">Connections</text>
+  <rect class="node core" x="347" y="224" width="123" height="32" rx="8"/>
+  <text class="title" x="408.5" y="245">Profile Memory</text>
+  <rect class="node core" x="482" y="224" width="123" height="32" rx="8"/>
+  <text class="title" x="543.5" y="245">Conversations</text>
+  <rect class="node core" x="617" y="224" width="123" height="32" rx="8"/>
+  <text class="title" x="678.5" y="245">Model Catalogue</text>
+
+  <path class="wire" d="M414,272 V298" marker-end="url(#arrow)"/>
+
+  <!-- Engine -->
+  <rect class="band core" x="72" y="300" width="684" height="244" rx="12"/>
+  <text class="layer core" x="88" y="322">ENGINE</text>
+  <rect class="node core" x="314" y="336" width="200" height="48" rx="8"/>
+  <text class="title" x="414" y="357">Answer</text>
+  <text class="sub" x="414" y="374">Fast · Research</text>
+  <path class="wire" d="M414,384 V414" marker-end="url(#arrow)"/>
+  <path class="wire" d="M414,398 H218 Q210,398 210,406 V414" marker-end="url(#arrow)"/>
+  <path class="wire" d="M414,398 H610 Q618,398 618,406 V414" marker-end="url(#arrow)"/>
+  <rect class="node core" x="126" y="416" width="168" height="48" rx="8"/>
+  <text class="title" x="210" y="445">Run runtime</text>
+  <rect class="node core" x="330" y="416" width="168" height="48" rx="8"/>
+  <text class="title" x="414" y="445">Agent</text>
+  <rect class="node core" x="534" y="416" width="168" height="48" rx="8"/>
+  <text class="title" x="618" y="437">RAG</text>
+  <text class="sub" x="618" y="454">LightRAG workspaces</text>
+  <path class="wire" d="M414,464 V486" marker-end="url(#arrow)"/>
+  <path class="wire" d="M618,464 V486" marker-end="url(#arrow)"/>
+  <rect class="node core" x="330" y="488" width="372" height="40" rx="8"/>
+  <text class="title" x="516" y="512">AI <tspan class="sub" dx="4">model providers</tspan></text>
+
+  <!-- dlightrag-memory: a separate distribution -->
+  <rect class="node package" x="780" y="324" width="176" height="72" rx="8"/>
+  <text class="name" x="868" y="350">dlightrag-memory</text>
+  <text class="sub" x="868" y="367">separate distribution</text>
+  <text class="sub" x="868" y="383">own schema · stdio MCP</text>
+  <path class="wire" d="M514,360 H778" marker-end="url(#arrow)"/>
+  <path class="wire" d="M756,210 H860 Q868,210 868,218 V322" marker-end="url(#arrow)"/>
+
+  <!-- Outbound adapters implement the ports the core owns -->
+  <path class="wire dashed" d="M414,572 V546" marker-end="url(#arrow)"/>
+  <text class="tag" x="424" y="562">implement ports</text>
+  <rect class="band" x="72" y="572" width="684" height="96" rx="12"/>
+  <text class="layer" x="88" y="594">OUTBOUND ADAPTERS</text>
+  <rect class="node" x="92" y="606" width="200" height="48" rx="8"/>
+  <text class="title" x="192" y="627">PostgreSQL stores</text>
+  <text class="sub" x="192" y="644">LISTEN · NOTIFY</text>
+  <rect class="node" x="312" y="606" width="236" height="48" rx="8"/>
+  <text class="title" x="430" y="635">Owners’ MCP and OAuth clients</text>
+  <rect class="node" x="568" y="606" width="168" height="48" rx="8"/>
+  <text class="title" x="652" y="635">Observability</text>
+</svg>

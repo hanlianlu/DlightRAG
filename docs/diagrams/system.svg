@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 348" width="980" height="348" role="img" aria-labelledby="title desc">
+  <title id="title">DlightRAG system overview</title>
+  <desc id="desc">A browser reaches dlightrag-api through an optional authenticating edge; REST and MCP clients reach dlightrag-api and dlightrag-mcp directly. An identity provider supplies the signing keys DlightRAG verifies tokens with. DlightRAG, including an optional read replica, keeps its state in PostgreSQL 18 and a working directory, and calls outside services.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; text-anchor: middle; }
+    .title { font-size: 13px; font-weight: 600; fill: #1c1917; }
+    .name { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 600; fill: #1c1917; }
+    .sub { font-size: 11.5px; fill: #57534e; }
+    .tag { font-size: 11px; fill: #78716c; }
+    .group { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #7e6c37; text-anchor: start; }
+    .node { fill: #ffffff; stroke: #c8c2bc; }
+    .core { fill: #fbf7ec; stroke: #b39b52; }
+    .store { fill: #f5f5f4; stroke: #a8a29e; }
+    .boundary { fill: #fdfbf6; stroke: #c9b37a; stroke-dasharray: 6 4; }
+    .optional { stroke-dasharray: 4 3; }
+    .wire { fill: none; stroke: #8a837d; stroke-width: 1.5; }
+    .dashed { stroke-dasharray: 4 3; }
+    .head, .dot { fill: #8a837d; }
+    @media (prefers-color-scheme: dark) {
+      .title, .name { fill: #e7e5e4; }
+      .sub { fill: #a8a29e; }
+      .tag { fill: #8a837d; }
+      .group { fill: #d2b661; }
+      .node { fill: #1c1917; stroke: #57534e; }
+      .core { fill: #2a2415; stroke: #b39b52; }
+      .store { fill: #231f1d; stroke: #78716c; }
+      .boundary { fill: #16130f; stroke: #8f7b40; }
+      .wire { stroke: #8a837d; }
+      .head, .dot { fill: #8a837d; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path class="head" d="M0,1 L9,5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <!-- Callers -->
+  <rect class="node" x="24" y="72" width="168" height="48" rx="24"/>
+  <text class="title" x="108" y="101">Browser</text>
+  <rect class="node" x="24" y="160" width="168" height="48" rx="24"/>
+  <text class="title" x="108" y="189">REST and MCP clients</text>
+
+  <!-- Identity -->
+  <rect class="node optional" x="228" y="68" width="160" height="56" rx="10"/>
+  <text class="title" x="308" y="92">Authenticating edge</text>
+  <text class="sub" x="308" y="110">optional</text>
+  <rect class="node" x="228" y="248" width="160" height="48" rx="10"/>
+  <text class="title" x="308" y="277">Identity provider</text>
+
+  <!-- DlightRAG -->
+  <rect class="boundary" x="464" y="24" width="240" height="300" rx="14"/>
+  <text class="group" x="484" y="48">DLIGHTRAG</text>
+  <rect class="core" x="484" y="68" width="200" height="56" rx="10"/>
+  <text class="name" x="584" y="92">dlightrag-api</text>
+  <text class="sub" x="584" y="110">REST · Web</text>
+  <rect class="core" x="484" y="156" width="200" height="56" rx="10"/>
+  <text class="name" x="584" y="180">dlightrag-mcp</text>
+  <text class="sub" x="584" y="198">MCP</text>
+  <rect class="core optional" x="484" y="244" width="200" height="56" rx="10"/>
+  <text class="name" x="584" y="268">dlightrag-reader</text>
+  <text class="sub" x="584" y="286">read replica · optional</text>
+
+  <!-- State and outside services -->
+  <path class="store" d="M760,63 A98,7 0 0 1 956,63 V129 A98,7 0 0 1 760,129 Z"/>
+  <path class="store" d="M760,63 A98,7 0 0 0 956,63" fill="none"/>
+  <text class="title" x="858" y="90">PostgreSQL 18</text>
+  <text class="sub" x="858" y="107">corpus · Runs · memory</text>
+  <text class="sub" x="858" y="123">Connections</text>
+  <path class="store" d="M760,155 A98,7 0 0 1 956,155 V213 A98,7 0 0 1 760,213 Z"/>
+  <path class="store" d="M760,155 A98,7 0 0 0 956,155" fill="none"/>
+  <text class="title" x="858" y="184">Working directory</text>
+  <text class="sub" x="858" y="201">corpus files · key ring</text>
+  <rect class="node" x="760" y="228" width="196" height="88" rx="10"/>
+  <text class="title" x="858" y="252">Outside services</text>
+  <text class="sub" x="858" y="270">model providers · parser</text>
+  <text class="sub" x="858" y="286">corpus sources · web search</text>
+  <text class="sub" x="858" y="302">owners' MCP servers</text>
+
+  <!-- Wires -->
+  <path class="wire" d="M192,96 H226" marker-end="url(#arrow)"/>
+  <path class="wire" d="M388,96 H482" marker-end="url(#arrow)"/>
+  <path class="wire" d="M192,184 H482" marker-end="url(#arrow)"/>
+  <path class="wire" d="M430,184 V120 Q430,112 438,112 H482" marker-end="url(#arrow)"/>
+  <circle class="dot" cx="430" cy="184" r="2.5"/>
+  <path class="wire dashed" d="M388,272 H462" marker-end="url(#arrow)"/>
+  <text class="tag" x="426" y="264">signing keys</text>
+  <path class="wire" d="M704,96 H758" marker-end="url(#arrow)"/>
+  <path class="wire" d="M704,184 H758" marker-end="url(#arrow)"/>
+  <path class="wire" d="M704,272 H758" marker-end="url(#arrow)"/>
+</svg>

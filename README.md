@@ -18,20 +18,7 @@ processes use the PostgreSQL vector leg.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  browser(["Browser"]) --> edge["Authenticating edge (optional)"] --> api
-  clients(["REST and MCP clients"]) --> api & mcp
-  subgraph dlightrag["DlightRAG"]
-    api["dlightrag-api: REST and Web"]
-    mcp["dlightrag-mcp: MCP"]
-    reader["dlightrag-reader: read-only replica (optional)"]
-  end
-  idp["Identity provider"] -. "published keys" .-> dlightrag
-  dlightrag --> pg[("PostgreSQL 18<br/>corpus, Runs, Memory, Connections")]
-  dlightrag --> files[("Working directory<br/>corpus files, inputs, key ring")]
-  dlightrag --> outside["Model providers, parser, corpus sources,<br/>Web search, owners' MCP servers"]
-```
+![DlightRAG system overview](docs/diagrams/system.svg)
 
 LightRAG supplies graph and vector retrieval. DlightRAG owns product policy,
 multimodal alignment, durable ingestion and answers, security, storage adapters,
