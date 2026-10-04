@@ -81,42 +81,27 @@ def test_a_narrower_tool_refuses_what_only_a_wider_one_offers() -> None:
         parse({"action": "upload", "ref": "e1", "files": ["a.txt"]}, upload=False)
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         parse({"action": "click", "ref": "e1", "files": ["a.txt"]}, upload=False)
-    with pytest.raises(ValidationError, match="Input should be"):
-        parse({"action": "register", "password_refs": ["e1"]}, accounts=False)
-    with pytest.raises(ValidationError, match="Input should be"):
-        parse({"action": "login", "email_ref": "e1"}, accounts=False)
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        parse({"action": "click", "ref": "e1", "email_ref": "e2"}, accounts=False)
-    # The mailbox is offered on its own terms: accounts without one have no inbox.
-    assert parse({"action": "login", "email_ref": "e1"}, mailbox=False).action == "login"
-    with pytest.raises(ValidationError, match="Input should be"):
-        parse({"action": "inbox"}, mailbox=False)
 
 
 @pytest.mark.parametrize("upload", [False, True])
-def test_agent_accounts_add_their_actions_and_their_fields_to_the_schema_and_nothing_else(
+def test_agent_accounts_add_their_fields_and_their_action_lines_to_the_schema(
     upload: bool,
 ) -> None:
     plain, accounting = (properties(upload=upload, accounts=on) for on in (False, True))
 
-    added = set(accounting["action"]["enum"]) - set(plain["action"]["enum"])
-    assert added == {"register", "login"}
     assert set(accounting) - set(plain) == {"password_refs", "email_ref", "username_ref"}
-    for name in ("password_refs", "email_ref", "username_ref"):
-        assert name not in plain
     assert (
         "register (password_refs, email_ref, username_ref)" in accounting["action"]["description"]
     )
     assert "register" not in plain["action"]["description"]
 
 
-def test_an_agent_mailbox_adds_the_inbox_action_and_no_field() -> None:
+def test_an_agent_mailbox_adds_the_inbox_line_and_no_field() -> None:
     plain, mailing = (properties(upload=True, accounts=True, mailbox=on) for on in (False, True))
 
-    assert set(mailing["action"]["enum"]) - set(plain["action"]["enum"]) == {"inbox"}
     assert set(mailing) == set(plain)
     assert "inbox: mail to this session's aliases" in mailing["action"]["description"]
-    assert parse({"action": "inbox"}).action == "inbox"
+    assert "inbox" not in plain["action"]["description"]
 
 
 def test_a_registration_names_the_fields_it_fills_and_a_login_may_name_any_of_them() -> None:

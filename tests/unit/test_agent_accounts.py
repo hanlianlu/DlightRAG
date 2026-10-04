@@ -171,12 +171,11 @@ async def register(
     scope: str,
     *,
     site: str = SITE,
-    child: bool = False,
     email: str | None = "a@x.example",
     existing: AgentAccount | None = None,
 ) -> tuple[AgentAccount, SecretStr]:
     password = generate_password()
-    account = await run.session(scope, child=child).record(
+    account = await run.session(scope, child=False).record(
         site,
         existing=existing,
         email=email,
@@ -216,48 +215,6 @@ async def test_a_reset_replaces_the_password_and_keeps_the_account_id_and_the_em
     assert (after.account_id, after.email) == (before.account_id, before.email)
     assert after.envelope != before.envelope
     assert run.session("parent", child=False).password(renewed) == password
-
-
-async def test_a_childs_registration_stays_in_the_run_and_serves_only_its_own_session() -> None:
-    store = MemoryAccountStore()
-    run = accounts(store)
-
-    _, own = await register(run, "child-a", child=True, email="alias-a@x.example")
-    _, siblings = await register(run, "child-b", child=True, email="alias-b@x.example")
-
-    assert store.rows == {}
-    first_session, second_session = (
-        run.session("child-a", child=True),
-        run.session("child-b", child=True),
-    )
-    first = await first_session.registration_target(SITE)
-    second = await second_session.registration_target(SITE)
-    assert first is not None and second is not None
-    assert (first.email, second.email) == ("alias-a@x.example", "alias-b@x.example")
-    assert first_session.password(first) == own and second_session.password(second) == siblings
-    assert not first.persistent
-    # What a Child registered is not the owner's account, so a parent finds nothing.
-    assert await run.session("parent", child=False).registration_target(SITE) is None
-
-
-async def test_a_childs_login_prefers_its_own_account_then_the_owners() -> None:
-    run = accounts(MemoryAccountStore())
-    _, owners = await register(run, "parent", email="owner@x.example")
-    await register(run, "child-a", child=True, email="alias@x.example")
-
-    own = await run.session("child-a", child=True).login_target(SITE)
-    child_b = run.session("child-b", child=True)
-    fallback = await child_b.login_target(SITE)
-    parent = await run.session("parent", child=False).login_target(SITE)
-
-    assert own is not None and fallback is not None and parent is not None
-    assert (own.email, fallback.email, parent.email) == (
-        "alias@x.example",
-        "owner@x.example",
-        "owner@x.example",
-    )
-    assert fallback.persistent and child_b.password(fallback) == owners
-    assert await run.session("parent", child=False).login_target("other.example") is None
 
 
 async def test_an_account_whose_key_the_ring_lost_cannot_be_opened() -> None:

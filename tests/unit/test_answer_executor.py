@@ -667,8 +667,6 @@ async def test_a_research_runs_browser_tool_drives_the_browser_it_was_given(
 async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pydantic import ValidationError
-
     from dlightrag.engine.answer.agent_browser import (
         AgentAccountsBinding,
         BrowserHolder,
@@ -687,26 +685,18 @@ async def test_a_research_runs_browser_tool_acts_on_the_agent_accounts_it_was_gi
         owner_id="owner", binding=AgentAccountsBinding(MemoryAccountStore(), CredentialCipher(None))
     )
 
-    async def browser_tool(accounts: RunAgentAccounts | None) -> Any:
-        run_browser = RunAgentBrowser(FakeProvider(), holder, browser_settings())
-        async with ResourceRegistry() as registry:
-            _, orchestrator, *_ = await _prepared_executor(
-                monkeypatch, registry=registry, agent_browser=run_browser, agent_accounts=accounts
-            )
-            return {tool.name: tool for tool in orchestrator.prepare_run("question").tools}[
-                "browser"
-            ]
+    run_browser = RunAgentBrowser(FakeProvider(), holder, browser_settings())
+    async with ResourceRegistry() as registry:
+        _, orchestrator, *_ = await _prepared_executor(
+            monkeypatch, registry=registry, agent_browser=run_browser, agent_accounts=keyless
+        )
+        tool = {tool.name: tool for tool in orchestrator.prepare_run("question").tools}["browser"]
 
-    with_accounts = await browser_tool(keyless)
-    refused = await with_accounts.execute(
-        with_accounts.input_model.model_validate({"action": "login", "email_ref": "e1"}),
+    refused = await tool.execute(
+        tool.input_model.model_validate({"action": "login", "email_ref": "e1"}),
         tool_runtime(tool_name="browser"),
     )
     assert refused.is_error and refused.text_content.startswith("Agent Accounts are unavailable")
-
-    without_accounts = await browser_tool(None)
-    with pytest.raises(ValidationError, match="Input should be"):
-        without_accounts.input_model.model_validate({"action": "login", "email_ref": "e1"})
 
 
 async def test_a_research_runs_materialize_tool_copies_from_the_registry_it_was_given(

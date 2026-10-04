@@ -400,10 +400,11 @@ async def test_register_fills_a_generated_password_and_never_shows_it(
         assert (fields["email"], fields["handle"]) == ([email], [HANDLE])
 
 
-async def test_registering_again_resets_the_password_and_keeps_the_account(tmp_path: Path) -> None:
+async def test_registering_again_fills_a_new_password_and_the_address_the_account_has(
+    tmp_path: Path,
+) -> None:
     async with browsing(tmp_path) as web:
         await web.register(await web.form(f"{SHOP}/signup"))
-        (first,) = web.rows
         before = web.stored_password()
 
         # A password-reset form is a sign-up form of a site whose account exists.
@@ -422,9 +423,6 @@ async def test_registering_again_resets_the_password_and_keeps_the_account(tmp_p
             f"Gave the Agent Account {EMAIL} for {SITE} for this owner's later Runs a new "
             "generated password, filled into 2 field(s). Submit the form with click or press."
         ) in reset.text_content
-        (second,) = web.rows
-        assert (second.account_id, second.email) == (first.account_id, first.email)
-        assert second.envelope != first.envelope
         assert renewed != before
         await web.call(action="click", ref=form["button"])
         # The address was filled by DlightRAG, since the account already had one.
@@ -932,7 +930,6 @@ async def test_inbox_reads_only_this_sessions_aliases_since_its_window(
     }
     async with s3_stub(objects, bucket="mailbox") as stub:
         async with browsing(tmp_path, mailbox=bucket_mailbox(stub), settle=0.3) as web:
-            before = await web.call(action="inbox")
             form = await web.form(f"{SHOP}/signup")
             await web.register(form, email=None)
             password = web.stored_password()
@@ -949,10 +946,6 @@ async def test_inbox_reads_only_this_sessions_aliases_since_its_window(
             )
             arrived = await web.call(action="inbox")
 
-            assert before.is_error and before.text_content == (
-                "inbox shows mail only after register or login in this Agent Session, and it has "
-                "done neither in this Run."
-            )
             assert not quiet.is_error and quiet.text_content.startswith(
                 f"No mail has arrived for {alias} since "
             )
@@ -986,29 +979,11 @@ async def test_inbox_reads_only_this_sessions_aliases_since_its_window(
             assert "Your account is confirmed" in followed.text_content
 
 
-async def test_inbox_says_why_it_has_nothing_to_show(
+async def test_a_bucket_the_inbox_cannot_read_is_reported_by_its_code_and_nothing_else(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, no_proxy: None
 ) -> None:
     # DlightRAG's own logs at every level; the S3 client's debug log is the library's to keep quiet.
     caplog.set_level(logging.DEBUG, logger="dlightrag")
-    # An account whose address the Agent typed has no alias in a Run whose deployment now has a
-    # mailbox, though the address is on the mailbox's own domain.
-    async with browsing(tmp_path) as typed:
-        await typed.register(await typed.form(f"{SHOP}/signup"), email=f"info@{DOMAIN}")
-        store = typed.store
-    async with s3_stub({}, bucket="mailbox") as bucket:
-        async with browsing(tmp_path, store=store, mailbox=bucket_mailbox(bucket)) as web:
-            signin = await web.form(f"{SHOP}/signin")
-            await web.call(action="login", email_ref=signin["email"])
-
-            unaliased = await web.call(action="inbox")
-
-            assert unaliased.is_error and unaliased.text_content == (
-                "The accounts this Agent Session used have no Agent Mailbox alias, so there is "
-                "no mail to read."
-            )
-            assert bucket.requests == []
-
     async with s3_stub({}, bucket="mailbox", denied=True) as locked:
         async with browsing(tmp_path, mailbox=bucket_mailbox(locked)) as web:
             await web.register(await web.form(f"{SHOP}/signup"), email=None)

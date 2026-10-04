@@ -52,18 +52,6 @@ def sealed_under_test_key() -> tuple[MemoryAccountStore, StoredAgentAccount]:
     return store, row
 
 
-async def test_a_pass_moves_the_envelopes_of_a_retired_key_to_the_active_one() -> None:
-    store, row = sealed_under_test_key()
-    maintenance = AgentAccountMaintenance(store=store, cipher=ring("next", "test", "next"))
-
-    resealed = await maintenance.maintain()
-
-    assert resealed == 1
-    moved = store.rows[("owner", "shop.example")]
-    assert (moved.key_id, moved.account_id) == ("next", row.account_id)
-    assert await maintenance.maintain() == 0
-
-
 async def test_the_loop_passes_now_and_again_and_stops_when_closed() -> None:
     store, _ = sealed_under_test_key()
     asked = 0

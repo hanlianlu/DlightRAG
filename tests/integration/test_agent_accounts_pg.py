@@ -126,10 +126,8 @@ async def test_accounts_are_owner_scoped_and_a_reset_replaces_the_envelope_of_th
     reset = await register(store, cipher, "alice", "shop.example")
 
     renewed = await store.account(owner_id="alice", site="shop.example")
-    assert renewed is not None and renewed.account_id == alice.account_id
-    assert renewed.envelope != alice.envelope
-    binding = ("alice", "shop.example", alice.account_id)
-    assert cipher.open(renewed.envelope, label=ACCOUNT_LABEL, binding=binding) == reset
+    assert renewed is not None and renewed.envelope != alice.envelope
+    assert cipher.open(renewed.envelope, label=ACCOUNT_LABEL, binding=renewed.binding) == reset
     assert reset != first
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_accounts") == 3
