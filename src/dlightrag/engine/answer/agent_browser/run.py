@@ -18,7 +18,6 @@ from dlightrag.engine.answer.agent_browser.contracts import (
     AgentBrowserSettings,
     BrowserHolder,
     BrowserProvider,
-    BrowserSandbox,
     LeasedBrowser,
     RenderedPage,
     browser_failure,
@@ -47,13 +46,7 @@ class RunAgentBrowser:
         self._renders = asyncio.Semaphore(_CONCURRENT_RENDERS)
         self._in_flight = 0
         self._idle: asyncio.Task[None] | None = None
-        self._sandbox: BrowserSandbox | None = None
         self._closed = False
-
-    @property
-    def sandbox(self) -> BrowserSandbox | None:
-        """Whether Chromium was sandboxed when this Run first leased its browser."""
-        return self._sandbox
 
     async def render(self, url: str) -> RenderedPage:
         """Render one page in a temporary context of this Run's browser."""
@@ -101,8 +94,6 @@ class RunAgentBrowser:
                 self._lease = await self._provider.lease(
                     self._holder, wait_seconds=self._settings.lease_wait_seconds
                 )
-                if self._sandbox is None:
-                    self._sandbox = self._lease.sandbox
             return self._lease
 
     async def _discard(self, lease: LeasedBrowser) -> None:

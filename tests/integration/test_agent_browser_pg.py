@@ -38,7 +38,6 @@ from tests.support.agent_browser import (
     WebProxy,
     browser_settings,
     run_server,
-    sandbox_refusal,
     web_proxy,
 )
 from tests.support.dns import public_dns
@@ -119,12 +118,17 @@ def settings(
 
 @asynccontextmanager
 async def pool_of(
-    pool: Any, *servers: str, proxy: WebProxy, connect_timeout: float = 20.0
+    pool: Any,
+    *servers: str,
+    proxy: WebProxy,
+    chromium_sandbox: bool = True,
+    connect_timeout: float = 20.0,
 ) -> AsyncIterator[tuple[PooledBrowserProvider, PGAgentBrowserLeaseStore]]:
     leases = PGAgentBrowserLeaseStore(pool=pool)
     provider = PooledBrowserProvider(
         endpoints=servers,
         egress_proxy=proxy.url,
+        chromium_sandbox=chromium_sandbox,
         connect_timeout_seconds=connect_timeout,
         leases=leases,
     )
@@ -602,83 +606,25 @@ async def test_closing_a_run_cancels_its_pending_release_and_frees_the_browser_a
 # -- Chromium's sandbox ----------------------------------------------------------------------
 
 
-async def test_an_endpoint_that_cannot_sandbox_runs_unsandboxed_and_is_remembered(
-    pg, caplog
-) -> None:
+@pytest.mark.parametrize("sandbox", [True, False], ids=["sandboxed", "unsandboxed"])
+async def test_a_real_chromium_renders_with_its_sandbox_as_configured(pg, sandbox: bool) -> None:
     store, pool = pg
-    first_run = await live_run(store, "sandbox-1")
-    second_run = await live_run(store, "sandbox-2")
+    holder = await live_run(store, f"sandbox-{sandbox}")
     async with AsyncExitStack() as stack:
         server = await stack.enter_async_context(run_server())
-        refusal = await stack.enter_async_context(sandbox_refusal(server.endpoint))
-        proxy = await stack.enter_async_context(web_proxy(PAGES))
-        provider, _ = await stack.enter_async_context(pool_of(pool, refusal.endpoint, proxy=proxy))
-
-        with caplog.at_level(logging.WARNING, logger=POOL_LOGGER):
-            first = RunAgentBrowser(provider, first_run, settings())
-            assert (await first.render("http://js.example/")).status == 200
-            # The sandbox is asked for first; the refusal is answered by an unsandboxed connect.
-            assert refusal.asked == [True, False]
-            assert first.sandbox == "unavailable"
-            await first.aclose()
-
-            second = RunAgentBrowser(provider, second_run, settings())
-            assert (await second.render("http://js.example/")).status == 200
-            # The endpoint is remembered: no sandboxed attempt is made again.
-            assert refusal.asked == [True, False, False]
-            assert second.sandbox == "unavailable"
-            await second.aclose()
-
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1
-        assert refusal.endpoint in warnings[0].getMessage()
-        assert "sandbox" in warnings[0].getMessage()
-
-
-async def test_a_sandboxed_connect_nothing_answers_is_not_taken_for_a_missing_sandbox(
-    pg, caplog
-) -> None:
-    store, pool = pg
-    holder = await live_run(store, "unanswered")
-    async with AsyncExitStack() as stack:
-        server = await stack.enter_async_context(run_server())
-        silent = await stack.enter_async_context(sandbox_refusal(server.endpoint, answers=False))
         proxy = await stack.enter_async_context(web_proxy(PAGES))
         provider, _ = await stack.enter_async_context(
-            pool_of(pool, silent.endpoint, proxy=proxy, connect_timeout=1.0)
+            pool_of(pool, server.endpoint, proxy=proxy, chromium_sandbox=sandbox)
         )
+        browser = RunAgentBrowser(provider, holder, settings())
 
-        for asked in ([True], [True, True]):
-            with caplog.at_level(logging.WARNING, logger=POOL_LOGGER):
-                with pytest.raises(AgentBrowserError) as unreachable:
-                    await provider.lease(holder, wait_seconds=5)
+        page = await browser.render("http://js.example/")
 
-            # It fails as any connect nobody answers does. The endpoint is not retried without
-            # the sandbox, so it is not remembered as unable to run it, and it is not left claimed.
-            assert unreachable.value.reason == "unreachable"
-            assert silent.asked == asked
-            assert await holder_of(pool, silent.endpoint) is None
-        failure = f"Agent Browser connect failed (TimeoutError): endpoint={silent.endpoint}"
-        assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
-            (logging.ERROR, failure)
-        ] * 2
-
-
-async def test_an_endpoint_that_can_sandbox_does_and_asks_nothing_else_of_it(pg, caplog) -> None:
-    store, pool = pg
-    holder = await live_run(store, "sandboxed")
-    async with AsyncExitStack() as stack:
-        server = await stack.enter_async_context(run_server())
-        proxy = await stack.enter_async_context(web_proxy(PAGES))
-        provider, _ = await stack.enter_async_context(pool_of(pool, server.endpoint, proxy=proxy))
-
-        with caplog.at_level(logging.WARNING, logger=POOL_LOGGER):
-            browser = RunAgentBrowser(provider, holder, settings())
-            await browser.render("http://js.example/")
-
-        assert browser.sandbox == "chromium"
-        assert caplog.records == []
+        assert '<div id="app">quote from script</div>' in page.html.decode()
         await browser.aclose()
+
+
+# -- the Playwright driver -------------------------------------------------------------------
 
 
 async def test_a_playwright_driver_that_died_is_replaced_by_the_next_lease(pg) -> None:

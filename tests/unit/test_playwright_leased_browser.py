@@ -75,9 +75,7 @@ async def test_a_browser_whose_context_will_not_close_is_given_up_though_its_ren
 
     wedged = _WedgedBrowser()
     healthy = FakeLease()
-    provider = FakeProvider(
-        PlaywrightLeasedBrowser(cast(Any, wedged), release, sandbox="chromium"), healthy
-    )
+    provider = FakeProvider(PlaywrightLeasedBrowser(cast(Any, wedged), release), healthy)
     browser = RunAgentBrowser(provider, HOLDER, browser_settings())
 
     with pytest.raises(AgentBrowserError) as lost:

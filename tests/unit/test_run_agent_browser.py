@@ -55,7 +55,7 @@ async def test_no_more_than_four_pages_render_at_once() -> None:
 
 async def test_a_browser_that_disconnects_is_closed_and_the_next_render_leases_afresh() -> None:
     dead = FakeLease(failure=browser_failure("disconnected"))
-    fresh = FakeLease(sandbox="unavailable")
+    fresh = FakeLease()
     provider = FakeProvider(dead, fresh)
     browser = RunAgentBrowser(provider, HOLDER, settings())
 
@@ -66,8 +66,6 @@ async def test_a_browser_that_disconnects_is_closed_and_the_next_render_leases_a
 
     assert (await browser.render("http://two.example/")).final_url == "http://two.example/"
     assert (provider.leased, fresh.rendered) == (2, ["http://two.example/"])
-    # What the Run records is how its browser was first leased.
-    assert browser.sandbox == "chromium"
     await browser.aclose()
     assert (dead.closed, fresh.closed) == (1, 1)
 
@@ -94,7 +92,6 @@ async def test_a_busy_pool_fails_the_render_and_the_next_render_tries_the_pool_a
     with pytest.raises(AgentBrowserError) as busy:
         await browser.render("http://a.example/")
     assert busy.value.reason == "busy"
-    assert browser.sandbox is None
 
     assert (await browser.render("http://a.example/")).status == 200
     assert provider.leased == 2

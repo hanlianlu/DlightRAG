@@ -578,6 +578,29 @@ def test_a_deployment_offers_a_rendered_read_exactly_when_it_configures_an_agent
     assert "rendered" not in read_properties(test_config)
 
 
+@pytest.mark.parametrize("sandbox", [True, False], ids=["sandboxed", "unsandboxed"])
+def test_a_deployment_reports_the_chromium_sandbox_it_configures_for_its_agent_browser(
+    test_config: Any, sandbox: bool
+) -> None:
+    from dlightrag._compose import _compose
+
+    pool = AgentBrowserConfig(
+        endpoints=("ws://agent-browser-1:3000/",),
+        egress_proxy="http://agent-browser-egress:3128",
+        chromium_sandbox=sandbox,
+    )
+    agent = test_config.answer.agent.model_copy(update={"browser": pool})
+    configured = test_config.model_copy(
+        update={"answer": test_config.answer.model_copy(update={"agent": agent})}
+    )
+
+    assert _compose(configured).health.agent_browser == {
+        "state": "configured",
+        "endpoints": 1,
+        "sandbox": sandbox,
+    }
+
+
 async def test_closing_the_executor_closes_the_browser_pool() -> None:
     provider = FakeProvider()
     executor = _executor(browser=AgentBrowserBinding(provider, browser_settings()))

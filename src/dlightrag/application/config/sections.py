@@ -357,6 +357,17 @@ class AgentBrowserConfig(BaseModel):
             "endpoints require it."
         ),
     )
+    chromium_sandbox: bool = Field(
+        default=True,
+        description=(
+            "Whether every browser launches inside Chromium's own process sandbox. Whether "
+            "a pool host can start it is the operator's to state: a host whose user "
+            "namespaces or seccomp profile forbid the sandbox cannot launch any browser "
+            "while this is true, and renders fail as unreachable until the host is relaxed "
+            "or this is set false. False runs Chromium with --no-sandbox, so the container "
+            "and its network are the only isolation."
+        ),
+    )
     lease_wait_seconds: float = Field(
         default=10.0,
         ge=0,

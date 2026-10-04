@@ -1968,8 +1968,6 @@ class AnswerExecutor:
                     else getattr(stream, "trace", None) or {}
                 )
                 trace["agent_shell_confinement"] = confinement_state(self._execution_environment)
-                if agent_browser is not None and agent_browser.sandbox is not None:
-                    trace["agent_browser_sandbox"] = agent_browser.sandbox
                 trace["agent_effort"] = _agent_effort_trace(
                     request.effort,
                     resolved_mode,

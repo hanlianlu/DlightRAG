@@ -2218,7 +2218,7 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
     """The browser is leased for the Run's own claim, settles with its renderings, and is closed."""
     monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
     url = "https://spa.example.com/quotes.html"
-    lease = FakeLease(sandbox="unavailable")
+    lease = FakeLease()
     provider = FakeProvider(lease)
     seen: list[Any] = []
     before_the_read: list[Any] = []
@@ -2306,7 +2306,6 @@ async def test_a_research_run_leases_its_browser_on_first_need_and_returns_it_at
         fencing_epoch=run_lease["fencing_epoch"],
     )
     assert (lease.rendered, lease.closed) == ([url], 1)
-    assert run.result["trace"]["agent_browser_sandbox"] == "unavailable"
     async with cast(Any, store)._operation_pool.acquire() as conn:
         kinds = [
             json.loads(row["capabilities"])["resource_kind"]
@@ -2338,7 +2337,6 @@ async def test_a_fast_run_has_no_browser_to_lease(store: FingerprintingRunStore)
     assert run is not None and run.result is not None
     assert [call["page_renderer"] for call in prepared] == [None]
     assert provider.leased == 0
-    assert "agent_browser_sandbox" not in run.result["trace"]
 
 
 async def test_publication_correction_is_one_linked_agent_operation(

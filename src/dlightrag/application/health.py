@@ -115,9 +115,11 @@ class ApplicationHealth:
         #: a Run records the same value, so an unconfined host is stated rather than
         #: inferred (ADR 0024).
         self._agent_shell_confinement: str = "disabled"
-        #: How many Agent Browser endpoints the deployment configures. Health reports the
-        #: configuration alone and never reaches the pool (ADR 0032).
+        #: How many Agent Browser endpoints the deployment configures, and whether it asks
+        #: for Chromium's own sandbox. Health reports the configuration alone and never
+        #: reaches the pool (ADR 0032).
         self._agent_browser_endpoints = 0
+        self._agent_browser_sandbox = True
 
     @property
     def is_ready(self) -> bool:
@@ -173,14 +175,16 @@ class ApplicationHealth:
 
     @property
     def agent_browser(self) -> Mapping[str, object]:
-        """Whether an Agent Browser is configured, and how many endpoints; no I/O."""
+        """The Agent Browser as configured: its state, endpoint count and sandbox; no I/O."""
         return {
             "state": "configured" if self._agent_browser_endpoints else "disabled",
             "endpoints": self._agent_browser_endpoints,
+            "sandbox": self._agent_browser_sandbox,
         }
 
-    def set_agent_browser(self, *, endpoints: int) -> None:
+    def set_agent_browser(self, *, endpoints: int, sandbox: bool) -> None:
         self._agent_browser_endpoints = endpoints
+        self._agent_browser_sandbox = sandbox
 
     def mark_component_degraded(self, component: HealthComponentName) -> None:
         if self._closed or component == "process":

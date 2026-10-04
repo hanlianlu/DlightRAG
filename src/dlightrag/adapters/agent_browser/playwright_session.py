@@ -12,12 +12,7 @@ from playwright.async_api import Browser, Page, Response
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from dlightrag.engine.answer.agent_browser import (
-    AgentBrowserError,
-    BrowserSandbox,
-    RenderedPage,
-    browser_failure,
-)
+from dlightrag.engine.answer.agent_browser import AgentBrowserError, RenderedPage, browser_failure
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +26,10 @@ _CLOSE_SECONDS = 10.0
 class PlaywrightLeasedBrowser:
     """A Run's browser: each render is a temporary anonymous context of its own."""
 
-    def __init__(
-        self,
-        browser: Browser,
-        release: Callable[[], Awaitable[None]],
-        *,
-        sandbox: BrowserSandbox,
-    ) -> None:
+    def __init__(self, browser: Browser, release: Callable[[], Awaitable[None]]) -> None:
         self._browser = browser
         self._release = release
-        self._sandbox: BrowserSandbox = sandbox
         self._closed = False
-
-    @property
-    def sandbox(self) -> BrowserSandbox:
-        return self._sandbox
 
     async def render(
         self, url: str, *, navigation_timeout: float, settle_timeout: float

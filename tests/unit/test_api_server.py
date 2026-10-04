@@ -1403,12 +1403,14 @@ class TestHealthEndpoint:
         assert (await client.get("/health")).json()["agent_browser"] == {
             "state": "disabled",
             "endpoints": 0,
+            "sandbox": True,
         }
 
-        mock_application.health.set_agent_browser(endpoints=2)
+        mock_application.health.set_agent_browser(endpoints=2, sandbox=False)
         body = (await client.get("/health")).json()
-        # The count is all it says: a pool member's address stays inside the deployment.
-        assert body["agent_browser"] == {"state": "configured", "endpoints": 2}
+        # The count and the configured sandbox are all it says: a pool member's address stays
+        # inside the deployment, and whether a host can start the sandbox is never probed.
+        assert body["agent_browser"] == {"state": "configured", "endpoints": 2, "sandbox": False}
         probe.assert_not_awaited()
 
 

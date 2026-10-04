@@ -4,9 +4,9 @@
 Each pool container runs ``playwright run-server --max-clients 1``, which launches a
 fresh browser for a connection and closes it with that connection. This provider
 claims one endpoint for a Run in the shared lease record, connects to it with the
-egress proxy in the launch options, and gives the Run a ``PlaywrightLeasedBrowser``
-(ADR 0032). It never passes ``expose_network``, which would route browser traffic back
-out through the application's own network.
+egress proxy and the configured Chromium sandbox in the launch options, and gives the
+Run a ``PlaywrightLeasedBrowser`` (ADR 0032). It never passes ``expose_network``, which
+would route browser traffic back out through the application's own network.
 """
 
 from __future__ import annotations
@@ -19,14 +19,12 @@ from collections.abc import Sequence
 from functools import partial
 
 from playwright.async_api import Browser, Playwright, async_playwright
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from dlightrag.adapters.agent_browser.playwright_session import PlaywrightLeasedBrowser
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     BrowserHolder,
     BrowserLeases,
-    BrowserSandbox,
     LeasedBrowser,
     browser_failure,
 )
@@ -39,7 +37,7 @@ _POLL_SECONDS = 0.5
 _STOP_SECONDS = 10.0
 
 
-def launch_options_header(proxy: str, *, sandbox: bool) -> str:
+def _launch_options_header(proxy: str, *, sandbox: bool) -> str:
     """The ``x-playwright-launch-options`` value that launches a headless, proxied Chromium.
 
     The server honors ``chromiumSandbox`` only because it runs with ``--unsafe``, and
@@ -66,20 +64,18 @@ class PooledBrowserProvider:
         *,
         endpoints: Sequence[str],
         egress_proxy: str,
+        chromium_sandbox: bool,
         connect_timeout_seconds: float,
         leases: BrowserLeases,
     ) -> None:
         self._endpoints = tuple(endpoints)
-        self._egress_proxy = egress_proxy
+        self._launch_options = _launch_options_header(egress_proxy, sandbox=chromium_sandbox)
         self._connect_timeout_ms = max(1.0, connect_timeout_seconds * 1000)
         self._leases = leases
         self._driver: Playwright | None = None
         self._driver_lock = asyncio.Lock()
         self._registered = False
         self._register_lock = asyncio.Lock()
-        #: Endpoints whose Chromium cannot start its sandbox, learned this process and
-        #: kept for its lifetime (ADR 0024 degrades the same way for Landlock).
-        self._unsandboxed: set[str] = set()
         self._closed = False
 
     async def lease(self, holder: BrowserHolder, *, wait_seconds: float) -> LeasedBrowser:
@@ -99,7 +95,7 @@ class PooledBrowserProvider:
             endpoint = await self._claim(holder, excluded)
             if endpoint is not None:
                 try:
-                    browser, sandbox = await self._open(endpoint)
+                    browser = await self._connect(endpoint)
                 except Exception as exc:
                     await self._give_back(holder, endpoint)
                     excluded.append(endpoint)
@@ -115,7 +111,7 @@ class PooledBrowserProvider:
                     await asyncio.shield(self._leases.release(holder, endpoint))
                     raise
                 return PlaywrightLeasedBrowser(
-                    browser, partial(self._leases.release, holder, endpoint), sandbox=sandbox
+                    browser, partial(self._leases.release, holder, endpoint)
                 )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -160,38 +156,13 @@ class PooledBrowserProvider:
         except Exception:
             logger.warning("Failed to release an Agent Browser lease", exc_info=True)
 
-    async def _open(self, endpoint: str) -> tuple[Browser, BrowserSandbox]:
-        """Connect with Chromium's sandbox, or without it where the endpoint cannot run it.
+    async def _connect(self, endpoint: str) -> Browser:
+        """Connect with the configured launch options.
 
-        A sandboxed connect that fails and an immediate unsandboxed one that succeeds
-        say the endpoint cannot start the sandbox, whatever the driver's words were:
-        that is recorded once, and its later leases connect unsandboxed directly. A connect
-        that fails with Playwright's TimeoutError says nothing about the sandbox, only that
-        the endpoint did not answer in time, so it fails as any connect does and is never
-        retried without the sandbox.
+        A host that cannot start the Chromium sandbox they ask for fails here like a member
+        that is down: the lease gives the endpoint back and goes on to the next.
         """
-        if endpoint in self._unsandboxed:
-            return await self._connect(endpoint, sandbox=False), "unavailable"
-        try:
-            return await self._connect(endpoint, sandbox=True), "chromium"
-        except PlaywrightTimeoutError:
-            raise
-        except Exception:
-            browser = await self._connect(endpoint, sandbox=False)
-        self._unsandboxed.add(endpoint)
-        logger.warning(
-            "Agent Browser endpoint %s cannot start Chromium's sandbox, so its browsers run "
-            "without it; the container's user namespaces and seccomp profile decide",
-            endpoint,
-        )
-        return browser, "unavailable"
-
-    async def _connect(self, endpoint: str, *, sandbox: bool) -> Browser:
-        headers = {
-            "x-playwright-launch-options": launch_options_header(
-                self._egress_proxy, sandbox=sandbox
-            )
-        }
+        headers = {"x-playwright-launch-options": self._launch_options}
         for attempt in (1, 2):
             driver = await self._started()
             try:
@@ -232,4 +203,4 @@ class PooledBrowserProvider:
         return True
 
 
-__all__ = ["PooledBrowserProvider", "launch_options_header"]
+__all__ = ["PooledBrowserProvider"]

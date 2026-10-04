@@ -5,8 +5,9 @@ The pool is real where it can be: ``run_server`` is the Playwright server a pool
 runs, driving a real Chromium, so a test observes the same launch options, connections and
 requests production sends. What stands in for the outside world is the proxy a launch is
 given: ``web_proxy`` carries a handful of canned ``http://*.example`` pages, as Squid would
-carry the public Web. ``SandboxRefusal`` is a container that cannot start Chromium's sandbox,
-and ``RecordingRenderer`` is the Agent Browser as a Run's Resource Registry sees it.
+carry the public Web. ``LaunchRecorder`` is a pool member that refuses every connection and
+keeps what each one asked to launch, and ``RecordingRenderer`` is the Agent Browser as a Run's
+Resource Registry sees it.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
-    BrowserSandbox,
     LeasedBrowser,
     RenderedPage,
 )
@@ -167,74 +167,43 @@ async def web_proxy(pages: Mapping[str, Served]) -> AsyncIterator[WebProxy]:
         await server.wait_closed()
 
 
-class SandboxRefusal:
-    """A pool container that cannot start Chromium's sandbox, in front of a real run-server.
+class LaunchRecorder:
+    """A pool member that refuses every connection and keeps the launch it asked for.
 
-    It forwards every connection that does not ask for the sandbox. A connection that does
-    is refused at the WebSocket upgrade, or with ``answers=False`` never answered at all, as
-    a container that is frozen or cut off from the network does not answer. ``asked`` records
-    what each connection asked.
+    The refusal stands for a member that cannot honor the launch, a host that cannot start the
+    sandbox included. ``launches`` holds the decoded ``x-playwright-launch-options`` of each
+    connection, in order, so a test sees what a provider sends and whether it sends anything
+    after being refused.
     """
 
-    def __init__(self, upstream: str, *, answers: bool = True) -> None:
-        self._upstream = upstream
-        self._answers = answers
-        self.asked: list[bool] = []
+    def __init__(self) -> None:
+        self.launches: list[dict[str, object]] = []
         self.endpoint = ""
 
     async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        upstream_writer: asyncio.StreamWriter | None = None
         try:
             head = await reader.readuntil(b"\r\n\r\n")
             _, _, headers = _parse_head(head)
-            options = json.loads(headers.get("x-playwright-launch-options", "{}"))
-            sandboxed = options.get("chromiumSandbox") is True
-            self.asked.append(sandboxed)
-            if sandboxed:
-                if self._answers:
-                    writer.write(_response(500, b"Chromium sandboxing failed", {}))
-                    await writer.drain()
-                else:
-                    await reader.read()  # until the client gives up
-                return
-            host, _, port = self._upstream.removeprefix("ws://").rstrip("/").partition(":")
-            upstream_reader, upstream_writer = await asyncio.open_connection(host, int(port))
-            upstream_writer.write(head)
-            await upstream_writer.drain()
-            await asyncio.gather(
-                _pipe(reader, upstream_writer),
-                _pipe(upstream_reader, writer),
-            )
+            self.launches.append(json.loads(headers["x-playwright-launch-options"]))
+            writer.write(_response(500, b"Chromium sandboxing failed", {}))
+            await writer.drain()
         except asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError:
             pass
         finally:
             writer.close()
-            if upstream_writer is not None:
-                upstream_writer.close()
 
 
 @asynccontextmanager
-async def sandbox_refusal(upstream: str, *, answers: bool = True) -> AsyncIterator[SandboxRefusal]:
-    """Front the run-server at ``upstream`` with a container that refuses the sandbox."""
-    refusal = SandboxRefusal(upstream, answers=answers)
-    server = await asyncio.start_server(refusal.serve, "127.0.0.1", 0, limit=_HEAD_LIMIT)
-    refusal.endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
+async def launch_recorder() -> AsyncIterator[LaunchRecorder]:
+    """Serve a pool member that records the launch of each connection and refuses it."""
+    recorder = LaunchRecorder()
+    server = await asyncio.start_server(recorder.serve, "127.0.0.1", 0, limit=_HEAD_LIMIT)
+    recorder.endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
     try:
-        yield refusal
+        yield recorder
     finally:
         server.close()
         await server.wait_closed()
-
-
-async def _pipe(source: asyncio.StreamReader, sink: asyncio.StreamWriter) -> None:
-    try:
-        while chunk := await source.read(65536):
-            sink.write(chunk)
-            await sink.drain()
-    except ConnectionError:
-        pass
-    finally:
-        sink.close()
 
 
 def _parse_head(head: bytes) -> tuple[str, str, dict[str, str]]:
@@ -261,6 +230,7 @@ def browser_settings(
     return AgentBrowserSettings(
         endpoints=("ws://pool-1/",),
         egress_proxy="http://egress:3128",
+        chromium_sandbox=True,
         connect_timeout_seconds=15.0,
         lease_wait_seconds=wait,
         navigation_timeout_seconds=navigation,
@@ -308,11 +278,9 @@ class FakeLease:
     def __init__(
         self,
         *,
-        sandbox: BrowserSandbox = "chromium",
         failure: AgentBrowserError | None = None,
         gate: asyncio.Event | None = None,
     ) -> None:
-        self.sandbox: BrowserSandbox = sandbox
         self.failure = failure
         self.gate = gate
         self.rendered: list[str] = []
@@ -397,14 +365,14 @@ __all__ = [
     "FakeLease",
     "FakeLeases",
     "FakeProvider",
+    "LaunchRecorder",
     "ProxiedRequest",
     "RecordingRenderer",
     "RunServer",
-    "SandboxRefusal",
     "Served",
     "WebProxy",
     "browser_settings",
+    "launch_recorder",
     "run_server",
-    "sandbox_refusal",
     "web_proxy",
 ]

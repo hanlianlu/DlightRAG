@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""How the Agent Browser pool fails: only an Agent Browser error leaves a lease, and a read goes on."""
+"""What the Agent Browser pool sends, and how it fails: only an Agent Browser error leaves a lease."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pytest
 from dlightrag.adapters.agent_browser.pool import PooledBrowserProvider
 from dlightrag.engine.answer.agent_browser import AgentBrowserError, BrowserHolder, RunAgentBrowser
 from dlightrag.engine.answer.resources.registry import AgentBrowserRender, ResourceRegistry
-from tests.support.agent_browser import FakeLeases, browser_settings
+from tests.support.agent_browser import FakeLeases, browser_settings, launch_recorder
 from tests.support.dns import public_dns
 from tests.support.resources import call, tools
 
@@ -20,13 +20,44 @@ LOGGER = "dlightrag.adapters.agent_browser.pool"
 PAGE = "https://spa.example.com/app.html"
 
 
-def pool(leases: FakeLeases, *endpoints: str) -> PooledBrowserProvider:
+def pool(
+    leases: FakeLeases, *endpoints: str, chromium_sandbox: bool = True
+) -> PooledBrowserProvider:
     return PooledBrowserProvider(
         endpoints=endpoints or ("ws://pool-1/", "ws://pool-2/"),
         egress_proxy="http://egress:3128",
+        chromium_sandbox=chromium_sandbox,
         connect_timeout_seconds=1.0,
         leases=leases,
     )
+
+
+@pytest.mark.parametrize(
+    ("chromium_sandbox", "sandbox_option"),
+    [
+        pytest.param(True, {"chromiumSandbox": True}, id="by-default"),
+        pytest.param(False, {}, id="off"),
+    ],
+)
+async def test_a_launch_asks_for_chromiums_sandbox_exactly_as_configured_and_only_once(
+    chromium_sandbox: bool, sandbox_option: dict[str, object]
+) -> None:
+    leases = FakeLeases()
+    async with launch_recorder() as member:
+        provider = pool(leases, member.endpoint, chromium_sandbox=chromium_sandbox)
+        try:
+            with pytest.raises(AgentBrowserError) as refused:
+                await provider.lease(HOLDER, wait_seconds=0)
+        finally:
+            await provider.aclose()
+
+    # A member that cannot honor the launch it was asked for, a host without the sandbox
+    # included, is a member that is down: it is given back and not asked for anything else.
+    assert refused.value.reason == "unreachable"
+    assert leases.released == [member.endpoint]
+    assert member.launches == [
+        {"headless": True, "proxy": {"server": "http://egress:3128"}, **sandbox_option}
+    ]
 
 
 @pytest.mark.parametrize("failing", ["register_endpoints", "claim"])

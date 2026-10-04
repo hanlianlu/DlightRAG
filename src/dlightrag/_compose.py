@@ -194,7 +194,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     health = ApplicationHealth(readiness_probe=PGReadinessProbe())
     health.set_agent_shell_confinement(confinement_state(config.answer.agent.execution_environment))
-    health.set_agent_browser(endpoints=len(config.answer.agent.browser.endpoints))
+    health.set_agent_browser(
+        endpoints=len(config.answer.agent.browser.endpoints),
+        sandbox=config.answer.agent.browser.chromium_sandbox,
+    )
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
     corpus_backend = build_pg_corpus_backend(config)
@@ -409,6 +412,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             PooledBrowserProvider(
                 endpoints=browser_settings.endpoints,
                 egress_proxy=browser_settings.egress_proxy,
+                chromium_sandbox=browser_settings.chromium_sandbox,
                 connect_timeout_seconds=browser_settings.connect_timeout_seconds,
                 leases=PGAgentBrowserLeaseStore(),
             ),

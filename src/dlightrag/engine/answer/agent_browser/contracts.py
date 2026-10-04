@@ -93,15 +93,8 @@ def browser_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrows
     return AgentBrowserError(reason, _PUBLIC_MESSAGES[reason].format(**fields))
 
 
-type BrowserSandbox = Literal["chromium", "unavailable"]
-"""Whether Chromium ran inside its own sandbox for one lease."""
-
-
 class LeasedBrowser(Protocol):
     """One browser a Run holds until it is closed."""
-
-    @property
-    def sandbox(self) -> BrowserSandbox: ...
 
     async def render(
         self, url: str, *, navigation_timeout: float, settle_timeout: float
@@ -136,13 +129,15 @@ class BrowserLeases(Protocol):
 class AgentBrowserSettings:
     """The Agent Browser a deployment configures.
 
-    The pool's endpoints, the egress proxy and the connect timeout are what its provider is
-    built from. The other timings are the waits a Run keeps: for a free browser, for a page
-    to load and settle, and before it gives an idle browser back.
+    The pool's endpoints, the egress proxy, whether Chromium is launched inside its own
+    sandbox, and the connect timeout are what its provider is built from. The other timings
+    are the waits a Run keeps: for a free browser, for a page to load and settle, and before
+    it gives an idle browser back.
     """
 
     endpoints: tuple[str, ...]
     egress_proxy: str
+    chromium_sandbox: bool
     connect_timeout_seconds: float
     lease_wait_seconds: float
     navigation_timeout_seconds: float
@@ -166,7 +161,6 @@ __all__ = [
     "BrowserHolder",
     "BrowserLeases",
     "BrowserProvider",
-    "BrowserSandbox",
     "LeasedBrowser",
     "RenderedPage",
     "browser_failure",

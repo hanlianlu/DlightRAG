@@ -13,6 +13,7 @@ from dlightrag.application.config import (
     DlightragConfig,
     WebSourcesConfig,
 )
+from dlightrag.application.settings import agent_browser_settings
 from dlightrag.engine.answer.execution_settings import (
     default_local_workspace_root,
     validate_agent_execution,
@@ -197,6 +198,30 @@ def test_the_agent_browser_pool_is_bound_through_the_environment_as_compose_bind
 
     assert browser.endpoints == _POOL["endpoints"]
     assert browser.egress_proxy == _POOL["egress_proxy"]
+
+
+@pytest.mark.parametrize(
+    ("bound", "sandboxed"),
+    [(None, True), ("true", True), ("false", False)],
+    ids=["by-default", "on", "off"],
+)
+def test_chromiums_sandbox_is_on_unless_the_operator_turns_it_off_and_reaches_the_settings(
+    monkeypatch: pytest.MonkeyPatch, bound: str | None, sandboxed: bool
+) -> None:
+    monkeypatch.setenv(
+        "DLIGHTRAG_ANSWER__AGENT__BROWSER__ENDPOINTS", '["ws://agent-browser-1:3000/"]'
+    )
+    monkeypatch.setenv(
+        "DLIGHTRAG_ANSWER__AGENT__BROWSER__EGRESS_PROXY", "http://agent-browser-egress:3128"
+    )
+    if bound is not None:
+        monkeypatch.setenv("DLIGHTRAG_ANSWER__AGENT__BROWSER__CHROMIUM_SANDBOX", bound)
+
+    config = DlightragConfig()  # pyright: ignore[reportCallIssue]
+    settings = agent_browser_settings(config)
+
+    assert config.answer.agent.browser.chromium_sandbox is sandboxed
+    assert settings is not None and settings.chromium_sandbox is sandboxed
 
 
 def test_endpoints_without_an_egress_proxy_are_refused() -> None:

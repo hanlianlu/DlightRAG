@@ -149,6 +149,7 @@ def agent_browser_settings(config: DlightragConfig) -> AgentBrowserSettings | No
     return AgentBrowserSettings(
         endpoints=browser.endpoints,
         egress_proxy=browser.egress_proxy,
+        chromium_sandbox=browser.chromium_sandbox,
         connect_timeout_seconds=browser.connect_timeout_seconds,
         lease_wait_seconds=browser.lease_wait_seconds,
         navigation_timeout_seconds=browser.navigation_timeout_seconds,

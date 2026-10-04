@@ -58,10 +58,14 @@ type AgentShellConfinementState = Annotated[
 
 
 class AgentBrowserHealthResponse(_StatusModel):
-    """Whether an Agent Browser is configured; it never names the pool's endpoints."""
+    """The Agent Browser as configured; it never names the pool's endpoints.
+
+    ``sandbox`` is the configured ``chromium_sandbox``, not a probe of what a host can start.
+    """
 
     state: Literal["configured", "disabled"]
     endpoints: int = Field(ge=0)
+    sandbox: bool
 
 
 class HealthResponse(_StatusModel):
