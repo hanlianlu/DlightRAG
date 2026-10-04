@@ -77,7 +77,7 @@ def _write_wheel(
                 f"{package}/adapters/http/browser/static/app/login.html", "<form></form>"
             )
             wheel.writestr(
-                f"{package}/adapters/http/browser/static/app/assets/style-test.css", "body {}"
+                f"{package}/adapters/http/browser/static/app/assets/app-test.css", "body {}"
             )
             wheel.writestr(
                 f"{package}/adapters/http/browser/static/app/assets/app-test.js", "export {}"
@@ -109,7 +109,7 @@ def _write_wheel(
             {
                 f"{sdist_root}/src/{package}/adapters/http/browser/static/app/index.html": "<dl-app></dl-app>",
                 f"{sdist_root}/src/{package}/adapters/http/browser/static/app/login.html": "<form></form>",
-                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/style-test.css": "body {}",
+                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/app-test.css": "body {}",
                 f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/app-test.js": "export {}",
                 f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/theme-init-test.js": "",
             }

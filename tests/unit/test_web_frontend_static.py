@@ -50,11 +50,36 @@ def test_web_shell_bootstraps_theme_preference_before_app_assets() -> None:
 
 def test_web_static_css_build_keeps_only_served_bundles() -> None:
     static_root = ROOT / "src/dlightrag/adapters/http/browser/static"
-    assets = static_root / "app" / "assets"
+    app_root = static_root / "app"
+    assets = app_root / "assets"
+    served = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (*app_root.glob("*.html"), *assets.glob("*.js"))
+    )
 
     assert {path.name for path in static_root.glob("*.css")} == {"pygments.css"}
-    styles = [path.name for path in assets.glob("style-*.css")]
-    assert len(styles) == 1
+    stylesheets = {path.name for path in assets.glob("*.css")}
+    assert stylesheets
+    assert {name for name in stylesheets if f"assets/{name}" not in served} == set()
+
+
+def test_web_static_catalog_stylesheet_reaches_only_catalog_pages() -> None:
+    """The catalog's page rules, such as its `body`, never reach the application."""
+    app_root = ROOT / "src/dlightrag/adapters/http/browser/static/app"
+    assets = app_root / "assets"
+    catalog = [
+        path.name
+        for path in assets.glob("*.css")
+        if ".ds-shell" in path.read_text(encoding="utf-8")
+    ]
+    referrers = sorted(
+        path.name
+        for path in (*app_root.glob("*.html"), *assets.glob("*.js"))
+        if any(name in path.read_text(encoding="utf-8") for name in catalog)
+    )
+
+    assert len(catalog) == 1
+    assert referrers == ["design-system.html", "product-showcase.html"]
 
 
 def test_pygments_css_matches_generator() -> None:

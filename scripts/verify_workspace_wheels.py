@@ -223,7 +223,7 @@ def _has_vite_frontend(members: set[str], *, prefix: str) -> bool:
         and any(
             name.startswith(assets + "theme-init-") and name.endswith(".js") for name in members
         )
-        and any(name.startswith(assets + "style-") and name.endswith(".css") for name in members)
+        and any(name.startswith(assets) and name.endswith(".css") for name in members)
     )
 
 

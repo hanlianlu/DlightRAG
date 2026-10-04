@@ -21,6 +21,7 @@ custom palettes, account-level preferences, or server-side preference storage.
 - Prefer semantic CSS tokens over component-specific light-mode overrides.
 - Reuse the existing popover dismissal and keyboard-navigation infrastructure.
 - The package-owned design system's runtime CSS remains authoritative and is projected deterministically for design tooling.
+- Every page loads only the stylesheets its own entry imports, so page-level rules such as the design-system catalog's `body` never reach the application, and the application's never reach the catalog.
 - Native Drawer/Dialog behavior remains product-owned; split behavior belongs to the package-owned design system.
 
 ## State Model

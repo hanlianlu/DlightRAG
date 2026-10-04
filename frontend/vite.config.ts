@@ -77,9 +77,7 @@ export default defineConfig({
       },
       external: [],
     },
-    cssCodeSplit: false,
     target: 'es2022',
-    modulePreload: false,
   },
   server: {
     proxy: {

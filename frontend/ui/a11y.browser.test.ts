@@ -46,11 +46,11 @@ import type {ChatTurnView} from '../lib/chat-views.ts';
 
 defineDesignSystemElements();
 
-// The product-styles page (web-test-runner.config.mjs) links the shipped
-// stylesheet, and components render the class names it was built with.
+// The product-styles page (web-test-runner.config.mjs) links the application's
+// shipped stylesheets, and components render the class names they were built with.
 before(() => {
   const token = getComputedStyle(document.documentElement).getPropertyValue('--color-bg-base');
-  expect(token, 'the shipped stylesheet is applied').to.not.equal('');
+  expect(token, 'the shipped stylesheets are applied').to.not.equal('');
 });
 
 /** Finish running transitions, so axe reads each color at its settled value. */

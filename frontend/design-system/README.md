@@ -65,7 +65,7 @@ Element modules have no registration side effects. Entrypoints explicitly call t
 - `design-system.html`: isolated foundations/primitives catalog; no product components.
 - `product-showcase.html`: feature composition showcase.
 - `npm test`: boundaries, generated drift, and structural rules.
-- `npm run test:browser`: default Chromium behavior suite. Its `product-styles` group runs `ui/a11y.browser.test.ts` against one production build's stylesheet and class names, in dark and light.
+- `npm run test:browser`: default Chromium behavior suite. Its `product-styles` group runs `ui/a11y.browser.test.ts` against the stylesheets and class names one production build ships to the application page, in dark and light.
 - `npm run test:browser:cross-engine`: Chromium, Firefox, and WebKit contract suite.
 
 Catalog coverage includes dark/light modes, 390/1440px specimens, focus/disabled states, and forced-colors rules.

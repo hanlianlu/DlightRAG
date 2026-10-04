@@ -30,13 +30,35 @@ const cssModulePlugin = {
 };
 
 // Accessibility is judged against what the product ships. One production build
-// of vite.config.ts, written nowhere, yields the shipped stylesheet and the
-// class names its CSS Modules received. The product-styles page links that
-// stylesheet and maps styles/ imports to those class names, so components
-// render exactly the selectors the stylesheet holds.
+// of vite.config.ts, written nowhere, yields the stylesheets the application
+// page loads and the class names its CSS Modules received. The product-styles
+// page links those stylesheets as one, in the order the application loads them,
+// and maps styles/ imports to those class names, so components render exactly
+// the selectors the stylesheets hold.
 const productStylesPath = '/__product-styles__/';
 const productStyledFiles = ['ui/a11y.browser.test.ts'];
 let productStyles;
+
+/**
+ * The application page links its entry chunk's stylesheets, its imports' first,
+ * and loads each dynamically imported chunk's stylesheets with that chunk.
+ */
+function applicationStylesheets(output) {
+  const files = new Map(output.map((file) => [file.fileName, file]));
+  const entry = output.find((file) => file.type === 'chunk' && file.isEntry && file.name === 'app');
+  if (!entry) throw new Error('Vite did not emit the application entry');
+  const stylesheets = new Set();
+  const visited = new Set();
+  const visit = (chunk) => {
+    if (visited.has(chunk.fileName)) return;
+    visited.add(chunk.fileName);
+    for (const name of chunk.imports) visit(files.get(name));
+    for (const name of chunk.viteMetadata.importedCss) stylesheets.add(name);
+    for (const name of chunk.dynamicImports) visit(files.get(name));
+  };
+  visit(entry);
+  return [...stylesheets].map((name) => files.get(name).source);
+}
 
 async function buildProductStyles() {
   const classNames = new Map();
@@ -46,9 +68,7 @@ async function buildProductStyles() {
     build: {write: false},
     css: {modules: {getJSON: (file, names) => classNames.set(relative(process.cwd(), file), names)}},
   });
-  const stylesheets = output.filter((file) => file.type === 'asset' && file.fileName.endsWith('.css'));
-  if (stylesheets.length !== 1) throw new Error(`expected one shipped stylesheet, built ${stylesheets.length}`);
-  return {stylesheet: stylesheets[0].source, classNames};
+  return {stylesheet: applicationStylesheets(output).join('\n'), classNames};
 }
 
 const productStylesPlugin = {

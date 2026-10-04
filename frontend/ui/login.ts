@@ -2,6 +2,7 @@
 
 import '../design-system/index.css';
 import '../styles/app.css';
+import '../styles/layout.css';
 
 import {msg} from '@lit/localize';
 import {initializeLanguagePreference} from '../i18n/locale.ts';
