@@ -172,23 +172,49 @@ it('keeps reconnect text and focus indicators contrast-safe in every theme and s
   document.documentElement.dataset.colorMode = 'dark';
 });
 
+/** A colour token's value in the current theme, read from a probe's computed style. */
+function resolveToken(property: 'color' | 'backgroundColor', token: string): Rgba {
+  const probe = element('');
+  probe.style[property] = `var(${token})`;
+  return rgba(getComputedStyle(probe)[property]);
+}
+
+const surfaces = ['--color-bg-base', '--color-bg-surface', '--color-bg-elevated', '--color-bg-subtle'];
+
 // The ring sits 2px outside its control, so it reads against whatever surrounds the control:
 // a surface, or a row tinted under the pointer or by selection.
 it('keeps the focus ring at 3:1 on every surface and row tint in both themes', () => {
-  const probe = element('');
-  const resolve = (property: 'color' | 'backgroundColor', value: string): Rgba => {
-    probe.style[property] = value;
-    return rgba(getComputedStyle(probe)[property]);
-  };
   for (const colorMode of ['dark', 'light']) {
     document.documentElement.dataset.colorMode = colorMode;
-    const ring = resolve('color', 'var(--focus-ring-color)');
-    for (const surface of ['--color-bg-base', '--color-bg-surface', '--color-bg-elevated', '--color-bg-subtle']) {
-      const plain = resolve('backgroundColor', `var(${surface})`);
+    const ring = resolveToken('color', '--focus-ring-color');
+    for (const surface of surfaces) {
+      const plain = resolveToken('backgroundColor', surface);
       for (const tint of ['', '--color-bg-hover', '--color-selected-row']) {
-        const background = tint ? composite(resolve('backgroundColor', `var(${tint})`), plain) : plain;
+        const background = tint ? composite(resolveToken('backgroundColor', tint), plain) : plain;
         expect(contrastRatio(composite(ring, background), background), `${colorMode} ${surface} ${tint}`)
           .to.be.at.least(3);
+      }
+    }
+  }
+  document.documentElement.dataset.colorMode = 'dark';
+});
+
+// Accent text is the gold for small text. It sits on a surface, or on the tint its row, pill,
+// chip, or link wears at rest or under the pointer. Gold-300, one step quieter in dark, read
+// 4.26:1 under a pill's hover tint.
+it('keeps accent text at 4.5:1 on every surface and tint in both themes', () => {
+  const tints = [
+    '', '--color-bg-hover', '--color-selected-row', '--color-row-alt', '--color-control-surface',
+    '--color-accent-ghost', '--color-accent-hover', '--color-accent-surface', '--color-accent-hover-strong',
+  ];
+  for (const colorMode of ['dark', 'light']) {
+    document.documentElement.dataset.colorMode = colorMode;
+    const text = resolveToken('color', '--color-accent-text');
+    for (const surface of surfaces) {
+      const plain = resolveToken('backgroundColor', surface);
+      for (const tint of tints) {
+        const background = tint ? composite(resolveToken('backgroundColor', tint), plain) : plain;
+        expect(contrastRatio(text, background), `${colorMode} ${surface} ${tint}`).to.be.at.least(4.5);
       }
     }
   }

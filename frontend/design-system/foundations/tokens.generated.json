@@ -115,7 +115,7 @@
   },
   "color-accent-text": {
     "$type": "color",
-    "$value": "{color-gold-300}",
+    "$value": "{color-gold-200}",
     "$extensions": {
       "org.dlightrag.modes": {
         "light": "{color-gold-500}"

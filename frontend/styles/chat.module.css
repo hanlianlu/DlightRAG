@@ -605,7 +605,7 @@
 }
 
 .markdownContent a:not(:where([data-answer-typed] *)) {
-  color: var(--color-accent-action);
+  color: var(--color-accent-text);
   text-decoration: none;
 }
 

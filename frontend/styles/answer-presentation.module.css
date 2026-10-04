@@ -26,7 +26,7 @@
 
 :global(.citation-badge:hover) {
     background: var(--color-accent-surface);
-    color: var(--color-accent-action);
+    color: var(--color-accent-text);
 }
 
 :global(.highlight) {
@@ -95,7 +95,7 @@
     background: transparent;
     border: 0;
     border-radius: var(--radius-control);
-    color: var(--color-accent-action);
+    color: var(--color-accent-text);
     cursor: pointer;
     display: flex;
     font: inherit;
