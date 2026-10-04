@@ -315,7 +315,11 @@ class BashArgs(BaseModel):
         gt=0,
         le=2_147_483.647,
         allow_inf_nan=False,
-        description="Optional finite process timeout in seconds.",
+        description=(
+            "Seconds after which the command is killed and the call reports a timeout. There is "
+            "no default, so set one to bound a command that could hang or run long (network "
+            "access, installs, long loops, anything waiting on input); omit it for quick commands."
+        ),
     )
 
 

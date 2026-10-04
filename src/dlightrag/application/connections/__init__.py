@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         ConnectionsView,
         ConnectionView,
         McpClientPort,
+        UnsupportedResultError,
     )
     from .service import Connections
 
@@ -32,6 +33,7 @@ __all__ = [
     "ConnectionsView",
     "ConnectionView",
     "McpClientPort",
+    "UnsupportedResultError",
 ]
 
 

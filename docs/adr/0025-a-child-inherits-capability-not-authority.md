@@ -24,7 +24,8 @@ give, since the line is authority, not side effects, and it failed any Run that 
 not offer one of the nine tools, whole `spawn_agent` call included. `tools` itself
 stays, as a way to narrow one child, and never fails a spawn. A user's explicit
 `/skill:` request goes to the Run's own agent and is no longer sent to its
-children, which keep the Skill catalog because they hold `load_skill`.
+children, which keep the Skill catalog while they hold `load_skill`; a child
+narrowed away from it is not shown Skills it cannot load.
 
 The objective prefix is no longer a prefix: [ADR 0015](0015-prompt-prefix-stability-and-cache-anchored-accounting.md)
 moved the child's instructions, the scratch convention among them, into its system

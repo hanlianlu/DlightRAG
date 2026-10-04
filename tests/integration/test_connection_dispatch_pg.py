@@ -315,6 +315,22 @@ async def test_one_broken_connection_reports_degraded_without_disabling_other_to
 
 
 @pytest.mark.asyncio
+async def test_a_result_the_connection_cannot_show_says_the_call_completed():
+    from dlightrag.application.connections import UnsupportedResultError
+
+    async with isolated_run_runtime("dispatch_media") as (runs, pool):
+        service, store, mcp, view, bound, claim, tool, runtime = await dispatch_fixture(runs, pool)
+        mcp.call.side_effect = UnsupportedResultError(("image",))
+        result = await tool.execute(tool.input_model.model_validate({"path": "x"}), runtime)
+        assert result.is_error
+        assert "completed" in result.text_content and "image" in result.text_content
+        assert "unknown" not in result.text_content and "Do not retry" in result.text_content
+        observed = await service.read(owner_id="a")
+        assert observed.connections[0].status == "degraded"
+        assert observed.connections[0].enabled
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("crash_point", ["pending", "dispatched"])
 async def test_real_pg_runtime_restart_settles_unknown_never_redispatches(crash_point):
     import asyncio

@@ -39,6 +39,17 @@ class ConnectionsError(RuntimeError):
         self.kind = kind
 
 
+class UnsupportedResultError(ConnectionsError):
+    """A tool call completed, but its result holds content a Connection cannot carry.
+
+    ``kinds`` are MCP content types such as ``image``, never remote text.
+    """
+
+    def __init__(self, kinds: tuple[str, ...]) -> None:
+        super().__init__("MCP result holds content that cannot be shown")
+        self.kinds = kinds
+
+
 class ConnectionCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["create", "edit", "enable", "disable", "delete", "probe", "revoke"]

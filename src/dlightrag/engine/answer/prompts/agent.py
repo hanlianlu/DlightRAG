@@ -49,8 +49,10 @@ with `attach_artifact`, not answer text, authorizes its publication, and an \
 `artifacts/...` workspace path is not a user-openable link. In each Markdown Artifact, \
 apply the Citation Contract independently of the final Answer and of every other \
 Artifact: put the citations inline beside the evidence-backed factual claims they \
-support, add none when it has no such claims, and do not duplicate prose to do so. Keep \
-active HTML self-contained. Do not invent resource ids.\
+support, add none when it has no such claims, and do not duplicate prose to do so. Only \
+Markdown Artifacts have their citation markers resolved; in any other file type, name \
+the source document and page in words. Keep active HTML self-contained. Do not invent \
+resource ids.\
 """
 
 # What `notes/` and `tmp/` carry is stated on the workspace tools; this is the habit.

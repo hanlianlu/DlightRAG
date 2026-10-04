@@ -378,10 +378,12 @@ export class DlChatComposer extends LightElement {
     this.draft = (event.currentTarget as HTMLTextAreaElement).value;
     this.skillNotice = false;
     const skillMenuOpen = skillDirectiveState(this.draft) !== null;
+    const menuOpening = skillMenuOpen && !this.skillMenuOpen;
     if (skillMenuOpen) this.#closePickers('skill');
     this.skillMenuOpen = skillMenuOpen;
     this.skillActive = -1;
-    if (this.draft.startsWith('/')) {
+    // A Skill published or deleted since the menu last opened shows up when it opens again.
+    if (menuOpening) {
       void listSkills()
         .then((skills) => { this.skills = skills; })
         .catch(() => {});

@@ -36,7 +36,7 @@ from dlightrag.application.corpus_admin import (
 )
 from dlightrag.application.runs import RunAdmissionLimitExceededError
 from dlightrag.application.settings import access_settings
-from dlightrag.engine.agent.skills import owner_skill_root
+from dlightrag.engine.agent.skills import SkillCatalog, builtin_skills_root, owner_skill_root
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from tests.config_helpers import mutate_config
 from tests.support.application_double import application_double
@@ -73,29 +73,22 @@ _READABLE_EXTENSIONS = (
     "yaml",
     "yml",
 )
-BUILTIN_SKILL_COUNCIL = {
-    "name": "council",
-    "description": (
-        "Use when the user asks for a judgment, recommendation, or go/no-go call on something "
-        "with real stakes (pricing, an acquisition, compliance or legal exposure, contract terms, "
-        "a strategy choice) where the knowledge base may hold evidence on both sides; when "
-        "sources disagree and must be reconciled; or when the user asks for an independent "
-        "review, second opinion, or red-team critique. Runs two or three independent Child "
-        "Sessions plus at most one cross-examination round. Skip lookups, summaries, and simple "
-        "factual questions. User veto, cancellation, and scope constraints win."
-    ),
-    "source": "builtin",
-}
-BUILTIN_SKILL_CREATOR = {
-    "name": "skill-creator",
-    "description": (
-        "Guide the user through creating, improving, or removing personal DlightRAG skills. "
-        "Use when the user wants to make, edit, or delete a skill, asks to turn a task they "
-        "repeat or a procedure just walked through into a skill, or wants one sentence to "
-        "trigger a routine (interview → draft → publish_skill)."
-    ),
-    "source": "builtin",
-}
+
+
+def _builtin_skills() -> list[dict[str, str]]:
+    """The listing entries the packaged SKILL.md files declare."""
+    catalog = SkillCatalog.discover(builtin_root=builtin_skills_root())
+    return [
+        {"name": skill.name, "description": skill.description, "source": "builtin"}
+        for skill in catalog.metadata
+    ]
+
+
+def _listing(*others: dict[str, str]) -> dict[str, list[dict[str, str]]]:
+    """What /web/api/skills lists: every Skill, ordered by name."""
+    return {"skills": sorted([*_builtin_skills(), *others], key=lambda skill: skill["name"])}
+
+
 # Allow-all deployments offer every Corpus Mutation, and the default is never deleted.
 _EVERY_CHANGE = ["ingest", "replace", "delete", "retry", "reset", "delete_workspace"]
 _DEFAULT_CHANGES = ["ingest", "replace", "delete", "retry", "reset"]
@@ -270,14 +263,10 @@ async def test_skills_endpoint_merges_owner_skills(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "skills": [
-            BUILTIN_SKILL_COUNCIL,
-            {"name": "mine", "description": "My skill.", "source": "owner"},
-            {"name": "review", "description": "Global review.", "source": "global"},
-            BUILTIN_SKILL_CREATOR,
-        ]
-    }
+    assert response.json() == _listing(
+        {"name": "mine", "description": "My skill.", "source": "owner"},
+        {"name": "review", "description": "Global review.", "source": "global"},
+    )
 
 
 async def test_skills_endpoint_lists_discovered_global_skills(
@@ -295,13 +284,9 @@ async def test_skills_endpoint_lists_discovered_global_skills(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "skills": [
-            BUILTIN_SKILL_COUNCIL,
-            {"name": "review", "description": "Review plans.", "source": "global"},
-            BUILTIN_SKILL_CREATOR,
-        ]
-    }
+    assert response.json() == _listing(
+        {"name": "review", "description": "Review plans.", "source": "global"},
+    )
 
 
 async def test_skills_endpoint_lists_builtin_for_empty_filesystem_roots(
@@ -313,7 +298,7 @@ async def test_skills_endpoint_lists_builtin_for_empty_filesystem_roots(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {"skills": [BUILTIN_SKILL_COUNCIL, BUILTIN_SKILL_CREATOR]}
+    assert response.json() == _listing()
 
 
 async def test_answer_rejects_unknown_requested_skill(

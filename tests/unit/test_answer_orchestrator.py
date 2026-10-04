@@ -522,6 +522,141 @@ def test_an_explicit_tool_list_narrows_a_child_and_restores_nothing(tmp_path: Pa
     assert tolerant & CHILD_FORBIDDEN_TOOLS == set()
 
 
+async def test_a_child_narrowed_away_from_load_skill_is_not_shown_the_catalog(
+    tmp_path: Path,
+) -> None:
+    global_root = tmp_path / "global"
+    (global_root / "review").mkdir(parents=True)
+    (global_root / "review" / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review plans.\n---\nbody", encoding="utf-8"
+    )
+    orchestrator = _research_owner_with_subagents(tmp_path)
+    orchestrator._skills = SkillsBundle(global_root=global_root)
+
+    async def request_text(run) -> str:
+        messages = await run.context.control_turn(evidence=run.evidence, working=run.working)
+        return json.dumps(messages)
+
+    default = await request_text(_prepared_child(orchestrator))
+    narrowed = await request_text(_prepared_child(orchestrator, tools=["search_knowledge_base"]))
+    keeps_loader = await request_text(
+        _prepared_child(orchestrator, tools=["search_knowledge_base", "load_skill"])
+    )
+
+    assert "review: Review plans." in default
+    assert "review: Review plans." not in narrowed
+    assert "review: Review plans." in keeps_loader
+
+
+@pytest.mark.asyncio
+async def test_a_parent_context_child_inherits_only_what_the_parent_has_settled(
+    tmp_path: Path,
+) -> None:
+    """The turn that is spawning has a Tool Call with no output yet, and a provider refuses one."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from dlightrag.engine.agent.session.effects import ToolResultEntry
+    from dlightrag.engine.agent.session.entries import (
+        AssistantMessageEntry,
+        ToolResultMessageEntry,
+        UserMessageEntry,
+    )
+    from dlightrag.engine.agent.session.ids import AttemptId, EntryId, IntentId, LaneId, SessionId
+    from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.engine.agent.session.transactions import (
+        RegisterExpectation,
+        SessionTransaction,
+        TransactionCommit,
+    )
+    from dlightrag.engine.ai.messages import ToolCall
+    from dlightrag.engine.ai.providers.openai_response import response_input
+    from dlightrag.engine.answer.evidence import EvidenceLedger
+    from dlightrag.engine.answer.tools.subagents import ChildRequest
+    from tests.in_memory_session_repository import MemoryAgentSessionRepository
+
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    now = datetime.now(UTC)
+    question = UserMessageEntry(
+        entry_id=EntryId.new(), session_id=session_id, timestamp=now, content="compare suppliers"
+    )
+    searching = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=question.entry_id,
+        timestamp=now,
+        content="Searching.",
+        stop_reason="tool_use",
+        tool_calls=(ToolCall("call-search", "search_knowledge_base", {"query": "suppliers"}),),
+    )
+    found = ToolResultMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=searching.entry_id,
+        timestamp=now,
+        result=ToolResultEntry.text(
+            tool_name="search_knowledge_base",
+            call_id="call-search",
+            outcome="succeeded",
+            text="supplier A pays in 45 days",
+        ),
+        intent_id=IntentId.new(),
+        source_index=0,
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        replay_policy="never",
+        attempt_id=AttemptId.new(),
+        effective_input_digest="b" * 64,
+    )
+    delegating = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=found.entry_id,
+        timestamp=now,
+        content="Delegating.",
+        stop_reason="tool_use",
+        tool_calls=(ToolCall("call-spawn", "spawn_agent", {"children": []}),),
+    )
+    head = LaneHead(LaneId.main(), delegating.entry_id)
+    state = LaneState(LaneId.main())
+    committed = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[question, searching, found, delegating],
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(committed, TransactionCommit)
+
+    orchestrator = _research_owner_with_subagents(tmp_path)
+    assert orchestrator._subagent_host is not None
+    orchestrator._subagent_host.parent_session_id = session_id
+    orchestrator.bind_child_context(
+        SimpleNamespace(evidence=EvidenceLedger()),  # type: ignore[arg-type]
+        SimpleNamespace(  # type: ignore[arg-type]
+            session_id=session_id, lane_id=LaneId.main(), snapshot=await store.load(session_id)
+        ),
+    )
+    captured = orchestrator._subagent_host.context_snapshot
+    assert captured is not None
+    child = orchestrator.prepare_child_session(
+        ChildRequest(objective="investigate", context="parent"), context_snapshot=captured
+    )
+    request = await child.context.control_turn(evidence=child.evidence, working=child.working)
+
+    # The provider-ready request is accepted: no call is left without its output.
+    response_input(request)
+    text = json.dumps(request)
+    assert "compare suppliers" in text and "supplier A pays in 45 days" in text
+    assert "call-spawn" not in text and "Delegating." not in text
+
+
 def test_child_admission_record_is_shared_and_idempotent_across_retry() -> None:
     import hashlib
 

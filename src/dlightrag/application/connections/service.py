@@ -56,6 +56,7 @@ from .models import (
     RefreshClaim,
     RemoteTool,
     StoredGrant,
+    UnsupportedResultError,
 )
 from .presets import PRESETS
 
@@ -258,6 +259,10 @@ class Connections:
                     self._calls.pop(key, None)
         except asyncio.CancelledError:
             raise
+        except UnsupportedResultError as exc:
+            # The call completed and only its result cannot be shown, so the Connection is
+            # still observed as degraded (`error` stays "transport") but nothing is unknown.
+            return _unshowable_result(tool, exc.kinds)
         except ConnectionsError as exc:
             error = "authentication" if exc.status == 401 else "transport"
             return _call_failure(tool, unknown=dispatch is not None)
@@ -931,6 +936,15 @@ def _call_failure(tool: CatalogueTool, *, unknown: bool) -> ToolResult:
     outcome = "Outcome may be unknown" if unknown else "No call was sent"
     return ToolResult.text(
         f"Connection tool {tool.local_name} unavailable. {outcome}. Do not retry automatically; identify the requested part not completed in the final Answer.",
+        is_error=True,
+    )
+
+
+def _unshowable_result(tool: CatalogueTool, kinds: tuple[str, ...]) -> ToolResult:
+    return ToolResult.text(
+        f"Connection tool {tool.local_name} completed, but its result holds "
+        f"{', '.join(kinds)} content that cannot be shown here. Do not retry; say in the "
+        "final Answer that this result could not be shown.",
         is_error=True,
     )
 

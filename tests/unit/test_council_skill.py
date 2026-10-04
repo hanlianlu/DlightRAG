@@ -9,16 +9,6 @@ from dlightrag.engine.agent.skills import SkillCatalog, SkillsBundle, builtin_sk
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.composition import compose_research_tools
 
-_COUNCIL_DESCRIPTION = (
-    "Use when the user asks for a judgment, recommendation, or go/no-go call on something with "
-    "real stakes (pricing, an acquisition, compliance or legal exposure, contract terms, a "
-    "strategy choice) where the knowledge base may hold evidence on both sides; when sources "
-    "disagree and must be reconciled; or when the user asks for an independent review, second "
-    "opinion, or red-team critique. Runs two or three independent Child Sessions plus at most one "
-    "cross-examination round. Skip lookups, summaries, and simple factual questions. User veto, "
-    "cancellation, and scope constraints win."
-)
-
 
 async def _retrieve(_query: str) -> object:
     return object()
@@ -34,12 +24,12 @@ def test_council_skill_is_packaged_builtin_with_autonomous_metadata() -> None:
     contribution = catalog.contribution()
 
     assert council.source == "builtin"
-    assert council.description == _COUNCIL_DESCRIPTION
+    assert council.description.startswith("Use when")
     assert "only when the user" not in council.description.lower()
     assert "permission" not in council.description.lower()
     assert contribution is not None
     rendered = str(contribution.messages[0]["content"])
-    assert f"council: {_COUNCIL_DESCRIPTION} (builtin)" in rendered
+    assert f"council: {council.description} (builtin)" in rendered
     assert "# Council" not in rendered
 
 

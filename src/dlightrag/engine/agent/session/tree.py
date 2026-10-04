@@ -88,13 +88,29 @@ class AgentSessionTree:
         if entry_id is None:
             return True
         ancestry = self.graph.ancestry(entry_id)
-        pending: set[str] = set()
-        for entry in ancestry:
-            if isinstance(entry, AssistantMessageEntry):
-                pending.update(call.id for call in entry.tool_calls)
-            elif isinstance(entry, ToolResultMessageEntry):
-                pending.discard(entry.result.call_id)
-        return not pending
+        return len(_settled_prefix(ancestry)) == len(ancestry)
+
+    def settled_ancestry(self, lane_id: LaneId = LaneId.main()) -> tuple[SessionEntry, ...]:
+        """Return the Lane's ancestry up to the last Entry that leaves no Tool Call unmatched.
+
+        A turn whose Tool Calls are still running has no outputs to follow them, and a
+        provider refuses a request that holds a call without its output.
+        """
+        return _settled_prefix(self.ancestry(lane_id))
+
+
+def _settled_prefix(entries: tuple[SessionEntry, ...]) -> tuple[SessionEntry, ...]:
+    """Return the longest prefix after which no provider Tool Call is unmatched."""
+    pending: set[str] = set()
+    settled = 0
+    for index, entry in enumerate(entries, start=1):
+        if isinstance(entry, AssistantMessageEntry):
+            pending.update(call.id for call in entry.tool_calls)
+        elif isinstance(entry, ToolResultMessageEntry):
+            pending.discard(entry.result.call_id)
+        if not pending:
+            settled = index
+    return entries[:settled]
 
 
 __all__ = ["AgentSessionTree", "LaneSnapshot"]

@@ -418,3 +418,42 @@ def test_a_frontmatter_the_yaml_reader_rejects_costs_only_its_own_skill(tmp_path
     catalog = SkillCatalog.discover(global_root=root)
 
     assert [skill.name for skill in catalog.metadata] == ["good"]
+
+
+def test_a_skill_file_that_is_not_utf8_text_costs_only_its_own_skill(tmp_path: Path) -> None:
+    root = tmp_path / "global"
+    _skill(root, "good", name="good", description="Use when asked", body="b")
+    broken = root / "latin"
+    broken.mkdir()
+    (broken / "SKILL.md").write_bytes(
+        "---\nname: latin\ndescription: Use when asked\n---\ncaf\xe9".encode("latin-1")
+    )
+
+    catalog = SkillCatalog.discover(global_root=root)
+
+    assert [skill.name for skill in catalog.metadata] == ["good"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_skill_load_is_an_error_result_that_says_what_is_missing(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "global"
+    _skill(root, "review", name="review", description="Use when asked", body="body")
+    tool = load_skill_tool(SkillCatalog.discover(global_root=root))
+
+    async def load(name: str, path: str = "SKILL.md") -> ToolResult:
+        return await tool.execute(
+            LoadSkillInput(name=name, path=path),
+            tool_runtime(tool_name="load_skill"),  # type: ignore[arg-type]
+        )
+
+    assert not (await load("review")).is_error
+    unknown = await load("nope")
+    missing = await load("review", "references/gone.md")
+    escaping = await load("review", "../other/SKILL.md")
+
+    assert unknown.is_error and "no Agent Skill is named 'nope'" in unknown.text_content
+    assert missing.is_error
+    assert "'references/gone.md' is not a file in Agent Skill 'review'" in missing.text_content
+    assert escaping.is_error
