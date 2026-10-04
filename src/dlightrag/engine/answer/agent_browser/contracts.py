@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from pydantic import SecretStr
+
 
 @dataclass(frozen=True, slots=True)
 class BrowserHolder:
@@ -160,6 +162,69 @@ class UploadFile:
     content: bytes
 
 
+#: What stands in for a filled password in every text a page or a mail yields.
+PASSWORD_MASK = "********"  # noqa: S105 - what replaces a password, not a password
+
+
+class FilledPasswords:
+    """The passwords DlightRAG filled into one Agent Session's pages in this Run (ADR 0034).
+
+    Every text a page or a mail yields passes through it before the tool sees it. A generated
+    password holds only characters that HTML, JSON and URL encoding leave unchanged, so the one
+    spelling it has is all there is to find.
+    """
+
+    def __init__(self) -> None:
+        self._values: set[str] = set()
+
+    def add(self, password: SecretStr) -> None:
+        # The empty value a cleanup fills back in is nothing to hide, and replacing it would put
+        # the mask between every character of every text.
+        if value := password.get_secret_value():
+            self._values.add(value)
+
+    def __bool__(self) -> bool:
+        return bool(self._values)
+
+    def found_in(self, text: str) -> bool:
+        return any(value in text for value in self._values)
+
+    def redact(self, text: str) -> str:
+        """``text`` with every filled password replaced by the mask."""
+        for value in self._values:
+            text = text.replace(value, PASSWORD_MASK)
+        return text
+
+    def redact_bytes(self, data: bytes) -> bytes:
+        """The same over UTF-8, for a page's serialized HTML."""
+        for value in self._values:
+            data = data.replace(value.encode(), PASSWORD_MASK.encode())
+        return data
+
+    def __repr__(self) -> str:
+        return f"FilledPasswords({len(self._values)} filled)"
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialForm:
+    """What a sign-up form's fields say before DlightRAG fills them."""
+
+    password_limit: int | None
+    """The smallest positive ``maxlength`` of the password fields, or None when none has one."""
+    email: str
+    username: str
+    """The fields' values now, empty for a field the call named no ref for."""
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialFill:
+    """One value DlightRAG fills into one field of the active page."""
+
+    ref: str
+    kind: Literal["email", "username", "password"]
+    value: SecretStr
+
+
 type AgentBrowserFailure = Literal[
     "not_configured",
     "busy",
@@ -182,6 +247,11 @@ type AgentBrowserFailure = Literal[
     "not_file_input",
     "wait_timeout",
     "action_failed",
+    "wrong_site",
+    "not_password_field",
+    "not_text_field",
+    "field_rejected",
+    "password_shown",
 ]
 
 #: What the model reads when a render fails, one stable sentence per reason. Page URLs
@@ -244,6 +314,17 @@ _PAGE_MESSAGES: dict[AgentBrowserFailure, str] = {
     "action_failed": "The browser could not {action} {target}: {detail}.",
     "busy": "Every Agent Browser is in use by other Runs, so no page was opened. Try again later.",
     "unreachable": "The Agent Browser is unreachable, so no page was opened.",
+    "wrong_site": (
+        "Field {ref} is not on an https page of {site}, so nothing was filled: register and "
+        "login fill only the fields of the page's own site."
+    ),
+    "not_password_field": "Element {ref} is not a password field, so nothing was filled.",
+    "not_text_field": "Element {ref} is not a text or email field, so nothing was filled.",
+    "field_rejected": (
+        "The page changed the value filled into {ref}, so nothing was recorded and the fields "
+        "were cleared."
+    ),
+    "password_shown": "The page shows a filled password as text, so no screenshot was taken.",
 }
 
 
@@ -269,8 +350,8 @@ def page_failure(reason: AgentBrowserFailure, **fields: object) -> AgentBrowserE
     """The error for ``reason`` as a ``browser`` call reports it.
 
     ``fields`` are the ones its sentence names: ``ref``, ``verb``, ``key``, ``text`` and
-    ``change``, ``action``, ``target`` and ``detail``, ``seconds``. A reason a render
-    reports in the same words is the render's error.
+    ``change``, ``action``, ``target`` and ``detail``, ``seconds``, ``site``. A reason a
+    render reports in the same words is the render's error.
     """
     template = _PAGE_MESSAGES.get(reason)
     if template is None:
@@ -319,6 +400,25 @@ class AgentPage(Protocol):
 
     async def capture(self) -> PageCapture: ...
 
+    async def credential_form(
+        self,
+        *,
+        site: str,
+        password_refs: tuple[str, ...],
+        email_ref: str | None,
+        username_ref: str | None,
+    ) -> CredentialForm:
+        """Check that every ref is a field of the right kind on a page of ``site``, and read
+        what the form says: the password limit, and what the email and username fields hold."""
+        ...
+
+    async def fill_credentials(
+        self, fills: tuple[CredentialFill, ...], *, site: str
+    ) -> PageObservation:
+        """Fill each value into its field, once every ref has passed the checks of
+        ``credential_form``; a failure clears what was filled and fills nothing more."""
+        ...
+
     async def aclose(self) -> None:
         """Close the context. Failing, it logs; it never raises."""
         ...
@@ -331,7 +431,10 @@ class LeasedBrowser(Protocol):
         self, url: str, *, navigation_timeout: float, settle_timeout: float
     ) -> RenderedPage: ...
 
-    async def open_page(self, limits: PageLimits) -> AgentPage: ...
+    async def open_page(self, limits: PageLimits, passwords: FilledPasswords) -> AgentPage:
+        """Open an Agent Page that adds the passwords it fills to ``passwords`` and redacts
+        them from every text it returns."""
+        ...
 
     async def aclose(self) -> None:
         """Disconnect the browser, then release its lease."""
@@ -391,6 +494,7 @@ class AgentBrowserBinding:
 
 __all__ = [
     "MAX_DOWNLOADS_PER_CALL",
+    "PASSWORD_MASK",
     "AgentBrowserBinding",
     "AgentBrowserError",
     "AgentBrowserFailure",
@@ -399,8 +503,11 @@ __all__ = [
     "BrowserLeases",
     "BrowserProvider",
     "AgentPage",
+    "CredentialFill",
+    "CredentialForm",
     "DownloadRefusal",
     "DownloadedFile",
+    "FilledPasswords",
     "FoundElements",
     "PageLimits",
     "LeasedBrowser",

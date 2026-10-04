@@ -23,6 +23,7 @@ from dlightrag.adapters.agent_browser.page import PlaywrightAgentPage
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentPage,
+    FilledPasswords,
     PageLimits,
     RenderedPage,
     browser_failure,
@@ -100,7 +101,7 @@ class PlaywrightLeasedBrowser:
                 logger.warning("Failed to close an Agent Browser context in time")
                 raise browser_failure("disconnected") from None
 
-    async def open_page(self, limits: PageLimits) -> AgentPage:
+    async def open_page(self, limits: PageLimits, passwords: FilledPasswords) -> AgentPage:
         """Open an Agent Session's Agent Page, which lives until it is closed."""
         if not self._browser.is_connected():
             raise page_failure("disconnected")
@@ -109,7 +110,7 @@ class PlaywrightLeasedBrowser:
             # answer must not hold every other page, render, and settlement with it.
             async with asyncio.timeout(CLOSE_SECONDS):
                 context = await new_agent_context(self._browser, accept_downloads=True)
-                return await PlaywrightAgentPage.open(self._browser, context, limits)
+                return await PlaywrightAgentPage.open(self._browser, context, limits, passwords)
         except TimeoutError:
             # A browser that does not answer is wedged, and the Run must not lease it again.
             logger.warning("Failed to open an Agent Browser page in time")

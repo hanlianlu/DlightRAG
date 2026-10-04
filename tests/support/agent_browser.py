@@ -30,6 +30,7 @@ from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     AgentBrowserSettings,
     BrowserHolder,
+    FilledPasswords,
     LeasedBrowser,
     PageEvents,
     PageLimits,
@@ -320,7 +321,8 @@ class FakeLease:
 
     ``gate`` holds every render until it is set, so a test can have renders in flight, and
     ``peak`` is the most that were. ``call_failure`` is what every call on a page it opens
-    raises, and ``opening_failure`` what opening one raises.
+    raises, and ``opening_failure`` what opening one raises. ``passwords`` holds the set of
+    filled passwords each page it opened was given.
     """
 
     def __init__(
@@ -338,6 +340,7 @@ class FakeLease:
         self.rendered: list[str] = []
         self.pages: list[FakePage] = []
         self.limits: list[PageLimits] = []
+        self.passwords: list[FilledPasswords] = []
         self.closed = 0
         self.active = 0
         self.peak = 0
@@ -357,10 +360,11 @@ class FakeLease:
         finally:
             self.active -= 1
 
-    async def open_page(self, limits: PageLimits) -> Any:
+    async def open_page(self, limits: PageLimits, passwords: FilledPasswords) -> Any:
         if self.opening_failure is not None:
             raise self.opening_failure
         self.limits.append(limits)
+        self.passwords.append(passwords)
         page = FakePage(failure=self.call_failure)
         self.pages.append(page)
         return page

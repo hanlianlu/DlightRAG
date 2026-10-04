@@ -23,6 +23,7 @@ from dlightrag.engine.answer.agent_browser.contracts import (
     AgentPage,
     BrowserHolder,
     BrowserProvider,
+    FilledPasswords,
     LeasedBrowser,
     PageLimits,
     RenderedPage,
@@ -65,6 +66,8 @@ class RunAgentBrowser:
         self._pages: dict[str, AgentPage] = {}
         #: The scopes whose page died with a browser that disconnected.
         self._lost: set[str] = set()
+        #: The passwords filled into each Agent Session's pages, by scope.
+        self._passwords: dict[str, FilledPasswords] = {}
         self._lease_lock = asyncio.Lock()
         self._renders = asyncio.Semaphore(_CONCURRENT_RENDERS)
         self._in_flight = 0
@@ -104,6 +107,17 @@ class RunAgentBrowser:
         """Where the Agent Session's active page is, or None when it has no page."""
         page = self._pages.get(scope)
         return None if page is None else page.current_url()
+
+    def filled_passwords(self, scope: str) -> FilledPasswords:
+        """The passwords filled into the Agent Session's pages in this Run, which every text
+        of theirs, and every mail the Session reads, passes through.
+
+        The set outlives the Session's page, a disconnect and a Child's drive, and goes with the
+        Run. It never leases a browser.
+        """
+        if (passwords := self._passwords.get(scope)) is None:
+            passwords = self._passwords[scope] = FilledPasswords()
+        return passwords
 
     async def with_page[T](
         self,
@@ -148,6 +162,7 @@ class RunAgentBrowser:
         if self._closed:
             return
         self._closed = True
+        self._passwords.clear()
         idle, self._idle = self._idle, None
         if idle is not None:
             idle.cancel()
@@ -188,7 +203,7 @@ class RunAgentBrowser:
                     # The pool's sentences say a page was not rendered; here none was opened.
                     raise page_failure(exc.reason) from exc
                 try:
-                    page = await lease.open_page(self._limits)
+                    page = await lease.open_page(self._limits, self.filled_passwords(scope))
                 except AgentBrowserError as exc:
                     if exc.reason == "disconnected":
                         await self._discard_locked(lease)

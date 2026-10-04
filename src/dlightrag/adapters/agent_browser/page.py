@@ -8,6 +8,7 @@ import logging
 import shutil
 import tempfile
 import time
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -37,8 +38,12 @@ from dlightrag.adapters.agent_browser.driver import (
 from dlightrag.engine.answer.agent_browser import (
     MAX_DOWNLOADS_PER_CALL,
     AgentBrowserError,
+    AgentBrowserFailure,
+    CredentialFill,
+    CredentialForm,
     DownloadedFile,
     DownloadRefusal,
+    FilledPasswords,
     FoundElements,
     PageCapture,
     PageDialog,
@@ -48,6 +53,7 @@ from dlightrag.engine.answer.agent_browser import (
     PageScreenshot,
     PageState,
     UploadFile,
+    account_site,
     browser_failure,
     page_failure,
 )
@@ -78,14 +84,24 @@ class PlaywrightAgentPage:
     when it opens later, when the next call that names no ref begins; a call that names a ref
     acts on the page the ref came from. A download, a dialog, and the answer of a navigation
     are noted as they happen and reported by the next call that returns.
+
+    The passwords DlightRAG fills into its fields are redacted from every text it returns
+    (ADR 0034), because the driver prints a filled value in a snapshot and in the page's own
+    HTML and URL, and quotes it in the error of a failed fill.
     """
 
     def __init__(
-        self, browser: Browser, context: BrowserContext, page: Page, limits: PageLimits
+        self,
+        browser: Browser,
+        context: BrowserContext,
+        page: Page,
+        limits: PageLimits,
+        passwords: FilledPasswords,
     ) -> None:
         self._browser = browser
         self._context = context
         self._limits = limits
+        self._passwords = passwords
         #: The open pages, the oldest first; the last is the active page.
         self._pages: list[Page] = [page]
         #: Popups opened since a call last returned, which no call has adopted yet.
@@ -98,7 +114,11 @@ class PlaywrightAgentPage:
 
     @classmethod
     async def open(
-        cls, browser: Browser, context: BrowserContext, limits: PageLimits
+        cls,
+        browser: Browser,
+        context: BrowserContext,
+        limits: PageLimits,
+        passwords: FilledPasswords,
     ) -> PlaywrightAgentPage:
         """Start an Agent Page in ``context``, which it owns from then on, with a blank page."""
         try:
@@ -106,11 +126,11 @@ class PlaywrightAgentPage:
         except BaseException:
             await _close_context(context)
             raise
-        return cls(browser, context, page, limits)
+        return cls(browser, context, page, limits, passwords)
 
     def current_url(self) -> str | None:
         pages = self._open_pages()
-        return pages[-1].url if pages else None
+        return self._passwords.redact(pages[-1].url) if pages else None
 
     async def navigate(self, url: str) -> PageObservation:
         page, adopted = await self._page_to_navigate()
@@ -304,6 +324,8 @@ class PlaywrightAgentPage:
 
     async def screenshot(self, *, full_page: bool) -> PageScreenshot:
         page, events = self._observing()
+        if self._passwords and await self._shows_a_password(page):
+            raise page_failure("password_shown")
         try:
             png = await page.screenshot(
                 type="png",
@@ -329,8 +351,58 @@ class PlaywrightAgentPage:
         return PageCapture(
             page=await self._state(page, "the page"),
             events=await self._deliver(events, page),
-            html=html.encode("utf-8", errors="replace"),
+            html=self._passwords.redact_bytes(html.encode("utf-8", errors="replace")),
         )
+
+    async def credential_form(
+        self,
+        *,
+        site: str,
+        password_refs: tuple[str, ...],
+        email_ref: str | None,
+        username_ref: str | None,
+    ) -> CredentialForm:
+        page = self._begin()
+        limits: list[int] = []
+        email = username = ""
+        try:
+            for ref in password_refs:
+                field = await self._field(page, ref, "password", site)
+                limits.append(await field.evaluate("e => e.maxLength", timeout=self._action_ms))
+            # What a text field holds is returned, so a page that shows a filled password in one
+            # is redacted like every other text.
+            if email_ref is not None:
+                field = await self._field(page, email_ref, "email", site)
+                email = self._passwords.redact(await field.input_value(timeout=self._action_ms))
+            if username_ref is not None:
+                field = await self._field(page, username_ref, "username", site)
+                username = self._passwords.redact(await field.input_value(timeout=self._action_ms))
+        except PlaywrightError as exc:
+            raise self._failure(exc, page, "read", "the form's fields") from exc
+        # A field with no maxlength reads -1.
+        positive = [limit for limit in limits if limit > 0]
+        return CredentialForm(min(positive, default=None), email, username)
+
+    async def fill_credentials(
+        self, fills: tuple[CredentialFill, ...], *, site: str
+    ) -> PageObservation:
+        page = self._begin()
+        # Every ref is checked before anything is filled, so a bad one fills nothing.
+        fields = [await self._field(page, fill.ref, fill.kind, site) for fill in fills]
+        # A password is known to the redaction before it reaches the page.
+        for fill in fills:
+            if fill.kind == "password":
+                self._passwords.add(fill.value)
+        filled: list[Locator] = []
+        for fill, field in zip(fills, fields, strict=True):
+            failure = await self._fill_secretly(field, fill.value.get_secret_value())
+            if failure is not None:
+                await self._clear([*filled, field])
+                raise page_failure(
+                    failure, ref=fill.ref, verb="filled", seconds=self._limits.action_timeout
+                )
+            filled.append(field)
+        return await self._after(page)
 
     async def aclose(self) -> None:
         """Close the context and every page in it; a context that does not answer is given up."""
@@ -358,7 +430,7 @@ class PlaywrightAgentPage:
         # A prompt asks for text the model never gave. Every other dialog completes what a
         # call set in motion, and refusing it would silently undo that.
         accepted = dialog.type != "prompt"
-        message = " ".join(dialog.message.split())[:_QUOTED_CHARS]
+        message = " ".join(self._passwords.redact(dialog.message).split())[:_QUOTED_CHARS]
         try:
             await (dialog.accept() if accepted else dialog.dismiss())
         except PlaywrightError:
@@ -496,13 +568,18 @@ class PlaywrightAgentPage:
             title = await page.title()
         except PlaywrightError as exc:
             raise self._failure(exc, page, "read the title of", where) from exc
-        return PageState(url=page.url, title=" ".join(title.split())[:_TITLE_CHARS])
+        return PageState(
+            url=self._passwords.redact(page.url),
+            title=" ".join(self._passwords.redact(title).split())[:_TITLE_CHARS],
+        )
 
     async def _tree(self, page: Page, *, depth: int | None, where: str) -> str:
+        """The page's accessibility snapshot, which prints a filled password input's value."""
         try:
-            return await page.aria_snapshot(mode="ai", depth=depth, timeout=self._action_ms)
+            tree = await page.aria_snapshot(mode="ai", depth=depth, timeout=self._action_ms)
         except PlaywrightError as exc:
             raise self._failure(exc, page, "take a snapshot of", where) from exc
+        return self._passwords.redact(tree)
 
     async def _element(self, page: Page, ref: str) -> Locator:
         """The element a ref names in the page's latest snapshot."""
@@ -515,6 +592,81 @@ class PlaywrightAgentPage:
             raise page_failure("stale_ref", ref=ref)
         return element
 
+    async def _field(
+        self, page: Page, ref: str, kind: Literal["email", "username", "password"], site: str
+    ) -> Locator:
+        """The field a ref names, once it is known to be of ``kind`` and in a frame of ``site``.
+
+        A password is only ever filled into a password field of the site it belongs to, and the
+        frame's own address decides that, not the page's: a ref inside an iframe names the iframe.
+        """
+        field = await self._element(page, ref)
+        try:
+            handle = await field.element_handle(timeout=self._action_ms)
+            frame = await handle.owner_frame()
+            seen = await field.evaluate(
+                "e => e instanceof HTMLInputElement ? e.type : ''", timeout=self._action_ms
+            )
+        except PlaywrightError as exc:
+            raise self._failure(
+                exc, page, "look at", f"element {ref}", ref=ref, verb="checked"
+            ) from exc
+        if account_site(frame.url if frame else "") != site:
+            raise page_failure("wrong_site", ref=ref, site=site)
+        if kind == "password":
+            if seen != "password":
+                raise page_failure("not_password_field", ref=ref)
+        elif seen not in ("text", "email"):
+            raise page_failure("not_text_field", ref=ref)
+        return field
+
+    async def _fill_secretly(self, field: Locator, value: str) -> AgentBrowserFailure | None:
+        """Fill ``value`` into the field and read it back; how that failed, or None.
+
+        The driver's error for a failed fill quotes the value in its call log, so none is kept,
+        chained or logged here, and the verdict is taken outside the handler that caught it.
+        """
+        echoed: str | None = None
+        failed = False
+        try:
+            await field.fill(value, timeout=self._action_ms)
+            echoed = await field.input_value(timeout=self._action_ms)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            failed = True
+        if failed:
+            return "not_actionable" if self._browser.is_connected() else "disconnected"
+        return None if echoed == value else "field_rejected"
+
+    async def _clear(self, fields: Sequence[Locator]) -> None:
+        """Empty fields a failed call had filled, so no half-filled form is left to submit."""
+        for field in fields:
+            with suppress(PlaywrightError):
+                await field.fill("", timeout=self._action_ms)
+
+    async def _shows_a_password(self, page: Page) -> bool:
+        """Whether a frame of the page shows a filled password as text, or cannot be read to say.
+
+        A page can turn a password input into a text input, and a screenshot would print what the
+        browser draws as dots. Every frame's text fields and visible text are read and compared
+        here, so no password is ever sent into a page.
+        """
+        try:
+            async with asyncio.timeout(self._limits.action_timeout):
+                for frame in page.frames:
+                    values = await frame.locator(
+                        "input:not([type=password]), textarea"
+                    ).evaluate_all("els => els.map(e => e.value)")
+                    text = await frame.locator("body").inner_text()
+                    if any(self._passwords.found_in(value) for value in values):
+                        return True
+                    if self._passwords.found_in(text):
+                        return True
+        except Exception:
+            return True
+        return False
+
     async def _deliver(self, events: PageEvents, page: Page | None) -> PageEvents:
         """Add what the pages did besides the call: the files they downloaded, the dialogs
         they showed, and the status their navigation answered."""
@@ -525,7 +677,7 @@ class PlaywrightAgentPage:
         for index, download in enumerate(downloads):
             if index >= MAX_DOWNLOADS_PER_CALL:
                 await _discard(download)
-                refused.append(DownloadRefusal(download.suggested_filename, "limit"))
+                refused.append(DownloadRefusal(self._filename(download), "limit"))
                 continue
             outcome = await self._save(download)
             if isinstance(outcome, DownloadedFile):
@@ -547,7 +699,7 @@ class PlaywrightAgentPage:
         copy is deleted whatever the outcome. A copy this process cannot make, write, or read
         is a refusal like any other, so the call's other downloads still count.
         """
-        name = download.suggested_filename
+        name = self._filename(download)
         try:
             directory = Path(tempfile.mkdtemp(prefix=_DOWNLOAD_DIRECTORY_PREFIX))
         except OSError:
@@ -566,7 +718,9 @@ class PlaywrightAgentPage:
                 if _size(target) > self._limits.max_download_bytes:
                     return DownloadRefusal(name, "too_large")
                 return DownloadedFile(
-                    download.url, name, await asyncio.to_thread(target.read_bytes)
+                    self._passwords.redact(download.url),
+                    name,
+                    await asyncio.to_thread(target.read_bytes),
                 )
             except TimeoutError:
                 return DownloadRefusal(name, "timeout")
@@ -577,6 +731,9 @@ class PlaywrightAgentPage:
             await asyncio.gather(copy, return_exceptions=True)
             shutil.rmtree(directory, ignore_errors=True)
             await _discard(download)
+
+    def _filename(self, download: Download) -> str:
+        return self._passwords.redact(download.suggested_filename)
 
     # -- failures ----------------------------------------------------------------------------
 
@@ -620,7 +777,14 @@ class PlaywrightAgentPage:
         elif (named := network_failure(exc)) is not None:
             return named
         logger.warning("Agent Browser call failed (%s): %s", type(exc).__name__, action)
-        return page_failure("action_failed", action=action, target=target, detail=_detail(exc))
+        return page_failure("action_failed", action=action, target=target, detail=self._detail(exc))
+
+    def _detail(self, exc: PlaywrightError) -> str:
+        """The first line of what the driver said, without its call log, and without a password
+        a URL or a message in it may quote."""
+        head = str(exc).split("Call log:", 1)[0].strip()
+        first = self._passwords.redact(head.splitlines()[0]) if head else type(exc).__name__
+        return first[:_DETAIL_CHARS].rstrip(".")
 
 
 def _size(path: Path) -> int:
@@ -628,13 +792,6 @@ def _size(path: Path) -> int:
         return path.stat().st_size
     except FileNotFoundError:
         return 0
-
-
-def _detail(exc: PlaywrightError) -> str:
-    """The first line of what the driver said, without its call log."""
-    head = str(exc).split("Call log:", 1)[0].strip()
-    first = head.splitlines()[0] if head else type(exc).__name__
-    return first[:_DETAIL_CHARS].rstrip(".")
 
 
 async def _discard(download: Download) -> None:

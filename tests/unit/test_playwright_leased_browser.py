@@ -14,6 +14,7 @@ from dlightrag.adapters.agent_browser.page import PlaywrightAgentPage
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
     BrowserHolder,
+    FilledPasswords,
     PageLimits,
     RunAgentBrowser,
 )
@@ -140,6 +141,7 @@ async def test_an_agent_page_that_will_not_close_does_not_hold_the_run_open(
         cast(Any, context),
         cast(Any, await context.new_page()),
         PageLimits(5, 5, 0, 12, 1024),
+        FilledPasswords(),
     )
 
     # A close with no limit would hold the Run's settlement open for good.

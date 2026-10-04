@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import SecretStr
 
 from dlightrag.engine.answer.agent_browser import (
     AgentBrowserError,
@@ -402,3 +403,25 @@ async def test_a_run_that_settled_opens_no_page() -> None:
         await open_page(browser, "child")
     assert closed.value.reason == "not_configured"
     assert provider.leased == 1
+
+
+async def test_an_agent_sessions_filled_passwords_outlive_its_pages_and_go_with_the_run() -> None:
+    lease = FakeLease()
+    provider = FakeProvider(lease)
+    browser = RunAgentBrowser(provider, HOLDER, settings())
+
+    parents = browser.filled_passwords("parent")
+    assert (provider.leased, browser.filled_passwords("parent")) == (0, parents)
+    assert browser.filled_passwords("child") is not parents
+
+    await open_page(browser, "parent")
+    assert lease.passwords == [parents]
+    # What the Session filled stays known to the redaction after its page closes, and the page it
+    # opens next is handed the same set.
+    parents.add(SecretStr("Fixture-Pass_123*"))
+    await browser.close_page("parent")
+    await open_page(browser, "parent")
+    assert lease.passwords == [parents, parents] and bool(browser.filled_passwords("parent"))
+
+    await browser.aclose()
+    assert not browser.filled_passwords("parent")
