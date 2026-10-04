@@ -68,8 +68,11 @@ ArtifactIssueKind = Literal[
 ]
 
 _HTML_LOADING_TAGS = frozenset({"script", "img", "audio", "video", "source", "iframe"})
+# A url() that is not a data:, blob: or same-document (#id) reference, or an @import that is not
+# data:. The whitespace is possessive so that giving it back cannot hide a data: or # behind it.
 _CSS_EXTERNAL = re.compile(
-    r"url\(\s*[\"']?(?!data:|blob:)[^)]+\)|@import\s+(?!url\(\s*[\"']?data:)", re.IGNORECASE
+    r"url\(\s*+(?![\"']?(?:data:|blob:|#))[^)]+\)|@import\s+(?!url\(\s*[\"']?data:)",
+    re.IGNORECASE,
 )
 _SVG_RASTER_DATA_URL = re.compile(r"^data:image/(?:gif|jpeg|png|webp)(?:;[^,]*)?,", re.IGNORECASE)
 _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
@@ -649,27 +652,31 @@ def _inventory(root: Path, *, limits: PublicationLimits) -> dict[str, Path]:
 
 
 class _ExternalLoads(HTMLParser):
-    """Collect what an HTML document loads from outside its own file.
+    """Find what an HTML document loads from outside its own file.
 
-    Markup and styles can name a resource. A script's source is code: a bundled library
-    that mentions ``toDataURL(`` or builds an ``<img src=`` string loads nothing.
+    Markup and CSS can name a resource, and CSS can sit in a style element or in any attribute:
+    an SVG presentation attribute such as ``clip-path`` or ``filter`` takes a ``url()``. A script's
+    source is code, so a bundled library that mentions ``toDataURL(`` or builds an ``<img src=``
+    string loads nothing.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.markup = False
-        self.styles: list[str] = []
+        self.loads_external = False
+        self.css: list[str] = []
         self._in_style = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values = {name: value or "" for name, value in attrs}
+        values: dict[str, str] = {}
+        for name, value in attrs:
+            values.setdefault(name, value or "")  # a browser keeps the first copy of an attribute
         source = values.get("src")
         if (
             tag in _HTML_LOADING_TAGS
             and source is not None
             and not source.lower().startswith(("data:", "blob:", "artifact:"))
         ):
-            self.markup = True
+            self.loads_external = True
         href = values.get("href")
         if (
             tag == "link"
@@ -677,9 +684,8 @@ class _ExternalLoads(HTMLParser):
             and href is not None
             and not href.lower().startswith("data:")
         ):
-            self.markup = True
-        if "style" in values:
-            self.styles.append(values["style"])
+            self.loads_external = True
+        self.css.extend(values.values())
         self._in_style = tag == "style"
 
     def handle_endtag(self, tag: str) -> None:
@@ -688,14 +694,14 @@ class _ExternalLoads(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if self._in_style:
-            self.styles.append(data)
+            self.css.append(data)
 
 
 def _loads_externally(text: str) -> bool:
     scan = _ExternalLoads()
     scan.feed(text)
     scan.close()
-    return scan.markup or any(_CSS_EXTERNAL.search(style) for style in scan.styles)
+    return scan.loads_external or any(_CSS_EXTERNAL.search(css) for css in scan.css)
 
 
 def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> StagedArtifact:

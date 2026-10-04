@@ -918,7 +918,7 @@ def test_active_html_is_checked_in_its_markup_and_styles_not_its_script_source(
 ) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    # A bundled library names `toDataURL(...)` and builds an `<img src=` string.
+    # A bundled library names `toDataURL(...)` and builds `<img src=` and `url(` strings.
     library = (
         "<script>var png = canvas.toDataURL('image/png');"
         "var tag = '<img src=\"' + png + '\">'; var paint = 'url(#' + id + ')';</script>"
@@ -931,17 +931,21 @@ def test_active_html_is_checked_in_its_markup_and_styles_not_its_script_source(
         plan = _validate(root, answer="[Open page](artifact:page.html)", attached=("page.html",))
         return [issue.kind for issue in plan.issues]
 
+    # An SVG points inside its own file with url(#id), which loads nothing.
     assert issue_kinds("") == []
-    assert issue_kinds('<img src="https://evil.test/x.png">') == ["media_mismatch"]
+    assert issue_kinds('<svg><rect clip-path="url(#c)" fill="url(\'#g\')"/></svg>') == []
+    # What loads from outside is refused wherever it sits, and a browser keeps the first copy of
+    # a repeated attribute.
     assert issue_kinds('<link rel="stylesheet" href="https://evil.test/x.css">') == [
         "media_mismatch"
     ]
     assert issue_kinds("<style>body{background:url(https://evil.test/x.png)}</style>") == [
         "media_mismatch"
     ]
-    assert issue_kinds('<p style="background:url(https://evil.test/x.png)">x</p>') == [
+    assert issue_kinds('<svg><rect filter="url(https://evil.test/x.svg#f)"/></svg>') == [
         "media_mismatch"
     ]
+    assert issue_kinds('<img src="https://evil.test/x.png" src="data:,">') == ["media_mismatch"]
 
 
 def test_attachment_receipt_round_trips_without_rewriting_or_duplicate_placement(
