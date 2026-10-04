@@ -15,7 +15,7 @@ const semantics = css.slice(css.indexOf('  --color-text-primary'));
 
 /** Declared ramp steps, keyed by hex: #7e6c37 -> gold-400. */
 const ramps = new Map(
-    [...css.matchAll(/--color-((?:stone|gold|red)-\d+):\s*(#[0-9a-f]{6});/g)]
+    [...css.matchAll(/--color-([a-z]+-\d+):\s*(#[0-9a-f]{6});/g)]
         .map((match) => [match[2], match[1]]),
 );
 
@@ -126,8 +126,8 @@ test('colours outside the ramps are only ever white', () => {
     );
     const strays = [
         ...[...semantics.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0].toLowerCase()),
-        ...[...semantics.matchAll(/rgba?\((\d+, \d+, \d+)/g)]
-            .map((m) => m[1])
+        ...[...semantics.matchAll(/rgba?\((\d+)[ ,]+(\d+)[ ,]+(\d+)/g)]
+            .map((m) => m.slice(1, 4).join(', '))
             .filter((triple) => !triples.has(triple))
             .map((triple) => `rgb(${triple})`),
     ].filter((colour) => !['#ffffff', 'rgb(255, 255, 255)', 'rgb(0, 0, 0)'].includes(colour));
