@@ -175,6 +175,35 @@ async def _adopt_earlier_then_retry[T](
         return ToolResult.text(str(exc), is_error=True)
 
 
+async def _call_adopting_earlier[T](
+    call: Callable[[], Awaitable[T]],
+    *,
+    resource_id: str | None,
+    lineage: LineageResourceLoader | None,
+    registry: ResourceRegistry,
+    runtime: ToolRuntime,
+    needs_text: bool = False,
+) -> T | ToolResult:
+    """Make one call on a handle, adopting it from an earlier turn when this Run does not hold it.
+
+    ``read``, ``view``, and ``materialize`` treat an unknown handle alike, so a handle nothing
+    admits gets one refusal whichever of them asks. They differ only in ``needs_text``: a read
+    needs a stored conversion view, while a view or a copy needs only the bytes.
+    """
+    try:
+        return await call()
+    except ResourceNotFoundError as exc:
+        return await _adopt_earlier_then_retry(
+            call,
+            resource_id=resource_id,
+            lineage=lineage,
+            registry=registry,
+            refusal=_run_scoped_handle_refusal(exc),
+            runtime=runtime,
+            needs_text=needs_text,
+        )
+
+
 def make_resource_reader(
     registry: ResourceRegistry,
     max_window_tokens: int,
@@ -238,14 +267,11 @@ def make_resource_reader(
 
     async def read(request: ResourceReadRequest, runtime: ToolRuntime) -> ToolResult:
         try:
-            return await read_registered(request, runtime)
-        except ResourceNotFoundError as exc:
-            return await _adopt_earlier_then_retry(
+            return await _call_adopting_earlier(
                 partial(read_registered, request, runtime),
                 resource_id=request.resource_id,
                 lineage=lineage,
                 registry=registry,
-                refusal=_run_scoped_handle_refusal(exc),
                 runtime=runtime,
                 needs_text=True,
             )
@@ -447,14 +473,11 @@ def make_resource_viewer(
 
     async def view(args: ViewArgs, runtime: ToolRuntime, prepare: ImagePreparer) -> ToolResult:
         try:
-            return await view_registered(args, runtime, prepare)
-        except ResourceNotFoundError as exc:
-            return await _adopt_earlier_then_retry(
+            return await _call_adopting_earlier(
                 partial(view_registered, args, runtime, prepare),
                 resource_id=args.resource_id,
                 lineage=lineage,
                 registry=registry,
-                refusal=_run_scoped_handle_refusal(exc),
                 runtime=runtime,
             )
         except ResourceCursorError as exc:
@@ -483,14 +506,11 @@ def make_admitted_bytes_reader(
 
     async def reader(resource_id: str, runtime: ToolRuntime) -> AdmittedBytes | ToolResult:
         try:
-            return await admitted(resource_id, runtime)
-        except ResourceNotFoundError as exc:
-            return await _adopt_earlier_then_retry(
+            return await _call_adopting_earlier(
                 partial(admitted, resource_id, runtime),
                 resource_id=resource_id,
                 lineage=lineage,
                 registry=registry,
-                refusal=_run_scoped_handle_refusal(exc),
                 runtime=runtime,
             )
         except ResourceRegistryError as exc:
