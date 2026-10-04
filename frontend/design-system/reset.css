@@ -5,3 +5,13 @@
   margin: 0;
   padding: 0;
 }
+
+/* Body text belongs to the design system, so the catalog renders body copy as
+   the product does. A page's own stylesheet adds only its chrome. */
+body {
+  background: var(--color-bg-base);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-body);
+  font-size: var(--font-size-body);
+  -webkit-font-smoothing: antialiased;
+}

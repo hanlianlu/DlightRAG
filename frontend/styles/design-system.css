@@ -1,16 +1,7 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
 @layer components {
-  * { box-sizing: border-box; }
-
-  body {
-    background: var(--color-bg-base);
-    color: var(--color-text-secondary);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: var(--font-size-body);
-    margin: 0;
-    min-width: 390px;
-  }
+  body { min-width: 390px; }
 
   .ds-shell {
     margin: 0 auto;

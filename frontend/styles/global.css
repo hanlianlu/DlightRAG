@@ -4,7 +4,8 @@
  * On phones (390px) → compact but readable.
  * On laptops (1440px) → slightly more relaxed without changing UI character.
  *
- * global.css — Universal resets, body defaults, and shared utility classes.
+ * global.css — The application's body chrome, layout tokens, and shared
+ * utility classes. Body text comes from the design system's reset.
  * Imported by Vite and emitted as part of the hashed application stylesheet.
  */
 
@@ -16,14 +17,10 @@ dl-answer-presentation { display: contents; }
     display: none;
 }
 
-/* ── Body defaults ── */
+/* ── Body chrome ── */
+/* The application fills the viewport and scrolls inside its own regions. */
 body {
-    font-family: var(--font-body);
-    font-size: var(--font-size-body);
-    background: var(--color-bg-base);
-    color: var(--color-text-tertiary);
     overflow: hidden;
-    -webkit-font-smoothing: antialiased;
 }
 
 body.conversation-drawer-open {

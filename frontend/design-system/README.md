@@ -14,6 +14,8 @@ CSS uses the fixed layer order:
 
 Application and catalog entries both load `design-system/index.css`. Product global styles and CSS Modules enter only the `components` and `features` layers.
 
+The reset layer also sets body text: Body text on the page background, in `--font-body` at body size, antialiased. A page adds only its own chrome, such as the application's clipped viewport or the catalog's 390px minimum width. Below its 1200px layout breakpoint the product raises `--size-button` to the hit target; that rule stays with the product, so the catalog shows controls at the design system's own sizes.
+
 ## Foundations and tokens
 
 Runtime CSS is authoritative. Foundation sources are separated by concern in `foundations/`: scale, color, type, geometry, motion, and roles. Run:
