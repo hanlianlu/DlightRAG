@@ -202,6 +202,16 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
             {**_ANTHROPIC_LEVELS, "off": None},
         ),
         (
+            "anthropic",
+            "claude-sonnet-5-5",
+            None,
+            1_000_000,
+            None,
+            128_000,
+            "anthropic",
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
             "gemini",
             "gemini-3.8-flash",
             None,
@@ -223,7 +233,7 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
         ),
         (
             "openai",
-            "grok-4.6",
+            "grok-4.7",
             "https://api.x.ai/v1",
             500_000,
             None,
@@ -330,6 +340,14 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
             {**_ANTHROPIC_LEVELS, "off": None},
         ),
         (
+            "anthropic/claude-sonnet-5.5",
+            1_000_000,
+            None,
+            128_000,
+            True,
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
             "deepseek/deepseek-v4.1-flash",
             1_048_576,
             None,
@@ -370,7 +388,7 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
             _QWEN_ROUTER_LEVELS,
         ),
         (
-            "x-ai/grok-4.6",
+            "x-ai/grok-4.7",
             500_000,
             None,
             450_000,
@@ -379,14 +397,6 @@ def test_packaged_catalogue_contains_native_multimodal_deepseek_profile() -> Non
         ),
         (
             "xiaomi/mimo-v2.6-pro",
-            1_048_576,
-            None,
-            131_072,
-            True,
-            _MIMO_LEVELS,
-        ),
-        (
-            "xiaomi/mimo-v2.6-flash",
             1_048_576,
             None,
             131_072,

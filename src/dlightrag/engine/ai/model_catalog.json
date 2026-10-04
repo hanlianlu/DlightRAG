@@ -47,6 +47,52 @@
       }
     },
     {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "anthropic",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "anthropic/claude-sonnet-5.5",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
       "provider": "openai",
       "model": "deepseek-flash",
       "base_url": "https://api.deepseek.com",
@@ -255,7 +301,7 @@
     },
     {
       "provider": "openai",
-      "model": "grok-4.6",
+      "model": "grok-4.7",
       "base_url": "https://api.x.ai/v1",
       "profile": {
         "context_window_tokens": 500000,
@@ -278,7 +324,7 @@
     },
     {
       "provider": "openai",
-      "model": "x-ai/grok-4.6",
+      "model": "x-ai/grok-4.7",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 500000,
@@ -302,29 +348,6 @@
     {
       "provider": "openai",
       "model": "xiaomi/mimo-v2.6-pro",
-      "base_url": "https://openrouter.ai/api/v1",
-      "profile": {
-        "context_window_tokens": 1048576,
-        "max_input_tokens": null,
-        "max_output_tokens": 131072,
-        "supports_images": true,
-        "reasoning": {
-          "format": "openrouter",
-          "levels": {
-            "off": "disabled",
-            "minimal": null,
-            "low": "enabled",
-            "medium": null,
-            "high": null,
-            "xhigh": null,
-            "max": null
-          }
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model": "xiaomi/mimo-v2.6-flash",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 1048576,

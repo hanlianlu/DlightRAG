@@ -53,13 +53,13 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
 def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() -> None:
     fingerprint = ModelEndpointFingerprint(
         provider="openai",
-        model="xiaomi/mimo-v2.6-flash",
+        model="xiaomi/mimo-v2.6-pro",
         endpoint_fingerprint=normalized_endpoint_fingerprint("https://openrouter.ai/api/v1"),
     )
     overlay = parse_catalogue_entry(
         {
             "provider": "openai",
-            "model": "xiaomi/mimo-v2.6-flash",
+            "model": "xiaomi/mimo-v2.6-pro",
             "base_url": "https://openrouter.ai/api/v1",
             "profile": {
                 "context_window_tokens": 90_000,
