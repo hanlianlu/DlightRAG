@@ -47,12 +47,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-editable
 
 # Charts (built-in charts Skill): the upstream resvg CLI, built from its pinned crates.io
-# release because upstream publishes no linux-aarch64 binary.
+# release because upstream publishes no linux-aarch64 binary. The binary links its crates
+# statically, so the license files of every crate the locked build used ship with it, one
+# directory per crate.
 FROM rust:1.99.0-slim-bookworm AS resvg
 ARG RESVG_VERSION=0.48.1
 RUN cargo install --locked resvg --version ${RESVG_VERSION} --root /out \
     && mkdir -p /out/licenses \
-    && cp /usr/local/cargo/registry/src/*/resvg-${RESVG_VERSION}/LICENSE-* /out/licenses/
+    && cd /usr/local/cargo/registry/src/*/ \
+    && find . -mindepth 2 -maxdepth 2 -type f \
+        \( -iname '*licen[cs]e*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) \
+        -exec cp --parents {} /out/licenses/ \;
 
 # Charts: ECharts draws on the image's node, so only echarts.min.js and its licenses ship.
 FROM node:26-slim AS chart-render

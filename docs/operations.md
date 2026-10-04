@@ -108,7 +108,7 @@ The image adds, all under `/usr/local`:
 |---|---|
 | `bin/echarts-render` | Symlink to `lib/echarts-render/echarts_render.py` |
 | `lib/echarts-render/` | The renderer from `chart-render/` (`echarts_render.py`, `ssr.cjs`, `theme.json`), `echarts.min.js`, and the ECharts and zrender licenses |
-| `bin/resvg` | The upstream resvg CLI, built from its crates.io release; its licenses are in `share/doc/resvg/` |
+| `bin/resvg` | The upstream resvg CLI, built from its crates.io release; the licenses of resvg and of every crate its locked build used are in `share/doc/resvg/`, one directory per crate |
 | `share/fonts/noto-sans-sc/` | Noto Sans SC Regular and Bold, with the OFL-1.1 license |
 
 Rust exists only in the builder stage. The font covers Chinese and Latin text;
