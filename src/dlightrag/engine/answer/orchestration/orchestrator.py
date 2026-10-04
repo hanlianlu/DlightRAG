@@ -321,19 +321,24 @@ class AnswerOrchestrator:
             runtime_context.snapshot,
             selected_lane_id=runtime_context.lane_id,
         )
-        messages = project_session_messages(
-            selected.tree.ancestry(runtime_context.lane_id),
-            selected.active_projection,
-        )
+        # The turn that is spawning has Tool Calls without outputs yet, and a provider
+        # refuses a request that holds one, so a Child inherits what the parent has settled.
+        settled = selected.tree.settled_ancestry(runtime_context.lane_id)
+        messages = project_session_messages(settled, selected.active_projection)
         from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 
+        settled_entries = {entry.entry_id.value for entry in settled}
         self._subagent_host.context_snapshot = ChildContextSnapshot.from_values(
             parent_session_id=runtime_context.session_id,
             parent_entry_id=parent_entry_id,
             depth=self._subagent_host.depth,
             messages=messages,
             evidence_state=run.evidence.durable_state(),
-            attachment_occurrences=AttachmentReplaySelection.from_snapshot(selected).occurrences,
+            attachment_occurrences=tuple(
+                occurrence
+                for occurrence in AttachmentReplaySelection.from_snapshot(selected).occurrences
+                if occurrence.entry_id in settled_entries
+            ),
         )
 
     def admit_durable_attachments(

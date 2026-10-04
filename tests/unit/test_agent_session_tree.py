@@ -295,3 +295,84 @@ async def test_archive_keeps_shared_entries_and_blocks_future_writes() -> None:
                 ],
             ),
         )
+
+
+async def _commit_chain(store, session_id: SessionId, entries) -> None:
+    """Commit entries as one chain with the Lane's head on the last."""
+    head = LaneHead(LaneId.main(), entries[-1].entry_id)
+    state = LaneState(LaneId.main())
+    outcome = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=entries,
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+
+def _call_turn(session_id: SessionId, parent: EntryId, *call_ids: str) -> AssistantMessageEntry:
+    return AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=parent,
+        timestamp=datetime.now(UTC),
+        content="",
+        stop_reason="tool_use",
+        tool_calls=tuple(ToolCall(call_id, "lookup", {}) for call_id in call_ids),
+    )
+
+
+def _output(session_id: SessionId, parent: EntryId, call_id: str) -> ToolResultMessageEntry:
+    return ToolResultMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        parent_entry_id=parent,
+        timestamp=datetime.now(UTC),
+        result=ToolResultEntry.text(
+            tool_name="lookup", call_id=call_id, outcome="succeeded", text="found"
+        ),
+        intent_id=IntentId.new(),
+        source_index=0,
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        replay_policy="never",
+        attempt_id=AttemptId.new(),
+        effective_input_digest="b" * 64,
+    )
+
+
+@pytest.mark.asyncio
+async def test_settled_ancestry_stops_before_a_turn_whose_calls_have_no_outputs() -> None:
+    session_id = SessionId.new()
+    question = _user(session_id, "compare the suppliers")
+    first = _call_turn(session_id, question.entry_id, "c1")
+    first_output = _output(session_id, first.entry_id, "c1")
+    running = _call_turn(session_id, first_output.entry_id, "c2", "c3")
+    c2_output = _output(session_id, running.entry_id, "c2")
+    c3_output = _output(session_id, c2_output.entry_id, "c3")
+
+    def ids(entries) -> list[EntryId]:
+        return [entry.entry_id for entry in entries]
+
+    # One of the two parallel calls has its output and the other does not: the whole turn waits.
+    partial = MemoryAgentSessionRepository[None]()
+    await _commit_chain(partial, session_id, [question, first, first_output, running, c2_output])
+    tree = (await partial.load(session_id)).tree
+    assert ids(tree.settled_ancestry()) == ids([question, first, first_output])
+    assert not tree.is_stable_checkpoint(c2_output.entry_id)
+
+    done = MemoryAgentSessionRepository[None]()
+    await _commit_chain(
+        done, session_id, [question, first, first_output, running, c2_output, c3_output]
+    )
+    tree = (await done.load(session_id)).tree
+    assert ids(tree.settled_ancestry()) == ids(
+        [question, first, first_output, running, c2_output, c3_output]
+    )
+    assert tree.is_stable_checkpoint(c3_output.entry_id)

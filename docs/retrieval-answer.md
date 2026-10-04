@@ -240,7 +240,10 @@ Run's authority: the roster controls, `remember`/`forget`, and the publication
 tools. It holds `ask_parent` instead. The parent's `tools` list narrows that set
 for one child — one without a shell, say — and can never restore what the
 Run withholds or remove `ask_parent`; a listed name the Run does not offer is left
-out, not an error. Children cannot spawn grandchildren.
+out, not an error. Children cannot spawn grandchildren. A child started with
+`context="parent"` inherits the conversation the parent has settled and the evidence
+gathered so far; the turn that is calling `spawn_agent` is left out, because its calls
+have no outputs yet and a provider refuses a request that holds one.
 Same-Session continuation creates a new Operation on the existing Child Session.
 `wait_subagent` returns early, with its child still running, when a sibling settles
 or a child asks a question, and then reports every question awaiting an answer. A
