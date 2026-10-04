@@ -1,35 +1,19 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {parseMemoryOperationEvent} from '../api/memory.ts';
+import {sendKeys, setViewport} from '@web/test-runner-commands';
+import {linkStyles, waitFor} from '../testing/dom.ts';
+import {
+  memoryPage,
+  memorySettings,
+  mountSettings,
+  openSettings,
+  wire,
+} from '../testing/settings.ts';
 import type {DlSettingsDialog} from './settings.ts';
-import './settings.ts';
-import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
-import './toast.ts';
-import {buttonNamed, waitFor} from '../testing/dom.ts';
 
 const originalFetch = window.fetch;
-
-function mount(): DlSettingsDialog {
-  const shell = document.createElement('div');
-  const toast = document.createElement('dl-toast-region') as DlToastRegion;
-  toast.className = 'toast';
-  shell.addEventListener('dl-toast-request', (event: CustomEvent<ToastRequestDetail>) => {
-    if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
-    else toast.show(event.detail.message, event.detail.duration);
-  });
-  const settings = document.createElement('dl-settings-dialog') as DlSettingsDialog;
-  shell.append(toast, settings);
-  document.body.appendChild(shell);
-  return settings;
-}
-
-/** Settings always mounts Connections; answer its read so a test sees only Memory traffic. */
-function memoryOnly(handler: typeof window.fetch): typeof window.fetch {
-  return async (input, init) => String(input).includes('/connections/')
-    ? Response.json({revision: '0', connections: [], presets: []})
-    : await handler(input, init);
-}
+const originalViewport = {width: window.innerWidth, height: window.innerHeight};
 
 afterEach(() => {
   window.fetch = originalFetch;
@@ -37,8 +21,70 @@ afterEach(() => {
   document.body.className = '';
 });
 
+/** The reads a fully populated Settings makes: two Connections and five memories. */
+function populated(): ReturnType<typeof wire> {
+  return wire({
+    'GET /web/api/connections/mcp': () => Response.json({
+      revision: '1',
+      presets: [],
+      connections: [
+        {connection_id: 'a', label: 'Notion', endpoint: 'https://a.example/mcp', enabled: true,
+          activation_epoch: 1, generation: 1, authentication: 'oauth', authorization_status: null, status: 'ready'},
+        {connection_id: 'b', label: 'Hugging Face', endpoint: 'https://b.example/mcp', enabled: false,
+          activation_epoch: 1, generation: 1, authentication: 'none', authorization_status: null, status: 'disabled'},
+      ],
+    }),
+    'GET /web/api/memory/settings': () => memorySettings(true, 5),
+    'GET /web/api/memory': () => memoryPage([{id: 'one', body: 'Use concise answers'}]),
+  });
+}
+
+/** The navigation rows, in order, as a reader meets them. */
+function rows(settings: DlSettingsDialog): HTMLButtonElement[] {
+  return [...settings.querySelectorAll<HTMLButtonElement>('nav .dl-nav-item')];
+}
+
+function row(settings: DlSettingsDialog, section: string): HTMLButtonElement {
+  return settings.querySelector<HTMLButtonElement>(`nav .dl-nav-item[data-section="${section}"]`)!;
+}
+
+/** What a row is called: the text its aria-labelledby points at. */
+function nameOf(element: Element): string {
+  const id = element.getAttribute('aria-labelledby')!;
+  return element.ownerDocument.getElementById(id)!.textContent!.trim();
+}
+
+function pageElement(settings: DlSettingsDialog, tag: string): HTMLElement {
+  return settings.querySelector<HTMLElement>(tag)!;
+}
+
+/** The pages in the order the navigation lists them, and what a populated Settings says of each. */
+const PAGES = [
+  {
+    section: 'connections', name: 'Connections', status: '1/2', detail: 'MCP · 1 of 2 enabled',
+    description: 'External MCP servers that Research runs can call. Turning the first one on asks you to confirm once.',
+  },
+  {
+    section: 'memory', name: 'Profile Memory', status: '5', detail: 'On · 5 stored',
+    description: 'Preferences and facts the agent remembers about you across conversations.',
+  },
+  {
+    section: 'conversations', name: 'Conversation Sessions', status: '0', detail: '0 conversations · kept 365 days',
+    description: 'Conversations retain 365 days',
+  },
+  {
+    section: 'language', name: 'Language', status: '', detail: 'Automatic',
+    description: 'The language of the interface.',
+  },
+] as const;
+
+/** The names of the rows that are current, as a reader would hear them. */
+function currentRows(settings: DlSettingsDialog): string[] {
+  return [...settings.querySelectorAll('nav [aria-current="page"]')].map(nameOf);
+}
+
 it('does not expose runtime model catalogue administration in Settings', async () => {
-  const settings = mount();
+  const {settings} = mountSettings();
   await settings.updateComplete;
 
   expect(settings.textContent).not.to.contain('Runtime Model Catalogue');
@@ -46,347 +92,445 @@ it('does not expose runtime model catalogue administration in Settings', async (
   expect(customElements.get('dl-model-catalogue')).to.equal(undefined);
 });
 
-it('consumes a typed memory fact through its command and refreshes after Undo', async () => {
-  const methods: string[] = [];
-  window.fetch = async (_input, init) => {
-    const method = init?.method || 'GET';
-    methods.push(method);
-    const payload = method === 'POST'
-      ? {action: 'undo', outcome: 'changed', change_id: 'undo-1', memory_ids: [], body: ''}
-      : {enabled: true, active_count: methods.includes('POST') ? 0 : 1};
-    return new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  };
-  const settings = mount();
+it('opens a modal named Settings on Connections, with three labelled groups of pages', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  const dialog = await openSettings(settings);
 
-  // The server's own field names, through the same parser the stream uses.
-  settings.handleMemoryOperation(parseMemoryOperationEvent({
-    live: true,
-    intent_id: 'intent-settings-test',
-    operation: 'remember',
-    outcome: 'changed',
-    change_id: 'change-settings-test',
-    body: 'Use concise answers',
-  })!);
-  await waitFor(() => settings.textContent?.includes('1 stored item') ?? false);
-
-  const toast = document.querySelector('dl-toast-region')!;
-  expect(toast.textContent).to.contain('Remembered: Use concise answers');
-  toast.querySelector<HTMLButtonElement>('button')?.click();
-  await waitFor(() => methods.length === 3
-    && toast.textContent?.trim() === 'Profile Memory change undone.'
-    && (settings.textContent?.includes('0 stored items') ?? false));
-  expect(methods).to.deep.equal(['GET', 'POST', 'GET']);
-});
-
-it('opens fail-closed when the authoritative memory read fails', async () => {
-  window.fetch = async () => new Response('unavailable', {status: 503});
-  const settings = mount();
-
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-
-  expect(settings.querySelector<HTMLDialogElement>('dialog[open]')).not.to.equal(null);
-  // A refused read leaves no control at all: a disabled unchecked checkbox would
-  // render "memory is off" for a state nobody read.
-  expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
-  expect(settings.textContent).to.contain('Could not load memory settings.');
-  expect(buttonNamed(settings, 'Clear memory')?.hidden).to.equal(true);
-});
-
-it('owns an explicit memory toggle mutation and its final visible state', async () => {
-  const methods: string[] = [];
-  window.fetch = memoryOnly(async (_input, init) => {
-    methods.push(init?.method || 'GET');
-    const payload = init?.method === 'PUT'
-      ? {enabled: false, active_count: null}
-      : {enabled: true, active_count: 2};
-    return new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  });
-  const settings = mount();
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
-
-  toggle.checked = false;
-  toggle.dispatchEvent(new Event('change'));
-  await waitFor(() => buttonNamed(settings, 'Clear memory')?.hidden === true);
-
-  expect(methods).to.deep.equal(['GET', 'PUT']);
-  expect(settings.textContent).not.to.contain('2 stored items');
-});
-
-it('restores the authoritative checkbox state after a failed toggle mutation', async () => {
-  window.fetch = async (_input, init) => {
-    if (init?.method === 'PUT') return new Response('unavailable', {status: 503});
-    return new Response(JSON.stringify({enabled: true, active_count: 2}), {
-      status: 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  };
-  const settings = mount();
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
-
-  toggle.checked = false;
-  toggle.dispatchEvent(new Event('change'));
-  const toast = settings.querySelector('dl-toast-region')!;
-  await waitFor(() => !toggle.disabled
-    && (toast.textContent?.includes('Could not save memory settings.') ?? false));
-
-  expect(toggle.checked).to.equal(true);
-});
-
-it('rejects a delayed memory read after a newer toggle mutation settles', async () => {
-  let resolveOldRead!: (response: Response) => void;
-  const oldRead = new Promise<Response>((resolve) => { resolveOldRead = resolve; });
-  const methods: string[] = [];
-  let reads = 0;
-  window.fetch = memoryOnly(async (_input, init) => {
-    const method = init?.method || 'GET';
-    methods.push(method);
-    if (method === 'GET') {
-      reads += 1;
-      if (reads === 1) return await oldRead;
-      return new Response(JSON.stringify({enabled: true, active_count: 2}), {
-        status: 200,
-        headers: {'Content-Type': 'application/json'},
-      });
-    }
-    return new Response(JSON.stringify({enabled: false, active_count: null}), {
-      status: 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  });
-  const settings = mount();
-  settings.memory = {enabled: true, activeCount: 2};
-
-  settings.handleMemoryOperation(parseMemoryOperationEvent({
-    live: true,
-    intent_id: 'stale-read-intent',
-    operation: 'remember',
-    outcome: 'changed',
-    change_id: 'stale-read-change',
-    body: 'Remember this',
-  })!);
-  await waitFor(() => reads === 1);
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
-  toggle.checked = false;
-  toggle.dispatchEvent(new Event('change'));
-  await waitFor(() => methods.includes('PUT') && toggle.disabled === false);
-
-  resolveOldRead(new Response(JSON.stringify({enabled: true, active_count: 9}), {
-    status: 200,
-    headers: {'Content-Type': 'application/json'},
+  expect(dialog.matches(':modal')).to.equal(true);
+  expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)!.textContent).to.equal('Settings');
+  const nav = settings.querySelector('nav')!;
+  expect(nav.getAttribute('aria-label')).to.equal('Settings');
+  const groups = [...nav.querySelectorAll('[role="group"]')].map((group) => ({
+    name: nameOf(group),
+    pages: [...group.querySelectorAll('.dl-nav-item')].map(nameOf),
   }));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(groups).to.deep.equal([
+    {name: 'Agent', pages: ['Connections', 'Profile Memory']},
+    {name: 'Data', pages: ['Conversation Sessions']},
+    {name: 'General', pages: ['Language']},
+  ]);
+
+  // Exactly the open page is current, the page pane is a region named for its heading, and
+  // keyboard focus starts on the current row.
+  const current = nav.querySelectorAll('[aria-current="page"]');
+  expect([...current].map(nameOf)).to.deep.equal(['Connections']);
+  const region = settings.querySelector('[role="region"]')!;
+  expect(document.getElementById(region.getAttribute('aria-labelledby')!)!.textContent).to.equal('Connections');
+  expect(region.textContent).to.contain('External MCP servers that Research runs can call.');
+  expect(document.activeElement).to.equal(current[0]);
+  expect(document.body.classList.contains('settings-open')).to.equal(true);
+});
+
+it('shows one page at a time while every page stays mounted, and keeps focus on the row it was given', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  await openSettings(settings);
+  const pages = PAGES.map(({section}) => pageElement(settings, `dl-settings-${section}`));
+  expect(pages.map((page) => page.hidden)).to.deep.equal(PAGES.map((_, index) => index !== 0));
+
+  for (const [index, {section, name, description}] of PAGES.entries()) {
+    // A pointer press focuses the row it clicks; a script's click does not, so this one does.
+    const target = row(settings, section);
+    target.focus();
+    target.click();
+    await settings.updateComplete;
+
+    expect(pages.map((page) => page.hidden), name).to.deep.equal(PAGES.map((_, other) => other !== index));
+    expect(currentRows(settings)).to.deep.equal([name]);
+    const region = settings.querySelector('[role="region"]')!;
+    expect(document.getElementById(region.getAttribute('aria-labelledby')!)!.textContent).to.equal(name);
+    expect(region.querySelector('p')!.textContent).to.equal(description);
+    expect(document.activeElement).to.equal(target);
+  }
+});
+
+it('moves focus among the rows with the arrow keys, Home, and End, and opens a page with Enter or Space', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  await openSettings(settings);
+  const names = PAGES.map(({name}) => name);
+  const focused = (): string => nameOf(document.activeElement!);
+  expect(focused()).to.equal(names[0]);
+
+  await sendKeys({press: 'ArrowDown'});
+  expect(focused()).to.equal(names[1]);
+  await sendKeys({press: 'End'});
+  expect(focused()).to.equal(names.at(-1));
+  await sendKeys({press: 'ArrowDown'});
+  expect(focused()).to.equal(names[0]);
+  await sendKeys({press: 'ArrowUp'});
+  expect(focused()).to.equal(names.at(-1));
+  await sendKeys({press: 'Home'});
+  expect(focused()).to.equal(names[0]);
+
+  // Moving focus opens nothing; Enter and Space activate the row that has it.
+  expect(currentRows(settings)).to.deep.equal([names[0]]);
+  await sendKeys({press: 'ArrowDown'});
+  await sendKeys({press: 'Enter'});
   await settings.updateComplete;
-
-  expect(methods).to.deep.equal(['GET', 'GET', 'PUT']);
-  expect(toggle.checked).to.equal(false);
-  expect(settings.textContent).not.to.contain('9 stored items');
-});
-
-it('renders Connections independently and never paints an unread memory state', async () => {
-  let releaseRead!: (response: Response) => void;
-  const pendingRead = new Promise<Response>((resolve) => { releaseRead = resolve; });
-  window.fetch = async (input) => {
-    if (String(input).includes('/memory/settings')) return await pendingRead;
-    return Response.json({revision: '1', connections: [], presets: []});
-  };
-  const settings = mount();
-
-  const opened = settings.open();
-  await waitFor(() => Boolean(settings.querySelector('dl-settings-connections')));
-
-  // The MCP section is on screen while the memory projection is still unknown,
-  // and Profile Memory is not painted as "off" in the meantime.
-  expect(settings.querySelector<HTMLDialogElement>('#settings-dialog')!.open).to.equal(true);
-  expect(settings.querySelector('dl-settings-connections')!.getBoundingClientRect().height).to.be.greaterThan(0);
-  expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
-  expect(settings.textContent).to.contain('Loading memory settings');
-
-  releaseRead(new Response(JSON.stringify({enabled: true, active_count: 3}), {
-    status: 200,
-    headers: {'Content-Type': 'application/json'},
-  }));
-  await opened;
-  await waitFor(() => Boolean(settings.querySelector('#memory-enabled-toggle')));
-
-  const toggle = settings.querySelector<HTMLInputElement>('#memory-enabled-toggle')!;
-  expect(toggle.checked).to.equal(true);
-  expect(settings.textContent).to.contain('3 stored items');
-});
-
-it('tears the Connections Feature down on close', async () => {
-  window.fetch = async (url) => Response.json(String(url).includes('connections')
-    ? {revision: '0', connections: [], presets: []}
-    : {enabled: false, active_count: 0});
-  const settings = mount();
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
+  expect(currentRows(settings)).to.deep.equal([names[1]]);
+  await sendKeys({press: 'ArrowDown'});
+  await sendKeys({press: 'Space'});
   await settings.updateComplete;
-  expect(settings.querySelector('dl-settings-connections')).not.to.equal(null);
-  settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
-  await waitFor(() => settings.querySelector('dl-settings-connections') === null);
+  expect(currentRows(settings)).to.deep.equal([names[2]]);
 });
 
-it('browses paginated memories, retries a page, forgets one item and restores it with Undo', async () => {
-  let forgotten = false;
-  let olderAttempts = 0;
-  const mutations: Array<{method: string; key: string | undefined}> = [];
-  window.fetch = async (input, init) => {
-    const url = new URL(String(input), window.location.origin);
-    if (url.pathname.endsWith('/settings')) return Response.json({enabled: true, active_count: forgotten ? 1 : 2});
-    if (init?.method === 'DELETE' || init?.method === 'POST') {
-      mutations.push({method: init.method, key: (init.headers as Record<string, string>)['Idempotency-Key']});
-      forgotten = init.method === 'DELETE';
-      return Response.json({action: forgotten ? 'forget' : 'undo', outcome: 'changed',
-        change_id: forgotten ? 'forgot-1' : 'undo-1', memory_ids: ['one'], body: 'Use concise answers'});
-    }
-    if (url.searchParams.has('cursor')) {
-      olderAttempts += 1;
-      if (olderAttempts === 1) return new Response('Unavailable', {status: 503});
-      return Response.json({memories: [{memory_id: 'two', kind: 'fact', body: '<img src=x> Lives in Sweden'}], next_cursor: null});
-    }
-    return Response.json({memories: forgotten ? [{memory_id: 'two', kind: 'fact', body: 'Lives in Sweden'}]
-      : [{memory_id: 'one', kind: 'preference', body: 'Use concise answers'}], next_cursor: forgotten ? null : 'older'});
-  };
-  const settings = mount();
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  expect(settings.querySelector('.memory-list li')).to.equal(null);
-  settings.querySelector<HTMLDetailsElement>('.memory-list')!.open = true;
-  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 1);
-  buttonNamed(settings, 'Load more')!.click();
-  await waitFor(() => Boolean(buttonNamed(settings, 'Retry')));
-  buttonNamed(settings, 'Retry')!.click();
-  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 2);
-  expect(settings.querySelector('.memory-list img')).to.equal(null);
-  expect(settings.textContent).to.contain('<img src=x> Lives in Sweden');
-  expect(buttonNamed(settings, 'Load more')).to.equal(null);
-
-  buttonNamed(settings, 'Forget')!.click();
-  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 1 && !settings.memoryPending);
-  expect(settings.querySelector('.memory-list')!.textContent).not.to.contain('Use concise answers');
-  const toast = settings.querySelector('dl-toast-region')!;
-  expect(toast.textContent).to.contain('Forgot: Use concise answers');
-  const undo = buttonNamed(toast, 'Undo')!;
-  undo.focus();
-  expect(document.activeElement).to.equal(undo);
-  expect(undo.closest('dialog[open]')).to.equal(settings.querySelector('#settings-dialog'));
-  expect(toast.inert).to.equal(false);
-  undo.click();
-  await waitFor(() => settings.querySelector('.memory-list')!.textContent?.includes('Use concise answers') ?? false);
-  expect(mutations.map((item) => item.method)).to.deep.equal(['DELETE', 'POST']);
-  expect(mutations.every((item) => Boolean(item.key))).to.equal(true);
-});
-
-it('retries a failed first memory page from its own note', async () => {
-  let firstPages = 0;
-  window.fetch = memoryOnly(async (input) => {
-    const url = new URL(String(input), window.location.origin);
-    if (url.pathname.endsWith('/settings')) return Response.json({enabled: true, active_count: 1});
-    firstPages += 1;
-    if (firstPages === 1) return new Response('Unavailable', {status: 503});
-    return Response.json({memories: [{memory_id: 'one', kind: 'fact', body: 'Lives in Sweden'}], next_cursor: null});
-  });
-  const settings = mount();
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  settings.querySelector<HTMLDetailsElement>('.memory-list')!.open = true;
-
-  await waitFor(() => settings.querySelector('.memory-list .settings-note')?.textContent
-    ?.includes('Could not load memories.') ?? false);
-  expect(settings.querySelector('[data-load-older="memories"]')).to.equal(null);
-  buttonNamed(settings.querySelector('.memory-list')!, 'Retry')!.click();
-
-  await waitFor(() => settings.querySelectorAll('.memory-list li').length === 1);
-  expect(firstPages).to.equal(2);
-  expect(buttonNamed(settings.querySelector('.memory-list')!, 'Retry')).to.equal(null);
-});
-
-it('rejects a stale list page after memory is disabled, even when transport ignores abort', async () => {
-  let releasePage!: (response: Response) => void;
-  let pageStarted = false;
-  window.fetch = memoryOnly(async (input, init) => {
-    if (String(input).includes('/settings')) return Response.json({enabled: init?.method !== 'PUT', active_count: 1});
-    pageStarted = true;
-    return new Promise<Response>((resolve) => { releasePage = resolve; });
-  });
-  const settings = mount();
-  await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  await settings.updateComplete;
-  settings.querySelector<HTMLDetailsElement>('.memory-list')!.open = true;
-  await waitFor(() => pageStarted);
-  settings.querySelector<HTMLInputElement>('#memory-enabled-toggle')!.click();
-  await waitFor(() => settings.memory?.enabled === false);
-  releasePage(Response.json({memories: [{memory_id: 'late', kind: 'fact', body: 'Stale private content'}], next_cursor: null}));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(settings.memoryRecords).to.equal(null);
-  expect(settings.textContent).not.to.contain('Stale private content');
-});
-
-it('does not reopen Settings or publish a late Memory read after closing it', async () => {
-  let releaseRead!: (response: Response) => void;
-  window.fetch = async () => new Promise<Response>((resolve) => { releaseRead = resolve; });
-  const settings = mount();
-  const opened = settings.open();
-  await waitFor(() => settings.querySelector<HTMLDialogElement>('#settings-dialog')?.open === true);
+it('opens on the page it is asked for, and on Connections otherwise', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  await openSettings(settings, 'memory');
+  expect([...settings.querySelectorAll('nav [aria-current="page"]')].map(nameOf)).to.deep.equal(['Profile Memory']);
+  expect(document.activeElement).to.equal(row(settings, 'memory'));
   settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
   await waitFor(() => !document.body.classList.contains('settings-open'));
-  releaseRead(Response.json({enabled: true, active_count: 1}));
-  await opened;
-  expect(settings.memory).to.equal(null);
-  expect(settings.querySelector<HTMLDialogElement>('#settings-dialog')!.open).to.equal(false);
+
+  await openSettings(settings);
+  expect([...settings.querySelectorAll('nav [aria-current="page"]')].map(nameOf)).to.deep.equal(['Connections']);
 });
 
-for (const reopen of [false, true]) it(`settles in-flight Undo after close (reopen=${reopen}) without a second Undo`, async () => {
-  let releaseUndo!: (response: Response) => void;
-  let undoCalls = 0;
-  window.fetch = async (input, init) => {
-    if (String(input).includes('/settings')) return Response.json({enabled: true, active_count: 1});
-    if (init?.method === 'POST') {
-      undoCalls += 1;
-      return new Promise<Response>((resolve) => { releaseUndo = resolve; });
-    }
-    return Response.json({memories: [], next_cursor: null});
-  };
-  const settings = mount();
+it('tells each row what its page holds, in a short status and in a full line', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  await openSettings(settings);
+  const status = (section: string): string => row(settings, section)
+    .querySelector('.dl-nav-item-status')!.textContent!.trim();
+  const detail = (section: string): string => document
+    .getElementById(row(settings, section).getAttribute('aria-describedby')!)!.textContent!.trim();
+
+  await waitFor(() => PAGES.every(({section, status: expected}) => expected === '' || status(section) !== ''));
+  expect(PAGES.map(({section}) => status(section))).to.deep.equal(PAGES.map(({status: expected}) => expected));
+  expect(PAGES.map(({section}) => detail(section))).to.deep.equal(PAGES.map(({detail: expected}) => expected));
+});
+
+it('says nothing short of a Memory that is off, and says Off in full', async () => {
+  window.fetch = wire({'GET /web/api/memory/settings': () => memorySettings(false)}).fetch;
+  const {settings} = mountSettings();
+  await openSettings(settings);
+  const memory = row(settings, 'memory');
+  await waitFor(() => Boolean(memory.getAttribute('aria-describedby')));
+
+  expect(memory.querySelector('.dl-nav-item-status')!.textContent!.trim()).to.equal('');
+  expect(document.getElementById(memory.getAttribute('aria-describedby')!)!.textContent!.trim()).to.equal('Off');
+});
+
+it('opens at once, whatever any page is still waiting for', async () => {
+  const never = new Promise<Response>(() => {});
+  window.fetch = wire({
+    'GET /web/api/connections/mcp': () => never,
+    'GET /web/api/memory/settings': () => never,
+  }).fetch;
+  const {settings} = mountSettings();
+  const dialog = await openSettings(settings);
+
+  expect(dialog.open).to.equal(true);
+  expect(rows(settings)).to.have.length(PAGES.length);
+  expect(row(settings, 'connections').getAttribute('aria-current')).to.equal('page');
+  // No page paints a state nobody has read.
+  expect(settings.textContent).to.contain('Loading Connections');
+  expect(settings.textContent).to.contain('Loading memory settings');
+  expect(settings.querySelector('#memory-enabled-toggle')).to.equal(null);
+});
+
+it('tears every page but Memory down on close, drops what they reported, and gives focus back', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  const trigger = document.createElement('button');
+  document.body.append(trigger);
+  trigger.focus();
+  await settings.open(trigger);
+  const dialog = settings.querySelector<HTMLDialogElement>('#settings-dialog')!;
+  await waitFor(() => dialog.open);
+  await waitFor(() => row(settings, 'connections').querySelector('.dl-nav-item-status')!.textContent!.trim() === '1/2');
+  const connections = pageElement(settings, 'dl-settings-connections');
+  expect(connections.isConnected).to.equal(true);
+
+  dialog.close();
+  await waitFor(() => !document.body.classList.contains('settings-open'));
+  await settings.updateComplete;
+
+  expect(connections.isConnected).to.equal(false);
+  for (const {section} of PAGES.filter(({section}) => section !== 'memory')) {
+    expect(settings.querySelector(`dl-settings-${section}`), section).to.equal(null);
+  }
+  // Memory stays, because a live Memory change arrives whenever Chat says so; it holds nothing read.
+  expect(settings.querySelector('dl-settings-memory')).not.to.equal(null);
+  expect(rows(settings).map((item) => item.querySelector('.dl-nav-item-status')!.textContent!.trim()))
+    .to.deep.equal(PAGES.map(() => ''));
+  expect(rows(settings).some((item) => item.hasAttribute('aria-current'))).to.equal(false);
+  expect(document.activeElement).to.equal(trigger);
+});
+
+it('closes from the Close button, from Escape, and from the scrim, but not from a click inside', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  const dialog = await openSettings(settings);
+  const named = (name: string): HTMLElement => [...settings.querySelectorAll<HTMLElement>('dl-icon-button')]
+    .find((button) => button.getAttribute('aria-label') === name)!;
+
+  dialog.querySelector<HTMLElement>('nav')!.click();
+  expect(dialog.open).to.equal(true);
+
+  named('Close settings').click();
+  await waitFor(() => !dialog.open);
+
+  await openSettings(settings);
+  await sendKeys({press: 'Escape'});
+  await waitFor(() => !dialog.open);
+
+  await openSettings(settings);
+  dialog.click();
+  await waitFor(() => !dialog.open);
+});
+
+it('starts a session of its own when it opens before the last close has been reported', async () => {
+  const api = populated();
+  window.fetch = api.fetch;
+  const {settings} = mountSettings();
+  const dialog = await openSettings(settings);
+  const first = pageElement(settings, 'dl-settings-connections');
+  await waitFor(() => first.isConnected && (first as unknown as {view: unknown}).view !== null);
+
+  // A dialog closes at once but reports it in a task of its own, which a quick reopen can beat.
+  dialog.close();
   await settings.open();
-  await waitFor(() => !settings.memoryLoading);
-  settings.handleMemoryOperation({
-    live: true, operation: 'forget', outcome: 'changed', changeId: 'forgot-slow',
-    intentId: null, body: 'One item',
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const second = pageElement(settings, 'dl-settings-connections');
+  expect(second).not.to.equal(first);
+  expect(first.isConnected).to.equal(false);
+  // The late report of the first close did not tear the second session down.
+  expect(dialog.open).to.equal(true);
+  expect(document.body.classList.contains('settings-open')).to.equal(true);
+  await waitFor(() => api.requests.filter((request) => request.path === '/web/api/connections/mcp').length === 2);
+  await waitFor(() => (second as unknown as {view: unknown}).view !== null);
+});
+
+it('deletes every conversation through the sidebar\'s command, and closes only once it ran', async () => {
+  window.fetch = populated().fetch;
+  const {settings} = mountSettings();
+  const asked: Array<HTMLElement | null | undefined> = [];
+  let outcome = false;
+  settings.deleteAllConversations = async (returnFocus) => {
+    asked.push(returnFocus);
+    return outcome;
+  };
+  const dialog = await openSettings(settings, 'conversations');
+  const button = settings.querySelector<HTMLButtonElement>('#delete-all-btn')!;
+
+  button.click();
+  await waitFor(() => asked.length === 1);
+  await settings.updateComplete;
+  expect(asked[0]).to.equal(button);
+  expect(dialog.open).to.equal(true);
+
+  outcome = true;
+  button.click();
+  await waitFor(() => !dialog.open);
+  expect(asked).to.have.length(2);
+});
+
+it('shows a page\'s notice in its own region while open, and hands it to the shell while closed', async () => {
+  window.fetch = populated().fetch;
+  const {settings, toast} = mountSettings();
+  const dialog = await openSettings(settings);
+  const language = pageElement(settings, 'dl-settings-language');
+  const notify = (from: Element, message: string): void => {
+    from.dispatchEvent(new CustomEvent('dl-toast-request', {detail: {message}, bubbles: true, composed: true}));
+  };
+
+  notify(language, 'Inside the dialog');
+  const own = settings.querySelector('dl-toast-region')!;
+  await own.updateComplete;
+  expect(own.textContent).to.contain('Inside the dialog');
+  expect(own.closest('dialog')).to.equal(dialog);
+  expect(toast.textContent?.trim() ?? '').to.equal('');
+
+  dialog.close();
+  await waitFor(() => !document.body.classList.contains('settings-open'));
+  notify(pageElement(settings, 'dl-settings-memory'), 'After it closed');
+  await toast.updateComplete;
+  expect(toast.textContent).to.contain('After it closed');
+});
+
+it('lets a notice that still offers Undo outlive the dialog', async () => {
+  window.fetch = populated().fetch;
+  const {settings, toast} = mountSettings();
+  const dialog = await openSettings(settings);
+  settings.querySelector('dl-settings-language')!.dispatchEvent(new CustomEvent('dl-toast-request', {
+    detail: {message: 'Forgot: one', action: {actionLabel: 'Undo', onAction: async () => 'Undone'}},
+    bubbles: true,
+    composed: true,
+  }));
+  const own = settings.querySelector('dl-toast-region')!;
+  await own.updateComplete;
+  expect(own.querySelector('button')?.textContent?.trim()).to.equal('Undo');
+
+  dialog.close();
+  await waitFor(() => !document.body.classList.contains('settings-open'));
+  await toast.updateComplete;
+
+  expect(toast.textContent).to.contain('Forgot: one');
+  expect(toast.querySelector('button')?.textContent?.trim()).to.equal('Undo');
+});
+
+describe('on a phone', () => {
+  let unlink: () => void;
+  before(async () => {
+    await setViewport({width: 390, height: 844});
+    unlink = await linkStyles([
+      '../design-system/index.css',
+      '../styles/layout.css',
+      '../styles/settings.css',
+      '../styles/settings-dialog.module.css',
+      '../styles/settings-page.module.css',
+      '../styles/settings-memory.module.css',
+      '../styles/settings-connections.module.css',
+    ].map((href) => new URL(href, import.meta.url).href));
   });
-  const localToast = settings.querySelector('dl-toast-region')!;
-  await localToast.updateComplete;
-  buttonNamed(localToast, 'Undo')!.click();
-  await waitFor(() => undoCalls === 1);
-  settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
-  await waitFor(() => settings.querySelector('dl-toast-region') === null);
-  const shellToast = document.querySelector('dl-toast-region')!;
-  expect(buttonNamed(shellToast, 'Undo')).to.equal(null);
-  if (reopen) await settings.open();
-  const visibleToast = reopen ? settings.querySelector('dl-toast-region')! : shellToast;
-  releaseUndo(Response.json({action: 'undo', outcome: 'changed', change_id: 'undo-slow', memory_ids: [], body: ''}));
-  await waitFor(() => visibleToast.textContent?.trim() === 'Profile Memory change undone.');
-  expect(buttonNamed(shellToast, 'Undo')).to.equal(null);
-  expect(buttonNamed(visibleToast, 'Undo')).to.equal(null);
-  expect(undoCalls).to.equal(1);
+  after(async () => {
+    unlink();
+    await setViewport(originalViewport);
+  });
+
+  const visible = (element: Element): boolean => element.getClientRects().length > 0;
+
+  it('opens on the section list with the page out of sight, and the first row focused', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    const dialog = await openSettings(settings);
+
+    expect(visible(settings.querySelector('nav')!)).to.equal(true);
+    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
+    expect(document.activeElement).to.equal(rows(settings)[0]);
+    // The list shows no page, so no row of it is "current".
+    expect(rows(settings).some((item) => item.hasAttribute('aria-current'))).to.equal(false);
+    expect(dialog.open).to.equal(true);
+  });
+
+  it('opens a page from the list, takes the reader to its title, and Back returns to the row it left', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings);
+    const memory = row(settings, 'memory');
+
+    memory.click();
+    await settings.updateComplete;
+    const title = settings.querySelector<HTMLElement>('#settings-page-title')!;
+    expect(visible(settings.querySelector('nav')!)).to.equal(false);
+    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(true);
+    expect(title.textContent).to.equal('Profile Memory');
+    expect(document.activeElement).to.equal(title);
+    expect(memory.getAttribute('aria-current')).to.equal('page');
+
+    const back = [...settings.querySelectorAll<HTMLElement>('dl-icon-button')]
+      .find((button) => button.getAttribute('aria-label') === 'Back')!;
+    expect(visible(back)).to.equal(true);
+    back.click();
+    await settings.updateComplete;
+
+    expect(visible(settings.querySelector('nav')!)).to.equal(true);
+    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(false);
+    expect(document.activeElement).to.equal(memory);
+    expect(memory.hasAttribute('aria-current')).to.equal(false);
+  });
+
+  it('opens straight on a page it is asked for, with the list one Back away', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    await openSettings(settings, 'connections');
+
+    expect(visible(settings.querySelector('nav')!)).to.equal(false);
+    expect(visible(settings.querySelector('[role="region"]')!)).to.equal(true);
+    expect(document.activeElement).to.equal(settings.querySelector('#settings-page-title'));
+  });
+
+  it('fills the screen with square corners, and every control a finger meets is 44px or more', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    const dialog = await openSettings(settings);
+
+    const box = dialog.getBoundingClientRect();
+    expect([box.x, box.y, box.width, box.height]).to.deep.equal([0, 0, 390, 844]);
+    expect(getComputedStyle(dialog).borderRadius).to.equal('0px');
+    const small = (element: Element): boolean => {
+      const rect = element.getBoundingClientRect();
+      return rect.width < 43.5 || rect.height < 43.5;
+    };
+    const named = (name: string): HTMLElement => [...settings.querySelectorAll<HTMLElement>('dl-icon-button')]
+      .find((button) => button.getAttribute('aria-label') === name)!;
+    expect(rows(settings).filter(small)).to.deep.equal([]);
+    expect(small(named('Close settings'))).to.equal(false);
+
+    row(settings, 'language').click();
+    await settings.updateComplete;
+    expect(small(named('Back'))).to.equal(false);
+    expect(small(named('Close settings'))).to.equal(false);
+  });
+});
+
+describe('on a desktop', () => {
+  let unlink: () => void;
+  before(async () => {
+    await setViewport({width: 1280, height: 800});
+    unlink = await linkStyles([
+      '../design-system/index.css',
+      '../styles/layout.css',
+      '../styles/settings.css',
+      '../styles/settings-dialog.module.css',
+      '../styles/settings-page.module.css',
+      '../styles/settings-memory.module.css',
+    ].map((href) => new URL(href, import.meta.url).href));
+  });
+  after(async () => {
+    unlink();
+    await setViewport(originalViewport);
+  });
+
+  it('is a centered dialog with a fixed size, a hairline border, and a navigation column beside its page', async () => {
+    window.fetch = populated().fetch;
+    const {settings} = mountSettings();
+    const dialog = await openSettings(settings);
+
+    const box = dialog.getBoundingClientRect();
+    expect([box.width, box.height]).to.deep.equal([880, 640]);
+    expect(box.x + box.width / 2).to.be.closeTo(640, 1);
+    expect(box.y + box.height / 2).to.be.closeTo(400, 1);
+    const style = getComputedStyle(dialog);
+    expect(style.borderRadius).to.equal('22px');
+    expect(style.borderTopWidth).to.equal('1px');
+    const nav = settings.querySelector('nav')!.getBoundingClientRect();
+    const pane = settings.querySelector('[role="region"]')!.getBoundingClientRect();
+    expect(nav.right).to.be.at.most(pane.left + 1);
+    expect(nav.top).to.be.closeTo(pane.top, 1);
+
+    // Another page does not resize it.
+    row(settings, 'language').click();
+    await settings.updateComplete;
+    const after = dialog.getBoundingClientRect();
+    expect([after.width, after.height]).to.deep.equal([880, 640]);
+  });
+
+  it('opens every page at its top, and scrolls its own pane rather than the dialog', async () => {
+    const many = Array.from({length: 30}, (_, index) => ({id: `m${index}`, body: `Memory number ${index}`}));
+    window.fetch = wire({
+      'GET /web/api/memory/settings': () => memorySettings(true, 30),
+      'GET /web/api/memory': () => memoryPage(many),
+    }).fetch;
+    const {settings} = mountSettings();
+    const dialog = await openSettings(settings, 'memory');
+    await waitFor(() => settings.querySelectorAll('dl-settings-memory li').length === 30);
+    const body = settings.querySelector<HTMLElement>('[data-page-body]')!;
+
+    expect(body.scrollHeight).to.be.greaterThan(body.clientHeight);
+    expect(dialog.scrollHeight).to.equal(dialog.clientHeight);
+    body.scrollTop = 200;
+    expect(body.scrollTop).to.be.greaterThan(0);
+    row(settings, 'language').click();
+    await settings.updateComplete;
+    row(settings, 'memory').click();
+    await settings.updateComplete;
+
+    expect(body.scrollTop).to.equal(0);
+  });
 });

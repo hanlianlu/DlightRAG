@@ -93,126 +93,6 @@ button[data-load-older][aria-disabled='true'] {
     padding: 0;
 }
 
-/* === Settings Drawer === */
-
-.settings-dialog {
-    background: var(--color-bg-surface);
-    border: 0;
-    border-right: 1px solid var(--color-border-subtle);
-    border-radius: 0 var(--radius-docked) var(--radius-docked) 0;
-    box-shadow: var(--shadow-overlay);
-    color: var(--color-text-secondary);
-    font-family: var(--font-body);
-    height: 100dvh;
-    inset: 0 auto 0 0;
-    margin: 0;
-    max-height: none;
-    max-width: none;
-    overflow-y: auto;
-    padding: var(--space-section);
-    transform: translateX(-100%);
-    transition:
-        transform 200ms ease-out,
-        display 200ms allow-discrete,
-        overlay 200ms allow-discrete;
-    width: var(--layout-chat-sidebar-width);
-}
-
-.settings-dialog[open] {
-    transform: translateX(0);
-}
-
-@starting-style {
-    .settings-dialog[open] {
-        transform: translateX(-100%);
-    }
-}
-
-.settings-dialog::backdrop {
-    background: var(--color-scrim-strong);
-}
-
-.settings-drawer-body {
-    display: flex;
-    flex-direction: column;
-}
-
-.settings-header {
-    align-items: center;
-    display: flex;
-    gap: var(--space-tight);
-    margin-bottom: var(--space-section);
-}
-
-.settings-dialog h2 {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-subhead);
-    font-weight: 600;
-    line-height: var(--line-height-control);
-    margin: 0;
-}
-
-.settings-header h2 {
-    flex: 1;
-}
-
-.settings-close {
-    align-items: center;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-control);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    display: flex;
-    flex: 0 0 auto;
-    font-size: var(--font-size-body);
-    height: var(--size-button);
-    justify-content: center;
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1;
-    margin-left: auto;
-    padding: 0;
-    transition: background 0.15s, color 0.15s;
-    width: var(--size-button);
-}
-
-.settings-close:hover {
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-}
-
-.settings-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: var(--space-component);
-}
-
-.settings-memory-feedback.visible {
-    display: block;
-    padding-block: var(--space-component);
-}
-
-.settings-memory-feedback .toast-message {
-    overflow-wrap: anywhere;
-    white-space: normal;
-}
-
-.memory-list ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-
-.memory-list li {
-    border-bottom: 1px solid var(--color-border-subtle);
-    padding-block: var(--space-component);
-}
-
-.memory-list p {
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
-}
-
 .workspace-actions,
 .roster-execution-details {
     border-top: 1px solid var(--color-border-subtle);
@@ -220,7 +100,6 @@ button[data-load-older][aria-disabled='true'] {
     padding-top: var(--space-component);
 }
 
-.memory-list summary,
 .workspace-actions summary,
 .roster-execution-details summary {
     border-radius: var(--radius-control);
@@ -231,13 +110,11 @@ button[data-load-older][aria-disabled='true'] {
     width: fit-content;
 }
 
-.memory-list summary:hover,
 .workspace-actions summary:hover,
 .roster-execution-details summary:hover {
     color: var(--color-text-primary);
 }
 
-.memory-list summary:focus-visible,
 .workspace-actions summary:focus-visible,
 .roster-execution-details summary:focus-visible {
     outline: 2px solid var(--color-control-ring);
@@ -258,35 +135,6 @@ button[data-load-older][aria-disabled='true'] {
     line-height: var(--line-height-control);
 }
 
-.settings-section {
-    border-top: 1px solid var(--color-border-subtle);
-    padding-block: var(--space-section);
-}
-
-.settings-section:first-of-type {
-    border-top: 0;
-    padding-top: 0;
-}
-
-.settings-section h3 {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-body);
-    font-weight: 600;
-    line-height: var(--line-height-control);
-    margin-bottom: var(--space-component);
-}
-
-.settings-section p {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-control);
-    margin-block: var(--space-tight);
-}
-
-.settings-note {
-    font-size: var(--font-size-caption);
-}
-
 /* === Workspace Dialog === */
 
 .workspace-dialog {
@@ -304,12 +152,6 @@ button[data-load-older][aria-disabled='true'] {
 
 .workspace-dialog::backdrop {
     background: var(--color-scrim-strong);
-}
-
-@media (width <= 640px), (height <= 640px) and (width < 1200px) {
-    .settings-dialog {
-        width: 100vw;
-    }
 }
 
 .workspace-dialog-title {

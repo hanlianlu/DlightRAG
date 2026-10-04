@@ -23,3 +23,17 @@ export function buttonNamed<T extends HTMLElement = HTMLElement>(
     .find((button) => (button.getAttribute('aria-label') || button.textContent?.trim()) === name)
     ?? null;
 }
+
+/** Link stylesheets into the page and resolve once every one has loaded; returns how to remove them.
+ *  The suite loads no product CSS by itself, so a test about layout asks for the files it needs. */
+export async function linkStyles(urls: readonly string[]): Promise<() => void> {
+  const links = await Promise.all(urls.map(async (href) => new Promise<HTMLLinkElement>((resolve, reject) => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.addEventListener('load', () => { resolve(link); }, {once: true});
+    link.addEventListener('error', () => { reject(new Error(`could not load ${href}`)); }, {once: true});
+    document.head.appendChild(link);
+  })));
+  return () => { for (const link of links) link.remove(); };
+}

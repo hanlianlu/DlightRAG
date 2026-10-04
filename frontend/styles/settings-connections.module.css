@@ -7,63 +7,34 @@
     min-width: 0;
   }
 
-  /* ── MCP group header ── */
+  /* ── MCP label ── */
 
-  .groupRow {
+  .summary {
     align-items: center;
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-control);
-    color: inherit;
-    cursor: pointer;
     display: flex;
-    font: inherit;
-    gap: var(--space-inline);
-    padding: 0;
-    text-align: left;
-    width: 100%;
+    gap: var(--space-tight);
+    margin: 0;
+    padding-inline: var(--space-inline);
   }
 
-  .groupName {
+  .summaryName {
     color: var(--color-text-muted);
     font-size: var(--font-size-caption);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
-  .groupRow:hover .groupName {
-    color: var(--color-text-primary);
-  }
-
-  .groupMeta {
+  .summaryMeta {
     color: var(--color-text-subtle);
     font-size: var(--font-size-caption);
   }
 
-  /* Both disclosures are their row's last child and pin themselves there, so no
-   * optional sibling can move them. The box stays glyph-sized because it never
-   * takes a width: rotation pivots on the glyph, not on flexible row space. */
-  .groupChevron,
-  .chevron {
-    color: var(--color-text-dim);
-    display: flex;
-    flex-shrink: 0;
-    margin-inline-start: auto;
-    transition: transform var(--duration-control) var(--easing-standard);
-  }
-
-  .groupRow[aria-expanded='true'] .groupChevron {
-    transform: rotate(90deg);
-  }
-
   /* ── Connection card ── */
 
-  .card {
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-card);
+  .cards {
     display: grid;
+    gap: var(--space-tight);
     min-width: 0;
-    overflow: hidden;
   }
 
   .cardHeader {
@@ -89,14 +60,23 @@
     text-align: left;
   }
 
+  /* The disclosure is the row's last child and pins itself there, so no optional sibling can
+   * move it. The box stays glyph-sized because it never takes a width: rotation pivots on the
+   * glyph, not on flexible row space. */
+  .chevron {
+    color: var(--color-text-dim);
+    display: flex;
+    flex-shrink: 0;
+    margin-inline-start: auto;
+    transition: transform var(--duration-control) var(--easing-standard);
+  }
+
   .cardToggle[aria-expanded='true'] .chevron {
     transform: rotate(90deg);
   }
 
-  /* Both disclosures are full-bleed rows, so the keyboard ring sits inside the
-   * row: the card clips overflow at its own radius, and the group header reads
-   * the same way. */
-  .groupRow:focus-visible,
+  /* The row is full-bleed, so the keyboard ring sits inside it: the card clips overflow at its
+   * own radius. */
   .cardToggle:focus-visible {
     outline: 2px solid var(--color-control-ring);
     outline-offset: -2px;
@@ -106,7 +86,7 @@
     border-top: 1px solid var(--color-border-subtle);
     display: grid;
     gap: var(--space-component);
-    padding: var(--space-tight);
+    padding: var(--space-component);
   }
 
   .rowText {
@@ -150,6 +130,13 @@
     display: grid;
     gap: var(--space-tight);
     min-width: 0;
+  }
+
+  /* Label and endpoint sit side by side where the pane is wide, one under the other on a phone. */
+  .fields {
+    display: grid;
+    gap: var(--space-component);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
   }
 
   /* Starter fills: one click writes the label and endpoint, and implies the authentication tab. */
@@ -206,22 +193,20 @@
   }
 
   .endpointRow {
-    display: grid;
+    align-items: center;
+    display: flex;
     gap: var(--space-tight);
     min-width: 0;
   }
 
   .endpoint {
     color: var(--color-text-muted);
+    flex: 1;
     font-family: SFMono-Regular, Consolas, monospace;
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
+    min-width: 0;
     overflow-wrap: anywhere;
-  }
-
-  /* Form rows run full width like the inputs above them; the closing action trails instead. */
-  .blockAction {
-    width: 100%;
   }
 
   .actionsEnd {
@@ -231,33 +216,46 @@
     justify-content: flex-end;
   }
 
+  /* What deleting does on the left, the one way to do it on the right. */
   .dangerRow {
+    align-items: center;
     border-top: 1px solid var(--color-border-subtle);
     display: flex;
+    gap: var(--space-related);
+    padding-top: var(--space-component);
+  }
+
+  .dangerRow > :first-child {
+    flex: 1;
+  }
+
+  /* The create form's closing row: what happens next, then the action that does it. */
+  .footer {
+    align-items: center;
+    display: flex;
+    gap: var(--space-component);
+  }
+
+  .footer > :first-child {
+    flex: 1;
+  }
+
+  /* A credential field and its action share a row, and wrap under each other when the pane is narrow. */
+  .inline {
+    align-items: center;
+    display: flex;
     flex-wrap: wrap;
-    gap: var(--space-inline);
-    justify-content: flex-end;
-    padding-top: var(--space-tight);
+    gap: var(--space-tight);
+    min-width: 0;
   }
 
-  .sectionLabel {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-detail);
-    font-weight: 600;
+  .inlineInput {
+    flex: 1 1 10rem;
+    width: auto;
   }
 
-  .hint,
-  .note {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
-    line-height: var(--line-height-control);
-  }
-
-  .note {
-    background: var(--color-danger-surface);
-    border-radius: var(--radius-control);
-    color: var(--color-danger);
-    padding: var(--space-tight);
+  .inlineHint {
+    flex: 1 1 12rem;
   }
 
   /* ── Authentication ── */
@@ -268,6 +266,7 @@
     display: grid;
     grid-auto-columns: 1fr;
     grid-auto-flow: column;
+    max-width: 19rem;
     min-width: 0;
     overflow: hidden;
   }
@@ -279,7 +278,7 @@
     color: var(--color-text-muted);
     cursor: pointer;
     font: inherit;
-    font-size: var(--font-size-caption);
+    font-size: var(--font-size-detail);
     min-width: 0;
     overflow: hidden;
     padding-block: var(--space-inline);
@@ -310,6 +309,7 @@
     font-size: var(--font-size-detail);
     gap: var(--space-tight);
     justify-content: center;
+    min-height: var(--size-button);
     padding-block: var(--space-tight);
     width: 100%;
   }
@@ -317,5 +317,31 @@
   .addRow:hover {
     background: var(--color-bg-hover);
     color: var(--color-text-primary);
+  }
+
+  .addRow:focus-visible {
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: -2px;
+  }
+
+  @media (width <= 720px), (height <= 480px) {
+    .fields {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .segmented {
+      max-width: none;
+    }
+
+    .cardToggle {
+      padding-block: var(--space-component);
+    }
+
+    /* The hint goes above a full-width Delete, so neither is squeezed beside the other. */
+    .dangerRow {
+      align-items: stretch;
+      flex-direction: column;
+      gap: var(--space-tight);
+    }
   }
 }

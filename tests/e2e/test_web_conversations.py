@@ -169,7 +169,21 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
         route.abort()
 
     page.route("**/web/api/conversations**", handle)
+    _install_quiet_settings_routes(page)
     return state
+
+
+def _install_quiet_settings_routes(page: Page) -> None:
+    """Connections empty and Profile Memory off, so the other Settings pages have nothing to say."""
+
+    def connections(route: Route) -> None:
+        route.fulfill(json={"revision": "0", "connections": [], "presets": []})
+
+    def memory(route: Route) -> None:
+        route.fulfill(json={"enabled": False, "active_count": None})
+
+    page.route("**/web/api/connections/mcp", connections)
+    page.route("**/web/api/memory/settings", memory)
 
 
 def _active_id(page: Page) -> str:
@@ -208,6 +222,13 @@ def _open_settings(page: Page) -> Locator:
     page.keyboard.press("Enter")
     dialog = page.get_by_role("dialog", name="Settings")
     dialog.wait_for()
+    return dialog
+
+
+def _open_settings_page(page: Page, name: str) -> Locator:
+    """Open Settings and choose one of its pages by the name of its navigation row."""
+    dialog = _open_settings(page)
+    dialog.get_by_role("button", name=name, exact=True).click()
     return dialog
 
 
@@ -586,7 +607,7 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     _new_conversation(page)
     assert len(state.conversations) == 3
 
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
     trigger = settings.get_by_role("button", name="Delete all conversations")
     assert settings.get_by_text("Conversations retain 365 days", exact=True).is_visible()
     assert settings.get_by_text("3 conversations", exact=True).is_visible()
@@ -611,7 +632,7 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     settings.get_by_role("button", name="Close settings").click()
 
     _add_draft_with_image(page, "discard this draft")
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
     settings.get_by_role("button", name="Delete all conversations").click()
     dialog.get_by_text("Draft and attachments will also be deleted.").wait_for()
     dialog.get_by_role("button", name="Delete all").click()
@@ -632,7 +653,7 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
     _new_conversation(page)
     _add_draft_with_image(page, "keep this draft")
 
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
     settings.get_by_role("button", name="Delete all conversations").click()
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     danger = dialog.get_by_role("button", name="Delete all")
@@ -677,7 +698,7 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto("/web/")
-    settings = _open_settings(page)
+    settings = _open_settings_page(page, "Conversation Sessions")
 
     trigger = settings.get_by_role("button", name="Delete all conversations")
     trigger.focus()
@@ -1066,7 +1087,7 @@ def test_mobile_shell_keeps_primary_actions_reachable(
     assert settings_box is not None
     assert settings_box["width"] == pytest.approx(390, abs=1)
     _assert_touch_target(settings.get_by_role("button", name="Close settings"))
-    for control in settings.locator(".dl-dialog-checkbox").all():
+    for control in settings.locator(".dl-nav-item:visible").all():
         _assert_touch_target(control)
     page.keyboard.press("Escape")
     page.get_by_role("button", name="Close conversations").click()
