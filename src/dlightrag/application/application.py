@@ -14,6 +14,7 @@ from dlightrag.application.errors import ApplicationClosedError
 
 if TYPE_CHECKING:
     from dlightrag.application.access import AccessControl
+    from dlightrag.application.agent_accounts import AgentAccountMaintenance
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
@@ -70,6 +71,7 @@ class _ApplicationComponents:
     memory_embedder: Any
     web_conversations: WebConversationService
     connections: Connections | None = None
+    agent_account_maintenance: AgentAccountMaintenance | None = None
     search_toolchain: Any | None = None
     model_catalogue: ModelCatalogueAdmin | None = None
     corpus_mutations: CorpusMutationService | None = None
@@ -194,6 +196,8 @@ class Application:
             await self._initialize_run_stores()
             if components.connections is not None:
                 await components.connections.start(validate_only=self._config.is_reader)
+            if components.agent_account_maintenance is not None:
+                components.agent_account_maintenance.start()
             await self._validate_active_runs()
             corpora_ready = await self._initialize_corpora()
             # Bind the retrieval-planner LLM; this does not make a model call.
@@ -518,6 +522,12 @@ class Application:
                 "Connection refresh",
                 components.connections.stop_refresh
                 if components.connections is not None
+                else _noop_close_process,
+            ),
+            (
+                "Agent Account maintenance",
+                components.agent_account_maintenance.aclose
+                if components.agent_account_maintenance is not None
                 else _noop_close_process,
             ),
             ("memory janitor", self._stop_memory_janitor),

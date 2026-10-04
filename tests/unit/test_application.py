@@ -300,6 +300,14 @@ class _WebConversations(_Collaborator):
         self._record("start_retention")
 
 
+class _Maintenance(_Collaborator):
+    def __init__(self, recorder: _Recorder) -> None:
+        super().__init__(recorder, "agent_account_maintenance")
+
+    def start(self) -> None:
+        self._record("start")
+
+
 class _Parts:
     """The fakes behind one Application, addressable by the test that wired them."""
 
@@ -323,6 +331,7 @@ class _Parts:
         self.memory = _Memory(self.recorder)
         self.web_conversations = _WebConversations(self.recorder)
         self.search_toolchain: _SearchToolchain | None = None
+        self.agent_account_maintenance: _Maintenance | None = None
 
     def application(
         self,
@@ -377,6 +386,7 @@ class _Parts:
                 memory_embedder=cast(Any, self.memory_embedder),
                 web_conversations=cast(WebConversationService, self.web_conversations),
                 search_toolchain=cast(Any, self.search_toolchain),
+                agent_account_maintenance=cast(Any, self.agent_account_maintenance),
                 close_agent_execution=self.agent_execution.aclose,
             ),
             web_enabled=web_enabled,
@@ -502,6 +512,28 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
 
     assert parts.recorder.closed() == _CLOSE_ORDER
     assert application.health.is_closed is True
+
+
+async def test_agent_account_maintenance_runs_from_the_stores_start_to_the_applications_close(
+    test_config: DlightragConfig,
+) -> None:
+    parts = _Parts()
+    parts.agent_account_maintenance = _Maintenance(parts.recorder)
+    application = parts.application(test_config)
+
+    await application.astart()
+
+    # It needs the table the run stores create, and runs before anything starts claiming Runs.
+    started = parts.recorder.started()
+    assert (
+        started.index("agent_account_maintenance:start")
+        == started.index("memory_store:initialize") + 1
+    )
+    assert started.index("agent_account_maintenance:start") < started.index("coordinator:start")
+
+    await application.aclose()
+
+    assert parts.recorder.closed()[0] == "close:agent_account_maintenance"
 
 
 async def test_close_stops_live_run_producer_before_execution_adapter(

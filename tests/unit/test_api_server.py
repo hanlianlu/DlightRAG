@@ -1404,13 +1404,24 @@ class TestHealthEndpoint:
             "state": "disabled",
             "endpoints": 0,
             "sandbox": True,
+            "accounts": False,
+            "mailbox": False,
         }
 
-        mock_application.health.set_agent_browser(endpoints=2, sandbox=False)
+        mock_application.health.set_agent_browser(
+            endpoints=2, sandbox=False, accounts=True, mailbox=True
+        )
         body = (await client.get("/health")).json()
-        # The count and the configured sandbox are all it says: a pool member's address stays
-        # inside the deployment, and whether a host can start the sandbox is never probed.
-        assert body["agent_browser"] == {"state": "configured", "endpoints": 2, "sandbox": False}
+        # The count, the configured sandbox and whether accounts and a mailbox are composed are
+        # all it says: a pool member's address and the bucket stay inside the deployment, and
+        # neither the sandbox nor the bucket is ever probed.
+        assert body["agent_browser"] == {
+            "state": "configured",
+            "endpoints": 2,
+            "sandbox": False,
+            "accounts": True,
+            "mailbox": True,
+        }
         probe.assert_not_awaited()
 
 

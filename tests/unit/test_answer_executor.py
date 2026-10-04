@@ -625,6 +625,9 @@ def test_a_deployment_offers_the_account_actions_it_allows_and_the_inbox_it_can_
         return set(browser.definition.parameters["properties"]["action"]["enum"])
 
     assert browser_actions(configured) & {"register", "login", "inbox"} == offered
+    # Health says what was composed, from the configuration alone.
+    health = _compose(configured).health.agent_browser
+    assert (health["accounts"], health["mailbox"]) == (registration, registration and mailbox)
     # A deployment with no Agent Browser has no browser tool, and so no account actions.
     assert browser_actions(test_config) == set()
 
@@ -762,6 +765,8 @@ def test_a_deployment_reports_the_chromium_sandbox_it_configures_for_its_agent_b
         "state": "configured",
         "endpoints": 1,
         "sandbox": sandbox,
+        "accounts": True,
+        "mailbox": False,
     }
 
 

@@ -61,11 +61,15 @@ class AgentBrowserHealthResponse(_StatusModel):
     """The Agent Browser as configured; it never names the pool's endpoints.
 
     ``sandbox`` is the configured ``chromium_sandbox``, not a probe of what a host can start.
+    ``accounts`` and ``mailbox`` say whether Agent Accounts and an Agent Mailbox are composed,
+    not whether the bucket answers.
     """
 
     state: Literal["configured", "disabled"]
     endpoints: int = Field(ge=0)
     sandbox: bool
+    accounts: bool
+    mailbox: bool
 
 
 class HealthResponse(_StatusModel):

@@ -128,6 +128,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.runtime import PGRunBlobStore, PGRunStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.access import access_control_from_settings
+    from dlightrag.application.agent_accounts import AgentAccountMaintenance
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import (
@@ -217,10 +218,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
     health = ApplicationHealth(readiness_probe=PGReadinessProbe())
     health.set_agent_shell_confinement(confinement_state(config.answer.agent.execution_environment))
-    health.set_agent_browser(
-        endpoints=len(config.answer.agent.browser.endpoints),
-        sandbox=config.answer.agent.browser.chromium_sandbox,
-    )
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
     corpus_backend = build_pg_corpus_backend(config)
@@ -445,6 +442,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             else None,
         )
 
+    accounts = None if agent_browser is None else agent_browser.accounts
+    health.set_agent_browser(
+        endpoints=len(config.answer.agent.browser.endpoints),
+        sandbox=config.answer.agent.browser.chromium_sandbox,
+        accounts=accounts is not None,
+        mailbox=accounts is not None and accounts.mailbox is not None,
+    )
+
     answer_executor = AnswerExecutor(
         store=run_store,
         blob_store=run_blob_store,
@@ -605,6 +610,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     return _ApplicationComponents(
         connections=connections,
+        # A writer re-seals Agent Account envelopes whatever its browser configuration, since
+        # envelopes sealed earlier must still follow a rotation; a reader writes nothing.
+        agent_account_maintenance=None
+        if config.is_reader
+        else AgentAccountMaintenance(store=PGAgentAccountStore(), cipher=cipher),
         health=health,
         capabilities=capabilities,
         model_catalogue=model_catalogue,
