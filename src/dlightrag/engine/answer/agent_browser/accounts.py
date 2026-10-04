@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import tldextract
 from pydantic import SecretStr
 
-from dlightrag.engine.answer.agent_browser.mailbox import AgentMailbox
+from dlightrag.engine.answer.agent_browser.mailbox import AgentMailbox, InboxWindow
 from dlightrag.engine.credential_cipher import CredentialCipher, UnreadableEnvelope
 
 #: An account's envelope is sealed under this label, so it never opens as a Connection Grant.
@@ -159,16 +159,6 @@ class AgentAccountStore(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class InboxWindow:
-    """The mail an Agent Session may read: what its aliases received since it last signed in."""
-
-    since: datetime
-    """When the Session last registered or logged in, in UTC."""
-    aliases: tuple[str, ...]
-    """The Agent Mailbox addresses of the accounts it has used in this Run."""
-
-
-@dataclass(frozen=True, slots=True)
 class AgentAccountsBinding:
     """What a deployment composed for Agent Accounts: where they are kept, the key ring, and the
     Agent Mailbox that delivers their mail, when it has one."""
@@ -261,7 +251,7 @@ class SessionAccounts:
         aliases = self._window.aliases if self._window is not None else ()
         if (alias := self.alias(account)) is not None and alias not in aliases:
             aliases = (*aliases, alias)
-        self._window = InboxWindow(datetime.now(UTC), aliases)
+        self._window = InboxWindow(self._mailbox, datetime.now(UTC), aliases)
 
     def inbox_window(self) -> InboxWindow | None:
         """The window the Session reads mail through, or None before it has signed in."""
@@ -367,7 +357,6 @@ __all__ = [
     "AgentAccountStore",
     "AgentAccountsBinding",
     "ChildAccount",
-    "InboxWindow",
     "RunAgentAccounts",
     "SessionAccounts",
     "StoredAgentAccount",

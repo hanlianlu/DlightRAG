@@ -16,11 +16,17 @@ from aiobotocore.session import AioSession
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from dlightrag.engine.answer.agent_browser import AgentMailboxError, MailListing, MailObject
+from dlightrag.engine.answer.agent_browser import (
+    MAX_LISTED,
+    AgentMailboxError,
+    MailListing,
+    MailObject,
+)
 
-#: The pages of keys one listing reads. S3 returns 1,000 keys a page, so an alias with more than
-#: this many stored messages is read from its first 10,000 and reported as truncated.
-_MAX_PAGES = 10
+#: S3 returns at most this many keys a page.
+_PAGE_KEYS = 1000
+#: The pages of keys one listing reads, which hold the most messages a listing may read.
+_MAX_PAGES = MAX_LISTED // _PAGE_KEYS
 
 
 class S3AgentMailbox:

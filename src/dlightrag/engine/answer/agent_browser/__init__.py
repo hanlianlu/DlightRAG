@@ -9,7 +9,6 @@ from dlightrag.engine.answer.agent_browser.accounts import (
     AgentAccountsBinding,
     AgentAccountStore,
     ChildAccount,
-    InboxWindow,
     RunAgentAccounts,
     SessionAccounts,
     StoredAgentAccount,
@@ -48,11 +47,16 @@ from dlightrag.engine.answer.agent_browser.contracts import (
     page_failure,
 )
 from dlightrag.engine.answer.agent_browser.mailbox import (
+    INBOX_MESSAGE_BYTES,
+    INBOX_MESSAGES,
+    MAX_LISTED,
     AgentMailbox,
     AgentMailboxError,
+    InboxWindow,
     MailListing,
     MailObject,
     MailSummary,
+    inbox_text,
     summarize_mail,
 )
 from dlightrag.engine.answer.agent_browser.passwords import PASSWORD_MASK, FilledPasswords
@@ -60,7 +64,10 @@ from dlightrag.engine.answer.agent_browser.run import RunAgentBrowser
 
 __all__ = [
     "ACCOUNT_LABEL",
+    "INBOX_MESSAGES",
+    "INBOX_MESSAGE_BYTES",
     "MAX_DOWNLOADS_PER_CALL",
+    "MAX_LISTED",
     "MIN_PASSWORD_LENGTH",
     "PASSWORD_LENGTH",
     "PASSWORD_MASK",
@@ -105,6 +112,7 @@ __all__ = [
     "account_site",
     "browser_failure",
     "generate_password",
+    "inbox_text",
     "owner_alias",
     "page_failure",
     "reseal_agent_accounts",
