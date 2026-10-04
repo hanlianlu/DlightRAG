@@ -223,7 +223,7 @@ export class DlSettingsAgentAccounts extends LightElement {
       <table class=${styles.table}>
         <thead>
           <tr>
-            <th scope="col" class=${styles.cell}>${msg('Website', {id: 'agentAccounts.website'})}</th>
+            <th scope="col" class="${styles.cell} ${styles.websiteColumn}">${msg('Website', {id: 'agentAccounts.website'})}</th>
             <th scope="col" class=${styles.cell}>${msg('Sign-in', {id: 'agentAccounts.signIn'})}</th>
             <th scope="col" class="${styles.cell} ${styles.date} ${styles.registered}">${msg('Registered', {id: 'agentAccounts.registered'})}</th>
             <th scope="col" class="${styles.cell} ${styles.date}">${msg('Last sign-in', {id: 'agentAccounts.lastSignIn'})}</th>

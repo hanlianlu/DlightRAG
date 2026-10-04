@@ -50,11 +50,16 @@
     vertical-align: middle;
   }
 
+  /* A website is short and an address is long, so the address gets the larger share. */
+  .websiteColumn {
+    width: 30%;
+  }
+
   .date {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
     white-space: nowrap;
-    width: 5.5rem;
+    width: 5rem;
   }
 
   /* The remove button's cell is as wide as the control ladder's button and its own margin. */
