@@ -10,7 +10,11 @@ import pytest
 from pydantic import SecretStr
 
 from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
-from dlightrag.application.connections import ConnectionPolicy, ConnectionsError
+from dlightrag.application.connections import (
+    ConnectionPolicy,
+    ConnectionsError,
+    UnsupportedResultError,
+)
 from tests.support.dns import public_dns
 
 
@@ -324,3 +328,65 @@ async def test_foreground_argument_quota_rejects_before_any_transport():
             policy=ConnectionPolicy(max_call_argument_bytes=10),
         )
     assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_a_result_with_media_is_unsupported_unless_the_remote_tool_failed(
+    monkeypatch, is_error
+):
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", public_dns)
+
+    def handler(request):
+        body = json.loads(request.content)
+        if "id" not in body:
+            return httpx2.Response(202)
+        if body["method"] == "initialize":
+            result = {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake", "version": "1"},
+            }
+        else:
+            result = {
+                "content": [
+                    {"type": "text", "text": "saved"},
+                    {"type": "image", "data": "eA==", "mimeType": "image/png"},
+                    {"type": "image", "data": "eA==", "mimeType": "image/png"},
+                    {"type": "audio", "data": "eA==", "mimeType": "audio/wav"},
+                ],
+                "isError": is_error,
+            }
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    mcp = PersonalMcpClient(transport_factory=lambda: httpx2.MockTransport(handler))
+    with pytest.raises(ConnectionsError) as error:
+        await mcp.call(
+            endpoint="https://fixture.example/mcp",
+            bearer=None,
+            policy=ConnectionPolicy(call_timeout=5),
+            name="write",
+            arguments={},
+        )
+
+    if is_error:
+        assert not isinstance(error.value, UnsupportedResultError)
+    else:
+        assert isinstance(error.value, UnsupportedResultError)
+        assert error.value.kinds == ("image", "audio")
+
+
+def test_an_unshowable_result_says_the_call_completed() -> None:
+    from types import SimpleNamespace
+
+    from dlightrag.application.connections.service import _unshowable_result
+
+    result = _unshowable_result(
+        SimpleNamespace(local_name="notion_search"),  # type: ignore[arg-type]
+        ("image", "audio"),
+    )
+
+    assert result.is_error
+    assert "notion_search completed" in result.text_content
+    assert "image, audio" in result.text_content
+    assert "unknown" not in result.text_content and "Do not retry" in result.text_content

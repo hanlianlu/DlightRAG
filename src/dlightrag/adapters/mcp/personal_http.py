@@ -16,7 +16,11 @@ from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import SecretStr
 
-from dlightrag.application.connections import ConnectionPolicy, ConnectionsError
+from dlightrag.application.connections import (
+    ConnectionPolicy,
+    ConnectionsError,
+    UnsupportedResultError,
+)
 from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.network_admission import (
     _normalize_host_patterns,
@@ -32,6 +36,17 @@ class _PrivateSdkLogs(logging.Filter):
         # SDK diagnostics may contain entire remote messages and OAuth values.
         # The owner module emits only redacted status, not SDK diagnostics.
         return not _PRIVATE_SESSION.get()
+
+
+def _unsupported_result(exc: BaseException) -> UnsupportedResultError | None:
+    """Find the unsupported-result signal an SDK task group may have wrapped in a group."""
+    if isinstance(exc, UnsupportedResultError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for inner in exc.exceptions:
+            if (found := _unsupported_result(inner)) is not None:
+                return found
+    return None
 
 
 def _protect_sdk_logs() -> None:
@@ -226,11 +241,20 @@ class PersonalMcpClient:
                 )
                 if len(result.content) > policy.max_result_parts:
                     raise ConnectionsError("MCP result part quota exceeded")
-                text = []
-                for part in result.content:
-                    if not isinstance(part, types.TextContent):
-                        raise ConnectionsError("MCP media result unsupported")
-                    text.append(part.text)
+                if result.is_error:
+                    # Remote errors may echo bearer values or private diagnostics.
+                    raise ConnectionsError("MCP remote tool failed")
+                text = [part.text for part in result.content if isinstance(part, types.TextContent)]
+                if len(text) < len(result.content):
+                    raise UnsupportedResultError(
+                        tuple(
+                            dict.fromkeys(
+                                part.type
+                                for part in result.content
+                                if not isinstance(part, types.TextContent)
+                            )
+                        )
+                    )
                 if result.structured_content is not None:
                     text.append(json.dumps(result.structured_content, ensure_ascii=False))
                 content = "\n".join(text)
@@ -238,13 +262,12 @@ class PersonalMcpClient:
                     content = content.replace(bearer.get_secret_value(), "[redacted]")
                 if len(content.encode()) > policy.max_result_bytes:
                     raise ConnectionsError("MCP result quota exceeded")
-                if result.is_error:
-                    # Remote errors may echo bearer values or private diagnostics.
-                    raise ConnectionsError("MCP remote tool failed")
                 return ToolResult.text(content)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            if (unsupported := _unsupported_result(exc)) is not None:
+                raise unsupported from None
             if transport.authentication_failed:
                 raise ConnectionsError("MCP authentication failed", 401) from None
             raise ConnectionsError("MCP call failed; outcome may be unknown") from None

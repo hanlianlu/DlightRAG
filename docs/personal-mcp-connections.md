@@ -460,7 +460,8 @@ Connection `needs-auth`.
   each JSON-RPC request id once, and sends at most one `tools/call`, so neither
   a redirect nor a stream resumption can resend an effect.
 - A result may hold at most `max_result_parts` parts, all text; image, audio,
-  and resource parts fail the call. Structured content is appended as JSON, the
+  and resource parts fail the call, and the failed result says the call completed and
+  names the content kinds rather than reporting an unknown outcome. Structured content is appended as JSON, the
   bearer value is redacted, and text larger than `max_result_bytes` fails the
   call. A remote error result becomes a failed call without its remote text.
   Accepted text follows the preview-or-spill rule shared by injected tools; with
