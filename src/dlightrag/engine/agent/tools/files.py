@@ -589,10 +589,15 @@ def view_tool(
     return view_declaration().bind(execute)
 
 
-async def _write_rooted(
+async def _replace_file_held(
     environment: ExecutionEnvironment, scheduler: AccessScheduler, path: Path, data: bytes
 ) -> WorkspaceInventoryFacts | ToolResult:
-    """Replace one file with ``data`` under its path's write hold, and report what is on disk."""
+    """Replace one file with ``data`` under its path's write hold.
+
+    The latch is checked again once the hold is taken, because a Bash command that held the
+    workspace first may have latched it. The result is the inventory fact of what is on disk,
+    or the refusal that stopped the write.
+    """
     async with scheduler.hold(PathAccess(path=str(path), kind="write")):
         if blocked := workspace_integrity_refusal(environment):
             return blocked
@@ -626,7 +631,7 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
         canonical = _workspace_relative_path(environment.root, path)
         await runtime.emit_update(ToolResult.text("", subject=_escape_path(canonical)))
         data = args.content.encode("utf-8")
-        inventory = await _write_rooted(environment, scheduler, path, data)
+        inventory = await _replace_file_held(environment, scheduler, path, data)
         if isinstance(inventory, ToolResult):
             return inventory
         return ToolResult.text(
@@ -694,7 +699,7 @@ def materialize_tool(
         admitted = await admitted_bytes_reader(args.resource_id, runtime)
         if isinstance(admitted, ToolResult):
             return admitted
-        inventory = await _write_rooted(environment, scheduler, path, admitted.content)
+        inventory = await _replace_file_held(environment, scheduler, path, admitted.content)
         if isinstance(inventory, ToolResult):
             return inventory
         return ToolResult.text(
