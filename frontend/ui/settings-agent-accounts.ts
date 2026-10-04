@@ -4,7 +4,8 @@
  * DlightRAG mints and seals every password, so this page has nothing secret to show or take: it
  * lists where the agent has an account, how it signs in there, and when, and it can remove one.
  * The view comes from one route and every command answers the fresh view, so the page holds no
- * state of its own beyond what is in flight.
+ * state of its own beyond what is in flight. A Run can register or sign in while Settings is
+ * open, so the page reads the view again every few seconds until the dialog closes.
  */
 
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
@@ -31,6 +32,8 @@ import {requestToast} from './toast-request.ts';
 
 /** The narrowest page, in rem, that has room for the table's five columns. */
 const TABLE_REM = 36;
+/** How long the page waits between reads while Settings is open. */
+const POLL_MILLISECONDS = 5000;
 
 /** The one sentence under the sign-up switch: the deployment's answer first, then the owner's. */
 function registrationCaption(view: AgentAccountsView): string {
@@ -64,7 +67,7 @@ export class DlSettingsAgentAccounts extends LightElement {
   };
 
   declare view: AgentAccountsView | null;
-  /** The first read failed; with a view in hand a failed reload only says so in a toast. */
+  /** No read has succeeded yet; once one has, a failed read keeps the view until a later one succeeds. */
   declare error: boolean;
   /** A command is in flight, so no second one starts. */
   declare pending: boolean;
@@ -72,6 +75,9 @@ export class DlSettingsAgentAccounts extends LightElement {
   declare removing: string | null;
 
   #events: AbortController | null = null;
+  #timer: ReturnType<typeof setTimeout> | undefined;
+  /** Counts reads and commands, so a read that a later one overtook changes nothing when it lands. */
+  #generation = 0;
   /** A table needs room for its columns: below this width each account is three lines instead. */
   readonly #narrow = new NarrowController(this, TABLE_REM);
 
@@ -93,6 +99,7 @@ export class DlSettingsAgentAccounts extends LightElement {
   override disconnectedCallback(): void {
     this.#events?.abort();
     this.#events = null;
+    clearTimeout(this.#timer);
     super.disconnectedCallback();
   }
 
@@ -102,22 +109,33 @@ export class DlSettingsAgentAccounts extends LightElement {
     }
   }
 
+  /** Read the view, then read it again after a while; a read or command that overtakes this one
+   * takes over the schedule too. */
   async #load(): Promise<void> {
     const signal = this.#events?.signal;
     if (!signal || signal.aborted) return;
+    const generation = this.#supersede();
     try {
       const view = await getAgentAccounts(signal);
-      if (signal.aborted) return;
+      if (signal.aborted || generation !== this.#generation) return;
       this.view = view;
       this.error = false;
     } catch {
-      if (signal.aborted) return;
-      if (this.view) {
-        requestToast(this, {message: msg('Could not load agent accounts.', {id: 'agentAccounts.loadFailed'}), duration: 3000});
-      } else {
-        this.error = true;
-      }
+      if (signal.aborted || generation !== this.#generation) return;
+      if (!this.view) this.error = true;
     }
+    this.#schedule();
+  }
+
+  /** Start a read or command: the next read waits, and one still in flight is ignored when it lands. */
+  #supersede(): number {
+    clearTimeout(this.#timer);
+    return ++this.#generation;
+  }
+
+  #schedule(): void {
+    clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => { void this.#load(); }, POLL_MILLISECONDS);
   }
 
   #retry = (): void => {
@@ -131,6 +149,7 @@ export class DlSettingsAgentAccounts extends LightElement {
     const toggle = event.currentTarget as HTMLElement;
     if (!signal || signal.aborted || !view || this.pending) return;
     const focused = document.activeElement === toggle;
+    this.#supersede();
     this.pending = true;
     try {
       const fresh = await setAgentAccountRegistration(!view.registration.enabled, signal);
@@ -142,6 +161,7 @@ export class DlSettingsAgentAccounts extends LightElement {
     } finally {
       if (!signal.aborted) {
         this.pending = false;
+        this.#schedule();
         await this.updateComplete;
         // A switch that was disabled for the request drops focus in some engines; give it back.
         if (focused) toggle.focus();
@@ -159,6 +179,7 @@ export class DlSettingsAgentAccounts extends LightElement {
     this.removing = null;
     if (outcome !== 'remove' || signal.aborted) return;
     const index = this.view?.accounts.findIndex((item) => item.site === account.site) ?? 0;
+    this.#supersede();
     this.pending = true;
     try {
       this.view = await removeAgentAccount(account.site, signal);
@@ -170,6 +191,7 @@ export class DlSettingsAgentAccounts extends LightElement {
     } finally {
       if (!signal.aborted) {
         this.pending = false;
+        this.#schedule();
         await this.updateComplete;
         // The row the reader was on is gone: land on the one that took its place, else on the switch,
         // else (it is off for the deployment) on the note that there is nothing left.

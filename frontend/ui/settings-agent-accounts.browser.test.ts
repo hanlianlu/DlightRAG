@@ -18,6 +18,7 @@ import './settings-agent-accounts.ts';
 import type {SettingsSummary} from './settings-summary.ts';
 
 const originalFetch = window.fetch;
+const originalSetTimeout = window.setTimeout;
 
 /** A page wide enough for the table, and one too narrow for it (the line is 36rem, 576px). */
 const WIDE = 700;
@@ -51,6 +52,7 @@ function csrfCookie(token: string | null): void {
 
 afterEach(async () => {
   window.fetch = originalFetch;
+  window.setTimeout = originalSetTimeout;
   document.body.replaceChildren();
   document.body.className = '';
   csrfCookie(null);
@@ -199,6 +201,74 @@ it('says it could not load, offers Retry, and shows the accounts once a retry re
   expect(feature.querySelector('[role="alert"]')).to.equal(null);
   expect(reads).to.equal(2);
   expect(api.unexpected).to.deep.equal([]);
+});
+
+describe('while Settings stays open', () => {
+  /** Every wait the page asks for passes at once, so its next read comes without the real interval. */
+  function waitsPassAtOnce(): void {
+    window.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 0)) as typeof window.setTimeout;
+  }
+
+  it('reads the list again, so an account a Run registers meanwhile shows up, in the dialog\'s count too', async () => {
+    const heard: SettingsSummary[] = [];
+    document.body.addEventListener('dl-settings-summary', (event) => { heard.push(event.detail); });
+    let reads = 0;
+    waitsPassAtOnce();
+    const {feature, api} = await shown({
+      'GET /web/api/agent-accounts': () => {
+        reads += 1;
+        return Response.json(agentAccountsView(reads === 1 ? [] : ACCOUNTS.slice(0, 1)));
+      },
+    });
+
+    await waitFor(() => feature.querySelectorAll('tbody tr').length === 1);
+    expect(heard[0]).to.deep.equal({section: 'agent-accounts', count: 0});
+    expect(heard.at(-1)).to.deep.equal({section: 'agent-accounts', count: 1});
+    expect(api.unexpected).to.deep.equal([]);
+  });
+
+  it('keeps the list and says nothing when a later read fails', async () => {
+    const heard = notices();
+    let reads = 0;
+    waitsPassAtOnce();
+    const {feature} = await shown({
+      'GET /web/api/agent-accounts': () => {
+        reads += 1;
+        return reads === 1 ? Response.json(agentAccountsView(ACCOUNTS)) : new Response('unavailable', {status: 503});
+      },
+    });
+
+    await waitFor(() => reads >= 3);
+    expect(feature.querySelectorAll('tbody tr')).to.have.length(4);
+    expect(feature.querySelector('[role="alert"]')).to.equal(null);
+    expect(heard).to.deep.equal([]);
+  });
+
+  it('lets no read that a command overtook undo what the command answered', async () => {
+    // Each wait is held, so the page reads again only when the test lets it.
+    const waits: TimerHandler[] = [];
+    window.setTimeout = ((handler: TimerHandler) => waits.push(handler)) as typeof window.setTimeout;
+    let reads = 0;
+    let answerSlowRead = (): void => {};
+    const {feature} = await shown({
+      'GET /web/api/agent-accounts': async () => {
+        reads += 1;
+        // Sent before the owner's PUT, the second read answers after it, with what was true before.
+        if (reads === 2) await new Promise<void>((resolve) => { answerSlowRead = resolve; });
+        return Response.json(agentAccountsView(ACCOUNTS, {allowed: true, enabled: true}));
+      },
+      'PUT /web/api/agent-accounts/settings': () => Response.json(agentAccountsView(ACCOUNTS, {allowed: true, enabled: false})),
+    });
+
+    (waits.shift() as () => void)();
+    await waitFor(() => reads === 2);
+    registration(feature).click();
+    await waitFor(() => registration(feature).getAttribute('aria-checked') === 'false' && !registration(feature).disabled);
+    answerSlowRead();
+    for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+
+    expect(registration(feature).getAttribute('aria-checked')).to.equal('false');
+  });
 });
 
 describe('the sign-up switch', () => {
