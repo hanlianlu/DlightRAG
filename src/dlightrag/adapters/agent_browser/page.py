@@ -71,9 +71,10 @@ _DEFAULT_VIEWPORT_HEIGHT = 720
 class PlaywrightAgentPage:
     """An anonymous context of the Run's browser with one active page.
 
-    A popup or a new tab becomes the active page once the call that opened it has acted,
-    so a ref always acts on the page it came from. A download, a dialog, and the answer of
-    a navigation are noted as they happen and reported by the next call that returns.
+    A popup or a new tab becomes the active page once the call that opened it has acted, or,
+    when it opens later, when the next call that names no ref begins; a call that names a ref
+    acts on the page the ref came from. A download, a dialog, and the answer of a navigation
+    are noted as they happen and reported by the next call that returns.
     """
 
     def __init__(
@@ -109,7 +110,7 @@ class PlaywrightAgentPage:
         return pages[-1].url if pages else None
 
     async def navigate(self, url: str) -> PageObservation:
-        page = await self._page_to_navigate()
+        page, adopted = await self._page_to_navigate()
         # A URL that answers with a file starts a download instead of loading a page.
         downloading = False
         try:
@@ -124,10 +125,10 @@ class PlaywrightAgentPage:
                     "the page",
                     timed_out=browser_failure("timeout", seconds=self._nav_seconds),
                 ) from exc
-        return await self._after(page, expecting_events=downloading)
+        return await self._after(page, adopted=adopted, expecting_events=downloading)
 
     async def back(self) -> PageObservation:
-        page = self._begin()
+        page, adopted = self._start()
         before = page.url
         try:
             response = await page.go_back(
@@ -144,11 +145,14 @@ class PlaywrightAgentPage:
         # A step back inside the same document answers nothing, and still moved the page.
         if response is None and page.url == before:
             raise page_failure("no_history")
-        return await self._after(page)
+        return await self._after(page, adopted=adopted)
 
     async def snapshot(self) -> PageObservation:
         page, events = self._observing()
-        return await self._observation(page, events, settle=events.new_page)
+        if events.new_page:
+            # A popup the call adopted is still loading.
+            await self._settle(page, self._settle_deadline())
+        return await self._observation(page, events)
 
     async def find(self, query: str, *, limit: int) -> FoundElements:
         page, events = self._observing()
@@ -165,7 +169,7 @@ class PlaywrightAgentPage:
     async def wait(
         self, *, text: str | None, text_gone: str | None, seconds: float | None
     ) -> PageObservation:
-        page = self._begin()
+        page, adopted = self._start()
         if seconds is not None:
             await asyncio.sleep(seconds)
         else:
@@ -189,7 +193,7 @@ class PlaywrightAgentPage:
                         seconds=self._nav_seconds,
                     ),
                 ) from exc
-        return await self._after(page)
+        return await self._after(page, adopted=adopted)
 
     async def click(self, ref: str) -> PageObservation:
         page = self._begin()
@@ -227,7 +231,7 @@ class PlaywrightAgentPage:
         return await self._after(page, expecting_events=True)
 
     async def press(self, key: str, *, ref: str | None) -> PageObservation:
-        page = self._begin()
+        page, adopted = self._start(ref)
         element = None if ref is None else await self._element(page, ref)
         try:
             if element is None:
@@ -245,10 +249,10 @@ class PlaywrightAgentPage:
                 ref=ref,
                 verb="pressed",
             ) from exc
-        return await self._after(page, expecting_events=True)
+        return await self._after(page, adopted=adopted, expecting_events=True)
 
     async def scroll(self, *, direction: Literal["up", "down"], ref: str | None) -> PageObservation:
-        page = self._begin()
+        page, adopted = self._start(ref)
         element = None if ref is None else await self._element(page, ref)
         viewport = page.viewport_size
         height = viewport["height"] if viewport else _DEFAULT_VIEWPORT_HEIGHT
@@ -267,7 +271,7 @@ class PlaywrightAgentPage:
                 ref=ref,
                 verb="scrolled",
             ) from exc
-        return await self._after(page)
+        return await self._after(page, adopted=adopted)
 
     async def upload(self, ref: str, files: tuple[UploadFile, ...]) -> PageObservation:
         page = self._begin()
@@ -375,22 +379,33 @@ class PlaywrightAgentPage:
             raise page_failure("page_closed" if self._browser.is_connected() else "disconnected")
         return self._pages[-1]
 
-    async def _page_to_navigate(self) -> Page:
-        """The active page, or a fresh one when the last page closed."""
+    def _start(self, ref: str | None = None) -> tuple[Page, bool]:
+        """The page a call starts on, and whether it began on a popup it adopted.
+
+        A call that names a ref acts on the page the ref came from. Any other call acts on
+        the newest page, a popup that opened since the last call included.
+        """
+        if ref is not None:
+            return self._begin(), False
+        page, events = self._observing()
+        return page, events.new_page
+
+    async def _page_to_navigate(self) -> tuple[Page, bool]:
+        """The newest page, a popup that opened since the last call included, or a fresh one
+        when none is open."""
         self._statuses.clear()
-        self._pages = self._open_pages()
-        if self._pages:
-            return self._pages[-1]
-        try:
-            page = await self._context.new_page()
-        except PlaywrightError as exc:
-            raise self._failure(exc, None, "open", "a page") from exc
-        self._pages.append(page)
-        self._watch(page)
-        return page
+        adopted = self._take_popups()
+        if not self._pages:
+            try:
+                page = await self._context.new_page()
+            except PlaywrightError as exc:
+                raise self._failure(exc, None, "open", "a page") from exc
+            self._pages.append(page)
+            self._watch(page)
+        return self._pages[-1], adopted
 
     def _observing(self) -> tuple[Page, PageEvents]:
-        """The page a call that only looks at the page observes, and what changed since.
+        """The page a call that names no ref acts on or observes, and what changed since.
 
         A popup that opened since the last call is that page: nothing was asked of the old
         one, so there is no ref to keep acting on it.
@@ -398,12 +413,17 @@ class PlaywrightAgentPage:
         events = self._adopt(self._begin())
         return self._pages[-1], events
 
-    def _adopt(self, acted: Page) -> PageEvents:
-        """Make the newest popup the active page, or note that ``acted`` closed."""
+    def _take_popups(self) -> bool:
+        """Make the popups that opened since the last call pages of this one, the newest
+        active, and say whether there were any."""
         popups = [popup for popup in self._popups if not popup.is_closed()]
         self._popups.clear()
         self._pages = [*self._open_pages(), *popups]
-        if popups:
+        return bool(popups)
+
+    def _adopt(self, acted: Page) -> PageEvents:
+        """Make the newest popup the active page, or note that ``acted`` closed."""
+        if self._take_popups():
             return PageEvents(new_page=True)
         if acted.is_closed():
             return PageEvents(returned=True) if self._pages else PageEvents(closed=True)
@@ -411,45 +431,64 @@ class PlaywrightAgentPage:
 
     # -- what a call returns -------------------------------------------------------------------
 
-    async def _after(self, acted: Page, *, expecting_events: bool = False) -> PageObservation:
-        """What an acting call left, once its page has settled.
+    async def _after(
+        self, acted: Page, *, adopted: bool = False, expecting_events: bool = False
+    ) -> PageObservation:
+        """What an acting call left, once the pages it touched have settled.
 
         ``expecting_events`` is for a call that may have opened a popup or started a
-        download, which the pages announce a moment after the action returns.
+        download, which the pages announce a moment after the action returns. The page the
+        call acted on settles before popups are adopted, so one it opened while that page
+        loaded is reported by this call. ``adopted`` says the call began on a popup.
         """
         if expecting_events:
             await asyncio.sleep(_EVENT_GRACE_SECONDS)
+        deadline = self._settle_deadline()
+        await self._settle(acted, deadline)
         events = self._adopt(acted)
+        if adopted and not (events.returned or events.closed):
+            events = replace(events, new_page=True)
+        if events.new_page:
+            # A popup is still loading, and may close itself while it does.
+            popup = self._pages[-1]
+            await self._settle(popup, deadline)
+            if popup.is_closed():
+                events = self._adopt(popup)
         if events.closed:
+            # Every page closes with a browser that is gone, though Playwright flags the
+            # browser disconnected one loop turn after it closes the pages.
+            await asyncio.sleep(0)
+            if not self._browser.is_connected():
+                raise page_failure("disconnected")
             return PageObservation(None, await self._deliver(events, None), None)
-        return await self._observation(self._pages[-1], events, settle=True, acted=True)
+        return await self._observation(self._pages[-1], events, acted=True)
 
     async def _observation(
-        self, page: Page, events: PageEvents, *, settle: bool, acted: bool = False
+        self, page: Page, events: PageEvents, *, acted: bool = False
     ) -> PageObservation:
         """The page's state and snapshot, and what the pages did around the call.
 
-        A page the call opened is still loading, so ``settle`` waits for it first. After an
-        action ``acted`` says in a failure that the action itself completed.
+        After an action ``acted`` says in a failure that the action itself completed.
         """
-        if settle:
-            await self._settle(page)
         where = "the page (the action itself completed)" if acted else "the page"
         state = await self._state(page, where)
         tree = await self._tree(page, depth=self._limits.snapshot_depth, where=where)
         return PageObservation(state, await self._deliver(events, page), tree)
 
-    async def _settle(self, page: Page) -> None:
-        """Wait, within one budget, for the page to load and go quiet.
+    def _settle_deadline(self) -> float:
+        return time.monotonic() + self._limits.settle_timeout
 
-        A page that never does is read as it stands.
+    async def _settle(self, page: Page, deadline: float) -> None:
+        """Wait until ``deadline`` for the page to load and go quiet.
+
+        A page that never does is read as it stands. One that closes, or a browser that
+        disconnects, while it is waited for is reported by what reads the page next.
         """
-        deadline = time.monotonic() + self._limits.settle_timeout
         for state in ("domcontentloaded", "networkidle"):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
-            with suppress(PlaywrightTimeoutError):
+            with suppress(PlaywrightError):
                 await page.wait_for_load_state(state, timeout=milliseconds(remaining))
 
     async def _state(self, page: Page, where: str) -> PageState:
@@ -505,10 +544,15 @@ class PlaywrightAgentPage:
         """Copy a download over the protocol, stopping once it is over the limit.
 
         The copy lives in a directory of its own for as long as this takes, and the pool's
-        copy is deleted whatever the outcome.
+        copy is deleted whatever the outcome. A copy this process cannot make, write, or read
+        is a refusal like any other, so the call's other downloads still count.
         """
         name = download.suggested_filename
-        directory = Path(tempfile.mkdtemp(prefix=_DOWNLOAD_DIRECTORY_PREFIX))
+        try:
+            directory = Path(tempfile.mkdtemp(prefix=_DOWNLOAD_DIRECTORY_PREFIX))
+        except OSError:
+            await _discard(download)
+            return DownloadRefusal(name, "failed")
         target = directory / "download"
         copy = asyncio.ensure_future(download.save_as(target))
         try:
@@ -519,13 +563,15 @@ class PlaywrightAgentPage:
                             return DownloadRefusal(name, "too_large")
                         await asyncio.wait({copy}, timeout=_DOWNLOAD_POLL_SECONDS)
                     copy.result()
+                if _size(target) > self._limits.max_download_bytes:
+                    return DownloadRefusal(name, "too_large")
+                return DownloadedFile(
+                    download.url, name, await asyncio.to_thread(target.read_bytes)
+                )
             except TimeoutError:
                 return DownloadRefusal(name, "timeout")
-            except PlaywrightError:
+            except PlaywrightError, OSError:
                 return DownloadRefusal(name, "failed")
-            if _size(target) > self._limits.max_download_bytes:
-                return DownloadRefusal(name, "too_large")
-            return DownloadedFile(download.url, name, await asyncio.to_thread(target.read_bytes))
         finally:
             copy.cancel()
             await asyncio.gather(copy, return_exceptions=True)

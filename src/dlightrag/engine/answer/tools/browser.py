@@ -638,10 +638,13 @@ class _Call:
                     return ToolResult.text(
                         UPLOAD_NOT_FILE.format(path=escape_path(name)), is_error=True
                     )
+                # A file is measured before it is read, so one that is too big is never loaded.
+                total += path.stat().st_size
+                if total > _MAX_UPLOAD_MIB * 1024 * 1024:
+                    return ToolResult.text(
+                        UPLOAD_TOO_BIG.format(limit=_MAX_UPLOAD_MIB), is_error=True
+                    )
                 content = environment.read_bytes(path)
-            total += len(content)
-            if total > _MAX_UPLOAD_MIB * 1024 * 1024:
-                return ToolResult.text(UPLOAD_TOO_BIG.format(limit=_MAX_UPLOAD_MIB), is_error=True)
             media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             files.append(UploadFile(path.name, media_type, content))
         return tuple(files)
@@ -708,7 +711,7 @@ class _Call:
         reasons = {
             "too_large": f"it exceeds {limits.max_download_bytes} bytes",
             "timeout": f"it did not finish within {limits.navigation_timeout:g} seconds",
-            "failed": "the browser reported it failed",
+            "failed": "it could not be downloaded",
             "limit": f"one call admits at most {MAX_DOWNLOADS_PER_CALL} downloads",
         }
         return [

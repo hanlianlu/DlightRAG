@@ -59,15 +59,19 @@ class RunServer:
 
 
 @asynccontextmanager
-async def run_server() -> AsyncIterator[RunServer]:
-    """Start a real run-server, as a pool container does, and yield it."""
+async def run_server(port: int = 0) -> AsyncIterator[RunServer]:
+    """Start a real run-server, as a pool container does, and yield it.
+
+    ``port`` is the one a server that was killed listened on, so a test can restart a pool
+    member at the endpoint its Run knows; 0 picks a free one.
+    """
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
         "playwright",
         "run-server",
         "--port",
-        "0",
+        str(port),
         "--host",
         "127.0.0.1",
         "--unsafe",

@@ -271,8 +271,9 @@ class AgentPage(Protocol):
     """An Agent Session's anonymous context in the Run's browser, driven as one active page.
 
     A call acts on the active page and answers with what it left. A popup or a new tab
-    becomes the active page only after the call that opened it, so a ref always acts on
-    the page it came from.
+    becomes the active page after the call that opened it, or at the start of the next call
+    that names no ref when it opened later; a call that names a ref acts on the page the ref
+    came from.
     """
 
     def current_url(self) -> str | None: ...

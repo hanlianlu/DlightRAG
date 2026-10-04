@@ -94,6 +94,42 @@ async def test_a_browser_whose_context_will_not_close_is_given_up_though_its_ren
     await browser.aclose()
 
 
+class _DeafBrowser(_WedgedBrowser):
+    """A browser that takes a request for a context and never answers it."""
+
+    async def new_context(self, **_options: object) -> _Context:
+        await asyncio.Event().wait()
+        raise AssertionError("a deaf browser answers nothing")
+
+
+async def test_a_browser_that_will_not_open_a_page_is_given_up_and_leased_afresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(leased_browser, "CLOSE_SECONDS", 0.05)
+    released: list[str] = []
+
+    async def release() -> None:
+        released.append("deaf")
+
+    deaf = _DeafBrowser()
+    healthy = FakeLease()
+    provider = FakeProvider(PlaywrightLeasedBrowser(cast(Any, deaf), release), healthy)
+    browser = RunAgentBrowser(provider, HOLDER, browser_settings())
+
+    with pytest.raises(AgentBrowserError) as lost:
+        # An open with no limit would hold the Run's browser lock, and every page and render
+        # waiting for it, for good.
+        async with asyncio.timeout(5):
+            await browser.with_page("parent", lambda page: page.navigate(PAGE), open_page=True)
+
+    assert lost.value.reason == "disconnected"
+    assert (deaf.closed, released) == (1, ["deaf"])
+
+    await browser.with_page("parent", lambda page: page.navigate(PAGE), open_page=True)
+    assert (provider.leased, len(healthy.pages)) == (2, 1)
+    await browser.aclose()
+
+
 async def test_an_agent_page_that_will_not_close_does_not_hold_the_run_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

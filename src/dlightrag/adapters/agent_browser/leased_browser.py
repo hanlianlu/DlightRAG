@@ -103,8 +103,15 @@ class PlaywrightLeasedBrowser:
         if not self._browser.is_connected():
             raise page_failure("disconnected")
         try:
-            context = await new_agent_context(self._browser, accept_downloads=True)
-            return await PlaywrightAgentPage.open(self._browser, context, limits)
+            # The Run holds its browser's lock while this waits, so a browser that does not
+            # answer must not hold every other page, render, and settlement with it.
+            async with asyncio.timeout(CLOSE_SECONDS):
+                context = await new_agent_context(self._browser, accept_downloads=True)
+                return await PlaywrightAgentPage.open(self._browser, context, limits)
+        except TimeoutError:
+            # A browser that does not answer is wedged, and the Run must not lease it again.
+            logger.warning("Failed to open an Agent Browser page in time")
+            raise page_failure("disconnected") from None
         except PlaywrightError as exc:
             if not self._browser.is_connected():
                 raise page_failure("disconnected") from exc

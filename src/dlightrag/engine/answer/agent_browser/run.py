@@ -37,7 +37,11 @@ _CONCURRENT_RENDERS = 4
 
 
 class RunAgentBrowser:
-    """The browser one Run leases lazily and shares across its Agent Sessions."""
+    """The browser one Run leases lazily and shares across its Agent Sessions.
+
+    A Run keeps its browser while any Agent Session has a page open; the idle clock starts
+    when none has and no render is in flight.
+    """
 
     def __init__(
         self,

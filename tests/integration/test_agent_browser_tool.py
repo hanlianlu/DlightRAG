@@ -8,14 +8,16 @@ tool answers. No database is needed: the Resources the tool admits go to a recor
 
 from __future__ import annotations
 
+import asyncio
 import re
 import tempfile
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -96,6 +98,12 @@ HUGE = (
     + "".join(f"<li>item {number:05d} of the long list</li>" for number in range(3000))
     + "</ul></body></html>"
 )
+# One button opens a popup that closes itself, another opens one after its call has returned.
+POPUPS = """<html><head><title>Popups</title></head><body>
+<button onclick="window.open('/flash')">Open flash</button>
+<button onclick="setTimeout(() => window.open('/late'), 600)">Open later</button></body></html>"""
+# The page this link opens loads an image whose request is held, so it never goes quiet.
+BUSY = '<html><head><title>Busy</title></head><body><a href="/slow">Open slow</a></body></html>'
 COOKIE = (
     "<html><head><title>Cookie</title></head><body><script>"
     "document.body.append('cookie=' + document.cookie); document.cookie = 'who=' + location.hash;"
@@ -129,6 +137,13 @@ PAGES = {
     f"{SHOP}/deep": Served(DEEP),
     f"{SHOP}/huge": Served(HUGE),
     f"{SHOP}/cookie": Served(COOKIE),
+    f"{SHOP}/popups": Served(POPUPS),
+    f"{SHOP}/flash": page(
+        "Flash", "<p>Flash popup</p><script>setTimeout(() => window.close(), 300)</script>"
+    ),
+    f"{SHOP}/late": page("Late", "<p>Late popup</p>"),
+    f"{SHOP}/busy": Served(BUSY),
+    f"{SHOP}/slow": page("Slow", "<p>Slow page</p><img src='/held' alt='held'>"),
     f"{SHOP}/signed?token=abc": page("Signed", "<p>Signed page</p>"),
     "http://alpha.example/": page("Alpha", "<p>Alpha stock</p>"),
     "http://beta.example/": page("Beta", "<p>Beta stock</p>"),
@@ -177,7 +192,7 @@ def ref_of(snapshot: str, text: str) -> str:
 async def browsing(
     pages: dict[str, Served] | None = None,
     *,
-    workspace: Path | None = None,
+    workspace: Path | LocalExecutionEnvironment | None = None,
     spill: Path | None = None,
     images: int = 3,
     proxy_url: str | None = None,
@@ -215,12 +230,21 @@ async def browsing(
         host = BrowserToolHost(run, registry, make_resource_reader(registry, 4000))
         tool = browser_tool(
             host,
-            environment=None if workspace is None else LocalExecutionEnvironment(workspace),
+            environment=(
+                LocalExecutionEnvironment(workspace) if isinstance(workspace, Path) else workspace
+            ),
             scheduler=AccessScheduler(),
             spill=keep if spill is not None else None,
             image_preparer=prepare,
         )
         yield Browsing(tool, registry, server, proxy, leases, admitted)
+
+
+async def until(condition: Callable[[], object], seconds: float = 10) -> None:
+    """Wait for something the browser does on its own, such as a request it sends."""
+    async with asyncio.timeout(seconds):
+        while not condition():
+            await asyncio.sleep(0.05)
 
 
 def download_directories() -> set[Path]:
@@ -290,6 +314,37 @@ async def test_a_new_tab_becomes_the_active_page_until_it_closes() -> None:
         assert "The active page closed; the previous page is active again." in closed.text_content
 
 
+async def test_a_popup_that_closes_itself_while_the_call_waits_returns_to_the_page() -> None:
+    async with browsing(settle=2) as web:
+        await web.call(action="navigate", url=f"{SHOP}/popups")
+
+        flashed = await web.call(action="click", ref=await web.ref("Open flash"))
+
+        assert not flashed.is_error
+        assert f"page: {SHOP}/popups | title: Popups]" in flashed.text_content
+        assert "The active page closed; the previous page is active again." in flashed.text_content
+
+
+async def test_a_popup_that_opens_after_its_call_returned_is_where_the_next_call_acts() -> None:
+    async with browsing() as web:
+        await web.call(action="navigate", url=f"{SHOP}/popups")
+
+        clicked = await web.call(action="click", ref=await web.ref("Open later"))
+        assert f"page: {SHOP}/popups" in clicked.text_content
+        assert "new tab" not in clicked.text_content
+        await until(lambda: web.proxy.fetched(f"{SHOP}/late"))
+        await asyncio.sleep(0.2)
+
+        moved = await web.call(action="navigate", url=f"{SHOP}/details")
+
+        # The navigation happened in the popup, so its call shows where it went.
+        assert f"page: {SHOP}/details | title: Details]" in moved.text_content
+        assert "A new tab opened and is now the active page." in moved.text_content
+        back = await web.call(action="back")
+        assert f"page: {SHOP}/late | title: Late]" in back.text_content
+        assert "new tab" not in back.text_content
+
+
 async def test_a_confirm_is_accepted_and_reported() -> None:
     async with browsing() as web:
         await web.call(action="navigate", url=f"{SHOP}/results?q=lamp")
@@ -353,6 +408,28 @@ async def test_a_download_over_the_limit_is_refused_and_leaves_nothing_behind() 
         )
         assert not refused.is_error
     assert download_directories() == before
+
+
+async def test_a_download_this_process_cannot_save_is_refused_and_the_page_goes_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async with browsing() as web:
+        await web.call(action="navigate", url=f"{SHOP}/results?q=lamp")
+        link = await web.ref("Download CSV")
+
+        # A temporary directory that is gone stands for a disk that cannot take the file.
+        with monkeypatch.context() as patched:
+            patched.setattr(tempfile, "tempdir", str(tmp_path / "gone"))
+            refused = await web.call(action="click", ref=link)
+
+        assert not refused.is_error and web.admitted == []
+        assert "The download data.csv was not admitted: it could not be downloaded." in (
+            refused.text_content
+        )
+        assert "Results for lamp page 1" in refused.text_content
+        again = await web.call(action="click", ref=link)
+        assert "Downloaded data.csv (text/csv, 8 bytes)" in again.text_content
+        assert len(web.admitted) == 1
 
 
 async def test_a_capture_admits_a_new_citable_web_resource_each_time() -> None:
@@ -494,11 +571,43 @@ async def test_upload_puts_a_workspace_file_into_a_file_input(tmp_path: Path) ->
         directory = await web.call(action="upload", ref=attachment, files=["folder"])
         missing = await web.call(action="upload", ref=attachment, files=["nothing.txt"])
 
-        assert escaping.is_error and "outside.txt" not in sent.text_content
+        assert escaping.is_error and escaping.text_content == "path must not escape the workspace"
         assert directory.is_error and "upload needs regular workspace files: folder" in (
             directory.text_content
         )
         assert missing.is_error and "nothing.txt" in missing.text_content
+
+
+class ReadRecorder(LocalExecutionEnvironment):
+    """A workspace that keeps the names of the files read from it."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.read: list[str] = []
+
+    def read_bytes(self, path: Path) -> bytes:
+        self.read.append(path.name)
+        return super().read_bytes(path)
+
+
+async def test_upload_refuses_what_is_over_the_limit_before_it_reads_it(tmp_path: Path) -> None:
+    # Sparse files: they have the size and cost no disk.
+    for name, mebibytes in (("huge.bin", 60), ("first.bin", 30), ("second.bin", 30)):
+        with (tmp_path / name).open("wb") as handle:
+            handle.truncate(mebibytes * 1024 * 1024)
+    workspace = ReadRecorder(tmp_path)
+    async with browsing(workspace=workspace) as web:
+        opened = await web.call(action="navigate", url=f"{SHOP}/upload")
+        attachment = ref_of(opened.text_content, "Attachment")
+
+        huge = await web.call(action="upload", ref=attachment, files=["huge.bin"])
+        both = await web.call(action="upload", ref=attachment, files=["first.bin", "second.bin"])
+
+        for refused in (huge, both):
+            assert refused.is_error
+            assert refused.text_content == "upload sends at most 50 MiB in one call."
+        # Only the first of two files that together are too big was ever read.
+        assert workspace.read == ["first.bin"]
 
 
 async def test_wait_for_text_and_back() -> None:
@@ -569,6 +678,8 @@ async def test_a_disconnect_loses_every_page_and_the_next_navigate_leases_again(
     async with browsing() as web:
         await web.call("a", action="navigate", url="http://alpha.example/")
         await web.call("b", action="navigate", url="http://beta.example/")
+        port = urlsplit(web.server.endpoint).port
+        assert port is not None
 
         await web.server.stop()
         a_saw = await web.call("a", action="snapshot")
@@ -579,6 +690,39 @@ async def test_a_disconnect_loses_every_page_and_the_next_navigate_leases_again(
             b_saw.text_content
         )
         assert len(web.leases.claimed) == 1
+
+        # The pool member came back at its endpoint, and the Run's next page asks for it again.
+        async with run_server(port):
+            again = await web.call("b", action="navigate", url="http://beta.example/")
+
+            assert "Beta stock" in again.text_content
+            assert len(web.leases.claimed) == 2
+
+
+async def test_a_browser_that_disconnects_while_a_page_settles_is_reported_and_leased_afresh() -> (
+    None
+):
+    held = asyncio.Event()
+    pages = {**PAGES, f"{SHOP}/held": Served("held", hold=held)}
+    async with browsing(pages, settle=30) as web:
+        await web.call(action="navigate", url=f"{SHOP}/busy")
+        port = urlsplit(web.server.endpoint).port
+        assert port is not None
+
+        # The image's request is never answered, so the call is still settling the page, past
+        # the moment it waits for a popup, when its browser goes away.
+        clicking = asyncio.create_task(web.call(action="click", ref=await web.ref("Open slow")))
+        await until(lambda: web.proxy.fetched(f"{SHOP}/held"))
+        await asyncio.sleep(0.6)
+        await web.server.stop()
+        lost = await asyncio.wait_for(clicking, 30)
+
+        assert lost.is_error and "every open page of this Run was lost" in lost.text_content
+        async with run_server(port):
+            again = await web.call(action="navigate", url="http://alpha.example/")
+
+            assert "Alpha stock" in again.text_content
+            assert len(web.leases.claimed) == 2
 
 
 async def read(reader: ResourceReader, resource_id: str) -> str:
